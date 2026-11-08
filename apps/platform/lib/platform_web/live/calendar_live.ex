@@ -2,13 +2,12 @@ defmodule PlatformWeb.CalendarLive do
   use PlatformWeb, :live_view
   import Ecto.Query, only: [from: 2]
   import PlatformWeb.CalendarLive.Components
-  import PlatformWeb.Components.Meetings.EditMeeting, only: [edit_meeting: 1]
 
   alias Platform.Calendar, as: Events
-  alias Platform.Calendar.Event
+  alias Platform.Calendar.Authoring
+  alias PlatformWeb.CalendarLive.Editor
   alias PlatformWeb.MeetingLive.CalendarWindow
   alias PlatformWeb.MeetingLive.LiveInvites
-  alias PlatformWeb.MeetingLive.MeetingEdit
   alias PlatformWeb.TimeEntry
 
   @impl true
@@ -43,16 +42,13 @@ defmodule PlatformWeb.CalendarLive do
      |> assign(:selected, nil)
      |> assign(:meeting_cancel_state, :idle)
      |> assign(:meeting_delete_state, :idle)
-     |> assign(:editing, nil)
-     |> assign(:editor_error, nil)
-     |> assign(:editor_fields, [])
+     |> assign(:projects, [])
      |> assign(feed_url: nil, feed_old: nil, feed_modal: false, feed_exists?: false)
      |> assign(ext_error: nil, ext_url: nil, ext_label: nil)
      |> assign(calendar_grants: [], agent_choices: [], agent_rows: [])
      |> assign(:grant_form, agent_grant_form(nil, nil))
-     |> assign(:form, to_form(%{}, as: :event))
      |> LiveInvites.seed()
-     |> MeetingEdit.seed()}
+     |> Editor.seed()}
   end
 
   @impl true
@@ -247,29 +243,20 @@ defmodule PlatformWeb.CalendarLive do
   def handle_event("new_event", _, socket),
     do: {:noreply, new_event_at(socket, socket.assigns.today, 14 * 60)}
 
-  # The New editor's Meeting side (task 01a1986e). Calendar does not build
-  # meetings: it hands the form's date and start to the MeetingLive
-  # scheduling sheet, which owns the one create path and returns here after
-  # Create. Only a NEW editor with Meetings on offers it.
-  def handle_event(
-        "new_meeting",
-        _,
-        %{assigns: %{meetings_on: true, editing: %Event{id: nil}}} = socket
-      ) do
-    params = socket.assigns.form.params
-
-    query =
-      %{
-        schedule: "true",
-        from: "calendar",
-        date: params["date"] || "",
-        start_time: params["start"] || ""
-      }
-
-    {:noreply, push_navigate(socket, to: ~p"/meetings?#{query}")}
+  # A range dragged on the week grid (calendar_selection.js): the editor
+  # opens on it and NOTHING is saved; Create event is the only write. The
+  # hook sends local minutes in the viewer's zone on one day; anything out
+  # of range, reversed or empty is normalized or refused here as well.
+  def handle_event("select_range", %{"date" => date} = params, socket) do
+    with {:ok, date} <- Date.from_iso8601(to_string(date)),
+         {a, ""} <- Integer.parse(to_string(params["start"])),
+         {b, ""} <- Integer.parse(to_string(params["end"])),
+         {start, finish} <- normalize_range(a, b) do
+      {:noreply, socket |> Editor.open_new(date, start, finish)}
+    else
+      _ -> {:noreply, socket}
+    end
   end
-
-  def handle_event("new_meeting", _, socket), do: {:noreply, socket}
 
   # Details (app.js `renderDetails`): a chip opens its entry; `start` picks
   # the occurrence of a recurring event.
@@ -280,7 +267,6 @@ defmodule PlatformWeb.CalendarLive do
     socket =
       socket
       |> LiveInvites.seed()
-      |> MeetingEdit.seed()
       |> assign(:meeting_cancel_state, :idle)
       |> assign(:meeting_delete_state, :idle)
       |> select_entry(kind, id, params["start"])
@@ -294,13 +280,12 @@ defmodule PlatformWeb.CalendarLive do
 
   def handle_event("close_details", _, socket), do: {:noreply, close_details(socket)}
 
-  # Escape closes the editor first, then the details (app.js keydown).
-  def handle_event("escape", _, %{assigns: %{editing: %Event{}}} = socket),
-    do: {:noreply, close_editor(socket)}
-
-  # Escape with the Edit meeting form open shuts the form only.
-  def handle_event("escape", _, %{assigns: %{meeting_edit: %{}}} = socket),
-    do: {:noreply, MeetingEdit.seed(socket)}
+  # Escape closes the editor first, then the details (app.js keydown). This
+  # is the ONE Escape binding: the editor's X, Cancel and backdrop push
+  # `close_editor`, and nothing else listens for Escape, so a keypress
+  # closes exactly one layer.
+  def handle_event("escape", _, %{assigns: %{editor: %{}}} = socket),
+    do: {:noreply, Editor.seed(socket)}
 
   # Escape while the Cancel meeting inset is open collapses the inset only,
   # not the details (task 01a19e7f stage 4).
@@ -315,7 +300,7 @@ defmodule PlatformWeb.CalendarLive do
 
   def handle_event("escape", _, socket), do: {:noreply, close_details(socket)}
 
-  def handle_event("close_editor", _, socket), do: {:noreply, close_editor(socket)}
+  def handle_event("close_editor", _, socket), do: {:noreply, Editor.seed(socket)}
 
   # ── Live invites in the meeting details (task 01a19e7b stage 2) ─────────
   #
@@ -440,28 +425,27 @@ defmodule PlatformWeb.CalendarLive do
     end
   end
 
-  # ── Edit meeting in the details (task 01a1b281 stage 3) ──────────────────
+  # ── Edit on a meeting's details (task 01a1b281 stage 3, absorbed) ────────
   #
-  # The same form and handlers as /meetings (`MeetingEdit`). It opens on the
-  # entry the open details were built from, never a payload id, and every
-  # later event reloads the meeting through the viewer scope.
+  # Opens the ONE Calendar editor (task 01a1b8a5 stage 2) on the entry the
+  # open details were built from, never a payload id. `Authoring.load_draft/2`
+  # loads it through the viewer scope with `Meetings.can_edit_meeting?/3`,
+  # and the editor re-checks that on every later event.
   def handle_event("meeting_edit_open", _params, socket) do
-    meeting_id =
-      case socket.assigns.selected do
-        %{kind: "meeting", entry: %{meeting: %{id: id}}} -> id
-        _ -> nil
-      end
+    case socket.assigns.selected do
+      %{kind: "meeting", entry: %{meeting: %{id: id}}} ->
+        {_, socket} = Editor.open_existing(socket, {:meeting, id})
+        {:noreply, socket}
 
-    {:noreply,
-     MeetingEdit.open(socket, meeting_id, socket.assigns.current_user_record, socket.assigns.zone)}
-  end
-
-  def handle_event("meeting_edit_" <> _ = event, params, socket) do
-    case MeetingEdit.handle(socket, event, params, socket.assigns.current_user_record) do
-      {:saved, _meeting, socket} -> {:noreply, reload(socket)}
-      other -> other
+      _ ->
+        {:noreply, socket}
     end
   end
+
+  # The editor's staged-people events: the same names and the same
+  # `InviteeStaging` as the /meetings Edit meeting form.
+  def handle_event("meeting_edit_" <> _ = event, params, socket),
+    do: Editor.people(socket, event, params)
 
   # One guest row's link expiry, and a new link for a lapsed row (task
   # 01a19ea6), under the same rule as staging: the meeting is the open
@@ -542,103 +526,51 @@ defmodule PlatformWeb.CalendarLive do
         _,
         %{assigns: %{selected: %{kind: "native", owner?: true, id: id}}} = socket
       ) do
-    case Events.get_event(socket.assigns.access_scope, id) do
-      {:ok, event} -> {:noreply, event_form(socket, event)}
-      _ -> {:noreply, put_flash(socket, :error, "Event is no longer available.")}
+    case Editor.open_existing(socket, {:event, id}) do
+      {:ok, socket} -> {:noreply, socket}
+      {:error, socket} -> {:noreply, put_flash(socket, :error, "Event is no longer available.")}
     end
   end
 
   def handle_event("edit", _, socket), do: {:noreply, socket}
 
   def handle_event("event_change", %{"event" => params}, socket),
-    do:
-      {:noreply,
-       assign(socket, :form, to_form(Map.merge(socket.assigns.form.params, params), as: :event))}
+    do: Editor.change(socket, params)
 
-  # The v4 editor's three messages (app.js `#f-save`) come from PR #51's
-  # changeset, `Platform.Calendar.change_event/2`, which stays the source of
-  # truth; anything else it rejects is shown as its own message.
-  def handle_event("save", %{"event" => params}, %{assigns: %{editing: %Event{}}} = socket) do
-    params = Map.merge(socket.assigns.form.params, params)
-    {attrs, time_errors} = parse_event(params)
-    editing = socket.assigns.editing
+  # Create event / Save: `Calendar.Authoring.save/3`, the one boundary for
+  # a native event and its call record. The v4 messages still come first.
+  def handle_event("save", %{"event" => params}, socket) do
+    new? = match?(%{editor: %{new?: true}}, socket.assigns)
 
-    # A typed Start/End that does not parse is answered FIRST, in its own
-    # words. Read as nil it would become "Pick a date, start and end.",
-    # which tells someone who typed "01:00" nothing (task 01a192d6).
-    errors =
-      case time_errors do
-        [{field, reason} | _] ->
-          {TimeEntry.message(field, reason), Keyword.keys(time_errors)}
+    case Editor.save(socket, params) do
+      {:saved, result, socket} ->
+        {:noreply, socket |> after_save(result, new?) |> reload_selected(result)}
 
-        [] ->
-          editor_errors(Events.change_event(%Event{owner_id: editing.owner_id}, attrs))
-      end
-
-    case errors do
-      {message, fields} ->
-        {:noreply,
-         assign(socket,
-           form: to_form(params, as: :event),
-           editor_error: message,
-           editor_fields: fields
-         )}
-
-      nil ->
-        result =
-          if editing.id,
-            do: Events.update_event(socket.assigns.access_scope, editing.id, attrs),
-            else: Events.create_event(socket.assigns.access_scope, attrs)
-
-        case result do
-          {:ok, event} ->
-            date = event_date(event)
-
-            {:noreply,
-             socket
-             |> close_editor()
-             |> put_flash(:info, if(editing.id, do: "Event saved", else: "Event created"))
-             |> put_day(date)
-             |> reload()
-             |> select_entry("event", event.id, nil)}
-
-          {:error, %Ecto.Changeset{} = changeset} ->
-            {message, fields} = editor_errors(changeset) || {"You cannot save this event.", []}
-
-            {:noreply,
-             assign(socket,
-               form: to_form(params, as: :event),
-               editor_error: message,
-               editor_fields: fields
-             )}
-
-          _ ->
-            {:noreply,
-             assign(socket, editor_error: "You cannot save this event.", editor_fields: [])}
-        end
+      other ->
+        other
     end
   end
 
   def handle_event("save", _, socket), do: {:noreply, socket}
 
   # Delete from the editor (Edit event footer) or the details footer; v4
-  # deletes straight away and toasts `Event deleted`.
-  def handle_event("delete", _, socket) do
-    id =
-      case socket.assigns do
-        %{editing: %Event{id: id}} when is_binary(id) -> id
-        %{selected: %{kind: "native", owner?: true, id: id}} -> id
-        _ -> nil
-      end
+  # deletes straight away and toasts `Event deleted`. Both go through
+  # `Calendar.Authoring.delete/2`, so a call record is deleted only under
+  # Meetings' lifecycle rule.
+  def handle_event("delete", _, %{assigns: %{editor: %{}}} = socket) do
+    case Editor.delete(socket) do
+      {:deleted, socket} -> {:noreply, deleted(socket)}
+      {:error, socket} -> {:noreply, put_flash(socket, :error, "You cannot delete this event.")}
+    end
+  end
 
-    with true <- is_binary(id),
-         {:ok, _} <- Events.delete_event(socket.assigns.access_scope, id) do
-      {:noreply,
-       socket
-       |> close_editor()
-       |> assign(:selected, nil)
-       |> put_flash(:info, "Event deleted")
-       |> reload()}
+  def handle_event("delete", _, socket) do
+    scope = socket.assigns.access_scope
+
+    with %{kind: "native", owner?: true, id: id} <- socket.assigns.selected,
+         {:ok, draft} <- Authoring.load_draft(scope, {:event, id}),
+         {:ok, _} <- Authoring.delete(scope, draft) do
+      {:noreply, deleted(socket)}
     else
       _ -> {:noreply, put_flash(socket, :error, "You cannot delete this event.")}
     end
@@ -811,7 +743,6 @@ defmodule PlatformWeb.CalendarLive do
       |> assign(:meeting_cancel_state, :idle)
       |> assign(:meeting_delete_state, :idle)
       |> LiveInvites.seed()
-      |> MeetingEdit.seed()
 
   defp selected_meeting!(%{assigns: %{selected: %{kind: "meeting", entry: %{meeting: meeting}}}}),
     do: meeting
@@ -960,13 +891,62 @@ defmodule PlatformWeb.CalendarLive do
     end
   end
 
-  defp close_editor(socket),
-    do: assign(socket, editing: nil, editor_error: nil, editor_fields: [])
+  defp after_save(socket, %{undelivered: undelivered, failed: failed}, new?) do
+    flash = if new?, do: "Event created", else: "Event saved"
 
-  defp event_date(%Event{all_day: true, start_date: %Date{} = date}), do: date
+    case length(undelivered) + length(failed) do
+      0 -> put_flash(socket, :info, flash)
+      n -> put_flash(socket, :error, "#{flash}, but #{n} invite(s) could not be sent.")
+    end
+  end
 
-  defp event_date(%Event{starts_at: at, time_zone: zone}),
+  # v4 opens the saved event's details (app.js `#f-save` sets S.sel): the
+  # native row for its owner, the call record for a legacy meeting.
+  defp reload_selected(socket, %{event: %{id: id} = event}) do
+    socket
+    |> put_day(local_date(event, socket.assigns.zone))
+    |> reload()
+    |> select_entry("event", id, nil)
+  end
+
+  defp reload_selected(socket, %{meeting: %{id: id, scheduled_start_at: %DateTime{} = at}}) do
+    date = at |> DateTime.shift_zone!(socket.assigns.zone) |> DateTime.to_date()
+    socket |> put_day(date) |> reload() |> select_entry("meeting", id, nil)
+  end
+
+  defp reload_selected(socket, _result), do: reload(socket)
+
+  defp local_date(%{all_day: true, start_date: %Date{} = date}, _zone), do: date
+
+  defp local_date(%{starts_at: at, time_zone: zone}, _viewer_zone),
     do: at |> DateTime.shift_zone!(zone) |> DateTime.to_date()
+
+  defp deleted(socket),
+    do:
+      socket
+      |> Editor.seed()
+      |> assign(:selected, nil)
+      |> put_flash(:info, "Event deleted")
+      |> reload()
+
+  @doc """
+  A dragged range as `{start, end}` local minutes: reversed order is
+  swapped, the day is clamped to 0..1440 and an empty range gets the
+  slot click's 30 minutes. `:error` for a range that has no minute in
+  the day.
+  """
+  def normalize_range(a, b) when is_integer(a) and is_integer(b) do
+    {first, last} = {min(a, b), max(a, b)}
+    first = first |> max(0) |> min(1439)
+    last = last |> max(0) |> min(1440)
+
+    cond do
+      last <= first -> {first, min(first + 30, 1440)}
+      true -> {first, last}
+    end
+  end
+
+  def normalize_range(_, _), do: :error
 
   # The scope Calendar's owner-only contexts expect, rebuilt from the user row
   # as PR #51's agent-access handlers did.
@@ -1034,23 +1014,8 @@ defmodule PlatformWeb.CalendarLive do
     end
   end
 
-  defp new_event_at(socket, date, minute) do
-    zone = socket.assigns.zone
-
-    start =
-      case DateTime.new(date, Time.new!(div(minute, 60), rem(minute, 60), 0), zone) do
-        {:ok, at} -> at
-        # A slot inside a DST change takes the instant either side of it.
-        {:ambiguous, first, _} -> first
-        {:gap, _, after_gap} -> after_gap
-      end
-
-    event_form(socket, %Event{
-      time_zone: zone,
-      starts_at: start,
-      ends_at: DateTime.add(start, 1800)
-    })
-  end
+  defp new_event_at(socket, date, minute),
+    do: Editor.open_new(socket, date, minute, min(minute + 30, 1440))
 
   # The agent behind each pending hold, for the tentative chip's
   # "Tentative · <Agent> · needs OK" line. Read-only; PR #51's consent rows
@@ -1103,199 +1068,6 @@ defmodule PlatformWeb.CalendarLive do
       )
 
     [native] ++ if(assigns.meetings_on, do: [meetings], else: []) ++ external
-  end
-
-  defp event_form(socket, event) do
-    zone = event.time_zone || socket.assigns.zone
-
-    rule =
-      case Platform.Calendar.Recurrence.parse(event.recurrence) do
-        {:ok, %{} = rule} -> rule
-        _ -> %{frequency: "WEEKLY", interval: 1, count: nil, until: nil}
-      end
-
-    local = fn at -> at && DateTime.shift_zone!(at, zone) end
-    starts = local.(event.starts_at)
-    ends = local.(event.ends_at)
-
-    attrs = %{
-      "title" => event.title || "",
-      "description" => event.description || "",
-      "time_zone" => zone,
-      "all_day" => event.all_day,
-      "date" =>
-        cond do
-          event.all_day && event.start_date -> Date.to_iso8601(event.start_date)
-          starts -> starts |> DateTime.to_date() |> Date.to_iso8601()
-          true -> ""
-        end,
-      # 12-hour text, so a re-saved event round-trips through
-      # `TimeEntry.parse/1` unambiguously ("10:07 AM", never "10:07").
-      "start" => if(starts, do: TimeEntry.format(DateTime.to_time(starts)), else: ""),
-      "end" => if(ends, do: TimeEntry.format(DateTime.to_time(ends)), else: ""),
-      "end_date" =>
-        if(event.all_day && event.end_date,
-          do: event.end_date |> Date.add(-1) |> Date.to_iso8601(),
-          else: ""
-        ),
-      "visibility" => event.visibility || "details",
-      "custom_frequency" => rule.frequency,
-      "custom_interval" => rule.interval,
-      "custom_count" => rule.count,
-      "custom_until" => rule.until,
-      "repeat" =>
-        if(event.recurrence in [nil, "", "FREQ=DAILY", "FREQ=WEEKLY", "FREQ=MONTHLY"],
-          do: event.recurrence || "",
-          else: "custom"
-        ),
-      "where" =>
-        cond do
-          event.space_id -> "space:" <> event.space_id
-          event.project_id -> "project:" <> event.project_id
-          true -> "private"
-        end
-    }
-
-    assign(socket,
-      editing: event,
-      form: to_form(attrs, as: :event),
-      editor_error: nil,
-      editor_fields: []
-    )
-  end
-
-  # The v4 editor submits a Date plus Start/End times in the event's zone;
-  # an all-day event submits its first and last day (PR #51 stores an
-  # exclusive end date). Returns `{attrs, time_errors}`, where time_errors
-  # lists each typed Start/End that `TimeEntry.parse/1` refused, in field
-  # order, as `{:start | :end, reason}`.
-  defp parse_event(params) do
-    zone = params["time_zone"] || "Etc/UTC"
-    all_day? = params["all_day"] in [true, "true"]
-    date = blank_nil(params["date"])
-
-    attrs = %{
-      "title" => params["title"],
-      "description" => params["description"],
-      "time_zone" => zone,
-      "visibility" => params["visibility"],
-      "all_day" => all_day?,
-      "recurrence" =>
-        if(params["repeat"] == "custom", do: custom_rule(params), else: params["repeat"]),
-      "space_id" => nil,
-      "project_id" => nil
-    }
-
-    attrs =
-      if all_day? do
-        last = blank_nil(params["end_date"]) || date
-
-        Map.merge(attrs, %{
-          "start_date" => date,
-          "end_date" =>
-            case Date.from_iso8601(last || "") do
-              {:ok, day} -> Date.add(day, 1)
-              _ -> nil
-            end
-        })
-      else
-        # A blank field stays nil, so the changeset's "Pick a date, start and
-        # end." still answers it; a typed one that does not parse is an
-        # error of its own.
-        at = fn time ->
-          case TimeEntry.parse(time) do
-            {:ok, %Time{} = parsed} -> {:ok, date && local_instant(date, parsed, zone)}
-            {:error, :blank} -> {:ok, nil}
-            {:error, reason} -> {:error, reason}
-          end
-        end
-
-        {starts_at, start_error} = time_result(at.(params["start"]), :start)
-        {ends_at, end_error} = time_result(at.(params["end"]), :end)
-
-        attrs
-        |> Map.merge(%{
-          "starts_at" => starts_at,
-          "ends_at" => ends_at,
-          "start_date" => nil,
-          "end_date" => nil
-        })
-        |> Map.put(:time_errors, Enum.reject([start_error, end_error], &is_nil/1))
-      end
-
-    {time_errors, attrs} = Map.pop(attrs, :time_errors, [])
-
-    attrs =
-      case String.split(params["where"] || "private", ":", parts: 2) do
-        ["space", id] -> Map.put(attrs, "space_id", id)
-        ["project", id] -> Map.put(attrs, "project_id", id)
-        _ -> attrs
-      end
-
-    {attrs, time_errors}
-  end
-
-  defp time_result({:ok, at}, _field), do: {at, nil}
-  defp time_result({:error, reason}, field), do: {nil, {field, reason}}
-
-  # Date + wall-clock time in `zone`, as UTC. A time inside a DST change
-  # has no single instant, so it is nil (the changeset then refuses it),
-  # exactly as the previous ISO-string path did.
-  defp local_instant(date, %Time{} = time, zone) do
-    with {:ok, day} <- Date.from_iso8601(date),
-         {:ok, at} <- DateTime.new(day, time, zone) do
-      DateTime.shift_zone!(at, "Etc/UTC")
-    else
-      _ -> nil
-    end
-  end
-
-  defp blank_nil(value) when value in [nil, ""], do: nil
-  defp blank_nil(value), do: value
-
-  # app.js `#f-save` order: title, then a missing date/start/end, then end
-  # not after start. Returns `{message, invalid_fields}` or nil.
-  @doc false
-  def editor_errors(%Ecto.Changeset{} = changeset) do
-    errors = Ecto.Changeset.traverse_errors(changeset, fn {message, _} -> message end)
-    blank? = fn field -> "can't be blank" in Map.get(errors, field, []) end
-
-    cond do
-      errors == %{} ->
-        nil
-
-      Map.has_key?(errors, :title) ->
-        {"Give the event a title.", [:title]}
-
-      Enum.any?(~w(starts_at ends_at start_date end_date)a, blank?) ->
-        fields =
-          [date: [:starts_at, :start_date], start: [:starts_at], end: [:ends_at, :end_date]]
-          |> Enum.filter(fn {_, keys} -> Enum.any?(keys, blank?) end)
-          |> Enum.map(&elem(&1, 0))
-
-        {"Pick a date, start and end.", fields}
-
-      Map.has_key?(errors, :ends_at) or Map.has_key?(errors, :end_date) ->
-        {"End has to be after the start.", [:end]}
-
-      true ->
-        {Enum.map_join(errors, ". ", fn {field, messages} ->
-           "#{Phoenix.Naming.humanize(field)} #{Enum.join(messages, ", ")}"
-         end), []}
-    end
-  end
-
-  defp custom_rule(params) do
-    base = "FREQ=#{params["custom_frequency"]};INTERVAL=#{params["custom_interval"]}"
-
-    base =
-      if params["custom_count"] not in [nil, ""],
-        do: base <> ";COUNT=#{params["custom_count"]}",
-        else: base
-
-    if params["custom_until"] not in [nil, ""],
-      do: base <> ";UNTIL=" <> String.replace(params["custom_until"], "-", ""),
-      else: base
   end
 
   def where_options(spaces, projects),

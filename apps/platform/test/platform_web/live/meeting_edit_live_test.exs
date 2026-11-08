@@ -452,6 +452,9 @@ defmodule PlatformWeb.MeetingEditLiveTest do
       |> render_click()
     end
 
+    # Task 01a1b8a5 stage 2: Calendar's Edit opens Calendar's ONE event
+    # editor (`CalendarLive.Editor`) on the meeting, not a second Edit
+    # meeting form; it saves through `Meetings.update_meeting_for_user/3`.
     test "carry Edit for the organizer, and Save renames in place", ctx do
       zone = midday_zone()
       meeting = cal_meeting!(ctx, zone)
@@ -469,17 +472,18 @@ defmodule PlatformWeb.MeetingEditLiveTest do
       |> element("[data-role=calendar-details] [data-role=meeting-edit-open]")
       |> render_click()
 
-      assert has_element?(view, "[data-role=meeting-edit]")
+      assert has_element?(view, "#calendar-editor")
+      refute has_element?(view, "[data-role=meeting-edit]")
 
-      change(view, %{name: "Calendar rename"})
+      view |> form("#calendar-event-form", event: %{title: "Calendar rename"}) |> render_change()
       assert has_element?(view, "[data-role=meeting-edit-was]", "was Weekly sync")
-      view |> form("#meeting-edit-form") |> render_submit()
+      view |> form("#calendar-event-form") |> render_submit()
 
       row = reload(meeting)
       assert row.name == "Calendar rename"
       assert row.slug == meeting.slug
       assert_receive {:meeting_updated, %Meeting{}, _}
-      refute has_element?(view, "[data-role=meeting-edit]")
+      refute has_element?(view, "#calendar-editor")
       assert has_element?(view, "[data-role=calendar-details]", "Calendar rename")
     end
 
@@ -496,10 +500,11 @@ defmodule PlatformWeb.MeetingEditLiveTest do
 
       render_click(view, "meeting_edit_open", %{})
       refute has_element?(view, "[data-role=meeting-edit]")
+      refute has_element?(view, "#calendar-editor")
 
-      render_submit(view, "meeting_edit_save", %{
+      render_submit(view, "save", %{
         "meeting_id" => meeting.id,
-        "meeting_edit" => %{"name" => "Hijacked"}
+        "event" => %{"title" => "Hijacked"}
       })
 
       assert reload(meeting).name == "Weekly sync"

@@ -325,12 +325,16 @@ defmodule PlatformWeb.MeetingLiveCalendarOriginTest do
     end
   end
 
-  describe "Calendar to Meetings round trip (stage 4)" do
-    test "slot, Meeting, stage a member and a guest, create, and land back on the calendar",
+  # Task 01a1b8a5 stage 2 retired Calendar's Event | Meeting hand-off: the
+  # same scheduling now happens IN Calendar's one editor, through
+  # `Calendar.Authoring` and the same `Meetings.Scheduling` create path, so
+  # staged invites are replayed exactly as the sheet replays them.
+  describe "Calendar schedules in place (task 01a1b8a5 stage 2)" do
+    test "slot, stage a member and a guest, Create event, and the call has both invites",
          %{conn: conn, project: project} do
       quill = member!("Quillon Zebedee", "quillon.zebedee@example.com")
 
-      {:ok, cal, _html} = live(conn, "/calendar")
+      {:ok, cal, _html} = live(conn, "/calendar?date=2026-11-04")
       render_click(cal, "new_at", %{"date" => "2026-11-04", "minute" => "630"})
 
       assert has_element?(
@@ -338,43 +342,31 @@ defmodule PlatformWeb.MeetingLiveCalendarOriginTest do
                "#calendar-event-form input[name='event[start]'][value='10:30 AM']"
              )
 
-      {:ok, sheet, _html} =
-        cal
-        |> element("#calendar-editor [data-role=new-kind-toggle] [data-kind=meeting]")
-        |> render_click()
-        |> follow_redirect(conn)
+      refute has_element?(cal, "#calendar-editor [data-role=new-kind-toggle]")
 
-      assert has_element?(sheet, ~s([data-role="meeting-create-submit-calendar"]))
-      assert has_element?(sheet, "#meeting-create-date[value='2026-11-04']")
-      assert has_element?(sheet, "#meeting-create-start-time[value='10:30 AM']")
+      search = "#calendar-editor-people-search"
 
-      commit(sheet, "Quillon Zebedee")
-      commit(sheet, "guest@example.com")
+      cal
+      |> element(search)
+      |> render_hook("meeting_edit_invite_commit", %{"value" => "Quillon Zebedee"})
 
-      result =
-        sheet
-        |> form("#start-meeting-form",
-          start_meeting: %{
-            "name" => "Round trip",
-            "project_id" => project.id,
-            "date" => "2026-11-04",
-            "start_time" => "10:30 AM",
-            "duration_minutes" => "30",
-            "invite_query" => ""
-          }
-        )
-        |> render_submit()
+      cal
+      |> element(search)
+      |> render_hook("meeting_edit_invite_commit", %{"value" => "guest@example.com"})
 
-      # Cross-live_session push_navigate: LiveViewTest reports it as a
-      # live_redirect; follow_redirect/2 mounts CalendarLive fresh.
-      assert {:error, {:live_redirect, %{to: "/calendar?" <> _}}} = result
-      {:ok, cal, html} = follow_redirect(result, conn)
+      assert Repo.all(Meeting) == []
+
+      cal
+      |> form("#calendar-event-form",
+        event: %{"title" => "Round trip", "call_project" => project.id}
+      )
+      |> render_submit()
 
       assert [%Meeting{} = meeting] = Repo.all(Meeting)
+      assert meeting.name == "Round trip"
+      assert meeting.project_id == project.id
       assert %DateTime{} = meeting.scheduled_start_at
-      assert html =~ "Meeting created."
-
-      assert has_element?(cal, ".cal-ev[data-kind=meeting]", "Round trip")
+      assert render(cal) =~ "Event created"
       assert has_element?(cal, "[data-role=calendar-details] h3", "Round trip")
 
       invites = Repo.all(from(i in Invite, where: i.meeting_id == ^meeting.id))

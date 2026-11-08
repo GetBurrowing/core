@@ -1691,19 +1691,15 @@ defmodule PlatformWeb.CalendarLiveTest do
       })
   end
 
-  defp redirect_query(to) do
-    %URI{path: path, query: query} = URI.parse(to)
-    {path, URI.decode_query(query || "")}
-  end
-
-  test "New renders the Event | Meeting toggle with Event checked", %{conn: conn} do
+  # Task 01a1b8a5 stage 2 retired the Event | Meeting toggle (task
+  # 01a1986e): Calendar has one editor, and a call is a checkbox in it.
+  test "New renders one editor with no Event | Meeting toggle", %{conn: conn} do
     {:ok, view, _} = live(zoned(conn, "America/Chicago"), "/calendar")
     view |> element("#calendar-new") |> render_click()
 
-    assert has_element?(view, "#{@toggle}[role=radiogroup]")
-    assert has_element?(view, "#{@toggle} [role=radio][data-kind=event][aria-checked=true]")
-    assert has_element?(view, "#{@toggle} [role=radio][data-kind=meeting][aria-checked=false]")
-    assert has_element?(view, "#{@toggle} [data-kind=meeting] i.cal-sw.cal-k-meeting")
+    assert has_element?(view, "#calendar-editor h2", "New event")
+    refute has_element?(view, @toggle)
+    refute has_element?(view, "#calendar-editor [data-kind=meeting]")
   end
 
   test "a New event still saves exactly one Event; Edit renders no toggle", %{
@@ -1736,7 +1732,7 @@ defmodule PlatformWeb.CalendarLiveTest do
     refute has_element?(view, @toggle)
   end
 
-  test "with Meetings off, New renders no toggle and new_meeting does nothing", %{
+  test "with Meetings off, New renders no toggle and offers no call", %{
     conn: conn,
     user: user
   } do
@@ -1746,10 +1742,10 @@ defmodule PlatformWeb.CalendarLiveTest do
 
     assert has_element?(view, "#calendar-editor h2", "New event")
     refute has_element?(view, @toggle)
-    assert is_binary(render_click(view, "new_meeting", %{}))
+    refute has_element?(view, "#calendar-editor input[data-role=f-call]")
   end
 
-  test "a slot tap at 10:30, then Meeting, carries the date and time to the scheduler", %{
+  test "a slot tap at 10:30 opens the editor there and hands nothing to the scheduler", %{
     conn: conn
   } do
     zone = midday_zone()
@@ -1761,18 +1757,9 @@ defmodule PlatformWeb.CalendarLiveTest do
     |> element("[data-role=calendar-week] button.cal-slot[aria-label='#{label}']")
     |> render_click()
 
-    view |> element("#{@toggle} [data-kind=meeting]") |> render_click()
-
-    {to, _flash} = assert_redirect(view)
-    {path, query} = redirect_query(to)
-    assert path == "/meetings"
-
-    assert query == %{
-             "schedule" => "true",
-             "from" => "calendar",
-             "date" => Date.to_iso8601(today),
-             "start_time" => "10:30 AM"
-           }
+    assert has_element?(view, "#calendar-event-form input[name='event[start]'][value='10:30 AM']")
+    assert has_element?(view, "#calendar-event-form input[name='event[end]'][value='11:00 AM']")
+    refute has_element?(view, @toggle)
   end
 
   test "?new=1 with date and start presets that day and time", %{conn: conn} do

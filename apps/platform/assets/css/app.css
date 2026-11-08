@@ -10053,6 +10053,45 @@ body.screen-share-fullscreen-active {
   font-size: 17px;
   font-weight: 700;
 }
+/* Unified editor (task 01a1b8a5 stage 2, v7 .editor-heading and the upper-right
+   X [data-close-modal]). Below lg the X and the footer actions are 44px
+   touch targets. */
+.cal-editor-head {
+  display: flex;
+  align-items: center;
+  justify-content: space-between;
+  gap: 8px;
+}
+.cal-editor-close:focus-visible {
+  outline: 2px solid var(--color-interactive);
+  outline-offset: 2px;
+  color: var(--color-interactive);
+}
+@media (max-width: 1023px) {
+  .cal-editor-close {
+    width: 44px;
+    height: 44px;
+  }
+  .cal-ft-btn {
+    height: 44px;
+    min-width: 44px;
+  }
+}
+.cal-people .cal-check,
+.cal-people [data-role="meeting-edit-invitees"] {
+  font-size: 13px;
+}
+/* A range being dragged on a day column (calendar_selection.js). */
+.cal-drag-selection {
+  position: absolute;
+  left: 3px;
+  right: 3px;
+  z-index: 3;
+  border: 1px solid var(--color-info);
+  border-radius: var(--radius-field);
+  background: color-mix(in srgb, var(--color-info) 16%, transparent);
+  pointer-events: none;
+}
 .cal-field {
   display: flex;
   flex-direction: column;
@@ -10170,8 +10209,8 @@ textarea.cal-input {
   font-size: 0.75rem;
 }
 .cal-visopt label:has(input:checked) {
-  border-color: var(--color-primary);
-  box-shadow: 0 0 0 1px var(--color-primary);
+  border-color: var(--color-interactive);
+  box-shadow: 0 0 0 1px var(--color-interactive);
 }
 .cal-visopt label:has(input:focus-visible) {
   outline: 2px solid var(--color-interactive);

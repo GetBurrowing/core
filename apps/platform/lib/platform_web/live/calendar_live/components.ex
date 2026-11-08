@@ -25,11 +25,13 @@ defmodule PlatformWeb.CalendarLive.Components do
   import PlatformWeb.Components.Meetings.CancelMeeting,
     only: [cancel_meeting: 1, cancelled_chip: 1]
 
-  import PlatformWeb.Components.Meetings.EditMeeting, only: [edit_button: 1]
+  import PlatformWeb.Components.Meetings.EditMeeting,
+    only: [edit_button: 1, invitees: 1, summary: 1, was: 1]
+
   import PlatformWeb.Components.Meetings.DeleteMeeting, only: [delete_meeting: 1]
 
   alias PlatformWeb.CalendarLive, as: Cal
-  alias PlatformWeb.Components.NewKindToggle
+  alias PlatformWeb.CalendarLive.Editor
 
   @primary_btn "inline-flex h-8 items-center gap-1.5 whitespace-nowrap rounded-full bg-primary px-3 text-xs font-semibold text-primary-content hover:brightness-110"
   @ghost_btn "inline-flex h-8 items-center gap-1.5 whitespace-nowrap rounded-full border border-subtle px-3 text-xs text-base-content hover:bg-base-300"
@@ -408,7 +410,12 @@ defmodule PlatformWeb.CalendarLive.Components do
   @doc "The desktop week: sticky day header, 07–21 gutter, seven columns."
   def week_grid(assigns) do
     ~H"""
-    <div class="hidden grid-cols-[56px_repeat(7,minmax(0,1fr))] lg:grid" data-role="calendar-week">
+    <div
+      id="calendar-week"
+      class="hidden grid-cols-[56px_repeat(7,minmax(0,1fr))] lg:grid"
+      data-role="calendar-week"
+      phx-hook="CalendarSelection"
+    >
       <div class="sticky top-0 z-[4] border-b border-edge bg-base-200"></div>
       <div
         :for={day <- @days}
@@ -682,7 +689,12 @@ defmodule PlatformWeb.CalendarLive.Components do
   @doc "The phone's single-day column: a 44px gutter and full-width chips."
   def phone_day(assigns) do
     ~H"""
-    <div class="grid grid-cols-[44px_minmax(0,1fr)]" data-role="calendar-phone-day">
+    <div
+      id="calendar-phone-day"
+      class="grid grid-cols-[44px_minmax(0,1fr)]"
+      data-role="calendar-phone-day"
+      phx-hook="CalendarSelection"
+    >
       <.gutter class="w-11 pr-2" />
       <.day_column
         day={@day}
@@ -1066,43 +1078,68 @@ defmodule PlatformWeb.CalendarLive.Components do
 
   # ── editor (app.js `openEditor`, index.html `.modal`) ──────────────────
 
-  attr(:form, :any, required: true)
-  attr(:editing, :any, required: true)
-  attr(:error, :string, default: nil)
-  attr(:invalid, :list, default: [])
+  attr(:editor, :map, required: true, doc: "the `:editor` assign (`CalendarLive.Editor`)")
   attr(:where_options, :list, default: [])
-
-  attr(:meetings_on, :boolean,
-    default: false,
-    doc: "Meetings module on: a NEW editor offers the Event | Meeting toggle (task 01a1986e)"
-  )
+  attr(:projects, :list, default: [])
+  attr(:user, :any, default: nil)
 
   @doc """
-  New / Edit event: a 520px modal at `lg`, a bottom sheet below it. PR #51's
-  all-day flag and custom recurrence stay (declared deviations): all-day is
-  one checkbox row under the Date row, and a custom rule shows as its own
-  selected Repeat option.
+  The ONE event editor (prototype 01a178d2 v7 app.js `openEditor`, task
+  01a1b8a5 stage 2): a 520px modal at `lg`, a bottom sheet below it. New,
+  edit, slot, drag, month, mobile and agent drafts all render this from a
+  `Platform.Calendar.EventDraft`; there is no Event | Meeting split.
+
+  Production extensions beyond v7, declared as design deviations: all-day
+  and custom recurrence (PR #51), Where, the call's Project when Where does
+  not name one, the staged-people rows with removed/undo and the
+  last-invitee refusal, the per-field "was ..." markers and the "When you
+  save" summary for an event with a call record (task 01a1b281).
+
+  DOM contract: the v7 ids as `data-role` (`f-title`, `f-date`, `f-s`,
+  `f-e`, `f-type`, `type-help`, `f-people`, `f-call`, `f-rec`, `f-notes`,
+  `f-err`, `f-save`), `data-close-modal` on the X and Cancel, `data-del` on
+  Delete and `data-vis` on the visibility choices.
   """
   def event_editor(assigns) do
-    form = assigns.form
-    editing = assigns.editing
+    editor = assigns.editor
+    form = editor.form
     all_day? = form[:all_day].value in [true, "true"]
+    base = editor.base
 
     assigns =
       assign(assigns,
-        new?: is_nil(editing.id),
+        form: form,
+        new?: editor.new?,
         all_day?: all_day?,
         repeat: form[:repeat].value || "",
         visibility: form[:visibility].value || "details",
-        recurring?: not is_nil(editing.id) and editing.recurrence not in [nil, ""],
+        preset: Editor.preset(editor),
+        people?: Editor.people_enabled?(editor),
+        call_shown?: Editor.call_shown?(editor),
+        call_enabled?: Editor.call_enabled?(editor, assigns.projects),
+        call_checked?: Editor.call_checked?(editor),
+        project?: Editor.project_needed?(editor) and assigns.projects != [],
+        changed: Editor.changed(editor),
+        original: editor.original,
+        recurring?: not editor.new? and base.recurrence not in [nil, ""],
         custom_label:
-          if(editing.recurrence not in [nil, "", "FREQ=DAILY", "FREQ=WEEKLY", "FREQ=MONTHLY"],
-            do: Cal.recurrence_label(editing)
+          if(base.recurrence not in [nil, "", "FREQ=DAILY", "FREQ=WEEKLY", "FREQ=MONTHLY"],
+            do:
+              Cal.recurrence_label(%{
+                recurrence: base.recurrence,
+                starts_at: base.starts_at,
+                time_zone: base.time_zone || "Etc/UTC"
+              })
           )
       )
 
     ~H"""
-    <div class="cal-modal-scrim" data-role="calendar-editor-scrim">
+    <div
+      id="calendar-editor-scrim"
+      class="cal-modal-scrim"
+      data-role="calendar-editor-scrim"
+      phx-hook="CalendarEditorFocus"
+    >
       <.focus_wrap
         id="calendar-editor"
         class="cal-modal"
@@ -1110,8 +1147,24 @@ defmodule PlatformWeb.CalendarLive.Components do
         aria-modal="true"
         aria-labelledby="calendar-editor-title"
         phx-click-away="close_editor"
+        data-role="calendar-editor"
+        data-source={@editor.base.source}
       >
-        <h2 id="calendar-editor-title">{if @new?, do: "New event", else: "Edit event"}</h2>
+        <div class="cal-editor-head">
+          <h2 id="calendar-editor-title" class="editor-heading">
+            {if @new?, do: "New event", else: "Edit event"}
+          </h2>
+          <button
+            type="button"
+            class={[icon_btn(), "cal-editor-close"]}
+            phx-click="close_editor"
+            aria-label="Close event editor"
+            data-close-modal
+            data-role="calendar-editor-close"
+          >
+            <.icon name="hero-x-mark" class="size-[18px]" />
+          </button>
+        </div>
         <.form
           for={@form}
           id="calendar-event-form"
@@ -1121,16 +1174,9 @@ defmodule PlatformWeb.CalendarLive.Components do
           novalidate
         >
           <input type="hidden" name={@form[:time_zone].name} value={@form[:time_zone].value} />
-          <%!-- New only, and only with Meetings on (task 01a1986e). Meeting
-               navigates to the MeetingLive scheduling sheet with this form's
-               date and start; Edit never changes an event's kind. --%>
-          <NewKindToggle.new_kind_toggle
-            :if={@new? and @meetings_on}
-            active={:event}
-            meeting_click="new_meeting"
-          />
           <label class="cal-field">
-            Title<input
+            <span>Title <.was :if={@changed["title"]} text={@original["title"]} /></span>
+            <input
               type="text"
               name={@form[:title].name}
               value={@form[:title].value}
@@ -1138,18 +1184,21 @@ defmodule PlatformWeb.CalendarLive.Components do
               maxlength="300"
               class="cal-input"
               aria-describedby="calendar-event-error"
-              aria-invalid={to_string(:title in @invalid)}
+              aria-invalid={to_string(:title in @editor.invalid)}
               phx-mounted={Phoenix.LiveView.JS.focus()}
+              data-role="f-title"
             />
           </label>
           <div class="cal-formgrid">
             <label class="cal-field cal-field-date">
-              Date<input
+              <span>Date <.was :if={@changed["date"]} text={@original["date"]} /></span>
+              <input
                 type="date"
                 name={@form[:date].name}
                 value={@form[:date].value}
                 class="cal-input"
-                aria-invalid={to_string(:date in @invalid)}
+                aria-invalid={to_string(:date in @editor.invalid)}
+                data-role="f-date"
               />
             </label>
             <%= if @all_day? do %>
@@ -1159,7 +1208,7 @@ defmodule PlatformWeb.CalendarLive.Components do
                   name={@form[:end_date].name}
                   value={@form[:end_date].value}
                   class="cal-input"
-                  aria-invalid={to_string(:end in @invalid)}
+                  aria-invalid={to_string(:end in @editor.invalid)}
                 />
               </label>
             <% else %>
@@ -1167,7 +1216,8 @@ defmodule PlatformWeb.CalendarLive.Components do
                    parses them, so a time with no AM/PM gets "pick AM or PM"
                    instead of posting "" and reading as a missing start. --%>
               <label class="cal-field">
-                Start<input
+                <span>Start <.was :if={@changed["start"]} text={@original["start"]} /></span>
+                <input
                   type="text"
                   inputmode="text"
                   autocomplete="off"
@@ -1175,11 +1225,13 @@ defmodule PlatformWeb.CalendarLive.Components do
                   name={@form[:start].name}
                   value={@form[:start].value}
                   class="cal-input"
-                  aria-invalid={to_string(:start in @invalid)}
+                  aria-invalid={to_string(:start in @editor.invalid)}
+                  data-role="f-s"
                 />
               </label>
               <label class="cal-field">
-                End<input
+                <span>End <.was :if={@changed["end"]} text={@original["end"]} /></span>
+                <input
                   type="text"
                   inputmode="text"
                   autocomplete="off"
@@ -1187,7 +1239,8 @@ defmodule PlatformWeb.CalendarLive.Components do
                   name={@form[:end].name}
                   value={@form[:end].value}
                   class="cal-input"
-                  aria-invalid={to_string(:end in @invalid)}
+                  aria-invalid={to_string(:end in @editor.invalid)}
+                  data-role="f-e"
                 />
               </label>
             <% end %>
@@ -1203,7 +1256,94 @@ defmodule PlatformWeb.CalendarLive.Components do
             /> All day
           </label>
           <label class="cal-field">
-            Repeat (optional)<select name={@form[:repeat].name} class="cal-input">
+            Type<select name={@form[:preset].name} class="cal-input" data-role="f-type">
+            <option
+                :for={
+                  {label, value} <- [
+                    {"Event", "event"},
+                    {"Focus time", "focus"},
+                    {"Out of office", "ooo"}
+                  ]
+                }
+                value={value}
+                selected={@preset == value}
+              >
+              {label}
+            </option>
+          </select>
+            <span class="cal-hint" data-role="type-help" data-preset={@preset}>
+              {type_help(@preset)}
+            </span>
+          </label>
+          <div :if={@people?} data-role="f-people" class="cal-people">
+            <.invitees
+              staging={@editor}
+              kept={Editor.kept(@editor)}
+              removed={Editor.removed(@editor)}
+              label="People"
+              label_class="text-xs font-[550] text-subtle"
+              placeholder="Names or email addresses"
+              id="calendar-editor-people"
+              always_open
+            />
+          </div>
+          <label :if={!@people?} class="cal-field" data-role="f-people" data-disabled="true">
+            People<input
+              type="text"
+              class="cal-input"
+              placeholder="Names or email addresses"
+              disabled
+            />
+          </label>
+          <div :if={@call_shown?} class="cal-field">
+            <label class="cal-check" data-role="calendar-editor-call">
+              <input
+                :if={@call_enabled?}
+                type="hidden"
+                name={@form[:call_enabled].name}
+                value="false"
+              />
+              <input
+                type="checkbox"
+                id="calendar-editor-call"
+                name={@call_enabled? && @form[:call_enabled].name}
+                value="true"
+                checked={@call_enabled? and @call_checked?}
+                disabled={!@call_enabled?}
+                class="cal-checkbox"
+                data-role="f-call"
+              /> Add a Burrow call
+            </label>
+            <span
+              :if={@people? and !@call_enabled? and @projects == []}
+              class="cal-hint"
+              data-role="calendar-editor-call-no-project"
+            >
+              Create a project before adding a Burrow call.
+            </span>
+          </div>
+          <label :if={@project?} class="cal-field" data-role="calendar-editor-call-project">
+            Project<select
+              name={@form[:call_project].name}
+              class="cal-input"
+              aria-invalid={to_string(:call_project in @editor.invalid)}
+            >
+            <option
+                :for={project <- @projects}
+                value={project.id}
+                selected={@form[:call_project].value == project.id}
+              >
+              {project.name}
+            </option>
+          </select>
+          </label>
+          <label class="cal-field">
+            Repeat (optional)<select
+              name={@form[:repeat].name}
+              class="cal-input"
+              data-role="f-rec"
+              aria-invalid={to_string(:repeat in @editor.invalid)}
+            >
             <option
                 :for={
                   {label, value} <- [
@@ -1270,12 +1410,14 @@ defmodule PlatformWeb.CalendarLive.Components do
             <div class="cal-visopt" role="radiogroup" aria-label="Visibility">
               <label
                 :for={
-                  {value, label, note} <- [
-                    {"busy", "Busy only", "Others, agents and your iCal feed just see “Busy”."},
-                    {"details", "Full details", "People with access see the title and notes."}
+                  {value, vis, label, note} <- [
+                    {"busy", "busy", "Busy only",
+                     "Others, agents and your iCal feed just see “Busy”."},
+                    {"details", "full", "Full details", "People with access see the title and notes."}
                   ]
                 }
                 class="relative"
+                data-vis={vis}
               >
                 <input
                   type="radio"
@@ -1300,25 +1442,39 @@ defmodule PlatformWeb.CalendarLive.Components do
           </select>
           </label>
           <label class="cal-field">
-            Notes<textarea
+            <span>Notes <.was :if={@changed["description"]} text="edited" bare /></span><textarea
               name={@form[:description].name}
               placeholder="Optional"
               maxlength="10000"
               class="cal-input"
+              data-role="f-notes"
             >{@form[:description].value}</textarea>
           </label>
-          <p id="calendar-event-error" class="cal-err" role="alert">{@error}</p>
+          <.summary :if={@editor.preview} preview={@editor.preview} />
+          <p id="calendar-event-error" class="cal-err" role="alert" data-role="f-err">
+            {@editor.error}
+          </p>
           <div class="cal-ft">
             <button
-              :if={!@new?}
+              :if={!@new? and @editor.deletable?}
               type="button"
-              class={[ghost_btn(), "cal-danger-btn mr-auto"]}
+              class={[ghost_btn(), "cal-danger-btn cal-ft-btn mr-auto"]}
               phx-click="delete"
+              data-del
+              data-role="calendar-editor-delete"
             >
               Delete
             </button>
-            <button type="button" class={ghost_btn()} phx-click="close_editor">Cancel</button>
-            <button type="submit" class={primary_btn()}>
+            <button
+              type="button"
+              class={[ghost_btn(), "cal-ft-btn"]}
+              phx-click="close_editor"
+              data-close-modal
+              data-role="calendar-editor-cancel"
+            >
+              Cancel
+            </button>
+            <button type="submit" class={[primary_btn(), "cal-ft-btn"]} data-role="f-save">
               {if @new?, do: "Create event", else: "Save"}
             </button>
           </div>
@@ -1327,6 +1483,16 @@ defmodule PlatformWeb.CalendarLive.Components do
     </div>
     """
   end
+
+  @doc "The v7 `#type-help` line for a preset, verbatim."
+  def type_help("focus"), do: "Focus time · blocks bookings, with no call."
+
+  def type_help("ooo"),
+    do:
+      "Out of office · blocks bookings. Existing events are kept; no invitations are declined automatically."
+
+  def type_help(_event),
+    do: "People and a call are optional. This event blocks your availability."
 
   # ── Calendar settings page (app.js `renderSettings`) ───────────────────
 

@@ -9,6 +9,7 @@ import AttachSheet from "./attach_sheet"
 import { AttachFailedPreview } from "../attach_stage"
 import ButtonLoading from "./button_loading"
 import CalendarScroll from "./calendar_scroll"
+import CalendarSelection, {CalendarEditorFocus} from "./calendar_selection"
 import CandidateClock, { SheetHandleClock } from "./candidate_clock"
 import CanvasRoomBridge from "./canvas_room_bridge"
 import CanvasSidebarResize from "./canvas_sidebar_resize"
@@ -100,6 +101,8 @@ export default {
   AttachSheet,
   ButtonLoading,
   CalendarScroll,
+  CalendarSelection,
+  CalendarEditorFocus,
   CandidateClock,
   CanvasRoomBridge,
   ChatClip,

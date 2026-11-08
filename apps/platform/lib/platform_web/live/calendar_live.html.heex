@@ -102,15 +102,11 @@
     delete={%{state: @meeting_delete_state}}
   />
 
-  <.edit_meeting :if={@meeting_edit} edit={@meeting_edit} escape={false} />
-
   <.event_editor
-    :if={@editing}
-    form={@form}
-    editing={@editing}
-    error={@editor_error}
-    invalid={@editor_fields}
+    :if={@editor}
+    editor={@editor}
     where_options={where_options(@spaces, @projects)}
-    meetings_on={@meetings_on}
+    projects={@projects}
+    user={@current_user_record}
   />
 </div>
