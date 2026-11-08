@@ -1,3 +1,4 @@
+# old-code-compatible: Creates only new instruction state, entry and download tables; previous code never reads them.
 defmodule Platform.Repo.Migrations.CreateInstructionPackInstallState do
   use Ecto.Migration
   @moduledoc "Task 01a1b6e1: install-side provenance and verified retained releases."

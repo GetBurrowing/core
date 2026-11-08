@@ -1,3 +1,4 @@
+# old-code-compatible: Adds a default-false sharing column and a new outcome table/index; previous code ignores the column and table.
 defmodule Platform.Repo.Migrations.CreateSharingInstructionOutcomes do
   @moduledoc """
   Task 01a1b6e1-4995-7000-b918-fb305d219275: stores bounded anonymous

@@ -1,3 +1,4 @@
+# old-code-compatible: Creates only the new sharing_usage_counts table and its indexes; previous code never reads it.
 defmodule Platform.Repo.Migrations.CreateSharingUsageCounts do
   @moduledoc """
   Task `01a1b678-8bb4-7000-96d2-c691eb9b13b5`, stage 2: the broker host's

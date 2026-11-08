@@ -1,3 +1,4 @@
+# old-code-compatible: Creates new pack tables and a mutation trigger scoped only to the new release table; previous code never reads or writes them.
 defmodule Platform.Repo.Migrations.CreateInstructionPackReleases do
   use Ecto.Migration
 

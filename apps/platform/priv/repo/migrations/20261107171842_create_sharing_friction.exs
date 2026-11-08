@@ -1,3 +1,4 @@
+# old-code-compatible: Creates only new friction event/report tables and constraints; previous code never reads them.
 defmodule Platform.Repo.Migrations.CreateSharingFriction do
   @moduledoc """
   Task `01a1b678-8bb4-7000-96d2-c691eb9b13b5`, stage 3: agent friction

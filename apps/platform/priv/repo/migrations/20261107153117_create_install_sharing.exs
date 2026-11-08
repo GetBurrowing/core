@@ -1,3 +1,4 @@
+# old-code-compatible: Creates only the new install_sharing table and its singleton constraint; previous code never reads it.
 defmodule Platform.Repo.Migrations.CreateInstallSharing do
   @moduledoc """
   Task `01a1b678-8bb4-7000-96d2-c691eb9b13b5`, stage 1: the singleton row

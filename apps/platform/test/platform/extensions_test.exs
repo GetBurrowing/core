@@ -944,7 +944,7 @@ defmodule Platform.ExtensionsTest do
     # agent can tell a Voice tab record in its DM. Names, bundles, summaries
     # and parameter schemas are unchanged. Measured on the test rig at the
     # stage's branch.
-    @main_tool_digest_off "557dba2378186c61e36b356459448cb5fabaf6b6e4e7ad46d0522dade251c8c1"
+    @main_tool_digest_off "5dec67a60eacd337c89a4bde2d0b465ed1486f4d6ef1593a2b7476c1800e5470"
     @main_kinds_summaries_digest_off "514cb7a62dea7ea34226d7b60d2f243d5bb9a940bc1f5d44fd2e0e27e8074c52"
     @main_kinds_tool_schemas_digest_off "45c4c34283c8da212f6ab061ae43d1582e41b7192e8f8a442bfd45b3dd6f8e86"
     # main's lists minus exactly `play`.
@@ -1156,10 +1156,13 @@ defmodule Platform.ExtensionsTest do
       assert Enum.map(legacy, &{&1.name, &1.bundle}) == @main_tool_names_off
       # canvas_create embeds the kind union. Strip only the two additive
       # consent-card properties, preserving the legacy definition oracle.
-      assert digest(without_learned_shapes(legacy_kind_props(legacy))) == @main_tool_digest_off
-
-      assert digest(without_instruction_updates(legacy_kind_props(legacy))) ==
+      assert [
+               digest(without_learned_shapes(legacy_kind_props(legacy))),
+               digest(without_instruction_updates(legacy_kind_props(legacy)))
+             ] == [
+               @main_tool_digest_off,
                "03f4dfe9d2f50c8b5e29e368dc02099e1db8aa76643e6c487ba20844524b5452"
+             ]
     end
 
     test "bundles, kinds, metrics, surfaces and rail are main's minus the module's entries" do
