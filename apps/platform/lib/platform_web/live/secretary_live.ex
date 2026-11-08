@@ -326,12 +326,12 @@ defmodule PlatformWeb.SecretaryLive do
   defp tag_class("waiting"), do: "border-warning/60 text-warning"
   defp tag_class("fyi"), do: "border-info/60 text-info"
   defp tag_class("not_in_space"), do: "border-dashed border-info/60 text-info"
-  defp tag_class(_), do: "border-base-300 text-base-content/70"
+  defp tag_class(_), do: "border-edge text-subtle"
 
   defp brief_tag_class("may_not_know"), do: "border-info/60 text-info"
   defp brief_tag_class("risk"), do: "border-warning/60 text-warning"
-  defp brief_tag_class("nobody_flagged"), do: "border-base-300 text-base-content/70"
-  defp brief_tag_class(_), do: "border-base-300 text-base-content"
+  defp brief_tag_class("nobody_flagged"), do: "border-edge text-subtle"
+  defp brief_tag_class(_), do: "border-edge text-base-content"
 
   defp first_brief_id(%{brief: [%{id: id} | _]}), do: id
   defp first_brief_id(_), do: nil

@@ -104,6 +104,9 @@ defmodule Platform.Design.PlaceholderContrastTest do
   # A file that gains a `placeholder:` utility cannot stay here: it moves to
   # `@template_sites`.
   @placeholder_exclusions %{
+    # The secretary view's "Add something to do" field (task 01a1b721 stage
+    # 4): no placeholder: utility, so the base ::placeholder rule.
+    "platform_web/live/secretary_live.html.heex" => :global_default,
     # The character builder's Try-it field, "Ask <name> anything…" (task
     # 01a1b6ad stage 2): no placeholder: utility, so the base ::placeholder rule.
     "platform_web/live/control_center/character_builder.ex" => :global_default,

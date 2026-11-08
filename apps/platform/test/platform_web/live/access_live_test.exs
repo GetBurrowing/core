@@ -449,7 +449,13 @@ defmodule PlatformWeb.AccessLiveTest do
       )
 
     {:ok, panel, _} = live(conn_for(ctx.root), "/access/user/#{member.id}")
-    assert has_element?(panel, "[data-source=Locked][data-module=inbox]", "Locked: Inbox")
+
+    assert has_element?(
+             panel,
+             "[data-source=Locked][data-module=inbox]",
+             "Locked: #{Platform.Secretary.name()}"
+           )
+
     assert has_element?(panel, "[data-source=Locked] td", org.name)
     assert has_element?(panel, "#access-lock-org option[value='#{sub}']")
     refute has_element?(panel, "#access-lock-module option[value=inbox]")

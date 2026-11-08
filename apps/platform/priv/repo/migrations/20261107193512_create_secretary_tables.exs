@@ -20,6 +20,7 @@ defmodule Platform.Repo.Migrations.CreateSecretaryTables do
   use Ecto.Migration
 
   def change do
+    # old-code-compatible: creates five new, empty tables the previous release never reads or writes
     create table(:secretary_batches, primary_key: false) do
       add(:id, :binary_id, primary_key: true)
       add(:user_id, references(:users, type: :binary_id, on_delete: :delete_all), null: false)

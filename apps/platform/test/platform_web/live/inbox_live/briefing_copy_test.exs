@@ -145,7 +145,8 @@ defmodule PlatformWeb.InboxLive.BriefingCopyTest do
       Copy.settings_note(%{apply_page_edits: true, file_tasks: true, deliver_questions: false})
 
     assert note.lead ==
-             "Briefings arrive in your Inbox each morning. Items you don't handle expire after 7 days."
+             "Briefings arrive in your #{Platform.Secretary.name()} each morning. " <>
+               "Items you don't handle expire after 7 days."
 
     assert note.flags == " · deliver at 7:00 · include page edits ✓ · tasks ✓ · questions ✗"
   end
