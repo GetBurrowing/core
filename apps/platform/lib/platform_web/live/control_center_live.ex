@@ -35,6 +35,7 @@ defmodule PlatformWeb.ControlCenterLive do
   alias PlatformWeb.ControlCenter.OnboardingEvents
   alias PlatformWeb.ControlCenter.RolesPanel
   alias PlatformWeb.ControlCenter.RuntimeEvents
+  alias PlatformWeb.ControlCenter.UnattachedRuntimes
   alias PlatformWeb.ControlCenter.VaultEvents
   alias PlatformWeb.ControlCenter.WorkspaceEvents
 
@@ -52,7 +53,11 @@ defmodule PlatformWeb.ControlCenterLive do
      socket
      |> assign(:page_title, "Agents")
      |> assign(:current_user_id, current_user_id)
-     |> assign_create_permission(Platform.Access.Scope.for_user(%{id: current_user_id}))
+     |> assign_access_scope(Platform.Access.Scope.for_user(%{id: current_user_id}))
+     # Unattached runtimes (task 01a1b84c stage 2): admins only; a member's
+     # list stays [] so the sidebar link and the pane never render for them.
+     |> assign(:unattached_runtimes, [])
+     |> assign(:unattached_owners, %{})
      |> assign(:agent_host_connected?, AgentHost.connected?())
      |> assign(:restarting_agent_id, nil)
      |> assign(:manageable_agent_ids, MapSet.new())
@@ -107,6 +112,7 @@ defmodule PlatformWeb.ControlCenterLive do
        to_form(%{"runtime_id" => "", "display_name" => "", "agent_name" => ""}, as: :federate)
      )
      |> assign(:federate_result, nil)
+     |> assign(:federate_conflict, nil)
      |> assign(:import_agents, [])
      |> assign(:import_selected, MapSet.new())
      |> assign(:external_agent_form, AgentData.build_external_agent_form())
@@ -152,6 +158,7 @@ defmodule PlatformWeb.ControlCenterLive do
       |> assign(:selected_agent, selected_agent)
       |> assign(:selected_agent_directory_entry, selected_entry)
       |> assign_builder_from_params(params)
+      |> assign_unattached_runtimes()
 
     socket =
       if selected_agent do
@@ -380,7 +387,7 @@ defmodule PlatformWeb.ControlCenterLive do
   @impl true
   def handle_event(name, params, socket) do
     scope = Platform.Access.Scope.for_user(%{id: socket.assigns.current_user_id})
-    socket = socket |> assign(:access_scope, scope) |> assign_create_permission(scope)
+    socket = assign_access_scope(socket, scope)
 
     permitted? =
       case Map.get(@event_policy, name) do
@@ -984,6 +991,7 @@ defmodule PlatformWeb.ControlCenterLive do
         template_form={@template_form}
         federate_form={@federate_form}
         federate_result={@federate_result}
+        federate_conflict={@federate_conflict}
         import_agents={@import_agents}
         import_selected={@import_selected}
         create_agent_form={@create_agent_form}
@@ -1037,6 +1045,27 @@ defmodule PlatformWeb.ControlCenterLive do
                 <span class="hero-plus h-4 w-4" /> Add
               </button>
             </div>
+            <%!-- Task 01a1b84c stage 2: admin-only entry to the unattached
+                 runtimes pane. The event policy stays the enforcement. --%>
+            <.link
+              :if={@can_create_ownerless?}
+              id="unattached-runtimes-link"
+              navigate={~p"/control/unattached-runtimes"}
+              class={[
+                "mt-3 inline-flex items-center gap-2 text-xs font-medium",
+                @live_action == :unattached_runtimes && "text-primary",
+                @live_action != :unattached_runtimes && "text-subtle hover:text-base-content"
+              ]}
+            >
+              <span class="hero-link-slash h-4 w-4" /> Unattached runtimes
+              <span
+                :if={@unattached_runtimes != []}
+                id="unattached-runtimes-count"
+                class="badge badge-warning badge-sm"
+              >
+                {length(@unattached_runtimes)}
+              </span>
+            </.link>
           </div>
 
           <nav
@@ -1133,8 +1162,17 @@ defmodule PlatformWeb.ControlCenterLive do
         <%!-- ── Main panel ─────────────────────────────────────────── --%>
         <main class={[
           "min-h-0 flex-1 overflow-y-auto",
-          is_nil(@selected_agent) && "hidden lg:block"
+          is_nil(@selected_agent) && @live_action != :unattached_runtimes && "hidden lg:block"
         ]}>
+          <%!-- Unattached runtimes pane (task 01a1b84c stage 2) --%>
+          <UnattachedRuntimes.panel
+            :if={@live_action == :unattached_runtimes and @can_create_ownerless?}
+            runtimes={@unattached_runtimes}
+            owners={@unattached_owners}
+          />
+          <UnattachedRuntimes.admins_only :if={
+            @live_action == :unattached_runtimes and not @can_create_ownerless?
+          } />
           <%!-- Agent detail view --%>
           <div
             :if={@selected_agent}
@@ -1296,7 +1334,10 @@ defmodule PlatformWeb.ControlCenterLive do
 
           <%!-- No agent selected → Roles panel (M7 stage 5 + 6 advanced) --%>
           <RolesPanel.panel
-            :if={is_nil(@selected_agent) and @active_tab == :roles}
+            :if={
+              is_nil(@selected_agent) and @active_tab == :roles and
+                @live_action != :unattached_runtimes
+            }
             roles={@roles}
             role_bundles={@role_bundles}
             role_assignments_by_key={@role_assignments_by_key}
@@ -1388,6 +1429,30 @@ defmodule PlatformWeb.ControlCenterLive do
   # (task 01a1ae4b); the event policy stays the enforcement.
   defp assign_create_permission(socket, scope) do
     assign(socket, :can_create_ownerless?, Platform.Access.Agents.may_create_ownerless?(scope))
+  end
+
+  defp assign_access_scope(socket, scope) do
+    socket |> assign(:access_scope, scope) |> assign_create_permission(scope)
+  end
+
+  # Task 01a1b84c stage 2. Admins get the live list on every navigation (it
+  # feeds the sidebar count and the pane); everyone else keeps []. Owner rows
+  # are resolved once per list so the pane shows a name, not an id.
+  defp assign_unattached_runtimes(%{assigns: %{can_create_ownerless?: true}} = socket) do
+    runtimes = Federation.list_unattached_runtimes(socket.assigns.access_scope)
+
+    owners =
+      runtimes
+      |> Enum.map(& &1.owner_user_id)
+      |> Platform.Accounts.get_users_map(include_archived: true)
+
+    socket
+    |> assign(:unattached_runtimes, runtimes)
+    |> assign(:unattached_owners, owners)
+  end
+
+  defp assign_unattached_runtimes(socket) do
+    socket |> assign(:unattached_runtimes, []) |> assign(:unattached_owners, %{})
   end
 
   defp assign_roles_panel(socket) do
