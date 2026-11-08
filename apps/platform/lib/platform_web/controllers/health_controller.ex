@@ -21,8 +21,21 @@ defmodule PlatformWeb.HealthController do
   # (POCKET_ID_API_KEY, `Platform.SignInAdmin.Config.api_key/0`), compared in
   # constant time with `Plug.Crypto.secure_compare/2` as the agent-host socket
   # compares its token. No other STATIC_API_KEY comparison exists in core.
+  #
+  # Host updater (task 01a1b7b6 stage 3): when the updater is installed, the
+  # body also carries `update: %{channel, auto_update, last_result,
+  # last_checked_at, last_rollback}` (`Platform.Updates.health_summary/0`), so
+  # a fleet dashboard can read update state without a key. It never carries
+  # an image digest, a path or a request id, and is absent when the updater
+  # is not installed. Status stays 200 and `status`/`commit` are unchanged.
   def index(conn, params) do
     body = %{status: "ok", commit: Platform.BuildInfo.commit()}
+
+    body =
+      case Platform.Updates.health_summary() do
+        %{} = update -> Map.put(body, :update, update)
+        nil -> body
+      end
 
     body =
       if params["deep"] == "memory" and key_matches?(conn),

@@ -41,9 +41,9 @@ GOLDEN = os.path.join(HERE, "golden")
 sys.path.insert(0, INSTALLER)
 
 from identity_terms import identity_hits, planted_term
-from migrate_embed import cut_migrate_script
+from migrate_embed import cut_migrate_script, expand_compressed
 
-from burrow_install import registry
+from burrow_install import registry, templates
 from burrow_install.__main__ import main
 from burrow_install.manifest import load
 from burrow_install.render import TARGETS, RenderError, build, plan, render
@@ -973,7 +973,13 @@ class ModuleFlavourTest(PositiveControlMixin, unittest.TestCase):
                     removed = core[rel].splitlines()[i1:i2]
                     added = play[rel].splitlines()[j1:j2]
                     self.assertEqual(
-                        [line.replace("/core:core", "/core:play") for line in removed],
+                        [
+                            # updater.env names the flavour the channel tag carries.
+                            line.replace("/core:core", "/core:play").replace(
+                                "FLAVOUR=core", "FLAVOUR=play"
+                            )
+                            for line in removed
+                        ],
                         [line for line in added if "GAME_STREAM_ENABLED" not in line],
                         f"{rel}: selecting play changed more than the image and its gate",
                     )
@@ -1026,6 +1032,7 @@ class ModuleFlavourTest(PositiveControlMixin, unittest.TestCase):
             _ci_publish_refs(play[0]),
             [
                 "ghcr.io/getburrowing/core:play",
+                "ghcr.io/getburrowing/core:play-edge",
                 "ghcr.io/getburrowing/core:play-${{ github.sha }}",
                 "ghcr.io/getburrowing/core:play-${{ steps.vars.outputs.short_sha }}",
                 "ghcr.io/getburrowing/core:latest",
@@ -1256,7 +1263,8 @@ class FreshRenderNamesTest(TempDirMixin, unittest.TestCase):
     def test_the_cut_is_needed_positive_control(self):
         # Without the cut the scan finds the script's legacy names: the cut is
         # what the test above relies on, so it must be shown to matter.
-        user_data = self.renders()["single-host"]["user-data"]
+        # The script ships gz+b64, so the scan reads it expanded.
+        user_data = expand_compressed(self.renders()["single-host"]["user-data"])
         self.assertTrue(self.LEGACY.findall(user_data))
         self.assertEqual(self.LEGACY.findall(self.without_migrate_script(user_data)[0]), [])
 
@@ -1281,6 +1289,16 @@ class FreshRenderNamesTest(TempDirMixin, unittest.TestCase):
             )
             for k in registry.REGISTRY_IMAGES
         }
+        # The updater (task 01a1b7b6) moves a legacy install to the published
+        # core repo and keeps its frozen Docker Hub repo as a rollback target.
+        legacy_updater = (
+            f"CORE_REPO={templates.PUBLISHED_CORE_REPO}\n"
+            f"      ROLLBACK_REPOS=docker.io/example/{registry.LEGACY_HUB_IMAGES['core']}\n"
+        )
+        self.assertIn(legacy_updater, legacy["user-data"])
+        legacy["user-data"] = legacy["user-data"].replace(
+            legacy_updater, "CORE_REPO=ghcr.io/example/core\n      ROLLBACK_REPOS=\n"
+        )
         changed = 0
         for rel in fresh:
             mapped = fresh[rel]

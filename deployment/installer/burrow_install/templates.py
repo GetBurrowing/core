@@ -14,9 +14,13 @@ JSON strings, which are valid YAML double-quoted scalars, so no value can be
 misread as a bool, number or null.
 """
 
+import base64
+import importlib.util
 import json
 import os
 import re
+import struct
+import zlib
 
 from . import agents, registry
 
@@ -595,6 +599,207 @@ def stack_unit(plan):
     return "\n".join(lines) + "\n"
 
 
+# Shipped compressed (cloud-init write_files encoding gz+b64): DigitalOcean
+# caps user_data at 64 KiB, and the largest hosted plan (meetings on, an
+# s3-compatible backup) only fits with the embedded migrate script, the host
+# updater and the two backup scripts compressed. cloud-init decodes each to
+# the same bytes and mode.
+COMPRESSED_FILES = (
+    "bin/burrow-migrate",
+    "bin/burrow-update",
+    "bin/burrow-backup",
+    "bin/burrow-restore-drill",
+)
+
+
+def gzip_b64(text):
+    """Deterministic gzip (fixed header: no name, mtime 0, OS unknown), base64."""
+    data = text.encode("utf-8")
+    deflate = zlib.compressobj(9, zlib.DEFLATED, -15, 9)
+    body = deflate.compress(data) + deflate.flush()
+    header = b"\x1f\x8b\x08\x00\x00\x00\x00\x00\x02\xff"
+    trailer = struct.pack("<II", zlib.crc32(data), len(data) & 0xFFFFFFFF)
+    return base64.b64encode(header + body + trailer).decode("ascii")
+
+
+# ---------------------------------------------------------------------------
+# The host updater (core task 01a1b7b6 stage 1): bin/burrow-update, its
+# updater.env, three units and /var/lib/burrow-updater. Delivered by
+# cloud-init only, so a re-render's install directory never carries the
+# override or the updater's state (the updater re-asserts its override on
+# every run anyway).
+# ---------------------------------------------------------------------------
+
+UPDATER_SOURCE = os.path.join(
+    os.path.dirname(os.path.dirname(os.path.abspath(__file__))), "updater", "burrow_update.py"
+)
+UPDATER_BIN = "bin/burrow-update"
+UPDATER_ENV = "/etc/burrow-updater/updater.env"
+UPDATER_UNIT_NAME = "burrow-updater.service"
+UPDATER_TIMER_NAME = "burrow-updater.timer"
+UPDATER_PATH_NAME = "burrow-updater.path"
+# The repository CI publishes core to. A legacy (images.image_namespace)
+# install moves to it; its frozen Docker Hub repo stays a rollback target.
+PUBLISHED_CORE_REPO = "ghcr.io/getburrowing/" + registry.REGISTRY_IMAGES["core"]
+UPDATER_HEALTH_TIMEOUT_S = 600
+UPDATER_MEETING_STALE_HOURS = 12
+
+
+def updater_module():
+    """bin/burrow-update as a module: the render reuses its override and status text."""
+    spec = importlib.util.spec_from_file_location("burrow_update", UPDATER_SOURCE)
+    module = importlib.util.module_from_spec(spec)
+    spec.loader.exec_module(module)
+    return module
+
+
+def updater_script():
+    with open(UPDATER_SOURCE, encoding="utf-8") as handle:
+        return handle.read()
+
+
+def updater_settings(plan):
+    """{CHANNEL, CORE_REPO, ROLLBACK_REPOS, FLAVOUR} and the reason CHANNEL is pinned."""
+    m = plan.manifest
+    channel, why = m["day2"]["upgrade_channel"], None
+    if m["images"]["refs"].get("core-platform"):
+        channel, why = "pinned", "images.refs.core-platform pins the core image"
+    elif plan.images_preloaded:
+        channel, why = "pinned", 'images.source = "preloaded": nothing is pulled'
+    repo, rollback = registry.core_image_repo(m), ""
+    if not registry.image_registry(m):
+        repo, rollback = PUBLISHED_CORE_REPO, registry.core_image_repo(m)
+    flavour = registry.IMAGE_FLAVOURS[frozenset(m["install"]["modules"])]
+    return {
+        "CHANNEL": channel,
+        "CORE_REPO": repo,
+        "ROLLBACK_REPOS": rollback,
+        "FLAVOUR": flavour,
+    }, why
+
+
+def updater_env(plan):
+    return updater_env_text(plan.name, *updater_settings(plan))
+
+
+def updater_env_text(name, values, why):
+    """updater.env for install ``name``; the render and bin/burrow-updater-bootstrap share it."""
+    lines = [
+        f"# {HEADER.format(name=name)}",
+        f"# Read by {INSTALL_ROOT}/{UPDATER_BIN} only. Core cannot write it; no secrets.",
+        "# CHANNEL = day2.upgrade_channel. The update target is always",
+        "# <CORE_REPO>:<FLAVOUR>-<CHANNEL>; a request from core can never name an image.",
+    ]
+    if why:
+        lines.append(f"# CHANNEL is pinned: {why}.")
+    lines += [f"{k}={v}" for k, v in values.items()]
+    lines += [
+        f"HEALTH_TIMEOUT_S={UPDATER_HEALTH_TIMEOUT_S}",
+        f"MEETING_STALE_HOURS={UPDATER_MEETING_STALE_HOURS}",
+        "AUTO_UPDATE_DEFAULT=true",
+    ]
+    return "\n".join(lines) + "\n"
+
+
+def updater_service_unit(plan):
+    return (
+        "\n".join(
+            [
+                f"# {HEADER.format(name=plan.name)}",
+                "[Unit]",
+                f"Description=Burrow host updater ({plan.name})",
+                "Requires=docker.service",
+                f"After=docker.service {STACK_UNIT_NAME}",
+                "# Started by the path unit on every inbox write: never start-limited.",
+                "StartLimitIntervalSec=0",
+                "",
+                "[Service]",
+                "Type=oneshot",
+                "User=root",
+                "# Mode comes from $TRIGGER_UNIT (path or timer). The updater takes",
+                "# flock(2) on /run/burrow-updater.lock itself: one run at a time.",
+                f"ExecStart={INSTALL_ROOT}/{UPDATER_BIN}",
+                "TimeoutStartSec=3600",
+            ]
+        )
+        + "\n"
+    )
+
+
+def updater_timer_unit(plan):
+    return (
+        "\n".join(
+            [
+                f"# {HEADER.format(name=plan.name)}",
+                "[Unit]",
+                f"Description=Hourly Burrow core update check ({plan.name})",
+                "",
+                "[Timer]",
+                "OnBootSec=5min",
+                "OnCalendar=hourly",
+                "RandomizedDelaySec=30min",
+                "Persistent=true",
+                f"Unit={UPDATER_UNIT_NAME}",
+                "",
+                "[Install]",
+                "WantedBy=timers.target",
+            ]
+        )
+        + "\n"
+    )
+
+
+def updater_path_unit(plan, inbox):
+    return (
+        "\n".join(
+            [
+                f"# {HEADER.format(name=plan.name)}",
+                "[Unit]",
+                f"Description=Burrow updater inbox ({plan.name})",
+                "",
+                "[Path]",
+                f"DirectoryNotEmpty={inbox}",
+                "# Past the limit the unit fails; every timer run resets and restarts it.",
+                "TriggerLimitIntervalSec=10s",
+                "TriggerLimitBurst=20",
+                f"Unit={UPDATER_UNIT_NAME}",
+                "",
+                "[Install]",
+                "WantedBy=paths.target",
+            ]
+        )
+        + "\n"
+    )
+
+
+def updater_entries(plan):
+    """{absolute path or install-relative path: (text, mode)} for user-data."""
+    upd = updater_module()
+    channel = updater_settings(plan)[0]["CHANNEL"]
+    unit_dir = "/etc/systemd/system"
+    return {
+        UPDATER_BIN: (updater_script(), EXEC_MODE),
+        "compose.override.yaml": (upd.override_text(), FILE_MODE),
+        UPDATER_ENV: (updater_env(plan), FILE_MODE),
+        upd.STATUS: (upd.initial_status(channel, True), FILE_MODE),
+        f"{unit_dir}/{UPDATER_UNIT_NAME}": (updater_service_unit(plan), FILE_MODE),
+        f"{unit_dir}/{UPDATER_TIMER_NAME}": (updater_timer_unit(plan), FILE_MODE),
+        f"{unit_dir}/{UPDATER_PATH_NAME}": (updater_path_unit(plan, upd.INBOX), FILE_MODE),
+    }
+
+
+def updater_runcmd():
+    """Directories, BEFORE the stack starts (docker would create the mount sources as root)."""
+    upd = updater_module()
+    owned = ["-o", "root", "-g", "root"]
+    core = ["-o", str(upd.CORE_UID), "-g", str(upd.CORE_UID)]
+    return [
+        ["install", "-d", *owned, "-m", "0755", upd.BASE, upd.OUTBOX],
+        ["install", "-d", *owned, "-m", "0700", upd.STATE, upd.CONSUMED],
+        ["install", "-d", *core, "-m", "0700", upd.CORE_DIR, upd.STAGING, upd.INBOX],
+    ]
+
+
 # ---------------------------------------------------------------------------
 # cloud-init
 # ---------------------------------------------------------------------------
@@ -629,23 +834,23 @@ def user_data(plan, install_files, registry_auth, agent_host_env=None):
         entries.update(agents.full_machine_files(plan, agent_host_env))
     if registry_auth is not None:
         entries["/root/.docker/config.json"] = (_ensure_newline(registry_auth), SECRET_MODE)
+    entries.update(updater_entries(plan))
 
     write_files = []
     for rel in sorted(entries, key=lambda r: _abs(r)):
         text, mode = entries[rel]
-        write_files.append(
-            {
-                "path": _abs(rel),
-                "owner": "root:root",
-                "permissions": f"0{mode:o}",
-                "content": Literal(text),
-            }
-        )
+        entry = {"path": _abs(rel), "owner": "root:root", "permissions": f"0{mode:o}"}
+        if rel in COMPRESSED_FILES:
+            entry["encoding"] = "gz+b64"
+            entry["content"] = gzip_b64(text)
+        else:
+            entry["content"] = Literal(text)
+        write_files.append(entry)
 
     mkdirs = [f"{INSTALL_ROOT}/postgres-init"]
     if plan.host_files:
         mkdirs.append(f"{INSTALL_ROOT}/models")
-    runcmd = [["mkdir", "-p", *mkdirs]]
+    runcmd = [["mkdir", "-p", *mkdirs], *updater_runcmd()]
     if plan.tls == "internal":
         runcmd.append([f"{INSTALL_ROOT}/bin/burrow-root-ca"])
     runcmd += [
@@ -664,6 +869,7 @@ def user_data(plan, install_files, registry_auth, agent_host_env=None):
     if fetches_model(plan):
         # Ubuntu 24.04 cloud images ship both; bin/burrow-fetch-model needs them.
         packages += ["curl", "coreutils"]
+    runcmd.append(["systemctl", "enable", "--now", UPDATER_TIMER_NAME, UPDATER_PATH_NAME])
     runcmd.append(["systemctl", "start", "--no-block", STACK_UNIT_NAME])
     doc = {
         "package_update": True,

@@ -1,5 +1,11 @@
 line-length = 100
 target-version = "py311"
+# Import roots for first- vs third-party sorting. Given with --config, ruff
+# resolves these against the working directory, so both spellings are listed:
+# "." from this directory, the other from the repository root (the lint
+# validation runs `ruff check --config deployment/installer/ruff.toml
+# deployment/installer` from there).
+src = [".", "deployment/installer"]
 
 [lint]
 extend-select = ["I", "UP", "B"]

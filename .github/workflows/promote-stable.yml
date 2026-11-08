@@ -1,0 +1,82 @@
+# Soak-gated promotion of the `stable` release channel (task 01a1b7b6 stage 2).
+#
+# Hourly, deployment/release/promote_stable.py probes the vendor's production
+# install and one canary hosted install, records each hour both ran the same
+# commit as refs/soak/<sha>/<hour> (failures as refs/soak-fail/...), and moves
+# core-stable / play-stable to a commit only after STABLE_SOAK_HOURS observed
+# hours with no failure. Because main moves often, stable advances only after
+# a stretch in which one commit stays on both installs: reliability over speed.
+#
+# Repository variables (Settings -> Variables), never tracked here:
+#   STABLE_PROD_HEALTH_URL    the production install's /health
+#   STABLE_CANARY_HEALTH_URL  the canary's /health (a hosted install on
+#                             CHANNEL=edge whose owner agrees, or a
+#                             vendor-owned hosted droplet)
+#   STABLE_SOAK_HOURS         observed hours required (default 24)
+#   STABLE_HOLD               "true" holds stable where it is
+# Until both URLs are set every run is red and nothing promotes.
+#
+# workflow_dispatch with force=true and sha=<commit> promotes that commit
+# without the soak count; STABLE_HOLD still wins.
+#
+# Runs on a GitHub runner, never on a vendor host.
+name: Promote stable
+
+on:
+  schedule:
+    - cron: "41 * * * *"
+  workflow_dispatch:
+    inputs:
+      sha:
+        description: "Commit to force onto stable (full 40-hex sha; used only with force)"
+        required: false
+        default: ""
+        type: string
+      force:
+        description: "Skip the soak count for sha (STABLE_HOLD still applies)"
+        required: false
+        default: false
+        type: boolean
+
+permissions:
+  contents: write
+  packages: write
+
+concurrency:
+  group: promote-stable
+  cancel-in-progress: false
+
+jobs:
+  promote:
+    name: Promote stable
+    runs-on: ubuntu-latest
+    steps:
+      # Full history: soak refs point at the observed commits, so the push
+      # needs those objects locally.
+      - uses: actions/checkout@v5
+        with:
+          fetch-depth: 0
+
+      - uses: docker/login-action@v4
+        with:
+          registry: ghcr.io
+          username: ${{ github.actor }}
+          password: ${{ secrets.GITHUB_TOKEN }}
+
+      - uses: docker/setup-buildx-action@v4
+        with:
+          driver-opts: image=ghcr.io/getburrowing/buildkit:buildx-stable-1@sha256:cec9f139f45e93c5c69c60f8b07cfad9f43f4ef6b6a6cd917527fea5ff2e3dea
+
+      - name: Probe, record soak, promote
+        env:
+          STABLE_PROD_HEALTH_URL: ${{ vars.STABLE_PROD_HEALTH_URL }}
+          STABLE_CANARY_HEALTH_URL: ${{ vars.STABLE_CANARY_HEALTH_URL }}
+          STABLE_SOAK_HOURS: ${{ vars.STABLE_SOAK_HOURS }}
+          STABLE_HOLD: ${{ vars.STABLE_HOLD }}
+          PROMOTE_SHA: ${{ inputs.sha }}
+          PROMOTE_FORCE: ${{ inputs.force }}
+          GIT_AUTHOR_NAME: promote-stable
+          GIT_AUTHOR_EMAIL: promote-stable@localhost
+          GIT_COMMITTER_NAME: promote-stable
+          GIT_COMMITTER_EMAIL: promote-stable@localhost
+        run: python3 deployment/release/promote_stable.py
