@@ -6223,7 +6223,10 @@ defmodule Platform.Meetings do
   A malformed or missing id, a nil or id-less user, and an out-of-scope
   transcript all answer `{:error, :not_found}`, so ids are not probeable.
   """
-  # Transcript reads must stay readable for soft-deleted meetings (task 01a1b281) and must not inherit a deleted filter.
+  # The meeting is resolved with `include_deleted: true` (task 01a1b281
+  # stage 4): a soft-deleted meeting's transcript is kept, and the delete
+  # confirm promises it stays downloadable. The viewer rule is unchanged;
+  # only the deleted filter is left off here.
   @spec get_transcript_for_user(map() | nil, term()) ::
           {:ok, Transcript.t()} | {:error, :not_found}
   def get_transcript_for_user(%{id: user_id} = user, transcript_id) when is_binary(user_id) do
@@ -6242,7 +6245,7 @@ defmodule Platform.Meetings do
 
   defp transcript_viewable?(%Transcript{meeting_id: meeting_id}, user)
        when is_binary(meeting_id) do
-    match?({:ok, _}, get_meeting_for_user(user, meeting_id))
+    match?({:ok, _}, load_meeting_for_viewer(meeting_id, user, include_deleted: true))
   end
 
   defp transcript_viewable?(%Transcript{space_id: space_id}, user) when is_binary(space_id) do
