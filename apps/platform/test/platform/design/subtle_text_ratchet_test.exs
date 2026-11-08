@@ -228,7 +228,7 @@ defmodule Platform.Design.SubtleTextRatchetTest do
   # three of them (the 10px panel labels): 106 -> 103. Burrow redesign 22
   # stage 4 (2026-10-25) deleted the desktop search drawer, whose 11px and
   # 10px result meta carried three: 103 -> 100.
-  @small_subtle_ceiling 100
+  @small_subtle_ceiling 99
   @small_size ~r/(?<![\w-])text-\[(?:\d|1[01])(?:\.\d+)?px\]|(?<![\w-])text-\[0\.(?:[0-6]\d*|7[0-4]\d*)rem\]/
   @tier_collapses [
     {"apps/platform/lib/platform_web/live/control_center/roles_panel.ex", ">unassigned<"},
@@ -281,7 +281,7 @@ defmodule Platform.Design.SubtleTextRatchetTest do
     {"apps/platform/lib/platform_web/live/pipeline_live.ex",
      ~r/:for=\{row <- measured\(@breakdown\)\}\s*class="([^"]*)"/},
     {"apps/platform/lib/platform_web/live/control_center/roles_panel.ex",
-     ~r/:for=\{key <- Map\.get\(@role_bundles, role\.key, \[\]\)\}\s*class="([^"]*)"/},
+     ~r/data-role="role-bundle-keys"\s*class="([^"]*)"/},
     {"apps/platform/lib/platform_web/live/control_center/roles_panel.ex",
      ~r/<code class="([^"]*)">\s*\{row\.responsibility_key\}/},
     {"apps/platform/lib/platform_web/live/tasks/task_detail_component.ex",

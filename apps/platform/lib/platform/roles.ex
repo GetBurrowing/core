@@ -175,6 +175,46 @@ defmodule Platform.Roles do
     |> Repo.all()
   end
 
+  @plain_lines %{
+    "historian" =>
+      "Keeps the team's long-term memory: daily summaries, decisions from meetings, and people profiles.",
+    "meeting_scribe" =>
+      "Takes notes in meetings, writes the summary and action items, and follows up afterward.",
+    "meeting_producer" =>
+      "Listens to live meetings and passes each request to the agent best placed to handle it.",
+    "triage_officer" =>
+      "Keeps the task list in order: sorts new tasks, unblocks stuck ones, takes in outside feedback, and writes a weekly review.",
+    "designer" =>
+      "Reviews visual design, writes design direction for new work, and checks it against the brand.",
+    "security_guard" =>
+      "Scans regularly for vulnerable dependencies, risky code, drifted deploy settings, and leaked secrets.",
+    "architect" =>
+      "Reviews plans and code changes so work across tasks fits together, with a weekly check for drift.",
+    "agents_leader" => "Owns the agents space's goal and checks progress against it every day.",
+    "scientist" => "Runs experiments on how the platform makes decisions and reads the results.",
+    "janitor" =>
+      "Clears small internal chores once a week, including fixes the Architect's weekly sweep turns up."
+  }
+
+  @doc """
+  The one plain-language line that says what a role does, for people and for
+  Burrow's own instructions (task 01a1b741). This is the single copy: the
+  roles panel and `Platform.Agents.Burrow.roles_section/1` both read it.
+  Falls back to the role's stored description for a key with no line.
+
+  ## Examples
+
+      iex> Platform.Roles.plain_line("scientist")
+      "Runs experiments on how the platform makes decisions and reads the results."
+  """
+  @spec plain_line(String.t()) :: String.t() | nil
+  def plain_line(role_key) when is_binary(role_key) do
+    case Map.fetch(@plain_lines, role_key) do
+      {:ok, line} -> line
+      :error -> with %Role{description: d} <- get_role(role_key), do: d
+    end
+  end
+
   # ── Assignments ───────────────────────────────────────────────────────
 
   @doc """
@@ -184,7 +224,9 @@ defmodule Platform.Roles do
   any other DB-level rejection.
 
   **Does NOT replace** an existing assignment — Decision 1. Callers
-  must `unassign_role/1` first if they intend to re-pin.
+  must `unassign_role/1` first if they intend to re-pin, or use
+  `reassign_role/2` (`reassign_role/3` with an actor) to hand a held
+  role to another agent in one transactional step.
 
   ## Examples
 
@@ -205,6 +247,99 @@ defmodule Platform.Roles do
     if AgentAccess.may_assign?(scope, get_agent_if_valid(agent_id)),
       do: assign_role(role_key, agent_id),
       else: {:error, :unauthorized}
+  end
+
+  @doc """
+  Hand `role_key` to `agent_id` in one step: lock the current
+  assignment row (`FOR UPDATE`), delete it and insert the new one in a
+  single transaction. A failed insert rolls the delete back, so the old
+  holder keeps the role.
+
+  Exactly ONE `{:role_assignment_changed, ...}` broadcast is sent after
+  commit, carrying the post-state, so subscribers never see an
+  intermediate `agent_id: nil`. Nothing is broadcast on error.
+
+  When `agent_id` already holds the role, nothing is written or
+  broadcast and the existing row is returned. An unheld role behaves
+  like `assign_role/2`.
+
+  `assign_role/2` keeps refusing a held role (Decision 1); this is the
+  explicit handover.
+  """
+  @spec reassign_role(String.t(), binary()) ::
+          {:ok, RoleAssignment.t()} | {:error, Ecto.Changeset.t()}
+  def reassign_role(role_key, agent_id) when is_binary(role_key) and is_binary(agent_id) do
+    do_reassign(role_key, agent_id, fn _current -> :ok end)
+  end
+
+  @doc """
+  Actor-checked `reassign_role/2`. The scope must be allowed to assign
+  the new agent (`may_assign?`) and to release the current holder
+  (`may_release?`), checked inside the same transaction after the
+  current row is locked. Otherwise `{:error, :unauthorized}` and nothing
+  changes.
+  """
+  @spec reassign_role(String.t(), binary(), keyword()) ::
+          {:ok, RoleAssignment.t()} | {:error, Ecto.Changeset.t() | :unauthorized}
+  def reassign_role(role_key, agent_id, actor: %Scope{} = scope)
+      when is_binary(role_key) and is_binary(agent_id) do
+    do_reassign(role_key, agent_id, fn current ->
+      may_release? =
+        case current do
+          nil -> true
+          %RoleAssignment{agent_id: holder_id} -> may_release_holder?(scope, holder_id)
+        end
+
+      if may_release? and AgentAccess.may_assign?(scope, get_agent_if_valid(agent_id)),
+        do: :ok,
+        else: {:error, :unauthorized}
+    end)
+  end
+
+  defp may_release_holder?(scope, holder_id),
+    do: AgentAccess.may_release?(scope, get_agent_if_valid(holder_id))
+
+  defp do_reassign(role_key, agent_id, authorize) do
+    result =
+      Repo.transaction(fn ->
+        current =
+          RoleAssignment
+          |> where([ra], ra.role_key == ^role_key)
+          |> lock("FOR UPDATE")
+          |> Repo.one()
+
+        with :ok <- authorize.(current) do
+          case current do
+            %RoleAssignment{agent_id: ^agent_id} = existing ->
+              {:unchanged, existing}
+
+            _ ->
+              if current, do: Repo.delete!(current)
+
+              %RoleAssignment{}
+              |> RoleAssignment.changeset(%{role_key: role_key, agent_id: agent_id})
+              |> Repo.insert()
+              |> case do
+                {:ok, assignment} -> {:changed, assignment}
+                {:error, changeset} -> Repo.rollback(changeset)
+              end
+          end
+        else
+          {:error, reason} -> Repo.rollback(reason)
+        end
+      end)
+
+    case result do
+      {:ok, {:unchanged, existing}} ->
+        {:ok, existing}
+
+      {:ok, {:changed, assignment}} ->
+        broadcast_assignment_change(role_key)
+        {:ok, assignment}
+
+      {:error, _} = error ->
+        error
+    end
   end
 
   @doc """

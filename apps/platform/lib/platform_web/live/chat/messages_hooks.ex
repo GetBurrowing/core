@@ -1654,6 +1654,30 @@ defmodule PlatformWeb.ChatLive.MessagesHooks do
     Phoenix.LiveView.push_event(socket, "compose_reset", %{})
   end
 
+  @draft_param_max 2_000
+
+  @doc """
+  Pre-fill the composer from a `?draft=` link (task 01a1b741 stage 4: the
+  roles panel's "Ask Burrow about splitting roles"). It only fills the
+  composer and never sends. A space that already holds a draft keeps it, so
+  a reconnect on the same URL does not overwrite what the user typed. Text
+  over #{@draft_param_max} characters, or a non-string, is ignored.
+  """
+  @spec maybe_prefill_draft(Phoenix.LiveView.Socket.t(), term(), binary()) ::
+          Phoenix.LiveView.Socket.t()
+  def maybe_prefill_draft(socket, draft, space_id)
+      when is_binary(draft) and draft != "" and byte_size(draft) <= @draft_param_max do
+    if Map.get(socket.assigns[:drafts] || %{}, space_id, "") == "" do
+      socket
+      |> update(:drafts, &Map.put(&1 || %{}, space_id, draft))
+      |> assign_compose(draft)
+    else
+      socket
+    end
+  end
+
+  def maybe_prefill_draft(socket, _draft, _space_id), do: socket
+
   defp assign_compose(socket, text) do
     assign(socket, :compose_form, to_form(%{"text" => text}, as: :compose))
   end

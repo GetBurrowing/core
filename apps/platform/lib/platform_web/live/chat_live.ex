@@ -1087,6 +1087,7 @@ defmodule PlatformWeb.ChatLive do
        |> MeetingHooks.maybe_restore_on_reconnect(space)
        |> span(:presence, &PresenceHooks.enter_space(&1, space, participant, participants))
        |> span(:message_window, &enter_space_window(&1, anchor, space, participant))
+       |> MessagesHooks.maybe_prefill_draft(params["draft"], space.id)
        |> SearchHooks.reset_for_space()
        |> ChatListHooks.leave_list()
        |> span(:space_sheet, &SpaceSheetHooks.enter_space/1)

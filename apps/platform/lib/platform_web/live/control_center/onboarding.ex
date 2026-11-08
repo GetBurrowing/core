@@ -7,6 +7,7 @@ defmodule PlatformWeb.ControlCenter.Onboarding do
 
   import PlatformWeb.ControlCenter.Helpers
 
+  alias Platform.Agents.Burrow
   alias PlatformWeb.ControlCenter.SheetRefusal
 
   attr :show, :boolean, required: true
@@ -1080,17 +1081,23 @@ defmodule PlatformWeb.ControlCenter.Onboarding do
             <option value="" selected={@selected_role_key in [nil, ""]}>
               — Skip role assignment —
             </option>
+            <% burrow_ids = burrow_holder_ids(@role_assignments_by_key) %>
             <%= for role <- @roles do %>
-              <% taken = Map.get(@role_assignments_by_key, role.key) %>
+              <% holder = Map.get(@role_assignments_by_key, role.key) %>
+              <% from_burrow? = not is_nil(holder) and MapSet.member?(burrow_ids, holder.id) %>
+              <% taken = if from_burrow?, do: nil, else: holder %>
               <option
                 value={role.key}
                 disabled={not is_nil(taken) and @selected_role_key != role.key}
                 selected={@selected_role_key == role.key}
               >
-                <%= if taken && @selected_role_key != role.key do %>
-                  {role.name} (taken by {taken.name})
-                <% else %>
-                  {role.name}
+                <%= cond do %>
+                  <% from_burrow? -> %>
+                    {role.name} (from Burrow)
+                  <% taken && @selected_role_key != role.key -> %>
+                    {role.name} (taken by {taken.name})
+                  <% true -> %>
+                    {role.name}
                 <% end %>
               </option>
             <% end %>
@@ -1196,5 +1203,18 @@ defmodule PlatformWeb.ControlCenter.Onboarding do
       },
       pretty: true
     )
+  end
+
+  # Ids of the role holders that are Burrow. A role Burrow holds is
+  # offered in the external-agent form's role select (the new agent takes
+  # it over in one step); a role another agent holds stays disabled.
+  # Deduped by agent first so the managed-runtime lookup runs once per
+  # holder, not once per role.
+  defp burrow_holder_ids(role_assignments_by_key) do
+    role_assignments_by_key
+    |> Map.values()
+    |> Enum.uniq_by(& &1.id)
+    |> Enum.filter(&Burrow.burrow?/1)
+    |> MapSet.new(& &1.id)
   end
 end

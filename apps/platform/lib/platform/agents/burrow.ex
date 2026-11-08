@@ -30,14 +30,16 @@ defmodule Platform.Agents.Burrow do
 
   ## Default roles
 
-  `ensure/2` pins Burrow to each of `default_roles/0` (`historian`,
-  `meeting_scribe`, `meeting_producer`, `triage_officer`) that NO agent holds,
-  through `Platform.Roles.assign_role/2`, so historian curation (org-page
-  writes, starting with `org/page/identity.md` in the setup guide) and the
-  meeting roles work from the first run (task 01a19aa4 stage 2). A role
-  another agent already holds is never taken; `assign_role/2` does not
-  replace a pinned role either. Re-running `ensure/2` changes nothing. The
-  owner can change the roles later in the Control Center.
+  Burrow holds every role in `Platform.Roles.Role.valid_keys/0` that no other
+  agent holds (`default_roles/0` is that roster, derived, never a second
+  list), so all of the install's role work, from historian curation and the
+  meeting roles to the architect gate and the scheduled sweeps, runs from the
+  first run. `ensure/2` fills them through `fill_unheld_roles/1`, and existing
+  installs got the same fill once from the data migration
+  `burrow_holds_unheld_roles`. A role another agent holds is never taken;
+  `Platform.Roles.assign_role/2` does not replace a pinned role either.
+  Re-running `ensure/2` changes nothing. The owner can hand any role to a
+  specialist in the Control Center.
 
   ## Owner and admins
 
@@ -57,11 +59,13 @@ defmodule Platform.Agents.Burrow do
 
   @name "Burrow"
   @slug "burrow"
-  @default_roles ~w(historian meeting_scribe meeting_producer triage_officer)
 
-  @doc "The roles `ensure/2` gives Burrow when no agent holds them."
+  @doc """
+  The roles `ensure/2` gives Burrow when no agent holds them: the whole
+  roster, `Platform.Roles.Role.valid_keys/0`.
+  """
   @spec default_roles() :: [String.t()]
-  def default_roles, do: @default_roles
+  def default_roles, do: Platform.Roles.Role.valid_keys()
 
   @doc "The agent's display name."
   def name, do: @name
@@ -102,7 +106,7 @@ defmodule Platform.Agents.Burrow do
   def ensure(owner_id, harness) when is_binary(owner_id) and harness in ~w(claude_code codex) do
     owner_id
     |> ensure_agent(harness)
-    |> assign_default_roles()
+    |> fill_after_ensure()
   end
 
   defp ensure_agent(owner_id, harness) do
@@ -138,23 +142,40 @@ defmodule Platform.Agents.Burrow do
     end
   end
 
-  # Only roles no agent holds: never take a role from another agent.
-  defp assign_default_roles({:ok, %Agent{id: agent_id}} = ok) do
-    for role <- @default_roles, is_nil(Roles.agent_id_for_role(role)) do
-      case Roles.assign_role(role, agent_id) do
-        {:ok, _assignment} ->
-          :ok
-
-        {:error, reason} ->
-          # Lost a race for the role: whoever holds it now keeps it.
-          Logger.warning("[Burrow] role #{role} not assigned: #{inspect(reason)}")
-      end
-    end
-
+  defp fill_after_ensure({:ok, %Agent{} = agent} = ok) do
+    _taken = fill_unheld_roles(agent)
     ok
   end
 
-  defp assign_default_roles(other), do: other
+  defp fill_after_ensure(other), do: other
+
+  @doc """
+  Give `agent` every role in `default_roles/0` that no agent holds, through
+  `Platform.Roles.assign_role/2`. Returns the role keys it took.
+
+  It never takes a role another agent holds (one agent per role), and a role
+  lost to a concurrent insert is logged and left with its winner. A second
+  run takes nothing and writes nothing.
+  """
+  @spec fill_unheld_roles(Agent.t()) :: [String.t()]
+  def fill_unheld_roles(%Agent{id: agent_id}) do
+    for role <- default_roles(),
+        is_nil(Roles.agent_id_for_role(role)),
+        taken?(role, agent_id),
+        do: role
+  end
+
+  defp taken?(role, agent_id) do
+    case Roles.assign_role(role, agent_id) do
+      {:ok, _assignment} ->
+        true
+
+      {:error, reason} ->
+        # Lost a race for the role: whoever holds it now keeps it.
+        Logger.warning("[Burrow] role #{role} not assigned: #{inspect(reason)}")
+        false
+    end
+  end
 
   defp harness_or(agent, fallback), do: harness(agent) || fallback
 
@@ -227,6 +248,123 @@ defmodule Platform.Agents.Burrow do
     """
   end
 
+  @roles_marker "## Roles you hold (as of your last start)"
+  @guidance_marker "## Splitting roles off"
+
+  @role_guidance """
+  #{@guidance_marker}
+
+  You hold every role on this install that no other agent holds, so all of this work runs from day one: the team's memory, meeting notes, triage, design direction, security scans, architecture review, the agents goal, experiments and the weekly chores.
+
+  That includes gates and scheduled jobs. You are the architect on every plan submit, so your verdict gates planning, and you run the designer's pre-plan design direction. You also run the janitor's weekly chore drain, the scientist's experiments and the architect's weekly sweep. Splitting those off is a common first move.
+
+  Your role list under "Roles you hold" is from your last start. A role handed to another agent since then still shows there until you restart, so confirm in Control Center, or ask the owner, before you act on it.
+
+  Why the owner might hand a role to a dedicated agent:
+
+  - It can run a different model or tools, picked for that one kind of work.
+  - It keeps its context focused on one kind of work, instead of sharing yours with everything else.
+  - It works at the same time as you, so neither of you waits for the other.
+
+  Which role first, and one at a time: start with the architect or the security guard. They exist to check work independently, and while you hold them you are reviewing your own plans. After that, pick the role whose work gains most from a different model or tools.
+
+  How: offer to open the character builder in Control Center (`/control?create=1&cls=<class>`), set to the class that fits the role: Builder for the architect, security guard or janitor; Scribe for the historian or meeting scribe; Producer for triage, the meeting producer or the agents leader; Scout for the scientist. The `cls` value is the class name in lower case, such as `builder`. For the designer, let the owner pick. Once the agent exists, they use "Hand to a specialist" on that role's row in the roles panel. For an external agent, the role picker on the external-agent form works too, and it offers the roles you hold. Either way the role moves from you to them in one step. Neither the character builder nor native agent creation has a role field, so don't tell the owner to pick a role there.
+
+  When: raise this yourself at most once; after that, explain it only when asked. A sensible moment is after you have been running here for about a week (the day count is under "Roles you hold"), and never in the middle of another task. Before you raise it, look through your direct conversation with the owner for an earlier explanation of yours; if you find one, wait to be asked. Whenever the owner asks what you can do, or asks about roles, explain it.
+  """
+
+  @doc "The heading of `roles_section/1`."
+  @spec roles_marker() :: String.t()
+  def roles_marker, do: @roles_marker
+
+  @doc "The heading of `role_guidance/0`."
+  @spec guidance_marker() :: String.t()
+  def guidance_marker, do: @guidance_marker
+
+  @doc """
+  Why and how to split roles off to a specialist, for Burrow's instructions
+  file. Generated at start (`start_blocks/1`), never stored.
+  """
+  @spec role_guidance() :: String.t()
+  def role_guidance, do: @role_guidance
+
+  @doc """
+  The blocks `NativeAgents.start_files/1` adds to Burrow's instructions file
+  through `Platform.Agents.Manners.ensure/2`, as `{marker, text}`: the roles
+  section for `agent`, then the guidance. Read from the database on every
+  call, never stored, so the stored file's version does not move.
+  """
+  @spec start_blocks(Agent.t()) :: [{String.t(), String.t()}]
+  def start_blocks(%Agent{} = agent),
+    do: [{@roles_marker, roles_section(agent)}, {@guidance_marker, @role_guidance}]
+
+  @doc "`roles_section/1` for the Burrow agent, or \"\" when there is none."
+  @spec roles_section() :: String.t()
+  def roles_section do
+    case get() do
+      %Agent{} = agent -> roles_section(agent)
+      nil -> ""
+    end
+  end
+
+  @doc """
+  The roles `agent` holds, each with its plain line (`Platform.Roles.plain_line/1`)
+  and its size as kinds of work (the role's bundle), the roles other agents
+  hold with that agent's name, and how many days `agent` has been on the
+  install. A snapshot taken at start.
+  """
+  @spec roles_section(Agent.t()) :: String.t()
+  def roles_section(%Agent{} = agent) do
+    held = Roles.roles_for(agent.id)
+    held_keys = MapSet.new(held, & &1.key)
+    names = Map.new(Roles.list_roles(), &{&1.key, &1.name})
+
+    held_lines =
+      case held do
+        [] -> ["- none"]
+        roles -> Enum.map(roles, &held_line/1)
+      end
+
+    other_lines =
+      case Enum.reject(Roles.assigned_agents(), &MapSet.member?(held_keys, &1.role_key)) do
+        [] -> ["- none"]
+        rows -> Enum.map(rows, &"- #{Map.get(names, &1.role_key, &1.role_key)}: #{&1.agent_name}")
+      end
+
+    """
+    #{@roles_marker}
+
+    You have been running on this install for #{days(agent)}.
+
+    You hold:
+
+    #{Enum.join(held_lines, "\n")}
+
+    Held by other agents:
+
+    #{Enum.join(other_lines, "\n")}
+    """
+  end
+
+  defp held_line(role) do
+    kinds =
+      case length(Roles.bundle_for(role.key)) do
+        1 -> "1 kind of work"
+        n -> "#{n} kinds of work"
+      end
+
+    "- #{role.name}: #{Roles.plain_line(role.key)} (#{kinds})"
+  end
+
+  defp days(%Agent{inserted_at: %DateTime{} = at}) do
+    case DateTime.diff(DateTime.utc_now(), at, :day) do
+      1 -> "1 day"
+      n -> "#{max(n, 0)} days"
+    end
+  end
+
+  defp days(_agent), do: "0 days"
+
   @doc """
   Burrow's instructions file (`CLAUDE.md` or `AGENTS.md`) for `harness`: the
   shared native-agent identity, its role and bundles, and the setup guide.
@@ -242,6 +380,7 @@ defmodule Platform.Agents.Burrow do
       for everyone on it: you work for every member. You plan and route work, keep
       the machine and its services healthy, and answer for the install's state to
       its owner and admins (listed at the end of this file).
+      You hold every role on this install that no other agent holds; see "Roles you hold" and "Splitting roles off" near the end of this file.
 
       ## Bundles you use
 

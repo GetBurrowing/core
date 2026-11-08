@@ -1583,7 +1583,7 @@ defmodule PlatformWeb.ControlCenterLiveTest do
   end
 
   describe "Roles panel (M7 stage 5)" do
-    test "GET /control with no agent selected renders 10 role rows + UNFILLED pills", %{
+    test "GET /control with no agent selected renders 10 role rows, none badged UNFILLED", %{
       conn: conn
     } do
       conn = authenticated_conn(conn)
@@ -1617,22 +1617,21 @@ defmodule PlatformWeb.ControlCenterLiveTest do
       assert html =~ "hero-clipboard-document-check"
       assert html =~ "hero-shield-check"
 
-      # Bundle keys render as <code> chips for at least one role.
-      assert html =~ "design.critique"
-      assert html =~ "memory.daily_summary"
-      assert html =~ "meetings.intent_classify"
-      assert html =~ "meetings.summarize"
-      assert html =~ "tasks.triage"
+      # Bundle keys: the first two of each role render (task 01a1b741 stage 4
+      # shows two plus "+N"; the full list is in Show advanced).
+      for key <- ~w(designer historian meeting_producer meeting_scribe triage_officer),
+          bundle_key <- Enum.take(Platform.Roles.bundle_for(key), 2) do
+        assert html =~ bundle_key
+      end
 
-      # Every row starts UNFILLED. With no agents, there is no picker to fill.
-      assert html =~ "UNFILLED"
+      # No agent holds a role here (no Burrow). Task 01a1b741 stage 4 dropped
+      # the UNFILLED badge and the dash cost chips; with no agents there is
+      # no picker to fill.
+      refute html =~ "UNFILLED"
+      assert html =~ "Not held by any agent"
       refute html =~ ~s(data-role="fill-role-picker")
-
-      # Cost stats stub chips render literal em-dash placeholders.
-      assert html =~ "runs —"
-      assert html =~ "last —"
-      assert html =~ "avg —"
-      assert html =~ "$/run —"
+      refute html =~ "runs —"
+      refute html =~ "$/run —"
 
       # Show advanced footer present (stage 6 owns the toggle behaviour).
       assert html =~ "Show advanced"
@@ -1647,7 +1646,7 @@ defmodule PlatformWeb.ControlCenterLiveTest do
       conn = authenticated_conn(conn)
       {:ok, _view, html} = live(conn, ~p"/control")
 
-      # The picker itself is present on every UNFILLED row.
+      # The picker itself is present on every unheld row.
       assert html =~ ~s(data-role="fill-role-picker")
 
       # A seeded active agent renders as an <option>.
@@ -1659,7 +1658,9 @@ defmodule PlatformWeb.ControlCenterLiveTest do
       assert html =~ "Create new external agent"
     end
 
-    test "assigning a role swaps the row to show the agent name + kind pill", %{conn: conn} do
+    test "assigning a role moves the row under Held by specialists with the agent name", %{
+      conn: conn
+    } do
       agent =
         create_agent(%{
           name: "Pixel Picasso",
@@ -1674,12 +1675,10 @@ defmodule PlatformWeb.ControlCenterLiveTest do
       conn = authenticated_conn(conn)
       {:ok, _view, html} = live(conn, ~p"/control")
 
-      # Designer row now shows the agent's name + EXT pill (kind == external).
+      # Designer row now shows the agent's name under "Held by specialists".
       assert html =~ "Pixel Picasso"
-      assert html =~ "EXT"
-
-      # Other three roles still UNFILLED.
-      assert html =~ "UNFILLED"
+      assert html =~ "Held by specialists"
+      refute html =~ "UNFILLED"
     end
 
     test "toggle_role_advanced flips the advanced label", %{conn: conn} do
@@ -1768,7 +1767,7 @@ defmodule PlatformWeb.ControlCenterLiveTest do
       refute Repo.get_by(Platform.Roles.RoleAssignment, role_key: "designer")
     end
 
-    test "clear_role_assignment removes the pin and re-renders the row as UNFILLED",
+    test "clear_role_assignment with no Burrow removes the pin and re-renders the row as not held",
          %{conn: conn} do
       agent = create_agent(%{name: "Cleared Pal"})
       {:ok, _} = Platform.Roles.assign_role("designer", agent.id)
@@ -1782,7 +1781,8 @@ defmodule PlatformWeb.ControlCenterLiveTest do
       html = render_click(view, "clear_role_assignment", %{"role_key" => "designer"})
 
       refute Repo.get_by(Platform.Roles.RoleAssignment, role_key: "designer")
-      assert html =~ "UNFILLED"
+      assert html =~ "Not held by any agent"
+      refute html =~ "UNFILLED"
       assert html =~ "Cleared assignment for designer"
     end
   end
@@ -2032,6 +2032,146 @@ defmodule PlatformWeb.ControlCenterLiveTest do
       assert assignment.agent_id == taken_agent.id
 
       # Flash visible.
+      assert html =~ "already filled"
+    end
+  end
+
+  # ── External-agent role select with Burrow holding roles (task 01a1b741 stage 2)
+  #
+  # Once Burrow holds every unheld role, a select that disabled every
+  # taken role would offer nothing at all. A role Burrow holds is
+  # offered and handed over in one step; a role another agent holds is
+  # still refused.
+  describe "external-agent role select when Burrow holds roles (task 01a1b741 stage 2)" do
+    setup do
+      previous_token = Application.get_env(:platform, :agent_host_token)
+      Application.put_env(:platform, :agent_host_token, "test-host-token")
+
+      on_exit(fn ->
+        if previous_token,
+          do: Application.put_env(:platform, :agent_host_token, previous_token),
+          else: Application.delete_env(:platform, :agent_host_token)
+      end)
+
+      for key <- Platform.Roles.Role.valid_keys(), do: :ok = Platform.Roles.unassign_role(key)
+
+      {:ok, burrow} =
+        Platform.Agents.Burrow.ensure(Platform.TenancyFixtures.root_admin!().id, "claude_code")
+
+      for key <- Platform.Roles.Role.valid_keys(),
+          do: assert(Platform.Roles.agent_id_for_role(key) == burrow.id)
+
+      %{burrow: burrow}
+    end
+
+    defp open_external_form(conn) do
+      {:ok, view, _html} = live(authenticated_conn(conn), ~p"/control")
+      render_click(view, "open_onboarding_chooser", %{})
+      html = render_click(view, "choose_onboarding", %{"flow" => "external"})
+      {view, html}
+    end
+
+    defp role_option(html, key) do
+      [option] =
+        html
+        |> LazyHTML.from_document()
+        |> LazyHTML.query(~s(#external-agent-role option[value="#{key}"]))
+        |> Enum.to_list()
+
+      option
+    end
+
+    defp option_disabled?(option), do: LazyHTML.attribute(option, "disabled") != []
+
+    defp option_text(option),
+      do: option |> LazyHTML.text() |> String.split() |> Enum.join(" ")
+
+    defp submit_external(view, name, role_key) do
+      view
+      |> form("#external-agent-form",
+        external_agent: %{
+          name: name,
+          slug: "",
+          endpoint_kind: "openai_compat",
+          base_url: "https://api.openai.com/v1",
+          model: "gpt-4o-mini",
+          default_behavior: "chat",
+          vault_mode: "paste",
+          vault_key: "",
+          secret: "",
+          save_to_vault: "false",
+          role_key: role_key
+        }
+      )
+      |> render_submit()
+    end
+
+    test "every role Burrow holds is enabled and reads (from Burrow)", %{conn: conn} do
+      {_view, html} = open_external_form(conn)
+
+      roles = Platform.Roles.list_roles()
+      assert length(roles) == length(Platform.Roles.Role.valid_keys())
+
+      for role <- roles do
+        option = role_option(html, role.key)
+        refute option_disabled?(option), "#{role.key} should be selectable"
+        assert option_text(option) == "#{role.name} (from Burrow)"
+      end
+    end
+
+    test "a role another agent holds stays disabled and reads (taken by <name>)", %{conn: conn} do
+      sam = create_agent(%{name: "Sam-agent"})
+      {:ok, _} = Platform.Roles.reassign_role("designer", sam.id)
+
+      {_view, html} = open_external_form(conn)
+
+      designer = role_option(html, "designer")
+      assert option_disabled?(designer)
+      assert option_text(designer) =~ "(taken by Sam-agent)"
+      refute option_text(designer) =~ "from Burrow"
+
+      historian = role_option(html, "historian")
+      refute option_disabled?(historian)
+      assert option_text(historian) =~ "(from Burrow)"
+    end
+
+    test "creating an agent for a role Burrow holds takes it over in one step", %{
+      conn: conn,
+      burrow: burrow
+    } do
+      stub_external_agents_req_client(fn conn ->
+        Req.Test.json(conn, %{"data" => [%{"id" => "gpt-4o-mini"}]})
+      end)
+
+      {view, _html} = open_external_form(conn)
+      html = submit_external(view, "Designer Specialist", "designer")
+
+      created = Repo.get_by!(Agent, slug: "designer-specialist")
+      assert Platform.Roles.agent_id_for_role("designer") == created.id
+      refute "designer" in Enum.map(Platform.Roles.roles_for(burrow.id), & &1.key)
+
+      assert [_one] =
+               Repo.all(
+                 from(ra in Platform.Roles.RoleAssignment, where: ra.role_key == "designer")
+               )
+
+      assert html =~ "Pinned to role designer."
+      refute html =~ "already filled"
+    end
+
+    test "creating an agent for a role another agent holds is still refused", %{conn: conn} do
+      stub_external_agents_req_client(fn conn ->
+        Req.Test.json(conn, %{"data" => []})
+      end)
+
+      sam = create_agent(%{name: "Sam-agent"})
+      {:ok, _} = Platform.Roles.reassign_role("designer", sam.id)
+
+      {view, _html} = open_external_form(conn)
+      html = submit_external(view, "Second Designer", "designer")
+
+      assert Repo.get_by!(Agent, slug: "second-designer")
+      assert Platform.Roles.agent_id_for_role("designer") == sam.id
       assert html =~ "already filled"
     end
   end
