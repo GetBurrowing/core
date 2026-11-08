@@ -125,6 +125,175 @@ defmodule Platform.Agents.NativeAgents do
     end
   end
 
+  @doc """
+  Turn `agent`, an existing agent this install does not run yet (one the
+  character builder made is a plain `built_in` row), into a native agent
+  running `harness`, keeping its id, its row and its files (task 01a1b84b).
+
+  One transaction, under a row lock on the agent: the same provisioning
+  `create/2` runs (`Platform.Federation.provision_agent_runtime/3`, which
+  registers the runtime, links THIS agent row to it and activates it), with
+  the raw runtime token discarded. The runtime is `managed_by: "install"`,
+  runs `harness`, starts `desired_state: "stopped"` and is owned by `actor`.
+
+  The harness's instructions and settings files are seeded only where the
+  agent has none: `SOUL.md`, `IDENTITY.md`, `TOOLS.md` and any other file
+  stay byte-equal. The seeded instructions file points the harness at the
+  character files, so the character reaches the agent.
+
+  Refused with `{:error, :forbidden}` unless `actor` may manage the agent
+  (`Platform.Access.Agents.manage?/2`) and may federate
+  (`Platform.Access.Agents.may_federate?/1`, provisioning's own check). An
+  agent that is already native comes back unchanged (`{:ok, agent}`); two
+  calls at once make one runtime.
+  """
+  @spec adopt(map() | binary() | nil, Agent.t(), String.t()) ::
+          {:ok, Agent.t()} | {:error, :forbidden | :not_found | term()}
+  def adopt(actor, %Agent{} = agent, harness) when harness in ~w(claude_code codex) do
+    if may_adopt?(actor, agent) do
+      actor_id = actor_id(actor)
+
+      Repo.transaction(fn ->
+        case Repo.one(from(a in Agent, where: a.id == ^agent.id, lock: "FOR UPDATE")) do
+          nil -> Repo.rollback(:not_found)
+          %Agent{runtime_id: nil} = locked -> provision_existing(actor_id, locked, harness)
+          %Agent{} = linked -> linked
+        end
+      end)
+    else
+      {:error, :forbidden}
+    end
+  end
+
+  def adopt(_actor, %Agent{}, harness), do: {:error, {:unsupported_harness, harness}}
+
+  @doc """
+  May `actor` adopt `agent` (`adopt/3`)? `Platform.Access.Agents.manage?/2`
+  on the agent and `Platform.Access.Agents.may_federate?/1`.
+  """
+  @spec may_adopt?(map() | binary() | nil, Agent.t() | nil) :: boolean()
+  def may_adopt?(actor, %Agent{} = agent) do
+    case actor_id(actor) do
+      nil ->
+        false
+
+      id ->
+        scope = Platform.Access.Scope.for_user(%{id: id})
+
+        Platform.Access.Agents.manage?(scope, agent) and
+          Platform.Access.Agents.may_federate?(scope)
+    end
+  end
+
+  def may_adopt?(_actor, _agent), do: false
+
+  defp provision_existing(actor_id, %Agent{} = agent, harness) do
+    runtime_attrs = %{
+      runtime_id: "#{agent.slug}-native-#{short_suffix()}",
+      display_name: agent.name,
+      transport: "websocket",
+      managed_by: @managed_by,
+      harness: harness,
+      desired_state: "stopped"
+    }
+
+    with {:ok, linked, _runtime, _raw_token} <-
+           Federation.provision_agent_runtime(
+             Platform.Access.Scope.for_user(%{id: actor_id}),
+             agent,
+             runtime_attrs
+           ),
+         :ok <- seed_files(linked, harness, overwrite: false) do
+      linked
+    else
+      {:error, reason} -> Repo.rollback(reason)
+    end
+  end
+
+  @doc """
+  Bring a native agent up on `harness` (task 01a10315's Burrow rule, shared
+  by `Platform.Agents.Burrow.ensure/2` and `Platform.Agents.AiConnect`): one
+  that is running keeps its harness; one that is not and runs `harness` is
+  started; one that runs another harness is stopped, switched
+  (`set_harness/2`) and started. Not being connected to a host is not an
+  error here: the reconciler starts the agent when the host joins.
+  """
+  @spec run_on(Agent.t(), String.t()) :: {:ok, Agent.t()} | {:error, term()}
+  def run_on(%Agent{} = agent, harness) when harness in ~w(claude_code codex) do
+    cond do
+      match?(%{state: :running}, Platform.AgentHost.status(agent)) ->
+        {:ok, agent}
+
+      match?(%AgentRuntime{harness: ^harness}, get_managed_runtime(agent)) ->
+        start(agent)
+
+      true ->
+        _ = Platform.AgentHost.stop_agent(agent)
+
+        case set_harness(agent, harness) do
+          {:ok, _runtime} -> start(agent)
+          {:error, reason} -> {:error, reason}
+        end
+    end
+  end
+
+  defp start(agent) do
+    _ = Platform.AgentHost.start_agent(agent)
+    {:ok, agent}
+  end
+
+  @doc """
+  The display-only summary of how `agent` is signed in to its AI, from its
+  runtime's `metadata["ai_login"]`: `%{"provider" => "claude", "account" =>
+  ..., "plan" => ...}` or `%{"provider" => "chatgpt"}`, or nil. Per agent:
+  it never reads another agent's. Never a URL or a code.
+  """
+  @spec ai_login(Agent.t() | AgentRuntime.t() | nil) :: map() | nil
+  def ai_login(%AgentRuntime{metadata: %{"ai_login" => %{} = login}}), do: login
+  def ai_login(%AgentRuntime{}), do: nil
+  def ai_login(%Agent{} = agent), do: ai_login(get_managed_runtime(agent))
+  def ai_login(nil), do: nil
+
+  @doc """
+  Record `agent`'s sign-in summary (`ai_login/1`). Only `provider`,
+  `account` and `plan` are kept, as strings. `{:error, :not_managed}` for an
+  agent this install does not run.
+  """
+  @spec put_ai_login(Agent.t(), map()) ::
+          {:ok, AgentRuntime.t()} | {:error, :not_managed | Ecto.Changeset.t()}
+  def put_ai_login(%Agent{} = agent, %{} = summary) do
+    summary =
+      for {k, v} <- summary,
+          k = to_string(k),
+          k in ["provider", "account", "plan"],
+          is_binary(v),
+          into: %{},
+          do: {k, v}
+
+    update_metadata(agent, &Map.put(&1, "ai_login", summary))
+  end
+
+  @doc "Forget `agent`'s sign-in summary (a logout, a harness switch)."
+  @spec clear_ai_login(Agent.t()) ::
+          {:ok, AgentRuntime.t()} | {:error, :not_managed | Ecto.Changeset.t()}
+  def clear_ai_login(%Agent{} = agent), do: update_metadata(agent, &Map.delete(&1, "ai_login"))
+
+  defp update_metadata(agent, fun) do
+    case get_managed_runtime(agent) do
+      nil ->
+        {:error, :not_managed}
+
+      %AgentRuntime{} = runtime ->
+        runtime
+        |> AgentRuntime.changeset(%{metadata: fun.(runtime.metadata || %{})})
+        |> Repo.update()
+    end
+  end
+
+  defp actor_id(id) when is_binary(id), do: id
+  defp actor_id(%{id: id}) when is_binary(id), do: id
+  defp actor_id(_), do: nil
+
   @doc "Every native agent with its runtime, ordered by agent name."
   @spec list() :: [entry()]
   def list do
@@ -178,8 +347,8 @@ defmodule Platform.Agents.NativeAgents do
 
   @doc """
   Switch a native agent's harness (`"claude_code"` or `"codex"`), seeding the
-  new harness's instructions and settings files. A no-op when it already runs
-  `harness`. The caller stops the agent first and starts it after (task
+  new harness's instructions and settings files, and forgetting the old
+  sign-in summary (`ai_login/1`). A no-op when it already runs `harness`. The caller stops the agent first and starts it after (task
   01a10315 stage 5; `Platform.Agents.Burrow.ensure/2`).
   """
   @spec set_harness(Agent.t(), String.t()) ::
@@ -195,7 +364,12 @@ defmodule Platform.Agents.NativeAgents do
       %AgentRuntime{} = runtime ->
         Repo.transaction(fn ->
           with {:ok, updated} <-
-                 runtime |> AgentRuntime.changeset(%{harness: harness}) |> Repo.update(),
+                 runtime
+                 |> AgentRuntime.changeset(%{
+                   harness: harness,
+                   metadata: Map.delete(runtime.metadata || %{}, "ai_login")
+                 })
+                 |> Repo.update(),
                :ok <- seed_files(agent, harness) do
             updated
           else
@@ -504,19 +678,59 @@ defmodule Platform.Agents.NativeAgents do
 
   defp seed_instructions(name, harness), do: identity_template(name, harness)
 
-  defp seed_files(%Agent{}, harness) when harness not in ~w(claude_code codex),
+  @character_files ["SOUL.md", "IDENTITY.md", "TOOLS.md"]
+
+  @doc """
+  The section a native agent's instructions file gets when the agent has
+  character files (`SOUL.md`, `IDENTITY.md`, `TOOLS.md`, written by the
+  character builder): it points the harness at them, and Claude Code also
+  imports them (`@SOUL.md`). Empty when `keys` names none of them.
+  """
+  @spec character_section(String.t() | nil, [String.t()]) :: String.t()
+  def character_section(harness, keys) do
+    case Enum.filter(@character_files, &(&1 in keys)) do
+      [] ->
+        ""
+
+      present ->
+        imports =
+          if harness == "claude_code",
+            do: "\n" <> Enum.map_join(present, "\n", &("@" <> &1)) <> "\n",
+            else: ""
+
+        """
+
+        ## Who you are
+
+        Your character is in #{Enum.join(present, ", ")}, in this folder. Read
+        #{if length(present) == 1, do: "it", else: "them"} before anything else and stay in character: that is who you are.
+        """ <> imports
+    end
+  end
+
+  defp seed_files(agent, harness, opts \\ [])
+
+  defp seed_files(%Agent{}, harness, _opts) when harness not in ~w(claude_code codex),
     do: {:error, {:unsupported_harness, harness}}
 
-  defp seed_files(%Agent{id: id, name: name}, harness) do
+  defp seed_files(%Agent{id: id, name: name}, harness, opts) do
+    overwrite? = Keyword.get(opts, :overwrite, true)
+    existing = id |> MemoryContext.list_workspace_files() |> Enum.map(& &1.file_key)
+
     seeds = [
-      {instructions_key(harness), seed_instructions(name, harness)},
+      {instructions_key(harness),
+       seed_instructions(name, harness) <> character_section(harness, existing)},
       {settings_key(harness), settings_seed(harness)}
     ]
 
     Enum.reduce_while(seeds, :ok, fn {key, content}, :ok ->
-      case MemoryContext.upsert_workspace_file(id, key, content) do
-        {:ok, _} -> {:cont, :ok}
-        {:error, reason} -> {:halt, {:error, reason}}
+      if not overwrite? and key in existing do
+        {:cont, :ok}
+      else
+        case MemoryContext.upsert_workspace_file(id, key, content) do
+          {:ok, _} -> {:cont, :ok}
+          {:error, reason} -> {:halt, {:error, reason}}
+        end
       end
     end)
   end

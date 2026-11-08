@@ -1140,6 +1140,14 @@ defmodule Platform.RepoLookupBoundaryTest do
     "platform_web/live/calendar_live.ex" => 1,
     # get_event/2 validates the boundary event UUID before its visible-query read.
     "platform/calendar.ex" => 1,
+    # adopt/3 (task 01a1b84b) locks `where: a.id == ^agent.id`, the id of the
+    # `%Agent{}` struct its caller loaded from the agents table (a UUIDv7 pk),
+    # never a param.
+    "platform/agents/native_agents.ex" => 1,
+    # reload/1 (task 01a1b84b) re-reads the panel's own `@agent.id`, taken from
+    # the `%Agent{}` the host LiveView loaded or AiConnect.prepare/3 returned;
+    # no event param ever reaches it.
+    "platform_web/connect_ai/panel.ex" => 1,
     # Subscription refresh locks by the UUID from a loaded owner-scoped row;
     # the periodic worker selects one persisted row without caller-supplied ids.
     "platform/calendar/subscriptions.ex" => 1,

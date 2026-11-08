@@ -10,7 +10,10 @@ defmodule PlatformWeb.Dev.FakeAgentHost do
     * `POST /dev/fake-agent-host/claude-login/<mode>` switches the fake Claude
       subscription login (task 01a1b365): `ok` (the default; the one good
       code signs in as `owner@example.com` on `max`), `no_subscription` or
-      `timeout` (the fake host answers nothing).
+      `timeout` (the fake host answers nothing);
+    * `GET /dev/fake-agent-host/<agent_id>/login-commands` lists the NAMES of
+      the Claude login commands the fake host received for that agent, oldest
+      first (task 01a1b84b), as a JSON array; never their payloads.
 
   Answers JSON. 404 for an agent the fake host never started, 409 for a
   non-codex agent, 503 when the fake host is not running.
@@ -32,6 +35,13 @@ defmodule PlatformWeb.Dev.FakeAgentHost do
     case FakeHost.set_claude_login(mode) do
       :ok -> json(conn, 200, %{"ok" => true, "mode" => Atom.to_string(mode)})
       {:error, :unknown_mode} -> json(conn, 404, %{"error" => "unknown_mode"})
+      {:error, :not_running} -> json(conn, 503, %{"error" => "fake_agent_host_not_running"})
+    end
+  end
+
+  def call(%Plug.Conn{method: "GET", path_info: [agent_id, "login-commands"]} = conn, _opts) do
+    case FakeHost.login_commands(agent_id) do
+      names when is_list(names) -> json(conn, 200, names)
       {:error, :not_running} -> json(conn, 503, %{"error" => "fake_agent_host_not_running"})
     end
   end

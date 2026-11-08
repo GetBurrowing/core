@@ -111,16 +111,8 @@ defmodule Platform.Agents.Burrow do
         create(owner_id, harness)
 
       %Agent{} = agent ->
-        cond do
-          running?(agent) ->
-            {:ok, agent}
-
-          harness(agent) == harness ->
-            start(agent)
-
-          true ->
-            switch(agent, harness)
-        end
+        # The rule every connect path shares (`NativeAgents.run_on/2`).
+        NativeAgents.run_on(agent, harness)
     end
   end
 
@@ -157,15 +149,6 @@ defmodule Platform.Agents.Burrow do
   defp assign_default_roles(other), do: other
 
   defp harness_or(agent, fallback), do: harness(agent) || fallback
-
-  defp switch(agent, harness) do
-    _ = AgentHost.stop_agent(agent)
-
-    case NativeAgents.set_harness(agent, harness) do
-      {:ok, _runtime} -> start(agent)
-      {:error, reason} -> {:error, reason}
-    end
-  end
 
   defp start(agent) do
     # Not connected to a host is not an error here: the screen says so, and

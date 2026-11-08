@@ -423,7 +423,9 @@ defmodule Platform.AgentHost do
   Hand `code`, the one the owner pasted from Anthropic's page, to `agent`'s
   pending login on the host, as `actor`, and wait for the outcome, which
   `claude auth status --json` on the host decides: `{:ok, %{account, plan}}`
-  (the agent's unit then restarts, logged in), or `{:error, :bad_code |
+  (the agent's unit then restarts, logged in, and the account and plan are
+  kept as the runtime's `metadata["ai_login"]`, `NativeAgents.ai_login/1`),
+  or `{:error, :bad_code |
   :no_subscription | :no_session | :failed | :timeout | :not_connected}`.
   `no_subscription` means the account has no Pro or Max plan; the host has
   logged the agent out again.
@@ -462,6 +464,15 @@ defmodule Platform.AgentHost do
 
       case result do
         {:ok, %{"result" => "ok", "account" => account, "plan" => plan}} ->
+          # The display summary a later page load reads (task 01a1b84b): the
+          # account and plan the host reported, never the URL or the code.
+          _ =
+            NativeAgents.put_ai_login(agent, %{
+              "provider" => "claude",
+              "account" => account,
+              "plan" => plan
+            })
+
           {:ok, %{account: account, plan: plan}}
 
         {:ok, %{"result" => r}} when r in ["bad_code", "no_subscription", "no_session"] ->
@@ -479,7 +490,8 @@ defmodule Platform.AgentHost do
   @doc """
   Log `agent` out of its Claude subscription, as `actor`: ends any pending
   login and runs `claude auth logout` as the agent. `:ok` once the host's
-  `claude auth status` reads logged out, else `{:error, :failed | :timeout |
+  `claude auth status` reads logged out (the runtime's `metadata["ai_login"]`
+  is then cleared), else `{:error, :failed | :timeout |
   :not_connected}`, or refused like `claude_login_start/3`.
 
   Logout does not restart the agent's unit on the host, so a running agent
@@ -496,6 +508,7 @@ defmodule Platform.AgentHost do
 
       case await_claude_login(ref, timeout, fn -> Reconciler.claude_logout(agent.id, ref) end) do
         {:ok, %{"result" => "ok"}} ->
+          _ = NativeAgents.clear_ai_login(agent)
           if Keyword.get(opts, :restart, true), do: restart_agent(agent), else: :ok
 
         {:ok, _} ->

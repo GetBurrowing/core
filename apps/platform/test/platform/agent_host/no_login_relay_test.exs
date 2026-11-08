@@ -53,6 +53,8 @@ defmodule Platform.AgentHost.NoLoginRelayTest do
   # unwraps one.
   @login_code_allowlist [
     "apps/platform/lib/platform_web/live/connect_ai_live.ex",
+    "apps/platform/lib/platform_web/connect_ai/steps.ex",
+    "apps/platform/lib/platform_web/connect_ai/panel.ex",
     "apps/platform/lib/platform/agent_host/login_code.ex",
     "apps/platform/lib/platform/agent_host.ex",
     "apps/platform/lib/platform/agent_host/reconciler.ex",

@@ -35,6 +35,11 @@ defmodule Platform.AgentHost.FakeHost do
   Endpoint in the supervision tree, so it waits and retries every second
   (`join/1`).
 
+  Every Claude login command it receives is recorded by NAME, per agent id
+  (`login_commands/1`, dev route `GET /dev/fake-agent-host/<agent_id>/login-commands`;
+  task 01a1b84b), never with its payload: a check that a refused event sent
+  nothing to the host reads it.
+
   `agent.stop` reports `stopped`. Logs, pane, file and auth requests get no
   answer; their callers time out as they would against a host that is slow.
 
@@ -54,6 +59,7 @@ defmodule Platform.AgentHost.FakeHost do
   @claude_account "owner@example.com"
   @claude_plan "max"
   @claude_modes [:ok, :no_subscription, :timeout]
+  @login_commands ["agent.claude_login_start", "agent.claude_login_code", "agent.claude_logout"]
   @report_after_ms 500
   @rejoin_after_ms 1_000
 
@@ -115,6 +121,27 @@ defmodule Platform.AgentHost.FakeHost do
     end
   end
 
+  @doc "The Claude login command names this fake host records (`login_commands/1`)."
+  def login_command_names, do: @login_commands
+
+  @doc """
+  The NAMES of the Claude login commands (`login_command_names/0`) this fake
+  host received for `agent_id`, oldest first; never their payloads. `[]` for
+  an agent it got none for, `{:error, :not_running}` when it is not running.
+  """
+  @spec login_commands(binary(), GenServer.server()) :: [String.t()] | {:error, :not_running}
+  def login_commands(agent_id, server \\ __MODULE__) when is_binary(agent_id) do
+    if GenServer.whereis(server),
+      do: GenServer.call(server, {:login_commands, agent_id}),
+      else: {:error, :not_running}
+  end
+
+  @doc false
+  def record_login_command(commands, event, agent_id) when event in @login_commands,
+    do: Map.update(commands, agent_id, [event], &(&1 ++ [event]))
+
+  def record_login_command(commands, _event, _agent_id), do: commands
+
   @doc """
   Finish `agent_id`'s fake Codex login, as if its owner approved the code on
   OpenAI's page. `:ok`, or `{:error, :unknown_agent}` for an agent this fake
@@ -137,6 +164,7 @@ defmodule Platform.AgentHost.FakeHost do
       agents: %{},
       completed: MapSet.new(),
       claude_login: :ok,
+      login_commands: %{},
       report_after_ms: Keyword.get(opts, :report_after_ms, @report_after_ms),
       endpoint: Keyword.get(opts, :endpoint, PlatformWeb.Endpoint),
       reconciler: nil
@@ -151,6 +179,9 @@ defmodule Platform.AgentHost.FakeHost do
   @impl true
   def handle_call({:claude_login_mode, mode}, _from, state),
     do: {:reply, :ok, %{state | claude_login: mode}}
+
+  def handle_call({:login_commands, agent_id}, _from, state),
+    do: {:reply, Map.get(state.login_commands, agent_id, []), state}
 
   def handle_call({:complete, agent_id}, _from, state) do
     case Map.get(state.agents, agent_id) do
@@ -194,17 +225,19 @@ defmodule Platform.AgentHost.FakeHost do
     {:noreply, state}
   end
 
-  def handle_info({:agent_host_push, event, %{"agent_id" => id, "ref" => ref} = payload}, state)
-      when event in ["agent.claude_login_start", "agent.claude_login_code", "agent.claude_logout"] do
-    case claude_login_reply(event, payload, state.claude_login) do
-      nil ->
+  def handle_info({:agent_host_push, event, %{"agent_id" => id} = payload}, state)
+      when event in @login_commands do
+    state = %{state | login_commands: record_login_command(state.login_commands, event, id)}
+
+    case is_binary(payload["ref"]) && claude_login_reply(event, payload, state.claude_login) do
+      falsy when falsy in [nil, false] ->
         :ok
 
       reply ->
         # Through the real channel handler's sanitising, as the host's reply would be.
         PlatformWeb.AgentHostChannel.handle_in(
           "agent.claude_login",
-          Map.merge(%{"ref" => ref, "agent_id" => id}, reply),
+          Map.merge(%{"ref" => payload["ref"], "agent_id" => id}, reply),
           %Phoenix.Socket{}
         )
 

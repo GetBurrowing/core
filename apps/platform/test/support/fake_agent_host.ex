@@ -15,6 +15,9 @@ defmodule Platform.FakeAgentHost do
   `owner@example.com` / `max`, anything else `bad_code`. The `:claude_login`
   option or `set_claude_login/2` switches a good code to `:no_subscription`,
   or the host to answering nothing (`:timeout`).
+
+  Every Claude login command it receives is recorded by NAME, per agent id
+  (`login_commands/2`, task 01a1b84b), never with its payload.
   """
   use GenServer
 
@@ -25,6 +28,9 @@ defmodule Platform.FakeAgentHost do
   @doc "Report an agent's observed state, with any extra payload keys."
   def report(pid, agent_id, state, extra \\ %{}),
     do: GenServer.call(pid, {:report, agent_id, state, extra})
+
+  @doc "The Claude login command names received for `agent_id`, oldest first; never payloads."
+  def login_commands(pid, agent_id), do: GenServer.call(pid, {:login_commands, agent_id})
 
   @doc "Switch the stubbed Claude login: `:ok`, `:no_subscription` or `:timeout`."
   def set_claude_login(pid, mode), do: GenServer.call(pid, {:claude_login, mode})
@@ -37,12 +43,16 @@ defmodule Platform.FakeAgentHost do
      %{
        root: Keyword.get(opts, :root),
        restart: Keyword.get(opts, :restart, {"ready", [], []}),
-       claude_login: Keyword.get(opts, :claude_login, :ok)
+       claude_login: Keyword.get(opts, :claude_login, :ok),
+       login_commands: %{}
      }}
   end
 
   @impl true
   def handle_call({:claude_login, mode}, _from, s), do: {:reply, :ok, %{s | claude_login: mode}}
+
+  def handle_call({:login_commands, agent_id}, _from, s),
+    do: {:reply, Map.get(s.login_commands, agent_id, []), s}
 
   def handle_call({:report, agent_id, state, extra}, _from, s) do
     payload = Map.merge(%{"agent_id" => agent_id, "state" => state}, extra)
@@ -100,16 +110,18 @@ defmodule Platform.FakeAgentHost do
     {:noreply, s}
   end
 
-  def handle_info({:agent_host_push, event, %{"agent_id" => id, "ref" => ref} = payload}, s)
+  def handle_info({:agent_host_push, event, %{"agent_id" => id} = payload}, s)
       when event in ["agent.claude_login_start", "agent.claude_login_code", "agent.claude_logout"] do
-    case FakeHost.claude_login_reply(event, payload, s.claude_login) do
-      nil ->
+    s = %{s | login_commands: FakeHost.record_login_command(s.login_commands, event, id)}
+
+    case is_binary(payload["ref"]) && FakeHost.claude_login_reply(event, payload, s.claude_login) do
+      falsy when falsy in [nil, false] ->
         :ok
 
       reply ->
         PlatformWeb.AgentHostChannel.handle_in(
           "agent.claude_login",
-          Map.merge(%{"ref" => ref, "agent_id" => id}, reply),
+          Map.merge(%{"ref" => payload["ref"], "agent_id" => id}, reply),
           %Phoenix.Socket{}
         )
     end
