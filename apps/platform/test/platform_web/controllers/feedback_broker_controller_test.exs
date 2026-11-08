@@ -194,7 +194,12 @@ defmodule PlatformWeb.FeedbackBrokerControllerTest do
 
     assert build_conn()
            |> get(@path <> "/" <> record.fingerprint)
-           |> json_response(200) == %{"repository" => "GetBurrowing/core", "issue_number" => 701}
+           |> json_response(200) == %{
+             "repository" => "GetBurrowing/core",
+             "issue_number" => 701,
+             # Task 01a1b678 stage 4: false until the issue closes as completed.
+             "shipped" => false
+           }
 
     assert build_conn()
            |> get(@path <> "/" <> String.duplicate("e", 64))

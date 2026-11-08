@@ -55,6 +55,7 @@ defmodule PlatformWeb.ModuleGate do
     PlatformWeb.ConnectAiLive => {:admin, nil},
     PlatformWeb.AdminPromptsLive => {:prompts, "prompts.manage"},
     PlatformWeb.AdminFederationLive => {:admin, nil},
+    PlatformWeb.FeedbackInboxLive => {:admin, nil},
     PlatformWeb.PipelineLive => {:tasks, "tasks.manage"},
     PlatformWeb.AdminSignInUsersLive => {:admin, nil}
   }

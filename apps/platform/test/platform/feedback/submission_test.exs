@@ -251,7 +251,7 @@ defmodule Platform.Feedback.SubmissionTest do
       refute raw =~ "ENV-SENTINEL"
 
       assert Map.keys(body) |> Enum.sort() ==
-               ~w(fingerprint installation repository submission)
+               ~w(fingerprint installation repository sharing_install_id submission)
 
       assert Map.keys(body["submission"]) |> Enum.sort() ==
                ~w(category expected_behavior observed_behavior reproduction_steps source title version_environment)
@@ -367,7 +367,7 @@ defmodule Platform.Feedback.SubmissionTest do
       body = Jason.decode!(raw)
 
       assert body |> Map.keys() |> Enum.sort() ==
-               ~w(fingerprint installation repository submission)
+               ~w(fingerprint installation repository sharing_install_id submission)
 
       refute Map.has_key?(body, "body")
       refute Map.has_key?(body, "title")

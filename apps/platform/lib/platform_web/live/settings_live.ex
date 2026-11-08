@@ -23,7 +23,12 @@ defmodule PlatformWeb.SettingsLive do
       also opened by `?sheet=learned_defaults`, where every ✦ "Why this?"
       line links), Usage, Admin.
     * Help: Send feedback (task 01a1a6a5 stage 5), only while feedback is
-      enabled (see Gating). Then Sign out, last.
+      enabled (see Gating), then the "Sharing with Burrow" card
+      (`PlatformWeb.Components.SharingCard`, task 01a1b678 stage 5), which
+      ALWAYS renders so an owner who turned a part off can turn it back on.
+      Its switches are editable by install admins (`Platform.Sharing.admin?/1`)
+      and read-only for everyone else; `set_sharing` re-checks on the server.
+      Then Sign out, last.
 
   ## Send feedback
 
@@ -77,7 +82,7 @@ defmodule PlatformWeb.SettingsLive do
   mount for this actor: the same mapping and the same
   `Platform.Access.module_access?/3` call the mount gate runs, so the row and
   the page cannot disagree (the one pinned exception is 01a15be9, a
-  project-scoped prompts.manage holder). The Help section, its Send feedback
+  project-scoped prompts.manage holder). The Help section's Send feedback
   row, the feedback sheet and `?sheet=feedback` exist only while
   `Platform.Feedback.Policy.enabled?/0` holds, read in `mount/3`; the
   `submit_feedback` handler asks the policy again, so a forged event on a
@@ -112,6 +117,7 @@ defmodule PlatformWeb.SettingsLive do
   alias Platform.Feedback.Policy
   alias Platform.Feedback.Submission
   alias PlatformWeb.Components.NotificationState
+  alias PlatformWeb.Components.SharingCard
   alias PlatformWeb.MeetingLive.CalendarWindow
   alias PlatformWeb.ModuleGate
 
@@ -201,6 +207,9 @@ defmodule PlatformWeb.SettingsLive do
      |> assign(:usage_row, if(ModuleGate.mounts?(scope, @usage_row.view), do: @usage_row))
      |> assign(:admin_rows, visible_admin_rows(scope))
      |> assign(:feedback_enabled, Policy.enabled?())
+     |> assign(:sharing_switches, Platform.Sharing.switches())
+     |> assign(:sharing_admin?, Platform.Sharing.admin?(socket.assigns[:current_user_record]))
+     |> assign(:sharing_error, nil)
      |> reset_feedback()
      |> open_from_params(params)}
   end
@@ -345,6 +354,23 @@ defmodule PlatformWeb.SettingsLive do
        |> assign(:float_error, nil)}
     else
       _ -> {:noreply, assign(socket, :float_error, "Couldn't save. Your setting hasn't changed.")}
+    end
+  end
+
+  # Sharing with Burrow (task 01a1b678 stage 5). The switch shows what is
+  # STORED; turning Feedback you send off or on also hides or shows the Send
+  # feedback row, because `Policy.enabled?/0` reads the same switch.
+  def handle_event("set_sharing", params, socket) do
+    case SharingCard.set(params, socket.assigns[:current_user_record]) do
+      {:ok, switches} ->
+        {:noreply,
+         socket
+         |> assign(:sharing_switches, switches)
+         |> assign(:sharing_error, nil)
+         |> assign(:feedback_enabled, Policy.enabled?())}
+
+      {:error, message} ->
+        {:noreply, assign(socket, :sharing_error, message)}
     end
   end
 
@@ -624,8 +650,8 @@ defmodule PlatformWeb.SettingsLive do
           </span>
         </button>
 
+        <p class={section_label_class()} data-role="settings-help-label">Help</p>
         <%= if @feedback_enabled do %>
-          <p class={section_label_class()} data-role="settings-help-label">Help</p>
           <button
             type="button"
             phx-click="open_feedback_sheet"
@@ -641,6 +667,13 @@ defmodule PlatformWeb.SettingsLive do
             <span class="hero-chevron-right size-4 shrink-0 text-subtle" aria-hidden="true"></span>
           </button>
         <% end %>
+        <SharingCard.sharing_card
+          id="settings-sharing"
+          switches={@sharing_switches}
+          editable={@sharing_admin?}
+          error={@sharing_error}
+          class="mx-3 mt-2"
+        />
 
         <button
           type="button"

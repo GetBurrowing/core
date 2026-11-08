@@ -216,6 +216,7 @@ defmodule Platform.Role do
     Platform.Push.APNsFinch,
     Platform.Chat.ContextSummaryCache,
     Platform.Chat.ReplyFailure.Dedupe,
+    Platform.Federation.DispatchOrigin,
     Platform.Chat.ActiveAgentStore,
     Platform.ExternalAgents.EphemeralCredentials,
     Platform.Chat.Presence,
@@ -280,6 +281,8 @@ defmodule Platform.Role do
     Platform.Memory.Insights.Disseminator,
     Platform.Files.CatalogEmitter,
     Platform.Tasks.DeployMergeReconciler,
+    # Hourly outbound POST of usage counts (task 01a1b678 stage 2).
+    Platform.Sharing.UsageBatcher,
     Platform.Orchestration.TaskRouterWatcher,
     Platform.Federation.NodeClient,
     :meetings_sender_seed,
@@ -305,7 +308,9 @@ defmodule Platform.Role do
     Platform.Agents.SystemEventScheduler,
     Platform.Responsibilities.Router,
     Platform.Mail.Outbox,
-    Platform.Memory.Insights.Disseminator
+    Platform.Memory.Insights.Disseminator,
+    # Each node would send its own batch under one install id.
+    Platform.Sharing.UsageBatcher
   ]
 
   # ── stage 4 tables ─────────────────────────────────────────────────────

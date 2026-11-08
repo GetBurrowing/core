@@ -170,7 +170,9 @@ defmodule Platform.Feedback.BrokerServerTest do
     assert {:ok, "created", identity} = BrokerServer.create(wire(submission()), @ip)
     [%SubmissionRecord{fingerprint: fingerprint}] = Repo.all(SubmissionRecord)
 
-    assert {:ok, ^identity} = BrokerServer.find(fingerprint)
+    assert {:ok, found} = BrokerServer.find(fingerprint)
+    # Task 01a1b678 stage 4: `shipped` rides along, false until the issue closes.
+    assert found == Map.put(identity, :shipped, false)
     assert {:ok, nil} = BrokerServer.find(String.duplicate("f", 64))
     assert {:ok, nil} = BrokerServer.find("not-a-fingerprint")
   end

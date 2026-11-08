@@ -755,6 +755,9 @@ defmodule Platform.ExtensionsTest do
       {"federation_status", "federation"},
       {"vault_fetch", "federation"},
       {"vault_list", "federation"},
+      # Task 01a1b678 stage 3: always listed, gated in the handler.
+      {"sharing_list", "federation"},
+      {"sharing_set", "federation"},
       {"memory_view", "memory"},
       {"memory_create", "memory"},
       {"memory_str_replace", "memory"},
@@ -941,7 +944,12 @@ defmodule Platform.ExtensionsTest do
     # agent can tell a Voice tab record in its DM. Names, bundles, summaries
     # and parameter schemas are unchanged. Measured on the test rig at the
     # stage's branch.
-    @main_tool_digest_off "557dba2378186c61e36b356459448cb5fabaf6b6e4e7ad46d0522dade251c8c1"
+    # Re-pinned by task 01a1b678 stage 3: sharing_list and sharing_set in
+    # `federation` and feedback_submit's `space_id`. Measured locally.
+    # Re-pinned by task 01a1b678 stage 4: sharing_set's description and
+    # limitations now say the server-side requester is authorized. Measured
+    # locally.
+    @main_tool_digest_off "55e1400d6b361653b05e16488a5732dd642c3c0b4d6ab2f5ca695b1968694ae6"
     @main_kinds_summaries_digest_off "514cb7a62dea7ea34226d7b60d2f243d5bb9a940bc1f5d44fd2e0e27e8074c52"
     @main_kinds_tool_schemas_digest_off "45c4c34283c8da212f6ab061ae43d1582e41b7192e8f8a442bfd45b3dd6f8e86"
     # main's lists minus exactly `play`.

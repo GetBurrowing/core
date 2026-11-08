@@ -1064,6 +1064,10 @@ defmodule PlatformWeb.ShellLive do
       PlatformWeb.AdminVaultLive ->
         "Admin"
 
+      # Task 01a1b678 stage 4: the fallback would print "FeedbackInbox".
+      PlatformWeb.FeedbackInboxLive ->
+        "Admin"
+
       # Task 01a10315 stage 5: "Connect your AI", not the module name.
       PlatformWeb.ConnectAiLive ->
         "Connect your AI"

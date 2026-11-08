@@ -150,6 +150,11 @@ defmodule Platform.Federation.AttentionDispatch do
         source: Keyword.get(opts, :source)
       )
 
+    # Task 01a1b678 stage 4: remember who and where this dispatch came from,
+    # BEFORE it leaves, so a tool call it triggers can read it server-side.
+    :ok =
+      Platform.Federation.DispatchOrigin.record(runtime_id, payload, Keyword.get(opts, :space_id))
+
     do_broadcast(topic(runtime_id), payload)
   end
 

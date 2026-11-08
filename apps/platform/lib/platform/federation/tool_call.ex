@@ -141,12 +141,17 @@ defmodule Platform.Federation.ToolCall do
   @spec build_context(map(), AgentRuntime.t()) :: map()
   def build_context(args, %AgentRuntime{} = runtime) do
     space_id = Map.get(args, "space_id")
+    origin = Platform.Federation.DispatchOrigin.lookup(runtime.runtime_id)
 
     %{
       space_id: space_id,
       agent_id: runtime.agent_id,
       agent_participant_id: lookup_participant(space_id, runtime.agent_id),
-      runtime_id: runtime.runtime_id
+      runtime_id: runtime.runtime_id,
+      # Server-side, never from args (task 01a1b678 stage 4); see
+      # `Platform.Federation.DispatchOrigin`.
+      origin_space_ids: origin.origin_space_ids,
+      requester_user_id: origin.requester_user_id
     }
   end
 

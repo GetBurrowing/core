@@ -54,6 +54,8 @@ defmodule PlatformWeb.GithubWebhookController do
     * `check_suite.completed` → the `ci_passed` gate belonging to the
       repository that ran it, and per-repo auto-merge for that repository.
     * `workflow_run.completed` → same, from the other CI event shape.
+    * `issues` `closed` as completed / `reopened` on the broker host →
+      `Platform.Feedback.Inbox.handle_issue_event/1` (task 01a1b678 stage 4).
     * `issues` (`X-GitHub-Event: issues`; opened / edited / reopened) on a
       signature-verified delivery → `Platform.Feedback.Intake`, which
       decides whether the repository is in scope (task 01a11ec3 stage 3).
@@ -138,7 +140,21 @@ defmodule PlatformWeb.GithubWebhookController do
         |> put_status(:ok)
         |> json(%{status: "ignored", reason: "signature_not_verified"})
 
+      # Task 01a1b678 stage 4: on the broker host, an issue in the feedback
+      # repository closed as completed marks its inbox requests shipped. A
+      # `reopened` delivery clears it and still goes on to the intake.
+      params["action"] == "closed" ->
+        case Platform.Feedback.Inbox.handle_issue_event(params) do
+          {:ok, changed} ->
+            conn |> put_status(:ok) |> json(%{status: "processed", shipped: changed})
+
+          :ignored ->
+            conn |> put_status(:ok) |> json(%{status: "ignored", reason: "action_not_handled"})
+        end
+
       true ->
+        _ = Platform.Feedback.Inbox.handle_issue_event(params)
+
         case Platform.Feedback.Intake.precheck(params) do
           {:ignored, reason} ->
             conn |> put_status(:ok) |> json(%{status: "ignored", reason: Atom.to_string(reason)})

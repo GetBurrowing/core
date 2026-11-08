@@ -316,6 +316,8 @@ defmodule PlatformWeb.Router do
     # install (or a hostile caller) sends may reach the broker's log.
     post("/issues", FeedbackBrokerController, :create, log: false)
     get("/issues/:fingerprint", FeedbackBrokerController, :show, log: false)
+    # Anonymous usage counts (task 01a1b678 stage 2).
+    post("/usage", FeedbackBrokerController, :usage, log: false)
   end
 
   scope "/api/app", PlatformWeb do
@@ -1147,6 +1149,10 @@ defmodule PlatformWeb.Router do
       # hand-over lands ("Open Burrow"). The view re-checks root admin.
       live("/setup/connect-ai", ConnectAiLive, :index)
       live("/admin/federation", AdminFederationLive, :index)
+      # Task 01a1b678 stage 4: the vendor's feedback inbox. 404 unless this
+      # node is the broker host AND the viewer is a root-org admin; the view
+      # checks both itself (`FeedbackInboxLive.visible?/1`).
+      live("/admin/feedback-inbox", FeedbackInboxLive, :index)
     end
   end
 

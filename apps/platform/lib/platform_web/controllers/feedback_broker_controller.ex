@@ -9,7 +9,12 @@ defmodule PlatformWeb.FeedbackBrokerController do
       201 `{repository, issue_number}` when created, 200 with the same keys
       for a duplicate.
     * `GET /api/feedback-broker/v1/issues/:fingerprint`: 200
-      `{repository, issue_number}` or 404 `{"error": "not_found"}`.
+      `{repository, issue_number, shipped}` or 404 `{"error": "not_found"}`.
+      `shipped` (task 01a1b678 stage 4) is true once the issue closed as
+      completed.
+    * `POST /api/feedback-broker/v1/usage` (task 01a1b678 stage 2), body
+      `{sharing_install_id, window, counts}`: 202 `{"accepted": n}`, or 422
+      `{"error": "invalid_usage"}`. See `Platform.Sharing.UsageReceiver`.
 
   Errors are `{"error": <bounded code>}` only: 422 for validation codes, 429
   for `rate_limited`, 503 for retryable publisher states, 502 for a refused
@@ -20,6 +25,7 @@ defmodule PlatformWeb.FeedbackBrokerController do
   use PlatformWeb, :controller
 
   alias Platform.Feedback.BrokerServer
+  alias Platform.Sharing.UsageReceiver
 
   @retryable ~w(publisher_unavailable publisher_rate_limited in_flight feedback_disabled)a
   @refused ~w(publisher_not_configured publisher_rejected publisher_bad_response unauthorized)a
@@ -38,14 +44,25 @@ defmodule PlatformWeb.FeedbackBrokerController do
 
   def show(conn, %{"fingerprint" => fingerprint}) do
     case BrokerServer.find(fingerprint) do
-      {:ok, %{repository: repo, issue_number: number}} ->
-        json(conn, %{repository: repo, issue_number: number})
+      {:ok, %{repository: repo, issue_number: number} = found} ->
+        json(conn, %{
+          repository: repo,
+          issue_number: number,
+          shipped: Map.get(found, :shipped, false)
+        })
 
       {:ok, nil} ->
         refuse(conn, :not_found)
 
       {:error, code} ->
         refuse(conn, code)
+    end
+  end
+
+  def usage(conn, _params) do
+    case UsageReceiver.record(conn.body_params) do
+      {:ok, written} -> conn |> put_status(202) |> json(%{accepted: written})
+      {:error, code} -> refuse(conn, code)
     end
   end
 

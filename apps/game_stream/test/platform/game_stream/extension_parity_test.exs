@@ -230,6 +230,9 @@ defmodule Platform.GameStream.ExtensionParityTest do
       {"federation_status", "federation"},
       {"vault_fetch", "federation"},
       {"vault_list", "federation"},
+      # Task 01a1b678 stage 3: always listed, gated in the handler.
+      {"sharing_list", "federation"},
+      {"sharing_set", "federation"},
       {"memory_view", "memory"},
       {"memory_create", "memory"},
       {"memory_str_replace", "memory"},
@@ -431,10 +434,16 @@ defmodule Platform.GameStream.ExtensionParityTest do
     # four tool-definition digests move. Names, bundles, summaries and
     # parameter schemas are unchanged. Measured on the test rig at the
     # stage's branch.
-    @previous_tool_digest_off "dec8d76d3a099473cf4d67e842f57702c6b3ec8f6c5cd73a9cce673f2f40c95a"
-    @previous_tool_digest_on "b96f42c432b252e8759d84749c81938b6ab456dd4c6de0cfec158c6fbad74c6b"
-    @main_tool_digest_off "a8436315038c731fbf2e9b31edce83137e98b07c9e5e0dbc501c8933ee7e5c9e"
-    @main_tool_digest_on "982f234f1d34aee0311551f81042547f5888d433c392c5580f4b25911709dc03"
+    # Re-pinned by task 01a1b678 stage 3: `sharing_list` and `sharing_set` join
+    # the `federation` bundle, and feedback_submit declares `space_id`. All four
+    # values measured locally on the stage's branch.
+    # Re-pinned by task 01a1b678 stage 4: sharing_set's description and
+    # limitations say the server-side requester is authorized. All four
+    # values measured locally on the stage's branch.
+    @previous_tool_digest_off "02c35b809b6b11d53f1a5215514ca957e9f813e5ae1baa12300f1f3867853fb4"
+    @previous_tool_digest_on "711619f1d0bb761b3439f3e9f20944083b0060a4baeb80580bcabdc4aafa10ce"
+    @main_tool_digest_off "cb5750c3b3fef6e235dcb1cf0dfe92326dc72223ef950737a69c0a1781790851"
+    @main_tool_digest_on "c6fe0f3bd07d64e4fbf5dcd1253959806180d8633345812ec1408ede8c65468f"
     @main_kinds_summaries_digest_off "1b337c131bca3720e1158e67d9fa1374ce4b08c60987f9d5f0ff10e5ffc6104a"
     @main_kinds_summaries_digest_on "e99a61e52a6858f0e97255683ebdc33d58c0fd56b4ada613946dc6a99ab2004e"
     @main_kinds_tool_schemas_digest_off "61843c26d260fdb0ca751f9106a1b4d1f7c0a68cbfca79425c6f03e02bcc96a8"

@@ -12,9 +12,12 @@ defmodule Platform.Feedback.GithubPublisher.Broker do
       (the hosted Burrow broker) when it is unset or blank (task 01a1a6a5
       stage 3).
     * `POST <base>/issues` with JSON
-      `%{repository, fingerprint, installation, submission}` and the
-      fingerprint as the `idempotency-key` header. `installation` is the
-      configured installation label or `null`. `submission` is
+      `%{repository, fingerprint, installation, sharing_install_id,
+      submission}` and the fingerprint as the `idempotency-key` header.
+      `installation` is the configured installation label or `null`.
+      `sharing_install_id` is the install's random sharing id
+      (`Platform.Sharing`, task 01a1b678 stage 4), which the broker uses
+      only to count distinct installs per request; `null` if unreadable. `submission` is
       `Platform.Feedback.Submission.wire_fields/1` of the sanitized
       structure: the allowlisted fields in the raw-argument shape.
     * NO `title`, `body` or `labels` are sent (task 01a1a6a5 stage 1). The
@@ -27,7 +30,10 @@ defmodule Platform.Feedback.GithubPublisher.Broker do
     * The broker must answer a repeated key with the issue it already
       created.
     * `GET <base>/issues/<fingerprint>` answers the issue a
-      fingerprint produced (200) or 404.
+      fingerprint produced (200) or 404. Its `shipped` key (task 01a1b678
+      stage 4) is read by `shipped?/1` only.
+    * `POST <base>/usage` carries an anonymous usage-count batch
+      (`post_usage/1`, task 01a1b678 stage 2).
     * A 200/201 body must carry `repository` and `issue_number`; everything
       else in it is ignored. `GithubPublisher.publish/2` rebuilds the
       identity from those two validated values.
@@ -51,6 +57,7 @@ defmodule Platform.Feedback.GithubPublisher.Broker do
       repository: Keyword.fetch!(opts, :repository),
       fingerprint: fingerprint,
       installation: installation_label(),
+      sharing_install_id: sharing_install_id(),
       submission: Keyword.fetch!(opts, :submission)
     }
 
@@ -80,6 +87,49 @@ defmodule Platform.Feedback.GithubPublisher.Broker do
         status -> GithubPublisher.http_error(status)
       end
     end
+  end
+
+  @doc """
+  `POST <base>/usage` with an anonymous usage-count batch (task 01a1b678
+  stage 2), to the same base as every feedback request. `body` is built and
+  scrubbed by `Platform.Sharing.UsageEvents`; this adapter only carries it.
+  `:ok` on 200/201/202.
+  """
+  @spec post_usage(map()) :: :ok | {:error, atom()}
+  def post_usage(body) when is_map(body) do
+    with {:ok, base} <- base_url(),
+         {:ok, status, _response} <- request(:post, base <> "/usage", "post_usage", json: body) do
+      case status do
+        status when status in [200, 201, 202] -> :ok
+        status -> GithubPublisher.http_error(status)
+      end
+    end
+  end
+
+  @doc """
+  Whether the broker reports the request `fingerprint` as shipped (task
+  01a1b678 stage 4): `{:ok, true | false}` from `GET <base>/issues/<fp>`'s
+  `shipped` key (a 404 is `false`), or `{:error, code}`. Called by
+  `Platform.Feedback.ShippedNotices` for this install's own fingerprints only.
+  """
+  @spec shipped?(String.t()) :: {:ok, boolean()} | {:error, atom()}
+  def shipped?(fingerprint) when is_binary(fingerprint) do
+    with {:ok, base} <- base_url(),
+         {:ok, status, response} <-
+           request(:get, base <> "/issues/" <> URI.encode_www_form(fingerprint), "shipped") do
+      case {status, response} do
+        {200, %{"shipped" => true}} -> {:ok, true}
+        {200, _} -> {:ok, false}
+        {404, _} -> {:ok, false}
+        {status, _} -> GithubPublisher.http_error(status)
+      end
+    end
+  end
+
+  defp sharing_install_id do
+    to_string(Platform.Sharing.get().sharing_install_id)
+  rescue
+    _ -> nil
   end
 
   defp installation_label do

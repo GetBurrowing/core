@@ -110,14 +110,17 @@ defmodule Platform.Feedback.Submission do
   agent) or `%{user_id: binary}` (a signed-in person). The person's identity
   is used ONLY for rate accounting; it never reaches the issue.
 
-  `opts` exist for `Platform.Feedback.BrokerServer` only (task 01a1a6a5
-  stage 3):
+  `opts` (the first two for `Platform.Feedback.BrokerServer` only, task
+  01a1a6a5 stage 3):
 
     * `:source` — the wire's `agent` | `person` display hint, used in place
       of the actor kind for `source` (the required-field rule and the issue
       footer). Any other value is ignored.
     * `:installation` — the calling installation's label (or nil) for the
       issue attribution, in place of this node's own label.
+    * `:notice_space_id` — the space an agent filed from (task 01a1b678
+      stage 4), kept on the row so the shipped notice
+      (`Platform.Feedback.ShippedNotices`) lands there. Not a UUID is nil.
 
   Returns `{:ok, result}` where `result.status` is `"created"` or
   `"duplicate"`, or `{:error, %{code: atom, message: binary}}` (plus
@@ -255,11 +258,21 @@ defmodule Platform.Feedback.Submission do
         _ -> Atom.to_string(actor.kind)
       end
 
-    actor = Map.put(actor, :source, source)
+    actor =
+      actor
+      |> Map.put(:source, source)
+      |> Map.put(:notice_space_id, notice_space_id(Keyword.get(opts, :notice_space_id)))
 
     case Keyword.fetch(opts, :installation) do
       {:ok, label} -> Map.put(actor, :installation, label)
       :error -> actor
+    end
+  end
+
+  defp notice_space_id(value) do
+    case Platform.UUID.cast(value) do
+      {:ok, id} -> id
+      :error -> nil
     end
   end
 
@@ -493,6 +506,7 @@ defmodule Platform.Feedback.Submission do
       category: category,
       actor_agent_id: actor.agent_id,
       actor_user_id: actor.user_id,
+      notice_space_id: actor.notice_space_id,
       attempted_at: DateTime.utc_now()
     }
 
@@ -524,6 +538,7 @@ defmodule Platform.Feedback.Submission do
           error_code: nil,
           actor_agent_id: actor.agent_id,
           actor_user_id: actor.user_id,
+          notice_space_id: actor.notice_space_id,
           updated_at: now
         ]
       )

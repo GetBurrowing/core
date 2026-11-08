@@ -178,6 +178,7 @@ ALLOWLIST = (
     Allow("tests/golden/single-host-agents-contained/", MIGRATE_MARK, MIGRATE),
     Allow("tests/golden/single-host-agents-full/", MIGRATE_MARK, MIGRATE),
     Allow("tests/golden/single-host-memory-off/", MIGRATE_MARK, MIGRATE),
+    Allow("tests/golden/single-host-sharing-on/", MIGRATE_MARK, MIGRATE),
     Allow("tests/golden/do-droplet/", MIGRATE_MARK, MIGRATE),
     Allow("tests/golden/do-droplet-8gb/", MIGRATE_MARK, MIGRATE),
     Allow("tests/golden/do-droplet-meetings/", MIGRATE_MARK, MIGRATE),
