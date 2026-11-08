@@ -136,6 +136,11 @@ defmodule Platform.RepoLookupBoundaryTest do
      "revert_approved/2 uses Consent.event_id, the UUID foreign key assigned by approve/3 before it marks the intent approved, plus Consent.owner_id UUID FK"},
     {"platform/calendar/agent_access.ex", :platform_uuid_guard, "-", 3, :must_cast,
      "revoke/2 guards the agent id, authority/3 guards the Calendar owner id, and target/4 guards the event id before their typed queries; malformed boundary values fail closed"},
+    # Task 01a1b8a5 stage 1: the Calendar authoring coordinator.
+    {"platform/calendar/authoring.ex", :get, "Event", 2, :safe_internal,
+     "do_save/3 re-reads Event.id after Calendar.update_event/3 or create_event/2 returned that row, a UUIDv7 primary key; the draft's own event id reaches the Repo only through Calendar's guarded owned_event/2"},
+    {"platform/calendar/authoring.ex", :platform_uuid_guard, "-", 1, :must_cast,
+     "linked_event/1 guards the draft's meeting id (an EventDraft field a LiveView or agent draft can carry) before its Repo.one; a malformed id answers nil and the save path then goes through Meetings.update_meeting_for_user/3, which answers :not_found"},
     {"platform/calendar/booking_confirmation.ex", :get, "Platform.Tasks.Project", 1,
      :safe_internal,
      "enqueue/5 receives the persisted Meeting created by BookingLinks; meeting.project_id is a UUID foreign key already checked against the owner's current project list"},
@@ -1142,6 +1147,8 @@ defmodule Platform.RepoLookupBoundaryTest do
     "platform_web/live/calendar_live.ex" => 1,
     # get_event/2 validates the boundary event UUID before its visible-query read.
     "platform/calendar.ex" => 1,
+    # linked_event/1 checks the meeting id with Platform.UUID.valid?/1 first.
+    "platform/calendar/authoring.ex" => 1,
     # Subscription refresh locks by the UUID from a loaded owner-scoped row;
     # the periodic worker selects one persisted row without caller-supplied ids.
     "platform/calendar/subscriptions.ex" => 1,
