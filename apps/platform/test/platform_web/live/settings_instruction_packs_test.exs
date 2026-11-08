@@ -125,6 +125,28 @@ defmodule PlatformWeb.SettingsInstructionPacksTest do
     assert Skills.get_skill(skill.id).content == "newer LOCAL sentinel"
   end
 
+  test "conflicts show the literal escaped vendor baseline beside local and incoming text", %{
+    owner: owner
+  } do
+    {skill, one} = fixture()
+    {:ok, view, _} = open(owner)
+    assert has_element?(view, "[data-role=pack-conflict-base]", "(no previous published content)")
+    view |> element("button[phx-value-choice=incoming]") |> render_click()
+
+    {:ok, _} =
+      Skills.update_skill(Skills.get_skill(skill.id), %{content: "LOCAL_REVIEW_SENTINEL"})
+
+    install(pack(2, Manifest.digest(one["manifest"])))
+    view |> element("button[phx-click=refresh]") |> render_click()
+    base = view |> element("[data-role=pack-conflict-base]") |> render()
+    assert base =~ "published 1 &lt;script&gt;pack&lt;/script&gt;"
+    refute base =~ "<script>"
+    conflict = view |> element("[data-role=pack-conflict]") |> render()
+    assert conflict =~ "Previous published content"
+    assert conflict =~ "LOCAL_REVIEW_SENTINEL"
+    assert conflict =~ "published 2 &lt;script&gt;pack&lt;/script&gt;"
+  end
+
   test "published choice pin resume and rollback preserve later edits", %{owner: owner} do
     {skill, e} = fixture()
     {:ok, view, _} = open(owner)

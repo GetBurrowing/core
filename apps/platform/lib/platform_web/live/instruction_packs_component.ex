@@ -344,6 +344,8 @@ defmodule PlatformWeb.InstructionPacksComponent do
                 Local change preserved: {entry.type} / {entry.target}
               </h5>
               <p>Keep your local text or explicitly use the published version.</p>
+              <h6 class="font-medium">Previous published content</h6>
+              <pre data-role="pack-conflict-base" class="whitespace-pre-wrap break-all text-xs">{entry.conflict["base"] || "(no previous published content)"}</pre>
               <h6 class="font-medium">Your current content</h6>
               <pre class="whitespace-pre-wrap break-all text-xs">{entry.conflict["local"] || "(deleted locally)"}</pre>
               <h6 class="font-medium">Incoming published content</h6>
