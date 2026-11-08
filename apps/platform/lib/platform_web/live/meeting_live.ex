@@ -8359,17 +8359,23 @@ defmodule PlatformWeb.MeetingLive do
   # meeting's own day in the viewer's zone with the meeting selected. An
   # unscheduled meeting has no day of its own, so it lands on the day the
   # sheet was submitted with, or today.
+  #
+  # The commit itself (create + staged-invite replay) is
+  # `Platform.Meetings.Scheduling.create_with_invites/2` (task 01a1b8a5 stage
+  # 1), shared with `Platform.Calendar.Authoring`; only the socket handling
+  # below is the sheet's.
   defp create_from_sheet(socket, attrs, name, project_id, starts_at, ends_at, mode) do
-    case Meetings.create_meeting(%{
-           project_id: project_id,
-           created_by_user_id: socket.assigns.user_id,
-           name: name,
-           scheduled_start_at: starts_at,
-           scheduled_end_at: ends_at
-         }) do
-      {:ok, meeting} ->
-        undelivered = replay_draft_invites(meeting, socket.assigns.meeting_create_invites)
-
+    case Platform.Meetings.Scheduling.create_with_invites(
+           %{
+             project_id: project_id,
+             created_by_user_id: socket.assigns.user_id,
+             name: name,
+             scheduled_start_at: starts_at,
+             scheduled_end_at: ends_at
+           },
+           socket.assigns.meeting_create_invites
+         ) do
+      {:ok, meeting, undelivered} ->
         socket =
           socket
           |> assign(:show_start_meeting_sheet, false)
@@ -8739,7 +8745,7 @@ defmodule PlatformWeb.MeetingLive do
   end
 
   # A guest chosen by NAME (task 01a18d0a-ec37 stage 2): no address, so
-  # `deliver_draft_invite/2` mints the link with `email: nil`. A blank name
+  # `Platform.Meetings.Scheduling.replay_invites/2` mints the link with `email: nil`. A blank name
   # stages nothing a host could not see, so it raises like any forged event.
   defp build_draft_invite("guest", %{"name" => name}, _socket) do
     case String.trim(to_string(name)) do
@@ -8821,19 +8827,6 @@ defmodule PlatformWeb.MeetingLive do
 
   # One call per staged entry, after the meeting is committed. Returns the
   # entries that did NOT produce a row.
-  defp replay_draft_invites(meeting, entries) do
-    Enum.reject(entries, &match?({:ok, _}, deliver_draft_invite(meeting, &1)))
-  end
-
-  defp deliver_draft_invite(meeting, %{kind: :user} = entry),
-    do: Meetings.invite_user(meeting, entry.user_id, display_name: entry.display_name)
-
-  defp deliver_draft_invite(meeting, %{kind: :guest} = entry),
-    do: Meetings.invite_guest(meeting, %{display_name: entry.display_name, email: entry.email})
-
-  defp deliver_draft_invite(meeting, %{kind: :external} = entry),
-    do: Meetings.invite_external_user(meeting, entry.email, display_name: entry.display_name)
-
   # ── Live invites (private) ───────────────────────────────────────────────
 
   # Closed, empty, and no candidates. Called on open as well as on close so
