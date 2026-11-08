@@ -409,7 +409,9 @@ defmodule PlatformWeb.Components.MoreSheetTest do
     end
 
     test "no row is current on a bar page" do
-      for path <- ["/chat", "/calendar", "/meetings", "/inbox"] do
+      bar_pages = ["/chat", "/calendar", "/meetings", "/brief", "/inbox/briefing/2026-01-01"]
+
+      for path <- bar_pages do
         html = render_more_sheet(%{root_user: true, current_path: path})
         assert current_keys(html) == [], path
         refute html =~ "hero-check", path

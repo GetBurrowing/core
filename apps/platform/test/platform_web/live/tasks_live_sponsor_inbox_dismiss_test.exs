@@ -117,7 +117,7 @@ defmodule PlatformWeb.TasksLiveSponsorInboxDismissTest do
     sponsor_row = emit!(sponsor, task, "task_sponsor_assigned")
     conn = auth(conn, sponsor)
 
-    {:ok, inbox, _html} = live(conn, ~p"/inbox")
+    {:ok, inbox, _html} = live(conn, "/inbox/briefing/#{Date.utc_today()}")
 
     assert {:error, {:live_redirect, %{to: to}}} =
              render_click(inbox, "open", %{

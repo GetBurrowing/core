@@ -222,7 +222,7 @@ defmodule Platform.Access.GlobexTargetAcceptanceTest do
           {"/control", "agents"},
           {"/files", "files"},
           {"/org_memory", "context"},
-          {"/inbox", "inbox"}
+          {"/brief", "inbox"}
         ] do
       assert {:error, {:redirect, %{to: to}}} = live(authed(ctx.u), path)
       assert to == "/access-denied?module=#{key}", path

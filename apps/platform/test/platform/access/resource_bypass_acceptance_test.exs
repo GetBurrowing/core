@@ -510,7 +510,7 @@ defmodule Platform.Access.ResourceBypassAcceptanceTest do
       assert Inbox.reachable_unread_count(ctx.int.id) == 0
       assert {:error, :denied} = Inbox.emit(attrs)
       refute_receive {:push, _, _}, 100
-      {:ok, _view, html} = live(session(ctx.int), "/inbox")
+      {:ok, _view, html} = live(session(ctx.int), "/inbox/briefing/#{Date.utc_today()}")
       no_marker!(html, marker)
       assert row.id
     end

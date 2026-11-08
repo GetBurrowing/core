@@ -155,8 +155,17 @@ defmodule PlatformWeb.NativeTabBridgeTest do
     assert has_element?(view, "#native-tab-bridge[data-active-key='more']")
   end
 
-  test "/inbox selects inbox", %{conn: conn} do
-    {:ok, view, _html} = live(authenticated_conn(conn), ~p"/inbox")
+  test "/brief selects inbox", %{conn: conn} do
+    {:ok, view, _html} = live(authenticated_conn(conn), ~p"/brief")
+    assert has_element?(view, "#native-tab-bridge[data-active-key='inbox']")
+  end
+
+  # /inbox/briefing/:date still renders InboxLive; the destination's
+  # `also_matches` keeps it under the same tab (task 01a1b721 stage 4).
+  test "/inbox/briefing/:date selects inbox", %{conn: conn} do
+    {:ok, view, _html} =
+      live(authenticated_conn(conn), "/inbox/briefing/#{Date.utc_today()}")
+
     assert has_element?(view, "#native-tab-bridge[data-active-key='inbox']")
   end
 

@@ -74,7 +74,7 @@
         <ul class="flex flex-wrap gap-1.5" data-role="inbox-filter-chips">
           <li :for={{value, label} <- @filters}>
             <.link
-              patch={"/inbox" <> filter_query(value)}
+              patch={detail_path(assigns) <> filter_query(value)}
               data-role="inbox-filter-chip"
               data-filter={value}
               aria-current={if(@filter == value, do: "true")}

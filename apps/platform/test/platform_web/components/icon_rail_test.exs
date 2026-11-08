@@ -290,8 +290,14 @@ defmodule PlatformWeb.Components.IconRailTest do
 
   describe "bottom_rail/1 active state" do
     test "applies .bottom-nav-tab--active only to the tile whose path matches current_path" do
-      html = render_bottom_rail(%{current_path: "/inbox"})
+      html = render_bottom_rail(%{current_path: "/brief"})
       assert active_keys(html) == ["inbox"]
+    end
+
+    test "/inbox/* (the InboxLive detail routes) still lights the secretary tab via also_matches" do
+      for path <- ["/inbox", "/inbox/briefing/2026-01-01", "/inbox/meeting/abc"] do
+        assert active_keys(render_bottom_rail(%{current_path: path})) == ["inbox"], path
+      end
     end
 
     test "/calendar and its subpages light Calendar" do
@@ -317,7 +323,7 @@ defmodule PlatformWeb.Components.IconRailTest do
     test "every mobile tab carries an aria-label" do
       html = render_bottom_rail(%{})
 
-      for label <- ["Chat", "Calendar", "Meetings", "Inbox", "More"] do
+      for label <- ["Chat", "Calendar", "Meetings", Platform.Secretary.name(), "More"] do
         assert html =~ ~s(aria-label="#{label}"),
                "expected aria-label=#{inspect(label)} on mobile bottom-rail"
       end
@@ -396,7 +402,11 @@ defmodule PlatformWeb.Components.IconRailTest do
         assert doc |> LazyHTML.query(~s([data-role="inbox-badge"])) |> Enum.count() == 1
 
         inbox = LazyHTML.query(doc, ~s([data-bottom-rail] a[data-destination="inbox"]))
-        assert LazyHTML.attribute(inbox, "aria-label") == ["Inbox, #{unquote(count)} need you"]
+
+        assert LazyHTML.attribute(inbox, "aria-label") == [
+                 "#{Platform.Secretary.name()}, #{unquote(count)} need you"
+               ]
+
         [more] = more_button(html)
         assert LazyHTML.attribute(more, "aria-label") == ["More"]
         refute html =~ "inbox-unread-dot"
@@ -404,7 +414,7 @@ defmodule PlatformWeb.Components.IconRailTest do
       end
     end
 
-    test "absent from the DOM at 0 (no dot, no 0), and the tab is plain Inbox" do
+    test "absent from the DOM at 0 (no dot, no 0), and the tab is the plain label" do
       html = render_bottom_rail(%{inbox_unread_count: 0})
       doc = LazyHTML.from_fragment(html)
       assert doc |> LazyHTML.query(~s([data-role="inbox-badge"])) |> Enum.count() == 0
@@ -413,7 +423,7 @@ defmodule PlatformWeb.Components.IconRailTest do
 
       inbox = LazyHTML.query(doc, ~s([data-bottom-rail] a[data-destination="inbox"]))
       assert Enum.count(inbox) == 1
-      assert LazyHTML.attribute(inbox, "aria-label") == ["Inbox"]
+      assert LazyHTML.attribute(inbox, "aria-label") == [Platform.Secretary.name()]
       # Positive control: the anchor is there, only the badge is not.
       assert doc
              |> LazyHTML.query(~s(a[data-destination="inbox"] .icon-badge-anchor))

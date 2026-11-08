@@ -182,7 +182,7 @@ defmodule PlatformWeb.InboxLiveBriefingTest do
       note = text(lv, "[data-role=briefing-settings-note]")
 
       assert note =~
-               "Briefings arrive in your Inbox each morning. Items you don't handle expire after 7 days."
+               "Briefings arrive in your #{Platform.Secretary.name()} each morning. Items you don't handle expire after 7 days."
 
       assert note =~ "Briefing settings · deliver at 7:00 · include page edits ✗ · tasks ✓"
       assert has_element?(lv, "[data-role=briefing-settings-link][href='/memory/insights']")

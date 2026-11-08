@@ -160,7 +160,7 @@ defmodule PlatformWeb.MaskNamesChipTest do
       plain = insert_user("presence-b", true)
       set_until(masked, DateTime.add(DateTime.utc_now(), 3600, :second))
 
-      for path <- ~w(/chat /chat/general /tasks /inbox /settings /meetings) do
+      for path <- ~w(/chat /chat/general /tasks /brief /settings /meetings) do
         {_view, on} = mount!(masked, path)
         {_view, off} = mount!(plain, path)
         assert chip?(on), "#{path}: expected the chip for the masked user"
@@ -291,10 +291,10 @@ defmodule PlatformWeb.MaskNamesChipTest do
       for name <- @chat_orgs, do: assert_name_anywhere(html, name)
     end
 
-    test "/inbox: the sheet's Turn off unmasks through the shell" do
-      user = insert_user("tap-inbox")
+    test "/brief: the sheet's Turn off unmasks through the shell" do
+      user = insert_user("tap-brief")
       {:ok, _} = Accounts.put_mask_names(user.id, true)
-      {view, _html} = mount!(user, "/inbox")
+      {view, _html} = mount!(user, "/brief")
       view |> element(@chip) |> render_click()
 
       html =
@@ -308,7 +308,7 @@ defmodule PlatformWeb.MaskNamesChipTest do
       user = insert_user("close")
       {:ok, _} = Accounts.put_mask_names(user.id, true)
       before = stored_until(user)
-      {view, _html} = mount!(user, "/inbox")
+      {view, _html} = mount!(user, "/brief")
 
       html = view |> element(@chip) |> render_click()
       assert html |> query(@chip) |> LazyHTML.attribute("aria-expanded") == ["true"]
@@ -324,7 +324,7 @@ defmodule PlatformWeb.MaskNamesChipTest do
     test "the accessible name says when masking ends and what the chip opens" do
       user = insert_user("copy")
       {:ok, _} = Accounts.put_mask_names(user.id, true)
-      {_view, html} = mount!(user, "/inbox")
+      {_view, html} = mount!(user, "/brief")
       label = chip_label(html)
       assert label =~ "Names masked until"
       assert label =~ "Open mask settings"
@@ -348,7 +348,7 @@ defmodule PlatformWeb.MaskNamesChipTest do
         end)
 
       assert zone
-      {_view, html} = mount!(user, "/inbox", zone)
+      {_view, html} = mount!(user, "/brief", zone)
       assert chip_label(html) =~ "tomorrow"
 
       # Control: a zone where both instants share a date reads no "tomorrow".
@@ -360,7 +360,7 @@ defmodule PlatformWeb.MaskNamesChipTest do
         end)
 
       assert same_day
-      {_view, html} = mount!(user, "/inbox", same_day)
+      {_view, html} = mount!(user, "/brief", same_day)
       refute chip_label(html) =~ "tomorrow"
     end
 
@@ -374,7 +374,7 @@ defmodule PlatformWeb.MaskNamesChipTest do
     setup do
       user = insert_user("guards")
       {:ok, _} = Accounts.put_mask_names(user.id, true)
-      {view, _} = mount!(user, "/inbox")
+      {view, _} = mount!(user, "/brief")
       html = view |> element(@chip) |> render_click()
 
       roots =

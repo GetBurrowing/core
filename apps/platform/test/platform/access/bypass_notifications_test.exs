@@ -124,7 +124,12 @@ defmodule Platform.Access.BypassNotificationsTest do
     assert Repo.aggregate(Inbox.reachable_badge_scope(user.id, false, scope), :count) == 0
     assert Inbox.reachable_unread_count(user.id) == 0
 
-    {:ok, view, html} = live(init_test_session(ctx.conn, current_user_id: user.id), "/inbox")
+    {:ok, view, html} =
+      live(
+        init_test_session(ctx.conn, current_user_id: user.id),
+        "/inbox/briefing/#{Date.utc_today()}"
+      )
+
     refute html =~ "ZQX-BYPASS-NOTIF"
     refute render(view) =~ "ZQX-BYPASS-NOTIF"
   end

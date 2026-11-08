@@ -206,7 +206,7 @@ defmodule PlatformWeb.ShellMaskNamesTest do
       plain = insert_user("seed-b")
       set_until(masked, DateTime.add(DateTime.utc_now(), 3600, :second))
 
-      for path <- ~w(/inbox /settings /meetings /chat) do
+      for path <- ~w(/brief /settings /meetings /chat) do
         {view, _} = mount!(masked, path)
         assigns = shell(view)
         assert assigns.mask_names? == true, "#{path}: expected masked"
@@ -223,13 +223,13 @@ defmodule PlatformWeb.ShellMaskNamesTest do
       user = insert_user("expiry")
 
       set_until(user, DateTime.add(DateTime.utc_now(), -1, :second))
-      {view, _} = mount!(user, "/inbox")
+      {view, _} = mount!(user, "/brief")
       refute shell(view).mask_names?
 
       # A few seconds rather than one, so a slow mount on a loaded rig cannot
       # cross the instant between the write and the mount's own clock read.
       set_until(user, DateTime.add(DateTime.utc_now(), 5, :second))
-      {view, _} = mount!(user, "/inbox")
+      {view, _} = mount!(user, "/brief")
       assert shell(view).mask_names?
     end
 
@@ -237,20 +237,20 @@ defmodule PlatformWeb.ShellMaskNamesTest do
       user = insert_user("zone")
 
       conn = conn_for(user) |> put_connect_params(%{"timezone" => "America/Chicago"})
-      {:ok, view, _} = live(conn, "/inbox")
+      {:ok, view, _} = live(conn, "/brief")
       assert shell(view).mask_zone == "America/Chicago"
 
       conn = conn_for(user) |> put_connect_params(%{"timezone" => "Not/AZone"})
-      {:ok, view, _} = live(conn, "/inbox")
+      {:ok, view, _} = live(conn, "/brief")
       assert shell(view).mask_zone == nil
     end
   end
 
   describe "the shell's toggle_mask_names on a page that masks nothing" do
-    test "/inbox: off removes the key and on writes now + 12h; the view survives" do
-      user = insert_user("inbox")
+    test "/brief: off removes the key and on writes now + 12h; the view survives" do
+      user = insert_user("brief")
       set_until(user, DateTime.add(DateTime.utc_now(), 3600, :second))
-      {view, _} = mount!(user, "/inbox")
+      {view, _} = mount!(user, "/brief")
       pid = view.pid
 
       render_hook(view, "toggle_mask_names", %{"masked" => "false"})
@@ -284,9 +284,9 @@ defmodule PlatformWeb.ShellMaskNamesTest do
       assert has_element?(view, "[data-role=settings-mask-names][aria-checked=true]")
     end
 
-    test "/inbox: one event is one write" do
-      user = insert_user("inbox-once")
-      {view, _} = mount!(user, "/inbox")
+    test "/brief: one event is one write" do
+      user = insert_user("brief-once")
+      {view, _} = mount!(user, "/brief")
 
       {{_, updates}, writes} =
         count_writes(view, fn ->

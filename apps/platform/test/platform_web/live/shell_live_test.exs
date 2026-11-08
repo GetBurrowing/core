@@ -919,14 +919,18 @@ defmodule PlatformWeb.ShellLiveTest do
       assert rendered_badge(render(view)).tab == ""
     end
 
-    test "opening, dismissing and Clear all on /inbox each move the badge live", %{conn: conn} do
+    test "opening, dismissing and Clear all on the inbox list each move the badge live", %{
+      conn: conn
+    } do
       {conn, user} = authenticated_conn_with_user(conn)
 
       to_open = plain_row!(user)
       to_dismiss = plain_row!(user)
       _rest = for _ <- 1..2, do: plain_row!(user)
 
-      {:ok, view, _html} = live(conn, ~p"/inbox")
+      # /inbox is a redirect to /brief (task 01a1b721 stage 4); the briefing route
+      # still renders the InboxLive list column with its open/dismiss/clear_all.
+      {:ok, view, _html} = live(conn, "/inbox/briefing/#{Date.utc_today()}")
       assert badge_count(view) == 4
 
       # Viewing the list marks nothing: every non-action row keeps its dot.
@@ -2202,8 +2206,9 @@ defmodule PlatformWeb.ShellLiveTest do
       refute MapSet.member?(live_ids, read_row.id)
       assert MapSet.member?(live_ids, unread_row.id)
 
-      # And the fence still lets an internal user through to /inbox.
-      assert conn |> get(~p"/inbox") |> Map.get(:status) == 200
+      # And the fence still lets an internal user through to /inbox, which
+      # now redirects to /brief (task 01a1b721 stage 4).
+      assert redirected_to(get(conn, ~p"/inbox")) == ~p"/brief"
     end
   end
 

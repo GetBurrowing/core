@@ -54,7 +54,7 @@ defmodule PlatformWeb.InboxLiveUxDecisionTest do
       user = user!()
       {finding, item} = finding!(user)
 
-      {:ok, lv, _html} = live(auth(conn, user), "/inbox")
+      {:ok, lv, _html} = live(auth(conn, user), "/inbox/ux/#{finding.id}")
 
       row = "#inbox-ux-list [data-role=inbox-ux-row][data-item-id='#{item.id}']"
       assert has_element?(lv, row <> " [data-role=ux-chip].bg-info", "UX")
@@ -73,22 +73,10 @@ defmodule PlatformWeb.InboxLiveUxDecisionTest do
       assert has_element?(lv, row <> " a[href='/inbox/ux/#{finding.id}']")
     end
 
-    test "the phone list renders the same slots in its row", %{conn: conn} do
-      user = user!()
-      {finding, item} = finding!(user)
-
-      {:ok, lv, _html} = live(auth(conn, user), "/inbox")
-
-      row = "#inbox-rows [data-role=inbox-row][data-item-id='#{item.id}']"
-      assert has_element?(lv, row <> " [data-role=ux-chip]", "UX")
-      assert has_element?(lv, row <> " [data-role=inbox-row-author]", finding.question)
-      assert has_element?(lv, row <> " [data-role=inbox-row-body].truncate", "Seen 6×")
-    end
-
     test "X dismisses the row and leaves the finding open", %{conn: conn} do
       user = user!()
       {finding, item} = finding!(user)
-      {:ok, lv, _html} = live(auth(conn, user), "/inbox")
+      {:ok, lv, _html} = live(auth(conn, user), "/inbox/ux/#{finding.id}")
 
       lv |> element("[data-role=inbox-ux-dismiss][phx-value-id='#{item.id}']") |> render_click()
 
@@ -211,14 +199,14 @@ defmodule PlatformWeb.InboxLiveUxDecisionTest do
 
       lv |> element("[data-role=ux-decision-answer][data-answer=build]") |> render_click()
 
-      assert_patch(lv, "/inbox")
+      # /inbox is a redirect to /brief since task 01a1b721 stage 4, so "back to
+      # the list" is a navigate to the secretary view, not a patch.
+      assert_redirect(lv, "/brief")
 
       assert %Finding{status: "answered", answer: "Build it: A DMs tab\nNote: go"} =
                Repo.get!(Finding, finding.id)
 
       assert Repo.get!(Item, item.id).dismissed_at
-      refute has_element?(lv, "[data-role=inbox-ux-row]")
-      assert has_element?(lv, "[data-role=inbox-toast]", "Answer sent to the task.")
     end
 
     test "another person's question is not found, and cannot be answered", %{conn: conn} do

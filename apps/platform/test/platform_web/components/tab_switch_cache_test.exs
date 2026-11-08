@@ -55,7 +55,9 @@ defmodule PlatformWeb.Components.TabSwitchCacheTest do
             {"/chat/general", "chat"},
             {"/tasks", "tasks"},
             {"/meetings", "meetings"},
-            {"/inbox", "inbox"},
+            {"/brief", "inbox"},
+            {"/brief/everything", "inbox"},
+            {"/inbox/briefing/2026-01-01", "inbox"},
             {"/settings", "settings"},
             {"/control/usage", "settings"}
           ] do

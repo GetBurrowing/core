@@ -153,8 +153,16 @@ defmodule PlatformWeb.Components.SidebarTest do
       html = render_sidebar(%{root_user: true})
       labels = html |> doc() |> q("#sidebar-nav .sidebar-row span.truncate") |> Enum.map(&text/1)
 
-      assert Enum.take(labels, 6) == ["Chat", "Voice", "Tasks", "Calendar", "Meetings", "Inbox"]
-      assert "Inbox" in labels
+      assert Enum.take(labels, 6) == [
+               "Chat",
+               "Voice",
+               "Tasks",
+               "Calendar",
+               "Meetings",
+               Platform.Secretary.name()
+             ]
+
+      assert Platform.Secretary.name() in labels
       assert "Org memory" in labels
 
       assert html |> doc() |> q(~s([data-role="sidebar-more-label"])) |> Enum.map(&text/1) == [
@@ -281,7 +289,7 @@ defmodule PlatformWeb.Components.SidebarTest do
       assert d |> q(~s([data-role="inbox-badge"])) |> Enum.count() == 0
       inbox = q(d, ~s(.sidebar-row[data-destination="inbox"]))
       assert Enum.count(inbox) == 1
-      assert LazyHTML.attribute(inbox, "aria-label") == ["Inbox"]
+      assert LazyHTML.attribute(inbox, "aria-label") == [Platform.Secretary.name()]
 
       for {count, label} <- [{1, "1"}, {7, "7"}, {9, "9"}, {10, "9+"}, {12, "9+"}] do
         d = render_sidebar(%{inbox_unread_count: count}) |> doc()
@@ -299,7 +307,7 @@ defmodule PlatformWeb.Components.SidebarTest do
         assert d
                |> q(~s(.sidebar-row[data-destination="inbox"]))
                |> LazyHTML.attribute("aria-label") ==
-                 ["Inbox, #{count} need you"]
+                 ["#{Platform.Secretary.name()}, #{count} need you"]
 
         # The old inline pill and its primary fill are gone.
         assert d |> q("#inbox-badge") |> Enum.count() == 0

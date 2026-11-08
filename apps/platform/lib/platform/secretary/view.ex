@@ -154,14 +154,18 @@ defmodule Platform.Secretary.View do
     evaluations = Store.list_evaluations(user_id)
     inputs = inputs(user, now)
     items = inbox_items(user_id, evaluations)
-    todos = Map.new(Todos.list(user_id, statuses: ~w(suggested kept done)), &{&1.id, &1})
-    spaces = spaces(inputs)
+
+    todos =
+      Map.new(Todos.list(user_id, statuses: ~w(suggested kept done dismissed)), &{&1.id, &1})
+
     goals = Context.for_user(user).goals
+    spaces = spaces(inputs, goals)
 
     rows =
       evaluations
       |> Enum.map(&row(&1, inputs, items, todos, spaces, now))
       |> Enum.reject(&is_nil/1)
+      |> Kernel.++(unevaluated_todos(evaluations, inputs, todos, spaces, now))
 
     live = Enum.reject(rows, & &1.leaving?)
     quiet = live |> Enum.filter(&(&1.tag == "quiet")) |> sort_rows()
@@ -179,7 +183,7 @@ defmodule Platform.Secretary.View do
 
     groups =
       case mode do
-        :ok -> goal_groups(visible, goals, now)
+        :ok -> goal_groups(visible, goals, spaces)
         _ -> fallback_groups(visible)
       end
 
@@ -212,6 +216,46 @@ defmodule Platform.Secretary.View do
     |> order_by([i], desc: i.inserted_at, desc: i.id)
     |> limit(200)
     |> Repo.all()
+  end
+
+  @doc """
+  Row 18's `Join #channel`: puts `user` into `space_id` when it is an open
+  channel they may read (`Platform.Access` chat.read), the same participant
+  row the chat UI writes. Anything else is `{:error, :not_joinable}`.
+  """
+  @spec join_open_channel(User.t(), term()) :: {:ok, Space.t()} | {:error, :not_joinable}
+  def join_open_channel(%User{} = user, space_id) do
+    scope = Scope.for_user(user)
+
+    with true <- is_binary(space_id) and Platform.UUID.valid?(space_id),
+         %Space{kind: "channel", archived_at: nil} = space <-
+           Repo.one(from(s in Space, where: s.id == ^space_id)),
+         true <- Platform.Access.can?(scope, "chat.read", {:space, space.id}),
+         {:ok, _} <- ensure_participant(space.id, user) do
+      {:ok, space}
+    else
+      _ -> {:error, :not_joinable}
+    end
+  end
+
+  defp ensure_participant(space_id, %User{} = user) do
+    existing =
+      space_id
+      |> Platform.Chat.list_participants()
+      |> Enum.find(&(&1.participant_type == "user" and &1.participant_id == user.id))
+
+    case existing do
+      nil ->
+        Platform.Chat.add_participant(space_id, %{
+          participant_type: "user",
+          participant_id: user.id,
+          display_name: user.name || user.email,
+          joined_at: DateTime.utc_now()
+        })
+
+      participant ->
+        {:ok, participant}
+    end
   end
 
   # ── mode ────────────────────────────────────────────────────────────────
@@ -258,11 +302,12 @@ defmodule Platform.Secretary.View do
     end
   end
 
-  defp spaces(inputs) do
+  defp spaces(inputs, goals) do
     ids =
       inputs
       |> Map.values()
       |> Enum.map(& &1.space_id)
+      |> Kernel.++(Enum.map(goals, & &1.space_id))
       |> Enum.filter(&(is_binary(&1) and Platform.UUID.valid?(&1)))
       |> Enum.uniq()
 
@@ -303,8 +348,8 @@ defmodule Platform.Secretary.View do
         # A to-do just marked done leaves the open list; it stays a moment
         # with its done-because note, then goes.
         case Map.get(todos, e.ref_id) do
-          %Todo{status: "done", updated_at: at} = todo
-          when not is_nil(at) ->
+          %Todo{status: status, updated_at: at} = todo
+          when status in ["done", "dismissed"] and not is_nil(at) ->
             if DateTime.diff(now, at, :second) <= @recent_seconds,
               do: build_row(e, todo_input(todo), items, todos, spaces, now, false)
 
@@ -314,6 +359,32 @@ defmodule Platform.Secretary.View do
 
       _ ->
         nil
+    end
+  end
+
+  # The person's own list is deterministic data, so an entry the evaluator
+  # has not reached yet (just added, just heard) still shows, under its goal
+  # or outside every goal, as a to-do or a suggestion. Nothing is persisted.
+  defp unevaluated_todos(evaluations, inputs, todos, spaces, now) do
+    evaluated = MapSet.new(evaluations, &{&1.ref_type, &1.ref_id})
+
+    for {{"todo", id} = key, %Input{} = input} <- inputs,
+        not MapSet.member?(evaluated, key),
+        %Todo{} = todo <- [Map.get(todos, id)] do
+      pending = %Evaluation{
+        id: "pending-" <> id,
+        user_id: todo.user_id,
+        ref_type: "todo",
+        ref_id: id,
+        tag: if(todo.status == "suggested", do: "suggested", else: "todo"),
+        group_key: todo.goal_key || "none",
+        rank: nil,
+        inserted_at: now,
+        evaluated_at: now,
+        model_version: "fallback"
+      }
+
+      build_row(pending, input, %{}, todos, spaces, now, false)
     end
   end
 
@@ -349,7 +420,7 @@ defmodule Platform.Secretary.View do
 
     kind =
       cond do
-        todo && todo.status == "suggested" -> :suggested
+        todo && todo.origin == "heard" && todo.status in ["suggested", "dismissed"] -> :suggested
         todo -> :todo
         e.tag == "not_in_space" -> :not_in_space
         true -> :item
@@ -524,7 +595,7 @@ defmodule Platform.Secretary.View do
 
   # ── groups ──────────────────────────────────────────────────────────────
 
-  defp goal_groups(rows, goals, _now) do
+  defp goal_groups(rows, goals, spaces) do
     by_key = Enum.group_by(rows, & &1.evaluation.group_key)
     goal_keys = MapSet.new(goals, & &1.key)
 
@@ -534,7 +605,7 @@ defmodule Platform.Secretary.View do
           id: "goal-" <> String.replace(goal.key, ":", "-"),
           key: goal.key,
           label: goal.text,
-          sub: "##{goal.space_name || "space"} goal",
+          sub: "#{goal_space_label(Map.get(spaces, goal.space_id), goal)} goal",
           status: nil,
           at_risk?: false,
           new_count: Enum.count(rows, & &1.new?),
@@ -569,6 +640,10 @@ defmodule Platform.Secretary.View do
 
     goal_sections ++ none_section
   end
+
+  defp goal_space_label(%Space{} = space, _goal), do: space_label(space)
+  defp goal_space_label(nil, %{space_name: name}) when is_binary(name), do: "#" <> name
+  defp goal_space_label(nil, _goal), do: "#space"
 
   defp fallback_groups(rows) do
     by_key = Enum.group_by(rows, & &1.evaluation.group_key)

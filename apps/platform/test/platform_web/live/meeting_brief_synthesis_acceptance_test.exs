@@ -704,7 +704,10 @@ defmodule PlatformWeb.MeetingBriefSynthesisAcceptanceTest do
       obs("c2.#{variant}.R.counts", r_view.counts)
       {:ok, r_lv, r_html} = live(auth(conn, r), detail(a.meeting))
       r_all = r_html <> render(r_lv)
-      {:ok, r_list, r_list_html} = live(auth(conn, r), "/inbox?f=briefing")
+
+      {:ok, r_list, r_list_html} =
+        live(auth(conn, r), "/inbox/briefing/#{Date.utc_today()}?f=briefing")
+
       r_all = r_all <> r_list_html <> render(r_list)
       r_row = inbox_row(r, a.meeting)
       obs("c2.#{variant}.R.row_body", r_row && r_row.body)
@@ -730,7 +733,10 @@ defmodule PlatformWeb.MeetingBriefSynthesisAcceptanceTest do
 
       obs("c2.#{variant}.J.counts", j_view.counts)
       {:ok, j_lv, j_html} = live(auth(conn, j), detail(a.meeting))
-      {:ok, j_list, j_list_html} = live(auth(conn, j), "/inbox?f=briefing")
+
+      {:ok, j_list, j_list_html} =
+        live(auth(conn, j), "/inbox/briefing/#{Date.utc_today()}?f=briefing")
+
       j_all = j_html <> render(j_lv) <> j_list_html <> render(j_list)
       j_row = inbox_row(j, a.meeting)
       obs("c2.#{variant}.J.row", j_row && Map.take(j_row, [:title, :body, :url]))

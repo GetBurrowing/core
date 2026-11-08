@@ -32,10 +32,7 @@ defmodule PlatformWeb.SecretaryLive do
   import PlatformWeb.Components.NotificationState, only: [notification_state_row: 1]
   import PlatformWeb.AgentPortrait, only: [agent_portrait: 1]
 
-  alias Platform.Access
-  alias Platform.Access.Scope
   alias Platform.Accounts
-  alias Platform.Chat
   alias Platform.Inbox
   alias Platform.Inbox.Item
   alias Platform.Secretary
@@ -182,15 +179,11 @@ defmodule PlatformWeb.SecretaryLive do
      |> toast("Undone. Back as it was.")}
   end
 
+  # Row 18: the existing join path, an open channel the viewer may read
+  # (`Platform.Secretary.View.join_open_channel/2` holds the check).
   def handle_event("join", %{"space_id" => space_id}, socket) do
-    user = socket.assigns.viewer
-    scope = Scope.for_user(user)
-
-    with %{kind: "channel"} = space <- Chat.get_space(space_id, scope: scope),
-         true <- Access.can?(scope, "chat.read", {:space, space.id}),
-         {:ok, _} <- ensure_participant(space.id, user) do
-      {:noreply, socket |> load() |> toast("Joined ##{space.slug || space.name}")}
-    else
+    case View.join_open_channel(socket.assigns.viewer, space_id) do
+      {:ok, space} -> {:noreply, socket |> load() |> toast("Joined ##{space.slug || space.name}")}
       _ -> {:noreply, socket}
     end
   end
@@ -282,26 +275,6 @@ defmodule PlatformWeb.SecretaryLive do
 
       _ ->
         socket |> load() |> push_patch(to: ~p"/brief", replace: true)
-    end
-  end
-
-  defp ensure_participant(space_id, user) do
-    existing =
-      space_id
-      |> Chat.list_participants()
-      |> Enum.find(&(&1.participant_type == "user" and &1.participant_id == user.id))
-
-    case existing do
-      nil ->
-        Chat.add_participant(space_id, %{
-          participant_type: "user",
-          participant_id: user.id,
-          display_name: user.name || user.email,
-          joined_at: DateTime.utc_now()
-        })
-
-      participant ->
-        {:ok, participant}
     end
   end
 

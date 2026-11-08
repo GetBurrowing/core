@@ -417,6 +417,20 @@ defmodule PlatformWeb.InboxLive do
     end
   end
 
+  # The path the desktop list column's `?f=` chips patch within. The index
+  # moved to /brief (task 01a1b721 stage 4), so the column only renders
+  # beside a detail, and a chip stays on that detail.
+  defp detail_path(%{live_action: :briefing, detail_date: %Date{} = date}),
+    do: "/inbox/briefing/" <> Date.to_iso8601(date)
+
+  defp detail_path(%{live_action: :meeting_briefing, meeting_detail_id: id}) when is_binary(id),
+    do: "/inbox/meeting/" <> id
+
+  defp detail_path(%{live_action: :ux_decision, ux_detail_id: id}) when is_binary(id),
+    do: "/inbox/ux/" <> id
+
+  defp detail_path(_assigns), do: "/brief"
+
   defp parse_filter(f) when f in ["briefing", "mentions", "tasks"], do: f
   defp parse_filter(_f), do: "all"
 
@@ -576,7 +590,7 @@ defmodule PlatformWeb.InboxLive do
     {:noreply,
      socket
      |> maybe_toast(%{message: message, variant: :ux, undo?: false}, @briefing_toast_ttl_ms)
-     |> push_patch(to: "/inbox" <> filter_query(socket.assigns.filter))}
+     |> push_navigate(to: ~p"/brief")}
   end
 
   # The briefing component's success toast (it runs in this process). The
@@ -903,7 +917,7 @@ defmodule PlatformWeb.InboxLive do
         push_navigate(socket, to: url)
 
       _ ->
-        push_patch(socket, to: ~p"/inbox", replace: true)
+        push_navigate(socket, to: ~p"/brief", replace: true)
     end
   end
 
