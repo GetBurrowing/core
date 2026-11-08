@@ -237,9 +237,12 @@ defmodule Platform.Meetings.InviteMailer do
 
   defp put_changed_line(setup, changed) when is_list(changed) do
     line =
-      case {:time in changed, :name in changed} do
-        {true, true} -> "Time and title changed"
-        {false, true} -> "Title changed"
+      case {:time in changed, :name in changed, :call in changed} do
+        {true, true, _} -> "Time and title changed"
+        {false, true, _} -> "Title changed"
+        # Task 01a1b8a5 stage 1: a call toggled on or off with nothing else
+        # on the calendar copy moved. Unhandled, it would read "Time changed".
+        {false, false, true} -> "Call changed"
         _ -> nil
       end
 

@@ -3,32 +3,38 @@ defmodule Platform.Calendar.Feed do
   alias Platform.ICal
 
   def render(scope) do
-    events = Enum.flat_map(Platform.Calendar.feed_events(scope), &series_lines/1)
-
     meetings =
       if Platform.Access.can?(scope, "meetings.join") do
         # Omitted for the same reason as cancelled events (`feed_events/1`).
         # The single-meeting invite keeps METHOD:CANCEL; this feed does not.
         Platform.Meetings.list_meetings_for_user(scope.actor)
         |> Enum.reject(&(&1.status == "cancelled"))
-        |> Enum.flat_map(fn meeting ->
-          case Platform.Meetings.CalendarFeed.render(meeting) do
-            {:ok, document} ->
-              # The meeting serializer owns UID, cancellation and invite privacy.
-              [_before, event] = String.split(document, "BEGIN:VEVENT\r\n", parts: 2)
-
-              [
-                String.replace_suffix(event, "END:VCALENDAR\r\n", "")
-                |> then(&("BEGIN:VEVENT\r\n" <> &1))
-              ]
-
-            _ ->
-              []
-          end
-        end)
       else
         []
       end
+
+    # A linked event/meeting pair is one VEVENT (task 01a1b8a5 stage 1).
+    {events, meetings} =
+      Platform.Calendar.project_linked(Platform.Calendar.feed_events(scope), meetings, scope)
+
+    events = Enum.flat_map(events, &series_lines/1)
+
+    meetings =
+      Enum.flat_map(meetings, fn meeting ->
+        case Platform.Meetings.CalendarFeed.render(meeting) do
+          {:ok, document} ->
+            # The meeting serializer owns UID, cancellation and invite privacy.
+            [_before, event] = String.split(document, "BEGIN:VEVENT\r\n", parts: 2)
+
+            [
+              String.replace_suffix(event, "END:VCALENDAR\r\n", "")
+              |> then(&("BEGIN:VEVENT\r\n" <> &1))
+            ]
+
+          _ ->
+            []
+        end
+      end)
 
     [
       encode([

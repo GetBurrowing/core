@@ -191,6 +191,48 @@ defmodule Platform.Meetings.MeetingEditTest do
 
   # ── Edit: time ────────────────────────────────────────────────────────────
 
+  describe "update_meeting_for_user/3 — the call toggle (task 01a1b8a5 stage 1)" do
+    test "turning the call off keeps id, slug and invites, bumps SEQUENCE and drops the call link from the update",
+         ctx do
+      invite!(ctx.meeting, ctx.member, ctx.host)
+      guest = guest!(ctx.meeting, "guest@example.com", ctx.host)
+      [request | _] = deliveries(:invitation)
+      assert request.calendar_ics =~ "LOCATION:"
+
+      preview = Meetings.preview_meeting_edit(ctx.meeting, %{call_enabled: false})
+      assert preview.changed == [:call]
+
+      assert {:ok, %{meeting: off}} =
+               Meetings.update_meeting_for_user(ctx.meeting.id, %{call_enabled: false}, ctx.host)
+
+      assert off.id == ctx.meeting.id and off.slug == ctx.meeting.slug
+      refute off.call_enabled
+      assert off.ical_sequence == 1
+      assert Repo.get!(Invite, guest.id).revoked_at == nil
+
+      {_meeting, info} = notify_edit!()
+      assert info.changed == [:call]
+
+      assert recipients(:updated) ==
+               Enum.sort(Enum.map(preview.update_recipients, & &1.email))
+
+      for update <- deliveries(:updated) do
+        assert update.body =~ "Call changed"
+        refute update.calendar_ics =~ "LOCATION:"
+        assert Lines.value!(update.calendar_ics, "SEQUENCE") == "1"
+      end
+    end
+
+    test "the toggle is refused on a meeting that is no longer editable", ctx do
+      {:ok, _live} = Meetings.start_meeting(ctx.meeting)
+
+      assert {:error, :forbidden} =
+               Meetings.update_meeting_for_user(ctx.meeting.id, %{call_enabled: false}, ctx.host)
+
+      assert Repo.get!(Meeting, ctx.meeting.id).call_enabled
+    end
+  end
+
   describe "update_meeting_for_user/3 — a new time" do
     test "keeps id, slug and guest short codes; one update per emailed invitee, none to the inviter, SEQUENCE bumped",
          ctx do

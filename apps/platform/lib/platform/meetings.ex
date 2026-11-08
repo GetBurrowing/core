@@ -431,9 +431,13 @@ defmodule Platform.Meetings do
             created_by_user_id: attrs[:created_by_user_id]
           }
 
+          # Notes and the call toggle (task 01a1b8a5 stage 1) are cast by
+          # `Meeting.put_event_fields/2`, not the whitelist above, so the
+          # ad-hoc and sheet paths that send neither are unchanged.
           changeset =
             %Meeting{}
             |> Meeting.changeset(meeting_attrs)
+            |> Meeting.put_event_fields(Map.take(attrs, [:description, :call_enabled]))
             |> Ecto.Changeset.put_change(:id, meeting_id)
 
           case Repo.insert(changeset) do
@@ -1682,6 +1686,8 @@ defmodule Platform.Meetings do
     )
     |> case do
       {1, [updated]} ->
+        sync_linked_calendar_event(updated)
+
         Phoenix.PubSub.broadcast(
           Platform.PubSub,
           project_meetings_topic(updated.project_id),
@@ -1749,7 +1755,8 @@ defmodule Platform.Meetings do
   disagree.
 
   `attrs` takes `name`, `description`, `scheduled_start_at`,
-  `scheduled_end_at`, `remove_invite_ids` and `add_invitees` (entries
+  `scheduled_end_at`, `call_enabled` (task 01a1b8a5 stage 1),
+  `remove_invite_ids` and `add_invitees` (entries
   shaped like the create sheet's: `%{kind: :user, user_id: ...}`,
   `%{kind: :guest, display_name: ..., email: ...}`,
   `%{kind: :external, email: ...}`), atom or string keys.
@@ -1757,7 +1764,7 @@ defmodule Platform.Meetings do
   Returns
 
       %{
-        changed: [:name | :description | :time | :invitees],
+        changed: [:name | :description | :time | :call | :invitees],
         update_recipients: [recipient],   # existing invitees, new time/title
         cancel_recipients: [recipient],   # removed invitees, METHOD:CANCEL
         invite_recipients: [recipient],   # added invitees, one invitation
@@ -1830,9 +1837,10 @@ defmodule Platform.Meetings do
        had invitees with none: `recipients_for_meeting/1` would then fall
        back to every chat participant and widen who is told.
     5. ONE transaction: a guarded UPDATE (still `scheduled`, not deleted)
-       of the changed fields, incrementing `ical_sequence` iff the time or
-       the name changed (both are on every calendar copy; notes are not),
-       and `revoke_invite/1` on each removed invite.
+       of the changed fields, incrementing `ical_sequence` iff the time,
+       the name or the call toggle changed (all three are on every calendar
+       copy; notes are not), `revoke_invite/1` on each removed invite, and
+       the linked Calendar event's title and window kept in step.
     6. The update audience is SNAPSHOTTED before anyone is added: the
        existing calendar holders minus the removed. After commit
        `{:meeting_updated, meeting, %{update_invite_ids, cancelled_invite_ids,
@@ -1890,12 +1898,16 @@ defmodule Platform.Meetings do
     time? = Map.has_key?(changes, :scheduled_start_at) or Map.has_key?(changes, :scheduled_end_at)
     name? = Map.has_key?(changes, :name)
     description? = Map.has_key?(changes, :description)
+    # The call toggle (task 01a1b8a5 stage 1) changes the LOCATION every
+    # calendar copy carries (`InviteMail` renders the join link there only
+    # while the call is on), so it bumps and mails like a time or title.
+    call? = Map.has_key?(changes, :call_enabled)
 
     live = list_invites(meeting.id)
     remove_ids = attr_list(attrs, :remove_invite_ids) |> Enum.filter(&is_binary/1) |> MapSet.new()
     {removed, kept} = Enum.split_with(live, &MapSet.member?(remove_ids, &1.id))
     added = attr_list(attrs, :add_invitees) |> Enum.filter(&is_map/1)
-    bump? = time? or name?
+    bump? = time? or name? or call?
 
     # The snapshot: who holds the event on a calendar NOW, minus whoever this
     # edit removes. Taken before any invitee is added, so an added invitee
@@ -1917,6 +1929,7 @@ defmodule Platform.Meetings do
         name? && :name,
         description? && :description,
         time? && :time,
+        call? && :call,
         (removed != [] or added != []) && :invitees
       ]
       |> Enum.filter(& &1)
@@ -1935,7 +1948,7 @@ defmodule Platform.Meetings do
     }
   end
 
-  @edit_field_keys [:name, :description, :scheduled_start_at, :scheduled_end_at]
+  @edit_field_keys [:name, :description, :scheduled_start_at, :scheduled_end_at, :call_enabled]
 
   # Only the keys the caller sent, so an absent field is "unchanged", never
   # "cleared".
@@ -1970,6 +1983,7 @@ defmodule Platform.Meetings do
         end
 
       Enum.each(plan.removed, &revoke_invite/1)
+      sync_linked_calendar_event(updated)
       updated
     end)
   end
@@ -1977,7 +1991,7 @@ defmodule Platform.Meetings do
   defp write_edit(%Meeting{} = meeting, changes, bump?) do
     set =
       changes
-      |> Map.take([:name, :description, :scheduled_start_at, :scheduled_end_at])
+      |> Map.take([:name, :description, :scheduled_start_at, :scheduled_end_at, :call_enabled])
       |> Map.put(:updated_at, DateTime.utc_now())
       |> Enum.to_list()
 
@@ -1993,6 +2007,43 @@ defmodule Platform.Meetings do
       {0, _} -> Repo.rollback(:not_editable)
     end
   end
+
+  # A native calendar event linked to this meeting (task 01a1b8a5 stage 1)
+  # shows the same title and window, whichever surface edited the meeting: an
+  # edit from the meeting page must not leave the Calendar entry behind. Each
+  # UPDATE matches only when the value actually differs, so a save that
+  # `Platform.Calendar.Authoring` already wrote to the event is a no-op here
+  # and an all-day event keeps its dates. A moved window is a timed window,
+  # so a time change clears the all-day dates.
+  defp sync_linked_calendar_event(%Meeting{scheduled_start_at: %DateTime{}} = meeting) do
+    now = DateTime.utc_now()
+    linked = from(e in Platform.Calendar.Event, where: e.meeting_id == ^meeting.id)
+
+    linked
+    |> where([e], e.title != ^meeting.name)
+    |> Repo.update_all(set: [title: meeting.name, updated_at: now], inc: [sequence: 1])
+
+    linked
+    |> where(
+      [e],
+      e.starts_at != ^meeting.scheduled_start_at or e.ends_at != ^meeting.scheduled_end_at
+    )
+    |> Repo.update_all(
+      set: [
+        starts_at: meeting.scheduled_start_at,
+        ends_at: meeting.scheduled_end_at,
+        all_day: false,
+        start_date: nil,
+        end_date: nil,
+        updated_at: now
+      ],
+      inc: [sequence: 1]
+    )
+
+    :ok
+  end
+
+  defp sync_linked_calendar_event(%Meeting{}), do: :ok
 
   # An entry that would add nobody new (already a live invitee) yields nil.
   defp prospective_invite(_meeting, entry, live) do

@@ -114,6 +114,12 @@ defmodule Platform.Meetings.Meeting do
     # viewer-facing listing filters `is_nil(deleted_at)`; `get_meeting/1`
     # and the background sweepers deliberately do not.
     field(:deleted_at, :utc_datetime_usec)
+    # Whether this record still offers a call (task 01a1b8a5 stage 1). An
+    # event can keep its people, guests and notes with the call turned off:
+    # the row, id, slug, chat space and invite links stay, only the call is
+    # withdrawn. Default true, which is every meeting that existed before the
+    # column. Cast only by `edit_changeset/2` and `put_event_fields/2`.
+    field(:call_enabled, :boolean, default: true)
 
     timestamps(type: :utc_datetime_usec)
   end
@@ -189,11 +195,12 @@ defmodule Platform.Meetings.Meeting do
     end
   end
 
-  @edit_fields ~w(name description scheduled_start_at scheduled_end_at)a
+  @edit_fields ~w(name description scheduled_start_at scheduled_end_at call_enabled)a
 
   @doc """
   Changeset for editing a meeting in place (task 01a1b281 stage 2): the
-  name, the notes and the intended-time pair, nothing else.
+  name, the notes, the intended-time pair and (task 01a1b8a5 stage 1)
+  whether the call is offered, nothing else.
 
   `slug` is NEVER cast, so `/meetings/<slug>` and every `/g/<short_code>`
   guest link stay the same across an edit. `status`, `ical_sequence` and
@@ -206,9 +213,23 @@ defmodule Platform.Meetings.Meeting do
     |> cast(attrs, @edit_fields, empty_values: [])
     |> update_change(:name, &trim/1)
     |> update_change(:description, &blank_to_nil/1)
-    |> validate_required([:name])
+    |> validate_required([:name, :call_enabled])
     |> validate_length(:name, max: 255)
     |> validate_scheduled_window()
+  end
+
+  @doc """
+  The event fields a create may carry beyond `changeset/2`'s whitelist
+  (task 01a1b8a5 stage 1): the notes and whether the call is offered. Kept
+  apart from `@cast_fields` so `changeset/2`, which `reschedule_meeting/3`
+  also uses, still cannot touch either.
+  """
+  @spec put_event_fields(Ecto.Changeset.t(), map()) :: Ecto.Changeset.t()
+  def put_event_fields(%Ecto.Changeset{} = changeset, attrs) do
+    changeset
+    |> cast(attrs, [:description, :call_enabled])
+    |> update_change(:description, &blank_to_nil/1)
+    |> validate_required([:call_enabled])
   end
 
   defp trim(value) when is_binary(value), do: String.trim(value)

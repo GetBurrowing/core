@@ -199,7 +199,8 @@ defmodule Platform.Meetings.InviteMail do
     parties = %{
       organizer: ctx.organizer,
       attendee: {Map.get(recipient, :name), recipient.email},
-      location: join_url
+      # No call, no call link on the calendar copy (task 01a1b8a5 stage 1).
+      location: if(Map.get(meeting, :call_enabled, true), do: join_url)
     }
 
     case InviteIcs.render(meeting, method, parties) do
