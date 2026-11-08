@@ -434,10 +434,12 @@ defmodule Platform.GameStream.ExtensionParityTest do
     # four tool-definition digests move. Names, bundles, summaries and
     # parameter schemas are unchanged. Measured on the test rig at the
     # stage's branch.
+    # Task 01a1b6e1 deploy integration: voice return metadata plus sharing
+    # definitions measured by CI 42440127890 at 3dd284545; exact names remain pinned.
     @previous_tool_digest_off "17bc6b45b27b5d985ca8c687e1fea60d6181ed1c0cc236a858059b32381f6252"
     @previous_tool_digest_on "db5cda14ecad14478c043c614b37e7631e71bcb793612f2b98a271f49be99ec5"
-    @main_tool_digest_off "a8436315038c731fbf2e9b31edce83137e98b07c9e5e0dbc501c8933ee7e5c9e"
-    @main_tool_digest_on "982f234f1d34aee0311551f81042547f5888d433c392c5580f4b25911709dc03"
+    @main_tool_digest_off "41af4df76e6eeb969153b5d520a42ac7ff7900981bd7df4f66e580f12fcdd2b6"
+    @main_tool_digest_on "7524e2543c29d0a46a8f759f9828b5c6ea9b89a6735a1de48252ee55742433ae"
     @main_kinds_summaries_digest_off "1b337c131bca3720e1158e67d9fa1374ce4b08c60987f9d5f0ff10e5ffc6104a"
     @main_kinds_summaries_digest_on "e99a61e52a6858f0e97255683ebdc33d58c0fd56b4ada613946dc6a99ab2004e"
     @main_kinds_tool_schemas_digest_off "61843c26d260fdb0ca751f9106a1b4d1f7c0a68cbfca79425c6f03e02bcc96a8"
@@ -614,7 +616,7 @@ defmodule Platform.GameStream.ExtensionParityTest do
              ] == [
                @previous_tool_digest_off,
                @main_tool_digest_off,
-               "11e499ce04f9e32df1372f3c511ef34b6e54d4ad2c7674a9c44d5e415da4b0cf"
+               "71d759178eded8c73d5e02e6fede0c0370f42c0e39f882dea95830d169eb5623"
              ]
     end
 
@@ -637,7 +639,7 @@ defmodule Platform.GameStream.ExtensionParityTest do
              ] == [
                @previous_tool_digest_on,
                @main_tool_digest_on,
-               "a9c22665a8d17d04acb776c1257b43db55a876100cc9c6efe21519f219bdad84"
+               "21cfcf95e2a7933460d4bf8a70b268d13780597a60f484b77e3064f88191af73"
              ]
     end
 

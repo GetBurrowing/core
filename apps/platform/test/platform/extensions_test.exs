@@ -944,6 +944,8 @@ defmodule Platform.ExtensionsTest do
     # agent can tell a Voice tab record in its DM. Names, bundles, summaries
     # and parameter schemas are unchanged. Measured on the test rig at the
     # stage's branch.
+    # Task 01a1b6e1 deploy integration: voice return metadata plus sharing
+    # definitions measured by CI 42440127890 at 3dd284545; exact names remain pinned.
     @main_tool_digest_off "5dec67a60eacd337c89a4bde2d0b465ed1486f4d6ef1593a2b7476c1800e5470"
     @main_kinds_summaries_digest_off "514cb7a62dea7ea34226d7b60d2f243d5bb9a940bc1f5d44fd2e0e27e8074c52"
     @main_kinds_tool_schemas_digest_off "45c4c34283c8da212f6ab061ae43d1582e41b7192e8f8a442bfd45b3dd6f8e86"
@@ -1161,7 +1163,7 @@ defmodule Platform.ExtensionsTest do
                digest(without_instruction_updates(legacy_kind_props(legacy)))
              ] == [
                @main_tool_digest_off,
-               "03f4dfe9d2f50c8b5e29e368dc02099e1db8aa76643e6c487ba20844524b5452"
+               "e3de24d4f3ab6b916a5456fa107f904b6ed78bae182e201ff017eaf3ba229c50"
              ]
     end
 
