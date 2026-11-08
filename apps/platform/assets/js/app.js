@@ -35,6 +35,10 @@ import {installTopBar} from "./lib/top_bar"
 import {installPressHold} from "./hooks/button_loading"
 import {installThemePreviewReceiver} from "./hooks/theme_preview_receiver"
 
+import {installPublicGamePage} from "./public_game_page"
+
+installPublicGamePage()
+
 // The theme editor's preview frames (task 01a1557a-fe9b stage 2): installs a
 // message listener only when this page is framed AND carries
 // theme_preview=1. See ./hooks/theme_preview_receiver.js.

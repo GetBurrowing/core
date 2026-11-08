@@ -2415,6 +2415,19 @@ defmodule Platform.Chat do
   kept as `metadata["reply_to_message_id"]` only when
   `Platform.Chat.ReplyTarget.validate/3` accepts it and the message is
   top-level, else dropped silently (the message still posts).
+
+  Option `:mark_read_for` (a `chat_participants` primary key in the same
+  space): after the insert and BEFORE the `{:new_message, _}` broadcast, that
+  participant's read cursor is moved forward to the new message
+  (forward-only, never backward). The Voice tab uses it so a record of a
+  conversation the user just heard never shows as unread: because the cursor
+  lands before the broadcast, a shell that recomputes its badge on
+  `{:new_message, _}` already sees it read. A single watermark cannot skip a
+  row, so the cursor moves ONLY when every row it would pass that counts as
+  unread for that participant (top-level, not deleted, authored by someone
+  else) is itself a voice record (metadata `"source" => "voice"`). If an older
+  unread typed message sits in between, the cursor stays put and that message
+  keeps its badge.
   """
   @spec post_message(map(), keyword()) ::
           {:ok, Message.t()}
@@ -2454,6 +2467,7 @@ defmodule Platform.Chat do
 
     case result do
       {:ok, msg} ->
+        mark_read_on_post(msg, Keyword.get(opts, :mark_read_for))
         msg |> reinvite_and_pin_mentioned() |> notify_refused_summons(msg, opts)
         emit_inbox_for_mentions(msg)
         publish_message_posted(msg, opts)
@@ -2463,6 +2477,89 @@ defmodule Platform.Chat do
       {:error, changeset} ->
         {:error, changeset}
     end
+  end
+
+  # `post_message/2`'s `:mark_read_for`: forward-only, scoped to the message's
+  # own space so a participant id from another space moves nothing, and held
+  # back when the rows it would pass include an unread non-voice message (the
+  # same rows `count_unread/3` counts), so that message's badge survives.
+  defp mark_read_on_post(%Message{} = msg, participant_pk) when is_binary(participant_pk) do
+    passed_non_voice =
+      from(m in Message,
+        where: m.space_id == ^msg.space_id and m.id < ^msg.id,
+        where: is_nil(m.thread_id) and is_nil(m.deleted_at),
+        where: m.participant_id != parent_as(:p).id,
+        where:
+          is_nil(parent_as(:p).last_read_message_id) or
+            m.id > parent_as(:p).last_read_message_id,
+        where: fragment("coalesce(?->>'source', '') <> 'voice'", m.metadata),
+        select: 1
+      )
+
+    {_count, _} =
+      from(p in Participant,
+        as: :p,
+        where: p.id == ^participant_pk and p.space_id == ^msg.space_id,
+        where: is_nil(p.last_read_message_id) or p.last_read_message_id < ^msg.id,
+        where: not exists(passed_non_voice)
+      )
+      |> Repo.update_all(set: [last_read_message_id: msg.id])
+
+    :ok
+  end
+
+  defp mark_read_on_post(_msg, _participant_pk), do: :ok
+
+  @doc """
+  The Voice tab's records (`AttentionRouter.voice_record?/1`: metadata
+  `"source" => "voice"` with a `"voice_session_id"`) in `space_ids`, oldest
+  first by id.
+
+  Options: `:voice_session_id` narrows to one session, `:voice_session_ids`
+  to a list of them (the DM's session bracket reads every row of the sessions
+  on screen in one query); `:since`
+  (`DateTime`) drops rows inserted before it. Thread replies and deleted rows
+  are excluded. Read by `Platform.Meetings.VoiceSession.finish/1` to count a
+  session's turns and to find the sessions a room left unfinished.
+  """
+  @spec list_voice_records([binary()], keyword()) :: [Message.t()]
+  def list_voice_records(space_ids, opts \\ [])
+  def list_voice_records([], _opts), do: []
+
+  def list_voice_records(space_ids, opts) when is_list(space_ids) do
+    query =
+      from(m in Message,
+        where: m.space_id in ^space_ids and is_nil(m.thread_id) and is_nil(m.deleted_at),
+        where: fragment("?->>'source' = 'voice'", m.metadata),
+        where: fragment("coalesce(?->>'voice_session_id', '') <> ''", m.metadata),
+        order_by: [asc: m.id]
+      )
+
+    query =
+      case Keyword.get(opts, :voice_session_id) do
+        id when is_binary(id) ->
+          where(query, [m], fragment("?->>'voice_session_id' = ?", m.metadata, ^id))
+
+        _ ->
+          query
+      end
+
+    query =
+      case Keyword.get(opts, :voice_session_ids) do
+        ids when is_list(ids) ->
+          where(query, [m], fragment("?->>'voice_session_id'", m.metadata) in ^ids)
+
+        _ ->
+          query
+      end
+
+    query =
+      case Keyword.get(opts, :since) do
+        %DateTime{} = since -> where(query, [m], m.inserted_at >= ^since)
+        _ -> query
+      end
+
+    Repo.all(query)
   end
 
   @doc """
@@ -6576,7 +6673,9 @@ defmodule Platform.Chat do
        when is_binary(content) do
     space = Repo.get(Space, space_id)
 
-    if space do
+    # A Voice tab record in a DM is a transcript the user just heard: never
+    # an inbox row, whatever its words happen to contain (task 01a1b6c3).
+    if space && not Platform.Chat.AttentionRouter.dm_voice_record?(msg, space.kind) do
       space_id
       |> list_participants()
       |> Enum.filter(&(&1.participant_type == "user"))

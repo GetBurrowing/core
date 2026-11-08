@@ -1,0 +1,32 @@
+<!DOCTYPE html>
+<html lang="en" data-theme="dark" class="public-game-document">
+  <head>
+    <meta charset="utf-8" /><meta name="viewport" content="width=device-width,initial-scale=1" />
+    <title>Join {@game["title"]} · Burrow</title>
+    <link rel="stylesheet" href={~p"/assets/css/app.css"} />
+  </head>
+  <body class="public-game">
+    <main class="gp-signin">
+      <img src={~p"/images/burrowplay.svg"} alt="Burrow" width="100" />
+      <h1>Come play {@game["title"]}.</h1>
+      <p>Your Burrow account gets you the game and its player community.</p>
+      <a
+        id="continue-sign-in"
+        class="gp-btn gp-primary"
+        href={"/auth/login?" <> URI.encode_query(%{game: @game["slug"]})}
+      >
+        Sign in with Burrow
+      </a>
+      <p :if={@signup?}>
+        New here? <a
+          id="game-create-account"
+          href={"/games/#{@game["slug"]}/create-account"}
+          target="_blank"
+          rel="noopener"
+        >Create your account</a>, then return here to sign in.
+      </p>
+      <p :if={!@signup?}>New account registration is not open on this game page yet.</p>
+      <a href={"/games/#{@game["slug"]}"}>← Back to the game</a>
+    </main>
+  </body>
+</html>

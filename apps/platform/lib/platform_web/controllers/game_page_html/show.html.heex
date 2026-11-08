@@ -1,0 +1,250 @@
+<!DOCTYPE html>
+<html lang="en" data-theme="dark" class="public-game-document">
+  <head>
+    <meta charset="utf-8" />
+    <meta name="viewport" content="width=device-width, initial-scale=1" />
+    <meta name="csrf-token" content={@csrf_token} />
+    <meta name="color-scheme" content="dark" />
+    <title>{@game["title"]} · play on Burrow</title>
+    <link phx-track-static rel="stylesheet" href={~p"/assets/css/app.css"} />
+    <script defer phx-track-static type="text/javascript" src={~p"/assets/js/app.js"}>
+    </script>
+  </head>
+  <body
+    class="public-game"
+    id="public-game"
+    data-community-joined={to_string((@community && @community.joined?) || false)}
+  >
+    <header class="gp-bar">
+      <a href={"/games/#{@game["slug"]}"} aria-label="Game home">
+        <img class="gp-logo" src={~p"/images/burrowplay.svg"} alt="Burrow" />
+      </a>
+      <span class="gp-sep"></span><span class="gp-game">{@game["title"]}</span>
+      <nav class="gp-tabs" aria-label="Game page">
+        <a id="game-tab" href={"/games/#{@game["slug"]}"} aria-selected={to_string(!@community?)}>
+          Game
+        </a>
+        <a
+          id="community-tab"
+          href={"/games/#{@game["slug"]}?tab=community"}
+          aria-selected={to_string(@community?)}
+        >
+          Community <span :if={@community} class="gp-count">{@community.member_count}</span>
+        </a>
+      </nav>
+      <div class="gp-right">
+        <span :if={@user} class="gp-me">{Platform.Games.player_display_name(@user)}</span><span
+          :if={!@user}
+          class="gp-ghost"
+        >Come play.</span>
+      </div>
+    </header>
+    <nav class="gp-tabs gp-mtabs" aria-label="Game page on phone">
+      <a href={"/games/#{@game["slug"]}"} aria-selected={to_string(!@community?)}>Game</a>
+      <a href={"/games/#{@game["slug"]}?tab=community"} aria-selected={to_string(@community?)}>
+        Community <span :if={@community} class="gp-count">{@community.member_count}</span>
+      </a>
+    </nav>
+    <main class="gp-wrap">
+      <div :if={!@community?} class="gp-grid">
+        <div>
+          <div :if={@game["image_path"]} class="gp-media">
+            <img src={@game["image_path"]} alt={@game["image_alt"] || @game["title"]} />
+            <span class="gp-chip">
+              Early build
+            </span>
+          </div>
+        </div>
+        <aside class="gp-card">
+          <div class="gp-eyebrow">
+            <span class="gp-seats"><i class="gp-s-r"></i><i class="gp-s-g"></i><i class="gp-s-b"></i><i class="gp-s-y"></i></span>Co-op · up to 4 pilots
+          </div>
+          <h1>{@game["title"]}</h1>
+          <p class="gp-by">Made by the team · hosted on Burrow</p>
+          <p class="gp-pitch">
+            One giant robot, four players. Each of you drives a limb. Staying upright is a team sport.
+          </p>
+          <div class="gp-facts">
+            <span>Windows</span><span>Free</span><span>{Float.round(@release["byte_size"] / 1_048_576, 1)} MiB</span>
+          </div>
+          <div data-game-action hidden={@unsupported?}>
+            <a
+              :if={!@user}
+              id="game-sign-in"
+              class="gp-btn gp-primary"
+              href={"/games/#{@game["slug"]}/sign-in"}
+            >
+              Sign in with Burrow
+            </a>
+            <a
+              :if={@user}
+              id="game-download"
+              data-game-download
+              class="gp-btn gp-primary"
+              href={"/games/#{@game["slug"]}/releases/#{@release["version"]}/download"}
+            >
+              Download for Windows
+            </a>
+            <p class="gp-under">
+              {if @user,
+                do: "Extract the ZIP, then open Play Multiplayer.",
+                else: "One Burrow account for the game and its community."}
+            </p>
+          </div>
+          <div data-game-unsupported hidden={!@unsupported?}>
+            <div class="gp-notice">
+              <div>
+                <b>Requires a Windows PC</b><span>Keep this page handy and open it on your PC to play.</span>
+              </div>
+            </div>
+            <button id="game-copy-link" data-game-copy class="gp-btn gp-primary" type="button">
+              Copy the game link
+            </button>
+            <a class="gp-textlink" href={"/games/#{@game["slug"]}"} data-game-windows-override>
+              Use the Windows download
+            </a>
+          </div>
+          <p data-game-status class="gp-copy-status" role="status" aria-live="polite"></p>
+          <input
+            data-game-copy-fallback
+            class="gp-copy-fallback"
+            readonly
+            aria-label="Game link to copy"
+            hidden
+          />
+          <div id="game-setup" data-game-setup hidden>
+            <div class="gp-done">
+              <div>
+                <b>Your download has started</b><span>Version {@release["version"]} · check your browser’s downloads</span>
+              </div>
+            </div>
+            <ol class="gp-steps">
+              <li>
+                <b>Extract the ZIP</b><span>Right-click the downloaded file → Extract All.</span>
+              </li>
+              <li>
+                <b>Open Play Multiplayer</b><span>Inside the folder you just extracted.</span>
+              </li>
+              <li>
+                <b>Find your crew</b><span>Get the current room code in the joined player community.</span>
+              </li>
+            </ol>
+            <a class="gp-btn gp-primary" href={"/games/#{@game["slug"]}?tab=community"}>
+              Find pilots in Community →
+            </a>
+            <a
+              data-game-download
+              class="gp-textlink"
+              href={"/games/#{@game["slug"]}/releases/#{@release["version"]}/download"}
+            >
+              Download again
+            </a>
+          </div>
+          <noscript>
+            <p class="gp-under">
+              After downloading, extract the ZIP and open Play Multiplayer.bat.
+            </p>
+          </noscript>
+        </aside>
+      </div>
+      <div :if={!@community?}>
+        <section class="gp-section">
+          <h2>Four pilots. One robot.</h2>
+          <p>{@game["summary"]}</p>
+          <p>
+            Pick a foot or a fist. Coordinate your next move, explore the city, and see how much destruction your crew can cause.
+          </p>
+        </section>
+        <section class="gp-section" id="game-instructions">
+          <h2>Good to know</h2>
+          <div class="gp-known">
+            <div><b>It’s early</b><span>Expect rough edges and frequent updates.</span></div>
+            <div><b>Room codes, for now</b><span>{@game["multiplayer_note"]}</span></div>
+            <div>
+              <b>Release details</b><span>{@release["version"]} · portable ZIP<br /><code>SHA-256 {@release["sha256"]}</code></span>
+            </div>
+          </div>
+        </section>
+      </div>
+      <div :if={@community?} class="gp-grid" id="game-community">
+        <div class="gp-ccol">
+          <section class="gp-room">
+            <header>
+              <span class="gp-hash">#</span>
+              <div>
+                <b>{if @community, do: @community.space.name, else: "Player community"}</b><span :if={
+                  @community
+                }>{@community.member_count} members</span>
+              </div>
+            </header>
+            <%= if @community && @community.joined? do %>
+              <div class="gp-voice">Keep your existing Burrow call open while you play.</div>
+              <div class="gp-game-chat-body">
+                <div id="game-live-chat" class="gp-chat">
+                  {live_render(@conn, PlatformWeb.GameCommunityLive,
+                    session: %{
+                      "game_slug" => @game["slug"],
+                      "current_user_id" => @user.id
+                    }
+                  )}
+                </div>
+              </div>
+            <% else %>
+              <div class="gp-room-placeholder">
+                <div>
+                  <h2>Find your next crew.</h2>
+                  <p>Coordinate a match, choose your limb, and share your best demolition.</p>
+                  <p>Live messages and room codes are available after you join.</p>
+                </div>
+              </div>
+              <div class="gp-joinbar">
+                <div class="gp-txt">
+                  <b>Join the pilots to chat</b>Only this player room is added. The team’s development channels stay private.
+                </div>
+                <%= cond do %>
+                  <% !@community -> %>
+                    <p>The player room is not open yet.</p>
+                  <% !@user -> %>
+                    <a
+                      id="community-sign-in"
+                      class="gp-btn gp-primary"
+                      href={"/games/#{@game["slug"]}/sign-in"}
+                    >
+                      Sign in to join
+                    </a>
+                  <% true -> %>
+                    <form method="post" action={"/games/#{@game["slug"]}/community"}>
+                      <input type="hidden" name="_csrf_token" value={@csrf_token} />
+                      <button
+                        id="community-join"
+                        class="gp-btn gp-primary"
+                        type="submit"
+                      >
+                        Join the community
+                      </button>
+                    </form>
+                <% end %>
+              </div>
+            <% end %>
+          </section>
+        </div>
+        <aside class="gp-side">
+          <div class="gp-box">
+            <div class="gp-mini">
+              <div>
+                <b>{@game["title"]}</b><span>Windows · Free · {Float.round(@release["byte_size"] / 1_048_576, 1)} MiB</span>
+              </div>
+            </div>
+            <a class="gp-btn gp-outline" href={"/games/#{@game["slug"]}"}>Back to the game</a>
+          </div>
+          <div class="gp-box gp-scope">
+            This is the players’ room. Development channels stay private.
+          </div>
+        </aside>
+      </div>
+      <p class="gp-foot">
+        <img src={~p"/images/burrowplay.svg"} alt="Burrow" />Hosted on Burrow. Downloads are Windows only for now.
+      </p>
+    </main>
+  </body>
+</html>

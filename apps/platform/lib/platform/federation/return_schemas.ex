@@ -420,6 +420,15 @@ defmodule Platform.Federation.ReturnSchemas do
             "byte_size" => nullable(int()),
             "filename" => nullable(string())
           })
+        ),
+      "voice" =>
+        nullable(
+          closed(%{
+            "voice_session_id" => string(),
+            "voice_turn" => nullable(int()),
+            "voice_kind" => nullable(string()),
+            "input" => nullable(string())
+          })
         )
     })
   end

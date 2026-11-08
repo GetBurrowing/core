@@ -492,6 +492,15 @@ defmodule PlatformWeb.Router do
   scope "/", PlatformWeb do
     pipe_through(:browser)
 
+    # Published game pages deliberately answer on every host, like auth.
+    # Only operator-published manifests are exposed; downloads authenticate
+    # separately and never widen chat attachment permissions.
+    get("/games/:slug", GamePageController, :show)
+    get("/games/:slug/sign-in", GamePageController, :sign_in)
+    get("/games/:slug/create-account", GamePageController, :create_account)
+    post("/games/:slug/community", GamePageController, :join_community)
+    get("/games/:slug/releases/:version/download", GamePageController, :download)
+
     get("/health", HealthController, :index)
     get("/auth/login", AuthController, :login)
     get("/auth/oidc/callback", AuthController, :callback)
@@ -1143,6 +1152,9 @@ defmodule PlatformWeb.Router do
       # previews, install-wide for the same reason as insights.
       # `Platform.Chat.LinkUnfurls.Settings.update/2` re-checks root admin.
       live("/admin/link-unfurls", AdminLinkUnfurlsLive, :index)
+      # Task 01a1b7b6 stage 3: the host updater. The view re-checks root
+      # admin on mount and on every event.
+      live("/admin/updates", AdminUpdatesLive, :index)
       # Task 01a131c5 stage 2: shared secrets an admin grants to agents.
       # `Platform.Vault.Shared` re-checks the actor on every call, so this
       # live_session's gate is not load-bearing alone.

@@ -9,6 +9,8 @@ defmodule Platform.Repo.Migrations.AddPostedStatusToUxFindings do
 
   use Ecto.Migration
 
+  # old-code-compatible: only widens the status check (adds 'posted'); every value the previous release writes still passes
+
   def up do
     drop(constraint(:ux_findings, :ux_findings_status_check))
 

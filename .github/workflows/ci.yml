@@ -1524,6 +1524,16 @@ jobs:
           # Derive a docker-safe branch tag: refs/heads/feat/reskin → feat-reskin
           BRANCH_TAG="${GITHUB_REF#refs/heads/}"
           BRANCH_TAG="${BRANCH_TAG//\//-}"
+          # Release-channel names are reserved (task 01a1b7b6 stage 2): only
+          # main tags core-edge/play-edge, and only promote-stable.yml tags
+          # core-stable/play-stable. A branch whose tag would land on a
+          # channel name (bare, core- or play-prefixed) fails here. The push
+          # triggers already exclude such branches; this is belt and braces.
+          if [[ "$BRANCH_TAG" =~ ^(core-|play-)?(stable|edge|candidate)$ ]] \
+            || [[ "$BRANCH_TAG" =~ ^(core-|play-)?(soak-|stable-) ]]; then
+            echo "::error::branch tag '${BRANCH_TAG}' collides with a reserved release-channel tag"
+            exit 1
+          fi
           echo "branch_tag=${BRANCH_TAG}" >> "$GITHUB_OUTPUT"
 
       - name: Download digests
@@ -1563,6 +1573,7 @@ jobs:
         run: |
           docker buildx imagetools create \
             -t ghcr.io/getburrowing/core:core \
+            -t ghcr.io/getburrowing/core:core-edge \
             -t ghcr.io/getburrowing/core:core-${{ github.sha }} \
             -t ghcr.io/getburrowing/core:core-${{ steps.vars.outputs.short_sha }} \
             ${{ steps.digests.outputs.ghcr_refs }}
@@ -1623,6 +1634,16 @@ jobs:
           # Derive a docker-safe branch tag: refs/heads/feat/reskin → feat-reskin
           BRANCH_TAG="${GITHUB_REF#refs/heads/}"
           BRANCH_TAG="${BRANCH_TAG//\//-}"
+          # Release-channel names are reserved (task 01a1b7b6 stage 2): only
+          # main tags core-edge/play-edge, and only promote-stable.yml tags
+          # core-stable/play-stable. A branch whose tag would land on a
+          # channel name (bare, core- or play-prefixed) fails here. The push
+          # triggers already exclude such branches; this is belt and braces.
+          if [[ "$BRANCH_TAG" =~ ^(core-|play-)?(stable|edge|candidate)$ ]] \
+            || [[ "$BRANCH_TAG" =~ ^(core-|play-)?(soak-|stable-) ]]; then
+            echo "::error::branch tag '${BRANCH_TAG}' collides with a reserved release-channel tag"
+            exit 1
+          fi
           echo "branch_tag=${BRANCH_TAG}" >> "$GITHUB_OUTPUT"
 
       # Every image this job pulls (the buildkit builder below, the
@@ -1658,6 +1679,7 @@ jobs:
             gh_token=${{ secrets.GITHUB_TOKEN }}
           tags: |
             ghcr.io/getburrowing/core:play
+            ghcr.io/getburrowing/core:play-edge
             ghcr.io/getburrowing/core:play-${{ github.sha }}
             ghcr.io/getburrowing/core:play-${{ steps.vars.outputs.short_sha }}
             ghcr.io/getburrowing/core:latest

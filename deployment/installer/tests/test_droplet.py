@@ -18,6 +18,7 @@ No test prints a key, a link or a code.
 
 import base64
 import contextlib
+import gzip
 import hashlib
 import io
 import json
@@ -419,7 +420,10 @@ class DropletMeetingsRenderTest(unittest.TestCase):
         )  # positive control
         size = len(user_data.encode("utf-8"))
         self.assertGreater(size, len(self.files["user-data"].encode("utf-8")))
-        self.assertLess(size, DO_USER_DATA_GUARD)
+        # The host updater is folded into this render now (task 01a1b7b6), so
+        # the guard below already counts it.
+        self.assertIn('path: "/opt/burrow/bin/burrow-update"', user_data)  # positive control
+        self.assertLessEqual(size, DO_USER_DATA_GUARD)
 
     def test_fixture_and_render_carry_no_install_identity(self):
         with open(DO_MEETINGS, encoding="utf-8") as handle:
@@ -427,6 +431,45 @@ class DropletMeetingsRenderTest(unittest.TestCase):
         for rel, text in self.rendered.redacted().items():
             with self.subTest(file=rel):
                 self.assertEqual(identity_hits(text), [])
+
+
+class CompressedMigrateScriptTest(unittest.TestCase):
+    """bin/burrow-migrate rides in user_data as gz+b64 and decodes to the same file."""
+
+    PATH = "/opt/burrow/bin/burrow-migrate"
+
+    @classmethod
+    def setUpClass(cls):
+        cls.user_data = droplet().files["user-data"][0]
+        part = cls.user_data.split(f'\n  - path: "{cls.PATH}"\n', 1)[1]
+        cls.head = part.split("\n  - ", 1)[0]
+
+    def test_the_entry_is_gz_b64_with_the_exec_mode(self):
+        self.assertEqual(
+            self.head.splitlines()[:3],
+            [
+                '    owner: "root:root"',
+                f'    permissions: "0{templates.EXEC_MODE:o}"',
+                '    encoding: "gz+b64"',
+            ],
+        )
+
+    def test_the_payload_decodes_to_migrate_script_byte_for_byte(self):
+        b64 = self.head.split('    content: "', 1)[1].split('"', 1)[0]
+        raw = base64.b64decode(b64, validate=True)
+        self.assertEqual(raw[:2], b"\x1f\x8b")  # positive control: a gzip member
+        self.assertEqual(gzip.decompress(raw), templates.migrate_script().encode("utf-8"))
+        self.assertGreater(len(templates.migrate_script()), 1024)
+
+    def test_no_plain_copy_of_the_script_is_rendered(self):
+        first = next(ln for ln in templates.migrate_script().splitlines() if len(ln) > 20)
+        self.assertNotIn(first, self.user_data)
+
+    def test_the_encoding_is_deterministic(self):
+        text = templates.migrate_script()
+        self.assertEqual(templates.gzip_b64(text), templates.gzip_b64(text))
+        again = droplet().files["user-data"][0].split(f'\n  - path: "{self.PATH}"\n', 1)[1]
+        self.assertEqual(again.split("\n  - ", 1)[0], self.head)
 
 
 class PublicImagesTest(unittest.TestCase):
@@ -956,6 +999,12 @@ def _write_files(user_data):
     parts = user_data.split('\n  - path: "')[1:]
     for part in parts:
         path = part.split('"', 1)[0]
+        head = part.split("\n  - ", 1)[0]
+        if '    encoding: "gz+b64"' in head:
+            # A compressed entry (templates.COMPRESSED_FILES): one quoted base64 line.
+            b64 = head.split('    content: "', 1)[1].split('"', 1)[0]
+            out[path] = gzip.decompress(base64.b64decode(b64)).decode("utf-8")
+            continue
         body = part.split("content: |\n", 1)[1]
         lines = []
         for line in body.split("\n"):

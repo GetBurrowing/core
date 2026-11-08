@@ -4432,4 +4432,83 @@ defmodule Platform.Responsibilities.RouterTest do
       assert_received {:fired, ^key, _}
     end
   end
+
+  # Voice DM stage 1: a Voice tab record in a DM (metadata source "voice" plus
+  # a voice_session_id) is a transcript of a spoken conversation and must not
+  # fire a chat_pattern. Positive controls: the same text in the same DM
+  # without the voice metadata fires, and a voice line in a CHANNEL (the Voice
+  # tab's context post) fires as before.
+  describe "chat_pattern and Voice tab records" do
+    test "a DM voice record fires nothing; the same text plain, or voice in a channel, does" do
+      key = "routertest.voice_guard_#{System.unique_integer([:positive])}"
+
+      insert!(%{
+        key: key,
+        trigger_kind: "chat_pattern",
+        trigger_config: %{"regex" => "zz-voice-guard-canary"}
+      })
+
+      handler_id = "router-test-voice-guard-#{System.unique_integer([:positive])}"
+
+      :telemetry.attach(
+        handler_id,
+        [:platform, :responsibility, :unfilled],
+        fn _event, _measurements, %{key: fired_key} = meta, pid ->
+          send(pid, {:fired, fired_key, meta})
+        end,
+        self()
+      )
+
+      on_exit(fn -> :telemetry.detach(handler_id) end)
+
+      {pid, _name} = start_router()
+
+      space! = fn kind ->
+        n = System.unique_integer([:positive])
+
+        {:ok, space} =
+          Chat.create_space(%{name: "Voice guard #{n}", slug: "voice-guard-#{n}", kind: kind})
+
+        {:ok, person} =
+          Chat.add_participant(space.id, %{
+            participant_type: "user",
+            participant_id: Ecto.UUID.generate(),
+            display_name: "Test User",
+            joined_at: DateTime.utc_now()
+          })
+
+        {space, person}
+      end
+
+      insert_message = fn space, participant, metadata ->
+        %Chat.Message{}
+        |> Chat.Message.changeset(%{
+          space_id: space.id,
+          participant_id: participant.id,
+          content_type: "text",
+          content: "please zz-voice-guard-canary now",
+          metadata: metadata
+        })
+        |> Repo.insert!()
+      end
+
+      deliver = fn message ->
+        send(pid, {:telemetry_chat_message_posted, %{message_id: message.id}})
+        _ = :sys.get_state(pid)
+      end
+
+      voice = %{"source" => "voice", "voice_session_id" => Ecto.UUID.generate()}
+      {dm, dm_user} = space!.("dm")
+
+      deliver.(insert_message.(dm, dm_user, voice))
+      refute_received {:fired, ^key, _}
+
+      deliver.(insert_message.(dm, dm_user, %{}))
+      assert_received {:fired, ^key, _}
+
+      {channel, channel_user} = space!.("channel")
+      deliver.(insert_message.(channel, channel_user, voice))
+      assert_received {:fired, ^key, _}
+    end
+  end
 end

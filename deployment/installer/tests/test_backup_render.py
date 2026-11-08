@@ -88,8 +88,10 @@ class HostedDefault(unittest.TestCase):
         self.assertIn("oldest_over_keep", script)
         self.assertIn("rotated", script)
         self.assertIn("bin/burrow-restore-drill", rendered.files)
-        # The same script is what cloud-init writes.
-        self.assertIn("pg_dump", ud)
+        # The same script is what cloud-init writes (gz+b64: templates.COMPRESSED_FILES).
+        from test_agents_render import write_files
+
+        self.assertEqual(write_files(ud)["/opt/burrow/bin/burrow-backup"][1], script)
 
     def test_hosted_target_none_is_refused(self):
         errors, _ = validate(raw_manifest(hosted=True, backup={"target": "none"}))

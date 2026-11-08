@@ -372,22 +372,18 @@ defmodule PlatformWeb.ControlCenter.CharacterBuilderTest do
 
     test "roll and a name chip change the name", %{conn: conn} do
       view = open(conn, "name")
+      [initial] = attr(view, "#ba-agname", "value")
       click(view, "#ba-dice")
       [rolled] = attr(view, "#ba-agname", "value")
-      assert rolled != "Forge"
+      assert rolled != initial
       assert rolled in Archetypes.get("builder").names
-      # The currently selected name is intentionally absent from suggestions.
-      # Main reproduced a flake when the roll itself picked Anvil. Exercise
-      # both known chips, starting with one different from the rolled value.
-      picked = if rolled == "Anvil", do: "Rivet", else: "Anvil"
-      click(view, ~s{.ba-chip[data-nm="#{picked}"]})
-      assert attr(view, "#ba-agname", "value") == [picked]
-      assert has_element?(view, ".ba-sub b", "@#{picked}")
-
-      other = if picked == "Anvil", do: "Rivet", else: "Anvil"
-      click(view, ~s{.ba-chip[data-nm="#{other}"]})
-      assert attr(view, "#ba-agname", "value") == [other]
-      assert has_element?(view, ".ba-sub b", "@#{other}")
+      # The chips hide the current name and any name another agent wears, so
+      # pick whichever chip is actually rendered rather than a fixed one.
+      [chip | _] = attr(view, ".ba-chips .ba-chip[data-nm]", "data-nm")
+      assert chip != rolled
+      click(view, ~s{.ba-chip[data-nm="#{chip}"]})
+      assert attr(view, "#ba-agname", "value") == [chip]
+      assert has_element?(view, ".ba-sub b", "@#{chip}")
     end
 
     test "voice knobs, reset and a typed prompt", %{conn: conn} do

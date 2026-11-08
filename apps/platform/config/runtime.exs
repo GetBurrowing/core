@@ -10,6 +10,13 @@ env_or = fn name, default ->
   end
 end
 
+# Host updater mounts (task 01a1b7b6 stage 3): the inbox core writes requests
+# into and the status file the updater publishes. Defaults are the paths the
+# installer's compose.override.yaml mounts; `Platform.Updates` documents both.
+config :platform, Platform.Updates,
+  core_dir: env_or.("BURROW_UPDATER_CORE_DIR", "/run/burrow/updater/core"),
+  status_path: env_or.("BURROW_UPDATER_STATUS", "/run/burrow/updater/status/status.json")
+
 # Ensure Erlang's :ssl uses CAStore for outbound HTTPS (web push, etc.)
 # hackney (used by WebPushEncryption/HTTPoison) needs cacertfile explicitly
 Application.ensure_all_started(:castore)
@@ -1051,3 +1058,9 @@ config :platform, :instruction_packs,
 config :platform,
        :start_instruction_pack_poller,
        config_env() != :test and System.get_env("INSTRUCTION_PACK_POLLER", "true") != "false"
+
+# Explicitly published game pages; absence exposes no games. Release URLs
+# remain stable while retained manifests keep their version entries.
+if manifest = System.get_env("GAME_PUBLICATIONS_JSON") do
+  config :platform, :game_publications, Jason.decode!(manifest)
+end

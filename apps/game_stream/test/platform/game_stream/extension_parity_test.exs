@@ -429,15 +429,15 @@ defmodule Platform.GameStream.ExtensionParityTest do
     # Re-pinned by task 01a19948 stage 2: `space_rename` joins the `space`
     # bundle after `space_leave`, so all four tool-definition digests move.
     # Measured by CI on PR #81 (runs 41492896250, 41493526292).
-    # Re-pinned by task 01a1b678 stage 3: `sharing_list` and `sharing_set` join
-    # the `federation` bundle, and feedback_submit declares `space_id`. All four
-    # values measured locally on the stage's branch.
-    # Task 01a1b6e1: sharing_set gains instruction_updates. Measured on the test rig
-    # at 5b1d04b64 / measurement probe 3f0cc6c9b; all names remain strict.
-    @previous_tool_digest_off "e0d06a1a374ddc981ac3a68ff397a3a3543310e996f20fd223e0cc58c1f06137"
-    @previous_tool_digest_on "21aaf1d9d1992e20dad655aad95f20158e232e9c6afe5b5877e6ba308b49c555"
-    @main_tool_digest_off "0faf461def08ed2226b5841da0f9720149da7ef719742099589dc3a95fd39a92"
-    @main_tool_digest_on "7769402ad6614fb3e8f1c49e922e85858a274149e0c0f99e323475f95b2a0bb6"
+    # Re-pinned by task 01a1b6c3 stage 3: `space_get_messages` rows carry a
+    # nullable `voice` object (its returns_schema and `returns` text), so all
+    # four tool-definition digests move. Names, bundles, summaries and
+    # parameter schemas are unchanged. Measured on the test rig at the
+    # stage's branch.
+    @previous_tool_digest_off "dec8d76d3a099473cf4d67e842f57702c6b3ec8f6c5cd73a9cce673f2f40c95a"
+    @previous_tool_digest_on "b96f42c432b252e8759d84749c81938b6ab456dd4c6de0cfec158c6fbad74c6b"
+    @main_tool_digest_off "a8436315038c731fbf2e9b31edce83137e98b07c9e5e0dbc501c8933ee7e5c9e"
+    @main_tool_digest_on "982f234f1d34aee0311551f81042547f5888d433c392c5580f4b25911709dc03"
     @main_kinds_summaries_digest_off "1b337c131bca3720e1158e67d9fa1374ce4b08c60987f9d5f0ff10e5ffc6104a"
     @main_kinds_summaries_digest_on "e99a61e52a6858f0e97255683ebdc33d58c0fd56b4ada613946dc6a99ab2004e"
     @main_kinds_tool_schemas_digest_off "61843c26d260fdb0ca751f9106a1b4d1f7c0a68cbfca79425c6f03e02bcc96a8"

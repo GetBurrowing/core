@@ -17,6 +17,8 @@ defmodule Platform.Repo.Migrations.CreateUxFindings do
 
   use Ecto.Migration
 
+  # old-code-compatible: creates a new table the previous release never reads or writes
+
   def change do
     create table(:ux_findings, primary_key: false) do
       add(:id, :uuid, primary_key: true)

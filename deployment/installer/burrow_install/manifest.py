@@ -196,7 +196,10 @@ SCHEMA = {
         "stt_endpoint": _str(),
         "stt_model": _str(),
     },
-    # Reserved for day-2 operations (ADR 0053). Validated, not yet acted on.
+    # Day-2 operations (ADR 0053). upgrade_channel is acted on: the host
+    # updater's CHANNEL (templates.updater_settings; pinned when
+    # images.refs.core-platform is set or images are preloaded). phone_home
+    # stays reserved: validated, not acted on.
     "day2": {
         "upgrade_channel": _enum(UPGRADE_CHANNELS, "stable"),
         "phone_home": _bool(False),
