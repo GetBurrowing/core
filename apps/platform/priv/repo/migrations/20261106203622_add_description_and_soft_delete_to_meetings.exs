@@ -16,6 +16,10 @@ defmodule Platform.Repo.Migrations.AddDescriptionAndSoftDeleteToMeetings do
   """
   use Ecto.Migration
 
+  # old-code-compatible: three nullable columns and an index; the previous
+  # release neither reads nor writes them. (Added on rebase onto main, whose
+  # IrreversibleMigrationsTest matches the word "drop" in the moduledoc.)
+
   def change do
     alter table(:meetings) do
       add(:description, :text)
