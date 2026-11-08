@@ -219,6 +219,7 @@ defmodule Platform.Regression.SupervisedTaskRepoAuditTest do
   # the belt-and-braces pair; the braces half is the runtime
   # `Application.get_env` assertion further down.
   @expected_disabled_flags [
+    :start_instruction_pack_poller,
     :start_calendar_refresh,
     :start_attention_router,
     :start_system_event_scheduler,
@@ -243,6 +244,7 @@ defmodule Platform.Regression.SupervisedTaskRepoAuditTest do
     # which touch Repo from its own process and Task children. Tests
     # start_supervised/1 it inside their sandbox.
     :start_experiments_mail_subscriber,
+    :start_usage_batcher,
     # Task 01a07402 stage 3 — the canvas body search backfill's boot-time
     # one-shot. A `Task`, not a ticker, but the same hazard: left on it would
     # run `CanvasSearchBackfill.run/1` from its own process at suite boot,

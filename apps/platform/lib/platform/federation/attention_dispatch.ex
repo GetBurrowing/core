@@ -150,6 +150,7 @@ defmodule Platform.Federation.AttentionDispatch do
         source: Keyword.get(opts, :source)
       )
 
+    payload = Platform.InstructionPacks.Guidance.enrich(payload, Keyword.get(opts, :agent_id))
     do_broadcast(topic(runtime_id), payload)
   end
 

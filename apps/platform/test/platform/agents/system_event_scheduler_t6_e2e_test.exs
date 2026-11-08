@@ -773,7 +773,9 @@ defmodule Platform.Agents.SystemEventSchedulerT6E2ETest do
     # adds no historian scheduler endpoint or T6 trigger.
     # +1 `space_rename` in the space bundle (task 01a19948 stage 2), which
     # adds no historian scheduler endpoint or T6 trigger.
-    @t6_baseline_tool_count 155
+    # +2 `sharing_list` and `sharing_set` in the federation bundle (task
+    # 01a1b678 stage 3), which add no historian scheduler endpoint or T6 trigger.
+    @t6_baseline_tool_count 157
 
     defp t6_root, do: Mix.Project.project_file() |> Path.dirname()
 

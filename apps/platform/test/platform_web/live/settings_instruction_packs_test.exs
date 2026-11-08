@@ -1,0 +1,377 @@
+defmodule PlatformWeb.SettingsInstructionPacksTest do
+  use PlatformWeb.ConnCase, async: false
+  import Ecto.Query
+  import Phoenix.LiveViewTest
+  import Platform.TenancyFixtures
+  import Platform.InstructionPackFixtures
+  alias Platform.{Repo, Sharing, Skills}
+
+  alias Platform.InstructionPacks.{
+    Check,
+    Installer,
+    Manifest,
+    Owner,
+    Poller,
+    RetainedRelease,
+    State
+  }
+
+  setup do
+    owner = root_admin!()
+    Sharing.get()
+    {:ok, _} = Sharing.set(:instruction_updates, true, :system)
+    {:ok, _} = Sharing.set(:instruction_updates_stopped, false, :system)
+    old = Application.get_env(:platform, :instruction_packs)
+    {_, roots} = envelope()
+    Application.put_env(:platform, :instruction_packs, trust_roots: roots)
+
+    on_exit(fn ->
+      if old,
+        do: Application.put_env(:platform, :instruction_packs, old),
+        else: Application.delete_env(:platform, :instruction_packs)
+    end)
+
+    %{owner: owner}
+  end
+
+  defp conn_for(user), do: build_conn() |> init_test_session(current_user_id: user.id)
+  defp open(owner), do: live(conn_for(owner), "/settings?sheet=sharing")
+
+  defp pack(version, previous \\ nil) do
+    envelope(
+      manifest(%{
+        "minimum_client_version" => "0.1.0",
+        "version" => version,
+        "previous_digest" => previous,
+        "changelog" => "<script>untrusted changelog</script>",
+        "entries" => [
+          %{
+            "type" => "skill_markdown",
+            "target" => "owner-ui",
+            "content" => "published #{version} <script>pack</script>"
+          }
+        ]
+      })
+    )
+  end
+
+  defp install({e, roots}) do
+    {:ok, snapshot} = Installer.consent_snapshot()
+    assert {:ok, state} = Installer.install(e, roots, snapshot)
+    state
+  end
+
+  defp fixture do
+    {:ok, skill} =
+      Skills.create_skill(%{name: "Owner UI", content: "my local <script>text</script>"})
+
+    {e, _} = p = pack(1)
+    install(p)
+    {skill, e}
+  end
+
+  test "owner sees registry disclosure and can stop and enable updates", %{owner: owner} do
+    {:ok, view, html} = open(owner)
+    assert html =~ "New installs receive signed agent instruction updates by default"
+    assert html =~ "Exactly what"
+    for entry <- Sharing.registry(), do: assert(html =~ entry.title)
+    view |> element("button[phx-click=stop]") |> render_click()
+    assert Sharing.get().instruction_updates_stopped
+
+    view
+    |> element("button[phx-click=sharing][phx-value-key=instruction_updates]")
+    |> render_click()
+
+    refute Sharing.get().instruction_updates
+  end
+
+  test "non-owner forged events cannot mutate install state", %{owner: owner} do
+    member = root_admin!()
+
+    Repo.update_all(from(m in Platform.Tenancy.OrgMembership, where: m.user_id == ^member.id),
+      set: [role: "member"]
+    )
+
+    {:ok, view, html} = live(conn_for(member), "/settings?sheet=sharing")
+    refute html =~ "settings-sharing-sheet\" open"
+    refute has_element?(view, "[data-role=settings-sharing]")
+    render_click(view, "open_sharing_sheet", %{})
+    refute has_element?(view, "#instruction-packs-controls")
+    assert {:error, :unauthorized} = Owner.set_sharing("instruction_updates", false, member)
+    assert Sharing.get().instruction_updates
+    # Revoke privilege after mount: both component events and context must check again.
+    {:ok, owner_view, _} = open(owner)
+    Repo.delete_all(from(m in Platform.Tenancy.OrgMembership, where: m.user_id == ^owner.id))
+    owner_view |> element("button[phx-click=stop]") |> render_click()
+    refute Sharing.get().instruction_updates_stopped
+    assert render(owner_view) =~ "Only an install owner"
+  end
+
+  test "conflict text is escaped and stale decision cannot overwrite newer local edit", %{
+    owner: owner
+  } do
+    {skill, _} = fixture()
+    {:ok, view, html} = open(owner)
+    assert html =~ "&lt;script&gt;"
+    refute html =~ "<script>pack</script>"
+    assert html =~ "Local change preserved"
+    assert html =~ "Local version"
+    {:ok, _} = Skills.update_skill(skill, %{content: "newer LOCAL sentinel"})
+    view |> element("button[phx-value-choice=incoming]") |> render_click()
+    assert Skills.get_skill(skill.id).content == "newer LOCAL sentinel"
+    assert render(view) =~ "changed since you reviewed it"
+    view |> element("button[phx-value-choice=local]") |> render_click()
+    refute has_element?(view, "[data-role=pack-conflict]")
+    assert Skills.get_skill(skill.id).content == "newer LOCAL sentinel"
+  end
+
+  test "conflicts show the literal escaped vendor baseline beside local and incoming text", %{
+    owner: owner
+  } do
+    {skill, one} = fixture()
+    {:ok, view, _} = open(owner)
+    assert has_element?(view, "[data-role=pack-conflict-base]", "(no previous published content)")
+    view |> element("button[phx-value-choice=incoming]") |> render_click()
+
+    {:ok, _} =
+      Skills.update_skill(Skills.get_skill(skill.id), %{content: "LOCAL_REVIEW_SENTINEL"})
+
+    install(pack(2, Manifest.digest(one["manifest"])))
+    view |> element("button[phx-click=refresh]") |> render_click()
+    base = view |> element("[data-role=pack-conflict-base]") |> render()
+    assert base =~ "published 1 &lt;script&gt;pack&lt;/script&gt;"
+    refute base =~ "<script>"
+    conflict = view |> element("[data-role=pack-conflict]") |> render()
+    assert conflict =~ "Previous published content"
+    assert conflict =~ "LOCAL_REVIEW_SENTINEL"
+    assert conflict =~ "published 2 &lt;script&gt;pack&lt;/script&gt;"
+  end
+
+  test "published choice pin resume and rollback preserve later edits", %{owner: owner} do
+    {skill, e} = fixture()
+    {:ok, view, _} = open(owner)
+    assert has_element?(view, "button[phx-click=rollback][disabled]")
+    view |> element("button[phx-value-choice=incoming]") |> render_click()
+    assert Skills.get_skill(skill.id).content =~ "published 1"
+    install(pack(2, Manifest.digest(e["manifest"])))
+    view |> element("button[phx-click=refresh]") |> render_click()
+
+    view
+    |> element("form[phx-submit=pin]")
+    |> render_submit(%{"pack" => "setup-guide", "version" => "2"})
+
+    assert Repo.get!(State, "setup-guide").pinned_version == 2
+    assert render(view) =~ "Pinned to v2"
+    view |> element("button[phx-click=resume]") |> render_click()
+    assert Repo.get!(State, "setup-guide").pinned_version == nil
+
+    {:ok, _} =
+      Skills.update_skill(Skills.get_skill(skill.id), %{content: "edited after version two"})
+
+    view |> element("button[phx-click=rollback]") |> render_click()
+    assert Repo.get!(State, "setup-guide").version == 1
+    assert Skills.get_skill(skill.id).content == "edited after version two"
+    assert render(view) =~ "Local change preserved"
+    assert render(view) =~ "resolve_conflict"
+  end
+
+  test "live local edits do not falsely retain fully-applied provenance", %{owner: owner} do
+    {skill, _} = fixture()
+    {:ok, view, _} = open(owner)
+    view |> element("button[phx-value-choice=incoming]") |> render_click()
+    {:ok, _} = Skills.update_skill(Skills.get_skill(skill.id), %{content: "LOCAL after adoption"})
+    view |> element("button[phx-click=refresh]") |> render_click()
+    assert view |> element("[data-role=pack-effective]") |> render() =~ "Local version"
+    assert view |> element("[data-role=pack-status]") |> render() =~ "Local overrides"
+  end
+
+  test "pinned installs see a newer signed release without applying or making it rollback eligible",
+       %{owner: owner} do
+    {skill, one} = fixture()
+    {:ok, view, _} = open(owner)
+    view |> element("button[phx-value-choice=incoming]") |> render_click()
+    {:ok, _} = Installer.pin("setup-guide", 1, owner)
+    publisher = Platform.Feedback.GithubPublisher
+    old = Application.get_env(:platform, publisher)
+
+    Application.put_env(:platform, publisher,
+      broker_url: "https://broker.example/api/feedback-broker/v1"
+    )
+
+    on_exit(fn ->
+      if old,
+        do: Application.put_env(:platform, publisher, old),
+        else: Application.delete_env(:platform, publisher)
+    end)
+
+    {two, roots} = pack(2, Manifest.digest(one["manifest"]))
+
+    tampered = put_in(two, ["manifest", "changelog"], "unsigned availability text")
+
+    assert {:error, :untrusted_pack} =
+             Installer.pull_available("setup-guide", roots,
+               plug: fn conn -> Plug.Conn.send_resp(conn, 200, Jason.encode!(tampered)) end
+             )
+
+    refute Repo.get_by(RetainedRelease, pack_id: "setup-guide", version: 2)
+
+    receiver = self()
+
+    assert :ok =
+             Poller.poll(
+               plug: fn conn ->
+                 send(receiver, {:pinned_request, conn.request_path})
+
+                 case conn.request_path do
+                   "/api/feedback-broker/v1/instruction-packs" ->
+                     Plug.Conn.send_resp(conn, 200, ~s({"packs":["setup-guide"]}))
+
+                   "/api/feedback-broker/v1/instruction-packs/setup-guide/latest" ->
+                     Plug.Conn.send_resp(conn, 200, Jason.encode!(two))
+
+                   _other ->
+                     Plug.Conn.send_resp(conn, 503, "unexpected request")
+                 end
+               end
+             )
+
+    assert_received {:pinned_request, "/api/feedback-broker/v1/instruction-packs"}
+
+    assert_received {:pinned_request,
+                     "/api/feedback-broker/v1/instruction-packs/setup-guide/latest"}
+
+    refute_received {:pinned_request, _}
+    state = Repo.get!(State, "setup-guide")
+    assert state.version == 1
+    assert state.pinned_version == 1
+    assert length(state.history) == 1
+    assert Repo.get_by(RetainedRelease, pack_id: "setup-guide", version: 2)
+    assert Skills.get_skill(skill.id).content =~ "published 1"
+    view |> element("button[phx-click=refresh]") |> render_click()
+    assert view |> element("[data-role=pack-available]") |> render() =~ "v2"
+    refute has_element?(view, "select option[value='2']")
+    assert {:error, :not_previously_applied} = Installer.rollback("setup-guide", 2, roots, owner)
+    # Consent changed during availability IO also wins before the cache commit.
+    {:ok, _} = Sharing.set(:instruction_updates_stopped, false, :system)
+
+    assert {:error, :sharing_changed} =
+             Installer.pull_available("setup-guide", roots,
+               plug: fn conn ->
+                 {:ok, _} = Installer.stop_updates(true, owner)
+                 Plug.Conn.send_resp(conn, 200, Jason.encode!(two))
+               end
+             )
+
+    assert Repo.get!(State, "setup-guide").version == 1
+  end
+
+  test "catalog failure is visible before first pack and successful discovery clears it", %{
+    owner: owner
+  } do
+    publisher = Platform.Feedback.GithubPublisher
+    old = Application.get_env(:platform, publisher)
+
+    Application.put_env(:platform, publisher,
+      broker_url: "https://broker.example/api/feedback-broker/v1"
+    )
+
+    on_exit(fn ->
+      if old,
+        do: Application.put_env(:platform, publisher, old),
+        else: Application.delete_env(:platform, publisher)
+    end)
+
+    receiver = self()
+
+    assert :ok =
+             Poller.poll(
+               plug: fn conn ->
+                 send(receiver, {:catalog_pending, Check.get().pending})
+                 Plug.Conn.send_resp(conn, 503, "unavailable")
+               end
+             )
+
+    assert_received {:catalog_pending, true}
+    refute Check.get().pending
+    assert Repo.all(State) == []
+    {:ok, view, html} = open(owner)
+    assert html =~ "Network failure"
+
+    assert :ok =
+             Poller.poll(plug: fn conn -> Plug.Conn.send_resp(conn, 200, ~s({"packs":[]})) end)
+
+    assert Check.get().last_successful_check_at != nil
+    view |> element("button[phx-click=refresh]") |> render_click()
+
+    assert view |> element("[data-role=instruction-check-status]") |> render() =~
+             "Last update check succeeded"
+
+    {:ok, _} = Installer.stop_updates(true, owner)
+
+    assert :ok =
+             Poller.poll(
+               plug: fn conn ->
+                 send(receiver, :unexpected_discovery_after_stop)
+                 Plug.Conn.send_resp(conn, 503, "unexpected request")
+               end
+             )
+
+    refute_received :unexpected_discovery_after_stop
+    view |> element("button[phx-click=refresh]") |> render_click()
+
+    assert view |> element("[data-role=instruction-check-status]") |> render() =~
+             "Instruction updates are disabled"
+  end
+
+  test "verification and network failures display distinct status without false application", %{
+    owner: owner
+  } do
+    {_skill, one} = fixture()
+    publisher = Platform.Feedback.GithubPublisher
+    old = Application.get_env(:platform, publisher)
+
+    Application.put_env(:platform, publisher,
+      broker_url: "https://broker.example/api/feedback-broker/v1"
+    )
+
+    on_exit(fn ->
+      if old,
+        do: Application.put_env(:platform, publisher, old),
+        else: Application.delete_env(:platform, publisher)
+    end)
+
+    {two, roots} = pack(2, Manifest.digest(one["manifest"]))
+    tampered = put_in(two, ["manifest", "changelog"], "tampered unsigned text")
+
+    assert {:error, :untrusted_pack} =
+             Installer.pull("setup-guide", 2, roots,
+               plug: fn conn -> Plug.Conn.send_resp(conn, 200, Jason.encode!(tampered)) end
+             )
+
+    {:ok, view, html} = open(owner)
+    assert html =~ "Verification failure"
+    refute html =~ "Up to date with"
+    assert Repo.get!(State, "setup-guide").version == 1
+
+    assert {:error, :download_failed} =
+             Installer.pull("setup-guide", 2, roots,
+               plug: fn conn -> Plug.Conn.send_resp(conn, 503, "unavailable") end
+             )
+
+    view |> element("button[phx-click=refresh]") |> render_click()
+    assert render(view) =~ "Network failure"
+    assert Repo.get!(State, "setup-guide").version == 1
+
+    assert {:error, :release_unavailable} =
+             Installer.pull("setup-guide", 2, roots,
+               plug: fn conn -> Plug.Conn.send_resp(conn, 404, "not published") end
+             )
+
+    state = Repo.get!(State, "setup-guide")
+    assert state.check_error == nil
+    assert state.last_successful_check_at != nil
+    assert state.version == 1
+    view |> element("button[phx-click=refresh]") |> render_click()
+    refute render(view) =~ "Network failure"
+  end
+end

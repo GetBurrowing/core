@@ -185,7 +185,10 @@ defmodule Platform.Federation.ToolSurface do
       "feedback for one memory path; out of scope for task 01a04a7a",
     "federation_status" =>
       "a status report whose lists are components of one snapshot, not a paged corpus",
-    "canvas_template" => "a static template catalogue returned whole from code, not a data corpus"
+    "canvas_template" =>
+      "a static template catalogue returned whole from code, not a data corpus",
+    "sharing_list" =>
+      "the fixed sharing registry (four entries today) returned whole from code with each switch's state, not a data corpus"
   }
 
   @doc """
@@ -267,8 +270,12 @@ defmodule Platform.Federation.ToolSurface do
   # runtime's `ToolAuthorization.effective_tools/1` — so `authorize/2` denies
   # it, and `execute/3` re-checks the same predicate for any caller that
   # reaches the handler without going through authorization.
+  #
+  # `sharing_list` and `sharing_set` (task 01a1b678 stage 3) ride the same
+  # bundle and are always listed; their handlers refuse anyone whose runtime
+  # owner is not an install admin.
   defp tools_for_bundle("federation"),
-    do: tag(federation_tools() ++ feedback_tools(), "federation")
+    do: tag(federation_tools() ++ feedback_tools() ++ sharing_tools(), "federation")
 
   defp tools_for_bundle("memory"), do: tag(memory_tools(), "memory")
   defp tools_for_bundle("skill"), do: tag(skill_tools(), "skill")
@@ -1224,6 +1231,12 @@ defmodule Platform.Federation.ToolSurface do
           required: false,
           description:
             "OPT-IN and SCOPED only: {include: true, scope: one of #{Enum.join(Platform.Feedback.Submission.diagnostic_scopes(), " | ")}, content: string of at most #{Platform.Feedback.Submission.limits().diagnostics} characters}. Anything else is dropped. Never paste logs, session transcripts, environment dumps or customer data."
+        },
+        space_id: %{
+          type: "string",
+          required: false,
+          description:
+            "The space the report comes from. Set it when filing from the Help & feedback channel; it is not sent with the report."
         }
       },
       returns:
@@ -1233,6 +1246,47 @@ defmodule Platform.Federation.ToolSurface do
       when_to_use:
         "When you hit a reproducible defect in Burrow (not in the task's own code) or have a specific improvement to Burrow to propose. It never substitutes for finishing your stage."
     }
+  end
+
+  # What this install shares with Burrow (task 01a1b678 stage 3). Gated in the
+  # handler to install admins, never by a flag, so both are always listed.
+  defp sharing_tools do
+    [
+      %{
+        name: "sharing_list",
+        description:
+          "List what this install shares with Burrow: every part, what exactly is sent, and whether it is on. Only for an install admin.",
+        parameters: %{},
+        returns: "{entries: [{key, title, description, exactly_sent, on}], never_sent: [string]}",
+        limitations:
+          "Refused unless your runtime's owner is an admin of the root org. Read-only.",
+        when_to_use:
+          "When an install admin asks what the install shares with Burrow, before changing a part with sharing_set."
+      },
+      %{
+        name: "sharing_set",
+        description:
+          "Turn one part of what this install shares with Burrow on or off. Every change is audited with you as the actor. Only for an install admin.",
+        parameters: %{
+          key: %{
+            type: "string",
+            required: true,
+            schema: %{type: "string", enum: Enum.map(Platform.Sharing.keys(), &Atom.to_string/1)},
+            description:
+              "The part to change, one of: #{Enum.map_join(Platform.Sharing.keys(), ", ", &Atom.to_string/1)}"
+          },
+          on: %{
+            type: "boolean",
+            required: true,
+            description: "true to share this part, false to stop"
+          }
+        },
+        returns: "{key, on, previous}",
+        limitations:
+          "Refused unless your runtime's owner is an admin of the root org. Takes effect on the next use; no restart.",
+        when_to_use: "Only when an install admin asks you to change what the install shares."
+      }
+    ]
   end
 
   defp mail_draft_tools do
@@ -8304,16 +8358,55 @@ defmodule Platform.Federation.ToolSurface do
   # a disabled installation refuses before an argument is read, whichever
   # path reached this clause.
   def execute("feedback_submit", args, context) do
-    with :ok <- feedback_enabled() do
+    with :ok <- feedback_enabled(),
+         :ok <- help_channel_reports_enabled(context, args) do
       actor =
         case load_agent(context) do
           %Agent{id: id, slug: slug} -> %{agent_id: id, slug: slug}
           nil -> nil
         end
 
-      case Platform.Feedback.Submission.submit(args, actor) do
+      case Platform.Feedback.Submission.submit(Map.delete(args, "space_id"), actor) do
         {:ok, result} -> {:ok, result}
         {:error, %{code: code} = err} -> {:error, feedback_error_envelope(code, err)}
+      end
+    end
+  end
+
+  # ── Sharing with Burrow (task 01a1b678 stage 3) ──────────────────────────
+
+  def execute("sharing_list", _args, context) do
+    with {:ok, _agent} <- sharing_admin(context, "sharing_list") do
+      entries =
+        Enum.map(Platform.Sharing.registry(), fn entry ->
+          entry
+          |> Map.take([:key, :title, :description, :exactly_sent])
+          |> Map.update!(:key, &Atom.to_string/1)
+          |> Map.put(:on, Platform.Sharing.enabled?(entry.key))
+        end)
+
+      {:ok, %{entries: entries, never_sent: Platform.Sharing.never_sent()}}
+    end
+  end
+
+  def execute("sharing_set", args, context) do
+    with {:ok, agent} <- sharing_admin(context, "sharing_set"),
+         {:ok, key} <- sharing_key(Map.get(args, "key")),
+         {:ok, on} <- sharing_value(Map.get(args, "on")) do
+      previous = Platform.Sharing.enabled?(key)
+
+      case Platform.Sharing.set(key, on, {:agent, agent.id}) do
+        {:ok, _row} ->
+          {:ok, %{key: Atom.to_string(key), on: on, previous: previous}}
+
+        {:error, _reason} ->
+          {:error,
+           %{
+             error: "sharing_set: the change was not saved",
+             code: :not_saved,
+             recoverable: true,
+             suggestion: "Try again once; if it fails again, tell the admin who asked."
+           }}
       end
     end
   end
@@ -13939,6 +14032,90 @@ defmodule Platform.Federation.ToolSurface do
     else
       {:error, feedback_error_envelope(:feedback_disabled, %{})}
     end
+  end
+
+  # A report filed from the Help & feedback channel also needs the owner's
+  # "Help channel bug reports" switch (task 01a1b678 stage 3). Calls from any
+  # other space, or none, are unaffected.
+  defp help_channel_reports_enabled(context, args) do
+    space_id = Map.get(context, :space_id) || Map.get(args, "space_id")
+
+    if Platform.Sharing.HelpChannel.help_space?(space_id) and
+         not Platform.Sharing.enabled?(:help_channel_reports) do
+      {:error,
+       %{
+         error: "feedback_submit: help channel reports are off on this installation",
+         code: :help_channel_reports_off,
+         recoverable: false,
+         suggestion:
+           "Tell the person the install is not sharing Help & feedback bug reports; an install admin can turn them on. Do not retry."
+       }}
+    else
+      :ok
+    end
+  end
+
+  # sharing_list / sharing_set: the runtime's owner must be an admin of the
+  # root org (`Tenancy.org_admin?/2`). The owner is read off the runtime row,
+  # never trusted from the wire.
+  defp sharing_admin(context, tool) do
+    with %Agent{} = agent <- load_agent(context) || sharing_runtime_agent(context),
+         runtime_id when is_binary(runtime_id) <- Map.get(context, :runtime_id),
+         %{owner_user_id: owner_id} when is_binary(owner_id) <-
+           Platform.Federation.get_runtime_by_runtime_id(runtime_id),
+         %{} = owner <- Platform.Accounts.get_user(owner_id),
+         %{id: root_id} <- Tenancy.get_root_org(),
+         true <- Tenancy.org_admin?(owner, root_id) do
+      {:ok, agent}
+    else
+      _ ->
+        {:error,
+         %{
+           error: "#{tool}: only an install admin's agent may use this tool",
+           code: :forbidden,
+           recoverable: false,
+           suggestion: "Tell the person to ask an install admin. Do not retry."
+         }}
+    end
+  end
+
+  defp sharing_runtime_agent(context) do
+    with runtime_id when is_binary(runtime_id) <- Map.get(context, :runtime_id),
+         %{id: id} <- Platform.Federation.get_runtime_by_runtime_id(runtime_id) do
+      Repo.get_by(Agent, runtime_id: id)
+    else
+      _ -> nil
+    end
+  end
+
+  defp sharing_key(value) when is_binary(value) do
+    case Enum.find(Platform.Sharing.keys(), &(Atom.to_string(&1) == value)) do
+      nil ->
+        sharing_invalid(
+          "key",
+          "one of: #{Enum.map_join(Platform.Sharing.keys(), ", ", &Atom.to_string/1)}"
+        )
+
+      key ->
+        {:ok, key}
+    end
+  end
+
+  defp sharing_key(_), do: sharing_invalid("key", "a string")
+
+  defp sharing_value(value) when is_boolean(value), do: {:ok, value}
+  defp sharing_value("true"), do: {:ok, true}
+  defp sharing_value("false"), do: {:ok, false}
+  defp sharing_value(_), do: sharing_invalid("on", "true or false")
+
+  defp sharing_invalid(field, expected) do
+    {:error,
+     %{
+       error: "sharing_set: `#{field}` must be #{expected}",
+       code: :invalid_argument,
+       recoverable: true,
+       suggestion: "Call sharing_list for the keys, then retry with a valid `#{field}`."
+     }}
   end
 
   # Every refusal is built from the bounded code and Submission's own fixed

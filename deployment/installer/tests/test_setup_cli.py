@@ -205,6 +205,58 @@ class InitAndStatusTest(Base):
             self.assertEqual(load(out), raw)
 
 
+class InitSharingTest(Base):
+    """Core task 01a1b678 stage 1: a NEW manifest shares with Burrow by
+    default and says so explicitly; an existing one is never given a switch."""
+
+    ALL_ON = {
+        "feedback": True,
+        "usage_counts": True,
+        "friction_reports": True,
+        "help_channel_reports": True,
+        "instruction_updates": True,
+        "learned_default_shapes": True,
+    }
+
+    def manifest(self):
+        return load(os.path.join(self.dir, "install.toml"))
+
+    def test_a_new_install_writes_all_four_as_explicit_true(self):
+        self.assertNotIn("sharing", load(MAC_LITE))
+        self.init()
+        self.assertEqual(self.manifest()["sharing"], self.ALL_ON)
+
+    def test_an_explicit_false_in_the_source_is_kept(self):
+        raw = load(MAC_LITE)
+        raw["sharing"] = {"usage_counts": False}
+        source = os.path.join(self.tmp, "src.toml")
+        with open(source, "w", encoding="utf-8") as handle:
+            handle.write(dumps_toml(raw))
+        self.init(source)
+        self.assertEqual(self.manifest()["sharing"], {**self.ALL_ON, "usage_counts": False})
+
+    def test_re_init_of_an_existing_install_without_sharing_adds_nothing(self):
+        self.init(MAC)
+        # An install written before [sharing] existed.
+        raw = self.manifest()
+        del raw["sharing"]
+        with open(os.path.join(self.dir, "install.toml"), "w", encoding="utf-8") as handle:
+            handle.write(dumps_toml(raw))
+        doc = self.init(MAC, "--meetings", "off")
+        self.assertEqual(doc["changed"], ["services.meetings"])
+        self.assertNotIn("sharing", self.manifest())
+
+    def test_re_init_keeps_an_owner_switched_off_value(self):
+        self.init()
+        raw = self.manifest()
+        raw["sharing"]["friction_reports"] = False
+        with open(os.path.join(self.dir, "install.toml"), "w", encoding="utf-8") as handle:
+            handle.write(dumps_toml(raw))
+        doc = self.init()
+        self.assertEqual(doc["changed"], [])
+        self.assertIs(self.manifest()["sharing"]["friction_reports"], False)
+
+
 class SecretCommandTest(Base):
     def test_secret_stores_in_keychain_and_records_only_the_reference(self):
         self.init()

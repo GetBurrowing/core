@@ -1,0 +1,132 @@
+defmodule Platform.Sharing.UsageReceiver do
+  @moduledoc """
+  The broker host's side of anonymous usage counts (task 01a1b678 stage 2),
+  behind `POST /api/feedback-broker/v1/usage` and
+  `PlatformWeb.Plugs.FeedbackBrokerGate` (404 unless `FEEDBACK_BROKER_SERVER`).
+
+  Accepts exactly the body `Platform.Sharing.UsageEvents.build_body/4`
+  builds: `sharing_install_id` (a UUID), `window` (`start` unix seconds and
+  `seconds`, both non-negative integers) and `counts`, whose every key must be
+  on the SAME pinned list (`UsageEvents.events/0`) with a non-negative integer
+  value. Any other key, an unpinned name, or a non-integer refuses the whole
+  body with `:invalid_usage`; nothing partial is stored. Two optional common
+  batch extensions are allowlisted: instruction_outcomes (effective inventory)
+  and learned_default_shapes (Habits aggregate only). Their validators repeat
+  exact field/bucket/version/variant bounds and the five-user floor. Every
+  other top-level key is refused; free text cannot ride beside the counts.
+
+  Extension payloads replace one row per anonymous install/window in
+  sharing_instruction_outcomes within the same transaction as the counts.
+  Unknown historic pack provenance is unavailable, never assigned today's
+  version or interpreted as a zero rate.
+
+  One row per (install, window start, event). A resend replaces its own row,
+  so a retry never doubles a count.
+  """
+
+  alias Platform.Repo
+  alias Platform.Sharing.UsageCount
+  alias Platform.Sharing.UsageEvents
+
+  @max_count 1_000_000_000
+  @max_window_seconds 31 * 24 * 3600
+  @keys ~w(sharing_install_id window counts)
+
+  @doc "Validate and store one batch. Returns the number of rows written."
+  @spec record(map()) :: {:ok, non_neg_integer()} | {:error, :invalid_usage}
+  def record(params) when is_map(params) do
+    with {:ok, install_id, start, seconds, counts} <- validate(params) do
+      now = DateTime.utc_now()
+
+      rows =
+        Enum.map(counts, fn {event, n} ->
+          %{
+            id: Platform.Types.UUIDv7.generate(),
+            sharing_install_id: install_id,
+            window_start: start,
+            window_seconds: seconds,
+            event: event,
+            count: n,
+            inserted_at: now,
+            updated_at: now
+          }
+        end)
+
+      {:ok, written} =
+        Repo.transaction(fn ->
+          if Map.has_key?(params, "instruction_outcomes") or
+               Map.has_key?(params, "learned_default_shapes") do
+            Repo.insert_all(
+              "sharing_instruction_outcomes",
+              [
+                %{
+                  sharing_install_id: Ecto.UUID.dump!(install_id),
+                  window_start: start,
+                  payload: Map.take(params, ["instruction_outcomes", "learned_default_shapes"]),
+                  inserted_at: now,
+                  updated_at: now
+                }
+              ],
+              on_conflict: {:replace, [:payload, :updated_at]},
+              conflict_target: [:sharing_install_id, :window_start]
+            )
+          end
+
+          {written, _} =
+            Repo.insert_all(UsageCount, rows,
+              on_conflict: {:replace, [:count, :window_seconds, :updated_at]},
+              conflict_target: [:sharing_install_id, :window_start, :event]
+            )
+
+          written
+        end)
+
+      {:ok, written}
+    end
+  end
+
+  def record(_params), do: {:error, :invalid_usage}
+
+  @doc "Validate a batch body without storing it."
+  @spec validate(map()) ::
+          {:ok, Ecto.UUID.t(), DateTime.t(), non_neg_integer(), %{String.t() => integer()}}
+          | {:error, :invalid_usage}
+  def validate(%{"window" => %{"start" => start, "seconds" => seconds} = window} = params)
+      when is_integer(start) and start >= 0 and is_integer(seconds) and seconds >= 0 and
+             seconds <= @max_window_seconds do
+    pinned = UsageEvents.events()
+
+    with true <-
+           Enum.sort(
+             Map.keys(Map.drop(params, ["instruction_outcomes", "learned_default_shapes"]))
+           ) == Enum.sort(@keys),
+         true <- outcomes_valid?(params),
+         true <- shapes_valid?(params),
+         true <- map_size(window) == 2,
+         {:ok, install_id} <- cast_uuid(params["sharing_install_id"]),
+         %{} = counts <- params["counts"],
+         true <-
+           Enum.all?(counts, fn {name, n} ->
+             name in pinned and is_integer(n) and n >= 0 and n <= @max_count
+           end),
+         {:ok, start_at} <- DateTime.from_unix(start) do
+      {:ok, install_id, start_at, seconds, counts}
+    else
+      _ -> {:error, :invalid_usage}
+    end
+  end
+
+  def validate(_params), do: {:error, :invalid_usage}
+
+  defp outcomes_valid?(params) do
+    not Map.has_key?(params, "instruction_outcomes") or
+      Platform.InstructionPacks.Outcomes.valid?(params["instruction_outcomes"])
+  end
+
+  defp shapes_valid?(params) do
+    not Map.has_key?(params, "learned_default_shapes") or
+      Platform.Sharing.LearnedShapes.valid?(params["learned_default_shapes"])
+  end
+
+  defp cast_uuid(value), do: Platform.UUID.cast(value)
+end

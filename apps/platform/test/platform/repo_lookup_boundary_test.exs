@@ -112,6 +112,24 @@ defmodule Platform.RepoLookupBoundaryTest do
 
   # {relative_path, call_kind, schema_alias, call_count, classification, reason}
   @inventory [
+    {"platform/instruction_packs/check.ex", :get, "Check", 1, :safe_internal,
+     "Check has a boolean singleton primary key; the only Repo.get argument is the literal true, never a caller-supplied value"},
+    {"platform/instruction_packs/owner.ex", :get, "State", 1, :safe_internal,
+     "State primary key pack_id is a string, not UUID; Owner.pin guards pack with is_binary before the Repo.get lookup"},
+    {"platform/instruction_packs/guidance.ex", :get, "Agent", 1, :safe_internal,
+     "guidance resolves only the server-selected dispatch recipient; the UUID branch checks Platform.UUID.valid? before Repo.get, while slugs use SlugLookup"},
+    {"platform/instruction_packs/guidance.ex", :platform_uuid_guard, "-", 1, :safe_internal,
+     "agent/1 validates the dispatch recipient UUID before the only Repo.get; malformed strings go through the ambiguity-checked slug lookup"},
+    {"platform/instruction_packs/poller.ex", :get, "State", 1, :safe_internal,
+     "State primary key pack_id is a string slug, not UUID; values come from bounded catalog or trusted owner config"},
+    {"platform/instruction_packs/installer.ex", :get!, "State", 1, :safe_internal,
+     "State primary key pack_id is a string slug; locked_state serializes the install before reading it"},
+    {"platform/instruction_packs/installer.ex", :get_by, "Entry", 2, :safe_internal,
+     "Entry lookups use string pack_id/type/target columns only; no client UUID cast occurs"},
+    {"platform/instruction_packs/installer.ex", :get_by, "RetainedRelease", 2, :safe_internal,
+     "RetainedRelease lookups use string pack_id and integer version, never its surrogate UUID id"},
+    {"platform/instruction_packs.ex", :get_by, "Release", 1, :safe_internal,
+     "get_release/2 queries pack_id, a string foreign key, and version, a positive bounded bigint checked before this lookup; neither lookup argument is cast to a UUID"},
     # Calendar consent task 01a16991: principal and persisted intent UUID sources.
     # Calendar v4 details (task 01a18d9f stage 2): Approve/Revert on a hold.
     {"platform_web/live/calendar_live.ex", :get, "Platform.Memory.Briefing", 1, :safe_internal,
@@ -159,6 +177,18 @@ defmodule Platform.RepoLookupBoundaryTest do
      "task 01a10315 stage 5 (moved here by task 01a19505): getting_started_space/1 looks up by slug, a string column built from a persisted Agent.id; no UUID is cast"},
     {"platform/agents/burrow/getting_started.ex", :get_by, "Participant", 1, :safe_internal,
      "task 01a10315 stage 5 (moved here by task 01a19505): system_participant/1 uses a persisted Space.id and a participant_id from Platform.UUID.deterministic/1; neither comes from outside"},
+    {"platform/sharing/friction.ex", :get, "Agent", 1, :must_cast,
+     "task 01a1b678 stage 3: context_agent/1 reads a tool call's context agent_id, which a transport built from a runtime row; it is guarded with Platform.UUID.cast/1 first and a malformed id records nothing"},
+    {"platform/sharing/friction.ex", :platform_uuid_guard, "-", 1, :must_cast,
+     "task 01a1b678 stage 3: context_agent/1 casts context agent_id with Platform.UUID.cast/1 before Repo.get; a malformed id falls through to the runtime lookup"},
+    {"platform/sharing/friction.ex", :get_by, "Agent", 1, :safe_internal,
+     "task 01a1b678 stage 3: runtime_agent/1 looks up runtime_id: with the id field of the AgentRuntime row get_by_runtime_id/1 just loaded, a UUIDv7 primary key"},
+    {"platform/sharing/help_channel.ex", :platform_uuid_guard, "-", 1, :must_cast,
+     "task 01a1b678 stage 3: help_space?/1 casts a tool call's space_id (from MCP args) with Platform.UUID.cast/1; a malformed id answers false before any query"},
+    {"platform/federation/tool_surface.ex", :get_by, "Agent", 1, :safe_internal,
+     "task 01a1b678 stage 3: sharing_runtime_agent/1 looks up runtime_id: with the id field of the AgentRuntime row get_runtime_by_runtime_id/1 just loaded, a UUIDv7 primary key"},
+    {"platform/sharing/usage_receiver.ex", :platform_uuid_guard, "-", 1, :must_cast,
+     "task 01a1b678 stage 2: validate/1 casts sharing_install_id from an unauthenticated broker POST body with Platform.UUID.cast/1; a malformed id refuses the batch as :invalid_usage before insert_all"},
     {"platform_web/live/meeting_live.ex", :platform_uuid_guard, "-", 1, :must_cast,
      "task 01a18d9f stage 4: assign_list_selection/2 guards the ?meeting= URL param with Platform.UUID.valid?/1; a malformed id selects nothing, and the id is only compared against already-loaded meeting rows, never passed to Repo"},
     {"platform/files/canvas_preview.ex", :platform_uuid_guard, "-", 1, :must_cast,
@@ -1130,6 +1160,12 @@ defmodule Platform.RepoLookupBoundaryTest do
   # statically needs dataflow the scanner does not do. A count change
   # here is a prompt to triage the new call by hand.
   @repo_one_counts %{
+    # Target lookups compare string slugs and lock existing skill/prompt rows.
+    "platform/instruction_packs/targets.ex" => 2,
+    # Publisher lookup pins the validated manifest pack_id string; no UUID input.
+    # latest_release/1 adds one boundary read of Release.pack_id, a :string
+    # column; its is_binary guard precedes the query, and no UUID field is compared.
+    "platform/instruction_packs.ex" => 2,
     # target/4 guards the client event UUID; locked_briefing/2 uses a
     # persisted Briefing.id and User.id; transaction/2 receives either
     # authority/3's UUID-validated owner id or Scope.actor User.id.
@@ -1923,6 +1959,12 @@ defmodule Platform.RepoLookupBoundaryTest do
     # malformed.
     "platform/responsibilities/janitor.ex" => 1,
     "platform/roles.ex" => 2,
+    # Task 01a1b678 stage 1: `read/0` loads the `install_sharing` singleton
+    # with `limit: 1` and no `where:` at all, so no id is cast.
+    "platform/sharing.ex" => 1,
+    # Task 01a1b678 stage 3: `space/0` selects by the constant slug and kind,
+    # `limit: 1`; no id is cast.
+    "platform/sharing/help_channel.ex" => 1,
     # 6 -> 7 with task 019f9b61 stage 2: `plan_task_id/1`, whose
     # `where: p.id == ^plan_id` pins a UUID column. Its caller is the
     # TaskRouter's `{:stage_transitioned, stage}` clause (`stage.plan_id`, an

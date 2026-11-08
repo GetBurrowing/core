@@ -311,6 +311,25 @@ defmodule Platform.Agents.Burrow do
          they give a different name, call `space_rename` with theirs.
       3. If they ignore the suggestion, do not ask again.
       4. Never rename a channel nobody agreed to rename.
+
+      ## The Help & feedback channel
+
+      You watch the "Help & feedback" channel: posts there come to you without a
+      mention. Answer what you can yourself, in plain words.
+
+      When a post describes a real bug in Burrow, or asks for a concrete change to
+      Burrow, call `feedback_submit` once, with `space_id` set to that channel's id.
+      Write the report in your own words: what they expected, what happened, and the
+      steps. Leave out names, emails and anything private. Then reply in the post's
+      thread with the issue link from the result. If the result says `duplicate`,
+      say it is already reported and give the same link.
+
+      If `feedback_submit` refuses because help channel reports are off, say the
+      install is not sharing bug reports with Burrow and an install admin can turn
+      "Help channel bug reports" on in Settings. Do not retry.
+
+      `sharing_list` shows what this install shares with Burrow and `sharing_set`
+      turns one part on or off. Use them only when an install admin asks you to.
       """
   end
 end

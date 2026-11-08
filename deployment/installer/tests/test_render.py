@@ -45,7 +45,7 @@ from migrate_embed import cut_migrate_script, expand_compressed
 
 from burrow_install import registry, templates
 from burrow_install.__main__ import main
-from burrow_install.manifest import load
+from burrow_install.manifest import SHARING_KEYS, load
 from burrow_install.render import TARGETS, RenderError, build, plan, render
 from burrow_install.secrets import parse_env_file
 from burrow_install.validate import validate
@@ -76,6 +76,9 @@ GOLDEN_CASES = {
     "do-droplet": os.path.join(RENDER_FIXTURES, "do-droplet.toml"),
     # The s-4vcpu-8gb droplet (task 01a18f76): size_tier = "medium".
     "do-droplet-8gb": os.path.join(RENDER_FIXTURES, "do-droplet-8gb.toml"),
+    # A NEW install's manifest (core task 01a1b678): [sharing] all true.
+    "single-host-sharing-on": os.path.join(RENDER_FIXTURES, "single-host-sharing-on.toml"),
+
     # Meetings on the droplet (task 01a19505); test_droplet.py covers the rest.
     "do-droplet-meetings": os.path.join(RENDER_FIXTURES, "do-droplet-meetings.toml"),
 }
@@ -227,6 +230,9 @@ class GoldenTest(PositiveControlMixin, unittest.TestCase):
 
     def test_golden_do_droplet_8gb(self):
         self.check_golden("do-droplet-8gb")
+
+    def test_golden_single_host_sharing_on(self):
+        self.check_golden("single-host-sharing-on")
 
     def test_golden_do_droplet_meetings(self):
         self.check_golden("do-droplet-meetings")
@@ -1428,3 +1434,103 @@ class FeedbackRenderTest(PositiveControlMixin, unittest.TestCase):
                         text = all_text(self.render(hosted, feedback, path))
                         for name in self.NEVER:
                             self.assertNotIn(name, text)
+
+
+# ---------------------------------------------------------------------------
+# [sharing] (core task 01a1b678 stage 1)
+
+
+class SharingRenderTest(PositiveControlMixin, unittest.TestCase):
+    """A NEW manifest's [sharing] table renders one seed env name per switch
+    into core-platform's environment; an absent key renders exactly what it
+    rendered before the table existed."""
+
+    ON = (
+        'FEEDBACK_POLICY: "quarantined"',
+        'USAGE_COUNTS: "true"',
+        'FRICTION_REPORTS: "true"',
+        'HELP_CHANNEL_REPORTS: "true"',
+        'INSTRUCTION_UPDATES: "true"',
+        'LEARNED_DEFAULT_SHAPES: "true"',
+    )
+    NAMES = ("USAGE_COUNTS", "FRICTION_REPORTS", "HELP_CHANNEL_REPORTS", "INSTRUCTION_UPDATES", "LEARNED_DEFAULT_SHAPES")
+    SHARING_ON = os.path.join(RENDER_FIXTURES, "single-host-sharing-on.toml")
+
+    def render(self, sharing=None, hosted=False, path=EXAMPLE):
+        raw = copy.deepcopy(load(path))
+        raw["install"]["hosted"] = hosted
+        if hosted:
+            raw.setdefault("backup", {})["hosted_opt_out"] = True
+        if sharing is not None:
+            raw["sharing"] = sharing
+        return build(valid(raw))
+
+    def core_block(self, rendered):
+        return _compose_services(rendered.files["compose.yaml"][0])["core-platform"]
+
+    def test_positive_control_a_new_manifest_renders_all_four(self):
+        block = self.core_block(self.render(path=self.SHARING_ON))
+        for line in self.ON:
+            self.assertIn(line, block)
+
+    def test_the_fixture_differs_from_the_example_in_sharing_only(self):
+        example = load(EXAMPLE)
+        fixture = load(self.SHARING_ON)
+        self.assertEqual(fixture.pop("sharing"), dict.fromkeys(SHARING_KEYS, True))
+        self.assertEqual(fixture, example)
+
+    def test_an_absent_table_renders_byte_identically(self):
+        before = self.render()
+        after = self.render(sharing={})
+        # redacted(): secrets are generated per render.
+        self.assertEqual(before.redacted(), after.redacted())
+        for name in self.NAMES:
+            self.assertNotIn(name, all_text(before))
+
+    def test_a_new_manifest_adds_exactly_the_four_lines(self):
+        old = self.render().files["compose.yaml"][0].splitlines()
+        new = self.render(path=self.SHARING_ON).files["compose.yaml"][0].splitlines()
+        added = [line.strip() for line in new if line not in old]
+        removed = [line for line in old if line not in new]
+        self.assertEqual(sorted(added), sorted(self.ON))
+        self.assertEqual(removed, [])
+
+    def test_explicit_false_renders_false_and_no_feedback_policy(self):
+        off = dict.fromkeys(SHARING_KEYS, False)
+        block = self.core_block(self.render(sharing=off))
+        for name in self.NAMES:
+            self.assertIn(f'{name}: "false"', block)
+        self.assertNotIn("FEEDBACK_POLICY", block)
+
+    def test_sharing_feedback_wins_over_hosted_and_the_feedback_table(self):
+        self.assertNotIn(
+            "FEEDBACK_POLICY", all_text(self.render(sharing={"feedback": False}, hosted=True))
+        )
+        raw = copy.deepcopy(load(EXAMPLE))
+        raw["feedback"] = {"enabled": False}
+        raw["sharing"] = {"feedback": True}
+        self.assertIn('FEEDBACK_POLICY: "quarantined"', self.core_block(build(valid(raw))))
+
+    def test_an_absent_feedback_key_keeps_todays_rule(self):
+        hosted = self.render(sharing={"usage_counts": True}, hosted=True)
+        self.assertIn('FEEDBACK_POLICY: "quarantined"', self.core_block(hosted))
+        self_host = self.render(sharing={"usage_counts": True})
+        self.assertNotIn("FEEDBACK_POLICY", all_text(self_host))
+
+    def test_the_names_land_only_in_core_platform(self):
+        rendered = self.render(path=self.SHARING_ON)
+        self.assertNotIn("USAGE_COUNTS", rendered.files["secrets.env"][0])
+        for service, block in _compose_services(rendered.files["compose.yaml"][0]).items():
+            if service != "core-platform":
+                for name in self.NAMES:
+                    self.assertNotIn(name, block, f"{service} carries {name}")
+
+    def test_every_golden_without_sharing_renders_no_sharing_name(self):
+        for case, path in GOLDEN_CASES.items():
+            if "sharing" in load(path):
+                continue
+            with self.subTest(case=case):
+                kwargs = FeedbackRenderTest.build_kwargs(self, path)
+                text = all_text(build(valid(load(path)), **kwargs))
+                for name in self.NAMES:
+                    self.assertNotIn(name, text)

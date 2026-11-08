@@ -29,7 +29,7 @@ import json
 import os
 import sys
 
-from ..manifest import ManifestLoadError, load
+from ..manifest import SHARING_KEYS, ManifestLoadError, load
 from ..secrets import redact
 from ..validate import validate
 from . import cloudflare, inputs, macos, migrate, steps
@@ -390,6 +390,19 @@ def _init(args, env, out):
             path = legacy
     check_dir_allowed(path)
     install = Install(path)
+    # Core tasks 01a1b678/01a1b6e1: a NEW install shares with Burrow and
+    # receives signed instruction updates by default (product direction, 2026-11-07), so its
+    # manifest says so explicitly. A value --from already set (true or false)
+    # is kept. An existing install keeps whatever its manifest already says
+    # (including saying nothing), so re-running init never adds a switch.
+    current = install.raw_manifest().get("sharing", {}) if install.exists() else None
+    for key in SHARING_KEYS:
+        if key in raw.get("sharing", {}):
+            continue
+        if current is None:
+            raw.setdefault("sharing", {})[key] = True
+        elif key in current:
+            raw.setdefault("sharing", {})[key] = current[key]
     if install.exists():
         # Report what changed against the install, not against --from.
         changed = _diff_keys(install.raw_manifest(), raw)

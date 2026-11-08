@@ -422,3 +422,14 @@ registers core's OIDC client (`suite-core`, callback `https://<primary>/auth/oid
 PKCE) and the render's `OIDC_CLIENT_SECRET` as its only secret, as the Mac setup CLI's pocket-id
 step does: nothing else registers the client on a `single-host` install. The JSON then carries
 `"oidc_client": "created"|"exists"`; a re-run registers nothing new.
+
+
+### Learned default shapes sharing
+
+`[sharing].learned_default_shapes` seeds `LEARNED_DEFAULT_SHAPES` on first boot.
+New setup-generated manifests write `true` explicitly under the new-install sharing policy.
+Absent/false values remain off; existing singleton rows are never re-enabled
+by manifest changes. This shares only five-person-or-larger anonymous aggregate
+buckets, through the existing usage broker request, and also requires
+`usage_counts`. Raw habit signals and identities never leave the install.
+Hosted renderers consume this same manifest/env key, not another channel.

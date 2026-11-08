@@ -26,7 +26,8 @@ defmodule Platform.Chat.DefaultSpaceTest do
     assert space.org_id == Platform.Tenancy.get_root_org().id
     assert DefaultSpace.ensure() == :exists
     assert DefaultSpace.run_at_boot() == :ok
-    assert [%Space{slug: "general"}] = channels()
+    # Task 01a1b678 stage 3: the same branch also creates Help & feedback.
+    assert ["general", "help-and-feedback"] = channels() |> Enum.map(& &1.slug) |> Enum.sort()
   end
 
   test "an install that already has a channel is left alone" do

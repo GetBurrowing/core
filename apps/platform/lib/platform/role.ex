@@ -280,6 +280,10 @@ defmodule Platform.Role do
     Platform.Memory.Insights.Disseminator,
     Platform.Files.CatalogEmitter,
     Platform.Tasks.DeployMergeReconciler,
+    # Hourly outbound POST of usage counts (task 01a1b678 stage 2).
+    Platform.Sharing.UsageBatcher,
+    # Scheduled pack application belongs to the full node only.
+    Platform.InstructionPacks.Poller,
     Platform.Orchestration.TaskRouterWatcher,
     Platform.Federation.NodeClient,
     :meetings_sender_seed,
@@ -305,7 +309,10 @@ defmodule Platform.Role do
     Platform.Agents.SystemEventScheduler,
     Platform.Responsibilities.Router,
     Platform.Mail.Outbox,
-    Platform.Memory.Insights.Disseminator
+    Platform.Memory.Insights.Disseminator,
+    # Each node would send its own batch under one install id.
+    Platform.Sharing.UsageBatcher,
+    Platform.InstructionPacks.Poller
   ]
 
   # ── stage 4 tables ─────────────────────────────────────────────────────
@@ -499,6 +506,13 @@ defmodule Platform.Role do
       file: "lib/platform/feedback/disposition/broker.ex",
       class: :request,
       note: "feedback disposition through the broker"
+    },
+    %{
+      kind: :http,
+      file: "lib/platform/instruction_packs/download.ex",
+      class: :follows_caller,
+      note:
+        "bounded signed-pack transport with no trigger of its own; runs only where its caller fetches a release"
     },
     %{
       kind: :http,

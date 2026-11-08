@@ -230,6 +230,9 @@ defmodule Platform.GameStream.ExtensionParityTest do
       {"federation_status", "federation"},
       {"vault_fetch", "federation"},
       {"vault_list", "federation"},
+      # Task 01a1b678 stage 3: always listed, gated in the handler.
+      {"sharing_list", "federation"},
+      {"sharing_set", "federation"},
       {"memory_view", "memory"},
       {"memory_create", "memory"},
       {"memory_str_replace", "memory"},
@@ -431,10 +434,12 @@ defmodule Platform.GameStream.ExtensionParityTest do
     # four tool-definition digests move. Names, bundles, summaries and
     # parameter schemas are unchanged. Measured on the test rig at the
     # stage's branch.
-    @previous_tool_digest_off "dec8d76d3a099473cf4d67e842f57702c6b3ec8f6c5cd73a9cce673f2f40c95a"
-    @previous_tool_digest_on "b96f42c432b252e8759d84749c81938b6ab456dd4c6de0cfec158c6fbad74c6b"
-    @main_tool_digest_off "a8436315038c731fbf2e9b31edce83137e98b07c9e5e0dbc501c8933ee7e5c9e"
-    @main_tool_digest_on "982f234f1d34aee0311551f81042547f5888d433c392c5580f4b25911709dc03"
+    # Task 01a1b6e1 deploy integration: voice return metadata plus sharing
+    # definitions measured by CI 42440127890 at 3dd284545; exact names remain pinned.
+    @previous_tool_digest_off "17bc6b45b27b5d985ca8c687e1fea60d6181ed1c0cc236a858059b32381f6252"
+    @previous_tool_digest_on "db5cda14ecad14478c043c614b37e7631e71bcb793612f2b98a271f49be99ec5"
+    @main_tool_digest_off "41af4df76e6eeb969153b5d520a42ac7ff7900981bd7df4f66e580f12fcdd2b6"
+    @main_tool_digest_on "7524e2543c29d0a46a8f759f9828b5c6ea9b89a6735a1de48252ee55742433ae"
     @main_kinds_summaries_digest_off "1b337c131bca3720e1158e67d9fa1374ce4b08c60987f9d5f0ff10e5ffc6104a"
     @main_kinds_summaries_digest_on "e99a61e52a6858f0e97255683ebdc33d58c0fd56b4ada613946dc6a99ab2004e"
     @main_kinds_tool_schemas_digest_off "61843c26d260fdb0ca751f9106a1b4d1f7c0a68cbfca79425c6f03e02bcc96a8"
@@ -525,6 +530,52 @@ defmodule Platform.GameStream.ExtensionParityTest do
     defp canon(f) when is_function(f), do: {:fun, inspect(f)}
     defp canon(x), do: x
 
+    # Preserve the previous byte oracle after removing ONLY this task's
+    # independently named enum values and generated disclosure suffixes.
+    # Stage 4 adds precisely one common-transport switch. Its complete enum
+    # is pinned literally in SharingToolsTest; preserve the older byte oracle
+    # after removing only that independently approved additive field/copy.
+    defp without_learned_shapes(definitions) do
+      Enum.map(definitions, fn
+        %{name: "sharing_set"} = tool ->
+          update_in(tool, [:parameters, :key], fn key ->
+            key
+            |> update_in([:schema, :enum], &List.delete(&1, "learned_default_shapes"))
+            |> Map.update!(
+              :description,
+              &String.replace_suffix(&1, ", learned_default_shapes", "")
+            )
+          end)
+
+        tool ->
+          tool
+      end)
+    end
+
+    defp without_instruction_updates(definitions) do
+      Enum.map(definitions, fn
+        %{name: "sharing_set"} = tool ->
+          update_in(tool, [:parameters, :key], fn key ->
+            key
+            |> update_in(
+              [:schema, :enum],
+              &Enum.reject(&1, fn value ->
+                value in ~w(instruction_updates learned_default_shapes)
+              end)
+            )
+            |> Map.update!(
+              :description,
+              &(&1
+                |> String.replace_suffix(", learned_default_shapes", "")
+                |> String.replace_suffix(", instruction_updates", ""))
+            )
+          end)
+
+        tool ->
+          tool
+      end)
+    end
+
     defp digest(term),
       do:
         :crypto.hash(:sha256, :erlang.term_to_binary(canon(term))) |> Base.encode16(case: :lower)
@@ -557,8 +608,16 @@ defmodule Platform.GameStream.ExtensionParityTest do
       # core extensions_test).
       defs = Enum.reject(pre_calendar_tool_definitions(), &(&1.bundle in ["admin", "voice_ask"]))
       assert Enum.map(defs, &{&1.name, &1.bundle}) == @main_tool_names_off
-      assert digest(without_triage_item_schema(defs)) == @previous_tool_digest_off
-      assert digest(defs) == @main_tool_digest_off
+
+      assert [
+               digest(without_learned_shapes(without_triage_item_schema(defs))),
+               digest(without_learned_shapes(defs)),
+               digest(without_instruction_updates(defs))
+             ] == [
+               @previous_tool_digest_off,
+               @main_tool_digest_off,
+               "71d759178eded8c73d5e02e6fede0c0370f42c0e39f882dea95830d169eb5623"
+             ]
     end
 
     test "flag on: tool_definitions/0 is main's, byte for byte" do
@@ -573,8 +632,15 @@ defmodule Platform.GameStream.ExtensionParityTest do
                    {"play_session_status", "play"}
                  ]
 
-      assert digest(without_triage_item_schema(defs)) == @previous_tool_digest_on
-      assert digest(defs) == @main_tool_digest_on
+      assert [
+               digest(without_learned_shapes(without_triage_item_schema(defs))),
+               digest(without_learned_shapes(defs)),
+               digest(without_instruction_updates(defs))
+             ] == [
+               @previous_tool_digest_on,
+               @main_tool_digest_on,
+               "21cfcf95e2a7933460d4bf8a70b268d13780597a60f484b77e3064f88191af73"
+             ]
     end
 
     # The one rail change since main (task 01a1557a-efdd stage 1): More >
