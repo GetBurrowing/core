@@ -54,6 +54,7 @@ defmodule PlatformWeb.ControlCenter.OnboardingEvents do
      |> assign(:onboarding_flow, nil)
      |> assign(:selected_template, nil)
      |> assign(:federate_result, nil)
+     |> assign(:federate_conflict, nil)
      |> assign(:probe_result, nil)}
   end
 
@@ -64,6 +65,7 @@ defmodule PlatformWeb.ControlCenter.OnboardingEvents do
      |> assign(:onboarding_flow, nil)
      |> assign(:selected_template, nil)
      |> assign(:federate_result, nil)
+     |> assign(:federate_conflict, nil)
      |> assign(:probe_result, nil)}
   end
 
@@ -198,10 +200,14 @@ defmodule PlatformWeb.ControlCenter.OnboardingEvents do
                ws_url: ws_url,
                agent: agent
              })
+             |> assign(:federate_conflict, nil)
              |> put_flash(:info, "Federated agent #{agent.name} created.")}
 
           {:error, %Ecto.Changeset{} = changeset} ->
-            {:noreply, put_flash(socket, :error, federate_error_message(changeset, runtime_id))}
+            {:noreply,
+             socket
+             |> assign(:federate_conflict, federate_conflict(changeset, runtime_id))
+             |> put_flash(:error, federate_error_message(changeset, runtime_id))}
 
           {:error, reason} ->
             {:noreply, put_flash(socket, :error, "Federation failed: #{inspect(reason)}")}
@@ -588,18 +594,29 @@ defmodule PlatformWeb.ControlCenter.OnboardingEvents do
   # A revoked runtime's id is reused by `Federation.register_runtime/2` (task
   # 01a1b34b stage 3), so a unique-constraint error on runtime_id here means a
   # pending, active or suspended runtime still holds it.
-  defp federate_error_message(%Ecto.Changeset{errors: errors} = changeset, runtime_id) do
-    case Keyword.get(errors, :runtime_id) do
-      {_msg, opts} when is_list(opts) ->
-        if opts[:constraint] == :unique do
-          "Runtime ID \"#{runtime_id}\" is in use by an active runtime. " <>
-            "Revoke that runtime first, then federate again."
-        else
-          changeset_error_summary(changeset)
-        end
+  defp federate_error_message(%Ecto.Changeset{} = changeset, runtime_id) do
+    if runtime_id_taken?(changeset) do
+      "Runtime ID \"#{runtime_id}\" is in use by an active runtime. " <>
+        "Revoke that runtime first, then federate again."
+    else
+      changeset_error_summary(changeset)
+    end
+  end
 
-      _ ->
-        changeset_error_summary(changeset)
+  # Task 01a1b84c stage 2: who holds the id, and whether anyone can reach it.
+  # The flash above stays as it is; the form renders the pointer to
+  # /control/unattached-runtimes from this when the holder is unattached.
+  defp federate_conflict(%Ecto.Changeset{} = changeset, runtime_id) do
+    if runtime_id_taken?(changeset) do
+      holder = Federation.get_runtime_by_runtime_id(runtime_id)
+      %{runtime_id: runtime_id, unattached?: Federation.unattached_runtime?(holder)}
+    end
+  end
+
+  defp runtime_id_taken?(%Ecto.Changeset{errors: errors}) do
+    case Keyword.get(errors, :runtime_id) do
+      {_msg, opts} when is_list(opts) -> opts[:constraint] == :unique
+      _ -> false
     end
   end
 end

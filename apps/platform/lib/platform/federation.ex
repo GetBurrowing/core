@@ -335,6 +335,46 @@ defmodule Platform.Federation do
     |> Repo.all()
   end
 
+  @doc """
+  Runtimes no agent can reach (task 01a1b84c stage 1): `agent_id` is NULL,
+  the row is not `revoked`, and no agent points at it through
+  `agents.runtime_id`. `pending` and `suspended` rows are included, because
+  they still hold their runtime_id (`register_runtime/2` reuses only a
+  `revoked` holder). Only rows `Agents.manage?/2` allows for `scope` are
+  returned. Ordered by `runtime_id`.
+
+  Shares `unattached_runtimes_query/0` with `unattached_runtime?/1`, so the
+  list and the per-row check cannot drift apart.
+  """
+  @spec list_unattached_runtimes(Scope.t()) :: [AgentRuntime.t()]
+  def list_unattached_runtimes(%Scope{} = scope) do
+    unattached_runtimes_query()
+    |> order_by([r], asc: r.runtime_id)
+    |> Repo.all()
+    |> Enum.filter(&Agents.manage?(scope, &1))
+  end
+
+  @doc "True when `runtime` is one `list_unattached_runtimes/1` would list (before the scope filter)."
+  @spec unattached_runtime?(AgentRuntime.t() | nil) :: boolean()
+  def unattached_runtime?(%AgentRuntime{id: id}) when is_binary(id) do
+    unattached_runtimes_query()
+    |> where([r], r.id == ^id)
+    |> Repo.exists?()
+  end
+
+  def unattached_runtime?(_), do: false
+
+  # The one definition of "unattached": no agent_id, not revoked, and no
+  # agent pointing at the row via agents.runtime_id.
+  defp unattached_runtimes_query do
+    pointed_at = from(a in Agent, where: a.runtime_id == parent_as(:runtime).id, select: 1)
+
+    from(r in AgentRuntime,
+      as: :runtime,
+      where: is_nil(r.agent_id) and r.status != "revoked" and not exists(pointed_at)
+    )
+  end
+
   # Every runtime bound to the agent: rows with `agent_id` == the agent's id,
   # plus the row `agents.runtime_id` points at (read from the database).
   defp bound_runtimes_query(agent_id) do

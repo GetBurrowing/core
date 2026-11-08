@@ -1019,6 +1019,9 @@ defmodule PlatformWeb.Router do
       # live_session expresses "anyone may read, admins may write".
       live("/control/experiments", ExperimentsLive, :index)
       live("/control/experiments/:slug", ExperimentsLive, :show)
+      # Task 01a1b84c stage 2: runtimes no agent can reach, admin-only inside
+      # the LiveView. Static, so it also MUST stay above the catch-all.
+      live("/control/unattached-runtimes", ControlCenterLive, :unattached_runtimes)
       live("/control/:agent_slug", ControlCenterLive, :show)
       # Task 01a17b1c stage 5: the agent's configuration files and session strip.
       live("/control/:agent_slug/config", AgentConfigLive, :show)

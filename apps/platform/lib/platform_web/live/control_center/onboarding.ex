@@ -4,6 +4,7 @@ defmodule PlatformWeb.ControlCenter.Onboarding do
   federate flow, import flow, and create custom flow.
   """
   use Phoenix.Component
+  use PlatformWeb, :verified_routes
 
   import PlatformWeb.ControlCenter.Helpers
 
@@ -15,6 +16,8 @@ defmodule PlatformWeb.ControlCenter.Onboarding do
   attr :template_form, :map, required: true
   attr :federate_form, :map, required: true
   attr :federate_result, :map, default: nil
+  # Task 01a1b84c stage 2: %{runtime_id, unattached?} after an in-use error.
+  attr :federate_conflict, :map, default: nil
   attr :import_agents, :list, default: []
   attr :import_selected, :any, required: true
   attr :create_agent_form, :map, required: true
@@ -86,6 +89,8 @@ defmodule PlatformWeb.ControlCenter.Onboarding do
             :if={@onboarding_flow == :federate}
             federate_form={@federate_form}
             federate_result={@federate_result}
+            federate_conflict={@federate_conflict}
+            can_create_ownerless?={@can_create_ownerless?}
           />
 
           <.import_flow
@@ -439,10 +444,34 @@ defmodule PlatformWeb.ControlCenter.Onboarding do
 
   attr :federate_form, :map, required: true
   attr :federate_result, :map, default: nil
+  attr :federate_conflict, :map, default: nil
+  attr :can_create_ownerless?, :boolean, default: false
 
   defp federate_flow(assigns) do
     ~H"""
     <div :if={is_nil(@federate_result)} class="mt-6">
+      <%!-- Task 01a1b84c stage 2: the flash says the id is in use; this
+           says whether anyone can reach the holder, and where to free it.
+           Rendered only when the holder is unattached. --%>
+      <p
+        :if={@federate_conflict && @federate_conflict.unattached?}
+        id="federate-conflict-unattached"
+        class="mb-4 rounded-2xl border border-warning/40 bg-warning/10 px-4 py-3 text-sm text-base-content"
+      >
+        <span class="hero-link-slash mr-1 inline-block h-4 w-4 align-text-bottom" />
+        <span :if={@can_create_ownerless?}>
+          It is not attached to any agent. Revoke it in <.link
+            id="federate-conflict-unattached-link"
+            navigate={~p"/control/unattached-runtimes"}
+            class="link link-primary font-semibold"
+          >
+            Unattached runtimes
+          </.link>.
+        </span>
+        <span :if={!@can_create_ownerless?}>
+          It is not attached to any agent. Ask an admin to revoke it in Unattached runtimes.
+        </span>
+      </p>
       <.form
         for={@federate_form}
         id="federate-form"
