@@ -16,6 +16,9 @@ defmodule PlatformWeb.ModuleGate do
     PlatformWeb.FirstRunLive => {:chat, nil},
     PlatformWeb.ChangelogLive => {:activity, nil},
     PlatformWeb.InboxLive => {:inbox, nil},
+    # The main view that replaced the Inbox index (task 01a1b721 stage 4):
+    # the same module as the detail routes it sits beside.
+    PlatformWeb.SecretaryLive => {:inbox, nil},
     PlatformWeb.TasksLive => {:tasks, nil},
     PlatformWeb.FilesLive => {:files, nil},
     PlatformWeb.MeetingLive => {:meetings, nil},

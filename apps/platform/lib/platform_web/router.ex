@@ -946,6 +946,10 @@ defmodule PlatformWeb.Router do
     get("/admin/pipeline", LegacyPipelineController, :show)
 
     get("/artifacts/preview", ArtifactPreviewController, :show)
+    # parallel-ui: inbox-index-redirect
+    # /inbox is a redirect to /brief, query string kept (task 01a1b721 stage 4);
+    # /inbox/briefing/:date and /inbox/meeting/:meeting_id stay InboxLive.
+    get("/inbox", InboxRedirectController, :index)
     get("/api/transcripts/:id/download", TranscriptController, :show)
 
     live_session :authenticated,
@@ -965,7 +969,9 @@ defmodule PlatformWeb.Router do
       live("/access/:type/:id", AccessLive, :show)
       live("/chat", ChatLive, :index)
       live("/chat/:space_slug", ChatLive, :show)
-      live("/inbox", InboxLive, :index)
+      # The main view that replaced the Inbox (task 01a1b721 stage 4).
+      live("/brief", SecretaryLive, :index)
+      live("/brief/everything", SecretaryLive, :everything)
       # The day's briefing, opened from its Inbox row (task 01a15ee1 stage 4).
       live("/inbox/briefing/:date", InboxLive, :briefing)
       live("/inbox/meeting/:meeting_id", InboxLive, :meeting_briefing)

@@ -32,7 +32,7 @@
     <div class="mx-auto max-w-3xl p-6">
       <header class="mb-6 flex items-start justify-between gap-4">
         <div class="min-w-0">
-          <h1 class="text-2xl font-bold text-base-content">Inbox</h1>
+          <h1 class="text-2xl font-bold text-base-content">{Platform.Secretary.name()}</h1>
           <p class="mt-1 text-sm text-subtle">
             Everything waiting on you across Burrow. Tick rows and clear them in one go, or open an item to jump to it.
           </p>
@@ -70,7 +70,7 @@
 
       <%!-- Filter chips (task 01a15ee1 stage 4). The filter is in the URL as
            ?f=, so a reload or a shared link keeps it. --%>
-      <nav aria-label="Filter the Inbox" class="-mt-2 mb-6">
+      <nav aria-label={"Filter " <> Platform.Secretary.name()} class="-mt-2 mb-6">
         <ul class="flex flex-wrap gap-1.5" data-role="inbox-filter-chips">
           <li :for={{value, label} <- @filters}>
             <.link
@@ -306,7 +306,7 @@
       @live_action not in [:briefing, :meeting_briefing, :ux_decision] && "max-lg:hidden"
     ]}
     data-role="inbox-detail-pane"
-    aria-label="Inbox item"
+    aria-label={Platform.Secretary.name() <> " item"}
   >
     <p
       :if={is_nil(@briefing_detail) and is_nil(@meeting_detail_id) and is_nil(@ux_detail_id)}
@@ -321,11 +321,11 @@
          not-found for everything it cannot load. --%>
     <div :if={@meeting_detail_id} class="mx-auto max-w-3xl p-6">
       <.link
-        patch={"/inbox" <> filter_query(@filter)}
+        navigate={~p"/brief"}
         class="focus-visible-ring -ml-2 mb-3 inline-flex min-h-11 items-center rounded px-2 font-semibold text-interactive lg:hidden"
         data-role="inbox-detail-back"
       >
-        ‹ Inbox
+        ‹ {Platform.Secretary.name()}
       </.link>
       <.live_component
         module={PlatformWeb.InboxLive.MeetingBriefingComponent}
@@ -340,11 +340,11 @@
          only through Decisions.get_for_recipient/2. --%>
     <div :if={@ux_detail_id} class="mx-auto max-w-3xl p-6">
       <.link
-        patch={"/inbox" <> filter_query(@filter)}
+        navigate={~p"/brief"}
         class="focus-visible-ring -ml-2 mb-3 inline-flex min-h-11 items-center rounded px-2 font-semibold text-interactive lg:hidden"
         data-role="inbox-detail-back"
       >
-        ‹ Inbox
+        ‹ {Platform.Secretary.name()}
       </.link>
       <.live_component
         module={PlatformWeb.InboxLive.UxDecisionComponent}
@@ -356,11 +356,11 @@
 
     <div :if={@briefing_detail} class="mx-auto max-w-3xl p-6">
       <.link
-        patch={"/inbox" <> filter_query(@filter)}
+        navigate={~p"/brief"}
         class="focus-visible-ring -ml-2 mb-3 inline-flex min-h-11 items-center rounded px-2 font-semibold text-interactive lg:hidden"
         data-role="inbox-detail-back"
       >
-        ‹ Inbox
+        ‹ {Platform.Secretary.name()}
       </.link>
 
       <div

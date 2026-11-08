@@ -103,6 +103,18 @@ defmodule Platform.ParallelUI do
           "short codes has passed its expires_at), make GuestShortLinkController admit " <>
           "the guest directly instead of redirecting, then delete the `/:slug/:token` " <>
           "guest route and its `parallel-ui` marker in router.ex."
+    },
+    %{
+      id: "inbox-index-redirect",
+      kind: :route,
+      legacy:
+        "/inbox index route kept as a redirect for native tab, saved route-resume paths " <>
+          "and ?open= links",
+      replacement: "/brief (PlatformWeb.SecretaryLive)",
+      introduced_by: "01a1b721-fbe1-7000-b7e0-fce544d64da2",
+      cutover:
+        "Delete the /inbox redirect once child task 01a1b754-4998-7000-8816-d2be5e640f5f " <>
+          "has shipped and no client opens /inbox."
     }
   ]
 

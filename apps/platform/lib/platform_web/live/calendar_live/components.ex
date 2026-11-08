@@ -1510,7 +1510,8 @@ defmodule PlatformWeb.CalendarLive.Components do
                 {:read_private, "Read event details", "Titles and notes, including busy-only events"},
                 {:create, "Add tentative holds", "Each one appears on your calendar as a hold"},
                 {:move, "Move events", "Propose a new time for an event"},
-                {:preapprove, "Preapprove changes", "Holds and moves skip your OK in Inbox"}
+                {:preapprove, "Preapprove changes",
+                 "Holds and moves skip your OK in #{Platform.Secretary.name()}"}
               ]
             }
             class="cal-setrow cursor-pointer"

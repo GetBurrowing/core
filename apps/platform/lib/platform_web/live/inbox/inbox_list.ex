@@ -118,7 +118,9 @@ defmodule PlatformWeb.Inbox.InboxList do
         >
           <.icon name="hero-chevron-left" class="size-[22px]" />
         </button>
-        <h1 class="min-w-0 flex-1 truncate text-[17px] font-semibold text-base-content">Inbox</h1>
+        <h1 class="min-w-0 flex-1 truncate text-[17px] font-semibold text-base-content">
+          {Platform.Secretary.name()}
+        </h1>
         <button
           :if={@undo}
           type="button"

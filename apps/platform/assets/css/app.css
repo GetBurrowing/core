@@ -11218,3 +11218,59 @@ textarea.cal-input {
 .ba-adv{display:block;margin:16px auto 0;padding:6px 10px}
 @media (prefers-reduced-motion: reduce){.ba-flow,.ba-modal,.ba-step,.ba-card.reveal,.ba-card.reveal::after,.ba-confetti i,.ba-dice.roll,.ba-typing i,.ba-vnow .ic,.ba-vb.swap{animation:none!important}.ba-confetti{display:none}}
 /* ── end character builder ── */
+
+/* ──────────────────────────────────────────────────────
+   The secretary view, /brief (task 01a1b721 stage 4; mockup canvas
+   01a1b744 .live, .arrived, .leaving, .tg). Colour comes from theme tokens
+   on the markup; these rules only carry motion and the uppercase tags, so
+   the source text stays sentence case. The universal prefers-reduced-motion
+   rule above (audit 1B-A11Y-3) stills every animation here.
+   ────────────────────────────────────────────────────── */
+.secretary-tag {
+  text-transform: uppercase;
+  letter-spacing: 0.05em;
+}
+.secretary-live-dot {
+  display: inline-block;
+  width: 7px;
+  height: 7px;
+  border-radius: 50%;
+  background: currentColor;
+  animation: secretary-breathe 2.4s ease-in-out infinite;
+}
+@keyframes secretary-breathe {
+  0%,
+  100% {
+    opacity: 0.45;
+    transform: scale(0.85);
+  }
+  50% {
+    opacity: 1;
+    transform: scale(1);
+  }
+}
+.secretary-arrived {
+  animation: secretary-arrive 0.5s cubic-bezier(0.2, 0, 0, 1);
+}
+@keyframes secretary-arrive {
+  from {
+    opacity: 0;
+    transform: translateY(-6px);
+  }
+  to {
+    opacity: 1;
+    transform: none;
+  }
+}
+.secretary-leaving {
+  animation: secretary-fade 6s ease forwards;
+}
+@keyframes secretary-fade {
+  to {
+    opacity: 0.35;
+  }
+}
+.secretary-sugg {
+  border-left-color: var(--ag, var(--color-primary));
+  background: color-mix(in srgb, var(--ag, var(--color-primary)) 8%, var(--color-base-200));
+}

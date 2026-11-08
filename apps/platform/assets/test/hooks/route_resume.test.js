@@ -215,6 +215,11 @@ describe("moduleFromPath", () => {
     expect(moduleFromPath("/tasks/xyz")).toBe("tasks")
     expect(moduleFromPath("/meetings/room-1")).toBe("meetings")
     expect(moduleFromPath("/inbox")).toBe("inbox")
+    // The Inbox index is /brief since task 01a1b721 stage 4; /inbox stays a
+    // redirect and the detail routes, so both prefixes are the inbox module.
+    expect(moduleFromPath("/brief")).toBe("inbox")
+    expect(moduleFromPath("/brief/everything")).toBe("inbox")
+    expect(moduleFromPath("/inbox/briefing/2026-11-07")).toBe("inbox")
     expect(moduleFromPath("/skills/deep-dive")).toBe("skills")
     expect(moduleFromPath("/files")).toBe("files")
   })
@@ -254,6 +259,11 @@ describe("sameModulePrefix", () => {
     expect(sameModulePrefix("chat", "/chat/abc")).toBe(true)
     expect(sameModulePrefix("chat", "/chat")).toBe(true)
     expect(sameModulePrefix("tasks", "/tasks/1234-uuid")).toBe(true)
+    // inbox owns two prefixes (task 01a1b721 stage 4)
+    expect(sameModulePrefix("inbox", "/brief")).toBe(true)
+    expect(sameModulePrefix("inbox", "/brief?open=abc")).toBe(true)
+    expect(sameModulePrefix("inbox", "/inbox/briefing/2026-11-07")).toBe(true)
+    expect(sameModulePrefix("inbox", "/chat/abc")).toBe(false)
   })
 
   it("rejects a cross-module saved value (namespace pollution guard)", () => {

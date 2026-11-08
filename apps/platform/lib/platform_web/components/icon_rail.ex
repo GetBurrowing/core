@@ -536,7 +536,9 @@ defmodule PlatformWeb.Components.IconRail do
   @doc false
   def active_destination_key(destinations, current_path) do
     destinations
-    |> Enum.filter(&path_matches?(&1.path, current_path))
+    |> Enum.filter(fn dest ->
+      Enum.any?([dest.path | Map.get(dest, :also_matches, [])], &path_matches?(&1, current_path))
+    end)
     |> Enum.sort_by(&String.length(&1.path), :desc)
     |> case do
       [winner | _] -> winner.key
@@ -681,8 +683,11 @@ defmodule PlatformWeb.Components.IconRail do
         # Today the route renders a "Coming Soon" placeholder LV so the tile
         # doesn't 404.
         key: :inbox,
-        label: "Inbox",
-        path: "/inbox",
+        label: Platform.Secretary.name(),
+        path: "/brief",
+        # /inbox/briefing/* and /inbox/meeting/* still render InboxLive, so
+        # the destination also matches them (task 01a1b721 stage 4).
+        also_matches: ["/inbox"],
         hero_icon: "hero-inbox",
         cluster: :live,
         root_only?: false

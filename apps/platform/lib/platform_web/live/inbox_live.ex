@@ -353,7 +353,7 @@ defmodule PlatformWeb.InboxLive do
     # the live action), which always runs before the first render.
     {:ok,
      socket
-     |> assign(:page_title, "Inbox")
+     |> assign(:page_title, Platform.Secretary.name())
      |> assign(:current_path, "/inbox")
      |> assign(:current_user_id, user_id)
      # Both must land BEFORE init_sections/2 — it ends in prune_selection/1,

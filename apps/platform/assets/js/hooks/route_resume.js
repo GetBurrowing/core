@@ -54,6 +54,9 @@ const PATH_MODULE_MAP = [
   ["/chat", "chat"],
   ["/tasks", "tasks"],
   ["/meetings", "meetings"],
+  // The Inbox index moved to /brief (task 01a1b721 stage 4); /inbox stays a
+  // redirect, so both prefixes own the same module.
+  ["/brief", "inbox"],
   ["/inbox", "inbox"],
   ["/skills", "skills"],
   ["/files", "files"],
@@ -66,8 +69,15 @@ const PATH_MODULE_MAP = [
 // URL prefix does it own? Used by the click intercept to gate the "same
 // module prefix" check on the saved URL — a stray saved value in the wrong
 // namespace can't hijack a click.
+// A module may own more than one prefix (`inbox` owns `/brief` and the
+// `/inbox` redirect + detail routes), so the reverse map keeps every prefix
+// and `MODULE_TO_PATH` names the first-listed one.
+const MODULE_TO_PATHS = PATH_MODULE_MAP.reduce((acc, [path, mod]) => {
+  (acc[mod] ||= []).push(path);
+  return acc;
+}, {});
 const MODULE_TO_PATH = Object.fromEntries(
-  PATH_MODULE_MAP.map(([path, mod]) => [mod, path])
+  Object.entries(MODULE_TO_PATHS).map(([mod, paths]) => [mod, paths[0]])
 );
 
 // Modules whose tile must ALWAYS land on the module root, never on a saved
@@ -121,10 +131,12 @@ function moduleFromPath(pathname) {
 // Chat wouldn't route to Tasks. Saved values may include a query string
 // (task 019f487e Case 5) so we compare against the pathname component only.
 function sameModulePrefix(moduleId, saved) {
-  const prefix = MODULE_TO_PATH[moduleId];
-  if (!prefix || typeof saved !== "string") return false;
+  const prefixes = MODULE_TO_PATHS[moduleId];
+  if (!prefixes || typeof saved !== "string") return false;
   const pathOnly = stripQueryAndFragment(saved);
-  return pathOnly === prefix || pathOnly.startsWith(prefix + "/");
+  return prefixes.some(
+    (prefix) => pathOnly === prefix || pathOnly.startsWith(prefix + "/")
+  );
 }
 
 // Query params that are TRANSIENT view state rather than durable filter

@@ -170,7 +170,8 @@ defmodule PlatformWeb.ModuleGateTest do
     {"/control", :agents, PlatformWeb.ControlCenterLive},
     {"/files", :files, PlatformWeb.FilesLive},
     {"/org_memory", :context, PlatformWeb.OrgMemoryLive},
-    {"/inbox", :inbox, PlatformWeb.InboxLive},
+    # The Inbox index is /brief since task 01a1b721 stage 4; /inbox redirects.
+    {"/brief", :inbox, PlatformWeb.SecretaryLive},
     # The Activity page is retired (task 01a1557a-7a71 stage 4); the
     # `activity` module now gates /changelog, so the lock keeps coverage here.
     {"/changelog", :activity, PlatformWeb.ChangelogLive},

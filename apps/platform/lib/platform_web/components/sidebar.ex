@@ -10,7 +10,8 @@ defmodule PlatformWeb.Components.Sidebar do
   The module rows are prototype 01a178d2 v4's rail
   (`IconRail.desktop_rail_destinations/1`: Chat, Voice, Tasks, Calendar,
   Meetings), then a "More" label, then `IconRail.desktop_more_rows/2`:
-  Inbox with its count badge (`IconRail.inbox_badge/1`, the phone tab's
+  the secretary view (`Platform.Secretary.name/0`, `/brief`, the former Inbox)
+  with its count badge (`IconRail.inbox_badge/1`, the phone tab's
   badge on the row's icon: 1-9, then 9+, nothing at 0), the extension rows, then the rest of the More
   sheet's order. The phone bar keeps its own four tabs (the product lead's rule, task
   01a18d9f stage 5), so the two lists are split, but they go through the

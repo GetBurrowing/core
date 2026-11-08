@@ -297,7 +297,7 @@ defmodule PlatformWeb.InboxLive.BriefingCopy do
 
     %{
       lead:
-        "Briefings arrive in your Inbox each morning. Items you don't handle expire after 7 days.",
+        "Briefings arrive in your #{Platform.Secretary.name()} each morning. Items you don't handle expire after 7 days.",
       flags:
         " · deliver at 7:00 · include page edits #{mark.(Map.get(settings, :apply_page_edits))}" <>
           " · tasks #{mark.(Map.get(settings, :file_tasks))}" <>

@@ -11,7 +11,8 @@ defmodule PlatformWeb.Components.MoreSheet do
   `IconRail.more_sheet_rows/2`: Voice and Tasks (they left the bar for the
   sheet, task 01a18d9f stage 5), then every extension row the actor may see
   (Social), then Email, Files, Skills, Org memory, Agents, Experiments,
-  Changelog. Inbox and Calendar are tabs in the bar, not rows here.
+  Changelog. The secretary view (`Platform.Secretary.name/0`, `/brief`, the
+  former Inbox) and Calendar are tabs in the bar, not rows here.
   Canvases opens the Files browser filtered to canvases
   (`/files?tab=browse&type=canvas`, rung 16). Games, after Canvases, opens
   the Files browser filtered to games (`/files?tab=browse&type=game`, rung

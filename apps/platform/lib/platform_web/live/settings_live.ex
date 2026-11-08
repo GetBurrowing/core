@@ -917,7 +917,7 @@ defmodule PlatformWeb.SettingsLive do
     "tasks" => "Tasks",
     "calendar" => "Calendar",
     "meetings" => "Meetings",
-    "inbox" => "Inbox",
+    "inbox" => Platform.Secretary.name(),
     "voice" => "Voice",
     "canvases" => "Canvases",
     "agents" => "Agents",
@@ -988,7 +988,7 @@ defmodule PlatformWeb.SettingsLive do
       word: "direct mentions only",
       helper:
         "You'll still get a push when someone mentions you directly. " <>
-          "Calls still ring; everything else waits in your Inbox."
+          "Calls still ring; everything else waits in your #{Platform.Secretary.name()}."
     }
   ]
 
