@@ -130,7 +130,7 @@ defmodule PlatformWeb.ControlCenter.RolesPanel do
 
       <div :if={!@show_role_advanced} class="flex flex-col gap-5">
         <section :if={@burrow_roles != []} id="roles-held-by-burrow" class="flex flex-col gap-3">
-          <h3 class="flex items-center gap-2 font-mono text-[11px] text-subtle">
+          <h3 class="flex items-center gap-2 font-mono text-xs text-subtle">
             <.agent_avatar
               name={@burrow.name || "Burrow"}
               avatar_url={@burrow.avatar_url}
@@ -162,7 +162,7 @@ defmodule PlatformWeb.ControlCenter.RolesPanel do
           id="roles-held-by-specialists"
           class="flex flex-col gap-3"
         >
-          <h3 class="font-mono text-[11px] text-subtle">
+          <h3 class="font-mono text-xs text-subtle">
             <span data-role="group-label">Held by specialists</span>
           </h3>
           <ul class="flex flex-col gap-3">
@@ -182,7 +182,7 @@ defmodule PlatformWeb.ControlCenter.RolesPanel do
         </section>
 
         <section :if={@open_roles != []} id="roles-not-held" class="flex flex-col gap-3">
-          <h3 class="font-mono text-[11px] text-subtle">
+          <h3 class="font-mono text-xs text-subtle">
             <span data-role="group-label">Not held by any agent</span>
           </h3>
           <ul class="flex flex-col gap-3">
@@ -333,7 +333,7 @@ defmodule PlatformWeb.ControlCenter.RolesPanel do
           <span
             :if={@shown_keys != []}
             data-role="role-bundle-keys"
-            class="font-mono text-[11px] text-subtle"
+            class="font-mono text-xs text-subtle"
           >
             {Enum.join(@shown_keys, " · ")}<span :if={@more_keys > 0}> · +{@more_keys}</span>
           </span>
