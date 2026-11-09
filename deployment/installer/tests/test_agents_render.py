@@ -141,7 +141,11 @@ class YamlTest(unittest.TestCase):
                 # The reader this file uses agrees with a real YAML parser.
                 for wpath, (perms, content) in write_files(rendered.files["user-data"][0]).items():
                     self.assertEqual(by_path[wpath]["permissions"], perms, wpath)
-                    self.assertEqual(by_path[wpath]["content"], content, wpath)
+                    entry = by_path[wpath]
+                    parsed_content = entry["content"]
+                    if entry.get("encoding") == "gz+b64":
+                        parsed_content = gzip.decompress(base64.b64decode(parsed_content)).decode()
+                    self.assertEqual(parsed_content, content, wpath)
                 self.assertEqual(len(by_path), len(write_files(rendered.files["user-data"][0])))
                 if path == CONTAINED:
                     ah = compose["services"]["agent-host"]

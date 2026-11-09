@@ -7,7 +7,7 @@
 #   sudo docker run --rm --entrypoint cat ghcr.io/getburrowing/core:core \
 #       /app/updater/bootstrap.sh | sudo sh -s -- --channel stable
 #
-# Flags: --channel stable|edge|pinned (default stable; pinned when the running
+# Flags: --channel stable|edge|candidate|pinned (default stable; pinned when the running
 # core image is a digest or a core-<sha>/play-<sha> tag), --auto-update on|off
 # (default on), --dry-run, --root <dir> (tests only: a prefix for every path).
 #
@@ -28,7 +28,7 @@ DRY_RUN=0
 
 die() { echo "$PROG: refused: $*" >&2; exit 1; }
 usage() {
-	echo "usage: $PROG [--channel stable|edge|pinned] [--auto-update on|off] [--dry-run]" >&2
+	echo "usage: $PROG [--channel stable|edge|candidate|pinned] [--auto-update on|off] [--dry-run]" >&2
 	exit 2
 }
 
@@ -42,7 +42,7 @@ while [ $# -gt 0 ]; do
 	*) echo "$PROG: unknown argument: $1" >&2; usage ;;
 	esac
 done
-case "$CHANNEL" in ''|stable|edge|pinned) ;; *) echo "$PROG: --channel is stable, edge or pinned" >&2; usage ;; esac
+case "$CHANNEL" in ''|stable|edge|candidate|pinned) ;; *) echo "$PROG: --channel is stable, edge, candidate or pinned" >&2; usage ;; esac
 case "$AUTO_FLAG" in ''|on|off) ;; *) echo "$PROG: --auto-update is on or off" >&2; usage ;; esac
 
 INSTALL=$ROOT/opt/burrow
@@ -250,7 +250,7 @@ CONSUMED_KEEP = 20
 POLL_S = 5
 
 FLAVOURS = ("core", "play")
-CHANNELS = ("stable", "edge", "pinned")
+CHANNELS = ("stable", "edge", "candidate", "pinned")
 ACTIONS = ("check", "update", "rollback")
 REQUEST_KEYS = {"action", "request_id", "requested_at"}
 SETTINGS_KEYS = {"auto_update"}
@@ -402,7 +402,7 @@ def load_config():
         "flavour": env.get("FLAVOUR", ""),
     }
     if cfg["channel"] not in CHANNELS:
-        raise ConfigError("CHANNEL must be stable, edge or pinned")
+        raise ConfigError("CHANNEL must be stable, edge, candidate or pinned")
     if cfg["flavour"] not in FLAVOURS:
         raise ConfigError("FLAVOUR must be core or play")
     for repo in [cfg["repo"], *cfg["rollback_repos"]]:

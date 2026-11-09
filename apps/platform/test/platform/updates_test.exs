@@ -147,6 +147,11 @@ defmodule Platform.UpdatesTest do
   end
 
   describe "status/0" do
+    test "recognizes the vendor's held candidate channel", ctx do
+      write_status!(ctx.status_path, %{"channel" => "candidate"})
+      assert Updates.status().channel == "candidate"
+    end
+
     test "missing is :not_installed", ctx do
       refute File.exists?(ctx.status_path)
       assert Updates.status() == :not_installed

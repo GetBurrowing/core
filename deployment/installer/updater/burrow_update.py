@@ -69,7 +69,7 @@ CONSUMED_KEEP = 20
 POLL_S = 5
 
 FLAVOURS = ("core", "play")
-CHANNELS = ("stable", "edge", "pinned")
+CHANNELS = ("stable", "edge", "candidate", "pinned")
 ACTIONS = ("check", "update", "rollback")
 REQUEST_KEYS = {"action", "request_id", "requested_at"}
 SETTINGS_KEYS = {"auto_update"}
@@ -221,7 +221,7 @@ def load_config():
         "flavour": env.get("FLAVOUR", ""),
     }
     if cfg["channel"] not in CHANNELS:
-        raise ConfigError("CHANNEL must be stable, edge or pinned")
+        raise ConfigError("CHANNEL must be stable, edge, candidate or pinned")
     if cfg["flavour"] not in FLAVOURS:
         raise ConfigError("FLAVOUR must be core or play")
     for repo in [cfg["repo"], *cfg["rollback_repos"]]:

@@ -51,7 +51,7 @@ ENDPOINT_KINDS = ("local", "hosted", "byo")
 AUTH_MODES = tuple(registry.AUTH_CONTAINERS)
 BACKUP_TARGETS = ("none", "local-path", "s3-compatible")
 IMAGE_SOURCES = ("registry", "preloaded")
-UPGRADE_CHANNELS = ("stable", "edge", "pinned")
+UPGRADE_CHANNELS = ("stable", "edge", "candidate", "pinned")
 # Render targets (task 01a0d6ab). ``single-host`` is ADR 0053's VM target and
 # the default, so a manifest without ``install.target`` renders unchanged.
 TARGETS = ("single-host", "mac")
