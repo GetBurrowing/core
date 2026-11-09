@@ -592,6 +592,83 @@ defmodule Platform.ExtensionsTest do
       assert length(messages) == 2
     end
 
+    defmodule FeedbackNameClash do
+      @moduledoc false
+      @behaviour Platform.Extension
+      def canvas_kinds, do: []
+
+      def mcp_tool_bundles,
+        do: [
+          %{
+            name: "feedback_clash",
+            definitions: [],
+            tool_names: ["feedback_submit"],
+            execute: fn _, _, _ -> :ok end
+          }
+        ]
+
+      def runtime_channel_events, do: []
+      def handle_runtime_event(_e, _r, _p), do: :ok
+      def runtime_disconnected(_r), do: :ok
+      def live_hooks, do: []
+      def live_pages, do: []
+      def experiment_surfaces, do: []
+      def experiment_metrics, do: %{}
+      def migrations_path, do: nil
+    end
+
+    defp with_feedback_policy(policy, fun) do
+      previous = Application.fetch_env(:platform, :feedback_policy)
+      Application.put_env(:platform, :feedback_policy, policy)
+
+      try do
+        fun.()
+      after
+        case previous do
+          {:ok, value} -> Application.put_env(:platform, :feedback_policy, value)
+          :error -> Application.delete_env(:platform, :feedback_policy)
+        end
+      end
+    end
+
+    # `validate!/0` runs in `Platform.Application.start/2` before
+    # `Platform.Repo` starts, so it must not query. With the feedback mode on,
+    # listing the `federation` bundle reads `install_sharing`; on 2026-11-08
+    # that crash-looped an install with extensions configured at boot. The
+    # handler is global, so it counts only queries from this process.
+    test "validate runs no database query, even with the feedback mode on" do
+      FixtureExtension.register([FixtureExtension])
+      test_pid = self()
+      handler_id = "extensions-validate-queries-#{unique()}"
+
+      :ok =
+        :telemetry.attach(
+          handler_id,
+          [:platform, :repo, :query],
+          fn _event, _measurements, meta, _config ->
+            if self() == test_pid, do: send(test_pid, {:repo_query, Map.get(meta, :query)})
+          end,
+          nil
+        )
+
+      try do
+        with_feedback_policy("trusted", fn -> assert Extensions.validate() == :ok end)
+      after
+        :telemetry.detach(handler_id)
+      end
+
+      refute_received {:repo_query, _}
+    end
+
+    test "a gated core tool keeps its name while its capability is off" do
+      with_feedback_policy("disabled", fn ->
+        FixtureExtension.register([FeedbackNameClash])
+        assert {:error, messages} = Extensions.validate()
+
+        assert ~s(tool name "feedback_submit" is claimed by core and by #{inspect(FeedbackNameClash)}) in messages
+      end)
+    end
+
     defmodule CoreInboxClash do
       @moduledoc false
       @behaviour Platform.Extension

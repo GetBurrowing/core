@@ -207,6 +207,32 @@ defmodule Platform.Federation.ToolSurface do
   def core_bundles, do: @bundles
 
   @doc """
+  Every tool name core owns, including the tools listed only while their
+  capability is on (`feedback_submit`, the mail tools). A capability that is
+  off today still owns its tool's name, so no extension may claim it.
+
+  Reads no database: `Platform.Extensions.validate!/0` calls this at boot,
+  before `Platform.Repo` starts. `feedback_tools/0` reads the
+  `install_sharing` row when the feedback mode is on, so the `federation`
+  bundle is assembled here from its parts rather than through
+  `tools_for_bundle/1`.
+  """
+  @spec reserved_tool_names() :: [String.t()]
+  def reserved_tool_names do
+    gated =
+      [feedback_submit_tool()] ++
+        Platform.Federation.MailDraftTools.definitions() ++
+        Platform.Federation.MailInboundTools.definitions()
+
+    @bundles
+    |> List.delete("federation")
+    |> list_tools()
+    |> Kernel.++(federation_tools() ++ sharing_tools() ++ gated)
+    |> Enum.map(& &1.name)
+    |> Enum.uniq()
+  end
+
+  @doc """
   Returns the full tool surface.
 
   Each tool follows the 6-component rubric:
