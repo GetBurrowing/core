@@ -385,26 +385,35 @@ defmodule PlatformWeb.ChatLive.Partials.Composer do
                "say something to get started" invitation on top of a
                channel nobody can post to is the defect this clause exists
                to prevent. --%>
-      <.empty_state
+      <%!-- These controls sit after the padded message list. Give their
+           own last row clearance above the phone's floating chat dock. --%>
+      <div
         :if={
           not @embedded and @active_space != nil and @active_space.archived_at == nil and
             MapSet.size(@rendered_message_ids) == 0
         }
-        variant={:conversational}
+        id="empty-room-agents"
+        class="pb-[var(--phone-chrome-bottom)] lg:pb-0"
       >
-        <:system_message>
-          — no messages yet in #{masked_space_name(assigns, @active_space.name)} —
-        </:system_message>
-        <:body>
-          Add an agent to this space, then @ them to start.
-        </:body>
-        <:chips
-          :if={@can_add_room_agents?}
-          label="+ Add an agent"
-          event={JS.push("open_room_agent_picker")}
-        />
-      </.empty_state>
-      <.room_agent_picker :if={not @embedded} picker={@room_agent_picker} />
+        <.empty_state variant={:conversational}>
+          <:system_message>
+            — no messages yet in #{masked_space_name(assigns, @active_space.name)} —
+          </:system_message>
+          <:body>
+            <%= if @can_add_room_agents? do %>
+              Add an agent to this space, then @ them to start.
+            <% else %>
+              This space is quiet. Send a message to start.
+            <% end %>
+          </:body>
+          <:chips
+            :if={@can_add_room_agents?}
+            label="+ Add an agent"
+            event={JS.push("open_room_agent_picker")}
+          />
+        </.empty_state>
+        <.room_agent_picker picker={@room_agent_picker} />
+      </div>
 
       <%!-- THE SAME STATE, WORDED FOR A CALL (task 01a084bf stage 4).
 

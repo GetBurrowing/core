@@ -76,6 +76,14 @@ defmodule PlatformWeb.ChatLive.Partials.MentionList do
   flow at every width (`.mention-list--pick` in app.css). One list, one row
   anatomy: the composer and the picker cannot drift apart.
 
+  ## Direct room adds
+
+  `on_pick` uses the same rows for an empty room's Add agent control, but
+  sends the selected agent id directly to its event instead of inserting a
+  mention or asking attention. These rows are native buttons: Tab and Enter
+  work without a composer hook. `room_agent_picker/1` supplies the search
+  field; the existing room-add writer checks permission and eligibility.
+
   Used by `Partials.Composer.composer/1` for the space composer, and by
   `PlatformWeb.Components.ChatMessage` above each thread reply box (stage 4).
   The thread's list is the one planned exception to "in flow": that reply

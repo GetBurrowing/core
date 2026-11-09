@@ -77,6 +77,7 @@ defmodule PlatformWeb.ChatLiveRoomAgentPickerTest do
     before_count = Repo.aggregate(Message, :count)
 
     open(view)
+    assert has_element?(view, "#empty-room-agents > #room-agent-picker")
     assert has_element?(view, "#room-agent-list-wrap[data-role='mention-list']")
     assert has_element?(view, option(agent), agent.name)
     refute has_element?(view, "#room-agent-list [data-kind='user']")
