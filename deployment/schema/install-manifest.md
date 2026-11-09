@@ -191,8 +191,10 @@ the bootstrap command for an existing install are described in `docs/burrow/inst
 
 | Key | Type | Default |
 |---|---|---|
-| `upgrade_channel` | `stable` \| `edge` \| `pinned` | `stable` |
+| `upgrade_channel` | `stable` \| `edge` \| `candidate` \| `pinned` | `stable` |
 | `phone_home` | bool | `false` |
+
+`candidate` is a vendor-only rehearsal channel for delayed release batches. It holds the automatically cut batch while `edge` follows main. Customers stay on `stable`; see [delayed stable batches](../release/BATCHES.md).
 
 ## `[agents]` (native agents, target `single-host`)
 
