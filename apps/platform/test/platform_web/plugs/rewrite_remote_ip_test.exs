@@ -183,6 +183,15 @@ defmodule PlatformWeb.Plugs.RewriteRemoteIpTest do
                ]
     end
 
+    test "explicit full-width and zero-length prefixes are accepted" do
+      assert RewriteRemoteIp.parse_trusted_proxies("10.255.255.254/32, 2001:db8::7/128") == [
+               {{10, 255, 255, 254}, 32},
+               {{0x2001, 0xDB8, 0, 0, 0, 0, 0, 7}, 128}
+             ]
+
+      assert RewriteRemoteIp.parse_trusted_proxies("0.0.0.0/0") == [{{0, 0, 0, 0}, 0}]
+    end
+
     test "a bad entry raises naming it" do
       for bad <- [
             "10.0.0.0/33",

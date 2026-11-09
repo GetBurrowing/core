@@ -393,6 +393,21 @@ class MacEdgeTest(PositiveControlMixin, unittest.TestCase):
             "TRUST_PROXY_HEADERS", build(manifest_from(SINGLE_HOST)).files["compose.yaml"][0]
         )
 
+    def test_mac_proxy_chain_relies_on_core_default(self):
+        # Core keys on the rightmost XFF hop past TRUSTED_PROXIES, whose default
+        # trusts Caddy and the private edge sidecar. That holds only while Caddy
+        # keeps the edge's XFF and no install renders an override.
+        rendered = mac_build(manifest_from(MAC))
+        core = compose_block(rendered.files["compose.yaml"][0], "core-platform")
+        self.assertIn("TRUST_PROXY_HEADERS", core)  # positive control: right block
+        self.assertNotIn("TRUSTED_PROXIES", core)
+        self.assertIn("\t\ttrusted_proxies static private_ranges\n", rendered.files["Caddyfile"][0])
+        single = build(manifest_from(SINGLE_HOST)).files
+        self.assertIn("core-platform", single["compose.yaml"][0])  # positive control
+        self.assertIn("core-platform", single["user-data"][0])  # positive control
+        for name in ("compose.yaml", "user-data"):
+            self.assertNotIn("TRUSTED_PROXIES", single[name][0])
+
     def test_cloudflared_runs_the_token_from_secrets_env(self):
         rendered = mac_build(manifest_from(MAC_LITE))
         block = compose_block(rendered.files["compose.yaml"][0], "cloudflared")
