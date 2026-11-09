@@ -86,6 +86,8 @@ defmodule PlatformWeb.ChatLive.Partials.MentionList do
 
   use Phoenix.Component
 
+  import PlatformWeb.CoreComponents, only: [input: 1]
+
   import PlatformWeb.AvatarComponents, only: [agent_avatar: 1, human_avatar: 1]
 
   alias Phoenix.LiveView.JS
@@ -110,6 +112,9 @@ defmodule PlatformWeb.ChatLive.Partials.MentionList do
     doc: "pick mode: the message id a row asks attention for (see Pick mode)"
   )
 
+  attr(:on_pick, :string, default: nil, doc: "direct agent-pick event; reuses the tagging list")
+  attr(:label, :string, default: "Mention suggestions")
+
   attr(:added, :any,
     default: MapSet.new(),
     doc: "pick mode: principal ids already asked, rendered as 'added' no-ops"
@@ -132,26 +137,36 @@ defmodule PlatformWeb.ChatLive.Partials.MentionList do
     <div
       id={"#{@id}-wrap"}
       data-role="mention-list"
-      class={["mention-list", @pick && "mention-list--pick"]}
+      class={["mention-list", (@pick || @on_pick) && "mention-list--pick"]}
     >
       <p class="sr-only" aria-live="polite" data-role="mention-list-status">
         {if @open, do: @status}
       </p>
       <div :if={@open} class="mention-list-panel">
-        <div id={@id} role="listbox" aria-label="Mention suggestions" class="mention-list-box">
+        <div id={@id} role="listbox" aria-label={@label} class="mention-list-box">
           <%= for {suggestion, idx} <- @rows do %>
-            <div
+            <.dynamic_tag
+              tag_name={if @on_pick, do: "button", else: "div"}
+              type={@on_pick && "button"}
               id={"#{@id}-opt-#{idx}"}
               role="option"
-              aria-selected={to_string(idx == 0 and is_nil(@pick))}
+              aria-selected={to_string(idx == 0 and is_nil(@pick) and is_nil(@on_pick))}
               aria-disabled={added?(suggestion, @added) && "true"}
               data-mention-suggestion={if idx == 0, do: "first", else: "row"}
               data-mention-name={suggestion.name}
-              data-principal-id={@pick && suggestion[:principal_id]}
+              data-principal-id={(@pick || @on_pick) && suggestion[:principal_id]}
               data-added={added?(suggestion, @added) && "true"}
               data-kind={kind(suggestion)}
-              phx-click={row_click(suggestion, @pick, @field_id, @added)}
-              class="mention-list-row active:bg-base-100"
+              phx-click={
+                if @on_pick,
+                  do: JS.push(@on_pick, value: %{agent_id: suggestion[:principal_id]}),
+                  else: row_click(suggestion, @pick, @field_id, @added)
+              }
+              class={[
+                "mention-list-row active:bg-base-100",
+                @on_pick &&
+                  "w-full text-left focus-visible:outline-none focus-visible:ring-2 focus-visible:ring-focus-ring"
+              ]}
             >
               <%= case kind(suggestion) do %>
                 <% "broadcast" -> %>
@@ -196,7 +211,7 @@ defmodule PlatformWeb.ChatLive.Partials.MentionList do
               >
                 added
               </span>
-            </div>
+            </.dynamic_tag>
             <.why_line
               :if={@pick && suggestion[:learned] == true && @why == suggestion[:principal_id]}
               suggestion={suggestion}
@@ -215,6 +230,62 @@ defmodule PlatformWeb.ChatLive.Partials.MentionList do
         </div>
       </div>
     </div>
+    """
+  end
+
+  attr(:picker, :map, default: nil)
+
+  def room_agent_picker(assigns) do
+    ~H"""
+    <section
+      :if={@picker}
+      id="room-agent-picker"
+      aria-label="Add an agent"
+      phx-click-away="close_room_agent_picker"
+      phx-window-keydown="close_room_agent_picker"
+      phx-key="Escape"
+      class="mx-auto mb-4 w-full max-w-md rounded-box border border-edge bg-base-200 p-2"
+    >
+      <div class="flex items-center justify-between px-2">
+        <h3 class="text-sm font-semibold text-base-content">Add an agent</h3>
+        <button
+          type="button"
+          phx-click="close_room_agent_picker"
+          aria-label="Close agent picker"
+          class="btn btn-ghost btn-sm min-h-11 min-w-11"
+        >
+          <span class="hero-x-mark size-4" aria-hidden="true"></span>
+        </button>
+      </div>
+      <.form
+        for={%{}}
+        id="room-agent-search-form"
+        phx-change="room_agent_query"
+        phx-submit="room_agent_query"
+      >
+        <.input
+          id="room-agent-search"
+          type="search"
+          name="query"
+          value={@picker.query}
+          placeholder="Find an agent"
+          aria-label="Find an agent"
+          autocomplete="off"
+          phx-debounce="100"
+          phx-mounted={JS.focus()}
+        />
+      </.form>
+      <.mention_list
+        id="room-agent-list"
+        suggestions={@picker.suggestions}
+        query={if @picker.query == "" and @picker.suggestions == [], do: nil, else: @picker.query}
+        on_pick="room_add_agent"
+        label="Agents to add"
+      />
+      <p :if={@picker.suggestions == [] and @picker.query == ""} class="px-3 py-2 text-sm text-subtle">
+        No agents available to add.
+      </p>
+    </section>
     """
   end
 

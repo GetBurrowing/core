@@ -65,7 +65,7 @@ defmodule PlatformWeb.ChatLive.Partials.Composer do
   use PlatformWeb, :verified_routes
 
   import PlatformWeb.ChatLive.Partials.Attach, only: [attach_popover: 1, staged_tray: 1]
-  import PlatformWeb.ChatLive.Partials.MentionList, only: [mention_list: 1]
+  import PlatformWeb.ChatLive.Partials.MentionList, only: [mention_list: 1, room_agent_picker: 1]
   import PlatformWeb.ChatLive.RenderHelpers, only: [composer_empty?: 1]
   import PlatformWeb.AvatarComponents, only: [agent_avatar: 1, human_avatar: 1]
   import PlatformWeb.Components.ChatMessage, only: [chat_message: 1]
@@ -229,6 +229,9 @@ defmodule PlatformWeb.ChatLive.Partials.Composer do
   The root of this template IS `#chat-message-scroller`. Do not wrap it —
   see the module doc.
   """
+  attr(:room_agent_picker, :map, default: nil)
+  attr(:can_add_room_agents?, :boolean, default: false)
+
   def message_scroller(assigns) do
     ~H"""
     <%!-- min-h-0 is the load-bearing class here: without it, flex items
@@ -393,10 +396,15 @@ defmodule PlatformWeb.ChatLive.Partials.Composer do
           — no messages yet in #{masked_space_name(assigns, @active_space.name)} —
         </:system_message>
         <:body>
-          This space is quiet. Connect your agent and @ them to plan and work in this space.
+          Add an agent to this space, then @ them to start.
         </:body>
-        <:chips label="+ Add an agent" event={JS.navigate(~p"/control")} />
+        <:chips
+          :if={@can_add_room_agents?}
+          label="+ Add an agent"
+          event={JS.push("open_room_agent_picker")}
+        />
       </.empty_state>
+      <.room_agent_picker :if={not @embedded} picker={@room_agent_picker} />
 
       <%!-- THE SAME STATE, WORDED FOR A CALL (task 01a084bf stage 4).
 
