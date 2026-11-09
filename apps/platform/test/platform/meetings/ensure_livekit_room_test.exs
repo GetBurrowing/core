@@ -26,8 +26,15 @@ defmodule Platform.Meetings.EnsureLivekitRoomTest do
       assert body == %{
                "name" => "space-abc",
                "empty_timeout" => 300,
+               "departure_timeout" => 90,
                "agents" => [%{"agent_name" => "meeting-transcriber"}]
              }
+    end
+
+    test "gives a departure grace of 90 seconds so a reconnecting call is not finished" do
+      body = "space-abc" |> Meetings.build_create_room_body() |> Jason.decode!()
+
+      assert body["departure_timeout"] == 90
     end
 
     test "agent_name uses snake_case (LiveKit REST convention, not JWT camelCase)" do

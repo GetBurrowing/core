@@ -787,6 +787,47 @@
   }
 }
 
+/* Call connection banner (meeting_client.js). A network drop keeps the call UI
+   up: "Reconnecting…" while LiveKit/the hook retries, then "Connection lost"
+   with Rejoin / Leave. #meeting-connection-banner[data-state] mirrors
+   #meeting-client[data-room-state]; anything else is hidden. */
+.meeting-connection-banner {
+  position: fixed;
+  top: 0.75rem;
+  left: 50%;
+  transform: translateX(-50%);
+  z-index: 60;
+  display: none;
+  align-items: center;
+  gap: 0.5rem;
+  padding: 0.4rem 0.9rem;
+  border-radius: 9999px;
+  font-size: 0.875rem;
+  background: var(--color-base-300, #333);
+  color: var(--color-base-content, #fff);
+  box-shadow: 0 2px 8px rgb(0 0 0 / 0.25);
+}
+.meeting-connection-banner .mcb-reconnecting,
+.meeting-connection-banner .mcb-lost {
+  display: none;
+  align-items: center;
+  gap: 0.5rem;
+}
+.meeting-connection-banner[data-state="reconnecting"],
+.meeting-connection-banner[data-state="lost"] {
+  display: flex;
+}
+.meeting-connection-banner[data-state="reconnecting"] .mcb-reconnecting,
+.meeting-connection-banner[data-state="lost"] .mcb-lost {
+  display: inline-flex;
+}
+.meeting-connection-banner button {
+  padding: 0.15rem 0.7rem;
+  border-radius: 9999px;
+  border: 1px solid currentColor;
+  cursor: pointer;
+}
+
 /* ──────────────────────────────────────────────────────
    Quiet reconnect slot (task 01a12b10). #connection-status in layouts.ex;
    state set by assets/js/lib/connection_status_view.js through data-state.

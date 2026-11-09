@@ -1,4 +1,4 @@
-import { Room, RoomEvent, Track } from "livekit-client"
+import { DisconnectReason, Room, RoomEvent, Track } from "livekit-client"
 import {
   participantLabel,
   personIdentity,
@@ -62,9 +62,34 @@ function isVideoPublication(pub) {
   return !!pub && pub.kind === Track.Kind.Video
 }
 
+// Reconnect policy for a dropped call. A Disconnected whose reason is not one
+// of these is a network loss, not a decision: the user stays in the call UI,
+// we try ONE automatic rejoin, then offer Rejoin / Leave.
+export const REJOIN_DELAY_MS = 1500
+export const REJOIN_GIVE_UP_MS = 30000
+const DELIBERATE_DISCONNECT_REASONS = new Set([
+  DisconnectReason.CLIENT_INITIATED,
+  DisconnectReason.PARTICIPANT_REMOVED,
+  DisconnectReason.ROOM_DELETED,
+  DisconnectReason.DUPLICATE_IDENTITY,
+])
+
+export function isDeliberateDisconnect(reason) {
+  return DELIBERATE_DISCONNECT_REASONS.has(reason)
+}
+
 const MeetingClient = {
   mounted() {
     this._room = null
+    // Reconnect state machine (see _handleDisconnected). `_leaving` is set by
+    // every deliberate leave (_leave, pagehide) so none of them can start an
+    // automatic rejoin. `_rejoinGen` invalidates a stale attempt/timer.
+    this._leaving = false
+    this._joinCreds = null
+    this._rejoinGen = 0
+    this._rejoinTimers = []
+    this._connLost = false
+    this._ensureConnectionBanner()
     // Tiles are keyed by PERSON (`personIdentity`), never by raw LiveKit
     // identity: a person's video-only companion connection
     // (`video:user:<uuid>`, task 01a13ca2) shares its person's tile.
@@ -136,6 +161,7 @@ const MeetingClient = {
     // re-mount must ADOPT the still-connected room left on
     // window.__livekit_room (mirrors meeting_room.js:32-52).
     this._onPageHide = () => {
+      this._leaving = true
       this._companionCameraOff()
       this._leave()
     }
@@ -177,6 +203,9 @@ const MeetingClient = {
     // e2e reviewer caught — listener count 1 → 2 → 3 → … and duplicate
     // `livekit:state` events firing per RoomEvent. (task 019ee06b stage 2
     // v2 fix.)
+    this._clearRejoinTimers()
+    this._rejoinGen += 1
+    if (this._connBanner && this._connBanner._owner === this) this._connBanner._owner = null
     this._releaseRoomListeners()
     // The native call (if any) outlives this element; only our listener goes.
     this._releaseNativeListener()
@@ -792,11 +821,155 @@ const MeetingClient = {
       return
     }
 
-    bind(RoomEvent.Disconnected, () => {
+    bind(RoomEvent.Disconnected, (reason) => this._handleDisconnected(room, reason))
+  },
+
+  // A Disconnected on the web call's Room. Deliberate reasons (and any
+  // client-initiated leave) end the call exactly as before. Anything else is
+  // treated as a network loss: keep the roster and tiles, do NOT push
+  // `meeting_left`, and rejoin once with the credentials the join used.
+  _handleDisconnected(room, reason) {
+    // A Room we are no longer pinned to (a failed rejoin attempt) is noise.
+    if (this._room && room !== this._room) return
+    if (this._leaving || isDeliberateDisconnect(reason)) {
       this._emitState("disconnected", room)
       this._cleanupRoom()
       this.pushEvent("meeting_left", {})
-    })
+      return
+    }
+    if (!this._joinCreds) {
+      // Adopted room: no token to rejoin with, so offer Leave only.
+      this._enterLost(room)
+      return
+    }
+    this._beginRejoin(room)
+  },
+
+  _beginRejoin(room) {
+    this._clearRejoinTimers()
+    const gen = ++this._rejoinGen
+    this._connLost = true
+    this._emitState("reconnecting", room)
+
+    const attempt = () => {
+      if (gen !== this._rejoinGen) return
+      this._clearRejoinTimers()
+      this._attemptRejoin(gen)
+    }
+    const schedule = () => this._rejoinTimers.push(setTimeout(attempt, REJOIN_DELAY_MS))
+
+    if (typeof navigator === "undefined" || navigator.onLine !== false) {
+      schedule()
+    } else {
+      this._onOnline = () => {
+        window.removeEventListener("online", this._onOnline)
+        this._onOnline = null
+        schedule()
+      }
+      window.addEventListener("online", this._onOnline)
+    }
+    this._rejoinTimers.push(
+      setTimeout(() => {
+        if (gen !== this._rejoinGen) return
+        this._rejoinGen += 1 // abandon any in-flight attempt
+        this._clearRejoinTimers()
+        this._enterLost(room)
+      }, REJOIN_GIVE_UP_MS),
+    )
+  },
+
+  async _attemptRejoin(gen) {
+    const creds = this._joinCreds
+    if (!creds) return this._enterLost(this._room)
+    const room = this._newRoom()
+    const ok = await this._connectRoom(room, creds.url, creds.token)
+    if (gen !== this._rejoinGen) {
+      // Gave up or left while connecting: do not resurrect the call.
+      if (ok) room.disconnect().catch(() => {})
+      return
+    }
+    if (!ok) {
+      this._rejoinGen += 1
+      this._clearRejoinTimers()
+      this._enterLost(this._room)
+      return
+    }
+    this._clearRejoinTimers()
+    this._connLost = false
+    await this._enterRoom(room, creds.desired)
+  },
+
+  _enterLost(room) {
+    this._clearRejoinTimers()
+    this._connLost = true
+    this._emitState("lost", room)
+  },
+
+  // "Rejoin" button: one click, the same path as the automatic attempt.
+  _manualRejoin() {
+    if (!this._connLost || !this._joinCreds) return
+    this._clearRejoinTimers()
+    const gen = ++this._rejoinGen
+    this._emitState("reconnecting", this._room)
+    this._rejoinTimers.push(
+      setTimeout(() => {
+        if (gen !== this._rejoinGen) return
+        this._rejoinGen += 1
+        this._enterLost(this._room)
+      }, REJOIN_GIVE_UP_MS),
+    )
+    this._attemptRejoin(gen)
+  },
+
+  // "Leave" button (or the server's leave-meeting while connection is lost).
+  _leaveAfterLoss() {
+    if (!this._connLost) return
+    this._rejoinGen += 1
+    const room = this._room
+    this._leaving = true
+    this._emitState("disconnected", room)
+    this._cleanupRoom()
+    this.pushEvent("meeting_left", {})
+  },
+
+  _clearRejoinTimers() {
+    for (const t of this._rejoinTimers || []) clearTimeout(t)
+    this._rejoinTimers = []
+    if (this._onOnline) {
+      window.removeEventListener("online", this._onOnline)
+      this._onOnline = null
+    }
+  },
+
+  // One banner for both call surfaces, created lazily in <body> and keyed on
+  // `data-state` (the same value as `#meeting-client[data-room-state]`), so
+  // CSS alone shows "Reconnecting…" or "Connection lost" + buttons.
+  _ensureConnectionBanner() {
+    if (typeof document === "undefined" || !document.body) return
+    let el = document.getElementById("meeting-connection-banner")
+    if (!el) {
+      el = document.createElement("div")
+      el.id = "meeting-connection-banner"
+      el.className = "meeting-connection-banner"
+      el.setAttribute("role", "status")
+      el.dataset.state = "idle"
+      el.innerHTML =
+        '<span class="mcb-reconnecting">Reconnecting…</span>' +
+        '<span class="mcb-lost"><span>Connection lost</span>' +
+        '<button type="button" data-mcb-action="rejoin">Rejoin</button>' +
+        '<button type="button" data-mcb-action="leave">Leave</button></span>'
+      // Hosts with a bare-bones DOM (unit tests) simply get no click wiring.
+      el.addEventListener?.("click", (event) => {
+        const btn = event.target.closest && event.target.closest("[data-mcb-action]")
+        const owner = el._owner
+        if (!btn || !owner) return
+        if (btn.dataset.mcbAction === "rejoin") owner._manualRejoin()
+        else owner._leaveAfterLoss()
+      })
+      document.body.appendChild(el)
+    }
+    el._owner = this
+    this._connBanner = el
   },
 
   // ── The companion Room (task 01a13ca2 stage 3) ──────────────────────────
@@ -1222,9 +1395,22 @@ const MeetingClient = {
       return
     }
 
+    // A fresh deliberate join starts clean: no pending rejoin, not leaving.
+    this._leaving = false
+    this._clearRejoinTimers()
+    this._rejoinGen += 1
+    this._connLost = false
+    this._joinCreds = { url, token, desired }
+
     const room = this._newRoom()
     if (!(await this._connectRoom(room, url, token))) return
 
+    await this._enterRoom(room, desired)
+  },
+
+  // Everything after a successful connect: shared by the first join and the
+  // automatic/manual rejoin so the two cannot drift.
+  async _enterRoom(room, desired) {
     // Enter the room in the state the lobby chose — NOT unconditionally
     // live. This used to be `setMicrophoneEnabled(true)`, which made joining
     // muted impossible: whatever the user had set before Join, the connect
@@ -1330,13 +1516,25 @@ const MeetingClient = {
 
   async _leave() {
     if (!this._room) return
+    // A deliberate leave must never start an automatic rejoin.
+    const wasLost = this._connLost
+    this._leaving = true
+    this._rejoinGen += 1
+    this._clearRejoinTimers()
     try {
       await this._room.disconnect()
     } catch (_) { /* already gone */ }
     this._cleanupRoom()
+    // The room was already dead (reconnecting / lost), so disconnect() emitted
+    // no Disconnected for the handler to turn into `meeting_left`.
+    if (wasLost) this.pushEvent("meeting_left", {})
   },
 
   _cleanupRoom() {
+    this._clearRejoinTimers()
+    this._connLost = false
+    this._joinCreds = null
+    if (this._connBanner) this._connBanner.dataset.state = "idle"
     // Detach any listeners we installed before nulling our ref so a
     // future _join against a fresh Room starts from a clean slate.
     this._releaseRoomListeners()
@@ -1384,6 +1582,10 @@ const MeetingClient = {
   // console.info breadcrumb is left on each transition.
   _emitState(state, room) {
     if (this.el && this.el.dataset) this.el.dataset.roomState = state
+    if (this._connBanner) {
+      this._connBanner.dataset.state =
+        state === "reconnecting" || state === "lost" ? state : "idle"
+    }
 
     const lp = room && room.localParticipant
     const detail = {
