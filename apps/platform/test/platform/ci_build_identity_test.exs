@@ -234,6 +234,33 @@ defmodule Platform.CiBuildIdentityTest do
   end
 
   describe "the build-and-push-play job" do
+    test "neither release flavour receives tags before a real application boot", %{
+      job: core,
+      play: play
+    } do
+      for {job, boot_name} <- [
+            {core, "Boot packaged core against a fresh database"},
+            {play, "Boot packaged Play against a fresh database"}
+          ] do
+        boot = named_step(job, boot_name)
+        assert boot =~ "deployment/release/boot_check.py"
+
+        for build <- build_steps(job) do
+          assert build =~ "push-by-digest=true"
+          refute build =~ ~r/^\s+tags:/m
+        end
+      end
+
+      steps = step_bodies(play)
+      boot_index = Enum.find_index(steps, &String.contains?(&1, "Boot packaged Play"))
+
+      for name <- ["Tag verified Play (main)", "Tag verified Play (feature branch)"] do
+        tag_index = Enum.find_index(steps, &String.contains?(&1, name))
+        assert boot_index < tag_index
+        refute named_step(play, name) =~ "always()"
+      end
+    end
+
     test "is push-only and runs after publish-manifest", %{play: job} do
       code = code_only(job)
       assert code =~ ~r/^    if: github\.event_name == 'push'\s*$/m
@@ -243,10 +270,10 @@ defmodule Platform.CiBuildIdentityTest do
                "(on the play image, watched by test-host's auto-update) is the last tag to move."
     end
 
-    test "has exactly two build-push-action steps (main and feature branch)",
+    test "builds one untagged Play digest before either tag step",
          %{play_steps: steps} do
-      assert length(steps) == 2,
-             "expected exactly 2 `docker/build-push-action` steps in `build-and-push-play`, " <>
+      assert length(steps) == 1,
+             "expected exactly 1 `docker/build-push-action` step in `build-and-push-play`, " <>
                "found #{length(steps)}. A new build step must carry the GIT_SHA build-arg " <>
                "too; extend this test when adding one."
     end
@@ -271,30 +298,30 @@ defmodule Platform.CiBuildIdentityTest do
 
     test "main keeps latest, the full sha and the short sha on the play image",
          %{play: job} do
-      step = named_step(job, "Build and push play (main)")
+      step = named_step(job, "Tag verified Play (main)")
       assert code_only(step) =~ ~r/^\s+if: github\.ref == 'refs\/heads\/main'\s*$/m
 
       for tag <- @ghcr_play_main_tags do
-        assert code_only(step) =~ ~r/^\s+#{Regex.escape(tag)}\s*$/m,
+        assert code_only(step) =~ ~r/^\s+-t #{Regex.escape(tag)} \\\s*$/m,
                "play main build step no longer tags `#{tag}`."
       end
 
-      assert play_tags(step, "ghcr.io/") == @ghcr_play_main_tags
-      assert tag_list(step) == @ghcr_play_main_tags
+      assert manifest_tags(step, "ghcr.io/") == @ghcr_play_main_tags
+      assert all_manifest_tags(step) == @ghcr_play_main_tags
     end
 
     test "feature branches tag the play image with the branch, sha and short sha",
          %{play: job} do
-      step = named_step(job, "Build and push play (feature branch)")
+      step = named_step(job, "Tag verified Play (feature branch)")
       assert code_only(step) =~ ~r/^\s+if: github\.ref != 'refs\/heads\/main'\s*$/m
 
       for tag <- @ghcr_play_branch_tags do
-        assert code_only(step) =~ ~r/^\s+#{Regex.escape(tag)}\s*$/m,
+        assert code_only(step) =~ ~r/^\s+-t #{Regex.escape(tag)} \\\s*$/m,
                "play feature-branch build step no longer tags `#{tag}`."
       end
 
-      assert play_tags(step, "ghcr.io/") == @ghcr_play_branch_tags
-      assert tag_list(step) == @ghcr_play_branch_tags
+      assert manifest_tags(step, "ghcr.io/") == @ghcr_play_branch_tags
+      assert all_manifest_tags(step) == @ghcr_play_branch_tags
     end
   end
 

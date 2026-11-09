@@ -415,13 +415,13 @@ class WorkflowTextTest(unittest.TestCase):
     def test_main_publishes_core_edge_and_play_edge(self):
         core = self.step("Create manifest list (main)")
         self.assertRegex(core, r"(?m)^\s+-t ghcr\.io/getburrowing/core:core-edge \\$")
-        play = self.step("Build and push play (main)")
-        self.assertRegex(play, r"(?m)^\s+ghcr\.io/getburrowing/core:play-edge$")
+        play = self.step("Tag verified Play (main)")
+        self.assertRegex(play, r"(?m)^\s+-t ghcr\.io/getburrowing/core:play-edge \\$")
 
     def test_feature_steps_publish_no_channel_tag(self):
         for name in (
             "Create manifest list (feature branch)",
-            "Build and push play (feature branch)",
+            "Tag verified Play (feature branch)",
         ):
             with self.subTest(step=name):
                 self.assertNotRegex(self.step(name), r"core:(core-|play-)?(edge|stable)\b")
