@@ -1370,14 +1370,17 @@ defmodule PlatformWeb.CalendarLive.Components do
     """
   end
 
+  # Approve / Revert live in Inbox only (task 01a1b8a5 stage 5: every
+  # briefing, consent included, stays Inbox-only; v7 excludes inline
+  # consent). The hold's details point there instead.
   defp detail_footer(%{detail: %{kind: "tentative"}} = assigns) do
     ~H"""
-    <button type="button" class={primary_btn()} phx-click="consent" phx-value-verb="approve">
-      Approve
-    </button>
-    <button type="button" class={ghost_btn()} phx-click="consent" phx-value-verb="revert">
-      Revert
-    </button>
+    <span class="text-xs text-subtle" data-role="calendar-detail-consent-note">
+      Approve or revert this hold in Inbox.
+    </span>
+    <.link navigate={~p"/inbox"} class={primary_btn()} data-role="calendar-detail-open-inbox">
+      Open Inbox
+    </.link>
     """
   end
 

@@ -312,6 +312,33 @@ defmodule PlatformWeb.CalendarConsolidationLiveTest do
       assert has_element?(view, @details, "Hidden offsite")
     end
 
+    test "a meeting the viewer cannot see does not move Calendar to its week", ctx do
+      # Far enough out that its week and month differ from today's, so a
+      # jump to the hidden meeting's date would show in the range label and
+      # leak when it is scheduled.
+      day =
+        DateTime.utc_now() |> DateTime.shift_zone!(@zone) |> DateTime.to_date() |> Date.add(75)
+
+      start = DateTime.new!(day, ~T[15:00:00], @zone)
+
+      %{meeting: meeting} =
+        linked!(ctx, %{
+          "starts_at" => DateTime.to_iso8601(start),
+          "ends_at" => DateTime.to_iso8601(DateTime.add(start, 3600))
+        })
+
+      plain = calendar(ctx.stranger) |> element("[data-role=calendar-range]") |> render()
+      linked = calendar(ctx.stranger, "?meeting=#{meeting.id}")
+
+      assert linked |> element("[data-role=calendar-range]") |> render() == plain
+      refute has_element?(linked, @details)
+
+      # Positive control: the owner, who can see it, is moved to that week.
+      owner = calendar(ctx.owner, "?meeting=#{meeting.id}")
+      refute owner |> element("[data-role=calendar-range]") |> render() == plain
+      assert has_element?(owner, @details, "Design review")
+    end
+
     test "a call that is off says so and offers no room, to the owner and the invitee", ctx do
       %{meeting: meeting} = linked!(ctx, %{"call_enabled" => "false"})
       refute meeting.call_enabled
@@ -353,6 +380,48 @@ defmodule PlatformWeb.CalendarConsolidationLiveTest do
 
       assert has_element?(view, "[data-role=meeting-join]")
       refute has_element?(view, "[data-role=meeting-call-off]")
+    end
+
+    test "its chat space says there is no call instead of offering Call", ctx do
+      %{meeting: off} = linked!(ctx, %{"call_enabled" => "false"})
+      %{meeting: on} = linked!(ctx)
+
+      # Chat draws Call only when LiveKit is configured.
+      livekit = Application.get_env(:platform, :livekit, [])
+
+      Application.put_env(:platform, :livekit,
+        api_key: "test-livekit-key",
+        api_secret: "test-livekit-secret-0123456789abcdef",
+        url: "wss://livekit.test"
+      )
+
+      on_exit(fn -> Application.put_env(:platform, :livekit, livekit) end)
+
+      # A meeting space opens in Chat only for its participants.
+      for m <- [off, on] do
+        {:ok, _} =
+          Platform.Chat.add_participant(m.chat_space_id, %{
+            participant_type: "user",
+            participant_id: ctx.owner.id,
+            joined_at: DateTime.utc_now()
+          })
+      end
+
+      {:ok, view, _} = live(conn_for(ctx.owner), "/chat/#{off.chat_space_id}")
+      assert has_element?(view, "[data-role=chat-call-off]", "No call for this event")
+      assert has_element?(view, "[data-role=space-call-off][aria-label='No call for this event']")
+      refute has_element?(view, "#chat-call")
+      refute has_element?(view, "[data-role=space-call]")
+
+      # The server stays the gate: a forged join is still refused.
+      assert render_click(view, "meeting_join", %{}) =~
+               "The organizer turned the Burrow call off for this event."
+
+      # Positive control: a call-on event's space keeps its Call buttons.
+      {:ok, view, _} = live(conn_for(ctx.owner), "/chat/#{on.chat_space_id}")
+      assert has_element?(view, "#chat-call")
+      assert has_element?(view, "[data-role=space-call]")
+      refute has_element?(view, "[data-role=chat-call-off]")
     end
   end
 

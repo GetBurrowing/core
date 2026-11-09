@@ -601,17 +601,8 @@ defmodule PlatformWeb.CalendarLive do
     {:noreply, socket |> LiveInvites.renew(meeting, params, inviter_id) |> refresh_selected()}
   end
 
-  # Approve / Revert on a tentative hold: the same AgentAccess.handle/4 the
-  # Inbox consent card calls, keyed by the hold's consent.
-  def handle_event("consent", %{"verb" => verb}, socket) when verb in ~w(approve revert) do
-    with %{kind: "tentative", id: hold_id} <- socket.assigns.selected,
-         {:ok, _} <- handle_consent(socket, hold_id, verb) do
-      flash = if verb == "approve", do: "Approved", else: "Reverted · hold removed"
-      {:noreply, socket |> put_flash(:info, flash) |> reload()}
-    else
-      _ -> {:noreply, socket |> put_flash(:error, "This hold was already handled.") |> reload()}
-    end
-  end
+  # Approve / Revert on a tentative hold are Inbox-only (task 01a1b8a5
+  # stage 5): Calendar has no "consent" event. A forged one has no clause.
 
   # ── Calendar settings: external calendars ───────────────────────────────
 
@@ -1137,32 +1128,6 @@ defmodule PlatformWeb.CalendarLive do
       can_delete: Platform.Meetings.can_delete_meeting?(meeting, user),
       audience: audience
     }
-  end
-
-  defp handle_consent(socket, hold_id, verb) do
-    owner_id = socket.assigns.current_user_record.id
-
-    consent =
-      Platform.Repo.one(
-        from(c in Platform.Calendar.Consent,
-          where: c.hold_id == ^hold_id and c.owner_id == ^owner_id,
-          order_by: [desc: c.inserted_at],
-          limit: 1
-        )
-      )
-
-    with %Platform.Calendar.Consent{} <- consent,
-         %Platform.Memory.Briefing{} = briefing <-
-           Platform.Repo.get(Platform.Memory.Briefing, consent.briefing_id) do
-      Platform.Calendar.AgentAccess.handle(
-        briefing,
-        "calendar:" <> consent.id,
-        verb,
-        socket.assigns.access_scope
-      )
-    else
-      _ -> {:error, :not_found}
-    end
   end
 
   defp after_save(socket, %{undelivered: undelivered, failed: failed}, new?) do

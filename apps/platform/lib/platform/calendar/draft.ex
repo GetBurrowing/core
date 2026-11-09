@@ -219,6 +219,29 @@ defmodule Platform.Calendar.Draft do
     end
   end
 
+  # ── retention ───────────────────────────────────────────────────────────
+
+  # How long a row outlives its link. Inside this window an expired link
+  # still answers "This draft has expired" (or "already saved") and a
+  # redelivered tool call with the same request key still finds the row,
+  # so it cannot mint a second draft. Past it the row is deleted.
+  @retention_grace_seconds 7 * 24 * 60 * 60
+
+  @doc """
+  Deletes every draft whose link expired more than the grace window ago
+  (seven days), saved or not. Returns `{:ok, deleted_count}`. Called daily by
+  `Platform.Calendar.DraftPruner`; tests call it directly with `now:`.
+  Nothing references a draft row, and the event a saved draft produced is
+  its own record, so deleting the row removes only the spent link.
+  """
+  def prune_expired(opts \\ []) do
+    now = Keyword.get(opts, :now, DateTime.utc_now())
+    cutoff = DateTime.add(now, -@retention_grace_seconds, :second)
+
+    {deleted, _} = Repo.delete_all(from(d in __MODULE__, where: d.expires_at < ^cutoff))
+    {:ok, deleted}
+  end
+
   # ── reading a draft ─────────────────────────────────────────────────────
 
   @doc """

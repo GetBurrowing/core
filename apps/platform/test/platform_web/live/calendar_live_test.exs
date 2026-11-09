@@ -904,8 +904,10 @@ defmodule PlatformWeb.CalendarLiveTest do
     assert has_element?(view, "[data-role=calendar-details] .cal-dhead b", "Agent hold")
     assert has_element?(view, ".cal-pill-acc", "Tentative · needs your OK")
     assert details_text(view) =~ "held by Higgins"
-    assert has_element?(view, ".cal-dfoot button", "Approve")
-    assert has_element?(view, ".cal-dfoot button", "Revert")
+    # Approve / Revert are Inbox-only (task 01a1b8a5 stage 5).
+    refute has_element?(view, ".cal-dfoot button", "Approve")
+    refute has_element?(view, ".cal-dfoot button", "Revert")
+    assert has_element?(view, ".cal-dfoot a[href='/inbox']", "Open Inbox")
   end
 
   defp seed_member!(name) do
@@ -1385,7 +1387,10 @@ defmodule PlatformWeb.CalendarLiveTest do
     end
   end
 
-  test "Approve in the hold's details commits it through AgentAccess", %{
+  # Every briefing, consent included, stays Inbox-only (task 01a1b8a5 stage
+  # 5): the hold's details offer no Approve / Revert, and a forged "consent"
+  # event has no clause, so it changes nothing.
+  test "a hold's details send its owner to Inbox and cannot approve or revert it", %{
     conn: conn,
     scope: scope,
     user: user
@@ -1396,28 +1401,15 @@ defmodule PlatformWeb.CalendarLiveTest do
     {:ok, view, _} = live(zoned(conn, zone), "/calendar")
 
     open_chip(view, "tentative")
-    view |> element(".cal-dfoot button", "Approve") |> render_click()
+    assert has_element?(view, "[data-role=calendar-detail-consent-note]", "in Inbox")
+    assert has_element?(view, "[data-role=calendar-detail-open-inbox][href='/inbox']")
+    refute has_element?(view, "[phx-click=consent]")
 
-    assert [%{state: "approved"}] = Repo.all(Calendar.Consent)
-    refute has_element?(view, ".cal-ev[data-kind=tentative]")
-    assert has_element?(view, ".cal-ev[data-kind=native]", "Interview · Sam Rivera")
-    # The open details follow the hold into a native event.
-    assert has_element?(view, "[data-role=calendar-details] .cal-pill-info", "Your event")
-  end
+    Process.flag(:trap_exit, true)
+    catch_exit(render_click(view, "consent", %{"verb" => "approve"}))
 
-  test "Revert in the hold's details removes the hold", %{conn: conn, scope: scope, user: user} do
-    zone = midday_zone()
-    today = local_today(zone)
-    seed_hold!(user, scope, zone, today)
-    {:ok, view, _} = live(zoned(conn, zone), "/calendar")
-
-    open_chip(view, "tentative")
-    view |> element(".cal-dfoot button", "Revert") |> render_click()
-
-    assert [%{state: "reverted"}] = Repo.all(Calendar.Consent)
-    refute has_element?(view, ".cal-ev[data-kind=tentative]")
-    refute has_element?(view, "[data-role=calendar-details]")
-    assert render(view) =~ "Reverted · hold removed"
+    assert [%{state: "pending"}] = Repo.all(Calendar.Consent)
+    assert [%{tentative: true}] = Repo.all(Platform.Calendar.Event)
   end
 
   test "the editor shows the three v4 validation messages", %{conn: conn} do

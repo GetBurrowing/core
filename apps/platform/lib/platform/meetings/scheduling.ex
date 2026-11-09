@@ -1,9 +1,9 @@
 defmodule Platform.Meetings.Scheduling do
   @moduledoc """
-  The scheduling sheet's create path, extracted from
-  `PlatformWeb.MeetingLive`'s `create_from_sheet/7` (task 01a1b8a5 stage 1)
-  so `Platform.Calendar.Authoring` commits a new call the same way the
-  Meetings sheet always has.
+  The scheduling sheet's create path, extracted from `PlatformWeb.MeetingLive`
+  (task 01a1b8a5 stage 1) so `Platform.Calendar.Authoring` commits a new call
+  the same way the retired Meetings sheet did. MeetingLive's instant room
+  (`start_instant_room/3`) is its other caller.
 
   Two steps and nothing else:
 

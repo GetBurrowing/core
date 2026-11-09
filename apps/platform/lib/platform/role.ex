@@ -277,6 +277,7 @@ defmodule Platform.Role do
     Platform.Prototypes.Purger,
     Platform.Memory.Insights.Purger,
     Platform.Habits.Pruner,
+    Platform.Calendar.DraftPruner,
     Platform.Memory.Insights.Disseminator,
     Platform.Files.CatalogEmitter,
     Platform.Tasks.DeployMergeReconciler,

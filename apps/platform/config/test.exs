@@ -261,6 +261,10 @@ config :platform, :start_insight_purger, false
 # `Platform.Habits.prune_signals/1` directly inside the DataCase sandbox.
 config :platform, :start_habits_pruner, false
 
+# Calendar DraftPruner (task 01a1b8a5 stage 5): tests call
+# `Platform.Calendar.Draft.prune_expired/1` directly inside the sandbox.
+config :platform, :start_calendar_draft_pruner, false
+
 # InsightDisseminator (task 01a13867 stage 3): tests call `run/1` directly
 # inside the DataCase sandbox instead of racing a global daily ticker.
 config :platform, :start_insight_disseminator, false

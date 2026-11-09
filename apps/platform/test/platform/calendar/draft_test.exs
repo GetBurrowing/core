@@ -334,6 +334,52 @@ defmodule Platform.Calendar.DraftTest do
     end
   end
 
+  describe "retention" do
+    test "prune_expired deletes only rows a week past their expiry, saved or not", ctx do
+      grant!(ctx)
+      {:ok, fresh, _} = create(ctx, %{"request_key" => "fresh"})
+      {:ok, recent, _} = create(ctx, %{"request_key" => "recent"})
+      {:ok, stale, _} = create(ctx, %{"request_key" => "stale"})
+      {:ok, spent, _} = create(ctx, %{"request_key" => "spent"})
+      now = DateTime.utc_now()
+
+      age = fn draft, seconds_past_expiry, extra ->
+        draft
+        |> Ecto.Changeset.change(
+          Keyword.merge([expires_at: DateTime.add(now, -seconds_past_expiry, :second)], extra)
+        )
+        |> Repo.update!()
+      end
+
+      week = 7 * 24 * 60 * 60
+      age.(recent, week - 60, [])
+      age.(stale, week + 60, [])
+      age.(spent, week + 60, saved_at: now)
+
+      assert {:ok, 2} = Draft.prune_expired(now: now)
+
+      assert Repo.get(Draft, fresh.id)
+      # Inside the grace window the owner still gets the reason, not "gone".
+      assert {:error, :expired} = Draft.fetch(ctx.owner, recent.token, now: now)
+      refute Repo.get(Draft, stale.id)
+      refute Repo.get(Draft, spent.id)
+      assert {:ok, 0} = Draft.prune_expired(now: now)
+    end
+
+    test "a redelivered call inside the grace window still finds the original row", ctx do
+      grant!(ctx)
+      {:ok, draft, :created} = create(ctx, %{"request_key" => "redeliver"})
+
+      draft
+      |> Ecto.Changeset.change(expires_at: DateTime.add(DateTime.utc_now(), -3600, :second))
+      |> Repo.update!()
+
+      assert {:ok, 0} = Draft.prune_expired()
+      assert {:ok, %{id: id}, :existing} = create(ctx, %{"request_key" => "redeliver"})
+      assert id == draft.id
+    end
+  end
+
   describe "the one explicit save" do
     defp attrs_for(draft, scope) do
       base = Draft.event_draft(draft, scope)
