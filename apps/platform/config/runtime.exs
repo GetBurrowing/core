@@ -322,9 +322,19 @@ if config_env() != :test do
         nil
     end
 
-  # Only enable when behind a trusted reverse proxy (Traefik, nginx, etc.).
-  # See PlatformWeb.Plugs.RewriteRemoteIp for security notes.
+  # TRUST_PROXY_HEADERS turns on client-IP resolution from forwarding headers.
+  # Headers are believed only from a TRUSTED_PROXIES peer (CIDR list; unset
+  # means loopback + RFC 1918 + fc00::/7, an explicit value replaces that), and
+  # the client is the rightmost X-Forwarded-For hop past those proxies, never
+  # the client-supplied leftmost one. A bad TRUSTED_PROXIES entry raises here.
+  # See PlatformWeb.Plugs.RewriteRemoteIp (task 01a1b2df).
   config :platform, :trust_proxy_headers, System.get_env("TRUST_PROXY_HEADERS") in ["true", "1"]
+
+  config :platform,
+         :trusted_proxies,
+         PlatformWeb.Plugs.RewriteRemoteIp.parse_trusted_proxies(
+           System.get_env("TRUSTED_PROXIES")
+         )
 
   config :platform, :oidc,
     client_id: System.get_env("OIDC_CLIENT_ID"),

@@ -22,6 +22,7 @@ defmodule Platform.FeedbackBrokerFixtures do
     :feedback_broker_server,
     :feedback_rate_limits,
     :trust_proxy_headers,
+    :trusted_proxies,
     GithubPublisher
   ]
 

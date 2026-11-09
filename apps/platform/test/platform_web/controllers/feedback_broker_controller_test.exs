@@ -171,20 +171,50 @@ defmodule PlatformWeb.FeedbackBrokerControllerTest do
       assert length(github_issues()) == 2
     end
 
-    test "under TRUST_PROXY_HEADERS two forwarded IPs get separate buckets" do
+    test "under TRUST_PROXY_HEADERS two real clients behind the proxy get separate buckets" do
       Application.put_env(:platform, :trust_proxy_headers, true)
 
-      send_from = fn ip, title ->
+      send_from = fn xff, title ->
         build_conn()
-        |> put_req_header("x-forwarded-for", ip)
+        |> put_req_header("x-forwarded-for", xff)
         |> post_json(wire(submission(%{"title" => title})))
       end
 
-      for n <- 1..2, do: assert(send_from.("203.0.113.10", "a#{n}").status == 201)
-      assert send_from.("203.0.113.10", "a3").status == 429
+      # The default test peer is 127.0.0.1 (a trusted proxy). The forged
+      # leading entry is shared, so merged buckets would show up as a 429.
+      for n <- 1..2, do: assert(send_from.("6.6.6.6, 203.0.113.10", "a#{n}").status == 201)
+      assert send_from.("6.6.6.6, 203.0.113.10", "a3").status == 429
 
-      for n <- 1..2, do: assert(send_from.("203.0.113.20", "b#{n}").status == 201)
-      assert send_from.("203.0.113.20", "b3").status == 429
+      for n <- 1..2, do: assert(send_from.("6.6.6.6, 203.0.113.20", "b#{n}").status == 201)
+      assert send_from.("6.6.6.6, 203.0.113.20", "b3").status == 429
+    end
+
+    test "a forged leading XFF cannot buy a fresh bucket" do
+      Application.put_env(:platform, :trust_proxy_headers, true)
+
+      statuses =
+        for {forged, n} <- Enum.with_index(["6.6.6.1", "6.6.6.2", "6.6.6.3"], 1) do
+          build_conn()
+          |> put_req_header("x-forwarded-for", "#{forged}, 203.0.113.10")
+          |> post_json(wire(submission(%{"title" => "f#{n}"})))
+          |> Map.fetch!(:status)
+        end
+
+      assert statuses == [201, 201, 429]
+    end
+
+    test "with TRUST_PROXY_HEADERS off, forwarded IPs share the peer bucket" do
+      Application.put_env(:platform, :trust_proxy_headers, false)
+
+      statuses =
+        for {xff, n} <- Enum.with_index(["203.0.113.10", "203.0.113.20", "203.0.113.30"], 1) do
+          build_conn()
+          |> put_req_header("x-forwarded-for", xff)
+          |> post_json(wire(submission(%{"title" => "o#{n}"})))
+          |> Map.fetch!(:status)
+        end
+
+      assert statuses == [201, 201, 429]
     end
   end
 
