@@ -894,7 +894,7 @@ def _ci_main_build_steps():
     Since task 01a0d6ab the `core` flavour is built per arch by digest and
     tagged by publish-manifest's `Create manifest list (main)` step
     (`docker buildx imagetools create -t ...`); the `play` flavour is still
-    tagged by its `Build and push play (main)` step.
+    tagged by its `Tag verified Play (main)` step.
     """
     with open(CI_WORKFLOW, encoding="utf-8") as handle:
         text = handle.read()
@@ -902,7 +902,7 @@ def _ci_main_build_steps():
     return [
         s
         for s in steps
-        if re.match(r"      - name: (Build and push \S+|Create manifest list) \(main\)", s)
+        if re.match(r"      - name: (Tag verified Play|Create manifest list) \(main\)", s)
     ]
 
 
@@ -1031,7 +1031,7 @@ class ModuleFlavourTest(PositiveControlMixin, unittest.TestCase):
         # step's whole GHCR tag set as raw literals, mirroring
         # ci_build_identity_test.exs's @ghcr_play_main_tags (task 01a14afe
         # stage 4: deleting `:latest` used to leave this test green).
-        play = [s for s in steps if s.startswith("      - name: Build and push play (main)")]
+        play = [s for s in steps if s.startswith("      - name: Tag verified Play (main)")]
         self.assertEqual(len(play), 1, "expected exactly one play main build step")
         self.assertIn("ghcr.io/getburrowing/core:latest", _ci_publish_refs(play[0]))
         self.assertEqual(
