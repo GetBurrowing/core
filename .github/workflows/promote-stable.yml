@@ -73,6 +73,8 @@ jobs:
           STABLE_CANARY_HEALTH_URL: ${{ vars.STABLE_CANARY_HEALTH_URL }}
           STABLE_SOAK_HOURS: ${{ vars.STABLE_SOAK_HOURS }}
           STABLE_HOLD: ${{ vars.STABLE_HOLD }}
+          STABLE_BATCH_ENABLED: ${{ vars.STABLE_BATCH_ENABLED }}
+          STABLE_SOAK_MODE: ${{ vars.STABLE_SOAK_MODE }}
           PROMOTE_SHA: ${{ inputs.sha }}
           PROMOTE_FORCE: ${{ inputs.force }}
           GIT_AUTHOR_NAME: promote-stable

@@ -659,6 +659,12 @@ class ChannelTest(UpdaterCase):
         self.assertEqual(self.run_updater()["last_result"], "ok")
         self.assertIn("/v2/acme/core/manifests/play-edge", self.registry.heads())
 
+    def test_vendor_candidate_channel_pulls_the_held_play_candidate(self):
+        self.write_env(env_text(channel="candidate", flavour="play"))
+        self.registry.tags = {"play-candidate": D_NEW}
+        self.assertEqual(self.run_updater()["last_result"], "ok")
+        self.assertIn("/v2/acme/core/manifests/play-candidate", self.registry.heads())
+
     def test_bad_digest_is_skipped(self):
         self.write(self.p(f"{upd.STATE}/bad_digests"), json.dumps([D_NEW]))
         self.assertEqual(self.run_updater()["last_result"], "skipped_bad_digest")

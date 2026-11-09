@@ -373,6 +373,36 @@ class PromotionTest(PromoteHarness):
         self.assertEqual(self.state["tags"], {})
 
 
+class BatchPromotionTest(PromoteHarness):
+    def test_batch_never_promotes_a_non_candidate_even_with_enough_history(self):
+        self.state["remote"].update(soak_refs(S, range(1, 24)))
+        self.state["remote"]["refs/release-candidate/current"] = T
+        self.assertEqual(self.run_promote(STABLE_BATCH_ENABLED="true"), 0)
+        self.assertEqual(self.creates(), [])
+
+    def test_batch_without_a_cut_never_promotes_historical_evidence(self):
+        self.state["remote"].update(soak_refs(S, range(1, 24)))
+        self.assertEqual(self.run_promote(STABLE_BATCH_ENABLED="true"), 0)
+        self.assertEqual(self.creates(), [])
+
+    def test_both_policy_promotes_only_the_current_candidate(self):
+        self.state["remote"].update(soak_refs(S, range(1, 24)))
+        self.state["remote"]["refs/release-candidate/current"] = S
+        self.assertEqual(self.run_promote(STABLE_BATCH_ENABLED="true"), 0)
+        self.assertTrue(self.creates())
+
+    def test_canary_policy_promotes_with_its_own_hours_while_prod_differs(self):
+        self.state["health"]["prod-health"]["body"]["commit"] = T
+        self.state["remote"].update({
+            k.replace("refs/soak/", "refs/soak-canary/"): v
+            for k, v in soak_refs(S, range(1, 24)).items()
+        })
+        self.state["remote"]["refs/release-candidate/current"] = S
+        self.assertEqual(self.run_promote(STABLE_BATCH_ENABLED="true", STABLE_SOAK_MODE="canary"), 0)
+        self.assertTrue(self.creates())
+        self.assertEqual(len(self.calls("curl")), 1)
+
+
 class PruneTest(PromoteHarness):
     def test_refs_older_than_14_days_are_pruned(self):
         old_hour = (NOW - dt.timedelta(days=15)).strftime("%Y%m%dT%HZ")
