@@ -1507,6 +1507,11 @@ jobs:
           # arch AND the vendored QuickJS wasm runs a script (suite_run).
           echo "$out" | grep -q '^code_mode={:ok, 2}$' || { echo "::error::wasmex NIF or code_mode wasm did not run"; exit 1; }
 
+      - name: Boot packaged core against a fresh database
+        env:
+          IMAGE: ghcr.io/getburrowing/core@${{ steps.build.outputs.digest }}
+        run: python3 deployment/release/boot_check.py "$IMAGE" "$GITHUB_SHA"
+
   publish-manifest:
     name: Publish multi-arch manifest
     if: github.event_name == 'push'
@@ -1660,56 +1665,54 @@ jobs:
         with:
           driver-opts: image=ghcr.io/getburrowing/buildkit:buildx-stable-1@sha256:cec9f139f45e93c5c69c60f8b07cfad9f43f4ef6b6a6cd917527fea5ff2e3dea
 
-      - name: Build and push play (main)
-        if: github.ref == 'refs/heads/main'
+      - name: Build play by digest (no public tags yet)
+        id: play-build
         uses: docker/build-push-action@v7
         with:
           context: .
           file: apps/burrow_release/Dockerfile
-          push: true
           cache-from: type=gha,scope=play
           cache-to: type=gha,mode=max,scope=play
-          # Same build identity as the core flavour (task 01a089d5).
           build-args: |
             GIT_SHA=${{ github.sha }}
-          # Task 01a1449b: optional BuildKit secret for the ffmpeg stage, which
-          # fetches the static tarball from the private vendor-ffmpeg-7.0.2
-          # release (falls back to johnvansickle without it).
           secrets: |
             gh_token=${{ secrets.GITHUB_TOKEN }}
-          tags: |
-            ghcr.io/getburrowing/core:play
-            ghcr.io/getburrowing/core:play-edge
-            ghcr.io/getburrowing/core:play-${{ github.sha }}
-            ghcr.io/getburrowing/core:play-${{ steps.vars.outputs.short_sha }}
-            ghcr.io/getburrowing/core:latest
-            ghcr.io/getburrowing/core:${{ github.sha }}
-            ghcr.io/getburrowing/core:${{ steps.vars.outputs.short_sha }}
+          outputs: type=image,"name=ghcr.io/getburrowing/core",push-by-digest=true,name-canonical=true,push=true
 
-      - name: Build and push play (feature branch)
+      - name: Boot packaged Play against a fresh database
+        env:
+          IMAGE: ghcr.io/getburrowing/core@${{ steps.play-build.outputs.digest }}
+        run: python3 deployment/release/boot_check.py "$IMAGE" "$GITHUB_SHA"
+
+      - name: Tag verified Play (main)
+        if: github.ref == 'refs/heads/main'
+        env:
+          IMAGE: ghcr.io/getburrowing/core@${{ steps.play-build.outputs.digest }}
+        run: |
+          docker buildx imagetools create \
+            -t ghcr.io/getburrowing/core:play \
+            -t ghcr.io/getburrowing/core:play-edge \
+            -t ghcr.io/getburrowing/core:play-${{ github.sha }} \
+            -t ghcr.io/getburrowing/core:play-${{ steps.vars.outputs.short_sha }} \
+            -t ghcr.io/getburrowing/core:latest \
+            -t ghcr.io/getburrowing/core:${{ github.sha }} \
+            -t ghcr.io/getburrowing/core:${{ steps.vars.outputs.short_sha }} \
+            "$IMAGE"
+
+      - name: Tag verified Play (feature branch)
         if: github.ref != 'refs/heads/main'
-        uses: docker/build-push-action@v7
-        with:
-          context: .
-          file: apps/burrow_release/Dockerfile
-          push: true
-          cache-from: type=gha,scope=play
-          cache-to: type=gha,mode=max,scope=play
-          # Same build identity as the core flavour (task 01a089d5).
-          build-args: |
-            GIT_SHA=${{ github.sha }}
-          # Task 01a1449b: optional BuildKit secret for the ffmpeg stage, which
-          # fetches the static tarball from the private vendor-ffmpeg-7.0.2
-          # release (falls back to johnvansickle without it).
-          secrets: |
-            gh_token=${{ secrets.GITHUB_TOKEN }}
-          tags: |
-            ghcr.io/getburrowing/core:play-${{ steps.vars.outputs.branch_tag }}
-            ghcr.io/getburrowing/core:play-${{ github.sha }}
-            ghcr.io/getburrowing/core:play-${{ steps.vars.outputs.short_sha }}
-            ghcr.io/getburrowing/core:${{ steps.vars.outputs.branch_tag }}
-            ghcr.io/getburrowing/core:${{ github.sha }}
-            ghcr.io/getburrowing/core:${{ steps.vars.outputs.short_sha }}
+        env:
+          IMAGE: ghcr.io/getburrowing/core@${{ steps.play-build.outputs.digest }}
+        run: |
+          docker buildx imagetools create \
+            -t ghcr.io/getburrowing/core:play-${{ steps.vars.outputs.branch_tag }} \
+            -t ghcr.io/getburrowing/core:play-${{ github.sha }} \
+            -t ghcr.io/getburrowing/core:play-${{ steps.vars.outputs.short_sha }} \
+            -t ghcr.io/getburrowing/core:${{ steps.vars.outputs.branch_tag }} \
+            -t ghcr.io/getburrowing/core:${{ github.sha }} \
+            -t ghcr.io/getburrowing/core:${{ steps.vars.outputs.short_sha }} \
+            "$IMAGE"
+
 
   build-and-push-agent-host:
     # Native agents' host image, `contained` profile (task 01a10322 stage 3):
@@ -1864,3 +1867,9 @@ jobs:
           PYTHONPATH: deployment/installer
           PYTHONDONTWRITEBYTECODE: "1"
         run: python3 -m unittest discover -s deployment/installer/tests -v
+
+      - name: Test release boot-check failure handling
+        env:
+          PYTHONPATH: deployment/release
+          PYTHONDONTWRITEBYTECODE: "1"
+        run: python3 -m unittest discover -s deployment/release -v
