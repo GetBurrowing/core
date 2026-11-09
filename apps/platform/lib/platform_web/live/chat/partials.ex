@@ -145,7 +145,7 @@ defmodule PlatformWeb.ChatLive.Partials do
     ~H"""
     <div
       :if={@push_permission == "prompt" and not @dismissed}
-      class="hidden lg:flex items-center justify-between gap-3 border-b border-info/20 bg-info/10 px-4 py-2"
+      class="hidden lg:flex shrink-0 items-center justify-between gap-3 border-b border-info/20 bg-info/10 px-4 py-2"
       role="status"
       data-role="chat-notification-banner"
     >

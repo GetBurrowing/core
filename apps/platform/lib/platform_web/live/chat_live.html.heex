@@ -56,274 +56,270 @@
      a meeting's canvas tile) runs disconnected instead of crashing it. --%>
 <span hidden data-canvas-rooms></span>
 
-<%!-- An always-rendered, box-less slot (rung 10 stage 5): whatever comes
+<div id="chat-surface" class="flex h-full min-h-0 flex-col overflow-hidden">
+  <%!-- An always-rendered, box-less slot (rung 10 stage 5): whatever comes
      and goes inside it is never a new sibling ahead of a composer field's
      ancestors. LiveView's DOM patch re-appends every sibling AFTER an
      inserted node, and a moved contenteditable loses focus (it is not a
      textual input, so LiveView does not restore it). See
      `Partials.Composer.typing_indicator/1`. --%>
-<div id="chat-notification-banner-slot" class="contents">
-  <.notification_banner
-    :if={!@embedded}
-    push_permission={@push_permission}
-    dismissed={@notification_banner_dismissed}
-  />
-</div>
+  <div id="chat-notification-banner-slot" class="contents">
+    <.notification_banner
+      :if={!@embedded}
+      push_permission={@push_permission}
+      dismissed={@notification_banner_dismissed}
+    />
+  </div>
 
-<%!-- Chat root must claim the full height of <main> AND set min-h-0 so its
-     descendant flex columns (chat-drop-zone, #message-list) can correctly
-     shrink-to-fit. Without min-h-0, the default `min-height: auto` on flex
-     items lets long message lists push past the viewport — on iOS Safari /
-     PWA standalone, this manifests as the bottom-tab nav being pushed
-     below the visible area while messages scroll the document itself.
-     PR #333 rooted the shell chrome but the chat surface was still
-     blowing the layout from the inside. --%>
-<div class="flex h-full min-h-0 overflow-hidden">
-  <%!-- External mobile channel switcher (task 019f9257-a83e) — markup lives in
+  <%!-- The banner and panes share one bounded column. Only the panes flex,
+     so a first-sign-in notification prompt cannot add height below main
+     and clip the composer. Keep the banner slot mounted for focus stability. --%>
+  <div id="chat-panes" class="flex flex-1 min-h-0 overflow-hidden">
+    <%!-- External mobile channel switcher (task 019f9257-a83e) — markup lives in
        `ChatLive.Partials.ExternalRail.external_mobile_switcher/1` (task
        01a0312e stage 2). The `@external? and !@embedded and ...` gate moved
        INSIDE the component with it. --%>
-  <.external_mobile_switcher
-    external?={@external?}
-    embedded={@embedded}
-    external_user={@external_user}
-    channels={@channels}
-    dm_conversations={@dm_conversations}
-    active_space={@active_space}
-    unread_counts={@unread_counts}
-    user_id={@user_id}
-    drawer_query={@drawer_query}
-    sidebar_sections={@sidebar_sections}
-    mask_names?={@mask_names?}
-    revealed_section_ids={@revealed_section_ids}
-  />
+    <.external_mobile_switcher
+      external?={@external?}
+      embedded={@embedded}
+      external_user={@external_user}
+      channels={@channels}
+      dm_conversations={@dm_conversations}
+      active_space={@active_space}
+      unread_counts={@unread_counts}
+      user_id={@user_id}
+      drawer_query={@drawer_query}
+      sidebar_sections={@sidebar_sections}
+      mask_names?={@mask_names?}
+      revealed_section_ids={@revealed_section_ids}
+    />
 
-  <%!-- The Chat list (task 01a1557a-8562 stage 2): the phone Chat tab at
+    <%!-- The Chat list (task 01a1557a-8562 stage 2): the phone Chat tab at
        /chat, and since Burrow redesign 22 stage 2 the desktop list pane
        beside the conversation on /chat and /chat/:slug, for internal and
        external users alike (it replaced the desktop channel rail and the
        external rail). Markup, gate and widths live in
        `ChatLive.Partials.ChatList.chat_list/1`. --%>
-  <%!-- `:if` short-circuits attribute evaluation, which is what keeps the
+    <%!-- `:if` short-circuits attribute evaluation, which is what keeps the
        embedded surfaces alive: `ChatLive.Embedded` has no `@push_permission`
        (ShellLive's on_mount seeds it on routed mounts only). --%>
-  <.chat_list
-    :if={!@embedded}
-    live_action={@live_action}
-    embedded={@embedded}
-    external?={@external?}
-    mask_names?={@mask_names?}
-    revealed_section_ids={@revealed_section_ids}
-    sidebar_sections={@sidebar_sections}
-    channel_sections={@channel_sections}
-    pinned_task_spaces={@pinned_task_spaces}
-    agents_block={@agents_block}
-    channels={@channels}
-    dm_conversations={@dm_conversations}
-    archived_channels={@archived_channels}
-    archived_open={@archived_open}
-    restricted_channel_ids={@restricted_channel_ids}
-    unread_counts={@unread_counts}
-    list_excerpts={@list_excerpts}
-    list_identities={@list_identities}
-    list_private_ids={@list_private_ids}
-    list_collapsed={@list_collapsed}
-    list_order_hold={@list_order_hold}
-    float_new_messages?={@float_new_messages?}
-    list_floated={@list_floated}
-    push_permission={@push_permission}
-    notification_banner_dismissed={@notification_banner_dismissed}
-    list_sheet={@list_sheet}
-    list_search_query={@list_search_query}
-    list_search_results={@list_search_results}
-    active_space={@active_space}
-    external_user={@external_user}
-    hidden_drawer_open={@hidden_drawer_open}
-    resolved_mode={PlatformWeb.Components.Sidebar.resolved_mode(assigns[:current_user_record])}
-    pinned_announcement={@pinned_announcement}
-    pinned_undo={@pinned_undo}
-  />
+    <.chat_list
+      :if={!@embedded}
+      live_action={@live_action}
+      embedded={@embedded}
+      external?={@external?}
+      mask_names?={@mask_names?}
+      revealed_section_ids={@revealed_section_ids}
+      sidebar_sections={@sidebar_sections}
+      channel_sections={@channel_sections}
+      pinned_task_spaces={@pinned_task_spaces}
+      agents_block={@agents_block}
+      channels={@channels}
+      dm_conversations={@dm_conversations}
+      archived_channels={@archived_channels}
+      archived_open={@archived_open}
+      restricted_channel_ids={@restricted_channel_ids}
+      unread_counts={@unread_counts}
+      list_excerpts={@list_excerpts}
+      list_identities={@list_identities}
+      list_private_ids={@list_private_ids}
+      list_collapsed={@list_collapsed}
+      list_order_hold={@list_order_hold}
+      float_new_messages?={@float_new_messages?}
+      list_floated={@list_floated}
+      push_permission={@push_permission}
+      notification_banner_dismissed={@notification_banner_dismissed}
+      list_sheet={@list_sheet}
+      list_search_query={@list_search_query}
+      list_search_results={@list_search_results}
+      active_space={@active_space}
+      external_user={@external_user}
+      hidden_drawer_open={@hidden_drawer_open}
+      resolved_mode={PlatformWeb.Components.Sidebar.resolved_mode(assigns[:current_user_record])}
+      pinned_announcement={@pinned_announcement}
+      pinned_undo={@pinned_undo}
+    />
 
-  <%!-- Desktop still lands in a channel from /chat: this reports which side
+    <%!-- Desktop still lands in a channel from /chat: this reports which side
        of `lg` the viewport is on, and `handle_event("chat_viewport", ...)`
        patches into the first channel when it is not below it. --%>
-  <div
-    :if={!@embedded and @live_action == :index}
-    id="chat-viewport-breakpoint"
-    phx-hook="ViewportBreakpoint"
-    data-breakpoint="1024"
-    data-event="chat_viewport"
-    class="hidden"
-  >
-  </div>
+    <div
+      :if={!@embedded and @live_action == :index}
+      id="chat-viewport-breakpoint"
+      phx-hook="ViewportBreakpoint"
+      data-breakpoint="1024"
+      data-event="chat_viewport"
+      class="hidden"
+    >
+    </div>
 
-  <%!-- At /chat a phone sees only the list: the conversation column is
+    <%!-- At /chat a phone sees only the list: the conversation column is
        `max-lg:hidden` there (the stage text's `hidden lg:flex`, written as
        one variant so the column's own `flex` keeps its literal class string
        on every other route; chat_live_test.exs pins that string). Desktop is
        unchanged. --%>
-  <div class={
-    if(!@embedded and !@external? and @live_action == :index,
-      do: "flex flex-1 overflow-hidden min-w-0 min-h-0 max-lg:hidden",
-      else: "flex flex-1 overflow-hidden min-w-0 min-h-0"
-    )
-  }>
-    <div
-      id="chat-drop-zone"
-      phx-hook="DragDropUpload"
-      class="flex flex-1 flex-col overflow-hidden min-w-0 min-h-0"
-    >
-      <.space_header
-        active_space={@active_space}
-        embedded={@embedded}
-        external?={@external?}
-        space_participants={@space_participants}
-        user_id={@user_id}
-        space_sheet={@space_sheet}
-        agent_status={@agent_status}
-        mask_names?={@mask_names?}
-        revealed_section_ids={@revealed_section_ids}
-        sidebar_sections={@sidebar_sections}
-        meetings_enabled={@meetings_enabled}
-        in_meeting={@in_meeting}
-        goal_panel={@goal_panel}
-        details_panel={@details_panel}
-      />
-
+    <div class={
+      if(!@embedded and !@external? and @live_action == :index,
+        do: "flex flex-1 overflow-hidden min-w-0 min-h-0 max-lg:hidden",
+        else: "flex flex-1 overflow-hidden min-w-0 min-h-0"
+      )
+    }>
       <div
-        :if={@chat_execution_activity}
-        id="chat-execution-activity"
-        class="border-b border-edge bg-base-100 px-4 py-2 overflow-x-auto"
+        id="chat-drop-zone"
+        phx-hook="DragDropUpload"
+        class="flex flex-1 flex-col overflow-hidden min-w-0 min-h-0"
       >
-        <PlatformWeb.ExecutionStatus.line status={@chat_execution_activity} />
-      </div>
+        <.space_header
+          active_space={@active_space}
+          embedded={@embedded}
+          external?={@external?}
+          space_participants={@space_participants}
+          user_id={@user_id}
+          space_sheet={@space_sheet}
+          agent_status={@agent_status}
+          mask_names?={@mask_names?}
+          revealed_section_ids={@revealed_section_ids}
+          sidebar_sections={@sidebar_sections}
+          meetings_enabled={@meetings_enabled}
+          in_meeting={@in_meeting}
+          goal_panel={@goal_panel}
+          details_panel={@details_panel}
+        />
 
-      <%!-- The canvases drawer opens and closes inside one always-rendered,
+        <div
+          :if={@chat_execution_activity}
+          id="chat-execution-activity"
+          class="border-b border-edge bg-base-100 px-4 py-2 overflow-x-auto"
+        >
+          <PlatformWeb.ExecutionStatus.line status={@chat_execution_activity} />
+        </div>
+
+        <%!-- The canvases drawer opens and closes inside one always-rendered,
            box-less slot, so it is never a new sibling ahead of #chat-dock
            (rung 10 stage 5; see the slot note at the top of this file). The
            desktop search and pins drawers were deleted in Burrow redesign 22
            stage 4: the details panel's Search and Pinned pages replace them. --%>
-      <div id="chat-drawers-slot" class="contents">
-        <.canvases_drawer
-          active_canvas={@active_canvas}
-          current_participant={@current_participant}
-          new_canvas_form={@new_canvas_form}
-          show_canvases={@show_canvases}
-          canvas_sort={@canvas_sort}
-          canvas_search_query={@canvas_search_query}
-          canvas_unindexed_count={@canvas_unindexed_count}
-          canvas_groups={@canvas_groups}
-          canvas_pinned_groups={@canvas_pinned_groups}
-          canvas_parent_titles={@canvas_parent_titles}
-          canvas_expanded_keys={@canvas_expanded_keys}
-          canvas_explorer_collapsed={@canvas_explorer_collapsed}
-          canvas_archive_count={@canvas_archive_count}
-          canvas_search_focus={@canvas_search_focus}
-          prototype_upload={@uploads[PrototypeUpload.upload_name()]}
-          can_publish_prototype?={@can_publish_prototype?}
-        />
-      </div>
+        <div id="chat-drawers-slot" class="contents">
+          <.canvases_drawer
+            active_canvas={@active_canvas}
+            current_participant={@current_participant}
+            new_canvas_form={@new_canvas_form}
+            show_canvases={@show_canvases}
+            canvas_sort={@canvas_sort}
+            canvas_search_query={@canvas_search_query}
+            canvas_unindexed_count={@canvas_unindexed_count}
+            canvas_groups={@canvas_groups}
+            canvas_pinned_groups={@canvas_pinned_groups}
+            canvas_parent_titles={@canvas_parent_titles}
+            canvas_expanded_keys={@canvas_expanded_keys}
+            canvas_explorer_collapsed={@canvas_explorer_collapsed}
+            canvas_archive_count={@canvas_archive_count}
+            canvas_search_focus={@canvas_search_focus}
+            prototype_upload={@uploads[PrototypeUpload.upload_name()]}
+            can_publish_prototype?={@can_publish_prototype?}
+          />
+        </div>
 
-      <%!-- The phone space sheet (task 01a1557a-8a6d, rung 7), opened by the
+        <%!-- The phone space sheet (task 01a1557a-8a6d, rung 7), opened by the
            header's title button. `lg:hidden`; `SpaceSheetHooks` owns it. --%>
-      <.space_sheet
-        :if={@active_space && !@embedded}
-        space_sheet={@space_sheet}
-        active_space={@active_space}
-        space_participants={@space_participants}
-        user_id={@user_id}
-        mask_names?={@mask_names?}
-        revealed_section_ids={@revealed_section_ids}
-        sidebar_sections={@sidebar_sections}
-        external?={@external?}
-        canvases={@canvases}
-        show_canvases={@show_canvases}
-        meetings_enabled={@meetings_enabled}
-        in_meeting={@in_meeting}
-        agent_presence={@agent_presence}
-        has_agent_participant={@has_agent_participant}
-        agent_attention={@agent_attention}
-        search_query={@search_query}
-        search_results={@search_results}
-        participants_map={@participants_map}
-        pins={@pins}
-        space_sheet_pins={@space_sheet_pins}
-        space_sheet_threads={@space_sheet_threads}
-        goal_panel={@goal_panel}
-        goal_edit={@goal_edit}
-        can_edit_goal?={@can_edit_goal?}
-        goal_invite?={@goal_invite?}
-        goal_scope_options={@goal_scope_options}
-        goal_scope_error={@goal_scope_error}
-        goal_cadence_form={@goal_cadence_form}
-        goal_time_zone={@goal_time_zone}
-        active_space_scope={@active_space_scope}
-        active_space_org={@active_space_org}
-        scope_filter={@scope_filter}
-        space_sheet_files={@space_sheet_files}
-        space_sheet_links={@space_sheet_links}
-      />
+        <.space_sheet
+          :if={@active_space && !@embedded}
+          space_sheet={@space_sheet}
+          active_space={@active_space}
+          space_participants={@space_participants}
+          user_id={@user_id}
+          mask_names?={@mask_names?}
+          revealed_section_ids={@revealed_section_ids}
+          sidebar_sections={@sidebar_sections}
+          external?={@external?}
+          canvases={@canvases}
+          show_canvases={@show_canvases}
+          meetings_enabled={@meetings_enabled}
+          in_meeting={@in_meeting}
+          agent_presence={@agent_presence}
+          has_agent_participant={@has_agent_participant}
+          agent_attention={@agent_attention}
+          search_query={@search_query}
+          search_results={@search_results}
+          participants_map={@participants_map}
+          pins={@pins}
+          space_sheet_pins={@space_sheet_pins}
+          space_sheet_threads={@space_sheet_threads}
+          goal_panel={@goal_panel}
+          goal_edit={@goal_edit}
+          can_edit_goal?={@can_edit_goal?}
+          goal_invite?={@goal_invite?}
+          goal_scope_options={@goal_scope_options}
+          goal_scope_error={@goal_scope_error}
+          goal_cadence_form={@goal_cadence_form}
+          goal_time_zone={@goal_time_zone}
+          active_space_scope={@active_space_scope}
+          active_space_org={@active_space_org}
+          scope_filter={@scope_filter}
+          space_sheet_files={@space_sheet_files}
+          space_sheet_links={@space_sheet_links}
+        />
 
-      <%!-- The phone Agents sheet (task 01a1557a-8f80 stage 2), opened from
+        <%!-- The phone Agents sheet (task 01a1557a-8f80 stage 2), opened from
            the space sheet's Agents row; the desktop popover renders under the
            header's `agents-open` button. `AgentsSheetHooks` owns both. --%>
-      <PlatformWeb.ChatLive.Partials.AgentsSheet.agents_sheet
-        :if={@active_space && !@embedded}
-        surface={:sheet}
-        open={@agents_sheet_open}
-        state={@agent_attention}
-        active_space={@active_space}
-      />
+        <PlatformWeb.ChatLive.Partials.AgentsSheet.agents_sheet
+          :if={@active_space && !@embedded}
+          surface={:sheet}
+          open={@agents_sheet_open}
+          state={@agent_attention}
+          active_space={@active_space}
+        />
 
-      <div id="inline-focus-listener" phx-hook="InlineFocus" class="hidden"></div>
-      <.archived_banner
-        active_space={@active_space}
-        can_unarchive?={@can_unarchive?}
-        can_cancel_deletion?={@can_cancel_deletion?}
-      />
+        <div id="inline-focus-listener" phx-hook="InlineFocus" class="hidden"></div>
+        <.archived_banner
+          active_space={@active_space}
+          can_unarchive?={@can_unarchive?}
+          can_cancel_deletion?={@can_cancel_deletion?}
+        />
 
-      <.message_scroller
-        streams={@streams}
-        has_more_older={@has_more_older}
-        loading_older={@loading_older}
-        newest_evicted?={@newest_evicted?}
-        loading_newer={@loading_newer}
-        anchor_message_id={@anchor_message_id}
-        active_space={@active_space}
-        current_participant={@current_participant}
-        mask_names?={@mask_names?}
-        revealed_section_ids={@revealed_section_ids}
-        sidebar_sections={@sidebar_sections}
-        agent_participant_ids={@agent_participant_ids}
-        agent_slots_map={@agent_slots_map}
-        participants_map={@participants_map}
-        quick_emojis={@quick_emojis}
-        pinned_message_ids={@pinned_message_ids}
-        highlighted_message_id={
-          PlatformWeb.ChatLive.MessageContextHooks.row_highlight(
-            @highlighted_message_id,
-            @quote_jump_message_id
-          )
-        }
-        canvases_by_id={@canvases_by_id}
-        attachments_map={@attachments_map}
-        thread_previews={@thread_previews}
-        expanded_threads={@expanded_threads}
-        inline_thread_messages={@inline_thread_messages}
-        mention_suggestions={@mention_suggestions}
-        mention_source={@mention_source}
-        mention_query={@mention_query}
-        editing_message_id={@editing_message_id}
-        rendered_message_ids={@rendered_message_ids}
-        refused_summons={@refused_summons}
-        mounted_inline_canvas_ids={@mounted_inline_canvas_ids}
-        load_older_failed?={@load_older_failed?}
-        embedded={@embedded}
-        viewer_user_id={@user_id}
-        thread_activity_overflow={@thread_activity_overflow}
-      />
+        <.message_scroller
+          streams={@streams}
+          has_more_older={@has_more_older}
+          loading_older={@loading_older}
+          newest_evicted?={@newest_evicted?}
+          loading_newer={@loading_newer}
+          anchor_message_id={@anchor_message_id}
+          active_space={@active_space}
+          current_participant={@current_participant}
+          mask_names?={@mask_names?}
+          revealed_section_ids={@revealed_section_ids}
+          sidebar_sections={@sidebar_sections}
+          agent_participant_ids={@agent_participant_ids}
+          agent_slots_map={@agent_slots_map}
+          participants_map={@participants_map}
+          quick_emojis={@quick_emojis}
+          pinned_message_ids={@pinned_message_ids}
+          highlighted_message_id={
+            PlatformWeb.ChatLive.MessageContextHooks.row_highlight(
+              @highlighted_message_id,
+              @quote_jump_message_id
+            )
+          }
+          canvases_by_id={@canvases_by_id}
+          attachments_map={@attachments_map}
+          thread_previews={@thread_previews}
+          expanded_threads={@expanded_threads}
+          inline_thread_messages={@inline_thread_messages}
+          mention_suggestions={@mention_suggestions}
+          mention_source={@mention_source}
+          mention_query={@mention_query}
+          editing_message_id={@editing_message_id}
+          rendered_message_ids={@rendered_message_ids}
+          refused_summons={@refused_summons}
+          mounted_inline_canvas_ids={@mounted_inline_canvas_ids}
+          load_older_failed?={@load_older_failed?}
+          embedded={@embedded}
+          viewer_user_id={@user_id}
+          thread_activity_overflow={@thread_activity_overflow}
+        />
 
-      <%!-- THE DOCK (task 01a15f2e stage 3; Saru's canvas 01a15f2f, node lay:
+        <%!-- THE DOCK (task 01a15f2e stage 3; Saru's canvas 01a15f2f, node lay:
            "the conversation fills the whole screen"). One wrapper around the
            four contiguous siblings below the scroller: streaming replies, the
            jump-to-latest anchor, the typing indicator and the composer.
@@ -335,18 +331,18 @@
            runs under the glass composer and bar instead of being cropped
            above them. The ChatDock hook writes its height to
            `--chat-dock-h` on <html> for the timeline's end padding. --%>
-      <div
-        id="chat-dock"
-        phx-hook="ChatDock"
-        class={["chat-dock", !@embedded && "chat-dock--glass"]}
-      >
-        <.streaming_replies
-          streaming_replies={@streaming_replies}
-          agent_slots_map={@agent_slots_map}
-          participants_map={@participants_map}
-        />
+        <div
+          id="chat-dock"
+          phx-hook="ChatDock"
+          class={["chat-dock", !@embedded && "chat-dock--glass"]}
+        >
+          <.streaming_replies
+            streaming_replies={@streaming_replies}
+            agent_slots_map={@agent_slots_map}
+            participants_map={@participants_map}
+          />
 
-        <%!-- Jump-to-latest control (task 01a03c76 stage 3; made a mobile
+          <%!-- Jump-to-latest control (task 01a03c76 stage 3; made a mobile
              overlay by task 01a0419a stage 2; made an overlay at EVERY WIDTH
              by task 01a0419a v3 stage 1, per design canvas revision 37).
 
@@ -416,7 +412,7 @@
              Both strings come from `MessagesHooks` (stage 4). The cap lives
              there as a single module attribute, so the unresolved 99+ / 9+
              question resolves in one integer rather than in this template. --%>
-        <%!-- The anchor still LEAVES THE DOM when hidden (above), but
+          <%!-- The anchor still LEAVES THE DOM when hidden (above), but
              inside `#chat-jump-slot`, an always-rendered, box-less
              (`contents`) slot: so it is never a new sibling ahead of the
              typing indicator and the composer area, which the DOM patch
@@ -424,175 +420,176 @@
              (gate case 7007, rung 10 stage 5). Layout is unchanged: a
              `contents` box generates nothing, so the anchor is still an
              in-flow item of the chat column. --%>
-        <div id="chat-jump-slot" class="contents">
-          <div
-            :if={
-              MessagesHooks.jump_chip_visible?(
-                @jump_deep_in_history,
-                @jump_away_from_bottom,
-                @jump_new_message_count
-              )
-            }
-            class="chat-jump-anchor"
-          >
-            <div class="chat-jump-anchor-row">
-              <button
-                type="button"
-                phx-click="jump_to_latest"
-                aria-label={MessagesHooks.jump_aria_label(@jump_new_message_count)}
-                class="chat-jump-chip focus-visible-ring flex-shrink-0"
-              >
-                <%!-- The button is the 44px HIT AREA and paints nothing; this span
+          <div id="chat-jump-slot" class="contents">
+            <div
+              :if={
+                MessagesHooks.jump_chip_visible?(
+                  @jump_deep_in_history,
+                  @jump_away_from_bottom,
+                  @jump_new_message_count
+                )
+              }
+              class="chat-jump-anchor"
+            >
+              <div class="chat-jump-anchor-row">
+                <button
+                  type="button"
+                  phx-click="jump_to_latest"
+                  aria-label={MessagesHooks.jump_aria_label(@jump_new_message_count)}
+                  class="chat-jump-chip focus-visible-ring flex-shrink-0"
+                >
+                  <%!-- The button is the 44px HIT AREA and paints nothing; this span
                    is the 28px painted pill. They are two elements on purpose, so
                    both boxes have a bounding rect and the e2e measurement can
                    assert 28-painted-inside-44-tappable without reading a
                    pseudo-element. Collapsing them back into one is the defect
                    this split exists to prevent: it looks finished either way,
                    and the only symptom is people missing the button. --%>
-                <span class="chat-jump-chip-pill">
-                  <span class="min-w-0 truncate">Jump to latest</span>
-                  <span
-                    :if={@jump_new_message_count > 0}
-                    aria-hidden="true"
-                    class="chat-jump-chip-count shrink-0 whitespace-nowrap"
-                  >
-                    {MessagesHooks.jump_count_label(@jump_new_message_count)}
+                  <span class="chat-jump-chip-pill">
+                    <span class="min-w-0 truncate">Jump to latest</span>
+                    <span
+                      :if={@jump_new_message_count > 0}
+                      aria-hidden="true"
+                      class="chat-jump-chip-count shrink-0 whitespace-nowrap"
+                    >
+                      {MessagesHooks.jump_count_label(@jump_new_message_count)}
+                    </span>
                   </span>
-                </span>
-              </button>
+                </button>
+              </div>
             </div>
           </div>
+
+          <.typing_indicator
+            agent_typing_pids={@agent_typing_pids}
+            streaming_replies={@streaming_replies}
+            participants_map={@participants_map}
+          />
+
+          <.composer
+            active_space={@active_space}
+            compose_form={@compose_form}
+            current_participant={@current_participant}
+            uploads={@uploads}
+            mention_suggestions={@mention_suggestions}
+            mention_source={@mention_source}
+            mention_query={@mention_query}
+            mask_names?={@mask_names?}
+            revealed_section_ids={@revealed_section_ids}
+            sidebar_sections={@sidebar_sections}
+            limits={@large_upload_limits}
+            large_staged={@large_upload_staged}
+            attach_menu_open={@attach_menu_open}
+            canvases={@canvases}
+            attach_canvas={@attach_canvas_id && Map.get(@canvases_by_id, @attach_canvas_id)}
+            attach_failed={@attach_failed}
+            reply_target={@reply_target}
+          />
         </div>
 
-        <.typing_indicator
-          agent_typing_pids={@agent_typing_pids}
-          streaming_replies={@streaming_replies}
-          participants_map={@participants_map}
-        />
-
-        <.composer
-          active_space={@active_space}
-          compose_form={@compose_form}
-          current_participant={@current_participant}
-          uploads={@uploads}
-          mention_suggestions={@mention_suggestions}
-          mention_source={@mention_source}
-          mention_query={@mention_query}
-          mask_names?={@mask_names?}
-          revealed_section_ids={@revealed_section_ids}
-          sidebar_sections={@sidebar_sections}
-          limits={@large_upload_limits}
-          large_staged={@large_upload_staged}
-          attach_menu_open={@attach_menu_open}
-          canvases={@canvases}
-          attach_canvas={@attach_canvas_id && Map.get(@canvases_by_id, @attach_canvas_id)}
-          attach_failed={@attach_failed}
-          reply_target={@reply_target}
-        />
-      </div>
-
-      <%!-- The phone ＋ sheet (rung 11). Outside the glass dock so the fixed
+        <%!-- The phone ＋ sheet (rung 11). Outside the glass dock so the fixed
            sheet stacks above the tab bar. Not when embedded: the meeting
            rail is itself a sheet, and a second sheet nested in it doubles
            its backdrop and handle. --%>
-      <PlatformWeb.ChatLive.Partials.Attach.attach_sheet
-        :if={!@embedded && @active_space && is_nil(@active_space.archived_at)}
-        open={@attach_menu_open}
-        canvases={@canvases}
-      />
-      <%!-- The desktop drop target (rung 11), shown by the DragDropUpload
+        <PlatformWeb.ChatLive.Partials.Attach.attach_sheet
+          :if={!@embedded && @active_space && is_nil(@active_space.archived_at)}
+          open={@attach_menu_open}
+          canvases={@canvases}
+        />
+        <%!-- The desktop drop target (rung 11), shown by the DragDropUpload
            hook on this element. --%>
-      <PlatformWeb.ChatLive.Partials.Attach.drop_target :if={
-        @active_space && is_nil(@active_space.archived_at)
-      } />
-    </div>
+        <PlatformWeb.ChatLive.Partials.Attach.drop_target :if={
+          @active_space && is_nil(@active_space.archived_at)
+        } />
+      </div>
 
-    <.canvas_overlay
-      canvas={@active_canvas}
-      show_versions_panel={@show_versions_panel}
-      canvas_versions={@canvas_versions}
-      restore_confirm_revision={@restore_confirm_revision}
-      viewer={{:user, @user_id}}
-    />
+      <.canvas_overlay
+        canvas={@active_canvas}
+        show_versions_panel={@show_versions_panel}
+        canvas_versions={@canvas_versions}
+        restore_confirm_revision={@restore_confirm_revision}
+        viewer={{:user, @user_id}}
+      />
 
-    <%!-- Embedded surfaces (e.g. inside MeetingLive) leave the meeting
+      <%!-- Embedded surfaces (e.g. inside MeetingLive) leave the meeting
          mini-bar to the parent — the parent already owns the live
          meeting state. Skip the panel here to avoid a double mini-bar. --%>
-    <.meeting_panel
-      :if={!@embedded}
-      in_meeting={@in_meeting}
-      active_space={@active_space}
-      mic_enabled={@mic_enabled}
-      camera_enabled={@camera_enabled}
-      screen_share_enabled={@screen_share_enabled}
-      native_call={@native_call}
-      mic_pending={@mic_pending}
-      camera_pending={@camera_pending}
-      media_error={@media_error}
-      meeting_participants={@meeting_participants}
-      invite_rows={@invite_rows}
-      active_meeting_tab={@active_meeting_tab}
-      rail_open={@quickmeet_rail_open}
-      meeting={@quickmeet_meeting}
-      agents_by_id={@agents_by_id}
-      agent_activity={@agent_activity}
-      agent_activity_now={@agent_activity_now}
-      candidates={@meeting_candidates}
-      candidates_closed={@meeting_candidates_closed}
-      candidate_events={@meeting_candidate_events}
-      candidate_error={@candidate_error}
-      candidate_order={@candidate_order}
-      captions_available={@meetings_enabled}
-      human_invite={
-        PlatformWeb.ChatLive.MeetingHumanInvite.rail_state(assigns, "quickmeet-call-rail")
-      }
-    />
-  </div>
+      <.meeting_panel
+        :if={!@embedded}
+        in_meeting={@in_meeting}
+        active_space={@active_space}
+        mic_enabled={@mic_enabled}
+        camera_enabled={@camera_enabled}
+        screen_share_enabled={@screen_share_enabled}
+        native_call={@native_call}
+        mic_pending={@mic_pending}
+        camera_pending={@camera_pending}
+        media_error={@media_error}
+        meeting_participants={@meeting_participants}
+        invite_rows={@invite_rows}
+        active_meeting_tab={@active_meeting_tab}
+        rail_open={@quickmeet_rail_open}
+        meeting={@quickmeet_meeting}
+        agents_by_id={@agents_by_id}
+        agent_activity={@agent_activity}
+        agent_activity_now={@agent_activity_now}
+        candidates={@meeting_candidates}
+        candidates_closed={@meeting_candidates_closed}
+        candidate_events={@meeting_candidate_events}
+        candidate_error={@candidate_error}
+        candidate_order={@candidate_order}
+        captions_available={@meetings_enabled}
+        human_invite={
+          PlatformWeb.ChatLive.MeetingHumanInvite.rail_state(assigns, "quickmeet-call-rail")
+        }
+      />
+    </div>
 
-  <%!-- The desktop details panel (Burrow redesign 22 stage 3): the space
+    <%!-- The desktop details panel (Burrow redesign 22 stage 3): the space
        sheet's sections at lg, a flex sibling after the conversation column
        so it pushes the main pane. Closed renders nothing.
        `DetailsPanelHooks` owns it. --%>
-  <PlatformWeb.ChatLive.Partials.DetailsPanel.details_panel
-    :if={@active_space && !@embedded}
-    details_panel={@details_panel}
-    active_space={@active_space}
-    space_participants={@space_participants}
-    user_id={@user_id}
-    mask_names?={@mask_names?}
-    revealed_section_ids={@revealed_section_ids}
-    sidebar_sections={@sidebar_sections}
-    external?={@external?}
-    canvases={@canvases}
-    show_canvases={@show_canvases}
-    meetings_enabled={@meetings_enabled}
-    in_meeting={@in_meeting}
-    agent_presence={@agent_presence}
-    has_agent_participant={@has_agent_participant}
-    agent_attention={@agent_attention}
-    search_query={@search_query}
-    search_results={@search_results}
-    participants_map={@participants_map}
-    pins={@pins}
-    details_pins={@details_pins}
-    details_threads={@details_threads}
-    goal_panel={@goal_panel}
-    goal_edit={@goal_edit}
-    can_edit_goal?={@can_edit_goal?}
-    goal_invite?={@goal_invite?}
-    goal_scope_options={@goal_scope_options}
-    goal_scope_error={@goal_scope_error}
-    goal_cadence_form={@goal_cadence_form}
-    goal_time_zone={@goal_time_zone}
-    active_space_scope={@active_space_scope}
-    active_space_org={@active_space_org}
-    scope_filter={@scope_filter}
-    details_files={@details_files}
-    details_links={@details_links}
-    agents_sheet_open={@agents_sheet_open}
-    show_members={@show_members}
-    current_user_record={assigns[:current_user_record]}
-  />
+    <PlatformWeb.ChatLive.Partials.DetailsPanel.details_panel
+      :if={@active_space && !@embedded}
+      details_panel={@details_panel}
+      active_space={@active_space}
+      space_participants={@space_participants}
+      user_id={@user_id}
+      mask_names?={@mask_names?}
+      revealed_section_ids={@revealed_section_ids}
+      sidebar_sections={@sidebar_sections}
+      external?={@external?}
+      canvases={@canvases}
+      show_canvases={@show_canvases}
+      meetings_enabled={@meetings_enabled}
+      in_meeting={@in_meeting}
+      agent_presence={@agent_presence}
+      has_agent_participant={@has_agent_participant}
+      agent_attention={@agent_attention}
+      search_query={@search_query}
+      search_results={@search_results}
+      participants_map={@participants_map}
+      pins={@pins}
+      details_pins={@details_pins}
+      details_threads={@details_threads}
+      goal_panel={@goal_panel}
+      goal_edit={@goal_edit}
+      can_edit_goal?={@can_edit_goal?}
+      goal_invite?={@goal_invite?}
+      goal_scope_options={@goal_scope_options}
+      goal_scope_error={@goal_scope_error}
+      goal_cadence_form={@goal_cadence_form}
+      goal_time_zone={@goal_time_zone}
+      active_space_scope={@active_space_scope}
+      active_space_org={@active_space_org}
+      scope_filter={@scope_filter}
+      details_files={@details_files}
+      details_links={@details_links}
+      agents_sheet_open={@agents_sheet_open}
+      show_members={@show_members}
+      current_user_record={assigns[:current_user_record]}
+    />
+  </div>
 </div>
 
 <%!-- The details panel's client state (restore at >= 1280px, Escape, F6);

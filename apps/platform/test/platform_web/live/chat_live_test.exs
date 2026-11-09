@@ -248,10 +248,12 @@ defmodule PlatformWeb.ChatLiveTest do
   # screenshots on the PR; this guards the wiring).
   test "chat surface flex containers set min-h-0 (PWA scroll lock take 2)", %{conn: conn} do
     conn = authenticated_conn(conn)
-    {:ok, _view, html} = live(conn, ~p"/chat/general")
+    {:ok, view, html} = live(conn, ~p"/chat/general")
 
-    # Chat root: flex h-full overflow-hidden + min-h-0
-    assert html =~ ~r/<div[^>]*class="flex h-full min-h-0 overflow-hidden"/
+    # Banner and panes share the available height; only the panes flex.
+    assert has_element?(view, "#chat-surface.h-full.min-h-0.flex-col.overflow-hidden")
+    assert has_element?(view, "#chat-surface > #chat-notification-banner-slot")
+    assert has_element?(view, "#chat-surface > #chat-panes.flex-1.min-h-0.overflow-hidden")
     # Inner flex row: must also set min-h-0 so the chat-drop-zone column
     # below it actually receives a bounded height.
     assert html =~ ~r/<div[^>]*class="flex flex-1 overflow-hidden min-w-0 min-h-0"/
