@@ -252,6 +252,10 @@ defmodule Platform.RepoLookupBoundaryTest do
      "fetch_agent/1's predicate is now Platform.UUID.valid?/1. This is the function stage 4's brief named as the shape to MIRROR: the branch structure was always right, only the predicate was broken"},
     {"platform/agents/orchestration.ex", :get, "Agent", 1, :safe_internal,
      "reached only via fetch_agent/1's Platform.UUID.valid?/1 branch; slugs go to Platform.Agents.SlugLookup.resolve/2 instead, which returns {:error, :ambiguous_slug} rather than raising Ecto.MultipleResultsError when two workspaces share one (task 01a0e77c)"},
+    {"platform/agents/burrow/starter.ex", :get!, "Agent", 1, :safe_internal,
+     "`put_state/2` takes `%Agent{id: id}` already loaded by `Burrow.get/0` or returned by `NativeAgents.create/2`; the id never arrives from a boundary"},
+    {"platform/onboarding/owner_handover.ex", :platform_uuid_guard, "-", 1, :safe_internal,
+     "`complete/1` receives the `%User{}` the OIDC callback just inserted or loaded; the Platform.UUID.valid?/1 check is belt and braces before `FirstRunGoal.mark_owner/1`, and a bad id answers :ok and does nothing"},
     {"platform/agents/workspace_bootstrap.ex", :get!, "Agent", 1, :safe_internal,
      "`agent.id` read off the `%Agent{}` `upsert_agent!/1` just returned in the same function"},
     # ── Architecture (ADR-0046, task 019fa61c) ─────────────────────────
@@ -703,8 +707,8 @@ defmodule Platform.RepoLookupBoundaryTest do
      "get_file_by_id/1 checks Platform.UUID.valid?/1 before Repo.get, so a caller-supplied page id from the memory MCP tools returns nil"},
     {"platform/org/preamble_builder.ex", :get, "Org", 3, :safe_internal,
      "one call reads `project.org_id` off a preloaded task, one walks `parent_org_id` off a loaded `%Org{}`, and the third takes `opts[:org_id]` which callers set from a resolved `%Org{}`"},
-    {"platform/onboarding/first_run_goal.ex", :platform_uuid_guard, "-", 3, :must_cast,
-     "task 01a19554-fd07 stage 1: `pending?/1`, `submit/3` and `skip/1` take a `%{id: user_id}` from the LiveView's current user and check it with Platform.UUID.valid?/1 before `Tenancy.external_user?/1`, `Chat.find_or_create_dm/3`, the `own_participant/2` Repo.one (this file's `@repo_one_counts` entry) and the single-key preference UPDATEs. A malformed id is not pending, submit answers {:error, :not_pending} and skip {:error, :not_found}; pinned by first_run_goal_test.exs \"a malformed user id is not pending and cannot submit or skip, without raising\""},
+    {"platform/onboarding/first_run_goal.ex", :platform_uuid_guard, "-", 4, :must_cast,
+     "3 → 4 for the onboarding bundle: `mark_owner/1` guards the hand-over user's id the same way before its single-key UPDATE. task 01a19554-fd07 stage 1: `pending?/1`, `submit/3` and `skip/1` take a `%{id: user_id}` from the LiveView's current user and check it with Platform.UUID.valid?/1 before `Tenancy.external_user?/1`, `Chat.find_or_create_dm/3`, the `own_participant/2` Repo.one (this file's `@repo_one_counts` entry) and the single-key preference UPDATEs. A malformed id is not pending, submit answers {:error, :not_pending} and skip {:error, :not_found}; pinned by first_run_goal_test.exs \"a malformed user id is not pending and cannot submit or skip, without raising\""},
     {"platform/org/wiki/nodes.ex", :platform_uuid_guard, "-", 1, :safe_internal,
      "task 01a1386d-e528 stage 1: `org_of/2` checks the `project/<id>/` or `space/<id>/` path segment with Platform.UUID.valid?/1 before `where: r.id == ^id` (this file's `@repo_one_counts` entry), so a non-UUID segment answers nil and `ensure/2` falls back to the root org instead of raising Ecto.Query.CastError on a path an agent supplied"},
     {"platform/access/grants.ex", :get, "Grant", 4, :must_cast,
@@ -1185,6 +1189,9 @@ defmodule Platform.RepoLookupBoundaryTest do
     # find_or_create_dm/3 just returned and the member's user id, which submit/3
     # checks with Platform.UUID.valid?/1 before any query.
     "platform/onboarding/first_run_goal.ex" => 1,
+    # `Starter.state/1` pins `a.id == ^id` with the id of a loaded `%Agent{}`
+    # (Burrow.get/0 or NativeAgents.create/2), never a boundary value.
+    "platform/agents/burrow/starter.ex" => 1,
     # Canonical publication is keyed by id from a loaded %Canvas{} and locks
     # that same row, ordering its delivery before any ownership move.
     "platform/chat/canvas/broadcasts.ex" => 1,

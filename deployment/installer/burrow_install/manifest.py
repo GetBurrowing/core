@@ -72,6 +72,9 @@ AGENT_LOGINS = ("api_key", "operator")
 # "generate-on-host" makes the host generate a VAPID key pair at first start
 # (bin/burrow-vapid), so the private key never exists anywhere but the box.
 VAPID_MODES = ("off", "generate-on-host")
+# TLS vocabulary of core's mail accounts (`smtp_tls`) and of
+# Platform.Mail.System (SYSTEM_SMTP_TLS).
+SMTP_TLS_MODES = ("tls", "starttls", "none")
 # [sharing] keys (core task 01a1b678): Platform.Sharing.registry/0, in order.
 # `setup init` writes each as explicit true into a NEW manifest.
 SHARING_KEYS = ("feedback", "usage_counts", "friction_reports", "help_channel_reports", "instruction_updates", "learned_default_shapes")
@@ -216,6 +219,12 @@ SCHEMA = {
         # advertises full_root in its hello. Gates the admin_restart,
         # admin_deploy and admin_rollback tools.
         "full_root": _bool(False),
+        # Core's starter allowance for Burrow (optional): a secret ref, read
+        # from --customer-secrets like auth.client_secret_ref, for an
+        # Anthropic API key. Rendered into core-platform's secrets.env as
+        # STARTER_ANTHROPIC_API_KEY. The spend cap is set on the key at
+        # Anthropic's console; nothing here or in core enforces one.
+        "starter_api_key_ref": _str(),
     },
     # External feedback (core task 01a1a6a5 stage 4). NO default: unset means
     # "follow install.hosted", so a hosted install renders
@@ -231,6 +240,17 @@ SCHEMA = {
     # into a NEW manifest only. Each value seeds the install's row once;
     # after that the owner's switch in Settings wins.
     "sharing": {key: Field("bool") for key in SHARING_KEYS},
+    # The install-wide system sender (core Platform.Mail.System): invite and
+    # sign-in mail from the install itself. NO defaults except the TLS mode:
+    # an absent smtp_host renders nothing and core's sender stays off.
+    "system_mail": {
+        "from": _str(),
+        "smtp_host": _str(),
+        "smtp_port": Field("int"),
+        "smtp_username": _str(),
+        "smtp_password_ref": _str(),
+        "smtp_tls": _enum(SMTP_TLS_MODES, "starttls"),
+    },
     # Web Push (VAPID) keys for core (core task 01a10315 stage 1).
     "push": {
         "vapid": _enum(VAPID_MODES, "off"),

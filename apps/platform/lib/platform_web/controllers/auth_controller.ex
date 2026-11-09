@@ -5,6 +5,8 @@ defmodule PlatformWeb.AuthController do
   alias Platform.Access.IdpGroupRoles
   alias Platform.Mobile
   alias Platform.OIDC
+  alias Platform.SignIn.DurableLink
+  alias Platform.SignInAdmin.PocketId
   alias PlatformWeb.ExternalRedirect
   alias PlatformWeb.ExternalSurface
   alias PlatformWeb.LoginOrigin
@@ -64,9 +66,56 @@ defmodule PlatformWeb.AuthController do
   # `/auth/oidc/callback`, which lands on `/setup/connect-ai` instead of `/`.
   # The code is never echoed, and only ever placed on the issuer's host.
   @handover_code ~r/\A[A-Za-z0-9]{6,64}\z/
-  @handover_landing "/setup/connect-ai"
+  @connect_landing "/setup/connect-ai"
+  # Not a route: a marker in the signed session that the callback resolves, once
+  # the user exists, to the Getting started conversation (`Burrow.Starter`).
+  @starter_landing "/setup/getting-started"
 
-  def handover(conn, %{"code" => code}) when is_binary(code) do
+  # Where the hand-over sign-in lands. With a starter key configured the first
+  # screen is the Getting started conversation, whose path needs the owner and
+  # Burrow, neither of which exists until the callback; without one it is the
+  # subscription picker, as before.
+  defp handover_landing do
+    if Platform.Agents.Burrow.Starter.configured?(), do: @starter_landing, else: @connect_landing
+  end
+
+  def handover(conn, %{"code" => code}) when is_binary(code),
+    do: start_code_login(conn, code, :handover)
+
+  def handover(conn, _params), do: handover_invalid(conn)
+
+  # Durable sign-in link (the "ready" and invite emails): `/auth/link?token=`
+  # carries a signed `Platform.SignIn.DurableLink` token instead of a code
+  # that dies in 30 minutes. Each click verifies it, mints a FRESH pocket-id
+  # one-time code for the user and then runs exactly the hand-over above, so
+  # the link works for days and more than once. See the DurableLink moduledoc
+  # for the security model.
+  def link(conn, %{"token" => token}) when is_binary(token) do
+    with {:ok, %{purpose: purpose, user: user}} <- DurableLink.verify(token),
+         {:ok, %PocketId.Token{value: code}} <- PocketId.one_time_token(user.oidc_sub) do
+      start_code_login(conn, code, purpose)
+    else
+      {:error, reason} when reason in [:invalid, :expired, :not_found, :archived, :no_identity] ->
+        link_expired(conn)
+
+      {:error, _unreachable} ->
+        login_unavailable(conn, provider_unreachable_message())
+    end
+  end
+
+  def link(conn, _params), do: link_expired(conn)
+
+  defp link_expired(conn) do
+    conn
+    |> put_status(:bad_request)
+    |> text("This sign-in link has expired. Ask your Burrow admin to send a new one.")
+  end
+
+  # The shared tail of `handover/2` and `link/2`: start Burrow's OIDC login,
+  # open the matching pocket-id interaction and send the browser to
+  # pocket-id's `/lc/<code>`. The owner's hand-over lands on /setup/connect-ai
+  # and shows the passkey card; an invitee lands where an ordinary login does.
+  defp start_code_login(conn, code, purpose) do
     with true <- Regex.match?(@handover_code, code),
          [] <- OIDC.missing_settings(),
          {:ok, %{url: url, session_params: session_params}} <- OIDC.authorize_url(),
@@ -75,8 +124,7 @@ defmodule PlatformWeb.AuthController do
       |> delete_session(:app_challenge)
       |> delete_session(:game_login)
       |> put_session(:oidc_session_params, session_params)
-      |> put_session(:post_login_path, @handover_landing)
-      |> put_session(:signed_in_with_link, true)
+      |> put_landing(purpose)
       |> LoginOrigin.capture()
       |> redirect(external: handover_url(url, code, interaction))
     else
@@ -97,12 +145,18 @@ defmodule PlatformWeb.AuthController do
     end
   end
 
-  def handover(conn, _params), do: handover_invalid(conn)
+  defp put_landing(conn, :handover) do
+    conn
+    |> put_session(:post_login_path, handover_landing())
+    |> put_session(:signed_in_with_link, true)
+  end
+
+  defp put_landing(conn, :invite), do: delete_session(conn, :post_login_path)
 
   defp handover_invalid(conn) do
     conn
     |> put_status(:bad_request)
-    |> text("Sign-in link is invalid or has expired")
+    |> text("This sign-in link has expired or was already used. Ask for a new one.")
   end
 
   defp handover_error_kind(error) when is_atom(error), do: inspect(error)
@@ -212,6 +266,13 @@ defmodule PlatformWeb.AuthController do
            admit_callback(conn, oidc_user, surface) do
       user = result.user
 
+      # The login began at `handover/2` or `link/2` with the owner's purpose
+      # (the signed session still carries one of the two hand-over landings):
+      # this person is the install owner. Never raises.
+      if get_session(conn, :post_login_path) in [@connect_landing, @starter_landing] do
+        Platform.Onboarding.OwnerHandover.complete(user)
+      end
+
       :telemetry.execute(
         [:platform, :auth, :callback],
         %{system_time: System.system_time()},
@@ -237,7 +298,7 @@ defmodule PlatformWeb.AuthController do
       |> put_session(:current_user_id, user.id)
       |> maybe_put_id_token(auth)
       |> maybe_put_end_session_endpoint(session_params)
-      |> land_game_or_callback(result, post_login_path(conn))
+      |> land_game_or_callback(result, post_login_path(conn, user))
     else
       false ->
         emit_callback_failure(conn, :invalid_state)
@@ -261,12 +322,14 @@ defmodule PlatformWeb.AuthController do
     invalid_state(conn)
   end
 
-  # Where a full internal user lands: `/`, or `/setup/connect-ai` when the
-  # login began at `handover/2`. A closed set read from the signed session,
+  # Where a full internal user lands: `/`, or `/setup/connect-ai` (or the
+  # starter conversation, see `handover_landing/0`) when the login began at
+  # `handover/2`. A closed set read from the signed session,
   # never from a parameter, so this is not an open redirect.
-  defp post_login_path(conn) do
+  defp post_login_path(conn, user) do
     case get_session(conn, :post_login_path) do
-      @handover_landing -> @handover_landing
+      @connect_landing -> @connect_landing
+      @starter_landing -> Platform.Agents.Burrow.Starter.handover_landing(user)
       _ -> ~p"/"
     end
   end

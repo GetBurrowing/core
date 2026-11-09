@@ -599,10 +599,13 @@ defmodule PlatformWeb.Components.ChatMessage do
           </div>
 
           <%!-- Inline thread: indicator + expanded thread --%>
-          <div :if={
-            Map.has_key?(@thread_previews, @msg.id) or
-              MapSet.member?(@expanded_threads, @msg.id)
-          }>
+          <div
+            :if={
+              Map.has_key?(@thread_previews, @msg.id) or
+                MapSet.member?(@expanded_threads, @msg.id)
+            }
+            id={"inline-thread-region-#{@msg.id}"}
+          >
             <%!-- Thread chip (collapsed state; masters `.thread-ind`,
                  direction m1): '↩ N replies · time' in subtle text, no
                  fill and no avatar. It TOGGLES; Reply in thread (the pill's
@@ -712,6 +715,14 @@ defmodule PlatformWeb.Components.ChatMessage do
                    from the space's `chat-draft:<id>`). ComposeInput clears
                    it after a send (`data-clear-on-submit`): the reply
                    handler pushes no `compose_reset`. --%>
+              <%!-- Every element from the thread region down to the field has an
+                   id (region, composer, form, hidden input, field box, Send).
+                   Each keystroke of an @query reinserts this stream row
+                   (`MentionsHooks`), and an unkeyed element is keyed by the
+                   render's magic id, which a reinsert mints anew: the DOM
+                   patch then moves the field, and a moved contenteditable
+                   blurs (one blur per letter after "@"). The space composer
+                   has ids on all of these. --%>
               <div
                 :if={!@read_only}
                 id={"inline-thread-composer-#{@msg.id}"}
@@ -725,6 +736,7 @@ defmodule PlatformWeb.Components.ChatMessage do
                 >
                   <input
                     type="hidden"
+                    id={"inline-thread-message-id-#{@msg.id}"}
                     name="inline_thread_compose[message_id]"
                     value={@msg.id}
                   />
@@ -734,7 +746,7 @@ defmodule PlatformWeb.Components.ChatMessage do
                        composer sits inside #message-list, so a list in flow
                        would push the box down and grow the scroller. The
                        anchoring is CSS (`.thread-field-box .mention-list`). --%>
-                  <div class="thread-field-box">
+                  <div id={"inline-thread-field-box-#{@msg.id}"} class="thread-field-box">
                     <.mention_list
                       open={
                         @mention_source == "inline-thread-compose-form-#{@msg.id}" and
@@ -780,6 +792,7 @@ defmodule PlatformWeb.Components.ChatMessage do
                        ComposeInput lights it from what is typed. --%>
                   <button
                     type="submit"
+                    id={"inline-thread-send-#{@msg.id}"}
                     class="thread-send"
                     disabled
                     data-send-blocked={to_string(is_nil(@current_participant))}

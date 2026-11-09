@@ -520,6 +520,24 @@ defmodule Platform.SignInAdminTest do
 
   # -- invite ---------------------------------------------------------------
 
+  defp configure_system_mail! do
+    saved = Application.fetch_env(:platform, Platform.Mail.System)
+
+    on_exit(fn ->
+      case saved do
+        {:ok, v} -> Application.put_env(:platform, Platform.Mail.System, v)
+        :error -> Application.delete_env(:platform, Platform.Mail.System)
+      end
+    end)
+
+    Application.put_env(:platform, Platform.Mail.System,
+      from: "Burrow <noreply@example.test>",
+      host: "smtp.example.test",
+      port: 587,
+      tls: "starttls"
+    )
+  end
+
   describe "invite/2" do
     test "creates the pocket-id user and the Suite user, and mints a 30m link", %{admin: admin} do
       fake!(ids: ["pid-new"])
@@ -551,6 +569,48 @@ defmodule Platform.SignInAdminTest do
       assert [token] = Enum.filter(reqs, &(&1.kind == :token))
       assert token.body == %{"ttl" => "30m"}
       assert token.path == "/api/users/pid-new/one-time-access-token"
+    end
+
+    test "emails the invitee when the system sender is configured", %{admin: admin} do
+      configure_system_mail!()
+      fake!(ids: ["pid-mail"])
+
+      assert {:ok, %{user: user, link: link, emailed?: true}} =
+               SignInAdmin.invite(admin, %{
+                 email: "maria@example.test",
+                 name: "Maria",
+                 role: :member
+               })
+
+      assert_received {:mail_test_adapter, email, _config}
+      assert email.to == [{"", "maria@example.test"}]
+      org = Tenancy.get_root_org().name
+      assert email.subject == "#{admin.name || admin.email} invited you to #{org}'s Burrow"
+      assert email.text_body =~ "Join: "
+      assert email.html_body =~ ">Join</a>"
+      # The email carries the durable multi-use link, not the slip's 30-minute one.
+      assert email.text_body =~ "/auth/link?token="
+      refute email.text_body =~ link.url
+      assert user.email == "maria@example.test"
+    end
+
+    test "sends nothing and reports emailed?: false when the system sender is off",
+         %{admin: admin} do
+      fake!(ids: ["pid-nomail"])
+
+      assert {:ok, %{link: %Link{}, emailed?: false}} =
+               SignInAdmin.invite(admin, %{email: "nomail@example.test", name: "N", role: :member})
+
+      refute_received {:mail_test_adapter, _, _}
+    end
+
+    test "a failing send still invites and reports emailed?: false", %{admin: admin} do
+      configure_system_mail!()
+      Process.put(:mail_test_adapter_hook, fn _ -> raise "relay down" end)
+      fake!(ids: ["pid-fail"])
+
+      assert {:ok, %{link: %Link{}, emailed?: false}} =
+               SignInAdmin.invite(admin, %{email: "fail@example.test", name: "F", role: :member})
     end
 
     test "sends the invite name to pocket-id as display, first and last name (01a114c1)",

@@ -495,6 +495,21 @@ def _rules(m, bad, errors, present=frozenset()):
         check_ref("backup.access_key_ref", backup["access_key_ref"])
         check_ref("backup.secret_key_ref", backup["secret_key_ref"])
 
+    # [system_mail]: optional; smtp_host switches it on.
+    sm = m["system_mail"]
+    if sm["smtp_host"] is not None:
+        if sm["from"] is None and not _is_bad("system_mail.from", bad):
+            add("missing_required", "system_mail.from", "smtp_host needs from, the sender address")
+        check_ref("system_mail.smtp_password_ref", sm["smtp_password_ref"])
+        if sm["smtp_password_ref"] is not None and sm["smtp_username"] is None:
+            add("invalid_value", "system_mail.smtp_username", "smtp_password_ref needs a username")
+        if type(sm["smtp_port"]) is int and not 1 <= sm["smtp_port"] <= 65535:
+            add("invalid_value", "system_mail.smtp_port", "must be 1-65535")
+    elif not _is_bad("system_mail.smtp_host", bad):
+        for key in ("from", "smtp_port", "smtp_username", "smtp_password_ref"):
+            if sm[key] is not None:
+                add("field_not_applicable", f"system_mail.{key}", "only used with smtp_host set")
+
     # [images]: exactly one of `registry` and the legacy `image_namespace`,
     # with no default (tasks 01a14b9e, 01a14dd8).
     images = m["images"]
@@ -546,6 +561,16 @@ def _rules(m, bad, errors, present=frozenset()):
     for container, ref in m["images"]["refs"].items():
         if ref is not None and not ref.strip():
             add("invalid_value", f"images.refs.{container}", "an image ref cannot be empty")
+
+    # [agents] starter_api_key_ref: a secret ref, and only with native agents on.
+    check_ref("agents.starter_api_key_ref", m["agents"]["starter_api_key_ref"])
+    if m["agents"]["profile"] == AGENTS_ABSENT_PROFILE:
+        not_applicable(
+            "agents",
+            "profile",
+            ["starter_api_key_ref"],
+            'only used when native agents are on (profile is not "off")',
+        )
 
     # [agents] (task 01a10322): packaged for single-host only in v1.
     # An [agents] table that omits `profile` means full_machine, so it counts.

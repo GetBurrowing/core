@@ -929,6 +929,29 @@ def sharing_env(m):
     }
 
 
+def system_mail_env(m):
+    """The core env for ``[system_mail]`` (Platform.Mail.System). Nothing
+    unless ``smtp_host`` is set, which is exactly how core reads it. The
+    password is a ``{customer:REF}`` marker, so it lands in the 0600
+    secrets.env, never in compose.yaml."""
+    sm = m["system_mail"]
+    if not sm["smtp_host"]:
+        return {}
+    env = {
+        "SYSTEM_SMTP_HOST": sm["smtp_host"],
+        "SYSTEM_SMTP_TLS": sm["smtp_tls"],
+    }
+    if sm["from"]:
+        env["SYSTEM_MAIL_FROM"] = sm["from"]
+    if sm["smtp_port"] is not None:
+        env["SYSTEM_SMTP_PORT"] = str(sm["smtp_port"])
+    if sm["smtp_username"]:
+        env["SYSTEM_SMTP_USERNAME"] = sm["smtp_username"]
+    if sm["smtp_password_ref"]:
+        env["SYSTEM_SMTP_PASSWORD"] = f"{{customer:{sm['smtp_password_ref']}}}"
+    return env
+
+
 def _core_env(ctx):
     env = {
         "PHX_SERVER": "true",
@@ -956,6 +979,12 @@ def _core_env(ctx):
         env["AGENT_HOST_TOKEN"] = "{secret:AGENT_HOST_TOKEN}"
         # Task 01a17b10: how native agents log in ([agents] login).
         env["NATIVE_AGENT_LOGIN"] = ctx.m["agents"]["login"]
+        if ctx.m["agents"]["starter_api_key_ref"]:
+            # A customer-supplied value, so it lands in secrets.env (never in
+            # compose.yaml) and is never printed. Core's Burrow.Starter reads it.
+            env["STARTER_ANTHROPIC_API_KEY"] = (
+                f"{{customer:{ctx.m['agents']['starter_api_key_ref']}}}"
+            )
     if ctx.agents == "contained":
         # Agents in the agent-host container reach core on the agents network,
         # not through the public URL (AgentHost.core_url/0's default).
@@ -968,6 +997,7 @@ def _core_env(ctx):
         env["FEEDBACK_POLICY"] = "quarantined"
     # Core task 01a1b678 stage 1: seeds the install's sharing switches once.
     env.update(sharing_env(ctx.m))
+    env.update(system_mail_env(ctx.m))
     auth = ctx.m["auth"]
     if not ctx.bundled_auth:
         env["OIDC_ISSUER"] = auth["issuer"]

@@ -205,9 +205,16 @@ defmodule Platform.SignInAdmin do
   archives the new Burrow user (reason "invite failed"), so no
   half-provisioned active user is left and a re-invite takes the restore
   path.
+
+  When `Platform.Mail.System.configured?/0`, the invitee is also emailed a
+  "Join" link and the result carries `emailed?: true`; the caller then need
+  not show the link slip. A failed send is logged and reported as
+  `emailed?: false`, so the slip is the fallback and the invite never fails
+  for want of mail.
   """
   @spec invite(actor(), map()) ::
-          {:ok, %{user: Accounts.User.t(), link: Link.t()}} | {:error, term()}
+          {:ok, %{user: Accounts.User.t(), link: Link.t(), emailed?: boolean()}}
+          | {:error, term()}
   def invite(actor, attrs) when is_map(attrs) do
     with :ok <- authorize(actor),
          {:ok, email, name, role} <- normalize_invite(attrs) do
@@ -278,7 +285,7 @@ defmodule Platform.SignInAdmin do
 
         case mint_link(user, identity.id) do
           {:ok, link, user} ->
-            {:ok, %{user: user, link: link}}
+            {:ok, %{user: user, link: link, emailed?: send_invite_email(actor, user, link)}}
 
           {:error, _} ->
             Logger.warning("sign_in_admin.invite_link_failed suite_user_id=#{user.id}")
@@ -290,6 +297,78 @@ defmodule Platform.SignInAdmin do
         compensate(identity, created?, error)
     end
   end
+
+  # -- invite email ---------------------------------------------------------
+
+  # TODO(app link): no App Store URL exists in the tree yet. When one does,
+  # pass it here and the "On iPhone?" line is added to the email.
+  @app_url nil
+
+  defp send_invite_email(actor, user, link) do
+    if Platform.Mail.System.configured?() do
+      inviter = actor.name || actor.email
+      org = (Tenancy.get_root_org() || %{name: "Burrow"}).name
+      url = invite_link(user, link)
+      subject = "#{inviter} invited you to #{org}'s Burrow"
+      text = invite_text(inviter, org, url)
+
+      case Platform.Mail.System.deliver(user.email, subject, text, invite_html(inviter, org, url)) do
+        {:ok, _} ->
+          true
+
+        {:error, reason} ->
+          Logger.warning(
+            "sign_in_admin.invite_email_failed suite_user_id=#{user.id} reason=#{inspect(reason)}"
+          )
+
+          false
+      end
+    else
+      false
+    end
+  end
+
+  # The link the email carries: the durable, multi-use `/auth/link` token
+  # (`Platform.SignIn.DurableLink`, 14 days), not the 30-minute pocket-id link
+  # the slip shows. The slip keeps the short link because an admin reads it
+  # out or pastes it right away; an email is opened hours later.
+  defp invite_link(user, %Link{}), do: Platform.SignIn.DurableLink.url(user, :invite)
+
+  defp invite_text(inviter, org, url) do
+    """
+    #{inviter} invited you to #{org}'s Burrow.
+
+    Join: #{url}
+    #{app_line()}\
+    """
+  end
+
+  defp invite_html(inviter, org, url) do
+    inviter = html_escape(inviter)
+    org = html_escape(org)
+    url = html_escape(url)
+
+    app =
+      if @app_url,
+        do:
+          ~s(<p>On iPhone? <a href="#{html_escape(@app_url)}">Get the Burrow app</a> and sign in with Face ID.</p>),
+        else: ""
+
+    """
+    <p>#{inviter} invited you to #{org}'s Burrow.</p>
+    <p><a href="#{url}" style="display:inline-block;padding:10px 20px;background:#111;color:#fff;text-decoration:none;border-radius:6px">Join</a></p>
+    #{app}
+    """
+  end
+
+  defp app_line do
+    if @app_url,
+      do: "\nOn iPhone? Get the Burrow app and sign in with Face ID: #{@app_url}\n",
+      else: ""
+  end
+
+  defp html_escape(value),
+    do: value |> Phoenix.HTML.html_escape() |> Phoenix.HTML.safe_to_string()
 
   defp set_role(user, :admin, actor), do: Tenancy.promote_to_admin(user, actor_id: actor.id)
   defp set_role(user, :member, actor), do: demote_unless_last_admin(user, actor)

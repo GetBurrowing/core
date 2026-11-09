@@ -188,7 +188,7 @@ defmodule Platform.Agents.Burrow.GettingStarted do
   @spec kickoff_text(String.t()) :: String.t()
   def kickoff_text(name) do
     "@[#{name}] you're connected. Please walk the owner through finishing setup: " <>
-      "get to know them and why they want Burrow (who they and their org are, what " <>
+      "get to know them and why they want Burrow (who they and their business are, what " <>
       "they do and why, who is involved, what they want to achieve), write what you " <>
       "learn to org/page/identity.md and read it back to them, create a first project " <>
       "named for that work, create a first space in it, then offer to shape how you " <>

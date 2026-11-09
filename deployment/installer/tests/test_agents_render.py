@@ -468,6 +468,68 @@ class LoginModeTest(unittest.TestCase):
         self.assertNotIn("NATIVE_AGENT_LOGIN", self.core_env({"profile": "off"}))
 
 
+class StarterKeyTest(unittest.TestCase):
+    """[agents] starter_api_key_ref (core Burrow.Starter): a customer-supplied
+    secret that lands in core-platform's secrets.env as
+    STARTER_ANTHROPIC_API_KEY, never in compose.yaml, and is optional."""
+
+    VALUE = "sk-ant-starter-fake-0123456789abcdef"
+
+    def setUp(self):
+        self.tmp = tempfile.mkdtemp()
+        self.addCleanup(shutil.rmtree, self.tmp, ignore_errors=True)
+        self.supplied = os.path.join(self.tmp, "customer.env")
+        with open(self.supplied, "w", encoding="utf-8") as handle:
+            handle.write(f"BURROW_STARTER_KEY={self.VALUE}\n")
+
+    def table(self, **extra):
+        return {"profile": "full_machine", "starter_api_key_ref": "BURROW_STARTER_KEY", **extra}
+
+    def test_the_default_is_no_starter_key(self):
+        _e, m = validate(with_agents(EXAMPLE, {"profile": "full_machine"}))
+        self.assertIsNone(m["agents"]["starter_api_key_ref"])
+        rendered = build(m)
+        self.assertNotIn("STARTER_ANTHROPIC_API_KEY", rendered.files["secrets.env"][0])
+        self.assertNotIn("STARTER_ANTHROPIC_API_KEY", rendered.files["compose.yaml"][0])
+
+    def test_the_value_lands_in_secrets_env_only(self):
+        errors, m = validate(with_agents(EXAMPLE, self.table()))
+        self.assertEqual(errors, [])
+        rendered = build(m, customer_secrets=self.supplied)
+        self.assertIn(
+            f"STARTER_ANTHROPIC_API_KEY={self.VALUE}\n", rendered.files["secrets.env"][0]
+        )
+        for rel, (text, _mode) in rendered.files.items():
+            if rel != "secrets.env" and rel != "user-data":
+                self.assertNotIn(self.VALUE, text, rel)
+        # (user-data legitimately carries secrets.env, mode 0600.)
+        # A secret the container reads is not also parked in customer-secrets.env.
+        self.assertNotIn("customer-secrets.env", rendered.files)
+        self.assertNotIn("STARTER_ANTHROPIC_API_KEY: ", rendered.files["compose.yaml"][0])
+
+    def test_the_value_must_be_supplied(self):
+        _e, m = validate(with_agents(EXAMPLE, self.table()))
+        with self.assertRaises(RenderError) as ctx:
+            build(m)
+        self.assertEqual(ctx.exception.code, "customer_secret_missing")
+        self.assertEqual(ctx.exception.path, "agents.starter_api_key_ref")
+
+    def test_a_ref_is_a_name_not_a_value(self):
+        errors, _m = validate(
+            with_agents(EXAMPLE, self.table(starter_api_key_ref="sk-ant-real-value"))
+        )
+        self.assertEqual(
+            [(e.code, e.path) for e in errors], [("invalid_value", "agents.starter_api_key_ref")]
+        )
+
+    def test_profile_off_refuses_it(self):
+        errors, _m = validate(with_agents(EXAMPLE, self.table(profile="off")))
+        self.assertEqual(
+            [(e.code, e.path) for e in errors],
+            [("field_not_applicable", "agents.starter_api_key_ref")],
+        )
+
+
 class FullRootTest(unittest.TestCase):
     """[agents] full_root (core task 01a17b10 stage 3): off unless enabled; on
     mounts exactly one runtime socket into the contained agent-host container."""

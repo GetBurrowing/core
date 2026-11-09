@@ -145,6 +145,14 @@ defmodule PlatformWeb.AdminSignInUsersLive do
     attrs = %{email: values["email"], name: values["name"], role: values["role"]}
 
     case SignInAdmin.invite(actor, attrs) do
+      {:ok, %{user: user, emailed?: true}} ->
+        {:noreply,
+         socket
+         |> assign(:invite_open?, false)
+         |> put_flash(:info, "Invite sent to #{user.email}.")
+         |> assign_suite_rows()
+         |> load_identities()}
+
       {:ok, %{user: user, link: link}} ->
         {:noreply,
          socket
@@ -190,7 +198,7 @@ defmodule PlatformWeb.AdminSignInUsersLive do
          |> assign(:invite_email_error, nil)
          |> assign(
            :invite_error,
-           "That sign-in account is already linked to another Burrow user. Nothing was saved."
+           "That email already belongs to someone else in Burrow. Nothing was saved."
          )}
 
       {:error, _other} ->
@@ -200,7 +208,7 @@ defmodule PlatformWeb.AdminSignInUsersLive do
          |> assign(:invite_email_error, nil)
          |> assign(
            :invite_error,
-           "Couldn't create the sign-in account. Nothing was saved. Try again."
+           "Couldn't send the invite. Nothing was saved. Try again."
          )}
     end
   end
@@ -442,7 +450,7 @@ defmodule PlatformWeb.AdminSignInUsersLive do
     do: put_flash(socket, :error, "You don't have permission to do that.")
 
   defp action_error(socket, :not_found, _id),
-    do: put_flash(socket, :error, "This page is switched off on this install.")
+    do: put_flash(socket, :error, "This page is switched off.")
 
   defp action_error(socket, reason, id) do
     name = row_name(socket, id)
@@ -455,7 +463,7 @@ defmodule PlatformWeb.AdminSignInUsersLive do
         :archived -> "#{name} is archived. Enable them first."
         :user_not_found -> "User not found."
         {:sign_in_link_live, until} -> link_live_message(name, until)
-        _ -> "Can't reach the sign-in service. Try again."
+        _ -> "Can't check sign-in right now. Try again."
       end
 
     put_flash(socket, :error, message)
@@ -531,7 +539,7 @@ defmodule PlatformWeb.AdminSignInUsersLive do
   end
 
   @doc false
-  def role_label(:admin), do: "Admin"
+  def role_label(:admin), do: "Manager"
   def role_label(:member), do: "Member"
   def role_label(_), do: nil
 

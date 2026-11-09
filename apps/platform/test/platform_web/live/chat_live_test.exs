@@ -2817,6 +2817,53 @@ defmodule PlatformWeb.ChatLiveTest do
       assert html =~ "Reply in thread"
     end
 
+    test "typing an @query in the thread composer opens its list and keeps the field's ancestors keyed",
+         %{conn: conn} do
+      conn = authenticated_conn(conn)
+      {:ok, view, _html} = live(conn, ~p"/chat/general")
+
+      view
+      |> form("#compose-form", compose: %{text: "mention focus"})
+      |> render_submit()
+
+      space = Chat.get_space_by_slug("general")
+      [msg | _] = Chat.list_messages(space.id)
+      render_click(view, "open_inline_thread", %{"message-id" => msg.id})
+
+      field = "inline-thread-compose-#{msg.id}"
+      source = "inline-thread-compose-form-#{msg.id}"
+      list = "#inline-thread-mention-list-#{msg.id}"
+
+      # Every element from the thread region down to the field. Unkeyed, one
+      # is re-keyed by each stream reinsert and the field moves (and blurs).
+      keyed = [
+        "inline-thread-region-#{msg.id}",
+        "inline-thread-#{msg.id}",
+        "inline-thread-composer-#{msg.id}",
+        source,
+        "inline-thread-message-id-#{msg.id}",
+        "inline-thread-field-box-#{msg.id}",
+        "inline-thread-mention-list-#{msg.id}-wrap",
+        field,
+        "inline-thread-send-#{msg.id}"
+      ]
+
+      first = render_hook(view, "mention_query", %{"query" => "", "source" => source})
+
+      assert first
+             |> LazyHTML.from_fragment()
+             |> LazyHTML.query(list <> " [role=option]")
+             |> Enum.count() > 0
+
+      second = render_hook(view, "mention_query", %{"query" => "g", "source" => source})
+
+      for html <- [first, second], id <- keyed do
+        assert html =~ ~s(id="#{id}"), "##{id} missing or unkeyed after a keystroke"
+      end
+
+      assert second =~ ~s(id="#{field}")
+    end
+
     test "toggling the inline thread closed hides its composer", %{conn: conn} do
       conn = authenticated_conn(conn)
       {:ok, view, _html} = live(conn, ~p"/chat/general")

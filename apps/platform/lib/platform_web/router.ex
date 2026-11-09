@@ -523,6 +523,12 @@ defmodule PlatformWeb.Router do
     # The code rides the query string for the same log-filter reason.
     get("/auth/handover", AuthController, :handover)
 
+    # Durable form of the same hand-over: a signed token that mints a fresh
+    # one-time code on each click (`Platform.SignIn.DurableLink`), so the
+    # "ready" and invite emails keep working for days. Token in the query
+    # string for the same log-filter reason (`token` is filtered).
+    get("/auth/link", AuthController, :link)
+
     # T7 stage 2 (task 019e41da-3610-7972-8573-54121ea1f3f5): retired
     # `/org-context[/:file_key]` paths 301-redirect to the new
     # `/org_memory[/:file_key]` surface. Mounted in the unauthenticated
@@ -1236,6 +1242,15 @@ defmodule PlatformWeb.Router do
   scope "/api/internal", PlatformWeb do
     pipe_through(:api)
     post("/usage-events", UsageEventController, :create)
+  end
+
+  # Installer bootstrap (durable sign-in link): returns the owner's
+  # `/auth/link` URL. HOST-AGNOSTIC and sessionless like the other `/api/*`
+  # machine callers; it authenticates on the install's STATIC_API_KEY bearer
+  # inside the controller and answers 404 to anyone else.
+  scope "/api/install", PlatformWeb do
+    pipe_through(:api)
+    post("/handover-link", InstallHandoverLinkController, :create, log: false)
   end
 
   # Editable-messages API (task 019df568-97a4). PATCH for author-only

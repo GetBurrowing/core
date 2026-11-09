@@ -2,7 +2,9 @@
 
     python3 -m burrow_install bootstrap-admin --base https://<auth host> \\
         --api-key-file <0600 file> --email <addr> [--username <u>] --link-file <path> \\
-        [--primary <host> [--oidc-secret-file <0600 file>]]
+        [--primary <host> [--oidc-secret-file <0600 file>]
+         [--durable-link-file <path> [--core-base <url>]]] \\
+        [--app-name <name>] [--accent-color <color>] [--logo-file <path>]
 
 For an install provisioned by someone else (a droplet), where the Mac-oriented
 ``setup`` CLI does not apply. It reuses ``setup/pocketid.py`` (target-agnostic):
@@ -28,6 +30,29 @@ For an install provisioned by someone else (a droplet), where the Mac-oriented
    same 4-character prefix is already listed. A single-host render has no
    other step that registers the client, so without this core's sign-in
    cannot complete on a droplet.
+
+5. With ``--durable-link-file`` (needs ``--primary``): ask core for the owner's
+   durable sign-in link, ``POST <core>/api/install/handover-link`` with
+   ``Authorization: Bearer <the API key>`` and ``{"email", "sub"}`` (``sub`` is
+   the pocket-id user id, so core can create the owner's Burrow user before
+   the first login; see ``InstallHandoverLinkController``), and write the
+   returned ``/auth/link?token=...`` URL there with mode 0600. Unlike the
+   30-minute one-time link it works for 14 days and more than once, which is
+   what the "ready" email needs. It goes in its OWN file so ``--link-file``
+   keeps its one-line format for existing readers. ``<core>`` is
+   ``https://<primary>`` unless ``--core-base`` says otherwise (https, or http
+   on loopback for tests). Core may not be answering yet at bootstrap, so a
+   failure here is NOT fatal: the one-time link is already written, and the
+   JSON says ``"durable_link": "written"`` or ``"unavailable"`` with a
+   ``durable_link_error`` code, so the caller can retry later.
+6. Appearance (all optional, API only): ``--app-name`` (1-30 characters) and
+   ``--accent-color`` set pocket-id's name and accent colour with
+   ``pocketid.ensure_branding``; ``--logo-file`` (svg, png, jpg or webp, up to
+   1 MB) uploads the logo with ``pocketid.ensure_logo``. This runs AFTER the
+   link is written, and a failure does not fail the hand-over: the document
+   says ``"branding": "failed"`` with ``branding_error`` instead, so a cosmetic
+   problem never strands the customer. With none of the three flags the
+   document has ``"branding": "skipped"`` and nothing is sent.
 
 The link is a credential until it is used or expires, and the API key is the
 pocket-id admin credential, so neither is EVER printed. stdout carries exactly
@@ -84,6 +109,15 @@ def _parser():
     parser.add_argument(
         "--oidc-secret-file", default=None, help="0600 file holding OIDC_CLIENT_SECRET"
     )
+    parser.add_argument(
+        "--durable-link-file", default=None, help="owner's durable link, written with mode 0600"
+    )
+    parser.add_argument(
+        "--core-base", default=None, help="core's base URL (default https://<primary>)"
+    )
+    parser.add_argument("--app-name", default=None, help="pocket-id's app name, 1-30 characters")
+    parser.add_argument("--accent-color", default=None, help="pocket-id's accent colour")
+    parser.add_argument("--logo-file", default=None, help="svg, png, jpg or webp, up to 1 MB")
     return parser
 
 
@@ -125,6 +159,41 @@ def handover_link(primary, code):
     return f"https://{primary}/auth/handover?" + urllib.parse.urlencode({"code": code})
 
 
+def core_base_of(primary, override):
+    """Core's origin: ``--core-base``, else ``https://<primary>``. http only on loopback."""
+    if override is None:
+        return f"https://{primary}"
+    parsed = urllib.parse.urlparse(override)
+    if not parsed.hostname or parsed.scheme not in ("https", "http"):
+        raise UsageError("invalid_core_base", "--core-base must be https://<host>")
+    if parsed.scheme == "http" and parsed.hostname not in _LOOPBACK:
+        raise UsageError(
+            "invalid_core_base", "--core-base must be https:// (http is loopback-only)"
+        )
+    if parsed.path not in ("", "/") or parsed.query or parsed.fragment:
+        raise UsageError("invalid_core_base", "--core-base is the origin only, with no path")
+    return f"{parsed.scheme}://{parsed.netloc}"
+
+
+def fetch_durable_link(core_base, api_key, email, sub):
+    """The owner's durable sign-in URL from core. Raises ``web.WebError`` or ``ValueError``."""
+    resp = web.request(
+        "POST",
+        core_base + "/api/install/handover-link",
+        headers={"Authorization": f"Bearer {api_key}"},
+        body={"email": email, "sub": sub},
+    )
+    if resp.status != 200:
+        raise ValueError(f"http_{resp.status}")
+    try:
+        url = (resp.json() or {}).get("url")
+    except ValueError:
+        url = None
+    if not isinstance(url, str) or not url.startswith(("https://", "http://")):
+        raise ValueError("bad_response")
+    return url
+
+
 def ensure_oidc_client(client, primary, secret):
     """Register core's OIDC client and ``secret`` on it. Returns the client action."""
     record, action = pocketid.ensure_client(
@@ -141,6 +210,46 @@ def ensure_oidc_client(client, primary, secret):
             "POST", f"/api/oidc/clients/{pocketid.CLIENT_ID}/secrets", body={"secret": secret}
         )
     return action
+
+
+def read_logo(path):
+    """``(file name, bytes)`` of a logo file, or raises UsageError."""
+    name = os.path.basename(path)
+    if not name.lower().endswith(pocketid.LOGO_EXTENSIONS):
+        raise UsageError(
+            "invalid_logo_file",
+            "--logo-file must be " + ", ".join(pocketid.LOGO_EXTENSIONS),
+        )
+    try:
+        info = os.stat(path)
+    except OSError as exc:
+        raise UsageError("invalid_logo_file", f"--logo-file: {exc.strerror}") from exc
+    if not stat.S_ISREG(info.st_mode):
+        raise UsageError("invalid_logo_file", "--logo-file is not a regular file")
+    if not 0 < info.st_size <= pocketid.LOGO_MAX_BYTES:
+        raise UsageError(
+            "invalid_logo_file", f"--logo-file must be 1 to {pocketid.LOGO_MAX_BYTES} bytes"
+        )
+    with open(path, "rb") as handle:
+        return name, handle.read()
+
+
+def apply_branding(client, args, logo):
+    """Appearance after the hand-over link exists. Returns the document fields.
+
+    A failure is reported, not raised: branding is cosmetic and must not strand
+    the customer whose link is already written.
+    """
+    if args.app_name is None and args.accent_color is None and logo is None:
+        return {"branding": "skipped"}
+    try:
+        names = pocketid.ensure_branding(client, args.app_name, args.accent_color)
+        if logo is not None:
+            pocketid.ensure_logo(client, *logo)
+            names = "applied"
+    except SetupError as exc:
+        return {"branding": "failed", "branding_error": exc.code}
+    return {"branding": names}
 
 
 def _valid_host(value):
@@ -183,6 +292,27 @@ def run(args):
         raise UsageError("usage", "--oidc-secret-file needs --primary")
     if args.primary is not None and not _valid_host(args.primary):
         raise UsageError("invalid_primary", "--primary must be a host name")
+    if args.durable_link_file is not None:
+        if args.primary is None:
+            raise UsageError("usage", "--durable-link-file needs --primary")
+        if not os.path.isdir(os.path.dirname(os.path.abspath(args.durable_link_file))):
+            raise UsageError(
+                "invalid_durable_link_file", "--durable-link-file's directory does not exist"
+            )
+    if args.core_base is not None and args.durable_link_file is None:
+        raise UsageError("usage", "--core-base needs --durable-link-file")
+    core_base = core_base_of(args.primary, args.core_base) if args.durable_link_file else None
+    if args.app_name is not None and not pocketid.valid_app_name(args.app_name):
+        raise UsageError(
+            "invalid_app_name",
+            f"--app-name must be 1-{pocketid.APP_NAME_MAX} printable characters with no "
+            "leading or trailing space",
+        )
+    if args.accent_color is not None and not pocketid.valid_accent_color(args.accent_color):
+        raise UsageError(
+            "invalid_accent_color", "--accent-color must be default, a hex colour or a colour name"
+        )
+    logo = read_logo(args.logo_file) if args.logo_file is not None else None
     key = read_api_key(args.api_key_file)
     oidc_secret = None
     if args.oidc_secret_file is not None:
@@ -196,9 +326,23 @@ def run(args):
         link = pocketid.login_link(client, user["id"], auth_host)
     write_link(args.link_file, link)
     extra = {}
+    if core_base is not None:
+        try:
+            durable = fetch_durable_link(core_base, key, args.email, user["id"])
+        except web.WebError as exc:
+            extra["durable_link"] = "unavailable"
+            extra["durable_link_error"] = exc.kind
+        except ValueError as exc:
+            extra["durable_link"] = "unavailable"
+            extra["durable_link_error"] = str(exc)
+        else:
+            write_link(args.durable_link_file, durable)
+            extra["durable_link"] = "written"
+            extra["durable_link_file"] = os.path.abspath(args.durable_link_file)
     if oidc_secret is not None:
         oidc_action = ensure_oidc_client(client, args.primary, oidc_secret)
         extra["oidc_client"] = "created" if oidc_action == "created" else "exists"
+    extra |= apply_branding(client, args, logo)
     return extra | {
         "ok": True,
         "admin": "created" if action == "created" else "exists",

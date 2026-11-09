@@ -402,7 +402,13 @@ defmodule Platform.Role do
       kind: :mail,
       file: "lib/platform/mail/deliverer.ex",
       class: :wire,
-      note: "the one Swoosh call site"
+      note: "the Swoosh call site for agent mail accounts"
+    },
+    %{
+      kind: :mail,
+      file: "lib/platform/mail/system.ex",
+      class: :wire,
+      note: "the install-wide system sender (invites, sign-in mail): the other Swoosh call site"
     },
     # :agent_dispatch.
     %{

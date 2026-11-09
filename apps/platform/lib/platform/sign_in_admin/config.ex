@@ -91,6 +91,21 @@ defmodule Platform.SignInAdmin.Config do
   end
 
   @doc """
+  Whether `Authorization` header values (`get_req_header/2`) carry
+  `Bearer <the install's API key>`. Constant-time; false for a missing or
+  blank key, so an install with no key configured authorises nobody.
+  """
+  @spec bearer_matches?([String.t()]) :: boolean()
+  def bearer_matches?(["Bearer " <> presented]) do
+    case api_key() do
+      %Key{value: expected} -> Plug.Crypto.secure_compare(presented, expected)
+      nil -> false
+    end
+  end
+
+  def bearer_matches?(_headers), do: false
+
+  @doc """
   The browser-facing base of pocket-id: the OIDC issuer (pocket-id's
   `APP_URL`). Sign-in links are built on it as `<public_base>/lc/<code>`.
   """

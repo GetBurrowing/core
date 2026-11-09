@@ -207,6 +207,7 @@ agent host reports.
 | `profile` | `full_machine` \| `contained` \| `off` | `full_machine` when the table is present, `off` when it is absent | A manifest without `[agents]` renders exactly as it did before the table existed. On `target = "mac"` any profile other than `off` is `field_not_applicable`. |
 | `login` | `api_key` \| `operator` | `api_key` | How native agents log in to Claude (core task 01a17b10). Rendered into core-platform's env as `NATIVE_AGENT_LOGIN` whenever the profile is not `off`. `operator`: core sends no API key and a person attaches to the agent's pane to log in to Claude Code there (services/agent-host/README.md, "Operator login"). |
 | `full_root` | bool | `false` | Lets the `admin_restart`, `admin_deploy` and `admin_rollback` tools act (core task 01a17b10). Off: nothing is mounted and those tools return `requires_full_root` naming `agents.full_root`. On, `contained`: exactly one mount, the container runtime socket, into the agent-host container, plus `AGENT_HOST_FULL_ROOT=true`. On, `full_machine`: no mount (the host is already root); the host env file gets `AGENT_HOST_FULL_ROOT=true`. The host advertises `full_root` in its hello. Ignored when `profile = "off"`. Note: `admin_rpc` evaluates code in the running core release and is NOT gated by this key. |
+| `starter_api_key_ref` | secret ref | none | Optional. The name of an Anthropic API key in `--customer-secrets`, like `auth.client_secret_ref`. Rendered into core-platform's `secrets.env` (never `compose.yaml`) as `STARTER_ANTHROPIC_API_KEY`, and never printed. With it, core creates Burrow on the owner's first hand-over sign-in and lands them in the Getting started conversation instead of the subscription picker, until the owner connects their own plan or key, which retires the starter key for that install. `field_not_applicable` when `profile = "off"`. **The spend cap is NOT enforced by Burrow or this renderer.** Create the key as a dedicated key with a monthly spend limit in the Anthropic console; that limit is the only cap. |
 
 - **`full_machine`** (the default for a VM we provision): the agent host is a root systemd
   service on the HOST. The render adds to `user-data` the tools (tmux, git, curl, cron; node,
@@ -250,6 +251,23 @@ core's environment sets `FEEDBACK_POLICY` (core task 01a1a6a5). This table is th
   `FEEDBACK_BROKER_SERVER` or broker URL is ever written to an install.
 - **Without the installer:** a self-hoster who runs core some other way opts in by setting
   `FEEDBACK_POLICY=quarantined` in core's environment. See `docs/runbooks/feedback-broker.md`.
+
+## `[system_mail]` (install-wide sender, optional)
+
+The install's own transactional sender (core `Platform.Mail.System`): invite emails, and later
+sign-in mail. It is separate from agent mail accounts and is off until `smtp_host` is set. Absent
+table: nothing is rendered and a manifest renders byte-identically to before.
+
+| Key | Type | Default | Notes |
+|---|---|---|---|
+| `smtp_host` | string | none | Switches the sender on. Renders `SYSTEM_SMTP_HOST` into core-platform's environment in `compose.yaml`. |
+| `from` | string | none | Required with `smtp_host`, e.g. `Burrow <noreply@example.com>`. Renders `SYSTEM_MAIL_FROM`. |
+| `smtp_port` | int | `465` for `tls`, `587` for `starttls`, `25` for `none` (core's default) | Renders `SYSTEM_SMTP_PORT`. |
+| `smtp_username` | string | none | Renders `SYSTEM_SMTP_USERNAME`. |
+| `smtp_password_ref` | secret ref | none | Needs `smtp_username`. The NAME of a customer secret supplied with `--customer-secrets`. The value is rendered as `SYSTEM_SMTP_PASSWORD` in the 0600 `secrets.env` (core reads it as an env var), never in `compose.yaml`. |
+| `smtp_tls` | `tls` \| `starttls` \| `none` | `starttls` | Renders `SYSTEM_SMTP_TLS`; the same vocabulary as a core mail account's `smtp_tls`. |
+
+Any key without `smtp_host` gives `field_not_applicable`.
 
 ## `[push]` (Web Push)
 
@@ -424,6 +442,14 @@ registers core's OIDC client (`suite-core`, callback `https://<primary>/auth/oid
 PKCE) and the render's `OIDC_CLIENT_SECRET` as its only secret, as the Mac setup CLI's pocket-id
 step does: nothing else registers the client on a `single-host` install. The JSON then carries
 `"oidc_client": "created"|"exists"`; a re-run registers nothing new.
+
+With `--primary` and `--durable-link-file <path> [--core-base <url>]` it also asks core
+(`POST /api/install/handover-link`, bearer `STATIC_API_KEY`, body `{email, sub}`) for the owner's
+durable sign-in URL (`https://<primary>/auth/link?token=...`, valid 14 days, usable more than
+once) and writes it to that file with mode 0600, for the "ready" email. Core creates the owner's
+Burrow user from `sub` if it does not exist yet. A core that is not answering is not fatal: the
+JSON reports `"durable_link": "unavailable"` with `durable_link_error`, and the one-time link
+is still written.
 
 
 ### Learned default shapes sharing
