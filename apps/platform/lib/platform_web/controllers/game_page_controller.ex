@@ -88,6 +88,52 @@ defmodule PlatformWeb.GamePageController do
     end
   end
 
+  def player(conn, %{"slug" => slug}) do
+    with %{} = game <- Games.get(slug),
+         %{} = user <- Games.user(get_session(conn, :current_user_id)),
+         {:ok, _} <- Games.artifact(game, game["current_version"]),
+         {:ok, {_, bytes}} <- Games.Player.bootstrap(game, user, PlatformWeb.Endpoint.url()) do
+      conn
+      |> put_resp_header("cache-control", "private, no-store")
+      |> download_started_cookie()
+      |> send_download({:binary, bytes},
+        filename: "BurrowPlayer-#{slug}.zip",
+        content_type: "application/zip"
+      )
+    else
+      nil -> redirect(conn, to: "/games/#{slug}/sign-in")
+      _ -> send_resp(conn, 503, "Player download is temporarily unavailable")
+    end
+  end
+
+  def updates(conn, %{"slug" => slug}) do
+    if game = Games.get(slug) do
+      release = Games.current_release(game)
+
+      conn
+      |> put_resp_header("cache-control", "no-store")
+      |> json(%{
+        version: release["version"],
+        sha256: release["sha256"],
+        byte_size: release["byte_size"],
+        download_path: "/games/#{slug}/player/releases/#{release["version"]}",
+        launch_path: "Play Voltron.bat"
+      })
+    else
+      send_resp(conn, 404, "Game not found")
+    end
+  end
+
+  def player_release(conn, %{"slug" => slug, "version" => version}) do
+    with %{} = game <- Games.get(slug),
+         ["Bearer " <> token] <- get_req_header(conn, "authorization"),
+         {:ok, _} <- Games.Player.authorize(game, token) do
+      send_release(conn, game, version)
+    else
+      _ -> send_resp(conn, 401, "Download sign-in expired. Get a new player from the game page.")
+    end
+  end
+
   defp send_release(conn, game, version) do
     with {:ok, attachment} <- Games.artifact(game, version),
          path <- AttachmentStorage.path_for(attachment.storage_key),
