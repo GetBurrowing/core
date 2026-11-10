@@ -34,10 +34,13 @@ defmodule Platform.Agents.Burrow.Starter do
   boot on a fresh install no user exists yet (the owner row is created by the
   first OIDC callback), so a boot task could only create an ownerless Burrow.
   The hand-over callback is the first moment the owner exists and the first
-  screen is about to be chosen, so `provision/1` runs there
-  (`PlatformWeb.AuthController`). It is idempotent: it creates nothing when
-  any Burrow exists, and the Getting started space and its kickoff are keyed
-  on the agent.
+  screen is about to be chosen, so `handover_landing/1` starts `provision/1`
+  there, in a task under `Platform.TaskSupervisor`, and lands the owner on
+  `/setup/getting-started` (`PlatformWeb.GettingStartedLive`), which waits
+  for the `{:starter, result}` broadcast on `topic/1` and moves on by itself.
+  Provisioning talks to the agent host, so it never runs inside the request.
+  It is idempotent: it creates nothing when any Burrow exists, and the
+  Getting started space and its kickoff are keyed on the agent.
 
   ## State and retirement
 
@@ -147,18 +150,75 @@ defmodule Platform.Agents.Burrow.Starter do
 
   def provision(_), do: :disabled
 
+  @doc "PubSub topic carrying `{:starter, result}` once `user`'s provisioning ends."
+  @spec topic(map()) :: String.t()
+  def topic(%{id: user_id}), do: "onboarding:starter:" <> user_id
+
   @doc """
-  Where a hand-over sign-in lands `user`: the Getting started conversation
-  when the starter provisioned it, else `/setup/connect-ai`. A failure falls
-  back to the picker, so a broken starter never strands the owner.
+  The Getting started conversation's path when Burrow and the space already
+  exist, else nil. Cheap: two reads, no provisioning.
+  """
+  @spec ready_path() :: String.t() | nil
+  def ready_path do
+    with %Agent{} = agent <- Burrow.get(),
+         %{slug: slug} <- GettingStarted.getting_started_space(agent) do
+      "/chat/" <> slug
+    else
+      _ -> nil
+    end
+  end
+
+  @doc """
+  Where a hand-over sign-in lands `user`.
+
+    * `/setup/connect-ai` without a starter key, or when `user` is not an
+      install admin: nothing to provision, the picker is the first screen.
+    * the Getting started conversation when it already exists (a second
+      sign-in): no task is started.
+    * otherwise `/setup/getting-started`, after starting `provision/1` in a
+      task. The holding page subscribes to `topic/1` and navigates to the
+      conversation on `{:starter, {:ok, space}}`, or to the picker on any
+      other result, so a broken starter never strands the owner.
+
+  Never raises: a task that cannot start falls back to the picker.
   """
   @spec handover_landing(map()) :: String.t()
-  def handover_landing(user) do
-    case provision(user) do
-      {:ok, %{slug: slug}} -> "/chat/" <> slug
-      _ -> "/setup/connect-ai"
+  def handover_landing(%{id: owner_id} = user) when is_binary(owner_id) do
+    cond do
+      not (configured?() and Tenancy.root_admin?(user)) ->
+        "/setup/connect-ai"
+
+      path = ready_path() ->
+        path
+
+      true ->
+        case start_provisioning(user) do
+          {:ok, _pid} -> "/setup/getting-started"
+          _ -> "/setup/connect-ai"
+        end
     end
   rescue
     _ -> "/setup/connect-ai"
+  end
+
+  def handover_landing(_), do: "/setup/connect-ai"
+
+  @doc """
+  Run `provision/1` for `user` under `Platform.TaskSupervisor` and broadcast
+  `{:starter, result}` on `topic/1` when it ends. A raise inside becomes
+  `{:error, exception}`, so the holding page always hears an answer.
+  """
+  @spec start_provisioning(map()) :: {:ok, pid()} | {:error, term()}
+  def start_provisioning(user) do
+    Task.Supervisor.start_child(Platform.TaskSupervisor, fn ->
+      result =
+        try do
+          provision(user)
+        rescue
+          e -> {:error, e}
+        end
+
+      Phoenix.PubSub.broadcast(Platform.PubSub, topic(user), {:starter, result})
+    end)
   end
 end

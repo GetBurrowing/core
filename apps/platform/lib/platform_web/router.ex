@@ -1169,6 +1169,9 @@ defmodule PlatformWeb.Router do
       # Task 01a10315 stage 5: "Connect your AI", where a new install's
       # hand-over lands ("Open Burrow"). The view re-checks root admin.
       live("/setup/connect-ai", ConnectAiLive, :index)
+      # Starter hand-over: "Burrow is getting ready" while the starter key
+      # provisions Burrow in a task; navigates on by itself. Re-checks root admin.
+      live("/setup/getting-started", GettingStartedLive, :index)
       live("/admin/federation", AdminFederationLive, :index)
     end
   end
