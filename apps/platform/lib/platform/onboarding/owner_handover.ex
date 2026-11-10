@@ -47,6 +47,46 @@ defmodule Platform.Onboarding.OwnerHandover do
 
   def complete(_), do: :ok
 
+  @doc """
+  True once any root admin has completed an OIDC sign-in: an audit row
+  `platform.auth.callback` / `success` whose actor is a current root admin.
+  Read by the installer's hand-over link endpoint to close itself after the
+  owner's first sign-in. The owner's `first_run_goal` mark (`mark_owner/1`)
+  counts too, so a pruned audit log does not reopen the endpoint.
+  """
+  @spec owner_signed_in?() :: boolean()
+  def owner_signed_in? do
+    import Ecto.Query
+
+    root_admins =
+      from(m in Platform.Tenancy.OrgMembership,
+        join: o in Platform.Tenancy.Org,
+        on: o.id == m.org_id and is_nil(o.parent_org_id),
+        where: m.role == "admin",
+        select: m.user_id
+      )
+
+    signed_in =
+      from(e in Platform.Audit.Event,
+        where:
+          e.event_type == "platform.auth.callback" and e.action == "success" and
+            e.actor_id in subquery(root_admins),
+        select: 1,
+        limit: 1
+      )
+
+    marked =
+      from(u in Platform.Accounts.User,
+        where:
+          u.id in subquery(root_admins) and
+            fragment("?->>'first_run_goal' = 'owner'", u.preferences),
+        select: 1,
+        limit: 1
+      )
+
+    Platform.Repo.exists?(signed_in) or Platform.Repo.exists?(marked)
+  end
+
   defp run(user) do
     log_failure(:mark_owner, FirstRunGoal.mark_owner(user))
     log_failure(:first_project, ensure_first_project(user, Tenancy.get_root_org()))

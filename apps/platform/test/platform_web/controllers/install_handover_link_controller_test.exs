@@ -92,6 +92,95 @@ defmodule PlatformWeb.InstallHandoverLinkControllerTest do
     assert %{"error" => "user_archived"} = json_response(conn, 409)
   end
 
+  test "someone else's sub with a new email is refused, and nothing changes", %{conn: conn} do
+    {:ok, victim} =
+      Accounts.find_or_create_from_oidc(%{
+        sub: "taken-sub",
+        email: "victim@example.test",
+        name: "V"
+      })
+
+    conn = post_link(conn, %{"email" => "attacker@example.test", "sub" => "taken-sub"})
+    assert %{"error" => "identity_in_use"} = json_response(conn, 409)
+
+    assert Accounts.get_user(victim.id).email == "victim@example.test"
+    assert Accounts.list_users(include_archived: true, query: "attacker@example.test") == []
+  end
+
+  test "closed for good once a root admin has signed in", %{conn: conn} do
+    {:ok, owner} =
+      Accounts.find_or_create_from_oidc(%{
+        sub: "owner-sub",
+        email: "owner@example.test",
+        name: "O"
+      })
+
+    membership!(owner, "admin")
+    # Open before the owner's first sign-in.
+    assert %{"url" => _} = json_response(post_link(conn, %{"email" => "owner@example.test"}), 200)
+
+    {:ok, _} =
+      Platform.Audit.record(%{
+        event_type: "platform.auth.callback",
+        actor_id: owner.id,
+        actor_type: "user",
+        resource_type: "session",
+        resource_id: owner.id,
+        action: "success"
+      })
+
+    for body <- [
+          %{"email" => "owner@example.test"},
+          %{"email" => "new@example.test", "sub" => "fresh-sub"}
+        ] do
+      conn = post_link(build_conn(), body)
+      assert %{"error" => "handover_closed"} = json_response(conn, 410)
+    end
+
+    assert Accounts.list_users(include_archived: true, query: "new@example.test") == []
+  end
+
+  test "a member's sign-in does not close it; the owner's hand-over mark does", %{conn: conn} do
+    {:ok, member} =
+      Accounts.find_or_create_from_oidc(%{sub: "m-sub", email: "member@example.test", name: "M"})
+
+    membership!(member, "member")
+
+    {:ok, _} =
+      Platform.Audit.record(%{
+        event_type: "platform.auth.callback",
+        actor_id: member.id,
+        actor_type: "user",
+        resource_type: "session",
+        resource_id: member.id,
+        action: "success"
+      })
+
+    assert %{"url" => _} =
+             json_response(post_link(conn, %{"email" => "member@example.test"}), 200)
+
+    {:ok, owner} =
+      Accounts.find_or_create_from_oidc(%{sub: "o-sub", email: "owner@example.test", name: "O"})
+
+    membership!(owner, "admin")
+    :ok = Platform.Onboarding.OwnerHandover.complete(owner)
+    assert post_link(build_conn(), %{"email" => "member@example.test"}).status == 410
+  end
+
+  # `find_or_create_from_oidc` already seats the user in the root org as a
+  # member; this sets the role the test needs.
+  defp membership!(user, role) do
+    membership =
+      Platform.Repo.get_by!(Platform.Tenancy.OrgMembership,
+        user_id: user.id,
+        org_id: Platform.TenancyFixtures.acme_org_id()
+      )
+
+    membership
+    |> Ecto.Changeset.change(role: role)
+    |> Platform.Repo.update!()
+  end
+
   test "a missing email is 400", %{conn: conn} do
     assert post_link(conn, %{}).status == 400
   end

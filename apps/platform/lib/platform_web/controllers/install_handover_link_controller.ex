@@ -23,10 +23,26 @@ defmodule PlatformWeb.InstallHandoverLinkController do
   rule apply exactly as they do on first login, and the later real login
   finds the same row by sub. Without `sub` an unknown email is a 404 and
   nothing is created.
+
+  ## Two refusals (review of PR #143)
+
+    * A `sub` that already belongs to a Burrow user whose email differs is
+      refused (409 `identity_in_use`), the same guard as
+      `Platform.SignInAdmin`'s `sub_unclaimed`. Otherwise a POST with a new
+      email and someone else's `sub` would re-point that person's account:
+      rewrite their email, possibly promote them through the domain rule, and
+      hand out a link for their account.
+    * Once any root admin has signed in
+      (`Platform.Onboarding.OwnerHandover.owner_signed_in?/0`) the endpoint is
+      closed for good (410 `handover_closed`). It exists for the gap between
+      bootstrap and the owner's first sign-in; after that a leaked
+      STATIC_API_KEY must not mint 14-day links for the owner, and rotating
+      pocket-id's key would not revoke links already minted.
   """
   use PlatformWeb, :controller
 
   alias Platform.Accounts
+  alias Platform.Onboarding.OwnerHandover
   alias Platform.SignIn.DurableLink
   alias Platform.SignInAdmin.Config
 
@@ -41,9 +57,31 @@ defmodule PlatformWeb.InstallHandoverLinkController do
   defp do_create(conn, %{"email" => email} = params) when is_binary(email) do
     email = email |> String.trim() |> String.downcase()
 
-    case find_or_create(email, params["sub"]) do
+    result =
+      if OwnerHandover.owner_signed_in?(),
+        do: {:error, :closed},
+        else: find_or_create(email, params["sub"])
+
+    case result do
       {:ok, user} ->
         json(conn, %{url: DurableLink.url(user, :handover)})
+
+      {:error, :closed} ->
+        conn
+        |> put_status(:gone)
+        |> json(%{
+          error: "handover_closed",
+          message:
+            "An install admin has already signed in; the hand-over link is no longer issued"
+        })
+
+      {:error, :identity_in_use} ->
+        conn
+        |> put_status(:conflict)
+        |> json(%{
+          error: "identity_in_use",
+          message: "That sub already belongs to a Burrow user with another email"
+        })
 
       {:error, :not_found} ->
         conn
@@ -75,10 +113,8 @@ defmodule PlatformWeb.InstallHandoverLinkController do
   end
 
   defp find_or_create(email, sub) do
-    existing =
-      [include_archived: true, query: email]
-      |> Accounts.list_users()
-      |> Enum.find(&(is_binary(&1.email) and String.downcase(&1.email) == email))
+    users = Accounts.list_users(include_archived: true)
+    existing = Enum.find(users, &(is_binary(&1.email) and String.downcase(&1.email) == email))
 
     case {existing, sub} do
       {%{archived_at: %DateTime{}}, _} ->
@@ -87,12 +123,18 @@ defmodule PlatformWeb.InstallHandoverLinkController do
       {%{} = user, _} ->
         {:ok, user}
 
+      # The same guard as SignInAdmin's `sub_unclaimed`: a row already holding
+      # this sub would take the Accounts UPDATE path and be re-pointed.
       {nil, sub} when is_binary(sub) and sub != "" ->
-        Accounts.find_or_create_from_oidc(%{
-          sub: sub,
-          email: email,
-          name: email |> String.split("@") |> hd()
-        })
+        if Enum.any?(users, &(&1.oidc_sub == sub)) do
+          {:error, :identity_in_use}
+        else
+          Accounts.find_or_create_from_oidc(%{
+            sub: sub,
+            email: email,
+            name: email |> String.split("@") |> hd()
+          })
+        end
 
       {nil, _} ->
         {:error, :not_found}
