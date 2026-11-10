@@ -18,6 +18,17 @@ defmodule PlatformWeb.AdminGamesLive do
         {:noreply, socket |> assign(:form, to_form(attrs, as: :game)) |> put_flash(:error, "Could not publish. Check the org, ready ZIP attachment and version. Existing versions cannot change bytes.")}
     end
   end
+  def handle_event("edit", %{"slug" => slug}, socket) do
+    case Enum.find(Publishing.list(socket.assigns.current_user_record), &(&1.slug == slug)) do
+      nil -> {:noreply, socket}
+      publication ->
+        manifest = publication.manifest
+        release = Platform.Games.current_release(manifest)
+        attrs = Map.merge(manifest, %{"version" => release["version"], "attachment_id" => release["attachment_id"], "published" => to_string(manifest["published"])})
+        {:noreply, assign(socket, :form, to_form(attrs, as: :game))}
+    end
+  end
+
   @impl true
   def render(assigns) do
     ~H"""
@@ -29,6 +40,7 @@ defmodule PlatformWeb.AdminGamesLive do
           <.input field={@form[:slug]} label="Game URL name" required />
           <.input field={@form[:title]} label="Title" required />
           <.input field={@form[:summary]} label="About the game" />
+          <.input field={@form[:multiplayer_note]} label="Multiplayer instructions / current server status" />
           <.input field={@form[:org_id]} label="Game organisation ID" required />
           <.input field={@form[:version]} label="Release version" required />
           <.input field={@form[:attachment_id]} label="Uploaded Windows ZIP attachment ID" required />
@@ -39,6 +51,7 @@ defmodule PlatformWeb.AdminGamesLive do
         <div id="published-games" class="space-y-3">
           <div :for={publication <- @publications} id={"publication-#{publication.slug}"} class="card bg-base-200 p-4">
             <.link href={"/games/#{publication.slug}"}>{publication.manifest["title"]}</.link>
+            <button class="btn btn-sm" phx-click="edit" phx-value-slug={publication.slug}>Edit / release update</button>
             <p>{publication.manifest["current_version"]} · {if publication.manifest["published"], do: "Published", else: "Unpublished"}</p>
           </div>
         </div>

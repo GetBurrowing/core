@@ -19,7 +19,7 @@ defmodule Platform.Games.Publishing do
       releases = if previous, do: previous["releases"], else: []
       releases = if Enum.any?(releases, &(&1["version"] == release["version"])), do: releases, else: releases ++ [release]
       if Enum.find(releases, &(&1["version"] == release["version"])) == release do
-        manifest = Map.merge(previous || %{}, %{"slug" => attrs["slug"], "org_id" => attrs["org_id"], "title" => attrs["title"], "summary" => attrs["summary"] || "", "published" => attrs["published"] == "true", "current_version" => attrs["version"], "releases" => releases})
+        manifest = Map.merge(previous || %{}, %{"slug" => attrs["slug"], "org_id" => attrs["org_id"], "title" => attrs["title"], "summary" => attrs["summary"] || "", "published" => attrs["published"] == "true", "current_version" => attrs["version"], "releases" => releases, "image_path" => (previous && previous["image_path"]) || if(attrs["slug"] == "voltron", do: "/images/voltron-game.png", else: nil), "multiplayer_note" => attrs["multiplayer_note"] || (previous && previous["multiplayer_note"]) || "Single player is ready. Multiplayer needs a matching server release and your crew’s room code."})
         save(actor, manifest)
       else
         {:error, :immutable_release}

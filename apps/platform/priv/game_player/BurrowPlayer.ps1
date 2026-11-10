@@ -1,4 +1,4 @@
-param([string]$ConfigPath = "$PSScriptRoot\player.json", [string]$DataRoot = "", [switch]$CheckOnly)
+param([string]$ConfigPath = "$PSScriptRoot\player.json", [string]$DataRoot = "", [switch]$CheckOnly, [string]$ScreenshotPath = "")
 $ErrorActionPreference = 'Stop'
 Add-Type -AssemblyName System.IO.Compression.FileSystem
 [Net.ServicePointManager]::SecurityProtocol = [Net.SecurityProtocolType]::Tls12
@@ -116,5 +116,9 @@ try {
         try { $installed=Get-Installed; if (-not $installed) { throw 'Install the game using Play first.' }; $launch=Join-Path $installed.folder 'Play Voltron.bat'; Start-Process -FilePath $launch -WorkingDirectory $installed.folder }
         catch { [Windows.Forms.MessageBox]::Show($_.Exception.Message) | Out-Null }
     }
-    [Windows.Forms.Application]::Run($form)
+    if ($ScreenshotPath) {
+        $form.Opacity=0; $form.Show(); [Windows.Forms.Application]::DoEvents()
+        $bitmap=New-Object Drawing.Bitmap($form.Width,$form.Height)
+        try { $form.DrawToBitmap($bitmap, $form.ClientRectangle); $bitmap.Save($ScreenshotPath, [Drawing.Imaging.ImageFormat]::Png) } finally { $bitmap.Dispose(); $form.Close(); $form.Dispose() }
+    } else { [Windows.Forms.Application]::Run($form) }
 } finally { $mutex.ReleaseMutex(); $mutex.Dispose() }
