@@ -10281,6 +10281,10 @@ defmodule Platform.Meetings do
     Jason.encode!(%{
       "name" => room_name,
       "empty_timeout" => 300,
+      # Grace before LiveKit closes a room after its last participant leaves.
+      # LiveKit's default (about 20 s) fires room_finished mid-reconnect on a
+      # flaky wifi/cell handover and ends the meeting.
+      "departure_timeout" => 90,
       "agents" => [%{"agent_name" => transcriber_agent_name()}]
     })
   end
