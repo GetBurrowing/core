@@ -1076,8 +1076,7 @@ defmodule Platform.VaultTest do
 
       assert {:ok, _} = Vault.delete(slug, accessor: {:system, nil})
 
-      assert_receive {[:platform, :vault, :credential_revoked], ^ref, _measurements, meta}
-      assert meta.slug == slug
+      assert_receive {[:platform, :vault, :credential_revoked], ^ref, _measurements, %{slug: ^slug}}
 
       :telemetry.detach(ref)
     end
