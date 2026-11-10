@@ -285,7 +285,7 @@ class MutationControls(unittest.TestCase):
             self.assertIn("STABLE_HELD_BOOTSTRAP: ${{ vars.STABLE_HELD_BOOTSTRAP }}", source)
             self.assertIn("STABLE_SOAK_HOURS: ${{ vars.STABLE_SOAK_HOURS }}", source)
             self.assertIn("group: promote-stable", source)
-            shell = textwrap.dedent(source.rsplit("        run: |\n", 1)[1])
+            shell = textwrap.dedent(source.split("        run: |\n", 1)[1].split("\n      - name:", 1)[0])
             for activation, expected in (("true", ["--held-bootstrap"]), ("", []), ("false", [])):
                 with self.subTest(workflow=workflow, activation=activation), tempfile.TemporaryDirectory() as directory:
                     python = Path(directory) / "python3"

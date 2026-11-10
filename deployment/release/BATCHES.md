@@ -158,3 +158,111 @@ move stable. Releasing HOLD/promotion is a separate authorized action. An
 observer exit code of zero alone does not prove acceptance: inspect the durable
 ledger, `soak_complete`, identity, interval and failure evidence. No real soak
 has been established by deterministic clock fixtures.
+
+## Dedicated canary activation and lifecycle continuation (task 01a1c3fe)
+
+Implementation/rehearsal is not deployment or acceptance. Both **core and
+burrow-cloud same-task branches** require their normal approved deployment;
+the cloud branch is not included by merging the core branch. Keep
+`STABLE_HOLD=true` permanently throughout this task, including acceptance.
+Future promotion requires separate authorization. Do not force stable, pick a
+routine SHA, rebuild a customer, reuse demo/Legacy Pie, or change Kobo from main.
+
+After approved deployments, the deployer must:
+
+1. Use the cloud dedicated request/provision API and its explicit expiring
+   `canary,provision` grant. Verify vendor ownership, feedback-on, relevant
+   Kobo module/extensions parity and the packaged boot path. Use private
+   `canary,handover` only if needed; read/provision is not shell, teardown or
+   credential disclosure authority. Revoke scoped access and purge unneeded
+   handover using its existing lifecycle. Never put secrets in evidence.
+2. Configure the dedicated HTTPS `STABLE_CANARY_HEALTH_URL`,
+   `STABLE_SOAK_MODE=canary`, `STABLE_SOAK_HOURS>=24`; verify configuration and
+   provisioning safety prerequisites before setting `STABLE_BATCH_ENABLED`
+   true with `STABLE_HELD_BOOTSTRAP=true`. HOLD must remain true. Invoke the
+   named held bootstrap cutter; selection is automatic newest eligible
+   first-attempt-green main with packaged boot evidence. Candidate publication
+   must be reconciled before observation. Health must actually report the
+   fixed selected revision and candidate image labels; updater enabled or
+   `no_release_on_channel` proves no delivery.
+3. Register non-secret verified configuration using
+   `python3 deployment/release/canary_acceptance.py --activate < activation.json`
+   from the deployed core checkout under the same held configuration. Do not
+   override `PROMOTE_NOW` or external tools: live acceptance refuses fixture
+   overrides. Input keys are exactly:
+
+   ```json
+   {
+     "install_id": "<dedicated install UUID>",
+     "health_url": "https://<dedicated host>/health",
+     "config": {
+       "purpose": "vendor_canary", "channel": "candidate", "feedback": true,
+       "modules": "play", "extensions": ["feedback"],
+       "kobo_parity_verified": true
+     },
+     "stable_before": {"core-stable": "<observed full SHA>", "play-stable": "<observed full SHA>"},
+     "workflow_run": "https://github.com/GetBurrowing/core/actions/runs/<activation run>"
+   }
+   ```
+
+   Record the actual matching extensions/module and actual stable image
+   revisions, never these placeholders. Activation validates registry baseline
+   and is immutable; configuration changes require approved reconciliation.
+   Candidate identity comes only from current release state, never this input.
+4. Post the configured health URL immediately in space
+   `01a1b1fc-8d83-7000-8028-a2f0d630638a` through authorized task messaging.
+   The acceptance outbox also persists a configured event for retry. If no
+   candidate exists yet, post the URL directly; the outbox starts once one is
+   published. Never attach private handover/sign-in URLs.
+
+The existing hourly workflow runs the observer followed by acceptance only
+when the observation command succeeds. GitHub's durable schedule and shared
+workflow concurrency group survive agent exit/restart. Acceptance stores
+activation at `refs/canary-acceptance/<task>/activation` and generation records
+at `refs/canary-acceptance/<task>/<candidate>`, using exact-ref atomic CAS.
+The writer cannot touch stable/candidate/failure namespaces. Lost/malformed
+state or CAS/storage errors fail closed. A replacement gets a separate record
+and empty soak interval; only the automatic cutter may select it, excluding
+failed candidates. Rejected generation evidence is retained permanently.
+
+Acceptance consumes the committed fixed-candidate canary ledger; >=86400 real
+elapsed seconds, independent hourly observations, freshness/cadence, zero
+failures/rollback, policy identity and unchanged stable image revisions are
+mandatory. Evidence contains install/config, candidate image revisions,
+first/last exact UTC, elapsed seconds, observations/failures, workflow links,
+and stable/HOLD before/after. Fixture clocks are never live proof. The task
+must remain pending until this evidence exists and is delivered.
+
+### Authorized task bridge / exact missing capability
+
+The scheduled acceptance outbox persists events **before** attempting delivery.
+Configure `STABLE_CANARY_CONTINUATION_URL` (HTTPS, no redirect/userinfo/query)
+and secret `STABLE_CANARY_CONTINUATION_TOKEN` only through an authorized
+operator. The bridge is a required integration capability, not an endpoint
+assumed to exist. It accepts JSON `{id, kind, payload, delivered}` with an
+`Idempotency-Key` header; atomically deduplicate/persist `id` and return exactly
+`{"event_id":"<id>","persisted":true}`. A crash between sending and marking
+receipt retries the same id. Without this configured capability events remain
+undelivered in Git; no live task completion is claimed. Never log the token or
+response bodies. The token must permit only this task and target space.
+
+The task runtime/operator (Dalton or the authorized Burrow integration owner)
+must provide that narrowly scoped receiver. Its smallest required action is
+to bind persisted `configured` events to authorized messaging in the target
+space, `rejected` events to rejection/continued automatic selection, and
+`accepted` events to final evidence messaging plus task-lifecycle resumption
+for the outstanding operational acceptance. It must **not** auto-complete the
+task from a workflow exit code, implementation validation, timer enablement,
+or pending/rejected evidence; complete only after validated real accepted
+evidence and normal deployment/review gates. Keep retrying while pending;
+absence/expiry of the bridge token cannot turn a pending record into success.
+An operator may drain the outbox through supported task tools with the same
+idempotency receipt discipline if no receiver is available.
+
+Measured initial access was read/provision only in `burrow-cloud-thanos`,
+with no local SSH key/config. Do not assume shell/teardown or mint wider
+credentials. If blocked live, retain the pending record and report the exact
+missing scope/API/provider action. Before a formal blocker search org memory
+for the task and exact error, document three concrete attempts and smallest
+provider action. Local infra errors go to @Dalton with exact command/error;
+continue independent work and wait 60 minutes before escalation.
