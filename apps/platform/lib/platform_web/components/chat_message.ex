@@ -1202,10 +1202,10 @@ defmodule PlatformWeb.Components.ChatMessage do
   # row on main (`create_group` seats members), so their copy is accurate but
   # nobody can currently satisfy it; that is a follow-up, not this ticket.
   defp refused_summon_reason("execution"),
-    do: "Only the task's sponsor can bring agents into this space."
+    do: "Only a conversation admin or the task's sponsor can bring agents into this space."
 
   defp refused_summon_reason("channel"),
-    do: "Only a channel admin can bring agents into this channel."
+    do: "Only a channel, org, or root admin can bring agents into this channel."
 
   defp refused_summon_reason(_kind), do: "Only an admin of this conversation can bring agents in."
 

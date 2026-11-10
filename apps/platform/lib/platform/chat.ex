@@ -6853,8 +6853,9 @@ defmodule Platform.Chat do
   # and hard-deleted). So "reinvite" is just an add-if-missing.
   # Authorization for the mention-summon path (task 01a0ac64 stage 1).
   #
-  # Two grounds, either sufficient:
+  # Internal users may qualify through any of these grounds:
   #   * the author is a `user` participant of THIS space with role "admin";
+  #   * for channels, the author can manage channel roles (org/root admin);
   #   * the space is an execution space whose task the author sponsors —
   #     the same `sponsor_user_id == author` comparison `sponsor_authored?/2`
   #     makes for `maybe_propagate_task_pins/3`, keyed on a user id since
@@ -6869,16 +6870,25 @@ defmodule Platform.Chat do
     do: can_summon_agents?(space, actor_user_id)
 
   @doc """
-  Whether `user_id` may bring agents into `space` (task 01a0ac64's rule,
-  extracted unchanged by task 01a0fd62 stage 2).
+  Whether `user_id` may bring agents into `space`.
 
-  Two grounds, either sufficient: the user is a `user` participant of the
-  space with role `"admin"`, or the space is an execution space whose task the
-  user sponsors. Anything else, including a non-binary `user_id`, is false.
+  External users are refused regardless of authority. Internal users
+  qualify as a `user` participant with role `"admin"`, through the channel-only
+  `can_manage_roles?/2` rule (including org/root admins), or as the sponsor of
+  an execution space's task. Org/root authority adds no grant in other space
+  kinds. A non-binary `user_id` is false.
   """
   @spec can_summon_agents?(Space.t(), term()) :: boolean()
   def can_summon_agents?(%Space{} = space, user_id) when is_binary(user_id) do
-    admin_user_participant?(space.id, user_id) or sponsor_of_space_task?(space, user_id)
+    authorized? =
+      case space.kind do
+        "channel" -> can_manage_roles?(space, user_id)
+        _ -> admin_user_participant?(space.id, user_id) or sponsor_of_space_task?(space, user_id)
+      end
+
+    # Do not spend another query on already-refused actors. Authority alone
+    # never grants an external user access, including external root admins.
+    authorized? and not Tenancy.external_user?(%{id: user_id})
   end
 
   def can_summon_agents?(_space, _user_id), do: false
