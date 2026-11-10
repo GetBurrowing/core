@@ -59,8 +59,11 @@ defmodule Platform.SignIn.DurableLinkTest do
 
   test "a tampered, truncated or foreign token is invalid" do
     token = user!() |> DurableLink.url(:handover) |> token_of()
-    last = if String.ends_with?(token, "A"), do: "B", else: "A"
-    tampered = String.slice(token, 0..-2//1) <> last
+    # Flip a character in the middle, never the last one: unpadded base64
+    # ignores the low bits of the final character, so changing it can decode
+    # to the same bytes and the token would still verify (flaked in CI).
+    <<head::binary-size(10), c, rest::binary>> = token
+    tampered = head <> <<if(c == ?A, do: ?B, else: ?A)>> <> rest
 
     assert {:error, :invalid} = DurableLink.verify(tampered)
     assert {:error, :invalid} = DurableLink.verify(String.slice(token, 0, 20))
