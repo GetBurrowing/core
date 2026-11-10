@@ -14,7 +14,16 @@ defmodule Platform.Games do
 
   def get(slug) when is_binary(slug) do
     stored = Repo.get(Platform.Games.Publication, slug)
-    game = if stored, do: stored.manifest, else: Enum.find(List.wrap(Application.get_env(:platform, :game_publications, [])), &(&1["slug"] == slug))
+
+    game =
+      if stored,
+        do: stored.manifest,
+        else:
+          Enum.find(
+            List.wrap(Application.get_env(:platform, :game_publications, [])),
+            &(&1["slug"] == slug)
+          )
+
     if valid?(game) and game["published"] == true, do: game
   end
 

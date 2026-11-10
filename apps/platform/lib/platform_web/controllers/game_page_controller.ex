@@ -96,7 +96,10 @@ defmodule PlatformWeb.GamePageController do
       conn
       |> put_resp_header("cache-control", "private, no-store")
       |> download_started_cookie()
-      |> send_download({:binary, bytes}, filename: "BurrowPlayer-#{slug}.zip", content_type: "application/zip")
+      |> send_download({:binary, bytes},
+        filename: "BurrowPlayer-#{slug}.zip",
+        content_type: "application/zip"
+      )
     else
       nil -> redirect(conn, to: "/games/#{slug}/sign-in")
       _ -> send_resp(conn, 503, "Player download is temporarily unavailable")
@@ -106,9 +109,16 @@ defmodule PlatformWeb.GamePageController do
   def updates(conn, %{"slug" => slug}) do
     if game = Games.get(slug) do
       release = Games.current_release(game)
+
       conn
       |> put_resp_header("cache-control", "no-store")
-      |> json(%{version: release["version"], sha256: release["sha256"], byte_size: release["byte_size"], download_path: "/games/#{slug}/player/releases/#{release["version"]}", launch_path: "Play Voltron.bat"})
+      |> json(%{
+        version: release["version"],
+        sha256: release["sha256"],
+        byte_size: release["byte_size"],
+        download_path: "/games/#{slug}/player/releases/#{release["version"]}",
+        launch_path: "Play Voltron.bat"
+      })
     else
       send_resp(conn, 404, "Game not found")
     end

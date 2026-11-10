@@ -140,8 +140,16 @@
               Download player again
             </a>
           </div>
-          <p class="gp-under">Latest release: {@release["version"]}. The Windows player checks for updates before Play and opens Community in your browser. Its download sign-in lasts seven days; get a fresh player here to renew it.</p>
-          <a class="gp-textlink" id="game-portable-download" href={"/games/#{@game["slug"]}/releases/#{@release["version"]}/download"}>Download portable game ZIP instead</a>
+          <p class="gp-under">
+            Latest release: {@release["version"]}. The Windows player checks for updates before Play and opens Community in your browser. Its download sign-in lasts seven days; get a fresh player here to renew it.
+          </p>
+          <a
+            class="gp-textlink"
+            id="game-portable-download"
+            href={"/games/#{@game["slug"]}/releases/#{@release["version"]}/download"}
+          >
+            Download portable game ZIP instead
+          </a>
           <noscript>
             <p class="gp-under">
               After downloading, extract the ZIP and open Play.bat.

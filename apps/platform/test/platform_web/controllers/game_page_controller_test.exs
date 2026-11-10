@@ -72,15 +72,37 @@ defmodule PlatformWeb.GamePageControllerTest do
     %{game: game, artifact: artifact, community: community, org: org}
   end
 
-  test "Windows player is personal, download-only and scoped to the game", %{conn: conn, game: game} do
-    user = Repo.insert!(User.changeset(%User{}, %{name: "Player grant", email: "player-grant@example.net", oidc_sub: "player-grant"}))
+  test "Windows player is personal, download-only and scoped to the game", %{
+    conn: conn,
+    game: game
+  } do
+    user =
+      Repo.insert!(
+        User.changeset(%User{}, %{
+          name: "Player grant",
+          email: "player-grant@example.net",
+          oidc_sub: "player-grant"
+        })
+      )
+
     assert conn |> get("/games/voltron/player") |> redirected_to() == "/games/voltron/sign-in"
     grant = Games.Player.token(game, user)
-    response = conn |> put_req_header("authorization", "Bearer " <> grant) |> get("/games/voltron/player/releases/one")
+
+    response =
+      conn
+      |> put_req_header("authorization", "Bearer " <> grant)
+      |> get("/games/voltron/player/releases/one")
+
     assert response(response, 200) == "PK-game-fixture"
     assert conn |> get("/games/voltron/player/releases/one") |> response(401)
     assert {:error, :unauthorized} = Games.Player.authorize(Map.put(game, "slug", "other"), grant)
     assert {:error, :unauthorized} = Games.Player.authorize(game, grant <> "bad")
+    expired =
+      Phoenix.Token.sign(PlatformWeb.Endpoint, "game-player-download-v1", {"voltron", user.id},
+        signed_at: System.system_time(:second) - 604_801
+      )
+
+    assert {:error, :unauthorized} = Games.Player.authorize(game, expired)
     conn = init_test_session(conn, current_user_id: user.id)
     zip = conn |> get("/games/voltron/player") |> response(200)
     {:ok, files} = :zip.extract(zip, [:memory])
@@ -93,7 +115,10 @@ defmodule PlatformWeb.GamePageControllerTest do
     assert {:error, :unauthorized} = Games.Player.authorize(game, grant)
   end
 
-  test "updates describe the pinned current artifact without granting download", %{conn: conn, game: game} do
+  test "updates describe the pinned current artifact without granting download", %{
+    conn: conn,
+    game: game
+  } do
     update = conn |> get("/games/voltron/updates") |> json_response(200)
     assert update["version"] == "one"
     assert update["sha256"] == Games.current_release(game)["sha256"]
@@ -101,12 +126,38 @@ defmodule PlatformWeb.GamePageControllerTest do
     assert conn |> get("/games/unknown/updates") |> response(404)
   end
 
-  test "admin publishes from Burrow without env changes, creates player room, updates and rolls back", %{conn: conn, game: game, org: org, artifact: artifact} do
-    actor = Repo.insert!(User.changeset(%User{}, %{name: "Publisher", email: "publisher@example.net", oidc_sub: "publisher"}))
-    attrs = %{"slug" => "test-published", "title" => "Test game", "summary" => "Physics fun", "org_id" => org.id, "version" => "one", "attachment_id" => artifact.id, "published" => "true"}
+  test "admin publishes from Burrow without env changes, creates player room, updates and rolls back",
+       %{conn: conn, game: game, org: org, artifact: artifact} do
+    actor =
+      Repo.insert!(
+        User.changeset(%User{}, %{
+          name: "Publisher",
+          email: "publisher@example.net",
+          oidc_sub: "publisher"
+        })
+      )
+
+    attrs = %{
+      "slug" => "test-published",
+      "title" => "Test game",
+      "summary" => "Physics fun",
+      "org_id" => org.id,
+      "version" => "one",
+      "attachment_id" => artifact.id,
+      "published" => "true"
+    }
+
     assert {:error, _} = Games.Publishing.publish_release(actor, attrs)
     root_org = Tenancy.get_org_by_slug!("acme")
-    Repo.insert!(OrgMembership.changeset(%OrgMembership{}, %{user_id: actor.id, org_id: root_org.id, role: "admin"}))
+
+    Repo.insert!(
+      OrgMembership.changeset(%OrgMembership{}, %{
+        user_id: actor.id,
+        org_id: root_org.id,
+        role: "admin"
+      })
+    )
+
     signed_in = init_test_session(conn, current_user_id: actor.id)
     {:ok, view, _} = live(signed_in, "/admin/games")
     assert has_element?(view, "#game-publication-form")
@@ -117,15 +168,29 @@ defmodule PlatformWeb.GamePageControllerTest do
     assert published == publication.manifest
     assert Games.community(published, actor).joined?
     assert published["community_space_id"] != game["community_space_id"]
-    {:ok, stored} = AttachmentStorage.persist_binary_upload("PK-new-release", "new.zip", "application/zip")
+
+    {:ok, stored} =
+      AttachmentStorage.persist_binary_upload("PK-new-release", "new.zip", "application/zip")
+
     next = Repo.insert!(Attachment.changeset(%Attachment{}, stored))
-    assert {:error, :immutable_release} = Games.Publishing.publish_release(actor, Map.put(attrs, "attachment_id", next.id))
-    assert {:ok, _} = Games.Publishing.publish_release(actor, Map.merge(attrs, %{"version" => "two", "attachment_id" => next.id}))
+
+    assert {:error, :immutable_release} =
+             Games.Publishing.publish_release(actor, Map.put(attrs, "attachment_id", next.id))
+
+    assert {:ok, _} =
+             Games.Publishing.publish_release(
+               actor,
+               Map.merge(attrs, %{"version" => "two", "attachment_id" => next.id})
+             )
+
     assert Games.get("test-published")["current_version"] == "two"
     assert {:ok, _} = Games.Publishing.publish_release(actor, attrs)
     assert Games.get("test-published")["current_version"] == "one"
     assert length(Games.get("test-published")["releases"]) == 2
-    assert {:ok, _} = Games.Publishing.publish_release(actor, Map.put(attrs, "published", "false"))
+
+    assert {:ok, _} =
+             Games.Publishing.publish_release(actor, Map.put(attrs, "published", "false"))
+
     refute Games.get("test-published")
     assert conn |> get("/games/test-published/updates") |> response(404)
   end
