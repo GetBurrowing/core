@@ -150,6 +150,18 @@ case System.get_env("NATIVE_AGENT_LOGIN") do
   value -> config :platform, :native_agent_login, value |> String.trim() |> String.downcase()
 end
 
+# STARTER_ANTHROPIC_API_KEY  Burrow's starter allowance: an Anthropic API key
+#                     that lets Burrow speak before the owner connects their own
+#                     plan. Optional; rendered from the installer manifest's
+#                     `agents.starter_api_key_ref`. Its spend cap lives at
+#                     Anthropic's console, not in core. See
+#                     Platform.Agents.Burrow.Starter.
+case System.get_env("STARTER_ANTHROPIC_API_KEY") do
+  nil -> :ok
+  "" -> :ok
+  value -> config :platform, :starter_anthropic_api_key, String.trim(value)
+end
+
 # ── Session cookie domain (cross-subdomain OIDC login fix) ────────────────────
 # The `_platform_session` cookie is host-only by default (no `Domain`), so a
 # login started on `chat.example.com` loses its OIDC `state` cookie when
@@ -417,6 +429,27 @@ end
 # and its Vault secret. :test keeps the recording adapter from test.exs.
 if config_env() != :test do
   config :platform, Platform.Mail.Mailer, adapter: Platform.Mail.SmtpAdapter
+end
+
+# Install-wide system sender (Platform.Mail.System): invite and sign-in mail
+# sent by the install itself, not by an agent mail account. Off while
+# SYSTEM_SMTP_HOST is unset. SYSTEM_SMTP_TLS is tls | starttls | none (the same
+# vocabulary as a mail account's smtp_tls; default starttls). Never set under
+# :test, which injects its own values with Application.put_env.
+if config_env() != :test and System.get_env("SYSTEM_SMTP_HOST") not in [nil, ""] do
+  system_smtp_port =
+    case System.get_env("SYSTEM_SMTP_PORT") do
+      v when v in [nil, ""] -> nil
+      v -> String.to_integer(v)
+    end
+
+  config :platform, Platform.Mail.System,
+    from: System.get_env("SYSTEM_MAIL_FROM"),
+    host: System.get_env("SYSTEM_SMTP_HOST"),
+    port: system_smtp_port,
+    username: System.get_env("SYSTEM_SMTP_USERNAME"),
+    password: System.get_env("SYSTEM_SMTP_PASSWORD"),
+    tls: System.get_env("SYSTEM_SMTP_TLS", "starttls")
 end
 
 # ── External feedback (task 01a11ec3 stage 2) ─────────────────────────────────

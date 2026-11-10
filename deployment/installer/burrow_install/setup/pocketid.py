@@ -9,6 +9,15 @@ re-checked at v2.18.0, the version the renderer pins
 (``ghcr.io/pocket-id/pocket-id:v2.18.0``, registry.py; ``:v2`` resolved to the
 same image digest on 2026-10-05):
 
+- Appearance, verified at v2.18.0 (task: pocket-id sign-in page wearing Burrow's
+  look): ``GET /api/application-configuration/all`` lists every setting as
+  ``{key, value}``; ``PUT /api/application-configuration`` REPLACES the whole
+  config (every required field), so ``ensure_branding`` reads, changes
+  ``appName`` / ``accentColor`` and writes back everything else untouched.
+  ``appName`` is 1..30 characters. ``UI_CONFIG_DISABLED=true`` would make the
+  PUT fail and reset every other setting to its default, so it is NOT used.
+  The logo has no setting: ``PUT /api/application-images/logo?light=true|false``
+  (multipart, field ``file``; the type comes from the file name's extension).
 - ``STATIC_API_KEY`` (backend/internal/common/env_config.go:64, min 16 chars)
   creates the synthetic admin "Static API User" (id 0000...0000,
   apikey/service.go:221); requests authenticate with the ``X-API-Key`` header
@@ -41,7 +50,9 @@ is never printed: the CLI opens it in the browser itself and writes it to a
 """
 
 import re
+import unicodedata
 import urllib.parse
+import uuid
 
 from . import web
 from .state import SetupError
@@ -73,10 +84,13 @@ class Client:
         self.base = base.rstrip("/")
         self.api_key = api_key
 
-    def call(self, method, path, body=None, allow=()):
+    def call(self, method, path, body=None, allow=(), headers=None):
         try:
             resp = web.request(
-                method, self.base + path, headers={"X-API-Key": self.api_key}, body=body
+                method,
+                self.base + path,
+                headers={"X-API-Key": self.api_key, **(headers or {})},
+                body=body,
             )
         except web.WebError as exc:
             raise SetupError(
@@ -251,3 +265,113 @@ def ensure_secret(client, secret, known_id=None):
         "POST", f"/api/oidc/clients/{CLIENT_ID}/secrets", body={"secret": secret}
     )
     return created["id"], "registered"
+
+
+# ---------------------------------------------------------------------------
+# Appearance: the sign-in page wearing Burrow's name and logo (API only)
+
+APP_NAME_MAX = 30  # pocket-id v2.18.0 dto.AppConfigUpdateDto: appName min=1,max=30
+LOGO_EXTENSIONS = (".svg", ".png", ".jpg", ".jpeg", ".webp")
+LOGO_MAX_BYTES = 1_000_000
+# pocket-id shows this in place of a secret when UI_CONFIG_DISABLED redacts it;
+# writing it back would store the placeholder as the real value.
+REDACTED = "XXXXXXXXXX"
+# "default" or any CSS colour: a hex colour or a plain colour name. Functions such
+# as rgb() are left out, so nothing here can carry markup or a quote.
+_ACCENT_RE = re.compile(r"^(?:default|#(?:[0-9a-fA-F]{3}|[0-9a-fA-F]{4}|[0-9a-fA-F]{6}|[0-9a-fA-F]{8})|[a-z]{3,20})$")
+
+
+def valid_app_name(value):
+    return (
+        isinstance(value, str)
+        and 1 <= len(value) <= APP_NAME_MAX
+        and value == unicodedata.normalize("NFC", value)
+        and value.isprintable()
+        and value == value.strip()
+    )
+
+
+def valid_accent_color(value):
+    return isinstance(value, str) and _ACCENT_RE.match(value) is not None
+
+
+def _settings(listed):
+    if not isinstance(listed, list):
+        return {}
+    return {
+        item["key"]: item.get("value", "")
+        for item in listed
+        if isinstance(item, dict) and isinstance(item.get("key"), str)
+    }
+
+
+def ensure_branding(client, app_name=None, accent_color=None):
+    """Set pocket-id's app name and accent colour. Returns "skipped", "present" or "applied".
+
+    Idempotent: nothing is written when both already match. Every other setting is
+    read and written back exactly as it was, because the update replaces the config.
+    """
+    if app_name is None and accent_color is None:
+        return "skipped"
+    _s, listed = client.call("GET", "/api/application-configuration/all")
+    current = _settings(listed)
+    if not current:
+        raise SetupError(
+            "pocketid_config_unreadable",
+            "GET /api/application-configuration/all returned no settings",
+            "check that pocket-id is the v2 release the renderer pins, then re-run",
+        )
+    if REDACTED in current.values():
+        raise SetupError(
+            "pocketid_config_locked",
+            "pocket-id is redacting its settings (UI_CONFIG_DISABLED is on)",
+            "remove UI_CONFIG_DISABLED from the pocket-id environment; branding is set "
+            "through the API and a locked config cannot be updated",
+        )
+    desired = dict(current)
+    if app_name is not None:
+        desired["appName"] = app_name
+    if accent_color is not None:
+        desired["accentColor"] = accent_color
+    if desired == current:
+        return "present"
+    _s, saved = client.call("PUT", "/api/application-configuration", body=desired)
+    after = _settings(saved)
+    for key in ("appName", "accentColor"):
+        if key in desired and desired[key] != current.get(key) and after.get(key) != desired[key]:
+            raise SetupError(
+                "pocketid_branding_not_saved",
+                f"pocket-id did not keep {key}",
+                "see pocket-id's logs: docker compose logs pocket-id",
+            )
+    return "applied"
+
+
+def multipart(field, filename, content, boundary=None):
+    """A multipart/form-data body with one file part. Returns (content_type, bytes)."""
+    boundary = boundary or uuid.uuid4().hex
+    safe = filename.replace('"', "").replace("\r", "").replace("\n", "")
+    head = (
+        f"--{boundary}\r\n"
+        f'Content-Disposition: form-data; name="{field}"; filename="{safe}"\r\n'
+        "Content-Type: application/octet-stream\r\n\r\n"
+    ).encode()
+    tail = f"\r\n--{boundary}--\r\n".encode()
+    return f"multipart/form-data; boundary={boundary}", head + content + tail
+
+
+def ensure_logo(client, filename, content):
+    """Upload ``content`` as the light and the dark logo. Returns "applied".
+
+    pocket-id strips image metadata on upload, so the stored bytes differ from
+    ``content`` and cannot be compared; the upload simply repeats on every run.
+    """
+    ctype, body = multipart("file", filename, content)
+    for light in ("true", "false"):
+        client.call(
+            "PUT",
+            f"/api/application-images/logo?light={light}",
+            body=body,
+            headers={"Content-Type": ctype},
+        )
+    return "applied"

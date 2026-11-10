@@ -46,6 +46,14 @@ defmodule PlatformWeb.ConnectAiLive do
   `:api_key` entry is accepted and ignored for the choices.
   `claude_login_timeout_ms:` there shortens the waits on the agent host.
 
+  While Burrow runs on the install's starter allowance
+  (`Burrow.Starter.active?/1`) this page still shows the choices with none
+  selected, and a link back to the conversation, and does NOT start anything
+  on mount: only an
+  explicit choice (`select`, `save_api_key`) calls `Burrow.ensure/2`, which
+  retires the starter. Opening the page from the conversation must not swap
+  Burrow off the allowance by itself.
+
   When the agent is first seen running,
   `Burrow.GettingStarted.ensure_getting_started/2`
   opens the "Getting started" space (once per agent) and the screen offers
@@ -66,7 +74,7 @@ defmodule PlatformWeb.ConnectAiLive do
   alias Platform.AgentHost
   alias Platform.AgentHost.LoginCode
   alias Platform.Agents.{Burrow, NativeLogin}
-  alias Platform.Agents.Burrow.GettingStarted
+  alias Platform.Agents.Burrow.{GettingStarted, Starter}
   alias Platform.Tenancy
 
   @default_order [:codex, :api_key, :claude_subscription]
@@ -157,7 +165,13 @@ defmodule PlatformWeb.ConnectAiLive do
   # wins over a subscription.
   defp initial_selection(nil, order), do: hd(order)
 
+  # On the starter allowance nothing is selected: a pre-checked radio would
+  # swallow the owner's click on it (no change event), and nothing may start.
   defp initial_selection(agent, order) do
+    if Starter.active?(agent), do: nil, else: selection_for_harness(agent, order)
+  end
+
+  defp selection_for_harness(agent, order) do
     case Burrow.harness(agent) do
       "codex" ->
         :codex
@@ -479,7 +493,14 @@ defmodule PlatformWeb.ConnectAiLive do
     assigns =
       assigns
       |> assign(:agent_name, (assigns.agent && assigns.agent.name) || Burrow.name())
-      |> assign(:done?, assigns.running? and not is_nil(assigns.space))
+      |> assign(:starter?, Starter.active?(assigns.agent))
+
+    assigns =
+      assign(
+        assigns,
+        :done?,
+        assigns.running? and not is_nil(assigns.space) and not assigns.starter?
+      )
 
     ~H"""
     <div class="h-full overflow-y-auto bg-base-100">
@@ -490,10 +511,10 @@ defmodule PlatformWeb.ConnectAiLive do
           class="mb-6 space-y-2 rounded-box border border-edge p-4"
         >
           <p class="flex items-center gap-2 text-base font-semibold text-base-content">
-            <span class="hero-finger-print size-5 shrink-0" /> Add a passkey
+            <span class="hero-finger-print size-5 shrink-0" /> Sign in faster next time
           </p>
           <p class="text-sm text-subtle">
-            You signed in with a one-time link. Add a passkey so you can sign in again.
+            Use Face ID, Touch ID or your device unlock to sign in next time.
           </p>
           <a
             id="connect-ai-passkey-link"
@@ -502,7 +523,7 @@ defmodule PlatformWeb.ConnectAiLive do
             rel="noopener noreferrer"
             class="btn btn-outline min-h-11"
           >
-            Add a passkey
+            Set up Face ID or device unlock
           </a>
         </div>
         <div :if={@done?} id="connect-ai-connected" class="space-y-4">
@@ -537,6 +558,14 @@ defmodule PlatformWeb.ConnectAiLive do
 
         <div :if={!@done?} class="space-y-6">
           <h1 class="text-base font-semibold text-base-content">Which subscription do you use?</h1>
+          <.link
+            :if={@starter? and @space}
+            id="connect-ai-back-to-getting-started"
+            navigate={~p"/chat/#{@space.slug}"}
+            class="text-sm text-base-content underline underline-offset-2 hover:no-underline"
+          >
+            Back to Getting started
+          </.link>
 
           <div class="space-y-2">
             <form id="connect-ai-options" phx-change="select" class="space-y-3">
@@ -661,7 +690,7 @@ defmodule PlatformWeb.ConnectAiLive do
               <p :if={@key_error} id="connect-ai-api-key-error" class="text-sm text-error">
                 {@key_error}
               </p>
-              <p class="text-xs text-subtle">Stored encrypted in this install's vault.</p>
+              <p class="text-xs text-subtle">Stored encrypted.</p>
               <button id="connect-ai-api-key-save" type="submit" class="btn btn-primary min-h-11">
                 Save and connect
               </button>
@@ -698,7 +727,7 @@ defmodule PlatformWeb.ConnectAiLive do
                 </p>
               <% :subscription_terminal_only -> %>
                 <p id="connect-ai-claude-operator" class="text-base text-base-content">
-                  The person who runs this server connects Claude Pro or Max for this install.
+                  Someone who manages Burrow needs to connect Claude Pro or Max for you.
                 </p>
               <% _ -> %>
                 <p id="connect-ai-claude-preparing" class="text-sm text-subtle">
@@ -860,7 +889,7 @@ defmodule PlatformWeb.ConnectAiLive do
               </button>
             </div>
             <p id="connect-ai-claude-reassurance" class="text-sm text-base-content">
-              The code goes straight to your Burrow's assistant on your server. Burrow doesn't keep it.
+              The code goes straight to your Burrow and is not kept.
             </p>
           </form>
           <p
@@ -968,7 +997,7 @@ defmodule PlatformWeb.ConnectAiLive do
 
   @doc false
   def failure_text(:host_offline, _name),
-    do: "This server's agent service isn't answering right now, so your AI can't connect yet."
+    do: "Burrow isn't answering right now, so your AI can't connect yet."
 
   def failure_text(:not_created, _name), do: "Your AI couldn't be set up. Try again."
 
@@ -984,8 +1013,7 @@ defmodule PlatformWeb.ConnectAiLive do
     do: "This account doesn't have Claude Pro or Max. Sign in with the account that does."
 
   def claude_failure_text(:server),
-    do:
-      "Your server didn't answer. Try again in a minute; if it keeps happening, ask Burrow support."
+    do: "Burrow didn't answer. Try again in a minute. If it keeps happening, ask Burrow support."
 
   @doc "The Claude card's connected line: the account and plan when a submit returned them."
   def claude_connected_text(%{account: account} = login) when is_binary(account) do

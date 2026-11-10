@@ -99,7 +99,8 @@ class _Server:
             def _handle(self):
                 length = int(self.headers.get("Content-Length") or 0)
                 body = self.rfile.read(length) if length else b""
-                data = json.loads(body) if body else None
+                is_json = self.headers.get("Content-Type", "").startswith("application/json")
+                data = (json.loads(body) if is_json else body) if body else None
                 outer.requests.append((self.command, self.path))
                 status, payload, headers = outer.dispatch(
                     self.command, self.path, dict(self.headers.items()), data
@@ -262,6 +263,20 @@ class FakePocketId(_Server):
         self.clients = {}
         self.secrets = {}
         self.tokens = []
+        # v2.18.0 application configuration (appconfig/model.go defaults) and
+        # the logo uploads, so the branding steps see what the real server does.
+        self.config = {
+            "appName": "Pocket ID",
+            "sessionDuration": "60",
+            "homePageUrl": "/settings/account",
+            "emailsVerified": "false",
+            "accentColor": "default",
+            "smtpHost": "mail.example.test",
+            "smtpPassword": "smtp-secret-kept-exactly",
+            "ldapBindPassword": "",
+        }
+        self.config_puts = []
+        self.logos = []
 
     def dispatch(self, method, path, headers, data):
         if headers.get("X-Api-Key", headers.get("X-API-Key")) != self.api_key:
@@ -286,6 +301,22 @@ class FakePocketId(_Server):
                 token = "".join(secrets.choice(_UNAMBIGUOUS) for _ in range(length))
                 self.tokens.append(token)
                 return 201, {"token": token}, None
+        if p == "/api/application-configuration/all" and method == "GET":
+            return 200, [{"key": k, "value": v} for k, v in self.config.items()], None
+        if p == "/api/application-configuration" and method == "PUT":
+            # PUT replaces the whole config; a missing key falls back to its default.
+            if not 1 <= len(data.get("appName", "")) <= 30:
+                return 400, {"error": "appName: min 1, max 30"}, None
+            if getattr(self, "config_put_status", None):
+                return self.config_put_status, {"error": "refused"}, None
+            self.config_puts.append(dict(data))
+            self.config = dict(data)
+            return 200, [{"key": k, "value": v} for k, v in self.config.items()], None
+        if p == "/api/application-images/logo" and method == "PUT":
+            self.logos.append(
+                {"light": q.get("light"), "content_type": headers.get("Content-Type", ""), "body": data}
+            )
+            return 204, None, None
         if p == "/api/oidc/clients" and method == "POST":
             client = dict(data)
             self.clients[client["id"]] = client

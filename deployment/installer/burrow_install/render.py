@@ -167,9 +167,14 @@ def _customer_refs(m):
         refs[access[key]] = f"access.{key}"
     if m["auth"]["client_secret_ref"]:
         refs[m["auth"]["client_secret_ref"]] = "auth.client_secret_ref"
+    if m["agents"]["profile"] != "off" and m["agents"]["starter_api_key_ref"]:
+        refs[m["agents"]["starter_api_key_ref"]] = "agents.starter_api_key_ref"
     for key in ("access_key_ref", "secret_key_ref"):
         if m["backup"][key]:
             refs[m["backup"][key]] = f"backup.{key}"
+    sm = m["system_mail"]
+    if sm["smtp_host"] and sm["smtp_password_ref"]:
+        refs[sm["smtp_password_ref"]] = "system_mail.smtp_password_ref"
     return refs
 
 

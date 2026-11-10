@@ -107,6 +107,85 @@ defmodule PlatformWeb.AuthControllerHandoverTest do
     assert get_session(conn, :post_login_path) == nil
   end
 
+  test "the callback that follows marks the owner past first run", %{conn: conn} do
+    conn = get(conn, ~p"/auth/handover?code=#{@code}")
+    state = get_session(conn, :oidc_session_params).state
+    mock_login()
+
+    conn = conn |> recycle() |> get(~p"/auth/oidc/callback?code=c&state=#{state}")
+    user_id = get_session(conn, :current_user_id)
+
+    assert Platform.Accounts.get_user_preferences(user_id)["first_run_goal"] == "owner"
+  end
+
+  test "an ordinary login does not mark the user as the owner", %{conn: conn} do
+    conn = get(conn, ~p"/auth/login")
+    state = get_session(conn, :oidc_session_params).state
+    mock_login()
+
+    conn = conn |> recycle() |> get(~p"/auth/oidc/callback?code=c&state=#{state}")
+    user_id = get_session(conn, :current_user_id)
+
+    refute Map.has_key?(Platform.Accounts.get_user_preferences(user_id), "first_run_goal")
+  end
+
+  describe "with a starter key configured" do
+    @starter "sk-ant-api03-" <> String.duplicate("s", 40) <> "STARTERKEYtail"
+
+    setup do
+      Application.put_env(:platform, :starter_anthropic_api_key, @starter)
+      on_exit(fn -> Application.delete_env(:platform, :starter_anthropic_api_key) end)
+    end
+
+    defp owner!(role) do
+      user =
+        Platform.Repo.insert!(%Platform.Accounts.User{
+          email: "owner@example.com",
+          name: "Owner",
+          oidc_sub: "handover-sub"
+        })
+
+      %Platform.Tenancy.OrgMembership{}
+      |> Platform.Tenancy.OrgMembership.changeset(%{
+        user_id: user.id,
+        org_id: Platform.TenancyFixtures.acme_org_id(),
+        role: role,
+        roles_locked_at: DateTime.utc_now()
+      })
+      |> Platform.Repo.insert!()
+    end
+
+    test "the landing is the starter marker, not the picker", %{conn: conn} do
+      conn = get(conn, ~p"/auth/handover?code=#{@code}")
+      assert get_session(conn, :post_login_path) == "/setup/getting-started"
+    end
+
+    test "the callback lands on the Getting started conversation, once", %{conn: conn} do
+      membership = owner!("admin")
+      conn = get(conn, ~p"/auth/handover?code=#{@code}")
+      state = get_session(conn, :oidc_session_params).state
+      mock_login()
+
+      conn = conn |> recycle() |> get(~p"/auth/oidc/callback?code=c&state=#{state}")
+      assert "/chat/getting-started-" <> _ = redirected_to(conn, 302)
+      assert membership.user_id == get_session(conn, :current_user_id)
+      assert get_session(conn, :post_login_path) == nil
+      assert Platform.Agents.Burrow.Starter.state(Platform.Agents.Burrow.get()) == "active"
+    end
+
+    test "a failed starter falls back to the picker", %{conn: conn} do
+      # Not an install admin: nothing is provisioned and the picker is the landing.
+      owner!("member")
+      conn = get(conn, ~p"/auth/handover?code=#{@code}")
+      state = get_session(conn, :oidc_session_params).state
+      mock_login()
+
+      conn = conn |> recycle() |> get(~p"/auth/oidc/callback?code=c&state=#{state}")
+      refute Platform.Agents.Burrow.get()
+      assert redirected_to(conn, 302) == "/setup/connect-ai"
+    end
+  end
+
   test "an ordinary login after an abandoned hand-over lands on /", %{conn: conn} do
     conn = get(conn, ~p"/auth/handover?code=#{@code}")
     conn = conn |> recycle() |> get(~p"/auth/login")
@@ -127,7 +206,10 @@ defmodule PlatformWeb.AuthControllerHandoverTest do
         ] do
       conn = get(build_conn(), path)
       assert conn.status == 400, path
-      assert conn.resp_body == "Sign-in link is invalid or has expired"
+
+      assert conn.resp_body ==
+               "This sign-in link has expired or was already used. Ask for a new one."
+
       refute get_session(conn, :post_login_path)
     end
 

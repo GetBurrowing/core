@@ -313,7 +313,7 @@ defmodule PlatformWeb.AdminSignInUsersLiveTest do
       fake!(users: [pid_user(admin.oidc_sub, admin.email)], passkeys: %{admin.oidc_sub => 1})
 
       html = conn |> login(admin) |> get(@path) |> html_response(200)
-      assert html =~ "Admin · Users"
+      assert html =~ ~r/<h1[^>]*>\s*Users\s*<\/h1>/
 
       admin_html = conn |> login(admin) |> get("/admin") |> html_response(200)
       assert admin_html =~ ~s(data-role="admin-sign-in-users-link")
@@ -333,7 +333,7 @@ defmodule PlatformWeb.AdminSignInUsersLiveTest do
          %{conn: conn, admin: admin} do
       fake!(users: [pid_user(admin.oidc_sub, admin.email)], passkeys: %{admin.oidc_sub => 1})
       conn = conn |> login(admin) |> get(@path)
-      assert html_response(conn, 200) =~ "Admin · Users"
+      assert html_response(conn, 200) =~ ~r/<h1[^>]*>\s*Users\s*<\/h1>/
 
       gate(false)
 
@@ -393,7 +393,7 @@ defmodule PlatformWeb.AdminSignInUsersLiveTest do
       {:ok, view, _html} = live(login(conn, admin), @path)
       html = render_async(view)
 
-      assert html =~ "Can&#39;t reach the sign-in service."
+      assert html =~ "Can&#39;t check sign-in right now."
       assert has_element?(view, "[data-role=retry]")
 
       for role <- ~w(open-invite resend-link disable enable open-remove pocket-id-admin-link) do
@@ -454,6 +454,40 @@ defmodule PlatformWeb.AdminSignInUsersLiveTest do
 
       # Nothing persisted the token.
       refute Repo.exists?(from(u in Accounts.User, where: like(u.name, ^"%#{@token}%")))
+    end
+
+    test "with the system sender configured, says the invite was sent and shows no slip",
+         %{conn: conn, admin: admin} do
+      saved = Application.fetch_env(:platform, Platform.Mail.System)
+
+      on_exit(fn ->
+        case saved do
+          {:ok, v} -> Application.put_env(:platform, Platform.Mail.System, v)
+          :error -> Application.delete_env(:platform, Platform.Mail.System)
+        end
+      end)
+
+      Application.put_env(:platform, Platform.Mail.System,
+        from: "Burrow <noreply@example.test>",
+        host: "smtp.example.test",
+        tls: "starttls"
+      )
+
+      fake!(users: [pid_user(admin.oidc_sub, admin.email)], passkeys: %{admin.oidc_sub => 1})
+      view = mount!(conn, admin)
+
+      view |> element("[data-role=open-invite]") |> render_click()
+
+      view
+      |> form("#invite-user-form", %{
+        "invite" => %{"email" => "maria@example.test", "name" => "Maria", "role" => "member"}
+      })
+      |> render_submit()
+
+      html = render(view)
+      assert html =~ "Invite sent to maria@example.test."
+      refute has_element?(view, "[data-role=credential-slip]")
+      refute html =~ "/lc/#{@token}"
     end
 
     test "duplicate email shows Saru's inline copy", %{conn: conn, admin: admin} do

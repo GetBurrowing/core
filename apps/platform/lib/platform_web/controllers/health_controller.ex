@@ -45,14 +45,8 @@ defmodule PlatformWeb.HealthController do
     json(conn, body)
   end
 
-  defp key_matches?(conn) do
-    with ["Bearer " <> presented] <- get_req_header(conn, "authorization"),
-         %KeyConfig.Key{value: expected} <- KeyConfig.api_key() do
-      Plug.Crypto.secure_compare(presented, expected)
-    else
-      _ -> false
-    end
-  end
+  defp key_matches?(conn),
+    do: conn |> get_req_header("authorization") |> KeyConfig.bearer_matches?()
 
   # One word, so the embed itself is a fraction of a second even on the 4 GB
   # profile; the bound is for the wait behind work already queued on the

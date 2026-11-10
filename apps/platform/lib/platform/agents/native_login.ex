@@ -301,9 +301,21 @@ defmodule Platform.Agents.NativeLogin do
   command and nowhere else.
 
   In `:operator` login mode it is always `%{}` and the Vault is not read.
+
+  One exception, in both modes: an agent marked as running on Burrow's starter
+  allowance (`Platform.Agents.Burrow.Starter`) gets the install's starter key
+  as `ANTHROPIC_API_KEY`, read from config, not the Vault. It stops the moment
+  the agent is retired from the starter.
   """
   @spec start_env(Agent.t()) :: %{optional(String.t()) => String.t()}
   def start_env(%Agent{} = agent) do
+    case Platform.Agents.Burrow.Starter.key_for(agent) do
+      nil -> vault_env(agent)
+      key -> %{@env_name => key}
+    end
+  end
+
+  defp vault_env(agent) do
     with :api_key <- login_mode(),
          %AgentRuntime{harness: harness} <- NativeAgents.get_managed_runtime(agent),
          true <- api_key_harness?(harness),

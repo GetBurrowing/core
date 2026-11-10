@@ -265,7 +265,7 @@ defmodule PlatformWeb.ConnectAiLiveTest do
       assert has_element?(
                view,
                "#connect-ai-claude-reassurance",
-               "The code goes straight to your Burrow's assistant on your server. Burrow doesn't keep it."
+               "The code goes straight to your Burrow and is not kept."
              )
 
       text = String.downcase(panel_text(view))
@@ -440,7 +440,7 @@ defmodule PlatformWeb.ConnectAiLiveTest do
           has_element?(
             view,
             "#connect-ai-claude-error.text-error",
-            "Your server didn't answer. Try again in a minute; if it keeps happening, ask Burrow support."
+            "Burrow didn't answer. Try again in a minute. If it keeps happening, ask Burrow support."
           )
         end,
         3_000
@@ -726,13 +726,53 @@ defmodule PlatformWeb.ConnectAiLiveTest do
       assert has_element?(
                view,
                ~s(#connect-ai-passkey-link[href="https://issuer.example.com/settings/account"][target="_blank"][rel="noopener noreferrer"]),
-               "Add a passkey"
+               "Set up Face ID or device unlock"
              )
     end
 
     test "any other sign-in shows no passkey card", %{conn: conn} do
       {:ok, view, _html} = live(conn, ~p"/setup/connect-ai")
       refute has_element?(view, "#connect-ai-passkey")
+    end
+  end
+
+  describe "while Burrow runs on the starter allowance" do
+    setup %{admin: admin} do
+      Application.put_env(
+        :platform,
+        :starter_anthropic_api_key,
+        "sk-ant-api03-" <> String.duplicate("s", 40) <> "STARTERKEYtail"
+      )
+
+      on_exit(fn -> Application.delete_env(:platform, :starter_anthropic_api_key) end)
+      {:ok, _space} = Platform.Agents.Burrow.Starter.provision(admin)
+      :ok
+    end
+
+    test "the page offers the choices with none selected and starts nothing", %{conn: conn} do
+      agent = Burrow.get()
+      {:ok, view, _html} = live(conn, ~p"/setup/connect-ai")
+
+      assert providers(view) == ["codex", "claude_subscription"]
+      refute has_element?(view, "#connect-ai-option-codex.ring-primary")
+      refute has_element?(view, "#connect-ai-option-claude_subscription.ring-primary")
+      assert has_element?(view, "#connect-ai-back-to-getting-started")
+      assert Burrow.Starter.state(agent) == "active"
+    end
+
+    test "choosing ChatGPT retires the starter", %{conn: conn} do
+      agent = Burrow.get()
+      {:ok, view, _html} = live(conn, ~p"/setup/connect-ai")
+
+      choose(view, "codex")
+
+      assert Burrow.Starter.state(agent) == "retired"
+      assert Burrow.harness(agent) == "codex"
+    end
+
+    test "/admin keeps the Connect your AI card", %{conn: conn} do
+      {:ok, view, _html} = live(conn, ~p"/admin")
+      assert has_element?(view, "#admin-connect-ai-card")
     end
   end
 end

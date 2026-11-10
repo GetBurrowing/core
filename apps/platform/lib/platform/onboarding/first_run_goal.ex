@@ -38,6 +38,10 @@ defmodule Platform.Onboarding.FirstRunGoal do
       migration `20261101050000_backfill_first_run_goal_for_existing_users`).
     * `"submitting"` — a submit is in flight. It is the claim that makes a
       double submit post once; a failed post removes it again.
+    * `"owner"` — the install owner arrived by the hand-over link
+      (`mark_owner/1`). The owner is walked through `/setup/connect-ai`, not
+      the member goal box, so without this an owner who opens `/` before
+      finishing that setup would be bounced into the member flow.
 
   A member is pending only while the key is ABSENT. Any value, including one
   this module does not know, means "not pending".
@@ -171,6 +175,19 @@ defmodule Platform.Onboarding.FirstRunGoal do
         end
     end
   end
+
+  @doc """
+  Record that `user` is the install owner who arrived by the hand-over link,
+  so the goal box is never pending for them. Idempotent, and it overwrites
+  any earlier value: arriving by hand-over is the stronger fact. Writes only
+  this key (see "Writes are single-key and atomic" above).
+  """
+  @spec mark_owner(User.t() | map()) :: :ok | {:error, :not_found}
+  def mark_owner(%{id: user_id}) when is_binary(user_id) do
+    if Platform.UUID.valid?(user_id), do: put_pref(user_id, "owner"), else: {:error, :not_found}
+  end
+
+  def mark_owner(_), do: {:error, :not_found}
 
   @doc "Record that the member dismissed the box. Idempotent."
   @spec skip(User.t() | map()) :: :ok | {:error, :not_found}

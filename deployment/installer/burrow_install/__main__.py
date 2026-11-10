@@ -19,9 +19,11 @@ Commands:
                         burrow_install/proof_mac.py and deployment/installer/mac/proof.sh.
   bootstrap-admin --base https://<auth host> --api-key-file <0600 file> --email <addr>
          [--username <u>] --link-file <path>
+         [--primary <host> --durable-link-file <path> [--core-base <url>]]
                         create (or find) the first pocket-id admin and write a fresh
                         one-time sign-in link to --link-file (0600); print one JSON
-                        document, never the link or the key. Exit 0 ok, 1 pocket-id
+                        document, never the link or the key. With --durable-link-file it also
+                        fetches the owner's 14-day /auth/link URL from core into that file. Exit 0 ok, 1 pocket-id
                         unreachable or erroring, 2 usage. See burrow_install/bootstrap.py.
   redact <render-dir> --out <dir>
                         copy a render with every secret value replaced by

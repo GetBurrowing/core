@@ -1535,3 +1535,95 @@ class SharingRenderTest(PositiveControlMixin, unittest.TestCase):
                 text = all_text(build(valid(load(path)), **kwargs))
                 for name in self.NAMES:
                     self.assertNotIn(name, text)
+
+
+# ---------------------------------------------------------------------------
+# [system_mail] (core Platform.Mail.System)
+
+
+class SystemMailRenderTest(unittest.TestCase):
+    """``[system_mail]`` renders the SYSTEM_MAIL_* / SYSTEM_SMTP_* names into
+    core-platform's environment; the password is a customer secret that lands
+    in the 0600 secrets.env and not in compose.yaml. An absent table renders
+    nothing."""
+
+    SECRET = "smtp-pass-value-9f3a"
+    TABLE = {
+        "from": "Burrow <noreply@example.test>",
+        "smtp_host": "smtp.example.test",
+        "smtp_port": 587,
+        "smtp_username": "mailer",
+        "smtp_password_ref": "SYSTEM_SMTP_PASSWORD_VALUE",
+        "smtp_tls": "starttls",
+    }
+
+    def setUp(self):
+        self.tmp = tempfile.mkdtemp()
+        self.addCleanup(shutil.rmtree, self.tmp, ignore_errors=True)
+        self.supplied = os.path.join(self.tmp, "customer.env")
+        with open(self.supplied, "w") as handle:
+            handle.write(f"SYSTEM_SMTP_PASSWORD_VALUE={self.SECRET}\n")
+
+    def render(self, table=None):
+        raw = copy.deepcopy(load(EXAMPLE))
+        if table is not None:
+            raw["system_mail"] = table
+        return build(valid(raw), customer_secrets=self.supplied)
+
+    def core_block(self, rendered):
+        return _compose_services(rendered.files["compose.yaml"][0])["core-platform"]
+
+    def test_renders_every_name_into_core(self):
+        block = self.core_block(self.render(self.TABLE))
+        for line in (
+            'SYSTEM_MAIL_FROM: "Burrow <noreply@example.test>"',
+            'SYSTEM_SMTP_HOST: "smtp.example.test"',
+            'SYSTEM_SMTP_PORT: "587"',
+            'SYSTEM_SMTP_USERNAME: "mailer"',
+            'SYSTEM_SMTP_TLS: "starttls"',
+        ):
+            self.assertIn(line, block)
+
+    def test_password_is_in_secrets_env_only(self):
+        rendered = self.render(self.TABLE)
+        text, mode = rendered.files["secrets.env"]
+        self.assertIn(f"SYSTEM_SMTP_PASSWORD={self.SECRET}", text)
+        self.assertEqual(mode, 0o600)
+        self.assertNotIn(self.SECRET, rendered.files["compose.yaml"][0])
+
+    def test_an_absent_table_renders_nothing(self):
+        text = all_text(self.render())
+        self.assertNotIn("SYSTEM_SMTP", text)
+        self.assertNotIn("SYSTEM_MAIL", text)
+
+    def test_tls_defaults_to_starttls_and_optional_keys_are_omitted(self):
+        block = self.core_block(
+            self.render({"from": "n@example.test", "smtp_host": "smtp.example.test"})
+        )
+        self.assertIn('SYSTEM_SMTP_TLS: "starttls"', block)
+        for name in ("SYSTEM_SMTP_PORT", "SYSTEM_SMTP_USERNAME", "SYSTEM_SMTP_PASSWORD"):
+            self.assertNotIn(name, block)
+
+    def invalid(self, table):
+        raw = copy.deepcopy(load(EXAMPLE))
+        raw["system_mail"] = table
+        errors, _ = validate(raw)
+        return [(e.code, e.path) for e in errors]
+
+    def test_validation(self):
+        # Positive control: the full table is valid.
+        self.assertEqual(self.invalid(self.TABLE), [])
+        self.assertIn(
+            ("missing_required", "system_mail.from"),
+            self.invalid({"smtp_host": "smtp.example.test"}),
+        )
+        self.assertIn(
+            ("field_not_applicable", "system_mail.smtp_username"), self.invalid({"smtp_username": "x"})
+        )
+        self.assertIn(
+            ("invalid_value", "system_mail.smtp_password_ref"),
+            self.invalid({**self.TABLE, "smtp_password_ref": "not a name"}),
+        )
+        self.assertIn(
+            ("invalid_enum", "system_mail.smtp_tls"), self.invalid({**self.TABLE, "smtp_tls": "ssl"})
+        )
