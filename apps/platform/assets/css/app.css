@@ -1883,6 +1883,34 @@ body, .font-suite {
   height: auto;
   margin: 0;
 }
+/* ComposeInput measures available space after patches, scrolling and
+   keyboard resizes. The shared picker keeps its internal scrolling. */
+.thread-field-box .mention-list-box {
+  max-height: min(212px, var(--thread-mention-max-h, 212px));
+}
+@media (max-width: 1023.98px) {
+  /* Escape the timeline's overflow clip; the panel still follows its field,
+     including scroll and visualViewport pan. Never move the LiveView node. */
+  .thread-field-box .mention-list {
+    position: fixed;
+    top: var(--thread-mention-top);
+    left: var(--thread-mention-left);
+    width: var(--thread-mention-width);
+    right: auto;
+    bottom: auto;
+    transform: translateY(-100%);
+  }
+  /* A transformed ancestor would turn fixed positioning back into a clipped
+     local containing block while the suggestion is pressed. */
+  .message-row-inner:has(.thread-input:focus) {
+    scale: none;
+    transform: none;
+  }
+}
+/* The expansion animation must not clip an open suggestion panel. */
+.thread-replies:has(.thread-input[aria-expanded="true"]) {
+  overflow: visible !important;
+}
 .thread-send {
   min-width: 30px;
   height: 30px;

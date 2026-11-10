@@ -162,6 +162,10 @@ function richComposer({ coarse = false, serverValue = "", staged = false, thread
   form.setAttribute("id", ids.form)
   form.requestSubmit = vi.fn()
 
+  const row = doc.createElement("div")
+  row.setAttribute("data-message-id", thread || "channel")
+  if (thread) row.appendChild(form)
+
   const hidden = doc.createElement("input")
   hidden.setAttribute("id", ids.value)
   hidden.value = serverValue
@@ -213,7 +217,7 @@ function richComposer({ coarse = false, serverValue = "", staged = false, thread
   hook.handleEvent = (name, fn) => (handlers[name] = fn)
   hook.mounted()
 
-  return { doc, form, hidden, hiddenInputs, el, at, send, hook, handlers, ctx, windowListeners, ids }
+  return { doc, row, form, hidden, hiddenInputs, el, at, send, hook, handlers, ctx, windowListeners, ids }
 }
 
 function type(c, text) {
@@ -908,5 +912,60 @@ describe("ComposeInput: focus stays in the field after a send", () => {
     submit(c)
     vi.runAllTimers()
     expect(c.doc.activeElement).not.toBe(c.el)
+  })
+})
+
+
+describe("thread mention viewport and ancestor focus", () => {
+  afterEach(() => vi.unstubAllGlobals())
+
+  it("observes the stream row and restores focus after the whole thread moves", () => {
+    const observers = []
+    vi.stubGlobal("MutationObserver", class {
+      constructor(fn) { this.fn = fn; this.observe = vi.fn(); this.disconnect = vi.fn(); observers.push(this) }
+    })
+    const c = richComposer({ thread: "root-1" })
+    const moved = c.doc.createElement("div")
+    moved.appendChild(c.form)
+    c.el.isConnected = true
+    c.el.focus()
+    c.el.fire("blur")
+    c.doc.activeElement = null
+    expect(c.hook._moveObserver.observe).toHaveBeenCalledWith(c.row, expect.objectContaining({ childList: true, subtree: true }))
+    c.hook._moveObserver.fn([{ removedNodes: [moved] }])
+    expect(c.doc.activeElement).toBe(c.el)
+    c.hook.destroyed()
+    expect(observers.every(o => o.disconnect.mock.calls.length === 1)).toBe(true)
+  })
+
+  it("clamps above the field after a viewport pan and cleans up every listener", () => {
+    const listeners = new Map()
+    const target = () => ({
+      addEventListener: vi.fn((n, f) => listeners.set(f, n)),
+      removeEventListener: vi.fn((n, f) => listeners.delete(f)),
+    })
+    const viewport = { ...target(), offsetTop: 20 }
+    const win = { ...target(), visualViewport: viewport }
+    vi.stubGlobal("window", win)
+    vi.stubGlobal("document", {})
+    vi.stubGlobal("requestAnimationFrame", vi.fn(f => { win.frame = f; return 7 }))
+    vi.stubGlobal("cancelAnimationFrame", vi.fn())
+    const values = new Map()
+    const box = { style: { setProperty: (k, v) => values.set(k, v), removeProperty: k => values.delete(k) } }
+    const scroller = target()
+    const field = { getBoundingClientRect: () => ({ top: 140, left: 30, width: 280 }), closest: s => ({ ".thread-field-box": box, "#chat-message-scroller": scroller, "#chat-drop-zone": { getBoundingClientRect: () => ({ top: 44 }) } })[s] }
+    const hook = Object.assign(Object.create(ComposeInput), { el: field })
+    hook._mountThreadMentionViewport()
+    expect(values.get("--thread-mention-max-h")).toBe("94px")
+    expect(values.get("--thread-mention-top")).toBe("140px")
+    expect(values.get("--thread-mention-left")).toBe("30px")
+    expect(values.get("--thread-mention-width")).toBe("280px")
+    viewport.offsetTop = 160
+    const resize = viewport.addEventListener.mock.calls.find(([n]) => n === "resize")[1]
+    resize(); win.frame()
+    expect(values.get("--thread-mention-max-h")).toBe("0px")
+    hook._threadMentionCleanup()
+    expect(listeners.size).toBe(0)
+    expect(values.size).toBe(0)
   })
 })

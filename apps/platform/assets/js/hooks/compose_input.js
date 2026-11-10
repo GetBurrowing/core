@@ -16,6 +16,7 @@
 // ever arrives already-prefixed with `"suite:"`, we strip it before passing
 // through so ClientState's own `suite:compose:` prefix isn't doubled.
 import ClientState from "../client_state.js";
+import { watchKeyboard } from "../lib/keyboard_inset.js";
 import { attachSendFeel, SEND_SELECTOR } from "../lib/send_feel.js";
 import {
   attachedToastText,
@@ -340,6 +341,7 @@ const ComposeInput = {
       this._form.removeEventListener("mousedown", this._onListPress);
       this._form.removeEventListener("pointerover", this._onListHover);
     }
+    if (this._threadMentionCleanup) this._threadMentionCleanup();
     if (this._richObserver) this._richObserver.disconnect();
     if (this._moveObserver) this._moveObserver.disconnect();
     if (this._onSelectionChange) document.removeEventListener("selectionchange", this._onSelectionChange);
@@ -403,6 +405,7 @@ const ComposeInput = {
     this._suppress = null;
     this._draftKey = null;
     this._form = el.closest("form");
+    this._mountThreadMentionViewport();
     // A coarse pointer (touch): the touch placeholder reads this, and so
     // does Enter, which inserts a line break here instead of sending; only
     // the Send button (or Cmd/Ctrl+Enter from a hardware keyboard) sends.
@@ -733,7 +736,10 @@ const ComposeInput = {
           sel.addRange(range);
         }
       });
-      this._moveObserver.observe(this._form, {
+      // Thread patches can move the whole expanded thread outside its form.
+      // Observe the stable stream row so those removals restore the same caret.
+      const moveRoot = el.closest("[data-message-id]") || this._form;
+      this._moveObserver.observe(moveRoot, {
         childList: true,
         subtree: true,
         attributes: true,
@@ -755,6 +761,55 @@ const ComposeInput = {
     }
 
     this._applyRichPlaceholder();
+  },
+
+  // A reply lives in the timeline scroller. Its mobile panel escapes that
+  // clipping with fixed positioning, capped to the visible chat surface.
+  // ChatDock and this field share the existing keyboard watcher.
+  _mountThreadMentionViewport() {
+    const box = this.el.closest(".thread-field-box");
+    if (!box) return;
+    const scroller = this.el.closest("#chat-message-scroller");
+    const viewport = window.visualViewport;
+    const unwatch = watchKeyboard();
+    this._measureThreadMentionSpace = () => {
+      const zone = this.el.closest("#chat-drop-zone");
+      const top = Math.max(viewport?.offsetTop || 0, zone?.getBoundingClientRect().top || 0);
+      const rect = this.el.getBoundingClientRect();
+      const height = Math.max(0, Math.floor(rect.top - top - 2));
+      box.style.setProperty("--thread-mention-max-h", `${height}px`);
+      box.style.setProperty("--thread-mention-top", `${rect.top}px`);
+      box.style.setProperty("--thread-mention-left", `${rect.left}px`);
+      box.style.setProperty("--thread-mention-width", `${rect.width}px`);
+    };
+    let frame = null;
+    const measure = () => {
+      if (frame !== null) return;
+      frame = requestAnimationFrame(() => {
+        frame = null;
+        this._measureThreadMentionSpace();
+      });
+    };
+    viewport?.addEventListener("resize", measure);
+    viewport?.addEventListener("scroll", measure);
+    window.addEventListener("resize", measure);
+    scroller?.addEventListener("scroll", measure, { passive: true });
+    const observer = typeof ResizeObserver !== "undefined" ? new ResizeObserver(measure) : null;
+    observer?.observe(box);
+    if (scroller) observer?.observe(scroller);
+    this._threadMentionCleanup = () => {
+      viewport?.removeEventListener("resize", measure);
+      viewport?.removeEventListener("scroll", measure);
+      window.removeEventListener("resize", measure);
+      scroller?.removeEventListener("scroll", measure);
+      observer?.disconnect();
+      if (frame !== null) cancelAnimationFrame(frame);
+      unwatch();
+      for (const name of ["max-h", "top", "left", "width"]) {
+        box.style.removeProperty(`--thread-mention-${name}`);
+      }
+    };
+    this._measureThreadMentionSpace();
   },
 
   _valueInput() {
@@ -836,6 +891,7 @@ const ComposeInput = {
   // Apply the highlight (clamped to the rows there are now) and the field's
   // ARIA state to whatever the last patch rendered.
   _syncList() {
+    this._measureThreadMentionSpace?.();
     const el = this.el;
     const list = this._list();
     const open = this._lastMentionQuery !== null && list !== null;
