@@ -32,7 +32,7 @@ defmodule PlatformWeb.AdminGamesLive do
   @impl true
   def render(assigns) do
     ~H"""
-    <Layouts.app flash={@flash}>
+    <Layouts.app flash={@flash} embedded={true}>
       <div class="max-w-3xl mx-auto p-6 space-y-6">
         <h1 class="text-3xl font-bold">Publish a game</h1>
         <p>Upload the Windows ZIP in Burrow chat, then publish it here. The page, downloads, updates and a separate player chat become available together. No host configuration or restart.</p>
