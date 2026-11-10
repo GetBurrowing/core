@@ -496,6 +496,9 @@ defmodule PlatformWeb.Router do
     # Only operator-published manifests are exposed; downloads authenticate
     # separately and never widen chat attachment permissions.
     get("/games/:slug", GamePageController, :show)
+    get("/games/:slug/player", GamePageController, :player)
+    get("/games/:slug/updates", GamePageController, :updates)
+    get("/games/:slug/player/releases/:version", GamePageController, :player_release)
     get("/games/:slug/sign-in", GamePageController, :sign_in)
     get("/games/:slug/create-account", GamePageController, :create_account)
     post("/games/:slug/community", GamePageController, :join_community)
@@ -1128,6 +1131,7 @@ defmodule PlatformWeb.Router do
       # context function re-checks the actor itself
       # (`Lifecycle.with_root_admin_authz/2`) so neither half is load-bearing
       # alone.
+      live("/admin/games", AdminGamesLive, :index)
       live("/admin/orgs", AdminOrgsLive, :index)
       # Task 01a0879a stage 4: this install's PWA identity (name, colours,
       # icon source). Install-wide, NOT per-org — an org is a client, and

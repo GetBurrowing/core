@@ -62,7 +62,7 @@
           <h1>{@game["title"]}</h1>
           <p class="gp-by">Made by the team · hosted on Burrow</p>
           <p class="gp-pitch">
-            One giant robot, four players. Each of you drives a limb. Staying upright is a team sport.
+            {@game["summary"]}
           </p>
           <div class="gp-facts">
             <span>Windows</span><span>Free</span><span>{Float.round(@release["byte_size"] / 1_048_576, 1)} MiB</span>
@@ -81,13 +81,13 @@
               id="game-download"
               data-game-download
               class="gp-btn gp-primary"
-              href={"/games/#{@game["slug"]}/releases/#{@release["version"]}/download"}
+              href={"/games/#{@game["slug"]}/player"}
             >
-              Download for Windows
+              Get Burrow Player for Windows
             </a>
             <p class="gp-under">
               {if @user,
-                do: "Extract the ZIP, then open Play Multiplayer.",
+                do: "Extract Burrow Player, then open Play.bat. It keeps Voltron up to date.",
                 else: "One Burrow account for the game and its community."}
             </p>
           </div>
@@ -120,10 +120,10 @@
             </div>
             <ol class="gp-steps">
               <li>
-                <b>Extract the ZIP</b><span>Right-click the downloaded file → Extract All.</span>
+                <b>Extract Burrow Player</b><span>Right-click the downloaded file → Extract All.</span>
               </li>
               <li>
-                <b>Open Play Multiplayer</b><span>Inside the folder you just extracted.</span>
+                <b>Open Play.bat</b><span>The player downloads and verifies the latest Voltron build.</span>
               </li>
               <li>
                 <b>Find your crew</b><span>Get the current room code in the joined player community.</span>
@@ -135,14 +135,16 @@
             <a
               data-game-download
               class="gp-textlink"
-              href={"/games/#{@game["slug"]}/releases/#{@release["version"]}/download"}
+              href={"/games/#{@game["slug"]}/player"}
             >
-              Download again
+              Download player again
             </a>
           </div>
+          <p class="gp-under">Latest release: {@release["version"]}. The Windows player checks for updates before Play and opens Community in your browser. Its download sign-in lasts seven days; get a fresh player here to renew it.</p>
+          <a class="gp-textlink" id="game-portable-download" href={"/games/#{@game["slug"]}/releases/#{@release["version"]}/download"}>Download portable game ZIP instead</a>
           <noscript>
             <p class="gp-under">
-              After downloading, extract the ZIP and open Play Multiplayer.bat.
+              After downloading, extract the ZIP and open Play.bat.
             </p>
           </noscript>
         </aside>

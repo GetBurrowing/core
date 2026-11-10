@@ -110,3 +110,49 @@ link will require a configured sender and the existing audited mail outbox.
 
 UI checks use the actual controller-rendered fixture and compiled CSS/JS on a
 GitHub-hosted browser, never a Core browser session on the personal workstation.
+
+## In-app publishing prototype
+
+Root admins can now use **Admin → Games** (`/admin/games`) instead of setting
+`GAME_PUBLICATIONS_JSON`. Upload a portable Windows ZIP in Burrow chat first.
+Enter its attachment ID, the game org, version, title and summary; save the
+release. Its digest and size come from the stored attachment. Publication
+creates a fresh, tagged player channel and seats the publisher as admin.
+The existing community join, player display-name projection and message
+permissions still apply. Existing environment manifests remain fallback only;
+a database publication, including an unpublished one, takes precedence.
+
+Versions retain their original bytes. Publish another version to update;
+select an older version with its original attachment to roll back. A save
+checks all retained attachments and refuses unavailable artifacts or attempts
+to change the game org. An archived org cannot receive a new release. This is
+install-admin publication for the prototype, not an open game-upload store.
+
+### Windows player
+
+The signed-in game page downloads a **personal** Burrow Player ZIP. Extract it
+and run `Play.bat`. Play downloads the current portable release, verifies the
+size and SHA-256, stages extraction, and switches the installed version only
+on success. Old versions remain installed. A failed update leaves the previous
+version playable through **Play installed version**. **Chat / renew sign-in**
+opens the same Burrow community in the browser. The first version uses Windows
+PowerShell and requires no administrator installation. No native chat or voice
+SDK is claimed; browser chat uses the existing signed-in session.
+
+The personal `player.json` contains a game-scoped, download-only bearer grant
+valid for seven days. Do not redistribute it; friends get their own player
+from the signed-in page. It grants neither account/profile nor chat access,
+is rejected for other games, and checks that the identity remains active.
+It is never passed to the game. Renew by downloading a fresh player in the
+browser. This is not OS isolation from arbitrary code on the same PC.
+
+`/games/:slug/updates` exposes only published release metadata. Native release
+downloads require the scoped grant in the Authorization header. Unpublishing
+stops new updates and downloads. Already installed copies remain usable.
+The release ZIP currently must contain `Play Voltron.bat` at its root.
+
+Hosting here means Burrow-hosted release files plus the existing public ENet
+match server. Publishing does not deploy a matching server pack. Coordinate
+that separately before advertising public multiplayer; local play works
+without it. Fresh-account provider registration still needs to be tested on
+the serving install. The publisher does not change the identity provider.
