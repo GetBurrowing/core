@@ -73,6 +73,7 @@ jobs:
           STABLE_CANARY_HEALTH_URL: ${{ vars.STABLE_CANARY_HEALTH_URL }}
           STABLE_SOAK_HOURS: ${{ vars.STABLE_SOAK_HOURS }}
           STABLE_HOLD: ${{ vars.STABLE_HOLD }}
+          STABLE_HELD_BOOTSTRAP: ${{ vars.STABLE_HELD_BOOTSTRAP }}
           STABLE_BATCH_ENABLED: ${{ vars.STABLE_BATCH_ENABLED }}
           STABLE_SOAK_MODE: ${{ vars.STABLE_SOAK_MODE }}
           PROMOTE_SHA: ${{ inputs.sha }}
@@ -81,4 +82,7 @@ jobs:
           GIT_AUTHOR_EMAIL: promote-stable@localhost
           GIT_COMMITTER_NAME: promote-stable
           GIT_COMMITTER_EMAIL: promote-stable@localhost
-        run: python3 deployment/release/promote_stable.py
+        run: |
+          args=()
+          if [[ "$STABLE_HELD_BOOTSTRAP" == "true" ]]; then args+=(--held-bootstrap); fi
+          python3 deployment/release/promote_stable.py "${args[@]}"

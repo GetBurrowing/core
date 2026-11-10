@@ -50,11 +50,17 @@ def latest_verified(refs, current, repository):
     return None
 
 
-def main():
+def main(held_bootstrap=False):
+    if held_bootstrap:
+        try:
+            release.held_bootstrap_config()
+        except ValueError as exc:
+            release.log(f"error: {exc}")
+            return 1
     if not release.truthy(os.environ.get("STABLE_BATCH_ENABLED")):
         release.log("batch cutting is not activated; no channels changed")
         return 0
-    if release.truthy(os.environ.get("STABLE_HOLD")):
+    if release.truthy(os.environ.get("STABLE_HOLD")) and not held_bootstrap:
         release.log("stable hold is set; candidate stays put")
         return 0
     mode = os.environ.get("STABLE_SOAK_MODE") or "both"
@@ -62,6 +68,9 @@ def main():
         release.log("error: invalid soak mode")
         return 1
     refs = release.list_refs(mode)
+    if refs.pending:
+        release.log("error: candidate publication pending; reconcile registry and Git state before another cut")
+        return 1
     now = release.now_utc()
     day = now.strftime("%Y%m%d")
     if day in refs.cuts:
@@ -69,6 +78,11 @@ def main():
         return 0
     repo = os.environ.get("PROMOTE_REPO") or release.DEFAULT_REPO
     current = release.stable_revision(repo)
+    if refs.candidate:
+        for flavour in ("core", "play"):
+            if release.stable_revision(repo, f"{flavour}-candidate") != refs.candidate:
+                release.log("error: candidate registry/Git mismatch; reconciliation required")
+                return 1
     if refs.candidate and refs.candidate != current and not refs.fail.get(refs.candidate):
         release.log("candidate is still soaking; not replacing it with a moving main")
         return 0
@@ -82,6 +96,15 @@ def main():
         if rc:
             release.log(f"error: {flavour} candidate image unavailable")
             return 1
+    # Durable intent first: a crash/partial registry publication remains visibly
+    # pending, including to the observer. CAS prevents competing candidate identities taking intent.
+    rc, _, _ = release.git(
+        "push", "--atomic", "--force-with-lease=refs/release-candidate/pending:",
+        "origin", f"{sha}:refs/release-candidate/pending",
+    )
+    if rc:
+        release.log("error: candidate publication intent not recorded; no registry writes")
+        return 1
     for flavour in ("core", "play"):
         rc, _, err = release.imagetools(
             "create", "-t", f"{repo}:{flavour}-candidate", f"{repo}:{flavour}-{sha}"
@@ -89,10 +112,16 @@ def main():
         if rc:
             release.log(f"error: {flavour} candidate tag did not move")
             return 1
+    for flavour in ("core", "play"):
+        if release.stable_revision(repo, f"{flavour}-candidate") != sha:
+            release.log("error: registry publication identity unverified; candidate remains pending")
+            return 1
     rc, _, _ = release.git(
-        "push", "--atomic", "origin",
-        f"+{sha}:refs/release-candidate/current",
+        "push", "--atomic", f"--force-with-lease=refs/release-candidate/pending:{sha}",
+        f"--force-with-lease=refs/release-candidate/current:{refs.candidate or ''}", "origin",
+        f"{sha}:refs/release-candidate/current",
         f"{sha}:refs/release-candidate/cut/{day}",
+        ":refs/release-candidate/pending",
     )
     if rc:
         release.log("error: candidate state not recorded; no stable promotion")
@@ -102,4 +131,4 @@ def main():
 
 
 if __name__ == "__main__":
-    raise SystemExit(main())
+    raise SystemExit(release.entrypoint(main))

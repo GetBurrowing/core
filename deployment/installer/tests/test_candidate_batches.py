@@ -1,9 +1,9 @@
 """Automatic candidate selection and policy boundaries; no network or registry."""
 import datetime as dt
 import os
-from pathlib import Path
 import sys
 import unittest
+from pathlib import Path
 from unittest.mock import patch
 
 sys.path.insert(0, str(Path(__file__).resolve().parents[2] / "release"))
@@ -62,7 +62,7 @@ class BatchTest(unittest.TestCase):
         with patch.dict(os.environ, env, clear=True), \
              patch.object(release, "list_refs", return_value=refs), \
              patch.object(release, "now_utc", return_value=dt.datetime(2026, 11, 8, tzinfo=dt.UTC)), \
-             patch.object(release, "stable_revision", return_value=OTHER), \
+             patch.object(release, "stable_revision", side_effect=lambda repo, channel="core-stable": OTHER if channel == "core-stable" else (refs.candidate or SHA)), \
              patch.object(cut, "latest_verified", return_value=SHA) as select, \
              patch.object(release, "imagetools", return_value=(0, "", "")) as images, \
              patch.object(release, "git", return_value=(0, "", "")) as git:
@@ -95,7 +95,7 @@ class BatchTest(unittest.TestCase):
         self.assertEqual(creates, [
             ("create", "-t", f"{release.DEFAULT_REPO}:{f}-candidate", f"{release.DEFAULT_REPO}:{f}-{SHA}")
             for f in ("core", "play")])
-        self.assertIn(f"+{SHA}:refs/release-candidate/current", git.call_args.args)
+        self.assertIn(f"{SHA}:refs/release-candidate/current", git.call_args.args)
 
     def test_failed_image_lookup_never_updates_candidate_state(self):
         with patch.object(release, "imagetools", return_value=(1, "", "")):

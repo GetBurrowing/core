@@ -45,6 +45,7 @@ PROMOTE_IMAGETOOLS (default `docker buildx imagetools`). PROMOTE_NOW
 (ISO-8601 UTC) fixes the clock and PROMOTE_REPO the image repository.
 """
 
+import argparse
 import datetime as dt
 import json
 import os
@@ -52,6 +53,7 @@ import re
 import shlex
 import subprocess
 import sys
+from urllib.parse import urlsplit
 
 DEFAULT_REPO = "ghcr.io/getburrowing/core"
 REVISION_LABEL = "org.opencontainers.image.revision"
@@ -61,6 +63,33 @@ HOUR_FMT = "%Y%m%dT%HZ"
 STAMP_FMT = "%Y%m%dT%H%MZ"
 PRUNE_DAYS = 14
 INSTALLS = ("prod", "canary")
+HELD_BOOTSTRAP = False
+
+
+def held_bootstrap_config():
+    """Opt-in exception to full freeze; never an exception for stable writes."""
+    global HELD_BOOTSTRAP
+    HELD_BOOTSTRAP = True
+    url = urlsplit((os.environ.get("STABLE_CANARY_HEALTH_URL") or "").strip())
+    try:
+        hours = int(os.environ.get("STABLE_SOAK_HOURS") or "24")
+    except ValueError:
+        hours = 0
+    if (not truthy(os.environ.get("STABLE_HOLD"))
+            or not truthy(os.environ.get("STABLE_BATCH_ENABLED"))
+            or os.environ.get("STABLE_SOAK_MODE") != "canary"
+            or url.scheme != "https" or not url.hostname or url.username or url.password
+            or url.fragment or hours < 24
+            or truthy(os.environ.get("PROMOTE_FORCE"))
+            or (os.environ.get("PROMOTE_SHA") or "").strip()):
+        raise ValueError("held bootstrap requires HOLD, batches, canary mode, HTTPS health, >=24h and no force/SHA")
+
+
+def entrypoint(main):
+    parser = argparse.ArgumentParser()
+    parser.add_argument("--held-bootstrap", action="store_true",
+                        help="explicit held candidate bootstrap/observation; stable writes forbidden")
+    return main(held_bootstrap=parser.parse_args().held_bootstrap)
 
 SOAK_RE = re.compile(r"^refs/soak/([0-9a-f]{40})/(\d{8}T\d{2}Z)$")
 FAIL_RE = re.compile(r"^refs/soak-fail/([0-9a-f]{40})/(\d{8}T\d{2}Z)$")
@@ -82,10 +111,38 @@ def run(argv):
 
 
 def git(*args):
+    if HELD_BOOTSTRAP:
+        if args and args[0] == "push":
+            # Literal namespaces, not a denylist of known stable tag names.
+            allowed = re.compile(
+                r"^refs/(release-candidate/(current|pending|cut/\d{8})|"
+                r"soak-seen/canary|soak(-fail)?-canary/[0-9a-f]{40}/\d{8}T\d{2}Z)$"
+            )
+            specs = [a for a in args[1:] if a != "origin" and not a.startswith("--")]
+            flags = [a for a in args[1:] if a.startswith("--")]
+            lease = re.compile(r"^--force-with-lease=refs/release-candidate/(current|pending):([0-9a-f]{40})?$")
+            if (args.count("origin") != 1 or "--atomic" not in flags
+                    or any(f != "--atomic" and not lease.fullmatch(f) for f in flags)
+                    or not specs or any(":" not in s
+                                        or not allowed.fullmatch(s.split(":", 1)[1])
+                                        or (s.split(":", 1)[0] and not SHA_RE.fullmatch(s.split(":", 1)[0]))
+                                        for s in specs)):
+                raise RuntimeError("held bootstrap refused Git mutation outside candidate state")
+            if any(s.startswith(":refs/soak-fail") for s in specs):
+                raise RuntimeError("held bootstrap must preserve failure evidence")
+        elif not args or args[0] not in ("ls-remote", "cat-file"):
+            raise RuntimeError("held bootstrap refused non-observation Git command")
     return run([*cmd("PROMOTE_GIT", "git"), *args])
 
 
 def imagetools(*args):
+    if HELD_BOOTSTRAP and args and args[0] != "inspect":
+        repo = os.environ.get("PROMOTE_REPO") or DEFAULT_REPO
+        if (len(args) != 4 or args[:2] != ("create", "-t")
+                or args[2] not in (f"{repo}:core-candidate", f"{repo}:play-candidate")
+                or not re.fullmatch(re.escape(repo) + r":(core|play)-[0-9a-f]{40}", args[3])
+                or args[2].rsplit(":", 1)[1].split("-")[0] != args[3].rsplit(":", 1)[1].split("-")[0]):
+            raise RuntimeError("held bootstrap refused registry mutation outside candidate tags")
     return run([*cmd("PROMOTE_IMAGETOOLS", "docker buildx imagetools"), *args])
 
 
@@ -138,6 +195,7 @@ class Refs:
         self.soak_kind = "soak" if mode == "both" else "soak-canary"
         self.fail_kind = "soak-fail" if mode == "both" else "soak-fail-canary"
         self.candidate = None
+        self.pending = None
         self.cuts = set()
         soak_re = re.compile(r"^refs/" + self.soak_kind + r"/([0-9a-f]{40})/(\d{8}T\d{2}Z)$")
         fail_re = re.compile(r"^refs/" + self.fail_kind + r"/([0-9a-f]{40})/(\d{8}T\d{2}Z)$")
@@ -152,6 +210,8 @@ class Refs:
             sha, ref = parts[0].strip(), parts[1].strip()
             if ref == "refs/release-candidate/current":
                 self.candidate = sha
+            elif ref == "refs/release-candidate/pending":
+                self.pending = sha
             elif ref.startswith("refs/release-candidate/cut/"):
                 self.cuts.add(ref.rsplit("/", 1)[1])
             elif m := soak_re.match(ref):
@@ -243,9 +303,9 @@ def prune_specs(refs, now):
 # --- promotion ----------------------------------------------------------------
 
 
-def stable_revision(repo):
-    """The commit core-stable currently carries, or None (no tag, no label)."""
-    rc, out, _ = imagetools("inspect", f"{repo}:core-stable", "--format", "{{json .Image}}")
+def stable_revision(repo, channel="core-stable"):
+    """Verified channel revision, or None if absent/missing/mixed labels."""
+    rc, out, _ = imagetools("inspect", f"{repo}:{channel}", "--format", "{{json .Image}}")
     if rc != 0:
         return None
     try:
@@ -255,12 +315,14 @@ def stable_revision(repo):
     configs = [image] if isinstance(image, dict) and "config" in image else []
     if not configs and isinstance(image, dict):
         configs = [v for v in image.values() if isinstance(v, dict)]
+    revisions = set()
     for config in configs:
         labels = (config.get("config") or {}).get("Labels") or {}
         rev = labels.get(REVISION_LABEL)
-        if isinstance(rev, str) and SHA_RE.match(rev):
-            return rev
-    return None
+        if not isinstance(rev, str) or not SHA_RE.fullmatch(rev):
+            return None
+        revisions.add(rev)
+    return revisions.pop() if len(revisions) == 1 else None
 
 
 def soak_count(hours):
@@ -295,6 +357,8 @@ def irreversible_at(rev):
 
 
 def promote(repo, sha, current, now):
+    if HELD_BOOTSTRAP:
+        raise RuntimeError("held bootstrap has no stable promotion authority")
     rc, _, err = imagetools("create", "-t", f"{repo}:core-stable", f"{repo}:core-{sha}")
     if rc != 0:
         log(f"error: core-stable not moved: {err.strip()}")
@@ -322,8 +386,14 @@ def promote(repo, sha, current, now):
     return 0
 
 
-def main():
-    if truthy(os.environ.get("STABLE_HOLD")):
+def main(held_bootstrap=False):
+    if held_bootstrap:
+        try:
+            held_bootstrap_config()
+        except ValueError as exc:
+            log(f"error: {exc}")
+            return 1
+    if truthy(os.environ.get("STABLE_HOLD")) and not held_bootstrap:
         log("STABLE_HOLD is set: holding, nothing probed or promoted")
         return 0
     prod_url = (os.environ.get("STABLE_PROD_HEALTH_URL") or "").strip()
@@ -357,12 +427,26 @@ def main():
     hour = now.strftime(HOUR_FMT)
 
     refs = list_refs(mode)
-    specs = observe(refs, prod_url, canary_url, hour) + prune_specs(refs, now)
+    if refs.pending or (held_bootstrap and not refs.candidate):
+        log("error: candidate absent or publication pending; reconcile before observation")
+        return 1
+    if held_bootstrap:
+        for flavour in ("core", "play"):
+            if stable_revision(repo, f"{flavour}-candidate") != refs.candidate:
+                log("error: published candidate differs from Git identity; reconcile before observation")
+                return 1
+    specs = observe(refs, prod_url, canary_url, hour)
+    if not held_bootstrap:
+        specs += prune_specs(refs, now)
     if specs:
         rc, _, err = git("push", "--atomic", "origin", *specs)
         if rc != 0:
             log(f"error: soak refs not pushed: {err.strip()}")
             return 1
+
+    if held_bootstrap:
+        log("held bootstrap: observations recorded; stable remains held")
+        return 0
 
     current = stable_revision(repo)
     log(f"current stable: {current or 'none'}")
@@ -390,4 +474,4 @@ def main():
 
 
 if __name__ == "__main__":
-    sys.exit(main())
+    sys.exit(entrypoint(main))
