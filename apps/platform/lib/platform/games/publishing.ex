@@ -5,13 +5,13 @@ defmodule Platform.Games.Publishing do
   alias Platform.Games.Publication
 
   def list(actor) do
-    if Tenancy.root_admin?(actor),
+    if authorized?(actor),
       do: Repo.all(from(p in Publication, order_by: p.slug)),
       else: []
   end
 
   def publish_release(actor, attrs) do
-    with true <- Tenancy.root_admin?(actor),
+    with true <- authorized?(actor),
          true <- Platform.UUID.valid?(attrs["attachment_id"]),
          %Platform.Chat.Attachment{state: "ready"} = attachment <-
            Repo.get(Platform.Chat.Attachment, attrs["attachment_id"]),
@@ -61,7 +61,7 @@ defmodule Platform.Games.Publishing do
   end
 
   def save(actor, manifest) do
-    if Tenancy.root_admin?(actor) and is_map(manifest) and Games.valid?(manifest) do
+    if authorized?(actor) and is_map(manifest) and Games.valid?(manifest) do
       Repo.transaction(fn ->
         # Serialise even first publication of a slug, including community creation.
         Repo.query!("SELECT pg_advisory_xact_lock(hashtext($1))", [to_string(manifest["slug"])])
@@ -88,6 +88,9 @@ defmodule Platform.Games.Publishing do
       {:error, :unauthorized}
     end
   end
+
+  defp authorized?(actor),
+    do: Tenancy.root_admin?(actor) and not is_nil(Games.user(actor.id))
 
   defp configured(slug),
     do:
@@ -127,6 +130,7 @@ defmodule Platform.Games.Publishing do
                participant_id: actor.id,
                participant_type: "user",
                role: "admin",
+               joined_at: DateTime.utc_now(),
                display_name: Games.player_display_name(actor)
              }) do
         {:ok, Map.put(manifest, "community_space_id", room.id)}
