@@ -97,6 +97,7 @@ defmodule PlatformWeb.GamePageControllerTest do
     assert conn |> get("/games/voltron/player/releases/one") |> response(401)
     assert {:error, :unauthorized} = Games.Player.authorize(Map.put(game, "slug", "other"), grant)
     assert {:error, :unauthorized} = Games.Player.authorize(game, grant <> "bad")
+
     expired =
       Phoenix.Token.sign(PlatformWeb.Endpoint, "game-player-download-v1", {"voltron", user.id},
         signed_at: System.system_time(:second) - 604_801
