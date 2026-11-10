@@ -26,6 +26,7 @@ defmodule PlatformWeb.AdminLiveTest do
     {"federation", "/admin/federation"},
     {"usage", "/control/usage"},
     {"users", "/admin/users"},
+    {"games", "/admin/games"},
     {"orgs", "/admin/orgs"},
     {"vault", "/admin/vault"},
     {"branding", "/admin/branding"},
