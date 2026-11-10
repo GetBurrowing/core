@@ -3289,6 +3289,15 @@ body, .font-suite {
   padding: 4px 0;
 }
 
+/* Keep the existing upward flow, but fit it between the channel's top
+   edge and the entry when a phone keyboard reduces the visible space.
+   Pick-mode lists (Add agent/attention sheets) keep their own sizing. */
+@media (max-width: 1023.98px) {
+  #compose-form > .mention-list:not(.mention-list--pick) .mention-list-box {
+    max-height: min(212px, var(--compose-mention-max-h, 212px));
+  }
+}
+
 /* min-height, not height: a row with a note (`.mention-list-note`, the
    second line) grows to fit it, 6px above and below; a row without one is
    50px (40px at lg). */
