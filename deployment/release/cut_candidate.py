@@ -42,7 +42,7 @@ def latest_verified(refs, current, repository):
     for run in data["workflow_runs"]:
         sha = run.get("head_sha", "")
         if (run.get("run_attempt") != 1 or not release.SHA_RE.fullmatch(sha)
-                or sha == current or refs.fail.get(sha)):
+                or sha == current or sha in refs.failed_any):
             continue
         jobs = api(f"repos/{repository}/actions/runs/{run['id']}/jobs?per_page=100")
         if boot_checked(jobs["jobs"]) and release.known_commit(sha):
@@ -83,7 +83,7 @@ def main(held_bootstrap=False):
             if release.stable_revision(repo, f"{flavour}-candidate") != refs.candidate:
                 release.log("error: candidate registry/Git mismatch; reconciliation required")
                 return 1
-    if refs.candidate and refs.candidate != current and not refs.fail.get(refs.candidate):
+    if refs.candidate and refs.candidate != current and refs.candidate not in refs.failed_any:
         release.log("candidate is still soaking; not replacing it with a moving main")
         return 0
     sha = latest_verified(refs, current, os.environ["GITHUB_REPOSITORY"])
@@ -92,7 +92,7 @@ def main(held_bootstrap=False):
         return 0
     # Require BOTH flavours. A canary must test the flavour customers run.
     for flavour in ("core", "play"):
-        rc, _, err = release.imagetools("inspect", f"{repo}:{flavour}-{sha}")
+        rc, _, _err = release.imagetools("inspect", f"{repo}:{flavour}-{sha}")
         if rc:
             release.log(f"error: {flavour} candidate image unavailable")
             return 1
@@ -106,7 +106,7 @@ def main(held_bootstrap=False):
         release.log("error: candidate publication intent not recorded; no registry writes")
         return 1
     for flavour in ("core", "play"):
-        rc, _, err = release.imagetools(
+        rc, _, _err = release.imagetools(
             "create", "-t", f"{repo}:{flavour}-candidate", f"{repo}:{flavour}-{sha}"
         )
         if rc:
@@ -116,9 +116,12 @@ def main(held_bootstrap=False):
         if release.stable_revision(repo, f"{flavour}-candidate") != sha:
             release.log("error: registry publication identity unverified; candidate remains pending")
             return 1
+    ledger = release.state_commit(release.soak_state.initial(sha, mode))
+    ledger_ref = release.state_ref(sha, mode)
     rc, _, _ = release.git(
-        "push", "--atomic", f"--force-with-lease=refs/release-candidate/pending:{sha}",
+        "push", "--atomic", f"--force-with-lease={ledger_ref}:", f"--force-with-lease=refs/release-candidate/pending:{sha}",
         f"--force-with-lease=refs/release-candidate/current:{refs.candidate or ''}", "origin",
+        f"{ledger}:{ledger_ref}",
         f"{sha}:refs/release-candidate/current",
         f"{sha}:refs/release-candidate/cut/{day}",
         ":refs/release-candidate/pending",

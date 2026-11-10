@@ -1,48 +1,14 @@
 #!/usr/bin/env python3
-"""Soak-gated promotion of core's `stable` channel (task 01a1b7b6 stage 2).
+"""Release observer/promoter.
 
-Run hourly by .github/workflows/promote-stable.yml on a GitHub runner, never
-on a vendor host. Each run:
+Default HOLD freezes all work. Explicit held bootstrap records candidate-only
+health in an atomic UTC ledger and has no stable mutation authority. Activated
+batches require >=24 actual elapsed hours, independent hourly observations,
+verified fixed identity and no failed probes, gaps or rollback. Legacy non-batch
+observations retain their separate compatibility refs. See BATCHES.md.
 
-  1. STABLE_HOLD=true -> exit 0, nothing probed or moved.
-  2. STABLE_PROD_HEALTH_URL or STABLE_CANARY_HEALTH_URL unset -> exit 1
-     ("not configured"). An unconfigured job is red; it never promotes.
-  3. Probes both /health URLs and records what it saw as custom refs on
-     origin (refs, not tags, so nothing installs or lists them as releases):
-       refs/soak/<S>/<hour>       both installs answered status ok and both
-                                  reported commit S in that UTC hour;
-       refs/soak-fail/<S>/<hour>  an install failed its probe (or answered
-                                  non-ok) while last reporting S, or the
-                                  canary's update.last_rollback.from is S;
-       refs/soak-seen/<install>   the commit that install last reported,
-                                  so a probe that gets no answer at all can
-                                  still name the commit it failed on.
-     Each ref points at the commit S itself.
-  4. Prunes soak and soak-fail refs older than 14 days.
-  5. Promotes S iff ALL of:
-       * count(refs/soak/<S>/*) >= STABLE_SOAK_HOURS (default 24): real
-         observed runtime on both installs, one per hour, not tag age;
-       * no refs/soak-fail/<S>/*;
-       * S is not the current stable revision (core-stable's label);
-       * S was last observed after the previous promotion (so an older,
-         once-eligible commit never flips stable back);
-       * S is the newest such commit (latest observation).
-     Promotion: `imagetools create` core-stable from core-<S>, and
-     play-stable from play-<S> when that tag exists, then an annotated tag
-     stable/<utc>-<short> on S whose message lists the irreversible
-     migrations added since the previous stable.
-
-  Dispatch with force=true and sha=<S> skips the soak COUNT only; HOLD,
-  configuration, soak-fail and the current-stable no-op still apply.
-
-Because main moves often, stable advances only after a stretch in which one
-commit stays on both installs for STABLE_SOAK_HOURS. That is deliberate:
-reliability over speed.
-
-External commands come from the environment so tests point them at fakes:
-PROMOTE_GIT (default `git`), PROMOTE_CURL (default `curl`),
-PROMOTE_IMAGETOOLS (default `docker buildx imagetools`). PROMOTE_NOW
-(ISO-8601 UTC) fixes the clock and PROMOTE_REPO the image repository.
+PROMOTE_GIT/CURL/IMAGETOOLS select external commands for deterministic tests;
+PROMOTE_NOW is the UTC clock override. Production uses GitHub runner time.
 """
 
 import argparse
@@ -54,6 +20,8 @@ import shlex
 import subprocess
 import sys
 from urllib.parse import urlsplit
+
+import soak_state
 
 DEFAULT_REPO = "ghcr.io/getburrowing/core"
 REVISION_LABEL = "org.opencontainers.image.revision"
@@ -105,8 +73,12 @@ def cmd(var, default):
     return shlex.split(os.environ.get(var) or default)
 
 
-def run(argv):
-    proc = subprocess.run(argv, capture_output=True, text=True, check=False)
+def run(argv, input=None):
+    env = dict(os.environ)
+    for key, value in {"GIT_AUTHOR_NAME": "Release observer", "GIT_AUTHOR_EMAIL": "release@localhost",
+                       "GIT_COMMITTER_NAME": "Release observer", "GIT_COMMITTER_EMAIL": "release@localhost"}.items():
+        env.setdefault(key, value)
+    proc = subprocess.run(argv, input=input, env=env, capture_output=True, text=True, check=False)
     return proc.returncode, proc.stdout, proc.stderr
 
 
@@ -116,11 +88,11 @@ def git(*args):
             # Literal namespaces, not a denylist of known stable tag names.
             allowed = re.compile(
                 r"^refs/(release-candidate/(current|pending|cut/\d{8})|"
-                r"soak-seen/canary|soak(-fail)?-canary/[0-9a-f]{40}/\d{8}T\d{2}Z)$"
+                r"soak-state/(canary|both)/[0-9a-f]{40}|soak-seen/canary|soak(-fail)?-canary/[0-9a-f]{40}/\d{8}T\d{2}Z)$"
             )
             specs = [a for a in args[1:] if a != "origin" and not a.startswith("--")]
             flags = [a for a in args[1:] if a.startswith("--")]
-            lease = re.compile(r"^--force-with-lease=refs/release-candidate/(current|pending):([0-9a-f]{40})?$")
+            lease = re.compile(r"^--force-with-lease=refs/(release-candidate/(current|pending)|soak-state/(canary|both)/[0-9a-f]{40}):([0-9a-f]{40})?$")
             if (args.count("origin") != 1 or "--atomic" not in flags
                     or any(f != "--atomic" and not lease.fullmatch(f) for f in flags)
                     or not specs or any(":" not in s
@@ -128,9 +100,9 @@ def git(*args):
                                         or (s.split(":", 1)[0] and not SHA_RE.fullmatch(s.split(":", 1)[0]))
                                         for s in specs)):
                 raise RuntimeError("held bootstrap refused Git mutation outside candidate state")
-            if any(s.startswith(":refs/soak-fail") for s in specs):
+            if any(s.startswith((":refs/soak-fail", ":refs/soak-state")) for s in specs):
                 raise RuntimeError("held bootstrap must preserve failure evidence")
-        elif not args or args[0] not in ("ls-remote", "cat-file"):
+        elif not args or args[0] not in ("ls-remote", "cat-file", "show", "commit-tree"):
             raise RuntimeError("held bootstrap refused non-observation Git command")
     return run([*cmd("PROMOTE_GIT", "git"), *args])
 
@@ -197,6 +169,8 @@ class Refs:
         self.candidate = None
         self.pending = None
         self.cuts = set()
+        self.ledgers = {}
+        self.failed_any = set()
         soak_re = re.compile(r"^refs/" + self.soak_kind + r"/([0-9a-f]{40})/(\d{8}T\d{2}Z)$")
         fail_re = re.compile(r"^refs/" + self.fail_kind + r"/([0-9a-f]{40})/(\d{8}T\d{2}Z)$")
         self.soak = {}  # S -> set(hours)
@@ -208,7 +182,12 @@ class Refs:
             if len(parts) != 2:
                 continue
             sha, ref = parts[0].strip(), parts[1].strip()
-            if ref == "refs/release-candidate/current":
+            failure = re.fullmatch(r"refs/soak-fail(?:-canary)?/([0-9a-f]{40})/\d{8}T\d{2}Z", ref)
+            if failure:
+                self.failed_any.add(failure[1])
+            if ref.startswith(f"refs/soak-state/{mode}/"):
+                self.ledgers[ref.rsplit("/", 1)[1]] = sha
+            elif ref == "refs/release-candidate/current":
                 self.candidate = sha
             elif ref == "refs/release-candidate/pending":
                 self.pending = sha
@@ -254,8 +233,7 @@ def observe(refs, prod_url, canary_url, hour):
         specs.append(f"{sha}:{ref}")
         return True
 
-    for install in results:
-        healthy, commit, _ = results[install]
+    for install, (healthy, commit, _) in results.items():
         if commit and refs.seen.get(install) != commit and add(f"refs/soak-seen/{install}", commit):
             refs.seen[install] = commit
         if not healthy:
@@ -285,10 +263,81 @@ def observe(refs, prod_url, canary_url, hour):
     return specs
 
 
+def state_ref(candidate, mode):
+    return f"refs/soak-state/{mode}/{candidate}"
+
+
+def state_commit(state):
+    # Empty-tree commit carries a JSON message, parented to candidate for reachability.
+    rc, tree, err = run([*cmd("PROMOTE_GIT", "git"), "hash-object", "-t", "tree", "-w", "--stdin"], input="")
+    if rc:
+        raise RuntimeError(f"cannot store soak tree: {err}")
+    rc, oid, err = git("commit-tree", tree.strip(), "-p", state["candidate"],
+                       "-m", json.dumps(state, sort_keys=True))
+    if rc or not SHA_RE.fullmatch(oid.strip()):
+        raise RuntimeError(f"cannot store soak ledger: {err}")
+    return oid.strip()
+
+
+def candidate_observation(refs, repo, prod_url, canary_url, now, hours):
+    candidate = refs.candidate
+    previous = refs.ledgers.get(candidate)
+    if not candidate or not previous:
+        raise RuntimeError("candidate generation ledger missing; reconcile, never recreate observation history")
+    # ls-remote does not download ledger objects on fresh workflow checkouts.
+    rc, _, err = run([*cmd("PROMOTE_GIT", "git"), "fetch", "--no-tags", "origin", state_ref(candidate, refs.mode)])
+    if rc:
+        raise RuntimeError(f"cannot fetch soak ledger: {err}")
+    rc, body, err = git("show", "-s", "--format=%B", previous)
+    if rc:
+        raise RuntimeError(f"cannot read soak ledger: {err}")
+    state = json.loads(body)
+    healthy = all(stable_revision(repo, f"{flavour}-candidate") == candidate
+                  for flavour in ("core", "play"))
+    reason = "registry candidate identity mismatch"
+    for url in ([prod_url, canary_url] if refs.mode == "both" else [canary_url]):
+        ok, revision, response = probe(url)
+        rollback = canary_rollback_from(response)
+        if not ok or revision != candidate or rollback == candidate:
+            healthy, reason = False, "unavailable/malformed health, candidate identity mismatch or rollback"
+    if candidate in refs.failed_any:
+        healthy, reason = False, "existing failed candidate evidence"
+    ref = state_ref(candidate, refs.mode)
+    hour = now.strftime(HOUR_FMT)
+    for attempt in range(3):
+        next_state = soak_state.observe(state, candidate, refs.mode, now, healthy, reason)
+        oid = state_commit(next_state)
+        kind = refs.fail_kind if next_state["failures"] else refs.soak_kind
+        # Commit ledger and hourly evidence together, pinned to publication identity.
+        rc, _, err = git("push", "--atomic", f"--force-with-lease={ref}:{previous}",
+                         f"--force-with-lease=refs/release-candidate/current:{candidate}",
+                         "--force-with-lease=refs/release-candidate/pending:", "origin",
+                         f"{oid}:{ref}", f"{candidate}:refs/{kind}/{candidate}/{hour}",
+                         f"{candidate}:refs/release-candidate/current", ":refs/release-candidate/pending")
+        if not rc:
+            break
+        fresh = list_refs(refs.mode)
+        replacement = fresh.ledgers.get(candidate)
+        if (fresh.candidate != candidate or fresh.pending or not replacement
+                or attempt == 2):
+            raise RuntimeError(f"soak ledger CAS failed; no success committed: {err}")
+        previous = replacement
+        rc, _, err = run([*cmd("PROMOTE_GIT", "git"), "fetch", "--no-tags", "origin", ref])
+        if rc:
+            raise RuntimeError(f"cannot fetch concurrent soak ledger: {err}")
+        rc, body, err = git("show", "-s", "--format=%B", previous)
+        if rc:
+            raise RuntimeError(f"cannot read concurrent soak ledger: {err}")
+        state = json.loads(body)
+    accepted = soak_state.complete(next_state, hours)
+    log(f"candidate {candidate}: soak_complete={accepted} failures={len(next_state['failures'])}")
+    return accepted
+
+
 def prune_specs(refs, now):
     cutoff = now - dt.timedelta(days=PRUNE_DAYS)
     specs = []
-    for kind, table in ((refs.soak_kind, refs.soak), (refs.fail_kind, refs.fail)):
+    for kind, table in ((refs.soak_kind, refs.soak),):
         for sha, hours in table.items():
             for hour in sorted(hours):
                 if parse_hour(hour) < cutoff:
@@ -419,6 +468,9 @@ def main(held_bootstrap=False):
         return 1
     force = truthy(os.environ.get("PROMOTE_FORCE"))
     forced_sha = (os.environ.get("PROMOTE_SHA") or "").strip()
+    if batch and (force or forced_sha):
+        log("error: batch observation refuses force/SHA inputs")
+        return 1
     if force and not SHA_RE.match(forced_sha):
         log("error: force needs sha = a full 40-hex commit")
         return 1
@@ -430,23 +482,29 @@ def main(held_bootstrap=False):
     if refs.pending or (held_bootstrap and not refs.candidate):
         log("error: candidate absent or publication pending; reconcile before observation")
         return 1
-    if held_bootstrap:
-        for flavour in ("core", "play"):
-            if stable_revision(repo, f"{flavour}-candidate") != refs.candidate:
-                log("error: published candidate differs from Git identity; reconcile before observation")
-                return 1
+    if batch:
+        try:
+            accepted = candidate_observation(refs, repo, prod_url, canary_url, now, soak_hours)
+        except (ValueError, KeyError, TypeError, RuntimeError) as exc:
+            log(f"error: {exc}")
+            return 1
+        if held_bootstrap:
+            log("held bootstrap: durable observations committed; stable remains held")
+            return 0
+        if not accepted:
+            log("candidate has not passed its full elapsed soak")
+            return 0
+        current = stable_revision(repo)
+        if refs.candidate == current:
+            return 0
+        return promote(repo, refs.candidate, current, now)
     specs = observe(refs, prod_url, canary_url, hour)
-    if not held_bootstrap:
-        specs += prune_specs(refs, now)
+    specs += prune_specs(refs, now)
     if specs:
         rc, _, err = git("push", "--atomic", "origin", *specs)
         if rc != 0:
             log(f"error: soak refs not pushed: {err.strip()}")
             return 1
-
-    if held_bootstrap:
-        log("held bootstrap: observations recorded; stable remains held")
-        return 0
 
     current = stable_revision(repo)
     log(f"current stable: {current or 'none'}")
@@ -460,12 +518,6 @@ def main(held_bootstrap=False):
         log(f"force: promoting {forced_sha} without the soak count")
         return promote(repo, forced_sha, current, now)
 
-    if batch:
-        if not refs.candidate:
-            log("no batch candidate has been cut; nothing promotes")
-            return 0
-        # Never promote an arbitrary historical revision in batch mode.
-        refs.soak = {sha: hours for sha, hours in refs.soak.items() if sha == refs.candidate}
     sha = choose(refs, soak_hours, current)
     if sha is None:
         log("no commit is eligible for stable this hour")

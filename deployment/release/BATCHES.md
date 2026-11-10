@@ -79,8 +79,9 @@ elapsed seconds** of healthy observations; hourly bucket count alone is
 insufficient. Exact interval/generation acceptance is a separate safety
 gate; do not treat bootstrap's successful exit as acceptance.
 
-The existing explicitly authorized **hotfix** dispatch (`force=true`, full
-SHA) remains available. It skips the observation count, not hold,
+The existing explicitly authorized **non-batch hotfix** dispatch (`force=true`,
+full SHA) remains available outside batch mode. Batch observation refuses force
+and SHA inputs. It skips the observation count, not hold,
 configuration or failed-soak checks. Routine release cuts never use it.
 
 ## Failure and recovery
@@ -114,3 +115,46 @@ failed refs as evidence.
 This changes the **core app release channel**, not the install's service
 topology. Adding or changing services still requires a separate supported
 installer migration mechanism; candidate tags do not solve that design gap.
+
+## Exact candidate generation ledger
+
+New cuts initialize `refs/soak-state/<policy>/<candidate-sha>` atomically
+with publication completion. The ref points to a Git commit containing a
+versioned JSON message: candidate identity, policy, exact UTC first/last
+observation timestamps, independent successful UTC hour buckets and all
+failure timestamps/reasons. The candidate commit is its parent, keeping
+identity reachable. Observation uses real health responses and verifies
+both candidate image revision labels; canary policy never probes production.
+A valid health response must report `status=ok` and the full active candidate
+commit. Missing/unknown/different identity, malformed/unavailable health,
+registry mismatch or rollback from the candidate records a permanent failure,
+even if the candidate has never previously answered.
+
+The first healthy observation starts the interval. Completion requires
+**at least 86400 elapsed seconds**, at least 24 distinct successful UTC hour
+observations (or a higher configured minimum), and no failures. A gap larger
+than **90 minutes** between observations, or a backwards clock, permanently
+rejects the generation. The hourly schedule therefore permits 30 minutes of
+scheduling delay. Twenty-four buckets spanning 23h01m fail. Duplicate runs
+in one hour cannot add hours. Candidate cut/tag age never starts the clock.
+
+The observer fetches durable ledger objects on each fresh runner. An atomic
+Git push uses expected-ref leases for the ledger and current/pending candidate
+refs, committing exact state and hourly evidence together. Racing observers
+retry with the originally measured health result against the committed ledger;
+they cannot overwrite a concurrent failure or report success before storage
+commits. Missing, malformed or unavailable state and failed reads/writes fail
+closed. No ledger is recreated from historical hourly refs. Older already-cut
+candidates without a ledger require explicit approved reconciliation or a new
+automatically selected candidate; never manufacture timestamps for past health.
+Failures and their refs are retained, including beyond the former 14-day prune
+window; candidate selection excludes failed identities across both policies.
+
+Replacement automatically starts with an empty generation ledger. An existing
+ledger cannot be overwritten by a new cut. A policy switch cannot consume the
+other policy's ledger or hours; it fails closed pending approved reconciliation.
+Held bootstrap always returns after observation; even a completed ledger cannot
+move stable. Releasing HOLD/promotion is a separate authorized action. An
+observer exit code of zero alone does not prove acceptance: inspect the durable
+ledger, `soak_complete`, identity, interval and failure evidence. No real soak
+has been established by deterministic clock fixtures.

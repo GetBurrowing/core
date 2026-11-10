@@ -1,18 +1,20 @@
 """Held bootstrap integration tests: real entrypoints, fake external tools only."""
 
+import hashlib
 import importlib.util
 import json
 import os
 import shutil
-from pathlib import Path
 import subprocess
 import sys
-import unittest
-from unittest.mock import patch
 import tempfile
 import textwrap
+import unittest
+from pathlib import Path
+from unittest.mock import patch
 
 import promote_stable as release
+import soak_state
 
 ROOT = Path(__file__).resolve().parents[2]
 spec = importlib.util.spec_from_file_location(
@@ -78,6 +80,10 @@ elif tool == "curl":''',
         return proc.returncode
 
     def candidate(self):
+        ledger = json.dumps(soak_state.initial(S, "canary"), sort_keys=True)
+        oid = hashlib.sha1(ledger.encode()).hexdigest()
+        self.state.setdefault("objects", {})[oid] = ledger
+        self.state["remote"][f"refs/soak-state/canary/{S}"] = oid
         self.state["remote"]["refs/release-candidate/current"] = S
         for flavour in ("core", "play"):
             self.state["images"][f"{IMG}:{flavour}-candidate"] = S
@@ -87,6 +93,7 @@ elif tool == "curl":''',
         destinations = {
             "refs/release-candidate/pending", "refs/release-candidate/current",
             "refs/release-candidate/cut/20261107", "refs/soak-seen/canary",
+            f"refs/soak-state/canary/{S}",
             f"refs/soak-canary/{S}/20261107T21Z",
             f"refs/soak-fail-canary/{S}/20261107T21Z",
         }
@@ -97,7 +104,7 @@ elif tool == "curl":''',
                     if value != "origin" and not value.startswith("--"):
                         self.assertIn(value.split(":", 1)[1], destinations)
             else:
-                self.assertIn(call[0], ("ls-remote", "cat-file"))
+                self.assertIn(call[0], ("ls-remote", "cat-file", "fetch", "hash-object", "commit-tree", "show"))
         for call in self.creates():
             self.assertIn(call, [
                 ["create", "-t", f"{IMG}:core-candidate", f"{IMG}:core-{S}"],
@@ -197,8 +204,8 @@ elif tool == "curl":''',
     def test_registry_git_mismatch_cannot_be_observed(self):
         self.candidate()
         self.state["images"][f"{IMG}:play-candidate"] = T
-        self.assertEqual(self.run_script("promote_stable"), 1, self.output)
-        self.assertEqual(self.calls("curl"), [])
+        self.assertEqual(self.run_script("promote_stable"), 0, self.output)
+        self.assertEqual(len(self.calls("curl")), 1)
         self.assertEqual(self.run_script(PROMOTE_NOW="2026-11-08T21:30:00+00:00"), 1, self.output)
         self.assertEqual(self.creates(), [])
 
@@ -237,7 +244,8 @@ class AuthorityTest(unittest.TestCase):
             for args in (("tag", "-a", "stable/x", "-m", "x", S),
                          ("push", "--atomic", "origin", f"{S}:refs/tags/stable/x"),
                          ("push", "--atomic", "origin", f"{S}:refs/heads/main"),
-                         ("push", "--atomic", "origin", f":refs/soak-fail-canary/{S}/20261107T21Z")):
+                         ("push", "--atomic", "origin", f":refs/soak-fail-canary/{S}/20261107T21Z"),
+                         ("push", "--atomic", "origin", f":refs/soak-state/canary/{S}")):
                 with self.assertRaises(RuntimeError):
                     release.git(*args)
             with self.assertRaisesRegex(RuntimeError, "no stable promotion authority"):
@@ -295,20 +303,20 @@ class MutationControls(unittest.TestCase):
     def test_literal_assertions_detect_stable_write_and_hold_bypass(self):
         mutations = (
             ("cut_candidate.py", '    release.log(f"cut automatic candidate',
-             '    release.run([*release.cmd("PROMOTE_IMAGETOOLS", "docker buildx imagetools"), '
+             ('    release.run([*release.cmd("PROMOTE_IMAGETOOLS", "docker buildx imagetools"), '
              '"create", "-t", f"{repo}:core-stable", f"{repo}:core-{sha}"])\n'
-             '    release.log(f"cut automatic candidate',
+             '    release.log(f"cut automatic candidate'),
              "test_held_bootstrap_cuts_once_automatically_and_only_candidate_writes", "core-stable"),
             ("promote_stable.py", 'if truthy(os.environ.get("STABLE_HOLD")) and not held_bootstrap:',
              'if False:  # mutation: bypass default HOLD',
-             "test_default_hold_is_full_freeze_even_with_bootstrap_variable", "Lists differ"),
+             "test_default_hold_is_full_freeze_even_with_bootstrap_variable", "1 != 0"),
         )
         for filename, old, new, test, diagnostic in mutations:
             with self.subTest(mutation=filename), tempfile.TemporaryDirectory() as directory:
                 target = Path(directory)
                 release_dir = target / "deployment/release"
                 release_dir.mkdir(parents=True)
-                for name in ("cut_candidate.py", "promote_stable.py", "test_candidate_bootstrap.py"):
+                for name in ("cut_candidate.py", "promote_stable.py", "soak_state.py", "test_candidate_bootstrap.py"):
                     shutil.copyfile(ROOT / "deployment/release" / name, release_dir / name)
                 harness = target / "deployment/installer/tests/test_promote_stable.py"
                 harness.parent.mkdir(parents=True)
