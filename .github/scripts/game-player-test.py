@@ -15,6 +15,9 @@ class Handler(http.server.BaseHTTPRequestHandler):
         if self.path.endswith('/updates'):
             body = json.dumps(state['manifest']).encode()
         else:
+            if state.get('redirect'):
+                state['redirects'] = state.get('redirects', 0) + 1
+                self.send_response(302); self.send_header('Location', '/capture'); self.end_headers(); return
             assert self.headers.get('Authorization') == 'Bearer fixture-token'
             state['downloads'] += 1
             body = state['body']
@@ -39,8 +42,11 @@ with tempfile.TemporaryDirectory(prefix='burrow-player-test-', dir=parent) as tm
     run(); assert state['downloads'] == 1, 'same release should not download again'
     state['manifest'], state['body'] = package('two')
     run(); assert current()['version'] == 'two'
-    state['manifest'], state['body'] = package('bad'); state['body'] = b'corrupted'
+    state['manifest'], state['body'] = package('bad'); state['body'] = state['body'][:-1] + bytes([state['body'][-1] ^ 1])
     run(False); assert current()['version'] == 'two', 'failed update must keep installed game'
+    state['manifest'], state['body'] = package('redirected'); state['redirect'] = True
+    run(False); assert current()['version'] == 'two'; assert state['redirects'] == 1, 'must not follow download redirects'
+    state['redirect'] = False
     state['manifest'], state['body'] = package('traversal', traversal=True)
     run(False); assert current()['version'] == 'two'; assert not (data/'escaped.txt').exists()
     state['manifest'], state['body'] = original
@@ -48,4 +54,4 @@ with tempfile.TemporaryDirectory(prefix='burrow-player-test-', dir=parent) as tm
     assert len(list((data/'versions').iterdir())) == 2
     assert not list(data.glob('.update-*')), 'staging is cleaned'
 server.shutdown()
-print('WINDOWS_PLAYER PASS: install, no-op, update, corrupt download, ZIP traversal, rollback, cleanup')
+print('WINDOWS_PLAYER PASS: install, no-op, update, same-size corruption, redirect rejection, ZIP traversal, rollback, cleanup')
