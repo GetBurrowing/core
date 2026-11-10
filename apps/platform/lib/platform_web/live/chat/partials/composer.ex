@@ -65,7 +65,7 @@ defmodule PlatformWeb.ChatLive.Partials.Composer do
   use PlatformWeb, :verified_routes
 
   import PlatformWeb.ChatLive.Partials.Attach, only: [attach_popover: 1, staged_tray: 1]
-  import PlatformWeb.ChatLive.Partials.MentionList, only: [mention_list: 1]
+  import PlatformWeb.ChatLive.Partials.MentionList, only: [mention_list: 1, room_agent_picker: 1]
   import PlatformWeb.ChatLive.RenderHelpers, only: [composer_empty?: 1]
   import PlatformWeb.AvatarComponents, only: [agent_avatar: 1, human_avatar: 1]
   import PlatformWeb.Components.ChatMessage, only: [chat_message: 1]
@@ -229,6 +229,9 @@ defmodule PlatformWeb.ChatLive.Partials.Composer do
   The root of this template IS `#chat-message-scroller`. Do not wrap it —
   see the module doc.
   """
+  attr(:room_agent_picker, :map, default: nil)
+  attr(:can_add_room_agents?, :boolean, default: false)
+
   def message_scroller(assigns) do
     ~H"""
     <%!-- min-h-0 is the load-bearing class here: without it, flex items
@@ -382,21 +385,35 @@ defmodule PlatformWeb.ChatLive.Partials.Composer do
                "say something to get started" invitation on top of a
                channel nobody can post to is the defect this clause exists
                to prevent. --%>
-      <.empty_state
+      <%!-- These controls sit after the padded message list. Give their
+           own last row clearance above the phone's floating chat dock. --%>
+      <div
         :if={
           not @embedded and @active_space != nil and @active_space.archived_at == nil and
             MapSet.size(@rendered_message_ids) == 0
         }
-        variant={:conversational}
+        id="empty-room-agents"
+        class="pb-[var(--phone-chrome-bottom)] lg:pb-0"
       >
-        <:system_message>
-          — no messages yet in #{masked_space_name(assigns, @active_space.name)} —
-        </:system_message>
-        <:body>
-          This space is quiet. Connect your agent and @ them to plan and work in this space.
-        </:body>
-        <:chips label="+ Add an agent" event={JS.navigate(~p"/control")} />
-      </.empty_state>
+        <.empty_state variant={:conversational}>
+          <:system_message>
+            — no messages yet in #{masked_space_name(assigns, @active_space.name)} —
+          </:system_message>
+          <:body>
+            <%= if @can_add_room_agents? do %>
+              Add an agent to this space, then @ them to start.
+            <% else %>
+              This space is quiet. Send a message to start.
+            <% end %>
+          </:body>
+          <:chips
+            :if={@can_add_room_agents?}
+            label="+ Add an agent"
+            event={JS.push("open_room_agent_picker")}
+          />
+        </.empty_state>
+        <.room_agent_picker picker={@room_agent_picker} />
+      </div>
 
       <%!-- THE SAME STATE, WORDED FOR A CALL (task 01a084bf stage 4).
 

@@ -104,6 +104,9 @@ defmodule Platform.Design.PlaceholderContrastTest do
   # A file that gains a `placeholder:` utility cannot stay here: it moves to
   # `@template_sites`.
   @placeholder_exclusions %{
+    # Empty-room agent search uses the shared input and no placeholder:
+    # utility; the guarded global ::placeholder rule paints its subtle text.
+    "platform_web/live/chat/partials/mention_list.ex" => :global_default,
     # The character builder's Try-it field, "Ask <name> anything…" (task
     # 01a1b6ad stage 2): no placeholder: utility, so the base ::placeholder rule.
     "platform_web/live/control_center/character_builder.ex" => :global_default,
