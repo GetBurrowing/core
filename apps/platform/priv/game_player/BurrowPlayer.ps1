@@ -59,7 +59,9 @@ function Update-Game {
                 }
             } finally { $output.Dispose(); $inputStream.Dispose() }
         } finally { $response.Dispose() }
-        if ((Get-Item -LiteralPath $zipPath).Length -ne $release.byte_size -or (Get-FileHash -LiteralPath $zipPath -Algorithm SHA256).Hash.ToLowerInvariant() -cne $release.sha256) { throw 'Download verification failed. Your installed version is unchanged.' }
+        $hasher = [Security.Cryptography.SHA256]::Create(); $stream = [IO.File]::OpenRead($zipPath)
+        try { $digest = [BitConverter]::ToString($hasher.ComputeHash($stream)).Replace('-', '').ToLowerInvariant() } finally { $stream.Dispose(); $hasher.Dispose() }
+        if ((Get-Item -LiteralPath $zipPath).Length -ne $release.byte_size -or $digest -cne $release.sha256) { throw 'Download verification failed. Your installed version is unchanged.' }
         Set-Status 'Installing verified update...'
         [IO.Directory]::CreateDirectory($staging) | Out-Null
         $archive = [IO.Compression.ZipFile]::OpenRead($zipPath)
