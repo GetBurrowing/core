@@ -14,7 +14,7 @@ import MeetingClient, {
  * click wiring on its buttons, and a real network kill.
  */
 
-const fake = vi.hoisted(() => ({ created: [], failConnect: false }))
+const fake = vi.hoisted(() => ({ created: [], failConnect: false, holdConnect: false, release: [] }))
 
 vi.mock("livekit-client", async (importOriginal) => {
   const actual = await importOriginal()
@@ -31,8 +31,12 @@ vi.mock("livekit-client", async (importOriginal) => {
         isCameraEnabled: false,
         isMicrophoneEnabled: false,
         trackPublications: new Map(),
+        micCalls: [],
         setCameraEnabled: () => Promise.resolve(),
-        setMicrophoneEnabled: () => Promise.resolve(),
+        setMicrophoneEnabled(on) {
+          this.micCalls.push(on)
+          return Promise.resolve()
+        },
       }
       fake.created.push(this)
     }
@@ -53,6 +57,15 @@ vi.mock("livekit-client", async (importOriginal) => {
     }
     connect() {
       if (fake.failConnect) return Promise.reject(new Error("net down"))
+      if (fake.holdConnect) {
+        // A slow connect: resolves only when the test calls fake.release.
+        return new Promise((resolve) => {
+          fake.release.push(() => {
+            this.state = "connected"
+            resolve()
+          })
+        })
+      }
       this.state = "connected"
       return Promise.resolve()
     }
@@ -255,5 +268,46 @@ describe("MeetingClient reconnect state machine", () => {
     await vi.advanceTimersByTimeAsync(REJOIN_DELAY_MS * 2)
     expect(left(hook)).toBe(1)
     expect(fake.created.length).toBe(1)
+  })
+
+  it("(f) a rejoin re-enters with the CURRENT mic/camera intent, not the lobby's", async () => {
+    const hook = buildHook()
+    await hook._join({ ...PAYLOAD, mic_enabled: true, camera_enabled: true })
+    expect(fake.created[0].localParticipant.micCalls).not.toContain(false)
+
+    // Muted mid-call: the server's committed pair lands on the dataset.
+    hook.el.dataset.micEnabled = "false"
+    fake.created[0].emit("disconnected", DisconnectReason.UNKNOWN_REASON)
+    await vi.advanceTimersByTimeAsync(REJOIN_DELAY_MS)
+
+    expect(hook._room).toBe(fake.created[1])
+    expect(fake.created[1].localParticipant.micCalls).toContain(false)
+    expect(fake.created[1].localParticipant.micCalls).not.toContain(true) // not the join-time choice
+  })
+
+  it("(g) a connect that finishes after the give-up never becomes the live room or pushes meeting_left", async () => {
+    const hook = buildHook()
+    await hook._join(PAYLOAD)
+    const first = fake.created[0]
+
+    fake.holdConnect = true
+    first.emit("disconnected", DisconnectReason.UNKNOWN_REASON)
+    await vi.advanceTimersByTimeAsync(REJOIN_DELAY_MS)
+    expect(fake.created.length).toBe(2) // the attempt started and is hanging in connect()
+    const slow = fake.created[1]
+
+    await vi.advanceTimersByTimeAsync(REJOIN_GIVE_UP_MS)
+    expect(hook.el.dataset.roomState).toBe("lost")
+    expect(hook._room).toBe(first)
+
+    fake.holdConnect = false
+    fake.release.shift()() // the stale connect finally resolves
+    await vi.advanceTimersByTimeAsync(0)
+
+    expect(hook._room).toBe(first) // not pinned to the stale room
+    expect(hook.el.dataset.roomState).toBe("lost") // no "connected" announced for it
+    expect(slow.disconnectCalls).toBe(1)
+    slow.emit("disconnected", DisconnectReason.CLIENT_INITIATED) // its own teardown
+    expect(left(hook)).toBe(0) // the user is still in the meeting, offered Rejoin / Leave
   })
 })

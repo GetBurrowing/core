@@ -853,7 +853,9 @@ const MeetingClient = {
 
     const attempt = () => {
       if (gen !== this._rejoinGen) return
-      this._clearRejoinTimers()
+      // Do NOT clear the timers here: the delay timer has just fired and the
+      // give-up timer below must keep running while connect() is in flight,
+      // or a connect that hangs is "Reconnecting…" forever.
       this._attemptRejoin(gen)
     }
     const schedule = () => this._rejoinTimers.push(setTimeout(attempt, REJOIN_DELAY_MS))
@@ -882,7 +884,10 @@ const MeetingClient = {
     const creds = this._joinCreds
     if (!creds) return this._enterLost(this._room)
     const room = this._newRoom()
-    const ok = await this._connectRoom(room, creds.url, creds.token)
+    // Pin `_room` only while this attempt is still the current one: a connect
+    // that resolves after the give-up timer (or after Leave) must not become
+    // the live room, or its later Disconnected would push `meeting_left`.
+    const ok = await this._connectRoom(room, creds.url, creds.token, undefined, () => gen === this._rejoinGen)
     if (gen !== this._rejoinGen) {
       // Gave up or left while connecting: do not resurrect the call.
       if (ok) room.disconnect().catch(() => {})
@@ -896,7 +901,21 @@ const MeetingClient = {
     }
     this._clearRejoinTimers()
     this._connLost = false
-    await this._enterRoom(room, creds.desired)
+    // Re-enter with the CURRENT mic/camera intent, not the lobby's choice at
+    // join time: someone who muted mid-call and then dropped must come back
+    // muted. The dataset mirrors the server's committed pair; a key the
+    // dataset lacks falls back to what the join used.
+    await this._enterRoom(room, this._currentMedia(creds.desired))
+  },
+
+  _currentMedia(fallback) {
+    const ds = (this.el && this.el.dataset) || {}
+    const pick = (fromDataset, fb) => {
+      if (fromDataset === "true") return true
+      if (fromDataset === "false") return false
+      return fb
+    }
+    return { mic: pick(ds.micEnabled, fallback.mic), camera: pick(ds.cameraEnabled, fallback.camera) }
   },
 
   _enterLost(room) {
@@ -1494,7 +1513,11 @@ const MeetingClient = {
   // Bind, connect, then pin the Room where every other meeting hook looks
   // for it. `connectOptions` is passed only when given, so the web call's
   // `connect(url, token)` is exactly what it was.
-  async _connectRoom(room, url, token, connectOptions) {
+  // `stillWanted` (optional): asked once the connect resolves; `false` means
+  // the caller has moved on (a rejoin that outlived its give-up timer), so
+  // the room is NOT pinned as `_room` and no connected state is announced.
+  // The caller owns disconnecting it.
+  async _connectRoom(room, url, token, connectOptions, stillWanted) {
     this._bindRoomEvents(room)
 
     try {
@@ -1505,6 +1528,7 @@ const MeetingClient = {
       return false
     }
 
+    if (stillWanted && !stillWanted()) return true
     this._room = room
     window.__livekit_room = room
     window.__livekitRoom = room
