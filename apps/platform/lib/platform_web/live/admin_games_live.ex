@@ -11,7 +11,8 @@ defmodule PlatformWeb.AdminGamesLive do
       {:ok,
        socket
        |> assign(:page_title, "Games")
-       |> assign(:publications, Publishing.list(socket.assigns.current_user_record))
+       |> stream_configure(:publications, dom_id: &("publication-" <> &1.slug))
+       |> stream(:publications, Publishing.list(socket.assigns.current_user_record))
        |> assign(:form, form)}
     else
       {:ok, socket |> put_flash(:error, "Root admin access required") |> redirect(to: "/")}
@@ -24,7 +25,7 @@ defmodule PlatformWeb.AdminGamesLive do
       {:ok, publication} ->
         {:noreply,
          socket
-         |> assign(:publications, Publishing.list(socket.assigns.current_user_record))
+         |> stream_insert(:publications, publication)
          |> assign(:form, to_form(attrs, as: :game))
          |> put_flash(:info, "Saved. Game page: /games/#{publication.slug}")}
 
@@ -92,10 +93,10 @@ defmodule PlatformWeb.AdminGamesLive do
         <p class="text-sm">
           Publish a new version to update players. Reuse an older version and its original attachment to roll back. Downloads use the uploaded ZIP’s verified size and checksum. The ZIP must contain Play Voltron.bat at its root for this prototype.
         </p>
-        <div id="published-games" class="space-y-3">
+        <div id="published-games" class="space-y-3" phx-update="stream">
           <div
-            :for={publication <- @publications}
-            id={"publication-#{publication.slug}"}
+            :for={{dom_id, publication} <- @streams.publications}
+            id={dom_id}
             class="card bg-base-200 p-4"
           >
             <.link href={"/games/#{publication.slug}"}>{publication.manifest["title"]}</.link>

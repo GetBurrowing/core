@@ -1071,13 +1071,12 @@ defmodule Platform.VaultTest do
       slug = unique_slug("del-tel")
       insert_credential!(slug, scope: {:platform, nil})
 
-      ref =
-        :telemetry_test.attach_event_handlers(self(), [[:platform, :vault, :credential_revoked]])
+      event = [:platform, :vault, :credential_revoked]
+      ref = :telemetry_test.attach_event_handlers(self(), [event])
 
       assert {:ok, _} = Vault.delete(slug, accessor: {:system, nil})
 
-      assert_receive {[:platform, :vault, :credential_revoked], ^ref, _measurements, meta}
-      assert meta.slug == slug
+      assert_receive {^event, ^ref, _measurements, %{slug: ^slug}}
 
       :telemetry.detach(ref)
     end
