@@ -29,7 +29,10 @@ def windows(path):
     return str(path) if os.name == 'nt' else subprocess.check_output(['wslpath', '-w', str(path)], text=True).strip()
 ps = 'powershell.exe' if os.name == 'nt' else '/mnt/c/Windows/System32/WindowsPowerShell/v1.0/powershell.exe'
 # Windows processes need a Windows-accessible temp directory, including on WSL.
-parent = None if os.name == 'nt' else '/mnt/c/Users/Jordan/AppData/Local/Temp'
+parent = None
+if os.name != 'nt':
+    native_temp = subprocess.check_output([ps, '-NoProfile', '-Command', '[IO.Path]::GetTempPath()'], text=True).strip()
+    parent = subprocess.check_output(['wslpath', '-u', native_temp], text=True).strip()
 with tempfile.TemporaryDirectory(prefix='burrow-player-test-', dir=parent) as tmp:
     directory = pathlib.Path(tmp); config = directory/'player.json'; data = directory/'game'
     config.write_text(json.dumps(dict(base_url=f'http://127.0.0.1:{server.server_port}', slug='voltron', token='fixture-token')))

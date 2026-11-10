@@ -81,7 +81,7 @@ jobs:
         run: |
           mix ecto.create
           mix ecto.migrate
-          mix precommit test/platform_web/live/admin_live_test.exs test/platform_web/controllers/game_page_controller_test.exs test/platform_web/controllers/auth_controller_test.exs test/platform_web/controllers/chat_attachment_controller_test.exs test/platform_web/router_host_isolation_test.exs test/platform/repo_lookup_boundary_test.exs
+          mix precommit test/platform/regression/install_identity_guard_test.exs test/platform/release/irreversible_migrations_test.exs test/platform/org/wiki/context_t4_e2e_test.exs test/platform_web/live/admin_live_test.exs test/platform_web/controllers/game_page_controller_test.exs test/platform_web/controllers/auth_controller_test.exs test/platform_web/controllers/chat_attachment_controller_test.exs test/platform_web/router_host_isolation_test.exs test/platform/repo_lookup_boundary_test.exs
       - name: Check the actual page on phone and desktop
         run: |
           sh "$GITHUB_WORKSPACE/scripts/fetch-github-release-binaries.sh" tailwind .
