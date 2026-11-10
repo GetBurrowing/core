@@ -318,7 +318,9 @@ defmodule PlatformWeb.ChatLiveMembersTest do
     |> with_target("#chat-members")
     |> render_hook("members_add_agent", %{"agent_id" => agent.id})
 
-    assert render(view) =~ "Only a channel admin can bring agents into this channel."
+    assert render(view) =~
+             "Only a channel, org, or root admin can bring agents into this channel."
+
     assert agent_rows(space.id, agent.id) == []
   end
 
@@ -338,7 +340,9 @@ defmodule PlatformWeb.ChatLiveMembersTest do
     |> with_target("#chat-members")
     |> render_hook("members_remove_agent", %{"participant_id" => row.id})
 
-    assert render(view) =~ "Only a channel admin can remove agents from this channel."
+    assert render(view) =~
+             "Only a channel, org, or root admin can remove agents from this channel."
+
     assert [_] = agent_rows(space.id, agent.id)
     assert has_element?(view, agent_row_selector(agent))
   end
@@ -776,7 +780,7 @@ defmodule PlatformWeb.ChatLiveMembersTest do
       |> with_target("#chat-members")
       |> render_hook("members_add_person", %{"user_id" => eve.id})
 
-      assert render(view) =~ "Only a channel admin can add people to this channel."
+      assert render(view) =~ "Only a channel, org, or root admin can add people to this channel."
       assert user_rows(space, eve) == []
     end
 
@@ -955,6 +959,83 @@ defmodule PlatformWeb.ChatLiveMembersTest do
 
       assert has_element?(view_b, person_selector(hal))
       refute hal.id in person_options(view_b)
+    end
+  end
+
+  for authority <- [:org_admin, :root_admin] do
+    test "#{authority} adds and removes agents without promotion and rechecks revocation", %{
+      conn: conn
+    } do
+      owner = user!("owner")
+      actor = user!("authority")
+      space = owned_channel!(owner)
+
+      space =
+        space
+        |> Ecto.Changeset.change(org_id: Platform.Tenancy.get_org_by_slug!("initech").id)
+        |> Repo.update!()
+
+      org_id =
+        if unquote(authority) == :root_admin, do: Tenancy.get_root_org().id, else: space.org_id
+
+      if unquote(authority) == :root_admin do
+        %Platform.Tenancy.OrgMembership{}
+        |> Platform.Tenancy.OrgMembership.changeset(%{
+          user_id: actor.id,
+          org_id: space.org_id,
+          role: "member",
+          external: false
+        })
+        |> Repo.insert!()
+      end
+
+      membership =
+        %OrgMembership{}
+        |> OrgMembership.changeset(%{
+          user_id: actor.id,
+          org_id: org_id,
+          role: "admin",
+          external: false
+        })
+        |> Repo.insert!()
+
+      agent = agent!("Authority")
+      view = conn |> live_as(actor, ~p"/chat/#{space.slug}") |> open_members()
+      assert has_element?(view, @add_form)
+
+      view
+      |> with_target("#chat-members")
+      |> render_hook("members_add_agent", %{"agent_id" => agent.id})
+
+      assert [row] = agent_rows(space.id, agent.id)
+      assert row.history_visible_from != nil
+      assert role_in_db(space, actor) == "member"
+
+      view
+      |> with_target("#chat-members")
+      |> render_hook("members_remove_agent", %{"participant_id" => row.id})
+
+      assert agent_rows(space.id, agent.id) == []
+
+      view
+      |> with_target("#chat-members")
+      |> render_hook("members_add_agent", %{"agent_id" => agent.id})
+
+      assert [row] = agent_rows(space.id, agent.id)
+      membership |> Ecto.Changeset.change(role: "member") |> Repo.update!()
+
+      view
+      |> with_target("#chat-members")
+      |> render_hook("members_remove_agent", %{"participant_id" => row.id})
+
+      assert [_] = agent_rows(space.id, agent.id)
+      other = agent!("Revoked")
+
+      view
+      |> with_target("#chat-members")
+      |> render_hook("members_add_agent", %{"agent_id" => other.id})
+
+      assert agent_rows(space.id, other.id) == []
     end
   end
 end

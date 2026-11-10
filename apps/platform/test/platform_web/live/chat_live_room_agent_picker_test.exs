@@ -195,4 +195,60 @@ defmodule PlatformWeb.ChatLiveRoomAgentPickerTest do
     view |> element(option(eligible)) |> render_click()
     assert length(rows(room, eligible)) == 1
   end
+
+  for authority <- [:org_admin, :root_admin] do
+    test "#{authority} picks without promotion and rechecks revoked authority", %{conn: conn} do
+      actor = user!()
+      room = room!(user!())
+
+      room =
+        room
+        |> Ecto.Changeset.change(org_id: Platform.Tenancy.get_org_by_slug!("initech").id)
+        |> Repo.update!()
+
+      org_id =
+        if unquote(authority) == :root_admin,
+          do: Platform.Tenancy.get_root_org().id,
+          else: room.org_id
+
+      if unquote(authority) == :root_admin do
+        %Platform.Tenancy.OrgMembership{}
+        |> Platform.Tenancy.OrgMembership.changeset(%{
+          user_id: actor.id,
+          org_id: room.org_id,
+          role: "member",
+          external: false
+        })
+        |> Repo.insert!()
+      end
+
+      membership =
+        %Platform.Tenancy.OrgMembership{}
+        |> Platform.Tenancy.OrgMembership.changeset(%{
+          user_id: actor.id,
+          org_id: org_id,
+          role: "admin",
+          external: false
+        })
+        |> Repo.insert!()
+
+      agent = agent!("Admin helper")
+      view = mount_room(conn, actor, room)
+      open(view)
+      assert has_element?(view, option(agent))
+      view |> element(option(agent)) |> render_click()
+      assert [%{history_visible_from: history}] = rows(room, agent)
+      assert history != nil
+
+      assert Enum.find(Chat.list_participants(room.id), &(&1.participant_id == actor.id)).role ==
+               "member"
+
+      other = agent!("Revoked helper")
+      open(view)
+      assert has_element?(view, option(other))
+      membership |> Ecto.Changeset.change(role: "member") |> Repo.update!()
+      render_click(view, "room_add_agent", %{"agent_id" => other.id})
+      assert rows(room, other) == []
+    end
+  end
 end

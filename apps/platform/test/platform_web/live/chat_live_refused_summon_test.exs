@@ -23,7 +23,7 @@ defmodule PlatformWeb.ChatLiveRefusedSummonTest do
   alias Platform.Repo
 
   @notice "[data-role=refused-summon-notice]"
-  @channel_reason "Only a channel admin can bring agents into this channel."
+  @channel_reason "Only a channel, org, or root admin can bring agents into this channel."
 
   defp user!(tag) do
     n = System.unique_integer([:positive])
@@ -199,5 +199,56 @@ defmodule PlatformWeb.ChatLiveRefusedSummonTest do
     })
 
     assert has_element?(view, "#inline-thread-#{root.id} #{@notice}")
+  end
+
+  for authority <- [:org_admin, :root_admin] do
+    test "#{authority} mention summons without channel promotion", %{conn: conn} do
+      space = channel!()
+      actor = user!("authority")
+
+      space =
+        space
+        |> Ecto.Changeset.change(org_id: Platform.Tenancy.get_org_by_slug!("initech").id)
+        |> Repo.update!()
+
+      org_id =
+        if unquote(authority) == :root_admin,
+          do: Platform.Tenancy.get_root_org().id,
+          else: space.org_id
+
+      if unquote(authority) == :root_admin do
+        %Platform.Tenancy.OrgMembership{}
+        |> Platform.Tenancy.OrgMembership.changeset(%{
+          user_id: actor.id,
+          org_id: space.org_id,
+          role: "member",
+          external: false
+        })
+        |> Repo.insert!()
+      end
+
+      %Platform.Tenancy.OrgMembership{}
+      |> Platform.Tenancy.OrgMembership.changeset(%{
+        user_id: actor.id,
+        org_id: org_id,
+        role: "admin",
+        external: false
+      })
+      |> Repo.insert!()
+
+      agent = agent!("Authority")
+      view = live_as(conn, actor, space)
+      send_text(view, "@[#{agent.slug}] hello")
+
+      assert Enum.any?(
+               Chat.list_participants(space.id),
+               &(&1.participant_type == "agent" and &1.participant_id == agent.id)
+             )
+
+      assert Enum.find(Chat.list_participants(space.id), &(&1.participant_id == actor.id)).role ==
+               "member"
+
+      refute has_element?(view, @notice)
+    end
   end
 end
