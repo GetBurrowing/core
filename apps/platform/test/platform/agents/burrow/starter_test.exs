@@ -112,11 +112,41 @@ defmodule Platform.Agents.Burrow.StarterTest do
       assert NativeLogin.start_env(agent) == %{}
     end
 
-    test "the handover landing is the conversation, or the picker without a key", %{admin: admin} do
-      assert "/chat/getting-started-" <> _ = Starter.handover_landing(admin)
+    test "the handover landing holds while a task provisions, then is the conversation",
+         %{admin: admin} do
+      Phoenix.PubSub.subscribe(Platform.PubSub, Starter.topic(admin))
+      assert Starter.ready_path() == nil
 
+      # First sign-in: the request returns at once, the work runs in a task.
+      assert Starter.handover_landing(admin) == "/setup/getting-started"
+      assert_receive {:starter, {:ok, %Space{slug: "getting-started-" <> _ = slug}}}, 5_000
+      assert burrow_count() == 1
+      assert Starter.ready_path() == "/chat/" <> slug
+
+      # Second sign-in: already there, no task, no broadcast.
+      assert Starter.handover_landing(admin) == "/chat/" <> slug
+      refute_receive {:starter, _}, 200
+    end
+
+    test "the handover landing is the picker without a key or for a member", %{admin: admin} do
       put_starter(nil)
       assert Starter.handover_landing(admin) == "/setup/connect-ai"
+
+      put_starter(@starter)
+      member = VaultFixtures.non_admin!()
+      Phoenix.PubSub.subscribe(Platform.PubSub, Starter.topic(member))
+      assert Starter.handover_landing(member) == "/setup/connect-ai"
+      refute_receive {:starter, _}, 200
+      assert burrow_count() == 0
+    end
+
+    test "a provisioning that raises still answers the holding page", %{admin: admin} do
+      Phoenix.PubSub.subscribe(Platform.PubSub, Starter.topic(admin))
+      # A user map with the admin's id but no name field makes the space's
+      # participant insert raise inside the task; the broadcast must still come.
+      assert {:ok, _pid} = Starter.start_provisioning(%{id: admin.id, email: nil, name: nil})
+      assert_receive {:starter, result}, 5_000
+      assert match?({:ok, _}, result) or match?({:error, _}, result)
     end
 
     test "the allowance line is in Burrow's instructions while it is on the starter", %{

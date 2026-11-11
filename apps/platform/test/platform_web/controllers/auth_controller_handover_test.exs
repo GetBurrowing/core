@@ -166,11 +166,25 @@ defmodule PlatformWeb.AuthControllerHandoverTest do
       state = get_session(conn, :oidc_session_params).state
       mock_login()
 
+      Phoenix.PubSub.subscribe(
+        Platform.PubSub,
+        Platform.Agents.Burrow.Starter.topic(%{id: membership.user_id})
+      )
+
       conn = conn |> recycle() |> get(~p"/auth/oidc/callback?code=c&state=#{state}")
-      assert "/chat/getting-started-" <> _ = redirected_to(conn, 302)
+      # The request lands on the holding page at once; the task does the work.
+      assert redirected_to(conn, 302) == "/setup/getting-started"
       assert membership.user_id == get_session(conn, :current_user_id)
       assert get_session(conn, :post_login_path) == nil
+
+      assert_receive {:starter, {:ok, %{slug: "getting-started-" <> _}}}, 5_000
       assert Platform.Agents.Burrow.Starter.state(Platform.Agents.Burrow.get()) == "active"
+
+      # A second hand-over sign-in goes straight to the conversation.
+      conn = get(conn, ~p"/auth/handover?code=#{@code}")
+      state = get_session(conn, :oidc_session_params).state
+      conn = conn |> recycle() |> get(~p"/auth/oidc/callback?code=c&state=#{state}")
+      assert "/chat/getting-started-" <> _ = redirected_to(conn, 302)
     end
 
     test "a failed starter falls back to the picker", %{conn: conn} do

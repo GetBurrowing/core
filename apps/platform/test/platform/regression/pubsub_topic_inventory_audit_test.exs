@@ -160,6 +160,10 @@ defmodule Platform.Regression.PubSubTopicInventoryAuditTest do
     {"files:stars:<id>", :user},
     {"external_admission:<id>", :user},
     {"inbox:<id>", :user},
+    # Keyed by the owner's user id. Only GettingStartedLive subscribes, after
+    # a root-admin check, and the payload is the starter provisioning result
+    # (a space slug or an error), nothing another user could learn from.
+    {"onboarding:starter:<id>", :user},
     {"meeting:state:<id>", :user},
     # Dormant on BOTH sides: broadcast_user/2 and subscribe_user/1 have no
     # caller anywhere in lib.
