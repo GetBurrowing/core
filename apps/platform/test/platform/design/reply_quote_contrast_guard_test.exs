@@ -232,10 +232,10 @@ defmodule Platform.Design.ReplyQuoteContrastGuardTest do
     assert failures == []
   end
 
-  test "the agent-slot bar clears 3:1 on base-200 for all ten slots in all ten variants", ctx do
+  test "the agent-slot bar clears 3:1 on base-200 for every slot in all ten variants", ctx do
     s = slots(ctx.html)
     ids = ColorPalette.ids()
-    assert length(ids) == 10
+    assert length(ids) == 16
 
     rows =
       for b <- ctx.blocks do

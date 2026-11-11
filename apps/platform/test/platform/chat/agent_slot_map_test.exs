@@ -45,7 +45,7 @@ defmodule Platform.Chat.AgentSlotMapTest do
     {:ok, teal} = Chat.add_agent_participant(space.id, agent!("teal"))
     {:ok, rose} = Chat.add_agent_participant(space.id, agent!("rose"))
     {:ok, none} = Chat.add_agent_participant(space.id, agent!(nil))
-    {:ok, odd} = Chat.add_agent_participant(space.id, agent!("magenta"))
+    {:ok, odd} = Chat.add_agent_participant(space.id, agent!("chartreuse"))
 
     map = Chat.agent_slot_map_for_participants(Chat.list_participants(space.id))
 
