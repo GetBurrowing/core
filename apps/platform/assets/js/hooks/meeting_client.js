@@ -891,19 +891,23 @@ const MeetingClient = {
     if (!creds) return this._enterLost(this._room)
     // A guest token lasts 30 minutes, so the one from the first join may be
     // dead by now: ask the server for a fresh one for the same room and
-    // identity. Only an explicit refusal ends the attempt; no answer (LiveView
-    // down, timeout) falls back to the held token once.
+    // identity. Only an explicit `denied` ends the attempt. Anything else
+    // (`unavailable`, any other error, no answer, a token for a different
+    // room) falls back to the held token once: a good held token must not be
+    // thrown away because the server could not mint a new one.
     const fresh = await this._requestRejoinToken()
     if (gen !== this._rejoinGen) return
-    if (fresh && fresh.error) {
-      console.warn("[MeetingClient] server refused a rejoin token:", fresh.error)
+    if (fresh && fresh.error === "denied") {
+      console.warn("[MeetingClient] server denied a rejoin token")
       this._rejoinGen += 1
       this._clearRejoinTimers()
       this._enterLost(this._room)
       return
     }
     let { url, token } = creds
-    if (fresh && fresh.token) {
+    if (fresh && fresh.token && creds.roomName && fresh.room_name && fresh.room_name !== creds.roomName) {
+      console.warn("[MeetingClient] rejoin token is for a different room; trying the held token once")
+    } else if (fresh && fresh.token) {
       url = fresh.url || url
       token = fresh.token
     } else {
@@ -934,7 +938,12 @@ const MeetingClient = {
     // dataset lacks falls back to what the join used.
     creds.url = url
     creds.token = token // the freshest one, for a later manual Rejoin's fallback
+    // A share held from the dead room is stale: its track is gone, and while
+    // it is held the first-published-wins policy would refuse the live one.
+    // `_enterRoom` re-attaches whatever the new room is sharing.
+    if (this._screenShareTrack) this._detachScreenShareTrack(this._screenShareTrack)
     await this._enterRoom(room, this._currentMedia(creds.desired))
+    if (gen !== this._rejoinGen) return // left or gave up while entering
     this._reconcileTiles(room)
   },
 
@@ -968,6 +977,12 @@ const MeetingClient = {
   _reconcileTiles(room) {
     const present = new Set()
     for (const p of room.remoteParticipants.values()) present.add(p.identity)
+    // Removing a tile does not clear the screen-share slot: a sharer who left
+    // during the outage must not stay on screen.
+    const sharer = this._screenShareParticipant?.identity
+    if (this._screenShareTrack && !(sharer && present.has(sharer))) {
+      this._detachScreenShareTrack(this._screenShareTrack)
+    }
     for (const [person, tile] of [...this._tiles]) {
       const connections = this._tileConnections && this._tileConnections.get(person)
       if (!connections || connections.size === 0) {
@@ -1492,7 +1507,7 @@ const MeetingClient = {
     this._clearRejoinTimers()
     this._rejoinGen += 1
     this._connLost = false
-    this._joinCreds = { url, token, desired }
+    this._joinCreds = { url, token, desired, roomName: room_name }
 
     const room = this._newRoom()
     if (!(await this._connectRoom(room, url, token))) return

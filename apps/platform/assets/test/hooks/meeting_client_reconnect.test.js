@@ -383,10 +383,10 @@ describe("MeetingClient reconnect state machine", () => {
       warn.mockRestore()
     })
 
-    it("(j) a refused reply goes to lost without connecting", async () => {
+    it("(j) a denied reply goes to lost without connecting", async () => {
       const hook = buildHook()
       await hook._join(PAYLOAD)
-      hook.rejoinReply = { error: "not_a_participant" }
+      hook.rejoinReply = { error: "denied" }
       fake.created[0].emit("disconnected", DisconnectReason.UNKNOWN_REASON)
       await vi.advanceTimersByTimeAsync(REJOIN_DELAY_MS)
 
@@ -394,6 +394,106 @@ describe("MeetingClient reconnect state machine", () => {
       expect(tokens()).toEqual(["tok"]) // no rejoin connect, fresh or held
       expect(left(hook)).toBe(0)
     })
+
+    it("(j2) an unavailable reply falls back to the held token instead of giving up", async () => {
+      const warn = vi.spyOn(console, "warn").mockImplementation(() => {})
+      const hook = buildHook()
+      await hook._join(PAYLOAD)
+      hook.rejoinReply = { error: "unavailable" }
+      fake.created[0].emit("disconnected", DisconnectReason.UNKNOWN_REASON)
+      await vi.advanceTimersByTimeAsync(REJOIN_DELAY_MS)
+
+      expect(tokens()).toEqual(["tok", "tok"])
+      expect(hook.el.dataset.roomState).toBe("connected")
+      warn.mockRestore()
+    })
+
+    it("(j3) any other error string is not a denial: held token is tried", async () => {
+      const warn = vi.spyOn(console, "warn").mockImplementation(() => {})
+      const hook = buildHook()
+      await hook._join(PAYLOAD)
+      hook.rejoinReply = { error: "not_in_meeting" }
+      fake.created[0].emit("disconnected", DisconnectReason.UNKNOWN_REASON)
+      await vi.advanceTimersByTimeAsync(REJOIN_DELAY_MS)
+      expect(tokens()).toEqual(["tok", "tok"])
+      warn.mockRestore()
+    })
+
+    it("(m) a token for a different room is not used: the held token is tried", async () => {
+      const warn = vi.spyOn(console, "warn").mockImplementation(() => {})
+      const hook = buildHook()
+      await hook._join(PAYLOAD)
+      hook.rejoinReply = { token: "other-room-tok", url: "wss://lk.test", room_name: "space-OTHER" }
+      fake.created[0].emit("disconnected", DisconnectReason.UNKNOWN_REASON)
+      await vi.advanceTimersByTimeAsync(REJOIN_DELAY_MS)
+
+      expect(tokens()).toEqual(["tok", "tok"])
+      expect(tokens()).not.toContain("other-room-tok")
+      expect(warn.mock.calls.some((c) => /room/.test(String(c[0])))).toBe(true)
+      warn.mockRestore()
+    })
+
+    it("(m2) a token for the held room is used", async () => {
+      const hook = buildHook()
+      await hook._join(PAYLOAD)
+      hook.rejoinReply = { token: "fresh-tok", url: "wss://lk.test", room_name: "space-r" }
+      fake.created[0].emit("disconnected", DisconnectReason.UNKNOWN_REASON)
+      await vi.advanceTimersByTimeAsync(REJOIN_DELAY_MS)
+      expect(tokens()).toEqual(["tok", "fresh-tok"])
+    })
+
+    it("(n) a token reply arriving after the give-up timer causes no connect and no state change", async () => {
+      const hook = buildHook()
+      await hook._join(PAYLOAD)
+      let reply = null
+      hook.pushEvent = (name, _p, cb) => {
+        hook.pushed.push(name)
+        if (name === "meeting_rejoin_token") reply = cb
+      }
+      globalThis.navigator.onLine = false
+      fake.created[0].emit("disconnected", undefined)
+      await vi.advanceTimersByTimeAsync(REJOIN_GIVE_UP_MS - 2000)
+      globalThis.window.addEventListener.mock.calls.find((c) => c[0] === "online")[1]()
+      await vi.advanceTimersByTimeAsync(REJOIN_DELAY_MS) // request in flight
+      expect(reply).not.toBe(null)
+      await vi.advanceTimersByTimeAsync(600) // give-up fires while we wait
+      expect(hook.el.dataset.roomState).toBe("lost")
+
+      reply({ token: "late-tok", url: "wss://lk.test", room_name: "space-r" })
+      await vi.advanceTimersByTimeAsync(0)
+
+      expect(tokens()).toEqual(["tok"])
+      expect(fake.created.length).toBe(1)
+      expect(hook.el.dataset.roomState).toBe("lost")
+      expect(left(hook)).toBe(0)
+    })
+
+    it("(n2) a token reply arriving after Leave causes no connect and no state change", async () => {
+      const hook = buildHook()
+      await hook._join(PAYLOAD)
+      let reply = null
+      hook.pushEvent = (name, _p, cb) => {
+        hook.pushed.push(name)
+        if (name === "meeting_rejoin_token") reply = cb
+      }
+      fake.created[0].emit("disconnected", DisconnectReason.UNKNOWN_REASON)
+      await vi.advanceTimersByTimeAsync(REJOIN_DELAY_MS) // request in flight
+      expect(reply).not.toBe(null)
+
+      hook._leaveAfterLoss()
+      const stateAfterLeave = hook.el.dataset.roomState
+      expect(left(hook)).toBe(1)
+
+      reply({ token: "late-tok", url: "wss://lk.test", room_name: "space-r" })
+      await vi.advanceTimersByTimeAsync(0)
+
+      expect(tokens()).toEqual(["tok"])
+      expect(fake.created.length).toBe(1)
+      expect(hook.el.dataset.roomState).toBe(stateAfterLeave)
+      expect(left(hook)).toBe(1)
+      expect(hook._room).toBe(null)
+    })
+
   })
 
   it("(k) people who left during the outage lose their tiles after the rejoin", async () => {
@@ -428,11 +528,88 @@ describe("MeetingClient reconnect state machine", () => {
     expect([...hook._tiles.keys()].sort()).toEqual(["user:alice", "user:carol"])
   })
 
-  it("(k2) the first join does not reconcile away tiles (only a rejoin does)", async () => {
+  it("(k2) only a rejoin reconciles tiles: not the first join, once per rejoin", async () => {
+    globalThis.document.getElementById = () => fakeNode()
+    const hook = buildHook()
+    const reconcile = vi.spyOn(hook, "_reconcileTiles")
+    await hook._join(PAYLOAD)
+    expect(reconcile).not.toHaveBeenCalled()
+
+    fake.created[0].emit("disconnected", DisconnectReason.UNKNOWN_REASON)
+    await vi.advanceTimersByTimeAsync(REJOIN_DELAY_MS)
+    expect(reconcile).toHaveBeenCalledTimes(1)
+    expect(reconcile).toHaveBeenCalledWith(fake.created[1])
+  })
+
+  it("(k3) a rejoin superseded during _enterRoom does not reconcile", async () => {
     globalThis.document.getElementById = () => fakeNode()
     const hook = buildHook()
     await hook._join(PAYLOAD)
-    expect(hook._tiles.size).toBe(0) // nothing to assert beyond: no throw on an empty roster
+    const reconcile = vi.spyOn(hook, "_reconcileTiles")
+    const realEnter = hook._enterRoom.bind(hook)
+    hook._enterRoom = async (...args) => {
+      await realEnter(...args)
+      hook._rejoinGen += 1 // Leave / give-up landed while entering
+    }
+    fake.created[0].emit("disconnected", DisconnectReason.UNKNOWN_REASON)
+    await vi.advanceTimersByTimeAsync(REJOIN_DELAY_MS)
+    expect(reconcile).not.toHaveBeenCalled()
+  })
+
+  describe("screen share across a rejoin", () => {
+    const shareOf = (identity) => {
+      const track = { kind: "video", source: "screen_share", detach: vi.fn(() => []) }
+      return { track, participant: { identity } }
+    }
+    const holdShare = (hook, { track, participant }) => {
+      hook._screenShareTrack = track
+      hook._screenShareParticipant = participant
+    }
+
+    it("(k4) the share of someone who left during the outage is cleared by reconcile", async () => {
+      globalThis.document.getElementById = () => fakeNode()
+      const hook = buildHook()
+      await hook._join(PAYLOAD)
+      const share = shareOf("user:bob")
+      holdShare(hook, share)
+
+      const room = fake.created[0] // bob is not in it
+      hook._reconcileTiles(room)
+
+      expect(share.track.detach).toHaveBeenCalled()
+      expect(hook._screenShareTrack).toBe(null)
+      expect(hook._screenShareParticipant).toBe(null)
+    })
+
+    it("(k5) a share whose sharer is still in the room survives reconcile", async () => {
+      globalThis.document.getElementById = () => fakeNode()
+      const hook = buildHook()
+      await hook._join(PAYLOAD)
+      const share = shareOf("user:alice")
+      holdShare(hook, share)
+      const room = fake.created[0]
+      room.remoteParticipants.set("user:alice", { identity: "user:alice", trackPublications: new Map() })
+
+      hook._reconcileTiles(room)
+
+      expect(hook._screenShareTrack).toBe(share.track)
+      expect(share.track.detach).not.toHaveBeenCalled()
+    })
+
+    it("(k6) through a real rejoin: the departed sharer's share is gone, and the old track never blocks a new one", async () => {
+      globalThis.document.getElementById = () => fakeNode()
+      const hook = buildHook()
+      await hook._join(PAYLOAD)
+      const share = shareOf("user:bob")
+      holdShare(hook, share)
+
+      fake.created[0].emit("disconnected", DisconnectReason.UNKNOWN_REASON)
+      await vi.advanceTimersByTimeAsync(REJOIN_DELAY_MS)
+
+      expect(hook._room).toBe(fake.created[1])
+      expect(share.track.detach).toHaveBeenCalled()
+      expect(hook._screenShareTrack).toBe(null)
+    })
   })
 
   it("(l) Leave during a held rejoin connect: the late room's Disconnected adds no second meeting_left", async () => {
