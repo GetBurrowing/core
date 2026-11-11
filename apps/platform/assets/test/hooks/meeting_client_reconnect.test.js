@@ -254,6 +254,49 @@ describe("MeetingClient reconnect state machine", () => {
     expect(hook._connBanner.dataset.state).toBe("idle")
   })
 
+  it("a second Rejoin click while an attempt is in flight sends no second token request", async () => {
+    const hook = buildHook()
+    await hook._join(PAYLOAD)
+    fake.failConnect = true
+    fake.created[0].emit("disconnected", DisconnectReason.UNKNOWN_REASON)
+    await vi.advanceTimersByTimeAsync(REJOIN_DELAY_MS)
+    expect(hook.el.dataset.roomState).toBe("lost")
+
+    // The server holds the token reply, so the attempt stays in flight.
+    let reply = null
+    hook.pushed.length = 0
+    hook.pushEvent = (name, _p, cb) => {
+      hook.pushed.push(name)
+      if (name === "meeting_rejoin_token") reply = cb
+    }
+    fake.failConnect = false
+    hook._manualRejoin()
+    hook._manualRejoin()
+    hook._manualRejoin()
+    expect(hook.pushed.filter((n) => n === "meeting_rejoin_token").length).toBe(1)
+
+    reply({ token: "fresh-tok", url: "wss://lk.test" })
+    await vi.advanceTimersByTimeAsync(0)
+    expect(hook.el.dataset.roomState).toBe("connected")
+  })
+
+  it("a Rejoin click after a failed manual attempt is honoured (the guard clears)", async () => {
+    const hook = buildHook()
+    await hook._join(PAYLOAD)
+    fake.failConnect = true
+    fake.created[0].emit("disconnected", DisconnectReason.UNKNOWN_REASON)
+    await vi.advanceTimersByTimeAsync(REJOIN_DELAY_MS)
+    expect(hook.el.dataset.roomState).toBe("lost")
+
+    hook.pushed.length = 0
+    hook._manualRejoin()
+    await vi.advanceTimersByTimeAsync(0)
+    expect(hook.el.dataset.roomState).toBe("lost") // failed again
+    hook._manualRejoin()
+    await vi.advanceTimersByTimeAsync(0)
+    expect(hook.pushed.filter((n) => n === "meeting_rejoin_token").length).toBe(2)
+  })
+
   it("gives up after 30 s with 'lost' when offline the whole time", async () => {
     const hook = buildHook()
     await hook._join(PAYLOAD)

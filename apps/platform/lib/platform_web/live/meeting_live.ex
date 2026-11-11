@@ -3649,16 +3649,27 @@ defmodule PlatformWeb.MeetingLive do
   # without a real user, so a stray click on a disconnected mount cannot
   # strand the socket out of both the lobby and the call.
   def handle_event("join_meeting", _params, socket) do
-    if connected?(socket) and is_binary(socket.assigns[:user_id]) do
-      socket =
-        socket
-        |> assign(:state, nil)
-        |> maybe_start_meeting()
-        |> MeetingHooks.join()
+    cond do
+      not (connected?(socket) and is_binary(socket.assigns[:user_id])) ->
+        {:noreply, socket}
 
-      {:noreply, socket}
-    else
-      {:noreply, socket}
+      # The window is checked before the lobby is cleared, so a throttled press
+      # leaves the lobby on screen with a message instead of stranding the
+      # viewer out of both. Only a permitted join is throttled here: when the
+      # window is full and the join gate refuses, this check passes and
+      # `maybe_start_meeting/1` still runs before `join/1` refuses (as before
+      # the throttle existed).
+      MeetingHooks.join_throttled?(socket) ->
+        {:noreply, put_flash(socket, :error, MeetingHooks.join_throttled_message())}
+
+      true ->
+        socket =
+          socket
+          |> assign(:state, nil)
+          |> maybe_start_meeting()
+          |> MeetingHooks.join()
+
+        {:noreply, socket}
     end
   end
 
@@ -5094,6 +5105,13 @@ defmodule PlatformWeb.MeetingLive do
         # An ordinary visit, or a restore whose call was left before this
         # message arrived. Joining needs the explicit Join.
         {:noreply, socket}
+
+      MeetingHooks.join_throttled?(socket) ->
+        # Checked before `maybe_start_meeting/1` for a permitted join only (see
+        # "join_meeting"): a gate-refused join with a full window still reaches
+        # `maybe_start_meeting/1` before `join/1` refuses it, as before the
+        # throttle. The viewer keeps the page they have.
+        {:noreply, put_flash(socket, :error, MeetingHooks.join_throttled_message())}
 
       true ->
         # The same `maybe_start_meeting |> MeetingHooks.join()` pair every

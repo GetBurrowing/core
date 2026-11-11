@@ -131,6 +131,10 @@ defmodule PlatformWeb.ChatLive.MeetingHooksJoinGateTest do
     }
   end
 
+  # The production rejoin functions return `{result, socket}` (the socket
+  # carries the write window); these tests pin the result.
+  defp rejoin(socket, params), do: socket |> MeetingHooks.rejoin_token(params) |> elem(0)
+
   # `push_event/3` writes to `socket.private.live_temp[:push_events]`; a bare
   # `%Socket{}` carries the same default private map a mounted one does.
   defp pushed_events(socket) do
@@ -326,6 +330,52 @@ defmodule PlatformWeb.ChatLive.MeetingHooksJoinGateTest do
 
       assert MeetingHooks.join(socket) == socket
     end
+
+    test "an invite landing between join's two checks joins without crashing a full window",
+         ctx do
+      now = System.monotonic_time(:millisecond)
+      full = for _ <- 1..MeetingHooks.write_throttle_limit(), do: now
+
+      socket =
+        ctx.external.id
+        |> build_socket(ctx.space)
+        |> then(&%{&1 | assigns: Map.put(&1.assigns, :write_requests, full)})
+
+      # The window is full and the user is uninvited, so `join_throttled?/1`
+      # sees "not permitted" and lets the call through to `attempt_join/1`.
+      # The invite is granted right after that first invite query, so the
+      # gate inside `join_for_user` then passes: the two checks disagree.
+      test_pid = self()
+      handler_id = {__MODULE__, :race, make_ref()}
+      meeting = ctx.meeting
+      external = ctx.external
+
+      :telemetry.attach(
+        handler_id,
+        [:platform, :repo, :query],
+        fn _event, _measurements, metadata, _config ->
+          if self() == test_pid and is_binary(metadata[:query]) and
+               String.contains?(metadata[:query], ~s("meeting_invites")) and
+               not Process.get(:race_invite_granted, false) do
+            Process.put(:race_invite_granted, true)
+            invite!(meeting, external)
+          end
+        end,
+        nil
+      )
+
+      result =
+        try do
+          MeetingHooks.join(socket)
+        after
+          :telemetry.detach(handler_id)
+        end
+
+      assert Process.get(:race_invite_granted), "the race was never staged"
+      assert %Phoenix.LiveView.Socket{} = result
+      assert joined_event(result), "the join that already happened is kept"
+      assert length(result.assigns.write_requests) == MeetingHooks.write_throttle_limit()
+    end
   end
 
   # ── The control that proves the gate did not simply break joining ──────────
@@ -447,7 +497,7 @@ defmodule PlatformWeb.ChatLive.MeetingHooksJoinGateTest do
       {:ok, _} = Meetings.revoke_invite(invite)
 
       assert {:error, :join_not_permitted} =
-               MeetingHooks.rejoin_token(
+               rejoin(
                  build_socket(ctx.external.id, ctx.space_b),
                  held(ctx.space)
                )
@@ -457,7 +507,7 @@ defmodule PlatformWeb.ChatLive.MeetingHooksJoinGateTest do
       invite!(ctx.meeting, ctx.external)
 
       assert {:error, :not_in_meeting} =
-               MeetingHooks.rejoin_token(
+               rejoin(
                  build_socket(ctx.external.id, ctx.space_b),
                  held(ctx.space)
                )
@@ -466,27 +516,27 @@ defmodule PlatformWeb.ChatLive.MeetingHooksJoinGateTest do
     test "no room name from a socket with no held call: unavailable, never the URL's space",
          ctx do
       assert {:error, :not_in_meeting} =
-               MeetingHooks.rejoin_token(build_socket(ctx.external.id, ctx.space_b), %{})
+               rejoin(build_socket(ctx.external.id, ctx.space_b), %{})
     end
 
     test "a forged room name for a space the user is not seated in is DENIED", ctx do
       {_meeting_c, space_c} = meeting_with_space!(ctx.org)
 
       assert {:error, :not_a_participant} =
-               MeetingHooks.rejoin_token(build_socket(ctx.internal.id, ctx.space), held(space_c))
+               rejoin(build_socket(ctx.internal.id, ctx.space), held(space_c))
     end
 
     test "a room name that maps to no space is DENIED", ctx do
       for name <- ["space-" <> Ecto.UUID.generate(), "meeting-123", "space-not-a-uuid", ""] do
         assert {:error, :unknown_room} =
-                 MeetingHooks.rejoin_token(
+                 rejoin(
                    build_socket(ctx.internal.id, ctx.space),
                    %{"room_name" => name}
                  )
       end
 
       assert {:error, :unknown_room} =
-               MeetingHooks.rejoin_token(build_socket(ctx.internal.id, ctx.space), %{
+               rejoin(build_socket(ctx.internal.id, ctx.space), %{
                  "room_name" => 42
                })
     end
@@ -498,28 +548,43 @@ defmodule PlatformWeb.ChatLive.MeetingHooksJoinGateTest do
       assert joined.assigns.call_space_id == ctx.space.id
 
       # B is seated but not invited: its own gate denies
-      assert {:error, :join_not_permitted} = MeetingHooks.rejoin_token(joined, held(ctx.space_b))
+      assert {:error, :join_not_permitted} = rejoin(joined, held(ctx.space_b))
       invite!(ctx.meeting_b, ctx.external)
       # B permitted: still no token, the socket is not in B's call
-      assert {:error, :not_in_meeting} = MeetingHooks.rejoin_token(joined, held(ctx.space_b))
-      assert {:ok, %{token: _}} = MeetingHooks.rejoin_token(joined, held(ctx.space))
+      assert {:error, :not_in_meeting} = rejoin(joined, held(ctx.space_b))
+      assert {:ok, %{token: _}} = rejoin(joined, held(ctx.space))
     end
   end
 
   describe "rejoin_token/2 on a socket that is not in the call" do
     test "an external user without a live invite is DENIED", ctx do
       assert {:error, :join_not_permitted} =
-               MeetingHooks.rejoin_token(
+               rejoin(
                  build_socket(ctx.external.id, ctx.space),
                  held(ctx.space)
                )
 
       assert MeetingHooks.rejoin_reply(
-               MeetingHooks.rejoin_token(
+               rejoin(
                  build_socket(ctx.external.id, ctx.space),
                  held(ctx.space)
                )
              ) == %{error: "denied"}
+    end
+
+    test "naming the held call is not enough: in_meeting false is refused, in_meeting true mints",
+         ctx do
+      # `same_call?` (call_space_id matches) AND `in_meeting` both decide the
+      # `:ok` branch of the gate. Each half alone must not mint.
+      left =
+        ctx.internal.id
+        |> build_socket(ctx.space)
+        |> Phoenix.Component.assign(:call_space_id, ctx.space.id)
+
+      assert {:error, :not_in_meeting} = rejoin(left, held(ctx.space))
+
+      in_call = Phoenix.Component.assign(left, :in_meeting, true)
+      assert {:ok, %{token: _}} = rejoin(in_call, held(ctx.space))
     end
 
     test "a benign remount (gate passes) stays unavailable, for internal and invited", ctx do
@@ -527,11 +592,11 @@ defmodule PlatformWeb.ChatLive.MeetingHooksJoinGateTest do
 
       for user <- [ctx.internal, ctx.external] do
         assert {:error, :not_in_meeting} =
-                 MeetingHooks.rejoin_token(build_socket(user.id, ctx.space), held(ctx.space))
+                 rejoin(build_socket(user.id, ctx.space), held(ctx.space))
       end
 
       assert MeetingHooks.rejoin_reply(
-               MeetingHooks.rejoin_token(
+               rejoin(
                  build_socket(ctx.internal.id, ctx.space),
                  held(ctx.space)
                )
@@ -553,7 +618,7 @@ defmodule PlatformWeb.ChatLive.MeetingHooksJoinGateTest do
 
       refute remounted.assigns.in_meeting
 
-      assert MeetingHooks.rejoin_reply(MeetingHooks.rejoin_token(remounted, held(ctx.space))) ==
+      assert MeetingHooks.rejoin_reply(rejoin(remounted, held(ctx.space))) ==
                %{
                  error: "denied"
                }
@@ -572,7 +637,7 @@ defmodule PlatformWeb.ChatLive.MeetingHooksJoinGateTest do
       assert remounted.assigns.in_meeting == true
 
       assert {:ok, %{token: token, room_name: room_name}} =
-               MeetingHooks.rejoin_token(remounted, held(ctx.space))
+               rejoin(remounted, held(ctx.space))
 
       assert is_binary(token)
       {:ok, room} = Meetings.ensure_room(ctx.space.id)
@@ -606,7 +671,7 @@ defmodule PlatformWeb.ChatLive.MeetingHooksJoinGateTest do
     test "A still permitted: unavailable (not denied), nothing minted", ctx do
       invite!(ctx.meeting, ctx.external)
 
-      result = MeetingHooks.rejoin_token(ctx.restored, held(ctx.space))
+      result = rejoin(ctx.restored, held(ctx.space))
       assert {:error, :not_in_meeting} = result
       assert MeetingHooks.rejoin_reply(result) == %{error: "unavailable"}
     end
@@ -615,7 +680,7 @@ defmodule PlatformWeb.ChatLive.MeetingHooksJoinGateTest do
       invite = invite!(ctx.meeting, ctx.external)
       {:ok, _} = Meetings.revoke_invite(invite)
 
-      assert MeetingHooks.rejoin_reply(MeetingHooks.rejoin_token(ctx.restored, held(ctx.space))) ==
+      assert MeetingHooks.rejoin_reply(rejoin(ctx.restored, held(ctx.space))) ==
                %{error: "denied"}
     end
   end
@@ -640,7 +705,7 @@ defmodule PlatformWeb.ChatLive.MeetingHooksJoinGateTest do
       on_exit(fn -> :telemetry.detach(handler) end)
 
       assert {:error, :join_not_permitted} =
-               MeetingHooks.rejoin_token(
+               rejoin(
                  build_socket(ctx.external.id, ctx.space),
                  held(ctx.space)
                )
@@ -682,10 +747,10 @@ defmodule PlatformWeb.ChatLive.MeetingHooksJoinGateTest do
       seat_in_space!(space, user)
 
       assert {:error, :not_in_meeting} =
-               MeetingHooks.rejoin_token(build_socket(user.id, space), held(space))
+               rejoin(build_socket(user.id, space), held(space))
 
       assert {:ok, %{token: _}} =
-               MeetingHooks.rejoin_token(in_call(build_socket(user.id, space)), held(space))
+               rejoin(in_call(build_socket(user.id, space)), held(space))
     end
 
     test "A: a sub-org member seated in a space of another org is not denied", ctx do
@@ -696,10 +761,10 @@ defmodule PlatformWeb.ChatLive.MeetingHooksJoinGateTest do
       seat_in_space!(space, user)
 
       assert {:error, :not_in_meeting} =
-               MeetingHooks.rejoin_token(build_socket(user.id, space), held(space))
+               rejoin(build_socket(user.id, space), held(space))
 
       assert {:ok, %{token: _}} =
-               MeetingHooks.rejoin_token(in_call(build_socket(user.id, space)), held(space))
+               rejoin(in_call(build_socket(user.id, space)), held(space))
     end
 
     test "B: a seated user with no membership rows is not denied", ctx do
@@ -707,10 +772,10 @@ defmodule PlatformWeb.ChatLive.MeetingHooksJoinGateTest do
       seat_in_space!(ctx.space, user)
 
       assert {:error, :not_in_meeting} =
-               MeetingHooks.rejoin_token(build_socket(user.id, ctx.space), held(ctx.space))
+               rejoin(build_socket(user.id, ctx.space), held(ctx.space))
 
       assert {:ok, %{token: _}} =
-               MeetingHooks.rejoin_token(
+               rejoin(
                  in_call(build_socket(user.id, ctx.space)),
                  held(ctx.space)
                )
@@ -724,10 +789,10 @@ defmodule PlatformWeb.ChatLive.MeetingHooksJoinGateTest do
       Repo.delete_all(from(m in OrgMembership, where: m.user_id == ^former.id))
 
       assert {:error, :not_in_meeting} =
-               MeetingHooks.rejoin_token(build_socket(former.id, ctx.space), held(ctx.space))
+               rejoin(build_socket(former.id, ctx.space), held(ctx.space))
 
       assert {:ok, %{token: _}} =
-               MeetingHooks.rejoin_token(
+               rejoin(
                  in_call(build_socket(former.id, ctx.space)),
                  held(ctx.space)
                )
@@ -740,10 +805,10 @@ defmodule PlatformWeb.ChatLive.MeetingHooksJoinGateTest do
       invite!(meeting, ctx.external)
 
       assert {:error, :not_in_meeting} =
-               MeetingHooks.rejoin_token(build_socket(ctx.external.id, space), held(space))
+               rejoin(build_socket(ctx.external.id, space), held(space))
 
       assert {:ok, %{token: _}} =
-               MeetingHooks.rejoin_token(
+               rejoin(
                  in_call(build_socket(ctx.external.id, space)),
                  held(space)
                )
@@ -755,10 +820,10 @@ defmodule PlatformWeb.ChatLive.MeetingHooksJoinGateTest do
       member!(outsider, ctx.org)
 
       assert {:error, :join_not_permitted} =
-               MeetingHooks.rejoin_token(build_socket(outsider.id, space_y), held(space_y))
+               rejoin(build_socket(outsider.id, space_y), held(space_y))
 
       assert {:error, :join_not_permitted} =
-               MeetingHooks.rejoin_token(
+               rejoin(
                  in_call(build_socket(outsider.id, space_y)),
                  held(space_y)
                )
@@ -786,7 +851,7 @@ defmodule PlatformWeb.ChatLive.MeetingHooksJoinGateTest do
         |> Phoenix.Component.assign(:access_scope, stale)
 
       # not seated: the fence (fresh) is what refuses, not the seat gate
-      assert {:error, :join_not_permitted} = MeetingHooks.rejoin_token(socket, held(ctx.space))
+      assert {:error, :join_not_permitted} = rejoin(socket, held(ctx.space))
     end
 
     test "a stale :access_scope, user removed from X but still seated: the mount rule keeps the space",
@@ -808,7 +873,7 @@ defmodule PlatformWeb.ChatLive.MeetingHooksJoinGateTest do
         |> in_call()
         |> Phoenix.Component.assign(:access_scope, stale)
 
-      assert {:ok, %{token: _}} = MeetingHooks.rejoin_token(socket, held(ctx.space))
+      assert {:ok, %{token: _}} = rejoin(socket, held(ctx.space))
     end
 
     test "a deleted user is refused before any fence (nil user is not :unfenced)", ctx do
@@ -819,7 +884,7 @@ defmodule PlatformWeb.ChatLive.MeetingHooksJoinGateTest do
       Repo.delete_all(from(u in User, where: u.id == ^user.id))
 
       assert {:error, :join_not_permitted} =
-               MeetingHooks.rejoin_token(
+               rejoin(
                  in_call(build_socket(user.id, ctx.space)),
                  held(ctx.space)
                )
@@ -833,11 +898,11 @@ defmodule PlatformWeb.ChatLive.MeetingHooksJoinGateTest do
       socket = in_call(build_socket(user.id, ctx.space))
 
       # control: the same user and socket mint before the archive
-      assert {:ok, _} = MeetingHooks.rejoin_token(socket, held(ctx.space))
+      assert {:ok, _} = rejoin(socket, held(ctx.space))
 
       {:ok, _} = Platform.Accounts.archive_user(user)
 
-      assert {:error, :join_not_permitted} = MeetingHooks.rejoin_token(socket, held(ctx.space))
+      assert {:error, :join_not_permitted} = rejoin(socket, held(ctx.space))
     end
 
     test "a root-org member follows the root rule: the fence admits a space of any org", ctx do
@@ -846,7 +911,7 @@ defmodule PlatformWeb.ChatLive.MeetingHooksJoinGateTest do
 
       # past the fence; unseated, so the seat gate (not the fence) refuses
       assert {:error, :not_a_participant} =
-               MeetingHooks.rejoin_token(
+               rejoin(
                  build_socket(root_member.id, ctx.space),
                  held(ctx.space)
                )
