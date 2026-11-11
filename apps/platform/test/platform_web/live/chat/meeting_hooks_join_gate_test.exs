@@ -825,7 +825,8 @@ defmodule PlatformWeb.ChatLive.MeetingHooksJoinGateTest do
                )
     end
 
-    test "an archived user in the call is refused a token (get_user does not filter archived_at)", ctx do
+    test "an archived user in the call is refused a token (get_user does not filter archived_at)",
+         ctx do
       user = create_user!("archived")
       member!(user, ctx.org)
       seat_in_space!(ctx.space, user)
