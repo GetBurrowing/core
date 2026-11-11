@@ -492,10 +492,9 @@ defmodule PlatformWeb.ChatLive.MeetingHooks do
     # The space the call was JOINED in, never `:active_space`: that moves
     # when the user navigates inside the same LiveView, and a token minted
     # for wherever they are now would seat and activate the wrong room.
-    with {:ok, space_id} <- held_space_id(socket, params),
-         :ok <- member_in_call_or_gate(socket, space_id),
+    with {:ok, space_id, same_call?} <- held_space(socket, params),
+         :ok <- member_in_call_or_gate(socket, space_id, same_call?),
          user_id when is_binary(user_id) <- socket.assigns[:user_id] || {:error, :not_in_meeting},
-         true <- still_seated?(space_id, user_id) || {:error, :not_a_participant},
          {:ok, %{token: token, room: room}} <-
            Meetings.join_for_user(space_id, user_id, resolve_display_name(socket)) do
       {:ok, %{token: token, url: Meetings.livekit_url(), room_name: room.livekit_room_name}}
@@ -505,46 +504,57 @@ defmodule PlatformWeb.ChatLive.MeetingHooks do
     end
   end
 
-  # The space of the call the client holds. While the socket is in the call,
-  # `:call_space_id` (server-recorded by `do_join/1`) wins, and a room name the
-  # client sends must match it. After a remount `:call_space_id` is gone and
-  # `:active_space` is the URL's space, which says nothing about the call, so
-  # the client's held room name is mapped back to its space by the server. The
-  # client never supplies a space id, and a name that maps to no space is
-  # refused.
-  defp held_space_id(socket, params) do
+  # The space of the call the client holds, and whether this socket is in THAT
+  # call. While the socket is in a call, `:call_space_id` (server-recorded by
+  # `do_join/1`) names it. A room name the client sends that differs from it is
+  # NOT evidence of a revoke (a remount's restore join can land in the URL's
+  # space while the client still holds another room), so the held room is
+  # mapped back to its space and gated on its own merits; the socket is then
+  # not in that call (`same_call?` false) and nothing is minted for either
+  # space. After a remount `:call_space_id` is gone and `:active_space` is the
+  # URL's space, which says nothing about the call, so the held room name is
+  # mapped by the server. The client never supplies a space id, and a name
+  # that maps to no space is refused.
+  defp held_space(socket, params) do
     room_name = if is_map(params), do: params["room_name"], else: nil
 
     case socket.assigns[:call_space_id] do
       space_id when is_binary(space_id) ->
         if is_nil(room_name) or room_name == Meetings.room_name_for_space(space_id),
-          do: {:ok, space_id},
-          else: {:error, :room_mismatch}
+          do: {:ok, space_id, true},
+          else: map_held_room(room_name)
 
       _ when not is_nil(room_name) ->
-        case Meetings.space_id_for_room_name(room_name) do
-          nil -> {:error, :unknown_room}
-          space_id -> {:ok, space_id}
-        end
+        map_held_room(room_name)
 
       _ ->
         {:error, :not_in_meeting}
     end
   end
 
-  # A socket that is not in the call is either a benign remount (a network
-  # drop remounts the LiveView, `:in_meeting` is false again) or a person the
-  # join gate would now refuse (a revoke made during the outage: the remount's
-  # restore join was refused and left the socket unchanged). Re-run the same
-  # gate the join uses so the second is `denied`, not `unavailable`.
-  defp member_in_call_or_gate(socket, space_id) do
+  defp map_held_room(room_name) do
+    case Meetings.space_id_for_room_name(room_name) do
+      nil -> {:error, :unknown_room}
+      space_id -> {:ok, space_id, false}
+    end
+  end
+
+  # The gate every rejoin passes, in or out of the call: the same join gate
+  # the join uses (an external user needs a live invite), the org fence the
+  # mount's space resolution uses, and a surviving chat-space row (a removed
+  # member must not be re-seated by `join_for_user/3`). Only then does being
+  # in THIS call decide between a token (`:ok`) and `:not_in_meeting`, which
+  # is a benign remount, not a revoke.
+  defp member_in_call_or_gate(socket, space_id, same_call?) do
     a = socket.assigns
+    user_id = a[:user_id]
 
     cond do
-      a[:in_meeting] == true -> :ok
-      not is_binary(a[:user_id]) -> {:error, :not_in_meeting}
-      not Meetings.join_permitted?(space_id, a[:user_id]) -> {:error, :join_not_permitted}
-      not still_seated?(space_id, a[:user_id]) -> {:error, :not_a_participant}
+      not is_binary(user_id) -> {:error, :not_in_meeting}
+      not Meetings.join_permitted?(space_id, user_id) -> {:error, :join_not_permitted}
+      not Chat.space_visible_to_viewer?(space_id, user_id) -> {:error, :join_not_permitted}
+      not still_seated?(space_id, user_id) -> {:error, :not_a_participant}
+      same_call? and a[:in_meeting] == true -> :ok
       true -> {:error, :not_in_meeting}
     end
   end
@@ -591,7 +601,6 @@ defmodule PlatformWeb.ChatLive.MeetingHooks do
   @rejoin_denials [
     :join_not_permitted,
     :not_a_participant,
-    :room_mismatch,
     :unknown_room,
     :revoked,
     :expired,

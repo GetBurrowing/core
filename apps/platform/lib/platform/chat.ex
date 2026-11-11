@@ -675,6 +675,24 @@ defmodule Platform.Chat do
 
   def list_viewer_presence_space_ids(_user), do: []
 
+  @doc """
+  Whether the org fence admits `user_id` to chat space `space_id`: the space's
+  `org_id` is among the orgs `Tenancy.visibility/1` resolves for the viewer
+  (every org for a root member, none for a user with no memberships). This is
+  the same fence `list_viewer_presence_space_ids/1` applies, as a point check.
+  """
+  @spec space_visible_to_viewer?(binary(), binary()) :: boolean()
+  def space_visible_to_viewer?(space_id, user_id)
+      when is_binary(space_id) and is_binary(user_id) do
+    vis = Tenancy.visibility(%{id: user_id})
+
+    from(s in Space, where: s.id == ^space_id)
+    |> Tenancy.scope(vis)
+    |> Repo.exists?()
+  end
+
+  def space_visible_to_viewer?(_space_id, _user_id), do: false
+
   # THE PARTICIPATION SEAM. "Spaces this viewer holds a non-archived
   # `participant_type: "user"` row on", as a QUERY rather than a result set, so
   # a caller can add its own predicate AND its own select before running it.

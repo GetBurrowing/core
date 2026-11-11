@@ -3801,13 +3801,7 @@ defmodule Platform.Meetings do
   """
   @spec legit_room?(term()) :: boolean()
   def legit_room?(%{"name" => name}) when is_binary(name) do
-    with true <- Regex.match?(@app_room_name_regex, name),
-         "space-" <> uuid <- name,
-         %Platform.Chat.Space{} <- Platform.Chat.get_space(uuid) do
-      true
-    else
-      _ -> false
-    end
+    is_binary(space_id_for_room_name(name))
   end
 
   def legit_room?(_), do: false
