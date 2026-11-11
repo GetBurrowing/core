@@ -333,6 +333,15 @@ describe("MeetingClient reconnect state machine", () => {
   describe("rejoin token (a guest token lasts 30 minutes)", () => {
     const tokens = () => fake.connects.map((c) => c.token)
 
+    it("(h0) the request carries the room name the client holds, for the server's gate", async () => {
+      const hook = buildHook()
+      await hook._join(PAYLOAD)
+      fake.created[0].emit("disconnected", DisconnectReason.UNKNOWN_REASON)
+      await vi.advanceTimersByTimeAsync(REJOIN_DELAY_MS)
+
+      expect(hook.pushedPayloads).toContainEqual(["meeting_rejoin_token", { room_name: "space-r" }])
+    })
+
     it("(h) the rejoin connects with the fresh token from the server, not the held one", async () => {
       const hook = buildHook()
       await hook._join(PAYLOAD)
@@ -583,10 +592,15 @@ describe("MeetingClient reconnect state machine", () => {
       expect(hook._screenShareTrack).toBe(null)
     })
 
-    it("(k7) our own share across a rejoin: the stale track is gone and the server is told we are not sharing", async () => {
+    const asSelf = (hook) => {
+      hook._room.localParticipant.identity = "user:me"
+    }
+
+    it("(k7) our own share held at the drop: the stale track is gone and the server is told we are not sharing", async () => {
       globalThis.document.getElementById = () => fakeNode()
       const hook = buildHook()
       await hook._join(PAYLOAD)
+      asSelf(hook)
       const own = shareOf("user:me")
       holdShare(hook, own)
       hook.pushedPayloads.length = 0
@@ -602,22 +616,33 @@ describe("MeetingClient reconnect state machine", () => {
       expect(hook.pushedPayloads).toContainEqual(["meeting_screen_share_state", { enabled: false }])
     })
 
-    it("(k8) a share the new room really publishes is reported as enabled", async () => {
+    it("(k8) no local share before the drop: nothing is pushed (it would re-collapse the rail)", async () => {
       globalThis.document.getElementById = () => fakeNode()
       const hook = buildHook()
       await hook._join(PAYLOAD)
-      const realNewRoom = hook._newRoom.bind(hook)
-      hook._newRoom = () => {
-        const r = realNewRoom()
-        r.localParticipant.isScreenShareEnabled = true
-        return r
-      }
+      asSelf(hook)
       hook.pushedPayloads.length = 0
 
       fake.created[0].emit("disconnected", DisconnectReason.UNKNOWN_REASON)
       await vi.advanceTimersByTimeAsync(REJOIN_DELAY_MS)
 
-      expect(hook.pushedPayloads).toContainEqual(["meeting_screen_share_state", { enabled: true }])
+      expect(hook._room).toBe(fake.created[1]) // the rejoin did complete
+      expect(hook.pushed).not.toContain("meeting_screen_share_state")
+    })
+
+    it("(k9) someone else's share at the drop is not ours: nothing is pushed", async () => {
+      globalThis.document.getElementById = () => fakeNode()
+      const hook = buildHook()
+      await hook._join(PAYLOAD)
+      asSelf(hook)
+      holdShare(hook, shareOf("user:bob"))
+      hook.pushedPayloads.length = 0
+
+      fake.created[0].emit("disconnected", DisconnectReason.UNKNOWN_REASON)
+      await vi.advanceTimersByTimeAsync(REJOIN_DELAY_MS)
+
+      expect(hook._room).toBe(fake.created[1])
+      expect(hook.pushed).not.toContain("meeting_screen_share_state")
     })
   })
 

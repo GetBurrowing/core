@@ -895,7 +895,11 @@ const MeetingClient = {
     // (`unavailable`, any other error, no answer, a token for a different
     // room) falls back to the held token once: a good held token must not be
     // thrown away because the server could not mint a new one.
-    const fresh = await this._requestRejoinToken()
+    // Whether WE were sharing when the connection dropped: read it now, before
+    // the share is cleared below and while `_room` is still the dead room.
+    const hadOwnShare =
+      !!this._screenShareTrack && this._isSelf(this._screenShareParticipant)
+    const fresh = await this._requestRejoinToken(creds.roomName)
     if (gen !== this._rejoinGen) return
     if (fresh && fresh.error === "denied") {
       console.warn("[MeetingClient] server denied a rejoin token")
@@ -945,15 +949,17 @@ const MeetingClient = {
     await this._enterRoom(room, this._currentMedia(creds.desired))
     if (gen !== this._rejoinGen) return // left or gave up while entering
     this._reconcileTiles(room)
-    // The new Room never republishes a share we were making, and the button's
-    // state is only written by a click, so the UI would keep saying "sharing".
-    // Report the room's truth, exactly as the share button does.
-    try {
-      this.pushEvent("meeting_screen_share_state", {
-        enabled: !!room.localParticipant?.isScreenShareEnabled,
-      })
-    } catch (err) {
-      console.warn("[MeetingClient] could not report screen-share state after rejoin:", err)
+    // The new Room never republishes a share we were making, and the server
+    // still believes we are sharing. Tell it we are not. Only when we held a
+    // share: the server's state can only be wrong then, and the push makes it
+    // re-apply the two-up rail default, which would re-collapse the rail for
+    // everyone who never shared. A freshly connected Room is never sharing.
+    if (hadOwnShare) {
+      try {
+        this.pushEvent("meeting_screen_share_state", { enabled: false })
+      } catch (err) {
+        console.warn("[MeetingClient] could not report screen-share state after rejoin:", err)
+      }
     }
   },
 
@@ -961,7 +967,7 @@ const MeetingClient = {
   // the reply, or null when there is none: LiveView not connected (pushEvent
   // throws), or no answer within REJOIN_TOKEN_TIMEOUT_MS. A late reply after
   // either is ignored.
-  _requestRejoinToken() {
+  _requestRejoinToken(roomName) {
     return new Promise((resolve) => {
       let settled = false
       const done = (value) => {
@@ -972,7 +978,9 @@ const MeetingClient = {
       }
       const timer = setTimeout(() => done(null), REJOIN_TOKEN_TIMEOUT_MS)
       try {
-        this.pushEvent("meeting_rejoin_token", {}, (reply) => done(reply || null))
+        // The room we hold: the server maps it back to its space to
+        // re-run the join gate on the call's space, not the URL's.
+        this.pushEvent("meeting_rejoin_token", { room_name: roomName || null }, (reply) => done(reply || null))
       } catch (err) {
         console.warn("[MeetingClient] could not ask for a rejoin token:", err)
         done(null)
