@@ -16,7 +16,7 @@
     data-community-joined={to_string((@community && @community.joined?) || false)}
   >
     <header class="gp-bar">
-      <a href={"/games/#{@game["slug"]}"} aria-label="Game home">
+      <a href={Platform.Gaming.home_path(@game)} aria-label="Game home">
         <img class="gp-logo" src={~p"/images/burrowplay.svg"} alt="Burrow" />
       </a>
       <span class="gp-sep"></span><span class="gp-game">{@game["title"]}</span>

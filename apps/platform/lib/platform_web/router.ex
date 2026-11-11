@@ -42,6 +42,7 @@ defmodule PlatformWeb.Router do
     plug(:put_root_layout, html: {PlatformWeb.Layouts, :root})
     plug(:protect_from_forgery)
     plug(:put_secure_browser_headers)
+    plug(PlatformWeb.Plugs.GamingLanding)
   end
 
   # Task 01a09415: content-negotiation variant of `:browser` used by ONE
@@ -495,6 +496,8 @@ defmodule PlatformWeb.Router do
     # Published game pages deliberately answer on every host, like auth.
     # Only operator-published manifests are exposed; downloads authenticate
     # separately and never widen chat attachment permissions.
+    # Gaming home is public like the published game pages, and install-opt-in.
+    get("/play", GamingController, :home)
     get("/games/:slug", GamePageController, :show)
     get("/games/:slug/player", GamePageController, :player)
     get("/games/:slug/updates", GamePageController, :updates)

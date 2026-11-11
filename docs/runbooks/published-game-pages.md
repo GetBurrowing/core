@@ -156,3 +156,31 @@ match server. Publishing does not deploy a matching server pack. Coordinate
 that separately before advertising public multiplayer; local play works
 without it. Fresh-account provider registration still needs to be tested on
 the serving install. The publisher does not change the identity provider.
+
+## Gaming presentation for a separate install
+
+The install branding record has an opt-in `experience` value: `workspace`
+(default) or `gaming`. Root admins can change it under Admin → Branding.
+Only enable it on the gaming install after its owner and initial game are
+configured. Existing installs retain their current presentation.
+
+Gaming mode sends the primary app-host root and the installed PWA to `/play`.
+The public home uses real published releases and community counts, with a
+player-facing identity and an admin-only creator entry. Game pages link back
+to that home. Ordinary login and owner handover land in the gaming home;
+explicit game login, native login, chat-host and meeting deep links retain
+their own routing. An empty publication list has an honest empty state.
+
+This is a presentation choice, not a permission boundary or an identity-sync
+service. Existing resource authorization remains in force. A separate
+instance has its own database, users and memberships. Reusing an OIDC provider
+requires a dedicated client and correct owner binding before first login;
+persona, friends and voice preferences do not synchronize automatically.
+Do not copy development conversations into the player community.
+
+Voltron's release attachment must be imported into the new install's own
+storage and published against a local game org. The original install's
+attachment, org and room IDs are not portable database references. Verify the
+imported ZIP against its approved digest before publishing. The native match
+server can stay shared when the PCK matches; a new web instance does not
+require another game-server droplet.
