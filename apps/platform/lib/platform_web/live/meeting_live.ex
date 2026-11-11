@@ -3653,9 +3653,12 @@ defmodule PlatformWeb.MeetingLive do
       not (connected?(socket) and is_binary(socket.assigns[:user_id])) ->
         {:noreply, socket}
 
-      # The write window is checked BEFORE the lobby is cleared or the meeting
-      # started: a throttled press must leave the lobby on screen and the
-      # meeting as it was, with a message, not strand the viewer out of both.
+      # The window is checked before the lobby is cleared, so a throttled press
+      # leaves the lobby on screen with a message instead of stranding the
+      # viewer out of both. Only a permitted join is throttled here: when the
+      # window is full and the join gate refuses, this check passes and
+      # `maybe_start_meeting/1` still runs before `join/1` refuses (as before
+      # the throttle existed).
       MeetingHooks.join_throttled?(socket) ->
         {:noreply, put_flash(socket, :error, MeetingHooks.join_throttled_message())}
 
@@ -5104,8 +5107,10 @@ defmodule PlatformWeb.MeetingLive do
         {:noreply, socket}
 
       MeetingHooks.join_throttled?(socket) ->
-        # Checked before `maybe_start_meeting/1`, which writes (see
-        # "join_meeting"). The viewer keeps the page they have.
+        # Checked before `maybe_start_meeting/1` for a permitted join only (see
+        # "join_meeting"): a gate-refused join with a full window still reaches
+        # `maybe_start_meeting/1` before `join/1` refuses it, as before the
+        # throttle. The viewer keeps the page they have.
         {:noreply, put_flash(socket, :error, MeetingHooks.join_throttled_message())}
 
       true ->

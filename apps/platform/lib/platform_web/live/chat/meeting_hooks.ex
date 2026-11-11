@@ -470,7 +470,10 @@ defmodule PlatformWeb.ChatLive.MeetingHooks do
   Returns the new socket.
 
   Goes through the per-socket write throttle (see "Write throttle" below), so
-  every explicit join shares one window with `meeting_rejoin_token`. A throttled
+  every explicit join shares one window with `meeting_rejoin_token`. The
+  remount restore (`maybe_restore_on_reconnect/2` -> `do_join/1`) is exempt: it
+  runs once per mount against a fresh, empty window, so a check there could
+  never fire. A throttled
   join returns the socket with a flash and changes nothing else. A caller that
   does something before joining (the lobby clearing itself, starting the
   meeting) must ask `join_throttled?/1` first, so a throttled press leaves
@@ -490,9 +493,17 @@ defmodule PlatformWeb.ChatLive.MeetingHooks do
 
         # Counted whether or not the join succeeded: a join that wrote and then
         # failed to mint is still a write.
+        #
+        # `write_throttle/1` can still say `:throttled`: `join_throttled?/1`
+        # and the gate inside `join_for_user` are two reads, so an invite that
+        # lands between them lets a join through a full window. The join has
+        # already happened, so the socket is kept as it is (no slot taken, no
+        # crash).
         {:attempted, socket} ->
-          {:ok, socket} = write_throttle(socket)
-          socket
+          case write_throttle(socket) do
+            {:ok, socket} -> socket
+            {:error, :throttled} -> socket
+          end
       end
     end
   end
@@ -1062,6 +1073,10 @@ defmodule PlatformWeb.ChatLive.MeetingHooks do
   #     can do from one connection; it is not an account-level rate limit.
   # Rejoin and join share ONE window: they are the same write, and a separate
   # window for each would let a caller double the budget by alternating.
+  #
+  # The remount restore (`maybe_restore_on_reconnect/2`) is exempt: it joins
+  # once per mount, against a window that is empty because the mount just made
+  # it, so a check there could never fire.
   #
   # One rule for join and rejoin: a request takes a slot as soon as the
   # read-only gate passes, and a throttled request changes nothing and says so.

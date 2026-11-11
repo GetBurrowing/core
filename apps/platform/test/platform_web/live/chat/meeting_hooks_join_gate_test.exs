@@ -330,6 +330,52 @@ defmodule PlatformWeb.ChatLive.MeetingHooksJoinGateTest do
 
       assert MeetingHooks.join(socket) == socket
     end
+
+    test "an invite landing between join's two checks joins without crashing a full window",
+         ctx do
+      now = System.monotonic_time(:millisecond)
+      full = for _ <- 1..MeetingHooks.write_throttle_limit(), do: now
+
+      socket =
+        ctx.external.id
+        |> build_socket(ctx.space)
+        |> then(&%{&1 | assigns: Map.put(&1.assigns, :write_requests, full)})
+
+      # The window is full and the user is uninvited, so `join_throttled?/1`
+      # sees "not permitted" and lets the call through to `attempt_join/1`.
+      # The invite is granted right after that first invite query, so the
+      # gate inside `join_for_user` then passes: the two checks disagree.
+      test_pid = self()
+      handler_id = {__MODULE__, :race, make_ref()}
+      meeting = ctx.meeting
+      external = ctx.external
+
+      :telemetry.attach(
+        handler_id,
+        [:platform, :repo, :query],
+        fn _event, _measurements, metadata, _config ->
+          if self() == test_pid and is_binary(metadata[:query]) and
+               String.contains?(metadata[:query], ~s("meeting_invites")) and
+               not Process.get(:race_invite_granted, false) do
+            Process.put(:race_invite_granted, true)
+            invite!(meeting, external)
+          end
+        end,
+        nil
+      )
+
+      result =
+        try do
+          MeetingHooks.join(socket)
+        after
+          :telemetry.detach(handler_id)
+        end
+
+      assert Process.get(:race_invite_granted), "the race was never staged"
+      assert %Phoenix.LiveView.Socket{} = result
+      assert joined_event(result), "the join that already happened is kept"
+      assert length(result.assigns.write_requests) == MeetingHooks.write_throttle_limit()
+    end
   end
 
   # ── The control that proves the gate did not simply break joining ──────────
