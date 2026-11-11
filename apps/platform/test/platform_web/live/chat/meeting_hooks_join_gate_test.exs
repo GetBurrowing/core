@@ -417,4 +417,100 @@ defmodule PlatformWeb.ChatLive.MeetingHooksJoinGateTest do
       assert guest_row.user_id == nil
     end
   end
+
+  # ── Rejoin token on a socket that is not in the call ───────────────────────
+  #
+  # A network drop remounts the LiveView: `:in_meeting` is false again, so the
+  # old gate (`in_meeting == true || :not_in_meeting`) answered "unavailable"
+  # and the client rejoined on the token it held, ignoring a revoke made
+  # during the outage. A socket that is not in the call must still be refused
+  # when the join gate would refuse it.
+  describe "rejoin_token/1 on a socket that is not in the call" do
+    test "an external user without a live invite is DENIED", ctx do
+      assert {:error, :join_not_permitted} =
+               MeetingHooks.rejoin_token(build_socket(ctx.external.id, ctx.space))
+
+      assert MeetingHooks.rejoin_reply(
+               MeetingHooks.rejoin_token(build_socket(ctx.external.id, ctx.space))
+             ) == %{error: "denied"}
+    end
+
+    test "a benign remount (gate passes) stays unavailable, for internal and invited", ctx do
+      invite!(ctx.meeting, ctx.external)
+
+      for user <- [ctx.internal, ctx.external] do
+        assert {:error, :not_in_meeting} =
+                 MeetingHooks.rejoin_token(build_socket(user.id, ctx.space))
+      end
+
+      assert MeetingHooks.rejoin_reply(
+               MeetingHooks.rejoin_token(build_socket(ctx.internal.id, ctx.space))
+             ) == %{error: "unavailable"}
+    end
+
+    test "drop + remount + revoke: restore leaves the socket out, rejoin is DENIED", ctx do
+      invite = invite!(ctx.meeting, ctx.external)
+      joined = MeetingHooks.join(build_socket(ctx.external.id, ctx.space))
+      assert joined.assigns.in_meeting == true
+
+      {:ok, _} = Meetings.revoke_invite(invite)
+
+      remounted =
+        ctx.external.id
+        |> build_socket(ctx.space)
+        |> Phoenix.Component.assign(:meeting_reconnect?, true)
+        |> MeetingHooks.maybe_restore_on_reconnect(ctx.space)
+
+      refute remounted.assigns.in_meeting
+
+      assert MeetingHooks.rejoin_reply(MeetingHooks.rejoin_token(remounted)) == %{
+               error: "denied"
+             }
+    end
+
+    test "drop + remount without a revoke: restore re-joins and the rejoin mints", ctx do
+      invite!(ctx.meeting, ctx.external)
+      _ = MeetingHooks.join(build_socket(ctx.external.id, ctx.space))
+
+      remounted =
+        ctx.external.id
+        |> build_socket(ctx.space)
+        |> Phoenix.Component.assign(:meeting_reconnect?, true)
+        |> MeetingHooks.maybe_restore_on_reconnect(ctx.space)
+
+      assert remounted.assigns.in_meeting == true
+      assert {:ok, %{token: token, room_name: room_name}} = MeetingHooks.rejoin_token(remounted)
+      assert is_binary(token)
+      {:ok, room} = Meetings.ensure_room(ctx.space.id)
+      assert room_name == room.livekit_room_name
+    end
+  end
+
+  describe "rejoin_reply/1 logging" do
+    import ExUnit.CaptureLog
+
+    test "a changeset or map reason never reaches the log; an atom does" do
+      cs =
+        Ecto.Changeset.change(%User{}, %{email: "leak-me@example.com", name: "Leaky Name"})
+        |> Ecto.Changeset.add_error(:email, "bad")
+
+      log =
+        capture_log(fn ->
+          assert MeetingHooks.rejoin_reply({:error, cs}) == %{error: "unavailable"}
+
+          assert MeetingHooks.rejoin_reply(
+                   {:error, %{headers: [{"authorization", "Bearer sekrit-token"}]}}
+                 ) == %{error: "unavailable"}
+
+          MeetingHooks.rejoin_reply({:error, :livekit_not_configured})
+        end)
+
+      refute log =~ "leak-me@example.com"
+      refute log =~ "Leaky Name"
+      refute log =~ "sekrit-token"
+      refute log =~ "authorization"
+      assert log =~ "Ecto.Changeset"
+      assert log =~ "livekit_not_configured"
+    end
+  end
 end

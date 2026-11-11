@@ -493,7 +493,7 @@ defmodule PlatformWeb.ChatLive.MeetingHooks do
     # `:active_space`: that moves when the user navigates inside the same
     # LiveView, and a token minted for wherever they are now would seat and
     # activate the wrong room.
-    with true <- socket.assigns[:in_meeting] == true || {:error, :not_in_meeting},
+    with :ok <- member_in_call_or_gate(socket),
          space_id when is_binary(space_id) <-
            socket.assigns[:call_space_id] || {:error, :not_in_meeting},
          user_id when is_binary(user_id) <- socket.assigns[:user_id] || {:error, :not_in_meeting},
@@ -504,6 +504,28 @@ defmodule PlatformWeb.ChatLive.MeetingHooks do
     else
       {:error, reason} -> {:error, reason}
       _ -> {:error, :rejoin_refused}
+    end
+  end
+
+  # A socket that is not in the call is either a benign remount (a network
+  # drop remounts the LiveView, `:in_meeting` is false again) or a person the
+  # join gate would now refuse (a revoke made during the outage: the remount's
+  # restore join was refused and left the socket unchanged). Re-run the same
+  # gate the join uses so the second is `denied`, not `unavailable`.
+  defp member_in_call_or_gate(socket) do
+    a = socket.assigns
+
+    if a[:in_meeting] == true do
+      :ok
+    else
+      space_id = a[:call_space_id] || (is_map(a[:active_space]) && a[:active_space].id)
+
+      if is_binary(space_id) and is_binary(a[:user_id]) and
+           not Meetings.join_permitted?(space_id, a[:user_id]) do
+        {:error, :join_not_permitted}
+      else
+        {:error, :not_in_meeting}
+      end
     end
   end
 
@@ -526,10 +548,12 @@ defmodule PlatformWeb.ChatLive.MeetingHooks do
   def guest_rejoin_token(socket) do
     a = socket.assigns
 
-    with true <- a[:in_meeting] == true || {:error, :not_in_meeting},
-         slug when is_binary(slug) <- a[:meeting_slug] || {:error, :not_in_meeting},
+    with slug when is_binary(slug) <- a[:meeting_slug] || {:error, :not_in_meeting},
          invite when is_binary(invite) <- a[:guest_invite_token] || {:error, :not_in_meeting},
+         # The invite is re-checked whether or not the socket is still in the
+         # call: a remount (guest back in name entry) must not hide a revoke.
          {:ok, %{meeting: meeting}} <- Meetings.resolve_guest_invite(slug, invite),
+         true <- a[:in_meeting] == true || {:error, :not_in_meeting},
          {:ok, bundle} <-
            Meetings.guest_rejoin_token(meeting, a[:identity] || "", a[:display_name] || "") do
       {:ok, %{token: bundle.token, url: bundle.livekit_url, room_name: bundle.room_name}}
@@ -566,9 +590,16 @@ defmodule PlatformWeb.ChatLive.MeetingHooks do
   end
 
   def rejoin_reply({:error, reason}) do
-    Logger.warning("[MeetingHooks] rejoin token unavailable: #{inspect(reason)}")
+    Logger.warning("[MeetingHooks] rejoin token unavailable: #{loggable_reason(reason)}")
     %{error: "unavailable"}
   end
+
+  # An atom is a code; anything else (an Ecto changeset with user ids and
+  # names, a Req/exception struct that may carry request headers) is logged
+  # by module name only.
+  defp loggable_reason(reason) when is_atom(reason), do: inspect(reason)
+  defp loggable_reason(%module{}), do: inspect(module)
+  defp loggable_reason(_other), do: "non-atom reason"
 
   @doc """
   Reset every meeting-local assign — media state AND the call shell the

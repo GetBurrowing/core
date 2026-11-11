@@ -238,5 +238,38 @@ defmodule PlatformWeb.MeetingLiveRejoinTokenTest do
       assert_reply(view, %{error: "denied"} = reply)
       refute Map.has_key?(reply, :token)
     end
+
+    defp drop_to_name_entry(view) do
+      # A network drop remounts the guest into name entry: no longer in the
+      # call, the invite link still on the socket.
+      :sys.replace_state(view.pid, fn state ->
+        update_in(state.socket.assigns, &Map.put(&1, :in_meeting, false))
+      end)
+    end
+
+    test "a guest whose invite was revoked during the outage (remounted, not in call) is denied",
+         ctx do
+      invite = guest_invite!(ctx.meeting, "Jane Doe")
+      token = guest_token(ctx.meeting, invite)
+
+      {:ok, view, _} = live(guest_conn(build_conn()), "/#{ctx.meeting.slug}/#{token}")
+      drop_to_name_entry(view)
+      {:ok, _} = Meetings.revoke_invite(invite)
+
+      render_hook(view, "meeting_rejoin_token", %{})
+      assert_reply(view, %{error: "denied"} = reply)
+      refute Map.has_key?(reply, :token)
+    end
+
+    test "a guest remounted with a still-valid invite gets unavailable, not denied", ctx do
+      invite = guest_invite!(ctx.meeting, "Jane Doe")
+      token = guest_token(ctx.meeting, invite)
+
+      {:ok, view, _} = live(guest_conn(build_conn()), "/#{ctx.meeting.slug}/#{token}")
+      drop_to_name_entry(view)
+
+      render_hook(view, "meeting_rejoin_token", %{})
+      assert_reply(view, %{error: "unavailable"})
+    end
   end
 end
