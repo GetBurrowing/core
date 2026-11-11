@@ -945,6 +945,16 @@ const MeetingClient = {
     await this._enterRoom(room, this._currentMedia(creds.desired))
     if (gen !== this._rejoinGen) return // left or gave up while entering
     this._reconcileTiles(room)
+    // The new Room never republishes a share we were making, and the button's
+    // state is only written by a click, so the UI would keep saying "sharing".
+    // Report the room's truth, exactly as the share button does.
+    try {
+      this.pushEvent("meeting_screen_share_state", {
+        enabled: !!room.localParticipant?.isScreenShareEnabled,
+      })
+    } catch (err) {
+      console.warn("[MeetingClient] could not report screen-share state after rejoin:", err)
+    }
   },
 
   // Ask the server for a fresh LiveKit token (`meeting_rejoin_token`). Resolves
@@ -977,12 +987,9 @@ const MeetingClient = {
   _reconcileTiles(room) {
     const present = new Set()
     for (const p of room.remoteParticipants.values()) present.add(p.identity)
-    // Removing a tile does not clear the screen-share slot: a sharer who left
-    // during the outage must not stay on screen.
-    const sharer = this._screenShareParticipant?.identity
-    if (this._screenShareTrack && !(sharer && present.has(sharer))) {
-      this._detachScreenShareTrack(this._screenShareTrack)
-    }
+    // The screen-share slot needs no handling here: `_rejoin` clears it before
+    // `_enterRoom` (and `_reconcileTiles` has no other caller), so a share held
+    // from the dead room cannot survive to this point.
     for (const [person, tile] of [...this._tiles]) {
       const connections = this._tileConnections && this._tileConnections.get(person)
       if (!connections || connections.size === 0) {

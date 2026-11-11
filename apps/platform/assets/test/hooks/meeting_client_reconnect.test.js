@@ -119,8 +119,10 @@ function buildHook() {
   // The server's answer to `meeting_rejoin_token`: a fresh token by default;
   // `hook.rejoinReply = null` means the server never answers (LiveView down).
   hook.rejoinReply = { token: "fresh-tok", url: "wss://lk.test" }
-  hook.pushEvent = (name, _payload, cb) => {
+  hook.pushedPayloads = []
+  hook.pushEvent = (name, payload, cb) => {
     hook.pushed.push(name)
+    hook.pushedPayloads.push([name, payload])
     if (name === "meeting_rejoin_token" && cb && hook.rejoinReply) cb(hook.rejoinReply)
   }
   return hook
@@ -566,37 +568,7 @@ describe("MeetingClient reconnect state machine", () => {
       hook._screenShareParticipant = participant
     }
 
-    it("(k4) the share of someone who left during the outage is cleared by reconcile", async () => {
-      globalThis.document.getElementById = () => fakeNode()
-      const hook = buildHook()
-      await hook._join(PAYLOAD)
-      const share = shareOf("user:bob")
-      holdShare(hook, share)
-
-      const room = fake.created[0] // bob is not in it
-      hook._reconcileTiles(room)
-
-      expect(share.track.detach).toHaveBeenCalled()
-      expect(hook._screenShareTrack).toBe(null)
-      expect(hook._screenShareParticipant).toBe(null)
-    })
-
-    it("(k5) a share whose sharer is still in the room survives reconcile", async () => {
-      globalThis.document.getElementById = () => fakeNode()
-      const hook = buildHook()
-      await hook._join(PAYLOAD)
-      const share = shareOf("user:alice")
-      holdShare(hook, share)
-      const room = fake.created[0]
-      room.remoteParticipants.set("user:alice", { identity: "user:alice", trackPublications: new Map() })
-
-      hook._reconcileTiles(room)
-
-      expect(hook._screenShareTrack).toBe(share.track)
-      expect(share.track.detach).not.toHaveBeenCalled()
-    })
-
-    it("(k6) through a real rejoin: the departed sharer's share is gone, and the old track never blocks a new one", async () => {
+    it("(k6) the rejoin clears a held share BEFORE entering the room, so reconcile never has one to clear", async () => {
       globalThis.document.getElementById = () => fakeNode()
       const hook = buildHook()
       await hook._join(PAYLOAD)
@@ -609,6 +581,43 @@ describe("MeetingClient reconnect state machine", () => {
       expect(hook._room).toBe(fake.created[1])
       expect(share.track.detach).toHaveBeenCalled()
       expect(hook._screenShareTrack).toBe(null)
+    })
+
+    it("(k7) our own share across a rejoin: the stale track is gone and the server is told we are not sharing", async () => {
+      globalThis.document.getElementById = () => fakeNode()
+      const hook = buildHook()
+      await hook._join(PAYLOAD)
+      const own = shareOf("user:me")
+      holdShare(hook, own)
+      hook.pushedPayloads.length = 0
+
+      fake.created[0].emit("disconnected", DisconnectReason.UNKNOWN_REASON)
+      await vi.advanceTimersByTimeAsync(REJOIN_DELAY_MS)
+
+      expect(hook._room).toBe(fake.created[1])
+      expect(own.track.detach).toHaveBeenCalled()
+      expect(hook._screenShareTrack).toBe(null)
+      // The new Room never republishes the share; the button's state must
+      // follow the room, not stay at "sharing".
+      expect(hook.pushedPayloads).toContainEqual(["meeting_screen_share_state", { enabled: false }])
+    })
+
+    it("(k8) a share the new room really publishes is reported as enabled", async () => {
+      globalThis.document.getElementById = () => fakeNode()
+      const hook = buildHook()
+      await hook._join(PAYLOAD)
+      const realNewRoom = hook._newRoom.bind(hook)
+      hook._newRoom = () => {
+        const r = realNewRoom()
+        r.localParticipant.isScreenShareEnabled = true
+        return r
+      }
+      hook.pushedPayloads.length = 0
+
+      fake.created[0].emit("disconnected", DisconnectReason.UNKNOWN_REASON)
+      await vi.advanceTimersByTimeAsync(REJOIN_DELAY_MS)
+
+      expect(hook.pushedPayloads).toContainEqual(["meeting_screen_share_state", { enabled: true }])
     })
   })
 
