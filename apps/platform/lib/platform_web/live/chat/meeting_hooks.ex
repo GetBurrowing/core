@@ -552,9 +552,12 @@ defmodule PlatformWeb.ChatLive.MeetingHooks do
     user_id = a[:user_id]
 
     # A user row that no longer exists would build a bare scope, which the
-    # fence reads as `:unfenced`. Refuse before any fence.
+    # fence reads as `:unfenced`. Refuse before any fence. `Accounts.get_user/1`
+    # does not filter `archived_at`, and archiving does not disconnect an open
+    # LiveView, so an archived user is refused here too.
     with true <- is_binary(user_id) || {:error, :not_in_meeting},
-         %{} = user <- Accounts.get_user(user_id) || {:error, :join_not_permitted} do
+         %{} = user <- Accounts.get_user(user_id) || {:error, :join_not_permitted},
+         true <- is_nil(user.archived_at) || {:error, :join_not_permitted} do
       cond do
         not Meetings.join_permitted?(space_id, user_id) -> {:error, :join_not_permitted}
         not space_in_mount_fence?(user, space_id) -> {:error, :join_not_permitted}

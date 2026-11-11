@@ -825,6 +825,20 @@ defmodule PlatformWeb.ChatLive.MeetingHooksJoinGateTest do
                )
     end
 
+    test "an archived user in the call is refused a token (get_user does not filter archived_at)", ctx do
+      user = create_user!("archived")
+      member!(user, ctx.org)
+      seat_in_space!(ctx.space, user)
+      socket = in_call(build_socket(user.id, ctx.space))
+
+      # control: the same user and socket mint before the archive
+      assert {:ok, _} = MeetingHooks.rejoin_token(socket, held(ctx.space))
+
+      {:ok, _} = Platform.Accounts.archive_user(user)
+
+      assert {:error, :join_not_permitted} = MeetingHooks.rejoin_token(socket, held(ctx.space))
+    end
+
     test "a root-org member follows the root rule: the fence admits a space of any org", ctx do
       root_member = create_user!("root")
       member!(root_member, Tenancy.get_org_by_slug!("acme"))
