@@ -215,8 +215,9 @@ defmodule Platform.Agents.Burrow.Starter do
         try do
           provision(user)
         rescue
-          # Named so the supervised-task audit sees it: in an async test the
-          # task is outside the sandbox owner chain and any Repo call raises.
+          # Named so the supervised-task audit sees it: in an `async: true`
+          # test (manual sandbox mode) the task is outside the sandbox owner
+          # chain and any Repo call raises.
           e in DBConnection.OwnershipError -> {:error, e}
           e -> {:error, e}
         end
