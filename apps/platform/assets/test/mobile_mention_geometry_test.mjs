@@ -139,6 +139,13 @@ test('actual mobile mention geometry, focus, caret, rotation and mutation contro
         await page.setViewportSize({width:375,height:482})
         const field = await typeAtCaret(page,kind,'line one\nline two @ after')
         assertGeometry(await geometry(page,kind))
+        // Rotate while suggestions are OPEN, not just between selections.
+        await page.setViewportSize({width:812,height:195})
+        await page.waitForTimeout(300)
+        assertGeometry(await geometry(page,kind))
+        await page.setViewportSize({width:375,height:482})
+        await page.waitForTimeout(300)
+        assertGeometry(await geometry(page,kind))
         await field.fill('@no_agent_matches_987654321')
         await page.waitForTimeout(400)
         assert.equal(await page.locator(selectors[kind].list + ' [data-kind="agent"]').count(),0)
