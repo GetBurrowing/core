@@ -6358,7 +6358,7 @@ defmodule PlatformWeb.MeetingLive do
   # The CATCH-ALL takes the operational branch deliberately. An unknown
   # future reason must be loud to us; it must never be quietly recast as
   # the visitor's fault. `mint_guest_join_bundle/2` has a closed error set
-  # today (`:livekit_not_configured`, `:missing_display_name` — confirmed
+  # today (`:livekit_not_configured`, `:missing_display_name`, `:space_archived` — confirmed
   # against the implementation, not just the `@spec`), so the catch-all is
   # currently unreachable and exists to keep the NEXT atom safe.
   #
@@ -6473,6 +6473,12 @@ defmodule PlatformWeb.MeetingLive do
   # retry would fail identically: a loop with no exit. The mislabel lives
   # in `meetings.ex` and cannot be fixed from here, so we discriminate on
   # the shape the atom is hiding instead.
+  # An archived space is frozen on purpose and stays so until someone
+  # unarchives it: nothing the guest does or waits for changes that.
+  def classify_guest_mint_failure(_meeting, :space_archived) do
+    {:fault, :permanent, "the meeting's chat space is archived, so the call is closed"}
+  end
+
   def classify_guest_mint_failure(%Meeting{chat_space_id: nil}, :missing_display_name) do
     {:fault, :permanent,
      "the meeting has no backing chat space, so no room name can be derived " <>

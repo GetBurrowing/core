@@ -2196,7 +2196,7 @@ defmodule Platform.Meetings do
              room_name: String.t(),
              livekit_url: String.t() | nil
            }}
-          | {:error, :livekit_not_configured | :missing_display_name}
+          | {:error, :livekit_not_configured | :missing_display_name | :space_archived}
   def mint_guest_join_bundle(%Meeting{} = meeting, display_name),
     do: guest_livekit_token(meeting, display_name)
 
@@ -4704,7 +4704,11 @@ defmodule Platform.Meetings do
   # the rejoin, the meeting page's start pre-check, the ringer) inherits each
   # rule.
   #
-  #   * An archived space refuses everyone. It is already read-only for posts
+  #   * An archived space refuses everyone, except that `space_writable?/1`
+  #     exempts `execution` spaces (orchestration archives them at task
+  #     completion), so those keep admitting joins as they keep admitting
+  #     posts. Meetings do not live in execution spaces; this is a decision to
+  #     reuse the one notion rather than a case anyone wants. It is already read-only for posts
   #     (`Chat.space_writable?/1`, the same notion, so execution spaces keep
   #     their exemption); a call there must not outlive the archive. A meeting
   #     that has merely ENDED is not refused: a join after the last call ended

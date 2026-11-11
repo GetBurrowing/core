@@ -1033,6 +1033,15 @@ defmodule PlatformWeb.ChatLive.MeetingHooksJoinGateTest do
       assert MeetingHooks.rejoin_reply(result) == %{error: "denied"}
     end
 
+    test "a guest's FIRST mint (guest_livekit_token/2) is refused in an archived space", ctx do
+      meeting = Repo.preload(ctx.meeting, :chat_space)
+      assert {:ok, %{token: _}} = Meetings.guest_livekit_token(meeting, "Jane Guest")
+
+      archive!(ctx.space)
+
+      assert {:error, :space_archived} = Meetings.guest_livekit_token(meeting, "Jane Guest")
+    end
+
     test "an ENDED meeting does not refuse a fresh join (it is how the next call starts)",
          ctx do
       {:ok, live} = Meetings.start_meeting(ctx.meeting)

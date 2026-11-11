@@ -80,8 +80,14 @@ defmodule Platform.Mobile.NativeCall do
 
   defp refuse_over(%Meeting{}), do: :ok
 
+  # The start must precede the join (the join reads the live row), so a join
+  # the gate is about to refuse (archived space, external without an invite)
+  # must not start the meeting first: the same read-only pre-check the web
+  # page uses. `join_for_user/3` then refuses, and emits the telemetry, once.
   defp ensure_started(%Meeting{status: "scheduled"} = meeting, %User{id: user_id}) do
-    Meetings.start_meeting(meeting, started_by_user_id: user_id)
+    if Meetings.join_permitted?(meeting.chat_space_id, user_id),
+      do: Meetings.start_meeting(meeting, started_by_user_id: user_id),
+      else: {:ok, meeting}
   end
 
   defp ensure_started(%Meeting{} = meeting, _user), do: {:ok, meeting}

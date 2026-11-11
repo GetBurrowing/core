@@ -381,6 +381,15 @@ defmodule PlatformWeb.MeetingLiveGuestInfraErrorTest do
       assert detail =~ "not configured"
     end
 
+    test "an archived space is classified :permanent (no retry copy, not :unknown)" do
+      meeting = create_meeting()
+
+      assert {:fault, :permanent, detail} =
+               MeetingLive.classify_guest_mint_failure(meeting, :space_archived)
+
+      assert detail =~ "archived"
+    end
+
     test "a meeting with no chat space is classified :permanent" do
       # The other fault that reaches the card. `create_meeting/1` writes the
       # space and the meeting in ONE transaction, so this shape is a data
