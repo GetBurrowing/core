@@ -425,13 +425,94 @@ defmodule PlatformWeb.ChatLive.MeetingHooksJoinGateTest do
   # and the client rejoined on the token it held, ignoring a revoke made
   # during the outage. A socket that is not in the call must still be refused
   # when the join gate would refuse it.
+  # The room name the client holds (`_joinCreds.roomName`) and sends with
+  # `meeting_rejoin_token`.
+  defp held(space), do: %{"room_name" => Meetings.room_name_for_space(space.id)}
+
+  describe "rejoin_token/2 gates on the HELD room, not the URL's space" do
+    # After a remount `:active_space` is the URL's space (B) while the call
+    # the client holds is in A. The gate must follow the room the client
+    # holds, mapped back to its space by the server.
+    setup ctx do
+      {meeting_b, space_b} = meeting_with_space!()
+      seat_in_space!(space_b, ctx.external)
+      %{meeting_b: meeting_b, space_b: space_b}
+    end
+
+    test "revoked on A, live on B, URL on B: DENIED (not rejoined on the held token)", ctx do
+      invite = invite!(ctx.meeting, ctx.external)
+      invite!(ctx.meeting_b, ctx.external)
+      {:ok, _} = Meetings.revoke_invite(invite)
+
+      assert {:error, :join_not_permitted} =
+               MeetingHooks.rejoin_token(
+                 build_socket(ctx.external.id, ctx.space_b),
+                 held(ctx.space)
+               )
+    end
+
+    test "live on A, not invited to B, URL on B: NOT denied", ctx do
+      invite!(ctx.meeting, ctx.external)
+
+      assert {:error, :not_in_meeting} =
+               MeetingHooks.rejoin_token(
+                 build_socket(ctx.external.id, ctx.space_b),
+                 held(ctx.space)
+               )
+    end
+
+    test "no room name from a socket with no held call: unavailable, never the URL's space",
+         ctx do
+      assert {:error, :not_in_meeting} =
+               MeetingHooks.rejoin_token(build_socket(ctx.external.id, ctx.space_b), %{})
+    end
+
+    test "a forged room name for a space the user is not seated in is DENIED", ctx do
+      {_meeting_c, space_c} = meeting_with_space!()
+
+      assert {:error, :not_a_participant} =
+               MeetingHooks.rejoin_token(build_socket(ctx.internal.id, ctx.space), held(space_c))
+    end
+
+    test "a room name that maps to no space is DENIED", ctx do
+      for name <- ["space-" <> Ecto.UUID.generate(), "meeting-123", "space-not-a-uuid", ""] do
+        assert {:error, :unknown_room} =
+                 MeetingHooks.rejoin_token(
+                   build_socket(ctx.internal.id, ctx.space),
+                   %{"room_name" => name}
+                 )
+      end
+
+      assert {:error, :unknown_room} =
+               MeetingHooks.rejoin_token(build_socket(ctx.internal.id, ctx.space), %{
+                 "room_name" => 42
+               })
+    end
+
+    test "call_space_id wins: a payload room for another space is DENIED, the matching one mints",
+         ctx do
+      invite!(ctx.meeting, ctx.external)
+      joined = MeetingHooks.join(build_socket(ctx.external.id, ctx.space))
+      assert joined.assigns.call_space_id == ctx.space.id
+
+      assert {:error, :room_mismatch} = MeetingHooks.rejoin_token(joined, held(ctx.space_b))
+      assert {:ok, %{token: _}} = MeetingHooks.rejoin_token(joined, held(ctx.space))
+    end
+  end
+
   describe "rejoin_token/1 on a socket that is not in the call" do
     test "an external user without a live invite is DENIED", ctx do
       assert {:error, :join_not_permitted} =
-               MeetingHooks.rejoin_token(build_socket(ctx.external.id, ctx.space))
+               MeetingHooks.rejoin_token(
+                 build_socket(ctx.external.id, ctx.space),
+                 held(ctx.space)
+               )
 
       assert MeetingHooks.rejoin_reply(
-               MeetingHooks.rejoin_token(build_socket(ctx.external.id, ctx.space))
+               MeetingHooks.rejoin_token(
+                 build_socket(ctx.external.id, ctx.space),
+                 held(ctx.space)
+               )
              ) == %{error: "denied"}
     end
 
@@ -440,11 +521,14 @@ defmodule PlatformWeb.ChatLive.MeetingHooksJoinGateTest do
 
       for user <- [ctx.internal, ctx.external] do
         assert {:error, :not_in_meeting} =
-                 MeetingHooks.rejoin_token(build_socket(user.id, ctx.space))
+                 MeetingHooks.rejoin_token(build_socket(user.id, ctx.space), held(ctx.space))
       end
 
       assert MeetingHooks.rejoin_reply(
-               MeetingHooks.rejoin_token(build_socket(ctx.internal.id, ctx.space))
+               MeetingHooks.rejoin_token(
+                 build_socket(ctx.internal.id, ctx.space),
+                 held(ctx.space)
+               )
              ) == %{error: "unavailable"}
     end
 
@@ -463,9 +547,10 @@ defmodule PlatformWeb.ChatLive.MeetingHooksJoinGateTest do
 
       refute remounted.assigns.in_meeting
 
-      assert MeetingHooks.rejoin_reply(MeetingHooks.rejoin_token(remounted)) == %{
-               error: "denied"
-             }
+      assert MeetingHooks.rejoin_reply(MeetingHooks.rejoin_token(remounted, held(ctx.space))) ==
+               %{
+                 error: "denied"
+               }
     end
 
     test "drop + remount without a revoke: restore re-joins and the rejoin mints", ctx do
@@ -479,7 +564,10 @@ defmodule PlatformWeb.ChatLive.MeetingHooksJoinGateTest do
         |> MeetingHooks.maybe_restore_on_reconnect(ctx.space)
 
       assert remounted.assigns.in_meeting == true
-      assert {:ok, %{token: token, room_name: room_name}} = MeetingHooks.rejoin_token(remounted)
+
+      assert {:ok, %{token: token, room_name: room_name}} =
+               MeetingHooks.rejoin_token(remounted, held(ctx.space))
+
       assert is_binary(token)
       {:ok, room} = Meetings.ensure_room(ctx.space.id)
       assert room_name == room.livekit_room_name

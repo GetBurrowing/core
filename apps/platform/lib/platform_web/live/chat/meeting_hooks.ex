@@ -485,17 +485,15 @@ defmodule PlatformWeb.ChatLive.MeetingHooks do
 
   Returns `{:ok, %{token: _, url: _}}` or `{:error, reason}`.
   """
-  @spec rejoin_token(Phoenix.LiveView.Socket.t()) ::
+  @spec rejoin_token(Phoenix.LiveView.Socket.t(), map()) ::
           {:ok, %{token: String.t(), url: String.t() | nil, room_name: String.t() | nil}}
           | {:error, atom()}
-  def rejoin_token(socket) do
-    # The space the call was JOINED in (`do_join/1` records it), never
-    # `:active_space`: that moves when the user navigates inside the same
-    # LiveView, and a token minted for wherever they are now would seat and
-    # activate the wrong room.
-    with :ok <- member_in_call_or_gate(socket),
-         space_id when is_binary(space_id) <-
-           socket.assigns[:call_space_id] || {:error, :not_in_meeting},
+  def rejoin_token(socket, params \\ %{}) do
+    # The space the call was JOINED in, never `:active_space`: that moves
+    # when the user navigates inside the same LiveView, and a token minted
+    # for wherever they are now would seat and activate the wrong room.
+    with {:ok, space_id} <- held_space_id(socket, params),
+         :ok <- member_in_call_or_gate(socket, space_id),
          user_id when is_binary(user_id) <- socket.assigns[:user_id] || {:error, :not_in_meeting},
          true <- still_seated?(space_id, user_id) || {:error, :not_a_participant},
          {:ok, %{token: token, room: room}} <-
@@ -507,25 +505,47 @@ defmodule PlatformWeb.ChatLive.MeetingHooks do
     end
   end
 
+  # The space of the call the client holds. While the socket is in the call,
+  # `:call_space_id` (server-recorded by `do_join/1`) wins, and a room name the
+  # client sends must match it. After a remount `:call_space_id` is gone and
+  # `:active_space` is the URL's space, which says nothing about the call, so
+  # the client's held room name is mapped back to its space by the server. The
+  # client never supplies a space id, and a name that maps to no space is
+  # refused.
+  defp held_space_id(socket, params) do
+    room_name = if is_map(params), do: params["room_name"], else: nil
+
+    case socket.assigns[:call_space_id] do
+      space_id when is_binary(space_id) ->
+        if is_nil(room_name) or room_name == Meetings.room_name_for_space(space_id),
+          do: {:ok, space_id},
+          else: {:error, :room_mismatch}
+
+      _ when not is_nil(room_name) ->
+        case Meetings.space_id_for_room_name(room_name) do
+          nil -> {:error, :unknown_room}
+          space_id -> {:ok, space_id}
+        end
+
+      _ ->
+        {:error, :not_in_meeting}
+    end
+  end
+
   # A socket that is not in the call is either a benign remount (a network
   # drop remounts the LiveView, `:in_meeting` is false again) or a person the
   # join gate would now refuse (a revoke made during the outage: the remount's
   # restore join was refused and left the socket unchanged). Re-run the same
   # gate the join uses so the second is `denied`, not `unavailable`.
-  defp member_in_call_or_gate(socket) do
+  defp member_in_call_or_gate(socket, space_id) do
     a = socket.assigns
 
-    if a[:in_meeting] == true do
-      :ok
-    else
-      space_id = a[:call_space_id] || (is_map(a[:active_space]) && a[:active_space].id)
-
-      if is_binary(space_id) and is_binary(a[:user_id]) and
-           not Meetings.join_permitted?(space_id, a[:user_id]) do
-        {:error, :join_not_permitted}
-      else
-        {:error, :not_in_meeting}
-      end
+    cond do
+      a[:in_meeting] == true -> :ok
+      not is_binary(a[:user_id]) -> {:error, :not_in_meeting}
+      not Meetings.join_permitted?(space_id, a[:user_id]) -> {:error, :join_not_permitted}
+      not still_seated?(space_id, a[:user_id]) -> {:error, :not_a_participant}
+      true -> {:error, :not_in_meeting}
     end
   end
 
@@ -536,7 +556,7 @@ defmodule PlatformWeb.ChatLive.MeetingHooks do
   end
 
   @doc """
-  The guest counterpart of `rejoin_token/1`. The guest keeps the identity
+  The guest counterpart of `rejoin_token/2`. The guest keeps the identity
   (`guest:...`) and display name the original join minted, so they remain a
   guest in the same room. The invite link is re-checked first
   (`Meetings.resolve_guest_invite/2`), so a link revoked or lapsed mid-call
@@ -571,6 +591,8 @@ defmodule PlatformWeb.ChatLive.MeetingHooks do
   @rejoin_denials [
     :join_not_permitted,
     :not_a_participant,
+    :room_mismatch,
+    :unknown_room,
     :revoked,
     :expired,
     :invalid
@@ -911,8 +933,8 @@ defmodule PlatformWeb.ChatLive.MeetingHooks do
     {:halt, do_join(socket)}
   end
 
-  defp handle_event("meeting_rejoin_token", _params, socket) do
-    {:halt, rejoin_reply(rejoin_token(socket)), socket}
+  defp handle_event("meeting_rejoin_token", params, socket) do
+    {:halt, rejoin_reply(rejoin_token(socket, params)), socket}
   end
 
   defp handle_event("meeting_leave", _params, socket) do

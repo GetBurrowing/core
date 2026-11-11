@@ -9401,6 +9401,24 @@ defmodule Platform.Meetings do
     "space-#{space_id}"
   end
 
+  @doc """
+  The inverse of `room_name_for_space/1`: the id of the existing chat space a
+  room name was derived from, or `nil` when the name has the wrong shape or
+  names no space. Never raises on client-supplied input.
+  """
+  @spec space_id_for_room_name(term()) :: binary() | nil
+  def space_id_for_room_name(name) when is_binary(name) do
+    with true <- Regex.match?(@app_room_name_regex, name),
+         "space-" <> uuid <- name,
+         %Platform.Chat.Space{id: id} <- Platform.Chat.get_space(uuid) do
+      id
+    else
+      _ -> nil
+    end
+  end
+
+  def space_id_for_room_name(_), do: nil
+
   # ── What LiveKit itself sees (task 01a06925 stage 3) ─────────────────────
   #
   # The roster is the truth about INTENT: `MeetingHooks.do_join/1` writes the
