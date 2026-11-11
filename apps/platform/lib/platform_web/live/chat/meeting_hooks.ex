@@ -717,6 +717,7 @@ defmodule PlatformWeb.ChatLive.MeetingHooks do
   # client falls back to it.
   @rejoin_denials [
     :join_not_permitted,
+    :space_archived,
     :not_a_participant,
     :unknown_room,
     :revoked,

@@ -918,6 +918,143 @@ defmodule PlatformWeb.ChatLive.MeetingHooksJoinGateTest do
     end
   end
 
+  # ── Archived space ─────────────────────────────────────────────────────────
+  #
+  # An archived space is read-only for posts (`Chat.space_writable?/1`); a call
+  # there must not outlive the archive. Join AND rejoin refuse, for everyone,
+  # through the one predicate (`Meetings.join_permitted?/2`) both already pass.
+  # A meeting that has merely ENDED is not refused: joining after the last call
+  # is how the next one starts.
+  describe "archived space" do
+    defp archive!(space) do
+      {:ok, archived} = Chat.archive_space(Chat.get_space(space.id))
+      archived
+    end
+
+    defp in_call(user_id, space) do
+      user_id
+      |> build_socket(space)
+      |> Phoenix.Component.assign(:call_space_id, space.id)
+      |> Phoenix.Component.assign(:in_meeting, true)
+    end
+
+    defp meeting_status(meeting), do: Repo.get!(Meetings.Meeting, meeting.id).status
+
+    test "an internal member's join is refused: no participant row, no token", ctx do
+      {:ok, room} = Meetings.ensure_room(ctx.space.id)
+      archive!(ctx.space)
+
+      refused = MeetingHooks.join(build_socket(ctx.internal.id, ctx.space))
+
+      refute refused.assigns.in_meeting
+      assert joined_event(refused) == nil
+      assert participant_count(room) == 0
+    end
+
+    test "the same internal member joins once the space is not archived (non-vacuity)", ctx do
+      joined = MeetingHooks.join(build_socket(ctx.internal.id, ctx.space))
+      assert joined.assigns.in_meeting == true
+
+      {:ok, _} = Chat.unarchive_space(Chat.get_space(ctx.space.id))
+      assert MeetingHooks.join(build_socket(ctx.internal.id, ctx.space)).assigns.in_meeting
+    end
+
+    test "an INVITED external user is refused in an archived space, admitted before", ctx do
+      invite!(ctx.meeting, ctx.external)
+      assert MeetingHooks.join(build_socket(ctx.external.id, ctx.space)).assigns.in_meeting
+
+      archive!(ctx.space)
+      refused = MeetingHooks.join(build_socket(ctx.external.id, ctx.space))
+
+      refute refused.assigns.in_meeting
+      assert joined_event(refused) == nil
+    end
+
+    test "join_for_user/3 (the shared seam) refuses and writes nothing", ctx do
+      {:ok, room} = Meetings.ensure_room(ctx.space.id)
+      archive!(ctx.space)
+
+      assert {:error, :join_not_permitted} =
+               Meetings.join_for_user(ctx.space.id, ctx.internal.id, "Int")
+
+      assert participant_count(room) == 0
+      refute Meetings.join_permitted?(ctx.space.id, ctx.internal.id)
+    end
+
+    test "the refusal telemetry names the archive, not an external-invite failure", ctx do
+      test_pid = self()
+      ref = make_ref()
+
+      :telemetry.attach(
+        {__MODULE__, ref},
+        [:platform, :auth, :access_blocked],
+        fn _e, _m, meta, _c -> send(test_pid, {:blocked, meta}) end,
+        nil
+      )
+
+      on_exit(fn -> :telemetry.detach({__MODULE__, ref}) end)
+      archive!(ctx.space)
+
+      MeetingHooks.join(build_socket(ctx.internal.id, ctx.space))
+
+      assert_receive {:blocked, %{reason: "space_archived", resource_id: id}}
+      assert id == ctx.space.id
+    end
+
+    test "a member's rejoin is DENIED and mints nothing; it minted before the archive", ctx do
+      socket = in_call(ctx.internal.id, ctx.space)
+      assert {:ok, %{token: _}} = rejoin(socket, held(ctx.space))
+
+      archive!(ctx.space)
+
+      result = rejoin(socket, held(ctx.space))
+      assert {:error, :join_not_permitted} = result
+      assert MeetingHooks.rejoin_reply(result) == %{error: "denied"}
+    end
+
+    test "a guest's rejoin is DENIED and mints nothing; it minted before the archive", ctx do
+      expires_at = DateTime.to_unix(DateTime.utc_now()) + 3600
+      token = Meetings.GuestInvite.sign(ctx.meeting.slug, expires_at, "Jane Guest")
+
+      socket =
+        ctx.internal.id
+        |> build_socket(ctx.space)
+        |> Phoenix.Component.assign(:meeting_slug, ctx.meeting.slug)
+        |> Phoenix.Component.assign(:guest_invite_token, token)
+        |> Phoenix.Component.assign(:identity, "guest:abc123")
+        |> Phoenix.Component.assign(:display_name, "Jane Guest")
+        |> Phoenix.Component.assign(:in_meeting, true)
+
+      assert {{:ok, %{token: _}}, _} = MeetingHooks.guest_rejoin_token(socket)
+
+      archive!(ctx.space)
+
+      assert {{:error, :space_archived} = result, _} = MeetingHooks.guest_rejoin_token(socket)
+      assert MeetingHooks.rejoin_reply(result) == %{error: "denied"}
+    end
+
+    test "an ENDED meeting does not refuse a fresh join (it is how the next call starts)",
+         ctx do
+      {:ok, live} = Meetings.start_meeting(ctx.meeting)
+      {:ok, _ended} = Meetings.end_meeting(live)
+      assert meeting_status(ctx.meeting) == "ended"
+
+      joined = MeetingHooks.join(build_socket(ctx.internal.id, ctx.space))
+
+      assert joined.assigns.in_meeting == true
+      assert joined_event(joined) != nil
+    end
+
+    test "the archive check costs the internal join one chat_spaces read and no invite query",
+         ctx do
+      queries =
+        capture_queries(fn -> MeetingHooks.join(build_socket(ctx.internal.id, ctx.space)) end)
+
+      assert count_matching(queries, "meeting_invites") == 0
+      assert count_matching(queries, "chat_spaces") >= 1
+    end
+  end
+
   describe "rejoin_reply/1 logging" do
     import ExUnit.CaptureLog
 

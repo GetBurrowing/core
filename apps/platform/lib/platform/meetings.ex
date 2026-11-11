@@ -4689,24 +4689,50 @@ defmodule Platform.Meetings do
   # surface passes through it, rather than being duplicated per caller.
   # Hiding the button is cosmetics; this is the fence.
   defp authorize_join(space_id, user_id) do
-    if join_permitted?(space_id, user_id) do
-      :ok
-    else
-      emit_join_blocked(space_id, user_id)
-      {:error, :join_not_permitted}
+    case join_refusal(space_id, user_id) do
+      nil ->
+        :ok
+
+      reason ->
+        emit_join_blocked(space_id, user_id, reason)
+        {:error, :join_not_permitted}
     end
   end
 
-  # An external user may join only a call whose space they hold a live invite
-  # to. Internal users are unaffected — and pay no query for the privilege:
-  # the account is loaded only inside the external branch, so the internal
-  # path is behaviourally identical to the one before this gate existed.
+  # Why `user_id` may not join the call of `space_id`, or nil when they may.
+  # The ONE place the join gate decides, so every path through it (the join,
+  # the rejoin, the meeting page's start pre-check, the ringer) inherits each
+  # rule.
+  #
+  #   * An archived space refuses everyone. It is already read-only for posts
+  #     (`Chat.space_writable?/1`, the same notion, so execution spaces keep
+  #     their exemption); a call there must not outlive the archive. A meeting
+  #     that has merely ENDED is not refused: a join after the last call ended
+  #     is how the next call starts. Costs one `chat_spaces` read per join.
+  #   * An external user needs a live invite to the space. Internal users pay
+  #     no invite query: the account is loaded only inside the external
+  #     branch.
   #
   # `Tenancy.external_user?/1` is the same predicate the request-path plug and
   # `Chat.ExternalScope` already use. Do not grow a second one.
+  defp join_refusal(space_id, user_id) do
+    cond do
+      not Chat.space_writable?(space_id) ->
+        :space_archived
+
+      Platform.Tenancy.external_user?(%{id: user_id}) and
+          not invited_to_space?(space_id, Accounts.get_user(user_id)) ->
+        :invite_required
+
+      true ->
+        nil
+    end
+  end
+
   @doc """
-  Whether `user_id` may join the call of chat space `space_id`: always for an
-  internal user, and for an external user only with a live invite to it.
+  Whether `user_id` may join the call of chat space `space_id`: never in an
+  archived space, always for an internal user otherwise, and for an external
+  user only with a live invite to it.
 
   The predicate behind `join_for_user/3`'s gate, without the gate's
   `access_blocked` telemetry: `Platform.Meetings.Ringing` asks it of every
@@ -4714,19 +4740,13 @@ defmodule Platform.Meetings do
   attempt.
   """
   @spec join_permitted?(binary(), binary()) :: boolean()
-  def join_permitted?(space_id, user_id) do
-    if Platform.Tenancy.external_user?(%{id: user_id}) do
-      invited_to_space?(space_id, Accounts.get_user(user_id))
-    else
-      true
-    end
-  end
+  def join_permitted?(space_id, user_id), do: is_nil(join_refusal(space_id, user_id))
 
   # The refusal is silent to the user by design — no distinguishing flash or
   # body, so a caller cannot probe which spaces back a meeting. It is not
   # silent to the operator: this feeds `Platform.Audit` through the same
   # `[:platform, :auth, :access_blocked]` event the request-path denials use.
-  defp emit_join_blocked(space_id, user_id) do
+  defp emit_join_blocked(space_id, user_id, reason) do
     :telemetry.execute(
       [:platform, :auth, :access_blocked],
       %{system_time: System.system_time()},
@@ -4736,10 +4756,13 @@ defmodule Platform.Meetings do
         actor_type: "user",
         resource_type: "chat_space",
         resource_id: space_id,
-        reason: "external_meeting_join_denied"
+        reason: join_blocked_reason(reason)
       }
     )
   end
+
+  defp join_blocked_reason(:space_archived), do: "space_archived"
+  defp join_blocked_reason(:invite_required), do: "external_meeting_join_denied"
 
   # Room lifecycle (task 019e4b3e v4 stage 1): `activate_room/1` previously
   # had ZERO callers, so `ensure_room/1` left rooms at the schema default
@@ -5602,7 +5625,7 @@ defmodule Platform.Meetings do
              room_name: String.t(),
              livekit_url: String.t() | nil
            }}
-          | {:error, :livekit_not_configured | :missing_display_name}
+          | {:error, :livekit_not_configured | :missing_display_name | :space_archived}
   def guest_livekit_token(%Meeting{chat_space_id: chat_space_id} = _meeting, display_name)
       when is_binary(chat_space_id) and is_binary(display_name) do
     trimmed = String.trim(display_name)
@@ -5634,7 +5657,8 @@ defmodule Platform.Meetings do
              room_name: String.t(),
              livekit_url: String.t() | nil
            }}
-          | {:error, :livekit_not_configured | :missing_display_name | :invalid_identity}
+          | {:error,
+             :livekit_not_configured | :missing_display_name | :invalid_identity | :space_archived}
   def guest_rejoin_token(
         %Meeting{chat_space_id: space_id},
         "guest:" <> _ = identity,
@@ -5653,7 +5677,15 @@ defmodule Platform.Meetings do
     "guest:" <> (:crypto.strong_rand_bytes(16) |> Base.url_encode64(padding: false))
   end
 
+  # Both guest mints (the first join and the rejoin) end here, so an archived
+  # space refuses a guest in the one place, as `join_refusal/2` does a member.
   defp do_guest_livekit_token(chat_space_id, display_name, identity) do
+    if Chat.space_writable?(chat_space_id),
+      do: mint_guest_livekit_token(chat_space_id, display_name, identity),
+      else: {:error, :space_archived}
+  end
+
+  defp mint_guest_livekit_token(chat_space_id, display_name, identity) do
     config = livekit_config()
     api_key = config[:api_key]
     api_secret = config[:api_secret]

@@ -268,6 +268,53 @@ defmodule PlatformWeb.MeetingLive.JoinGateStartTest do
     assert Process.alive?(view.pid)
   end
 
+  # ── Archived space ─────────────────────────────────────────────────────
+  #
+  # An archived space is read-only; a call there must not start or resume the
+  # meeting either. Same predicate (`join_permitted?/2`), so the pre-check
+  # inherits it. An ENDED meeting in a live space is still resumed (above).
+
+  defp archive_meeting_space!(meeting) do
+    {:ok, _} = Platform.Chat.archive_space(Platform.Chat.get_space(meeting.chat_space_id))
+    :ok
+  end
+
+  for entry <- [:lobby, :shell], status <- [:scheduled, :ended] do
+    test "an internal member's #{entry} Join in an ARCHIVED space leaves a #{status} meeting #{status}",
+         %{conn: conn} do
+      entry = unquote(entry)
+      status = unquote(status)
+      %{user: user, meeting: meeting} = internal_member(status)
+      before = reload(meeting)
+
+      {:ok, view, _html} = mount_internal(conn, user, meeting, entry)
+      archive_meeting_space!(meeting)
+
+      {_html, queries} = capture_queries(fn -> click_join(view, entry) end)
+
+      after_attempt = reload(meeting)
+      assert after_attempt.status == Atom.to_string(status)
+      assert after_attempt.started_at == before.started_at
+      assert after_attempt.ended_at == before.ended_at
+      assert participant_rows(user) == []
+      assert status_writes(queries) == []
+      assert Process.alive?(view.pid)
+    end
+  end
+
+  test "an invited external member's Join in an ARCHIVED space leaves a scheduled meeting scheduled",
+       %{conn: conn} do
+    %{user: ext, meeting: meeting} = external_with_invite(:scheduled)
+
+    {:ok, view, _html} = mount(conn, ext, meeting, :lobby)
+    archive_meeting_space!(meeting)
+
+    click_join(view, :lobby)
+
+    assert reload(meeting).status == "scheduled"
+    assert participant_rows(ext) == []
+  end
+
   # ── Admitted joiner (non-vacuity) ──────────────────────────────────────
 
   for entry <- [:lobby, :shell] do
