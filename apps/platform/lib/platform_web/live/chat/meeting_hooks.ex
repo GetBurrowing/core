@@ -473,6 +473,69 @@ defmodule PlatformWeb.ChatLive.MeetingHooks do
   def join(socket), do: do_join(socket)
 
   @doc """
+  A fresh LiveKit token for a signed-in member who is already in the call,
+  for the client's rejoin after a network drop (`"meeting_rejoin_token"`).
+
+  It is the SAME gate and the same room/identity as `join/1`:
+  `Meetings.join_for_user/3` re-runs the join gate (an external user needs a
+  live invite, so a revoked one is refused) and mints for `user:<id>` in the
+  space's room. On top of that it refuses a socket that is not in the call,
+  and a member whose chat-space row is gone (removed): `join_for_user/3`
+  would quietly re-seat them, which a rejoin must never do.
+
+  Returns `{:ok, %{token: _, url: _}}` or `{:error, reason}`.
+  """
+  @spec rejoin_token(Phoenix.LiveView.Socket.t()) ::
+          {:ok, %{token: String.t(), url: String.t() | nil}} | {:error, atom()}
+  def rejoin_token(socket) do
+    with true <- socket.assigns[:in_meeting] == true || {:error, :not_in_meeting},
+         %{id: space_id} <- socket.assigns[:active_space] || {:error, :not_in_meeting},
+         user_id when is_binary(user_id) <- socket.assigns[:user_id] || {:error, :not_in_meeting},
+         true <- still_seated?(space_id, user_id) || {:error, :not_a_participant},
+         {:ok, %{token: token}} <-
+           Meetings.join_for_user(space_id, user_id, resolve_display_name(socket)) do
+      {:ok, %{token: token, url: Meetings.livekit_url()}}
+    else
+      {:error, reason} when is_atom(reason) -> {:error, reason}
+      _ -> {:error, :rejoin_refused}
+    end
+  end
+
+  defp still_seated?(space_id, user_id) do
+    space_id
+    |> Platform.Chat.list_participants(participant_type: "user")
+    |> Enum.any?(&(&1.participant_id == user_id))
+  end
+
+  @doc """
+  The guest counterpart of `rejoin_token/1`. The guest keeps the identity
+  (`guest:...`) and display name the original join minted, so they remain a
+  guest in the same room. The invite link is re-checked first
+  (`Meetings.resolve_guest_invite/2`), so a link revoked or lapsed mid-call
+  gets no new token.
+  """
+  @spec guest_rejoin_token(Phoenix.LiveView.Socket.t()) ::
+          {:ok, %{token: String.t(), url: String.t() | nil}} | {:error, atom()}
+  def guest_rejoin_token(socket) do
+    a = socket.assigns
+
+    with true <- a[:in_meeting] == true || {:error, :not_in_meeting},
+         slug when is_binary(slug) <- a[:meeting_slug] || {:error, :not_in_meeting},
+         invite when is_binary(invite) <- a[:guest_invite_token] || {:error, :not_in_meeting},
+         {:ok, %{meeting: meeting}} <- Meetings.resolve_guest_invite(slug, invite),
+         {:ok, bundle} <-
+           Meetings.guest_rejoin_token(meeting, a[:identity] || "", a[:display_name] || "") do
+      {:ok, %{token: bundle.token, url: bundle.livekit_url}}
+    else
+      {:error, reason} when is_atom(reason) -> {:error, reason}
+      _ -> {:error, :rejoin_refused}
+    end
+  end
+
+  defp rejoin_reply({:ok, %{token: _, url: _} = reply}), do: reply
+  defp rejoin_reply({:error, reason}), do: %{error: to_string(reason)}
+
+  @doc """
   Reset every meeting-local assign — media state AND the call shell the
   quickmeet hydrated at join (task 01a05b14 stage 6).
 
@@ -782,6 +845,10 @@ defmodule PlatformWeb.ChatLive.MeetingHooks do
     {:halt, do_join(socket)}
   end
 
+  defp handle_event("meeting_rejoin_token", _params, socket) do
+    {:halt, rejoin_reply(rejoin_token(socket)), socket}
+  end
+
   defp handle_event("meeting_leave", _params, socket) do
     stamp_local_left(socket)
     MeetingState.broadcast_left(socket.assigns.user_id)
@@ -1031,6 +1098,10 @@ defmodule PlatformWeb.ChatLive.MeetingHooks do
   # `01a02c4e` stage 4) — the LiveView survives the leave, so without this
   # it keeps receiving presence/room/meeting broadcasts for a meeting it is
   # no longer in. See `release_guest_topics/1`.
+  defp handle_guest_event("meeting_rejoin_token", _params, socket) do
+    {:halt, rejoin_reply(guest_rejoin_token(socket)), socket}
+  end
+
   defp handle_guest_event("meeting_leave", _params, socket) do
     {:halt,
      socket
