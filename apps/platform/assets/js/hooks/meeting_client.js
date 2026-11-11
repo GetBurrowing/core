@@ -67,6 +67,10 @@ function isVideoPublication(pub) {
 // we try ONE automatic rejoin, then offer Rejoin / Leave.
 export const REJOIN_DELAY_MS = 1500
 export const REJOIN_GIVE_UP_MS = 30000
+// How long a rejoin waits for the server's fresh LiveKit token. Under
+// REJOIN_DELAY_MS so a silent LiveView costs about one more delay, not the
+// whole give-up window; on no answer the held token is tried once.
+export const REJOIN_TOKEN_TIMEOUT_MS = 1000
 const DELIBERATE_DISCONNECT_REASONS = new Set([
   DisconnectReason.CLIENT_INITIATED,
   DisconnectReason.PARTICIPANT_REMOVED,
@@ -829,8 +833,10 @@ const MeetingClient = {
   // treated as a network loss: keep the roster and tiles, do NOT push
   // `meeting_left`, and rejoin once with the credentials the join used.
   _handleDisconnected(room, reason) {
-    // A Room we are no longer pinned to (a failed rejoin attempt) is noise.
-    if (this._room && room !== this._room) return
+    // A Room we are not pinned to (a failed or abandoned rejoin attempt, or
+    // anything after Leave has cleared the pin) is noise: it must neither
+    // rejoin nor push a second `meeting_left`.
+    if (room !== this._room) return
     if (this._leaving || isDeliberateDisconnect(reason)) {
       this._emitState("disconnected", room)
       this._cleanupRoom()
@@ -883,11 +889,32 @@ const MeetingClient = {
   async _attemptRejoin(gen) {
     const creds = this._joinCreds
     if (!creds) return this._enterLost(this._room)
+    // A guest token lasts 30 minutes, so the one from the first join may be
+    // dead by now: ask the server for a fresh one for the same room and
+    // identity. Only an explicit refusal ends the attempt; no answer (LiveView
+    // down, timeout) falls back to the held token once.
+    const fresh = await this._requestRejoinToken()
+    if (gen !== this._rejoinGen) return
+    if (fresh && fresh.error) {
+      console.warn("[MeetingClient] server refused a rejoin token:", fresh.error)
+      this._rejoinGen += 1
+      this._clearRejoinTimers()
+      this._enterLost(this._room)
+      return
+    }
+    let { url, token } = creds
+    if (fresh && fresh.token) {
+      url = fresh.url || url
+      token = fresh.token
+    } else {
+      console.warn("[MeetingClient] no fresh rejoin token from the server; trying the held token once")
+    }
+
     const room = this._newRoom()
     // Pin `_room` only while this attempt is still the current one: a connect
     // that resolves after the give-up timer (or after Leave) must not become
     // the live room, or its later Disconnected would push `meeting_left`.
-    const ok = await this._connectRoom(room, creds.url, creds.token, undefined, () => gen === this._rejoinGen)
+    const ok = await this._connectRoom(room, url, token, undefined, () => gen === this._rejoinGen)
     if (gen !== this._rejoinGen) {
       // Gave up or left while connecting: do not resurrect the call.
       if (ok) room.disconnect().catch(() => {})
@@ -905,7 +932,53 @@ const MeetingClient = {
     // join time: someone who muted mid-call and then dropped must come back
     // muted. The dataset mirrors the server's committed pair; a key the
     // dataset lacks falls back to what the join used.
+    creds.url = url
+    creds.token = token // the freshest one, for a later manual Rejoin's fallback
     await this._enterRoom(room, this._currentMedia(creds.desired))
+    this._reconcileTiles(room)
+  },
+
+  // Ask the server for a fresh LiveKit token (`meeting_rejoin_token`). Resolves
+  // the reply, or null when there is none: LiveView not connected (pushEvent
+  // throws), or no answer within REJOIN_TOKEN_TIMEOUT_MS. A late reply after
+  // either is ignored.
+  _requestRejoinToken() {
+    return new Promise((resolve) => {
+      let settled = false
+      const done = (value) => {
+        if (settled) return
+        settled = true
+        clearTimeout(timer)
+        resolve(value)
+      }
+      const timer = setTimeout(() => done(null), REJOIN_TOKEN_TIMEOUT_MS)
+      try {
+        this.pushEvent("meeting_rejoin_token", {}, (reply) => done(reply || null))
+      } catch (err) {
+        console.warn("[MeetingClient] could not ask for a rejoin token:", err)
+        done(null)
+      }
+    })
+  },
+
+  // After a rejoin the tiles from the dead room are kept so the UI does not
+  // flash, but anyone who left during the outage never sent a Disconnected to
+  // the new room. Drop every tile connection the new room does not hold; a
+  // person's tile goes with their last connection (a companion keeps it).
+  _reconcileTiles(room) {
+    const present = new Set()
+    for (const p of room.remoteParticipants.values()) present.add(p.identity)
+    for (const [person, tile] of [...this._tiles]) {
+      const connections = this._tileConnections && this._tileConnections.get(person)
+      if (!connections || connections.size === 0) {
+        tile.remove()
+        this._tiles.delete(person)
+        continue
+      }
+      for (const identity of [...connections]) {
+        if (!present.has(identity)) this._removeTile(identity)
+      }
+    }
   },
 
   _currentMedia(fallback) {
