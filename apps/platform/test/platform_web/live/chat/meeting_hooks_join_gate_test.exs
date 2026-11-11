@@ -764,6 +764,67 @@ defmodule PlatformWeb.ChatLive.MeetingHooksJoinGateTest do
                )
     end
 
+    # `:access_scope` is a mount-time snapshot that only grant/role changes
+    # refresh; an org-membership removal does not. The rejoin must build the
+    # scope fresh, so the removal shows.
+    test "a stale :access_scope that still names org X does not admit a user removed from X",
+         ctx do
+      user = create_user!("stale")
+      member!(user, ctx.org)
+      member!(user, tenant_org!())
+
+      stale = Platform.Access.scope_for(Platform.Accounts.get_user(user.id))
+
+      Repo.delete_all(
+        from(m in OrgMembership, where: m.user_id == ^user.id and m.org_id == ^ctx.org.id)
+      )
+
+      socket =
+        user.id
+        |> build_socket(ctx.space)
+        |> in_call()
+        |> Phoenix.Component.assign(:access_scope, stale)
+
+      # not seated: the fence (fresh) is what refuses, not the seat gate
+      assert {:error, :join_not_permitted} = MeetingHooks.rejoin_token(socket, held(ctx.space))
+    end
+
+    test "a stale :access_scope, user removed from X but still seated: the mount rule keeps the space",
+         ctx do
+      user = create_user!("stale-seated")
+      member!(user, ctx.org)
+      member!(user, tenant_org!())
+      seat_in_space!(ctx.space, user)
+
+      stale = Platform.Access.scope_for(Platform.Accounts.get_user(user.id))
+
+      Repo.delete_all(
+        from(m in OrgMembership, where: m.user_id == ^user.id and m.org_id == ^ctx.org.id)
+      )
+
+      socket =
+        user.id
+        |> build_socket(ctx.space)
+        |> in_call()
+        |> Phoenix.Component.assign(:access_scope, stale)
+
+      assert {:ok, %{token: _}} = MeetingHooks.rejoin_token(socket, held(ctx.space))
+    end
+
+    test "a deleted user is refused before any fence (nil user is not :unfenced)", ctx do
+      user = create_user!("deleted")
+      member!(user, ctx.org)
+      seat_in_space!(ctx.space, user)
+      Repo.delete_all(from(m in OrgMembership, where: m.user_id == ^user.id))
+      Repo.delete_all(from(u in User, where: u.id == ^user.id))
+
+      assert {:error, :join_not_permitted} =
+               MeetingHooks.rejoin_token(
+                 in_call(build_socket(user.id, ctx.space)),
+                 held(ctx.space)
+               )
+    end
+
     test "a root-org member follows the root rule: the fence admits a space of any org", ctx do
       root_member = create_user!("root")
       member!(root_member, Tenancy.get_org_by_slug!("acme"))

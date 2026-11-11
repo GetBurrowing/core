@@ -494,6 +494,8 @@ defmodule PlatformWeb.ChatLive.MeetingHooks do
     # for wherever they are now would seat and activate the wrong room.
     with {:ok, space_id, same_call?} <- held_space(socket, params),
          :ok <- member_in_call_or_gate(socket, space_id, same_call?),
+         # Safe un-guarded: `member_in_call_or_gate/3` above refuses unless
+         # `is_binary(user_id)`, so this is always a binary here.
          user_id = socket.assigns[:user_id],
          {:ok, %{token: token, room: room}} <-
            Meetings.join_for_user(space_id, user_id, resolve_display_name(socket)) do
@@ -549,34 +551,27 @@ defmodule PlatformWeb.ChatLive.MeetingHooks do
     a = socket.assigns
     user_id = a[:user_id]
 
-    cond do
-      not is_binary(user_id) -> {:error, :not_in_meeting}
-      not Meetings.join_permitted?(space_id, user_id) -> {:error, :join_not_permitted}
-      not space_in_mount_fence?(socket, space_id) -> {:error, :join_not_permitted}
-      not still_seated?(space_id, user_id) -> {:error, :not_a_participant}
-      same_call? and a[:in_meeting] == true -> :ok
-      true -> {:error, :not_in_meeting}
-    end
-  end
-
-  # The fence the mount applies to the rail and the space resolution, called
-  # as the mount calls it (`ReadScope.within_org_fence/2` ->
-  # `Access.fenced_ids(scope, :space)`): the viewer's orgs plus every space
-  # they hold a participant row in, and `:unfenced` for a guest or a user with
-  # no memberships. The scope is the socket's `:access_scope`, else built from
-  # the user as `ChatLive.access_scope/2` does.
-  defp space_in_mount_fence?(socket, space_id) do
-    scope =
-      case socket.assigns[:access_scope] do
-        %Platform.Access.Scope{} = scope -> scope
-        _ -> Platform.Access.scope_for(Accounts.get_user(socket.assigns[:user_id]))
+    # A user row that no longer exists would build a bare scope, which the
+    # fence reads as `:unfenced`. Refuse before any fence.
+    with true <- is_binary(user_id) || {:error, :not_in_meeting},
+         %{} = user <- Accounts.get_user(user_id) || {:error, :join_not_permitted} do
+      cond do
+        not Meetings.join_permitted?(space_id, user_id) -> {:error, :join_not_permitted}
+        not space_in_mount_fence?(user, space_id) -> {:error, :join_not_permitted}
+        not still_seated?(space_id, user_id) -> {:error, :not_a_participant}
+        same_call? and a[:in_meeting] == true -> :ok
+        true -> {:error, :not_in_meeting}
       end
-
-    case Platform.Access.fenced_ids(scope, :space) do
-      :unfenced -> true
-      ids -> space_id in ids
     end
   end
+
+  # The fence the mount applies (`Access.fenced_ids(scope, :space)`), asked of
+  # the one space (`Access.space_in_fence?/2`). The scope is built fresh from
+  # the database on every rejoin, never the socket's `:access_scope`: that is
+  # a mount-time snapshot refreshed only by grant/role changes, so an org
+  # removal or switch mid-call would not show in it.
+  defp space_in_mount_fence?(user, space_id),
+    do: Platform.Access.space_in_fence?(Platform.Access.scope_for(user), space_id)
 
   defp still_seated?(space_id, user_id) do
     space_id
