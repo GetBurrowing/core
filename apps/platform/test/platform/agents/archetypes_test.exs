@@ -80,9 +80,12 @@ defmodule Platform.Agents.ArchetypesTest do
     assert length(Archetypes.toolkit()) == 10
   end
 
-  test "the comp's palette is the platform's ten agent slots" do
-    assert Enum.map(ColorPalette.all(), &%{"id" => &1.id, "label" => &1.label}) ==
-             @comp["palette"]
+  test "the comp's palette is the platform's first ten agent slots, the six appended after" do
+    # The comp drew the masters' ten; ColorPalette appended six on 2026-11-11
+    # (append only), so the comp's ten are its prefix in the comp's order.
+    palette = Enum.map(ColorPalette.all(), &%{"id" => &1.id, "label" => &1.label})
+    assert Enum.take(palette, 10) == @comp["palette"]
+    assert length(palette) == 16
 
     for a <- Archetypes.all(), do: assert(a.color in ColorPalette.ids())
   end

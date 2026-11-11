@@ -1,6 +1,13 @@
 defmodule Platform.Agents.ColorPalette do
   @moduledoc """
-  The ten agent identity slots.
+  The sixteen agent identity slots.
+
+  APPEND ONLY. An agent stores its slot id, never an index, so a slot keeps
+  its colour whatever this list holds; still, add new slots at the end and
+  never reorder or rename one, because the pickers show this order. The
+  first ten are the masters' (theme.js); magenta through cocoa were
+  appended on 2026-11-11 when ten ran out, with no theme.js master: their
+  values are measured per block like the others.
 
   An agent stores a slot id (`agents.color`, e.g. `"purple"`). The id resolves
   to THEME TOKENS, not to a colour: every theme block (app.css's two Burrow
@@ -19,8 +26,8 @@ defmodule Platform.Agents.ColorPalette do
   `test/platform/design/agent_slot_tokens_guard_test.exs` holds the values.
 
   `slot_for/1` is the resolver: a nil, blank or unknown stored id is the blue
-  slot. A surface renders `data-agent-slot="<id>"`, and app.css's ten pointer
-  rules (`[data-agent-slot="<id>"]`) point `--ag`, `--ag-text` and `--ag-tint`
+  slot. A surface renders `data-agent-slot="<id>"`, and app.css's pointer
+  rules, one per slot (`[data-agent-slot="<id>"]`), point `--ag`, `--ag-text` and `--ag-tint`
   at that slot's tokens; the colour pickers read `var(<token>)` directly.
   The pre-token OKLCH accent strings (`accent_for/1`, `default_accent/0`,
   `:accent`) were removed in task 01a1557a rung 3 stage 2 with their last
@@ -39,7 +46,14 @@ defmodule Platform.Agents.ColorPalette do
     %{id: "amber", label: "Amber", token: "--ag-amber"},
     %{id: "teal", label: "Teal", token: "--ag-teal"},
     %{id: "indigo", label: "Indigo", token: "--ag-indigo"},
-    %{id: "lime", label: "Lime", token: "--ag-lime"}
+    %{id: "lime", label: "Lime", token: "--ag-lime"},
+    # Appended 2026-11-11. Append only: see the moduledoc.
+    %{id: "magenta", label: "Magenta", token: "--ag-magenta"},
+    %{id: "violet", label: "Violet", token: "--ag-violet"},
+    %{id: "jade", label: "Jade", token: "--ag-jade"},
+    %{id: "mustard", label: "Mustard", token: "--ag-mustard"},
+    %{id: "slate", label: "Slate", token: "--ag-slate"},
+    %{id: "cocoa", label: "Cocoa", token: "--ag-cocoa"}
   ]
 
   @ids Enum.map(@colors, & &1.id)

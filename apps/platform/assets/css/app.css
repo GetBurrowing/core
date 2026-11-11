@@ -233,6 +233,23 @@
   /* theme.js #4f7b00 measures 4.3682:1 on the painted 8% tint;
      this value, on the same oklch hue line, measures 4.5457:1. */
   --ag-lime-text: #4d7802;
+  /* Six slots appended 2026-11-11 (magenta..cocoa). No theme.js master:
+     one OKLCH family per slot, the same value in every Burrow-family
+     block of this mode, chosen so the rail is also its own text (it
+     clears 4.5:1 on the painted 8% tint, base-100 and base-200) and sits at least delta E 5.5
+     (OKLab x100) from every other rail and status colour of the block. */
+  --ag-magenta: #93147f;
+  --ag-magenta-text: var(--ag-magenta);
+  --ag-violet: #5c2ab4;
+  --ag-violet-text: var(--ag-violet);
+  --ag-jade: #17634e;
+  --ag-jade-text: var(--ag-jade);
+  --ag-mustard: #5e5700;
+  --ag-mustard-text: var(--ag-mustard);
+  --ag-slate: #505469;
+  --ag-slate-text: var(--ag-slate);
+  --ag-cocoa: #704734;
+  --ag-cocoa-text: var(--ag-cocoa);
   /* agent-slots:end */
   --radius-selector: 1rem;      /* pill-at-height for badges/toggles — re-skin Phase 1 (task 019f4f76) */
   --radius-field: 0.5625rem;    /* 9px buttons/inputs = round(box x 0.71); was 10px (re-skin Phase 1), eased 2026-10-23 "back off on the rounded corners" */
@@ -368,6 +385,23 @@
   --ag-indigo-text: var(--ag-indigo);
   --ag-lime: #9fd959;
   --ag-lime-text: var(--ag-lime);
+  /* Six slots appended 2026-11-11 (magenta..cocoa). No theme.js master:
+     one OKLCH family per slot, the same value in every Burrow-family
+     block of this mode, chosen so the rail is also its own text (it
+     clears 4.5:1 on the painted 8% tint, base-100 and base-200) and sits at least delta E 5.5
+     (OKLab x100) from every other rail and status colour of the block. */
+  --ag-magenta: #ea60cf;
+  --ag-magenta-text: var(--ag-magenta);
+  --ag-violet: #a878fc;
+  --ag-violet-text: var(--ag-violet);
+  --ag-jade: #5fdfb4;
+  --ag-jade-text: var(--ag-jade);
+  --ag-mustard: #c0ac23;
+  --ag-mustard-text: var(--ag-mustard);
+  --ag-slate: #b1b6cb;
+  --ag-slate-text: var(--ag-slate);
+  --ag-cocoa: #b99683;
+  --ag-cocoa-text: var(--ag-cocoa);
   /* agent-slots:end */
   --radius-selector: 1rem;      /* pill-at-height for badges/toggles — re-skin Phase 1 (task 019f4f76) */
   --radius-field: 0.5625rem;    /* 9px buttons/inputs = round(box x 0.71); was 10px (re-skin Phase 1), eased 2026-10-23 "back off on the rounded corners" */
@@ -473,6 +507,12 @@
   --ag-rose-tint: color-mix(in srgb, var(--ag-rose) var(--ag-tint-pct), var(--color-base-100));
   --ag-indigo-tint: color-mix(in srgb, var(--ag-indigo) var(--ag-tint-pct), var(--color-base-100));
   --ag-lime-tint: color-mix(in srgb, var(--ag-lime) var(--ag-tint-pct), var(--color-base-100));
+  --ag-magenta-tint: color-mix(in srgb, var(--ag-magenta) var(--ag-tint-pct), var(--color-base-100));
+  --ag-violet-tint: color-mix(in srgb, var(--ag-violet) var(--ag-tint-pct), var(--color-base-100));
+  --ag-jade-tint: color-mix(in srgb, var(--ag-jade) var(--ag-tint-pct), var(--color-base-100));
+  --ag-mustard-tint: color-mix(in srgb, var(--ag-mustard) var(--ag-tint-pct), var(--color-base-100));
+  --ag-slate-tint: color-mix(in srgb, var(--ag-slate) var(--ag-tint-pct), var(--color-base-100));
+  --ag-cocoa-tint: color-mix(in srgb, var(--ag-cocoa) var(--ag-tint-pct), var(--color-base-100));
 }
 
 /* Every placeholder defaults to the secondary-text tier (task 01a15902
@@ -1472,7 +1512,7 @@ body, .font-suite {
 /* Agent identity slots (task 01a1557a rung 3 stage 2). An agent row
    carries data-agent-slot="<id>" (Platform.Agents.ColorPalette's ids, from
    Chat.agent_slot_map_for_participants/1; nil, blank or unknown is "blue").
-   The ten pointer rules below are the ONE place a slot id becomes colour:
+   The pointer rules below (one per slot) are the ONE place a slot id becomes colour:
    each points the row-local --ag, --ag-text and --ag-tint at that slot's
    theme tokens (declared per theme block, measured by
    test/platform/design/agent_slot_tokens_guard_test.exs). There is no
@@ -1491,6 +1531,12 @@ body, .font-suite {
 [data-agent-slot="rose"] { --ag: var(--ag-rose); --ag-text: var(--ag-rose-text); --ag-tint: var(--ag-rose-tint); }
 [data-agent-slot="indigo"] { --ag: var(--ag-indigo); --ag-text: var(--ag-indigo-text); --ag-tint: var(--ag-indigo-tint); }
 [data-agent-slot="lime"] { --ag: var(--ag-lime); --ag-text: var(--ag-lime-text); --ag-tint: var(--ag-lime-tint); }
+[data-agent-slot="magenta"] { --ag: var(--ag-magenta); --ag-text: var(--ag-magenta-text); --ag-tint: var(--ag-magenta-tint); }
+[data-agent-slot="violet"] { --ag: var(--ag-violet); --ag-text: var(--ag-violet-text); --ag-tint: var(--ag-violet-tint); }
+[data-agent-slot="jade"] { --ag: var(--ag-jade); --ag-text: var(--ag-jade-text); --ag-tint: var(--ag-jade-tint); }
+[data-agent-slot="mustard"] { --ag: var(--ag-mustard); --ag-text: var(--ag-mustard-text); --ag-tint: var(--ag-mustard-tint); }
+[data-agent-slot="slate"] { --ag: var(--ag-slate); --ag-text: var(--ag-slate-text); --ag-tint: var(--ag-slate-tint); }
+[data-agent-slot="cocoa"] { --ag: var(--ag-cocoa); --ag-text: var(--ag-cocoa-text); --ag-tint: var(--ag-cocoa-tint); }
 
 /* The row: 3px rail at full hue, the slot's opaque tint as its ground.
    One rule for every theme and mode, because the tokens already differ per
@@ -11142,7 +11188,7 @@ textarea.cal-input {
 .ba-dice{width:56px;height:56px;border-radius:calc(var(--radius-box) * 1.5);background:color-mix(in srgb,var(--ag) 16%,var(--color-base-100));border:1px solid color-mix(in srgb,var(--ag) 40%,var(--color-edge))!important;font-size:28px;display:flex;align-items:center;justify-content:center}
 .ba-dice.roll{animation:ba-roll .45s cubic-bezier(.3,1.4,.5,1)}
 @keyframes ba-roll{from{transform:rotate(-200deg) scale(.7)}to{transform:none}}
-.ba-swatches{display:grid;grid-template-columns:repeat(5,1fr);gap:14px 8px;margin-top:20px}
+.ba-swatches{display:grid;grid-template-columns:repeat(4,1fr);gap:14px 8px;margin-top:20px}
 /* The swatch is the platform palette's radio (agent_detail.ex Color family):
    an sr-only radio inside a label that is its containing block, `relative`
    (task 01a1b34f: an unpositioned label lets the click scroll the shell). */

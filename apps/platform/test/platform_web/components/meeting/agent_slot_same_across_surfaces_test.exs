@@ -148,7 +148,7 @@ defmodule PlatformWeb.Components.Meeting.AgentSlotSameAcrossSurfacesTest do
   end
 
   test "the chat message, the gallery tile and the Ask row carry the same slot" do
-    for color <- ["rose", "lime", "amber", nil, "magenta"] do
+    for color <- ["rose", "lime", "amber", nil, "chartreuse", "magenta"] do
       agent = agent!(color)
       {:ok, chat_participant} = Chat.add_agent_participant(space!().id, agent)
       vm = meeting_vm(agent)

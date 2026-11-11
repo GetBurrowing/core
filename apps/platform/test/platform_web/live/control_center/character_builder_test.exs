@@ -179,7 +179,7 @@ defmodule PlatformWeb.ControlCenter.CharacterBuilderTest do
                "Its name, AI pill, avatar ring and message rail all wear it."
              )
 
-      assert count(view, ".ba-swatches label") == 10
+      assert count(view, ".ba-swatches label") == 16
 
       for c <- ColorPalette.all() do
         assert has_element?(view, ~s{.ba-swatches label[data-agent-slot="#{c.id}"]}, c.label)
@@ -188,7 +188,7 @@ defmodule PlatformWeb.ControlCenter.CharacterBuilderTest do
       end
 
       assert attr(view, ".ba-swatches input[checked]", "value") == ["orange"]
-      assert has_element?(view, ".ba-sub", "Ten slots, same as the platform's agent palette.")
+      assert has_element?(view, ".ba-sub", "Sixteen slots, same as the platform's agent palette.")
     end
 
     test "colour: the small label names the first agent wearing a slot", %{conn: conn} do

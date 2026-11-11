@@ -53,7 +53,13 @@ const ALL = [
   "high-contrast:light",
   "high-contrast:dark",
 ];
+// The masters' ten slots. The under-glass sweep paints these as its agent
+// underlays (under_glass_contrast_guard_test.exs's @underlays); the tokens
+// sweep paints every ColorPalette slot, these plus APPENDED_SLOTS.
 const SLOTS = ["teal", "blue", "purple", "rose", "amber", "green", "orange", "indigo", "brick", "lime"];
+// Appended 2026-11-11 (no theme.js master).
+const APPENDED_SLOTS = ["magenta", "violet", "jade", "mustard", "slate", "cocoa"];
+const TOKEN_SLOTS = [...SLOTS, ...APPENDED_SLOTS];
 const UNDERLAYS = [
   ["black", "#000"],
   ["white", "#fff"],
@@ -340,7 +346,7 @@ async function tokens(page) {
   await page.resize(W, H);
   const rows = [];
   const boxes = (prefix) =>
-    SLOTS.map(
+    TOKEN_SLOTS.map(
       (s) =>
         `<div style="display:flex;gap:4px;margin:2px">` +
         `<span data-k="${prefix}small|${s}" style="display:block;width:8px;height:8px;background:var(--ag-${s}-tint)"></span>` +
@@ -364,7 +370,7 @@ async function tokens(page) {
     const px = { ...root, ...nested };
 
     const ground = px["|root_ground"];
-    for (const s of SLOTS) {
+    for (const s of TOKEN_SLOTS) {
       for (const path of ["block_nested", "block_root", "small_nested", "small_root"]) {
         const [size, where] = path.split("_");
         rows.push([v.preset, v.mode, s, "tint", px[`|root_ink|${s}`], ground, m[1], path, px[`|${where}_${size}|${s}`]]);

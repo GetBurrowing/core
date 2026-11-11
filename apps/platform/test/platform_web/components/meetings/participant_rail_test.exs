@@ -2340,7 +2340,7 @@ defmodule PlatformWeb.Components.Meetings.ParticipantRailTest do
         "a-teal" => agent_struct("a-teal", "teal"),
         "a-rose" => agent_struct("a-rose", "rose"),
         "a-nil" => agent_struct("a-nil", nil),
-        "a-odd" => agent_struct("a-odd", "magenta")
+        "a-odd" => agent_struct("a-odd", "chartreuse")
       }
 
       doc = agents |> slot_rail(by_id) |> Floki.parse_fragment!()
