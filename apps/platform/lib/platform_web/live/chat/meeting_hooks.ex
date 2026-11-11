@@ -470,7 +470,8 @@ defmodule PlatformWeb.ChatLive.MeetingHooks do
   Returns the new socket.
 
   Goes through the per-socket write throttle (see "Write throttle" below), so
-  every explicit join shares one window with `meeting_rejoin_token`. The
+  every explicit join shares one window with `meeting_rejoin_token`. That
+  throttle is a backstop for a runaway client, not a per-user limit. The
   remount restore (`maybe_restore_on_reconnect/2` -> `do_join/1`) is exempt: it
   runs once per mount against a fresh, empty window, so a check there could
   never fire. A throttled
@@ -1066,11 +1067,15 @@ defmodule PlatformWeb.ChatLive.MeetingHooks do
   # activation) and broadcasts. A sliding window per socket bounds how often
   # one LiveView can do that.
   #
-  # What it does and does not claim. The window lives in a socket assign, so:
+  # What it does and does not claim. It is a BACKSTOP FOR A RUNAWAY CLIENT
+  # (a stuck retry loop, a held key), not a limit on a member who wants to
+  # cause writes. The window lives in a socket assign, so:
   #   * it is per LiveView process, not per user: a second tab or a remount
   #     starts a fresh window, and a user with N sockets gets N windows;
-  #   * it bounds writes per process, which is the abuse a hammering client
-  #     can do from one connection; it is not an account-level rate limit.
+  #   * the remount restore (below) writes and broadcasts with no slot, and
+  #     it is triggered by a connect parameter the client controls, so a
+  #     client that reconnects on purpose is not bounded by this at all.
+  # A per-user cap would need state outside the socket; that is its own PR.
   # Rejoin and join share ONE window: they are the same write, and a separate
   # window for each would let a caller double the budget by alternating.
   #
@@ -1094,9 +1099,10 @@ defmodule PlatformWeb.ChatLive.MeetingHooks do
   # button ignores clicks while an attempt is in flight, so it adds no
   # concurrency. 120 is three times that cadence; the window start is
   # exclusive, so an exactly-at-cadence client would sit AT the limit with a
-  # limit of 40, which is why there is margin. A person would have to press
-  # Rejoin twice a second for a full minute to reach it. `join/1` is a
-  # button press, a handful per minute at the extreme.
+  # limit of 40, which is why there is margin. The client's real ceiling is
+  # that 40 a minute: Rejoin is ignored while an attempt is in flight and
+  # each attempt takes at least REJOIN_DELAY_MS. `join/1` is a button press,
+  # a handful per minute at the extreme.
   @write_throttle_window_ms 60_000
   @write_throttle_limit 120
 
