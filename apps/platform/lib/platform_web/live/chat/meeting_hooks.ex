@@ -1044,18 +1044,19 @@ defmodule PlatformWeb.ChatLive.MeetingHooks do
   @spec write_throttle(Phoenix.LiveView.Socket.t(), integer()) ::
           {:ok, Phoenix.LiveView.Socket.t()} | {:error, :throttled}
   def write_throttle(socket, now \\ System.monotonic_time(:millisecond)) do
-    recent =
-      Enum.filter(
-        socket.assigns[:write_requests] || [],
-        &(&1 > now - @write_throttle_window_ms)
-      )
-
-    if length(recent) >= @write_throttle_limit do
+    if write_window_full?(socket, now) do
       {:error, :throttled}
     else
-      {:ok, assign(socket, :write_requests, [now | recent])}
+      {:ok, assign(socket, :write_requests, [now | recent_writes(socket, now)])}
     end
   end
+
+  defp write_window_full?(socket, now \\ System.monotonic_time(:millisecond)),
+    do: length(recent_writes(socket, now)) >= @write_throttle_limit
+
+  defp recent_writes(socket, now),
+    do:
+      Enum.filter(socket.assigns[:write_requests] || [], &(&1 > now - @write_throttle_window_ms))
 
   # Gate, then window, then write. `gate` is read-only and returns
   # `{:ok, ctx}` or `{:error, reason}`; `mint` does the writes.
@@ -1068,24 +1069,43 @@ defmodule PlatformWeb.ChatLive.MeetingHooks do
     end
   end
 
-  # The join's gate is `Meetings.join_permitted?/2` (the same predicate
-  # `join_for_user/3` enforces). Anything the join would refuse, or lacks the
-  # inputs for, goes straight to `do_join/1`, which refuses without writing and
-  # without a slot.
+  # A join has no separable read-only gate: `join_for_user/3` runs the gate
+  # and the writes together, and calling `Meetings.join_permitted?/2` first on
+  # every join would double the external user's invite queries
+  # (`MeetingHooksJoinGateTest` pins one). So the order is by window state:
+  #
+  #   * window not full: join as before; `do_join/1` hands back the socket
+  #     byte-identical when the gate refuses (or it lacks inputs), and only a
+  #     join that changed the socket, i.e. one that wrote, takes a slot;
+  #   * window full: ask the predicate. A caller the join would refuse still
+  #     goes to `do_join/1` and gets its refusal; a permitted one is throttled,
+  #     nothing is written.
   defp throttled_join(socket) do
-    with %{id: space_id} <- socket.assigns[:active_space],
-         user_id when is_binary(user_id) <- socket.assigns[:user_id],
-         true <- Meetings.join_permitted?(space_id, user_id) do
-      case write_throttle(socket) do
-        {:ok, socket} ->
-          do_join(socket)
-
-        {:error, :throttled} ->
-          Logger.warning("[MeetingHooks] meeting_join throttled for user #{user_id}")
-          socket
+    if write_window_full?(socket) do
+      if join_permitted_now?(socket) do
+        Logger.warning("[MeetingHooks] meeting_join throttled for user #{socket.assigns.user_id}")
+        socket
+      else
+        do_join(socket)
       end
     else
-      _ -> do_join(socket)
+      joined = do_join(socket)
+
+      if joined == socket do
+        joined
+      else
+        {:ok, recorded} = write_throttle(joined)
+        recorded
+      end
+    end
+  end
+
+  defp join_permitted_now?(socket) do
+    with %{id: space_id} <- socket.assigns[:active_space],
+         user_id when is_binary(user_id) <- socket.assigns[:user_id] do
+      Meetings.join_permitted?(space_id, user_id)
+    else
+      _ -> false
     end
   end
 
