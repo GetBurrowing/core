@@ -12,6 +12,17 @@ defmodule Platform.Games do
   alias Platform.Chat.Attachment
   alias Platform.Repo
 
+  def list_published do
+    stored = Repo.all(Platform.Games.Publication)
+    slugs = MapSet.new(stored, & &1.slug)
+    configured = List.wrap(Application.get_env(:platform, :game_publications, []))
+
+    (Enum.map(stored, & &1.manifest) ++
+       Enum.reject(configured, &MapSet.member?(slugs, &1["slug"])))
+    |> Enum.filter(&(valid?(&1) and &1["published"] == true))
+    |> Enum.sort_by(& &1["title"])
+  end
+
   def get(slug) when is_binary(slug) do
     stored = Repo.get(Platform.Games.Publication, slug)
 

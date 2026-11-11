@@ -56,7 +56,7 @@ defmodule PlatformWeb.ManifestController do
     %{
       name: branding.app_name,
       short_name: branding.app_name,
-      start_url: "/chat",
+      start_url: if(branding.experience == "gaming", do: "/play", else: "/chat"),
       display: "standalone",
       background_color: branding.background_color,
       theme_color: branding.theme_color,

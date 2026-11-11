@@ -327,6 +327,14 @@ defmodule PlatformWeb.AuthController do
   # `handover/2`. A closed set read from the signed session,
   # never from a parameter, so this is not an open redirect.
   defp post_login_path(conn, user) do
+    if Platform.Gaming.enabled?() do
+      "/play"
+    else
+      workspace_post_login_path(conn, user)
+    end
+  end
+
+  defp workspace_post_login_path(conn, user) do
     case get_session(conn, :post_login_path) do
       @connect_landing -> @connect_landing
       @starter_landing -> Platform.Agents.Burrow.Starter.handover_landing(user)

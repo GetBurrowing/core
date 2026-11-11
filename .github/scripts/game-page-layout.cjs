@@ -45,6 +45,23 @@ const path = require('node:path')
         await community.setViewportSize({width:390, height:844})
       }
       await community.screenshot({path:path.join(process.env.GAME_PAGE_SCREENSHOTS, mobile ? 'community-phone.png' : 'community-desktop.png'), fullPage:true})
+      for (const state of ['gaming-visitor', 'gaming-owner', 'gaming-empty']) {
+        const gaming = await context.newPage()
+        await gaming.goto(origin + '/game-page-evidence/' + state + '.html')
+        assert.equal(await gaming.locator('#gaming-home').isVisible(), true)
+        assert.notEqual(await gaming.evaluate(() => getComputedStyle(document.body).overflowY), 'hidden', 'gaming catalog cannot scroll')
+        const bottom = gaming.locator('#gaming-home').locator('a').last()
+        if (await bottom.count()) {
+          await bottom.scrollIntoViewIfNeeded()
+          const box = await bottom.boundingBox()
+          assert.ok(box.y >= 0 && box.y + box.height <= (mobile ? 844 : 900) + 1, 'catalog footer action unreachable')
+        }
+        await gaming.evaluate(() => window.scrollTo(0, 0))
+        assert.equal(await gaming.evaluate(() => document.documentElement.scrollWidth <= innerWidth + 1), true, 'gaming home overflow')
+        if (state !== 'gaming-empty') assert.equal(await gaming.locator('#gaming-play').isVisible(), true)
+        if (state === 'gaming-owner') assert.equal(await gaming.locator('#gaming-create').isVisible(), true)
+        await gaming.screenshot({path:path.join(process.env.GAME_PAGE_SCREENSHOTS, state + (mobile ? '-phone.png' : '-desktop.png')), fullPage:true})
+      }
       await context.close()
     }
   } finally { await browser.close() }
