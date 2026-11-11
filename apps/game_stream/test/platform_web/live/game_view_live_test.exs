@@ -384,7 +384,16 @@ defmodule PlatformWeb.GameViewLiveTest do
     end
 
     test "two SessionRecord rows list newest first; runs today counts the last 24h only", ctx do
-      now = DateTime.utc_now()
+      now = ~U[2026-11-11 12:00:00Z]
+      previous_clock = Application.fetch_env(:game_stream, :game_view_utc_now)
+      Application.put_env(:game_stream, :game_view_utc_now, fn -> now end)
+
+      on_exit(fn ->
+        case previous_clock do
+          {:ok, clock} -> Application.put_env(:game_stream, :game_view_utc_now, clock)
+          :error -> Application.delete_env(:game_stream, :game_view_utc_now)
+        end
+      end)
 
       run!(ctx.task, %{
         ended_reason: "Build failed",
@@ -428,18 +437,63 @@ defmodule PlatformWeb.GameViewLiveTest do
         |> LazyHTML.query("[data-role=game-run-small]")
         |> Enum.map(&squish(LazyHTML.text(&1)))
 
-      hhmm = Calendar.strftime(DateTime.add(now, -72, :second), "%H:%M")
-      assert r1 == hhmm <> " · 58fps avg"
-
-      assert r2 == Calendar.strftime(DateTime.add(now, -548, :second), "%H:%M") or
-               r2 == "yesterday"
-
-      assert r3 ==
-               Calendar.strftime(DateTime.add(old_start, 65, :second), "%Y-%m-%d") <>
-                 " · 30fps avg"
+      assert r1 == "11:58 · 58fps avg"
+      assert r2 == "11:50"
+      assert r3 == "2026-11-08 · 30fps avg"
 
       assert texts(child, "[data-role=game-tile-runs] > *") == ["2", "runs today"]
       refute has_element?(child, "[data-role=game-runs-empty]")
+    end
+
+    test "just after UTC midnight, run labels use calendar days and counts use the last 24h",
+         ctx do
+      now = ~U[2026-11-11 00:00:50Z]
+      previous_clock = Application.fetch_env(:game_stream, :game_view_utc_now)
+      Application.put_env(:game_stream, :game_view_utc_now, fn -> now end)
+
+      on_exit(fn ->
+        case previous_clock do
+          {:ok, clock} -> Application.put_env(:game_stream, :game_view_utc_now, clock)
+          :error -> Application.delete_env(:game_stream, :game_view_utc_now)
+        end
+      end)
+
+      # Insert out of order; adjacent previous-day rows straddle the rolling cutoff.
+      for {reason, ended_at, fps_avg} <- [
+            {"Before cutoff", DateTime.add(now, -86_401, :second), nil},
+            {"Stopped", DateTime.add(now, -72, :second), 58.0},
+            {"Older", DateTime.add(now, -2 * 86_400, :second), nil},
+            {"Midnight", ~U[2026-11-11 00:00:00Z], nil},
+            {"At cutoff", DateTime.add(now, -86_400, :second), nil}
+          ] do
+        run!(ctx.task, %{
+          ended_reason: reason,
+          started_at: DateTime.add(ended_at, -30, :second),
+          ended_at: ended_at,
+          fps_avg: fps_avg
+        })
+      end
+
+      {_view, child} = open(ctx, game!(ctx).id)
+      child |> element("#game-tab-insights") |> render_click()
+
+      assert texts(child, "[data-role=game-run-main]") == [
+               "Midnight · 0:30",
+               "Stopped · 0:30",
+               "At cutoff · 0:30",
+               "Before cutoff · 0:30",
+               "Older · 0:30"
+             ]
+
+      [midnight, previous_day, at_cutoff, before_cutoff, older] =
+        texts(child, "[data-role=game-run-small]")
+
+      assert midnight == "00:00"
+      assert previous_day == "yesterday · 58fps avg"
+      assert at_cutoff == "yesterday"
+      assert before_cutoff == "yesterday"
+      assert older == "2026-11-09"
+      assert texts(child, "[data-role=game-tile-runs] > *") == ["3", "runs today"]
     end
 
     test "recent_runs/2 lists at most 10 by default, newest first", ctx do
