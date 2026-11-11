@@ -494,7 +494,7 @@ defmodule PlatformWeb.ChatLive.MeetingHooks do
     # for wherever they are now would seat and activate the wrong room.
     with {:ok, space_id, same_call?} <- held_space(socket, params),
          :ok <- member_in_call_or_gate(socket, space_id, same_call?),
-         user_id when is_binary(user_id) <- socket.assigns[:user_id] || {:error, :not_in_meeting},
+         user_id = socket.assigns[:user_id],
          {:ok, %{token: token, room: room}} <-
            Meetings.join_for_user(space_id, user_id, resolve_display_name(socket)) do
       {:ok, %{token: token, url: Meetings.livekit_url(), room_name: room.livekit_room_name}}
@@ -552,10 +552,29 @@ defmodule PlatformWeb.ChatLive.MeetingHooks do
     cond do
       not is_binary(user_id) -> {:error, :not_in_meeting}
       not Meetings.join_permitted?(space_id, user_id) -> {:error, :join_not_permitted}
-      not Chat.space_visible_to_viewer?(space_id, user_id) -> {:error, :join_not_permitted}
+      not space_in_mount_fence?(socket, space_id) -> {:error, :join_not_permitted}
       not still_seated?(space_id, user_id) -> {:error, :not_a_participant}
       same_call? and a[:in_meeting] == true -> :ok
       true -> {:error, :not_in_meeting}
+    end
+  end
+
+  # The fence the mount applies to the rail and the space resolution, called
+  # as the mount calls it (`ReadScope.within_org_fence/2` ->
+  # `Access.fenced_ids(scope, :space)`): the viewer's orgs plus every space
+  # they hold a participant row in, and `:unfenced` for a guest or a user with
+  # no memberships. The scope is the socket's `:access_scope`, else built from
+  # the user as `ChatLive.access_scope/2` does.
+  defp space_in_mount_fence?(socket, space_id) do
+    scope =
+      case socket.assigns[:access_scope] do
+        %Platform.Access.Scope{} = scope -> scope
+        _ -> Platform.Access.scope_for(Accounts.get_user(socket.assigns[:user_id]))
+      end
+
+    case Platform.Access.fenced_ids(scope, :space) do
+      :unfenced -> true
+      ids -> space_id in ids
     end
   end
 

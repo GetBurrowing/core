@@ -650,28 +650,130 @@ defmodule PlatformWeb.ChatLive.MeetingHooksJoinGateTest do
       refute_received {:blocked, _}
     end
 
-    test "a user seated in a space of an org they no longer belong to is DENIED", ctx do
-      space = Chat.get_space(ctx.space.id)
-      former = create_user!("former")
-
+    # The fence is the rule the mount applies: `Access.fenced_ids(scope, :space)`
+    # (the user's orgs PLUS every space they hold a participant row in), and
+    # `:unfenced` for a guest or a user with no memberships. These tests pin
+    # that a seated user is never denied by an org fence the mount would not
+    # apply to them.
+    defp member!(user, org) do
       %OrgMembership{}
-      |> OrgMembership.changeset(%{user_id: former.id, org_id: space.org_id, role: "member"})
+      |> OrgMembership.changeset(%{user_id: user.id, org_id: org.id, role: "member"})
       |> Repo.insert!()
+    end
 
-      seat_in_space!(space, former)
+    defp in_call(socket) do
+      socket
+      |> Phoenix.Component.assign(:in_meeting, true)
+      |> Phoenix.Component.assign(:call_space_id, socket.assigns.active_space.id)
+    end
 
-      # control: still a member of the space's org -> gate passes, not in call
+    test "A: a sub-org member seated in a space with no org is not denied", ctx do
+      {_meeting, space} = meeting_with_space!()
+
+      {1, _} =
+        Repo.update_all(from(s in Platform.Chat.Space, where: s.id == ^space.id),
+          set: [org_id: nil]
+        )
+
+      space = Chat.get_space(space.id)
+      assert space.org_id == nil
+      user = create_user!("suborg-nil")
+      member!(user, ctx.org)
+      seat_in_space!(space, user)
+
       assert {:error, :not_in_meeting} =
-               MeetingHooks.rejoin_token(build_socket(former.id, space), held(space))
+               MeetingHooks.rejoin_token(build_socket(user.id, space), held(space))
 
+      assert {:ok, %{token: _}} =
+               MeetingHooks.rejoin_token(in_call(build_socket(user.id, space)), held(space))
+    end
+
+    test "A: a sub-org member seated in a space of another org is not denied", ctx do
+      {_meeting, space} = meeting_with_space!(tenant_org!())
+      refute space.org_id == ctx.org.id
+      user = create_user!("suborg-other")
+      member!(user, ctx.org)
+      seat_in_space!(space, user)
+
+      assert {:error, :not_in_meeting} =
+               MeetingHooks.rejoin_token(build_socket(user.id, space), held(space))
+
+      assert {:ok, %{token: _}} =
+               MeetingHooks.rejoin_token(in_call(build_socket(user.id, space)), held(space))
+    end
+
+    test "B: a seated user with no membership rows is not denied", ctx do
+      user = create_user!("nomember")
+      seat_in_space!(ctx.space, user)
+
+      assert {:error, :not_in_meeting} =
+               MeetingHooks.rejoin_token(build_socket(user.id, ctx.space), held(ctx.space))
+
+      assert {:ok, %{token: _}} =
+               MeetingHooks.rejoin_token(
+                 in_call(build_socket(user.id, ctx.space)),
+                 held(ctx.space)
+               )
+    end
+
+    test "B: a former member (memberships gone) seated in the space follows the mount rule: not denied",
+         ctx do
+      former = create_user!("former")
+      member!(former, ctx.org)
+      seat_in_space!(ctx.space, former)
       Repo.delete_all(from(m in OrgMembership, where: m.user_id == ^former.id))
 
-      assert {:error, :join_not_permitted} =
-               MeetingHooks.rejoin_token(build_socket(former.id, space), held(space))
+      assert {:error, :not_in_meeting} =
+               MeetingHooks.rejoin_token(build_socket(former.id, ctx.space), held(ctx.space))
 
-      # and an in-call socket gets no fresh token either
-      in_call = build_socket(former.id, space) |> Phoenix.Component.assign(:in_meeting, true)
-      assert {:error, :join_not_permitted} = MeetingHooks.rejoin_token(in_call, held(space))
+      assert {:ok, %{token: _}} =
+               MeetingHooks.rejoin_token(
+                 in_call(build_socket(former.id, ctx.space)),
+                 held(ctx.space)
+               )
+    end
+
+    test "C: an invited, seated external user whose space is outside their membership org is not denied",
+         ctx do
+      {meeting, space} = meeting_with_space!(tenant_org!())
+      seat_in_space!(space, ctx.external)
+      invite!(meeting, ctx.external)
+
+      assert {:error, :not_in_meeting} =
+               MeetingHooks.rejoin_token(build_socket(ctx.external.id, space), held(space))
+
+      assert {:ok, %{token: _}} =
+               MeetingHooks.rejoin_token(
+                 in_call(build_socket(ctx.external.id, space)),
+                 held(space)
+               )
+    end
+
+    test "a member of org X who is NOT seated in a space of org Y is DENIED by the fence", ctx do
+      {_meeting, space_y} = meeting_with_space!(tenant_org!())
+      outsider = create_user!("outsider")
+      member!(outsider, ctx.org)
+
+      assert {:error, :join_not_permitted} =
+               MeetingHooks.rejoin_token(build_socket(outsider.id, space_y), held(space_y))
+
+      assert {:error, :join_not_permitted} =
+               MeetingHooks.rejoin_token(
+                 in_call(build_socket(outsider.id, space_y)),
+                 held(space_y)
+               )
+    end
+
+    test "a root-org member follows the root rule: the fence admits a space of any org", ctx do
+      root_member = create_user!("root")
+      member!(root_member, Tenancy.get_org_by_slug!("acme"))
+
+      # past the fence; unseated, so the seat gate (not the fence) refuses
+      assert {:error, :not_a_participant} =
+               MeetingHooks.rejoin_token(
+                 build_socket(root_member.id, ctx.space),
+                 held(ctx.space)
+               )
     end
   end
 
