@@ -162,6 +162,7 @@ function makeCtx(scrollEl, { guarded = true } = {}) {
     _reportDistance() {
       this.reported += 1;
     },
+    _keepThreadEntryVisible: ScrollToBottom._keepThreadEntryVisible,
     _onViewportResize: ScrollToBottom._onViewportResize,
     // The realign-restore collaborator (task 01a084bf stage 5, second round).
     // `_onViewportResize` pays back an offset that was held because the pane had
@@ -293,6 +294,7 @@ test("the FIRST arrival on the Chat tab still lands on the newest message", () =
     _reportDistance() {
       this.reported += 1;
     },
+    _keepThreadEntryVisible: ScrollToBottom._keepThreadEntryVisible,
     _onViewportResize: ScrollToBottom._onViewportResize,
     _pendingRealignTop: null,
     _applyPendingRealign: ScrollToBottom._applyPendingRealign,
@@ -372,6 +374,7 @@ test("a message arriving while the pane is box-less does not poison the remember
     _lastClientHeight: GATE.clientHeight,
     _lastScrollHeight: unguarded._lastScrollHeight, // the poisoned 0
     _reportDistance() {},
+    _keepThreadEntryVisible: ScrollToBottom._keepThreadEntryVisible,
     _onViewportResize: ScrollToBottom._onViewportResize,
     _pendingRealignTop: null,
     _applyPendingRealign: ScrollToBottom._applyPendingRealign,

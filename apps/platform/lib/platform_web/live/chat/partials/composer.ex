@@ -712,7 +712,7 @@ defmodule PlatformWeb.ChatLive.Partials.Composer do
         </div>
 
         <%!-- Pill-shaped compose bar --%>
-        <div class="compose-pill-bar">
+        <div class="compose-pill-bar" data-role="compose-mention-anchor">
           <%!-- The staged tray (rung 11): first in the glass field, above
                the caption line, absent when nothing is staged. --%>
           <%!-- The tray comes and goes (a pasted image stages while the

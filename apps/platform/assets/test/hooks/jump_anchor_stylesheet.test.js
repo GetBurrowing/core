@@ -218,7 +218,7 @@ describe("app.css — the jump-to-latest control is unconditional", () => {
     expect(hover.some((r) => r.selector.includes(":focus-visible"))).toBe(true);
   });
 
-  it("the shared 1023.98px breakpoint survives, and governs only the bottom nav and its clearance", () => {
+  it("the shared 1023.98px breakpoint governs phone composer, mentions and bottom-nav clearance", () => {
     // NOT "zero occurrences of 1023.98". It is the shared mobile breakpoint and
     // deleting it would break an unrelated live rule. What matters is that no
     // occurrence of it reaches a `.chat-jump` selector — which the media-query
@@ -245,6 +245,11 @@ describe("app.css — the jump-to-latest control is unconditional", () => {
     // rule. Send feel "4g" adds the phone disc's flash and ring inset.
     // Still no `.chat-jump` selector.
     expect(gated.map((r) => r.selector)).toEqual([
+      // Mobile mention anchoring/capping shares this breakpoint; the jump
+      // chip still has no breakpoint-specific selector.
+      ".thread-field-box .mention-list",
+      ".message-row-inner:has(.thread-input:focus)",
+      "#compose-form > .mention-list:not(.mention-list--pick) .mention-list-box",
       ".compose-input-area",
       ":root .compose-input-area .compose-pill-bar",
       ".compose-input-area .compose-pill-bar:not(:focus-within)",

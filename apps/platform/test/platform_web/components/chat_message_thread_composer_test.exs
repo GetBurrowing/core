@@ -226,4 +226,12 @@ defmodule PlatformWeb.Components.ChatMessageThreadComposerTest do
     [box] = Regex.run(~r/\n\.thread-field-box\s*\{([^}]*)\}/, css, capture: :all_but_first)
     assert box =~ "position: relative"
   end
+
+  test "mobile thread suggestions escape the timeline clip and have a measured scroll cap" do
+    css = File.read!(@css_path)
+    assert css =~ "top: var(--thread-mention-top)"
+    assert css =~ "left: var(--thread-mention-left)"
+    assert css =~ "width: var(--thread-mention-width)"
+    assert css =~ "max-height: min(212px, var(--thread-mention-max-h, 212px))"
+  end
 end
