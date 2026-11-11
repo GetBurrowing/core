@@ -25,7 +25,10 @@ async function geometry(page, kind) {
     const actualPanel = panel || wrapper?.closest('.mention-list-panel')
     const rect = el => { const r = el.getBoundingClientRect(); return {top:r.top,bottom:r.bottom,left:r.left,right:r.right,height:r.height} }
     const vv = window.visualViewport
+    const p = actualPanel.getBoundingClientRect()
+    const hit = y => document.elementsFromPoint((p.left+p.right)/2,y).some(el => el===actualPanel || actualPanel.contains(el))
     return {input:rect(entry), panel:rect(actualPanel), focused:document.activeElement===entry,
+      panelPainted:hit(p.top+2) && hit(p.bottom-2),
       viewport:{top:vv.offsetTop,bottom:vv.offsetTop+vv.height,left:vv.offsetLeft,right:vv.offsetLeft+vv.width},
       scrollHeight:document.querySelector(list).scrollHeight, listHeight:document.querySelector(list).clientHeight}
   }, selectors[kind])
@@ -37,6 +40,7 @@ function assertGeometry(g) {
   assert(g.panel.top >= g.viewport.top - 1, 'panel top inside visualViewport')
   assert(g.panel.bottom <= g.viewport.bottom + 1, 'panel bottom inside visualViewport')
   assert(g.panel.left >= g.viewport.left - 1 && g.panel.right <= g.viewport.right + 1, 'panel horizontally visible')
+  assert(g.panelPainted, 'panel top and bottom are hit-testable, not ancestor-clipped or covered')
   assert(g.input.top >= g.viewport.top - 1 && g.input.bottom <= g.viewport.bottom + 1, 'input inside visualViewport')
   assert(g.focused, 'input retains focus after LiveView patch')
 }
