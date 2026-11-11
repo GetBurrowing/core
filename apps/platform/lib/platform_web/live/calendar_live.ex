@@ -1053,22 +1053,26 @@ defmodule PlatformWeb.CalendarLive do
   defp open_meeting_link(socket, id) do
     %{current_user_record: user, zone: zone} = socket.assigns
 
+    # The grid moves only when the viewer's OWN Calendar lists the record
+    # in that week (M21): the by-id read above is not the gate on its own,
+    # or a meeting the viewer's Calendar never shows would still hand them
+    # its week. Not listed → the unchanged socket, exactly like a stale id.
     with true <- Platform.UUID.valid?(id),
          {:ok, meeting} <- Platform.Meetings.get_meeting_for_user(user, id),
-         %DateTime{} = at <- meeting.scheduled_start_at || meeting.started_at do
-      socket =
-        socket |> put_day(at |> DateTime.shift_zone!(zone) |> DateTime.to_date()) |> reload()
-
-      visible = socket.assigns.visible_entries
-
-      entry =
-        Enum.find(visible, &(&1.kind == :meeting and &1.id == id)) ||
-          Enum.find(visible, &(&1.kind == :event and &1[:meeting_id] == id))
-
-      if entry, do: assign(socket, :selected, detail(socket.assigns, entry)), else: socket
+         %DateTime{} = at <- meeting.scheduled_start_at || meeting.started_at,
+         moved = socket |> put_day(at |> DateTime.shift_zone!(zone) |> DateTime.to_date()),
+         moved = reload(moved),
+         listed when not is_nil(listed) <- meeting_entry(moved.assigns.entries, id) do
+      entry = meeting_entry(moved.assigns.visible_entries, id)
+      if entry, do: assign(moved, :selected, detail(moved.assigns, entry)), else: moved
     else
       _ -> socket
     end
+  end
+
+  defp meeting_entry(entries, id) do
+    Enum.find(entries, &(&1.kind == :meeting and &1.id == id)) ||
+      Enum.find(entries, &(&1.kind == :event and &1[:meeting_id] == id))
   end
 
   # `?past=1` opens Past events; `past_page` pages it. Built from the

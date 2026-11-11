@@ -276,6 +276,42 @@ defmodule PlatformWeb.CalendarConsolidationLiveTest do
       refute render(view) =~ "Design review"
     end
 
+    # M21: the id alone must not move the grid. A meeting five weeks out
+    # (so it cannot share today's week) that the viewer cannot see leaves
+    # them on today's week, with no details and no title; the invitee, as a
+    # positive control, is taken to that week. The two-days-out fixture
+    # above cannot tell a moved week from an unmoved one.
+    test "a meeting the viewer cannot see never moves the week", ctx do
+      today = DateTime.utc_now() |> DateTime.shift_zone!(@zone) |> DateTime.to_date()
+      far = Date.add(today, 35)
+      start = DateTime.new!(far, ~T[15:00:00], @zone)
+      scope = Scope.for_user(ctx.owner)
+
+      {:ok, %{meeting: meeting}} =
+        Authoring.save(scope, Authoring.new_draft(scope), %{
+          "title" => "Hidden offsite",
+          "starts_at" => DateTime.to_iso8601(start),
+          "ends_at" => DateTime.to_iso8601(DateTime.add(start, 3600)),
+          "time_zone" => @zone,
+          "project_id" => ctx.project.id,
+          "add_invitees" => [%{"kind" => "user", "user_id" => ctx.invitee.id}]
+        })
+
+      far_cell = "[data-date='#{Date.to_iso8601(far)}']"
+      today_cell = "[data-date='#{Date.to_iso8601(today)}']"
+
+      view = calendar(ctx.stranger, "?meeting=#{meeting.id}")
+      refute has_element?(view, @details)
+      refute has_element?(view, far_cell)
+      assert has_element?(view, today_cell)
+      refute render(view) =~ "Hidden offsite"
+
+      # The invitee, who does see it, is taken to that week.
+      view = calendar(ctx.invitee, "?meeting=#{meeting.id}")
+      assert has_element?(view, far_cell)
+      assert has_element?(view, @details, "Hidden offsite")
+    end
+
     test "a call that is off says so and offers no room, to the owner and the invitee", ctx do
       %{meeting: meeting} = linked!(ctx, %{"call_enabled" => "false"})
       refute meeting.call_enabled
