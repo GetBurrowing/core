@@ -473,6 +473,183 @@ defmodule PlatformWeb.ChatLive.MeetingHooks do
   def join(socket), do: do_join(socket)
 
   @doc """
+  A fresh LiveKit token for a signed-in member who is already in the call,
+  for the client's rejoin after a network drop (`"meeting_rejoin_token"`).
+
+  It is the SAME gate and the same room/identity as `join/1`:
+  `Meetings.join_for_user/3` re-runs the join gate (an external user needs a
+  live invite, so a revoked one is refused) and mints for `user:<id>` in the
+  space's room. On top of that it refuses a socket that is not in the call,
+  and a member whose chat-space row is gone (removed): `join_for_user/3`
+  would quietly re-seat them, which a rejoin must never do.
+
+  Returns `{:ok, %{token: _, url: _}}` or `{:error, reason}`.
+  """
+  @spec rejoin_token(Phoenix.LiveView.Socket.t(), map()) ::
+          {:ok, %{token: String.t(), url: String.t() | nil, room_name: String.t() | nil}}
+          | {:error, atom()}
+  def rejoin_token(socket, params \\ %{}) do
+    # The space the call was JOINED in, never `:active_space`: that moves
+    # when the user navigates inside the same LiveView, and a token minted
+    # for wherever they are now would seat and activate the wrong room.
+    with {:ok, space_id, same_call?} <- held_space(socket, params),
+         :ok <- member_in_call_or_gate(socket, space_id, same_call?),
+         # Safe un-guarded: `member_in_call_or_gate/3` above refuses unless
+         # `is_binary(user_id)`, so this is always a binary here.
+         user_id = socket.assigns[:user_id],
+         {:ok, %{token: token, room: room}} <-
+           Meetings.join_for_user(space_id, user_id, resolve_display_name(socket)) do
+      {:ok, %{token: token, url: Meetings.livekit_url(), room_name: room.livekit_room_name}}
+    else
+      {:error, reason} -> {:error, reason}
+      _ -> {:error, :rejoin_refused}
+    end
+  end
+
+  # The space of the call the client holds, and whether this socket is in THAT
+  # call. While the socket is in a call, `:call_space_id` (server-recorded by
+  # `do_join/1`) names it. A room name the client sends that differs from it is
+  # NOT evidence of a revoke (a remount's restore join can land in the URL's
+  # space while the client still holds another room), so the held room is
+  # mapped back to its space and gated on its own merits; the socket is then
+  # not in that call (`same_call?` false) and nothing is minted for either
+  # space. After a remount `:call_space_id` is gone and `:active_space` is the
+  # URL's space, which says nothing about the call, so the held room name is
+  # mapped by the server. The client never supplies a space id, and a name
+  # that maps to no space is refused.
+  defp held_space(socket, params) do
+    room_name = if is_map(params), do: params["room_name"], else: nil
+
+    case socket.assigns[:call_space_id] do
+      space_id when is_binary(space_id) ->
+        if is_nil(room_name) or room_name == Meetings.room_name_for_space(space_id),
+          do: {:ok, space_id, true},
+          else: map_held_room(room_name)
+
+      _ when not is_nil(room_name) ->
+        map_held_room(room_name)
+
+      _ ->
+        {:error, :not_in_meeting}
+    end
+  end
+
+  defp map_held_room(room_name) do
+    case Meetings.space_id_for_room_name(room_name) do
+      nil -> {:error, :unknown_room}
+      space_id -> {:ok, space_id, false}
+    end
+  end
+
+  # The gate every rejoin passes, in or out of the call: the same join gate
+  # the join uses (an external user needs a live invite), the org fence the
+  # mount's space resolution uses, and a surviving chat-space row (a removed
+  # member must not be re-seated by `join_for_user/3`). Only then does being
+  # in THIS call decide between a token (`:ok`) and `:not_in_meeting`, which
+  # is a benign remount, not a revoke.
+  defp member_in_call_or_gate(socket, space_id, same_call?) do
+    a = socket.assigns
+    user_id = a[:user_id]
+
+    # A user row that no longer exists would build a bare scope, which the
+    # fence reads as `:unfenced`. Refuse before any fence. `Accounts.get_user/1`
+    # does not filter `archived_at`, and archiving does not disconnect an open
+    # LiveView, so an archived user is refused here too.
+    with true <- is_binary(user_id) || {:error, :not_in_meeting},
+         %{} = user <- Accounts.get_user(user_id) || {:error, :join_not_permitted},
+         true <- is_nil(user.archived_at) || {:error, :join_not_permitted} do
+      cond do
+        not Meetings.join_permitted?(space_id, user_id) -> {:error, :join_not_permitted}
+        not space_in_mount_fence?(user, space_id) -> {:error, :join_not_permitted}
+        not still_seated?(space_id, user_id) -> {:error, :not_a_participant}
+        same_call? and a[:in_meeting] == true -> :ok
+        true -> {:error, :not_in_meeting}
+      end
+    end
+  end
+
+  # The fence the mount applies (`Access.fenced_ids(scope, :space)`), asked of
+  # the one space (`Access.space_in_fence?/2`). The scope is built fresh from
+  # the database on every rejoin, never the socket's `:access_scope`: that is
+  # a mount-time snapshot refreshed only by grant/role changes, so an org
+  # removal or switch mid-call would not show in it.
+  defp space_in_mount_fence?(user, space_id),
+    do: Platform.Access.space_in_fence?(Platform.Access.scope_for(user), space_id)
+
+  defp still_seated?(space_id, user_id) do
+    space_id
+    |> Platform.Chat.list_participants(participant_type: "user")
+    |> Enum.any?(&(&1.participant_id == user_id))
+  end
+
+  @doc """
+  The guest counterpart of `rejoin_token/2`. The guest keeps the identity
+  (`guest:...`) and display name the original join minted, so they remain a
+  guest in the same room. The invite link is re-checked first
+  (`Meetings.resolve_guest_invite/2`), so a link revoked or lapsed mid-call
+  gets no new token.
+  """
+  @spec guest_rejoin_token(Phoenix.LiveView.Socket.t()) ::
+          {:ok, %{token: String.t(), url: String.t() | nil, room_name: String.t() | nil}}
+          | {:error, atom()}
+  def guest_rejoin_token(socket) do
+    a = socket.assigns
+
+    with slug when is_binary(slug) <- a[:meeting_slug] || {:error, :not_in_meeting},
+         invite when is_binary(invite) <- a[:guest_invite_token] || {:error, :not_in_meeting},
+         # The invite is re-checked whether or not the socket is still in the
+         # call: a remount (guest back in name entry) must not hide a revoke.
+         {:ok, %{meeting: meeting}} <- Meetings.resolve_guest_invite(slug, invite),
+         true <- a[:in_meeting] == true || {:error, :not_in_meeting},
+         {:ok, bundle} <-
+           Meetings.guest_rejoin_token(meeting, a[:identity] || "", a[:display_name] || "") do
+      {:ok, %{token: bundle.token, url: bundle.livekit_url, room_name: bundle.room_name}}
+    else
+      {:error, reason} -> {:error, reason}
+      _ -> {:error, :rejoin_refused}
+    end
+  end
+
+  # Reasons that mean "this person is not allowed back in". Only these reach
+  # the client as `denied`, and the client then gives up. Every other failure
+  # (not mounted in the call after a remount, LiveKit not configured, room
+  # setup failing) is `unavailable`: the held token may still be good, so the
+  # client falls back to it.
+  @rejoin_denials [
+    :join_not_permitted,
+    :not_a_participant,
+    :unknown_room,
+    :revoked,
+    :expired,
+    :invalid
+  ]
+
+  @doc false
+  # The reply carries a CLASS, never the reason: the join gate is
+  # deliberately indistinguishable (see `Meetings.join_for_user/3`), so a
+  # revoked external user must not learn which check refused them. The
+  # reason goes to the server log only.
+  @spec rejoin_reply({:ok, map()} | {:error, term()}) :: map()
+  def rejoin_reply({:ok, %{token: _, url: _} = reply}), do: reply
+
+  def rejoin_reply({:error, reason}) when reason in @rejoin_denials do
+    Logger.info("[MeetingHooks] rejoin token denied: #{inspect(reason)}")
+    %{error: "denied"}
+  end
+
+  def rejoin_reply({:error, reason}) do
+    Logger.warning("[MeetingHooks] rejoin token unavailable: #{loggable_reason(reason)}")
+    %{error: "unavailable"}
+  end
+
+  # An atom is a code; anything else (an Ecto changeset with user ids and
+  # names, a Req/exception struct that may carry request headers) is logged
+  # by module name only.
+  defp loggable_reason(reason) when is_atom(reason), do: inspect(reason)
+  defp loggable_reason(%module{}), do: inspect(module)
+  defp loggable_reason(_other), do: "non-atom reason"
+
+  @doc """
   Reset every meeting-local assign — media state AND the call shell the
   quickmeet hydrated at join (task 01a05b14 stage 6).
 
@@ -782,6 +959,10 @@ defmodule PlatformWeb.ChatLive.MeetingHooks do
     {:halt, do_join(socket)}
   end
 
+  defp handle_event("meeting_rejoin_token", params, socket) do
+    {:halt, rejoin_reply(rejoin_token(socket, params)), socket}
+  end
+
   defp handle_event("meeting_leave", _params, socket) do
     stamp_local_left(socket)
     MeetingState.broadcast_left(socket.assigns.user_id)
@@ -1031,6 +1212,10 @@ defmodule PlatformWeb.ChatLive.MeetingHooks do
   # `01a02c4e` stage 4) — the LiveView survives the leave, so without this
   # it keeps receiving presence/room/meeting broadcasts for a meeting it is
   # no longer in. See `release_guest_topics/1`.
+  defp handle_guest_event("meeting_rejoin_token", _params, socket) do
+    {:halt, rejoin_reply(guest_rejoin_token(socket)), socket}
+  end
+
   defp handle_guest_event("meeting_leave", _params, socket) do
     {:halt,
      socket
@@ -1884,6 +2069,10 @@ defmodule PlatformWeb.ChatLive.MeetingHooks do
         socket
         |> assign(:current_participant, participant)
         |> assign(:in_meeting, true)
+        # The space and room this call was joined in. `:active_space` can
+        # move during the call; a rejoin token must follow the call.
+        |> assign(:call_space_id, space.id)
+        |> assign(:call_room_name, room.livekit_room_name)
         |> assign_roster(space.id)
         |> hold_roster_topic(space.id)
         |> push_event("join-meeting", %{
@@ -2184,6 +2373,8 @@ defmodule PlatformWeb.ChatLive.MeetingHooks do
     |> leave_call_shell()
     |> release_roster_topic()
     |> assign(:in_meeting, false)
+    |> assign(:call_space_id, nil)
+    |> assign(:call_room_name, nil)
     |> assign(:speaking_identities, MapSet.new())
     |> assign(:muted_identities, MapSet.new())
     |> assign(:camera_off_identities, MapSet.new())

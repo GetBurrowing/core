@@ -67,6 +67,10 @@ function isVideoPublication(pub) {
 // we try ONE automatic rejoin, then offer Rejoin / Leave.
 export const REJOIN_DELAY_MS = 1500
 export const REJOIN_GIVE_UP_MS = 30000
+// How long a rejoin waits for the server's fresh LiveKit token. Under
+// REJOIN_DELAY_MS so a silent LiveView costs about one more delay, not the
+// whole give-up window; on no answer the held token is tried once.
+export const REJOIN_TOKEN_TIMEOUT_MS = 1000
 const DELIBERATE_DISCONNECT_REASONS = new Set([
   DisconnectReason.CLIENT_INITIATED,
   DisconnectReason.PARTICIPANT_REMOVED,
@@ -829,8 +833,10 @@ const MeetingClient = {
   // treated as a network loss: keep the roster and tiles, do NOT push
   // `meeting_left`, and rejoin once with the credentials the join used.
   _handleDisconnected(room, reason) {
-    // A Room we are no longer pinned to (a failed rejoin attempt) is noise.
-    if (this._room && room !== this._room) return
+    // A Room we are not pinned to (a failed or abandoned rejoin attempt, or
+    // anything after Leave has cleared the pin) is noise: it must neither
+    // rejoin nor push a second `meeting_left`.
+    if (room !== this._room) return
     if (this._leaving || isDeliberateDisconnect(reason)) {
       this._emitState("disconnected", room)
       this._cleanupRoom()
@@ -883,11 +889,40 @@ const MeetingClient = {
   async _attemptRejoin(gen) {
     const creds = this._joinCreds
     if (!creds) return this._enterLost(this._room)
+    // A guest token lasts 30 minutes, so the one from the first join may be
+    // dead by now: ask the server for a fresh one for the same room and
+    // identity. Only an explicit `denied` ends the attempt. Anything else
+    // (`unavailable`, any other error, no answer, a token for a different
+    // room) falls back to the held token once: a good held token must not be
+    // thrown away because the server could not mint a new one.
+    // Whether WE were sharing when the connection dropped: read it now, before
+    // the share is cleared below and while `_room` is still the dead room.
+    const hadOwnShare =
+      !!this._screenShareTrack && this._isSelf(this._screenShareParticipant)
+    const fresh = await this._requestRejoinToken(creds.roomName)
+    if (gen !== this._rejoinGen) return
+    if (fresh && fresh.error === "denied") {
+      console.warn("[MeetingClient] server denied a rejoin token")
+      this._rejoinGen += 1
+      this._clearRejoinTimers()
+      this._enterLost(this._room)
+      return
+    }
+    let { url, token } = creds
+    if (fresh && fresh.token && creds.roomName && fresh.room_name && fresh.room_name !== creds.roomName) {
+      console.warn("[MeetingClient] rejoin token is for a different room; trying the held token once")
+    } else if (fresh && fresh.token) {
+      url = fresh.url || url
+      token = fresh.token
+    } else {
+      console.warn("[MeetingClient] no fresh rejoin token from the server; trying the held token once")
+    }
+
     const room = this._newRoom()
     // Pin `_room` only while this attempt is still the current one: a connect
     // that resolves after the give-up timer (or after Leave) must not become
     // the live room, or its later Disconnected would push `meeting_left`.
-    const ok = await this._connectRoom(room, creds.url, creds.token, undefined, () => gen === this._rejoinGen)
+    const ok = await this._connectRoom(room, url, token, undefined, () => gen === this._rejoinGen)
     if (gen !== this._rejoinGen) {
       // Gave up or left while connecting: do not resurrect the call.
       if (ok) room.disconnect().catch(() => {})
@@ -905,7 +940,75 @@ const MeetingClient = {
     // join time: someone who muted mid-call and then dropped must come back
     // muted. The dataset mirrors the server's committed pair; a key the
     // dataset lacks falls back to what the join used.
+    creds.url = url
+    creds.token = token // the freshest one, for a later manual Rejoin's fallback
+    // A share held from the dead room is stale: its track is gone, and while
+    // it is held the first-published-wins policy would refuse the live one.
+    // `_enterRoom` re-attaches whatever the new room is sharing.
+    if (this._screenShareTrack) this._detachScreenShareTrack(this._screenShareTrack)
     await this._enterRoom(room, this._currentMedia(creds.desired))
+    if (gen !== this._rejoinGen) return // left or gave up while entering
+    this._reconcileTiles(room)
+    // The new Room never republishes a share we were making, and the server
+    // still believes we are sharing. Tell it we are not. Only when we held a
+    // share: the server's state can only be wrong then, and the push makes it
+    // re-apply the two-up rail default, which would re-collapse the rail for
+    // everyone who never shared. A freshly connected Room is never sharing.
+    if (hadOwnShare) {
+      try {
+        this.pushEvent("meeting_screen_share_state", { enabled: false })
+      } catch (err) {
+        console.warn("[MeetingClient] could not report screen-share state after rejoin:", err)
+      }
+    }
+  },
+
+  // Ask the server for a fresh LiveKit token (`meeting_rejoin_token`). Resolves
+  // the reply, or null when there is none: LiveView not connected (pushEvent
+  // throws), or no answer within REJOIN_TOKEN_TIMEOUT_MS. A late reply after
+  // either is ignored.
+  _requestRejoinToken(roomName) {
+    return new Promise((resolve) => {
+      let settled = false
+      const done = (value) => {
+        if (settled) return
+        settled = true
+        clearTimeout(timer)
+        resolve(value)
+      }
+      const timer = setTimeout(() => done(null), REJOIN_TOKEN_TIMEOUT_MS)
+      try {
+        // The room we hold: the server maps it back to its space to
+        // re-run the join gate on the call's space, not the URL's.
+        this.pushEvent("meeting_rejoin_token", { room_name: roomName || null }, (reply) => done(reply || null))
+      } catch (err) {
+        console.warn("[MeetingClient] could not ask for a rejoin token:", err)
+        done(null)
+      }
+    })
+  },
+
+  // After a rejoin the tiles from the dead room are kept so the UI does not
+  // flash, but anyone who left during the outage never sent a Disconnected to
+  // the new room. Drop every tile connection the new room does not hold; a
+  // person's tile goes with their last connection (a companion keeps it).
+  _reconcileTiles(room) {
+    const present = new Set()
+    for (const p of room.remoteParticipants.values()) present.add(p.identity)
+    // The screen-share slot needs no handling here: `_rejoin` clears it before
+    // `_enterRoom` (and `_reconcileTiles` has no other caller), so a share held
+    // from the dead room cannot survive to this point.
+    for (const [person, tile] of [...this._tiles]) {
+      const connections = this._tileConnections && this._tileConnections.get(person)
+      if (!connections || connections.size === 0) {
+        tile.remove()
+        this._tiles.delete(person)
+        continue
+      }
+      for (const identity of [...connections]) {
+        if (!present.has(identity)) this._removeTile(identity)
+      }
+    }
   },
 
   _currentMedia(fallback) {
@@ -1419,7 +1522,7 @@ const MeetingClient = {
     this._clearRejoinTimers()
     this._rejoinGen += 1
     this._connLost = false
-    this._joinCreds = { url, token, desired }
+    this._joinCreds = { url, token, desired, roomName: room_name }
 
     const room = this._newRoom()
     if (!(await this._connectRoom(room, url, token))) return

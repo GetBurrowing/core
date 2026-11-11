@@ -3801,13 +3801,7 @@ defmodule Platform.Meetings do
   """
   @spec legit_room?(term()) :: boolean()
   def legit_room?(%{"name" => name}) when is_binary(name) do
-    with true <- Regex.match?(@app_room_name_regex, name),
-         "space-" <> uuid <- name,
-         %Platform.Chat.Space{} <- Platform.Chat.get_space(uuid) do
-      true
-    else
-      _ -> false
-    end
+    is_binary(space_id_for_room_name(name))
   end
 
   def legit_room?(_), do: false
@@ -5463,13 +5457,48 @@ defmodule Platform.Meetings do
         {:error, :missing_display_name}
 
       true ->
-        do_guest_livekit_token(chat_space_id, trimmed)
+        do_guest_livekit_token(chat_space_id, trimmed, new_guest_identity())
     end
   end
 
   def guest_livekit_token(%Meeting{}, _display_name), do: {:error, :missing_display_name}
 
-  defp do_guest_livekit_token(chat_space_id, display_name) do
+  @doc """
+  A fresh token for a guest who is ALREADY in the call, for the client's
+  rejoin after a network drop. Same room, same `guest:` identity, same
+  display name as the original `guest_livekit_token/2` mint, so LiveKit sees
+  the same participant coming back and the guest never becomes anything
+  other than a guest. Only a `guest:`-prefixed identity is accepted: this
+  cannot be used to mint a `user:` or `agent:` token.
+  """
+  @spec guest_rejoin_token(Meeting.t(), String.t(), String.t()) ::
+          {:ok,
+           %{
+             token: String.t(),
+             identity: String.t(),
+             room_name: String.t(),
+             livekit_url: String.t() | nil
+           }}
+          | {:error, :livekit_not_configured | :missing_display_name | :invalid_identity}
+  def guest_rejoin_token(
+        %Meeting{chat_space_id: space_id},
+        "guest:" <> _ = identity,
+        display_name
+      )
+      when is_binary(space_id) and is_binary(display_name) do
+    case String.trim(display_name) do
+      "" -> {:error, :missing_display_name}
+      trimmed -> do_guest_livekit_token(space_id, trimmed, identity)
+    end
+  end
+
+  def guest_rejoin_token(_meeting, _identity, _display_name), do: {:error, :invalid_identity}
+
+  defp new_guest_identity do
+    "guest:" <> (:crypto.strong_rand_bytes(16) |> Base.url_encode64(padding: false))
+  end
+
+  defp do_guest_livekit_token(chat_space_id, display_name, identity) do
     config = livekit_config()
     api_key = config[:api_key]
     api_secret = config[:api_secret]
@@ -5477,10 +5506,6 @@ defmodule Platform.Meetings do
     if is_nil(api_key) or api_key == "" or is_nil(api_secret) or api_secret == "" do
       {:error, :livekit_not_configured}
     else
-      identity =
-        "guest:" <>
-          (:crypto.strong_rand_bytes(16) |> Base.url_encode64(padding: false))
-
       room_name = room_name_for_space(chat_space_id)
       now = System.system_time(:second)
 
@@ -9369,6 +9394,24 @@ defmodule Platform.Meetings do
   def room_name_for_space(space_id) do
     "space-#{space_id}"
   end
+
+  @doc """
+  The inverse of `room_name_for_space/1`: the id of the existing chat space a
+  room name was derived from, or `nil` when the name has the wrong shape or
+  names no space. Never raises on client-supplied input.
+  """
+  @spec space_id_for_room_name(term()) :: binary() | nil
+  def space_id_for_room_name(name) when is_binary(name) do
+    with true <- Regex.match?(@app_room_name_regex, name),
+         "space-" <> uuid <- name,
+         %Platform.Chat.Space{id: id} <- Platform.Chat.get_space(uuid) do
+      id
+    else
+      _ -> nil
+    end
+  end
+
+  def space_id_for_room_name(_), do: nil
 
   # ── What LiveKit itself sees (task 01a06925 stage 3) ─────────────────────
   #
