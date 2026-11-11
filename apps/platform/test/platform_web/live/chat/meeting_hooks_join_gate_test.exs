@@ -522,6 +522,21 @@ defmodule PlatformWeb.ChatLive.MeetingHooksJoinGateTest do
              ) == %{error: "denied"}
     end
 
+    test "naming the held call is not enough: in_meeting false is refused, in_meeting true mints",
+         ctx do
+      # `same_call?` (call_space_id matches) AND `in_meeting` both decide the
+      # `:ok` branch of the gate. Each half alone must not mint.
+      left =
+        ctx.internal.id
+        |> build_socket(ctx.space)
+        |> Phoenix.Component.assign(:call_space_id, ctx.space.id)
+
+      assert {:error, :not_in_meeting} = MeetingHooks.rejoin_token(left, held(ctx.space))
+
+      in_call = Phoenix.Component.assign(left, :in_meeting, true)
+      assert {:ok, %{token: _}} = MeetingHooks.rejoin_token(in_call, held(ctx.space))
+    end
+
     test "a benign remount (gate passes) stays unavailable, for internal and invited", ctx do
       invite!(ctx.meeting, ctx.external)
 
