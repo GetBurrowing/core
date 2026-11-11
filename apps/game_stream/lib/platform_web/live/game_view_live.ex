@@ -231,7 +231,7 @@ defmodule PlatformWeb.GameViewLive do
 
   defp load_runs(socket, task_id) do
     runs = GameStream.recent_runs(task_id, 10)
-    since = DateTime.add(DateTime.utc_now(), -24 * 3600, :second)
+    since = DateTime.add(utc_now(), -24 * 3600, :second)
 
     socket
     |> assign(:runs_count, length(runs))
@@ -1014,10 +1014,15 @@ defmodule PlatformWeb.GameViewLive do
     end
   end
 
+  defp utc_now do
+    clock = Application.get_env(:game_stream, :game_view_utc_now, &DateTime.utc_now/0)
+    clock.()
+  end
+
   # HH:MM today, "yesterday", else the date (UTC: the session rows carry no
   # viewer time zone).
   defp when_text(%DateTime{} = at) do
-    today = Date.utc_today()
+    today = DateTime.to_date(utc_now())
 
     case Date.diff(today, DateTime.to_date(at)) do
       0 -> Calendar.strftime(at, "%H:%M")

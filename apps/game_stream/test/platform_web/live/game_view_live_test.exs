@@ -384,7 +384,16 @@ defmodule PlatformWeb.GameViewLiveTest do
     end
 
     test "two SessionRecord rows list newest first; runs today counts the last 24h only", ctx do
-      now = DateTime.utc_now()
+      now = ~U[2026-11-11 12:00:00Z]
+      previous_clock = Application.fetch_env(:game_stream, :game_view_utc_now)
+      Application.put_env(:game_stream, :game_view_utc_now, fn -> now end)
+
+      on_exit(fn ->
+        case previous_clock do
+          {:ok, clock} -> Application.put_env(:game_stream, :game_view_utc_now, clock)
+          :error -> Application.delete_env(:game_stream, :game_view_utc_now)
+        end
+      end)
 
       run!(ctx.task, %{
         ended_reason: "Build failed",
@@ -428,15 +437,9 @@ defmodule PlatformWeb.GameViewLiveTest do
         |> LazyHTML.query("[data-role=game-run-small]")
         |> Enum.map(&squish(LazyHTML.text(&1)))
 
-      hhmm = Calendar.strftime(DateTime.add(now, -72, :second), "%H:%M")
-      assert r1 == hhmm <> " · 58fps avg"
-
-      assert r2 == Calendar.strftime(DateTime.add(now, -548, :second), "%H:%M") or
-               r2 == "yesterday"
-
-      assert r3 ==
-               Calendar.strftime(DateTime.add(old_start, 65, :second), "%Y-%m-%d") <>
-                 " · 30fps avg"
+      assert r1 == "11:58 · 58fps avg"
+      assert r2 == "11:50"
+      assert r3 == "2026-11-08 · 30fps avg"
 
       assert texts(child, "[data-role=game-tile-runs] > *") == ["2", "runs today"]
       refute has_element?(child, "[data-role=game-runs-empty]")
