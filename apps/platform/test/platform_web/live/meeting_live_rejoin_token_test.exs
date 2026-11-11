@@ -343,14 +343,108 @@ defmodule PlatformWeb.MeetingLiveRejoinTokenTest do
       refute :sys.get_state(view.pid).socket.assigns.in_meeting
     end
 
-    test "the lobby's join_meeting shares the window: full window, no writes", ctx do
-      view = started_then_left_view(ctx)
+    # The member lobby: a signed-in member on the `meet.` host lands in
+    # `state: :lobby` and presses Join. A throttled press must leave them in
+    # the lobby with a message, not strand them out of both lobby and call.
+    defp lobby_view(ctx) do
+      {:ok, view, _} =
+        %{ctx.conn | host: "meet.localhost"} |> live("/meetings/#{ctx.meeting.slug}")
+
+      assert :sys.get_state(view.pid).socket.assigns.state == :lobby
+      view
+    end
+
+    defp view_assigns(view), do: :sys.get_state(view.pid).socket.assigns
+
+    test "the lobby's join_meeting with a full window keeps the lobby, flashes, writes nothing, starts nothing",
+         ctx do
+      view = lobby_view(ctx)
       fill_window(view)
+      assert view_assigns(view).meeting.status == "scheduled"
 
       writes = count_writes(fn -> view |> render_click("join_meeting", %{}) end)
 
       assert writes == []
-      refute :sys.get_state(view.pid).socket.assigns.in_meeting
+      assigns = view_assigns(view)
+      assert assigns.state == :lobby
+      refute assigns.in_meeting
+      assert assigns.meeting.status == "scheduled"
+      assert Meetings.get_meeting(ctx.meeting.id).status == "scheduled"
+      assert Phoenix.Flash.get(assigns.flash, :error) =~ "Too many join attempts"
+      refute_push_event(view, "join-meeting", %{}, 100)
+    end
+
+    test "the lobby's join_meeting below the limit still joins and takes one slot", ctx do
+      view = lobby_view(ctx)
+      before = window_size(view)
+      view |> render_click("join_meeting", %{})
+      assert_push_event(view, "join-meeting", %{token: _})
+      assert view_assigns(view).state == nil
+      assert window_size(view) == before + 1
+    end
+
+    test ":auto_join with a full window changes nothing and flashes", ctx do
+      view = joined_view(ctx)
+
+      :sys.replace_state(view.pid, fn state ->
+        update_in(state.socket.assigns, &Map.put(&1, :in_meeting, false))
+      end)
+
+      fill_window(view)
+
+      writes =
+        count_writes(fn ->
+          send(view.pid, :auto_join)
+          render(view)
+        end)
+
+      assert writes == []
+      assigns = view_assigns(view)
+      refute assigns.in_meeting
+      assert Phoenix.Flash.get(assigns.flash, :error) =~ "Too many join attempts"
+    end
+
+    test "meeting_join with a full window flashes", ctx do
+      view = started_then_left_view(ctx)
+      fill_window(view)
+      view |> render_click("meeting_join", %{})
+
+      assert Phoenix.Flash.get(view_assigns(view).flash, :error) =~ "Too many join attempts"
+    end
+
+    test "a join that writes then fails to mint still takes a slot, so repeats are throttled",
+         ctx do
+      limit = MeetingHooks.write_throttle_limit()
+      {:ok, view, _} = live(ctx.conn, ~p"/meetings/#{ctx.meeting.slug}")
+      Application.put_env(:platform, :livekit, [])
+
+      first = count_writes(fn -> view |> render_click("meeting_join", %{}) end)
+      assert first != []
+      refute view_assigns(view).in_meeting
+      assert window_size(view) == 1
+
+      for _ <- 2..limit, do: view |> render_click("meeting_join", %{})
+      assert window_size(view) == limit
+
+      writes = count_writes(fn -> view |> render_click("meeting_join", %{}) end)
+      assert writes == []
+    end
+
+    test "throttled requests do not flood the log at warning", ctx do
+      view = joined_view(ctx)
+      fill_window(view)
+
+      log =
+        ExUnit.CaptureLog.capture_log([level: :warning], fn ->
+          for _ <- 1..5 do
+            render_hook(view, "meeting_rejoin_token", %{})
+            assert_reply(view, %{error: "unavailable"})
+            view |> render_click("meeting_join", %{})
+          end
+        end)
+
+      refute log =~ "throttled"
+      refute log =~ "unavailable"
     end
 
     test "meeting_join: a refused join with a full window is not hidden by the throttle", ctx do

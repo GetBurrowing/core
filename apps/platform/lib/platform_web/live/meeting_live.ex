@@ -3649,16 +3649,24 @@ defmodule PlatformWeb.MeetingLive do
   # without a real user, so a stray click on a disconnected mount cannot
   # strand the socket out of both the lobby and the call.
   def handle_event("join_meeting", _params, socket) do
-    if connected?(socket) and is_binary(socket.assigns[:user_id]) do
-      socket =
-        socket
-        |> assign(:state, nil)
-        |> maybe_start_meeting()
-        |> MeetingHooks.join()
+    cond do
+      not (connected?(socket) and is_binary(socket.assigns[:user_id])) ->
+        {:noreply, socket}
 
-      {:noreply, socket}
-    else
-      {:noreply, socket}
+      # The write window is checked BEFORE the lobby is cleared or the meeting
+      # started: a throttled press must leave the lobby on screen and the
+      # meeting as it was, with a message, not strand the viewer out of both.
+      MeetingHooks.join_throttled?(socket) ->
+        {:noreply, put_flash(socket, :error, MeetingHooks.join_throttled_message())}
+
+      true ->
+        socket =
+          socket
+          |> assign(:state, nil)
+          |> maybe_start_meeting()
+          |> MeetingHooks.join()
+
+        {:noreply, socket}
     end
   end
 
@@ -5094,6 +5102,11 @@ defmodule PlatformWeb.MeetingLive do
         # An ordinary visit, or a restore whose call was left before this
         # message arrived. Joining needs the explicit Join.
         {:noreply, socket}
+
+      MeetingHooks.join_throttled?(socket) ->
+        # Checked before `maybe_start_meeting/1`, which writes (see
+        # "join_meeting"). The viewer keeps the page they have.
+        {:noreply, put_flash(socket, :error, MeetingHooks.join_throttled_message())}
 
       true ->
         # The same `maybe_start_meeting |> MeetingHooks.join()` pair every

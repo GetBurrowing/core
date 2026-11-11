@@ -470,11 +470,46 @@ defmodule PlatformWeb.ChatLive.MeetingHooks do
   Returns the new socket.
 
   Goes through the per-socket write throttle (see "Write throttle" below), so
-  every explicit join, the lobby's `join_meeting` included, shares one window
-  with `meeting_rejoin_token`.
+  every explicit join shares one window with `meeting_rejoin_token`. A throttled
+  join returns the socket with a flash and changes nothing else. A caller that
+  does something before joining (the lobby clearing itself, starting the
+  meeting) must ask `join_throttled?/1` first, so a throttled press leaves
+  everything as it was.
   """
+  @join_throttled_message "Too many join attempts. Try again in a minute."
+
   @spec join(Phoenix.LiveView.Socket.t()) :: Phoenix.LiveView.Socket.t()
-  def join(socket), do: throttled_join(socket)
+  def join(socket) do
+    if join_throttled?(socket) do
+      Logger.debug("[MeetingHooks] meeting_join throttled")
+      put_flash(socket, :error, @join_throttled_message)
+    else
+      case attempt_join(socket) do
+        {:refused, socket} ->
+          socket
+
+        # Counted whether or not the join succeeded: a join that wrote and then
+        # failed to mint is still a write.
+        {:attempted, socket} ->
+          {:ok, socket} = write_throttle(socket)
+          socket
+      end
+    end
+  end
+
+  @doc """
+  Would `join/1` be refused by the write throttle right now? Read-only: takes
+  no slot and writes nothing. True only when the window is full AND the join
+  would otherwise be permitted, so a caller the join gate refuses still gets
+  the gate's own answer.
+  """
+  @spec join_throttled?(Phoenix.LiveView.Socket.t()) :: boolean()
+  def join_throttled?(socket),
+    do: write_window_full?(socket) and join_permitted_now?(socket)
+
+  @doc "The flash a throttled join shows."
+  @spec join_throttled_message() :: String.t()
+  def join_throttled_message, do: @join_throttled_message
 
   @doc """
   A fresh LiveKit token for a signed-in member who is already in the call,
@@ -487,20 +522,27 @@ defmodule PlatformWeb.ChatLive.MeetingHooks do
   and a member whose chat-space row is gone (removed): `join_for_user/3`
   would quietly re-seat them, which a rejoin must never do.
 
-  Returns `{:ok, %{token: _, url: _}}` or `{:error, reason}`.
+  Returns `{result, socket}`: `result` is `{:ok, %{token: _, url: _}}` or
+  `{:error, reason}`, and `socket` carries the updated write window. This is
+  the function the `meeting_rejoin_token` handler calls; the throttle lives
+  here, between the read-only gate and the write.
   """
   @spec rejoin_token(Phoenix.LiveView.Socket.t(), map()) ::
-          {:ok, %{token: String.t(), url: String.t() | nil, room_name: String.t() | nil}}
-          | {:error, atom()}
+          {{:ok, %{token: String.t(), url: String.t() | nil, room_name: String.t() | nil}}
+           | {:error, atom()}, Phoenix.LiveView.Socket.t()}
   def rejoin_token(socket, params \\ %{}) do
-    with {:ok, space_id} <- rejoin_gate(socket, params) do
-      rejoin_mint(socket, space_id)
+    with {:ok, space_id} <- rejoin_gate(socket, params),
+         {:ok, socket} <- write_throttle(socket) do
+      {rejoin_mint(socket, space_id), socket}
+    else
+      {:error, reason} -> {{:error, reason}, socket}
     end
   end
 
   # The read-only half of a member rejoin: no write, no broadcast. Throttling
   # runs between this and `rejoin_mint/2`, so a refused caller always gets the
-  # real refusal and never spends a throttle slot.
+  # real refusal and never spends a throttle slot. Slot taken as soon as this
+  # passes, whether or not the mint then succeeds.
   defp rejoin_gate(socket, params) do
     # The space the call was JOINED in, never `:active_space`: that moves
     # when the user navigates inside the same LiveView, and a token minted
@@ -603,11 +645,8 @@ defmodule PlatformWeb.ChatLive.MeetingHooks do
   defp space_in_mount_fence?(user, space_id),
     do: Platform.Access.space_in_fence?(Platform.Access.scope_for(user), space_id)
 
-  defp still_seated?(space_id, user_id) do
-    space_id
-    |> Platform.Chat.list_participants(participant_type: "user")
-    |> Enum.any?(&(&1.participant_id == user_id))
-  end
+  # One exists-query for this user's row, not a load of the space's roster.
+  defp still_seated?(space_id, user_id), do: Platform.Chat.participant?(space_id, user_id)
 
   @doc """
   The guest counterpart of `rejoin_token/2`. The guest keeps the identity
@@ -615,13 +654,18 @@ defmodule PlatformWeb.ChatLive.MeetingHooks do
   guest in the same room. The invite link is re-checked first
   (`Meetings.resolve_guest_invite/2`), so a link revoked or lapsed mid-call
   gets no new token.
+
+  Returns `{result, socket}` like `rejoin_token/2`.
   """
   @spec guest_rejoin_token(Phoenix.LiveView.Socket.t()) ::
-          {:ok, %{token: String.t(), url: String.t() | nil, room_name: String.t() | nil}}
-          | {:error, atom()}
+          {{:ok, %{token: String.t(), url: String.t() | nil, room_name: String.t() | nil}}
+           | {:error, atom()}, Phoenix.LiveView.Socket.t()}
   def guest_rejoin_token(socket) do
-    with {:ok, meeting} <- guest_rejoin_gate(socket) do
-      guest_rejoin_mint(socket, meeting)
+    with {:ok, meeting} <- guest_rejoin_gate(socket),
+         {:ok, socket} <- write_throttle(socket) do
+      {guest_rejoin_mint(socket, meeting), socket}
+    else
+      {:error, reason} -> {{:error, reason}, socket}
     end
   end
 
@@ -679,6 +723,13 @@ defmodule PlatformWeb.ChatLive.MeetingHooks do
   def rejoin_reply({:error, reason}) when reason in @rejoin_denials do
     Logger.info("[MeetingHooks] rejoin token denied: #{inspect(reason)}")
     %{error: "denied"}
+  end
+
+  # Debug, not warning: a hammering client would otherwise write a warning per
+  # request. The client sees the same `unavailable` as any other transient.
+  def rejoin_reply({:error, :throttled}) do
+    Logger.debug("[MeetingHooks] rejoin token throttled")
+    %{error: "unavailable"}
   end
 
   def rejoin_reply({:error, reason}) do
@@ -1012,13 +1063,14 @@ defmodule PlatformWeb.ChatLive.MeetingHooks do
   # Rejoin and join share ONE window: they are the same write, and a separate
   # window for each would let a caller double the budget by alternating.
   #
-  # Gate first. The window is consulted only after the read-only gate has
-  # passed, so a caller who would be refused always gets the real refusal
-  # (`denied`) and never spends a slot; only a request that would have written
-  # consumes one. A permitted caller with a full window gets `unavailable` (see
-  # `rejoin_reply/1`) from rejoin, and a silent no-op from `meeting_join`, and
-  # nothing is written either way. A throttled request is not recorded, so it
-  # never extends the lockout.
+  # One rule for join and rejoin: a request takes a slot as soon as the
+  # read-only gate passes, and a throttled request changes nothing and says so.
+  # A rejoin that is refused gets the real refusal (`denied`) and no slot; a
+  # permitted rejoin with a full window gets `unavailable` (`rejoin_reply/1`).
+  # A permitted join with a full window gets a flash (`join/1`), and a caller
+  # that would clear state first (the lobby) checks `join_throttled?/1` before
+  # touching anything. A throttled request is not recorded, so it never
+  # extends the lockout.
   #
   # The limit, 120 per 60 s, against the real client (meeting_client.js): an
   # automatic rejoin attempt starts REJOIN_DELAY_MS (1500 ms) after a drop and
@@ -1058,48 +1110,12 @@ defmodule PlatformWeb.ChatLive.MeetingHooks do
     do:
       Enum.filter(socket.assigns[:write_requests] || [], &(&1 > now - @write_throttle_window_ms))
 
-  # Gate, then window, then write. `gate` is read-only and returns
-  # `{:ok, ctx}` or `{:error, reason}`; `mint` does the writes.
-  defp gated_rejoin(socket, gate, mint) do
-    with {:ok, ctx} <- gate,
-         {:ok, socket} <- write_throttle(socket) do
-      {rejoin_reply(mint.(socket, ctx)), socket}
-    else
-      {:error, reason} -> {rejoin_reply({:error, reason}), socket}
-    end
-  end
-
-  # A join has no separable read-only gate: `join_for_user/3` runs the gate
-  # and the writes together, and calling `Meetings.join_permitted?/2` first on
-  # every join would double the external user's invite queries
-  # (`MeetingHooksJoinGateTest` pins one). So the order is by window state:
-  #
-  #   * window not full: join as before; `do_join/1` hands back the socket
-  #     byte-identical when the gate refuses (or it lacks inputs), and only a
-  #     join that changed the socket, i.e. one that wrote, takes a slot;
-  #   * window full: ask the predicate. A caller the join would refuse still
-  #     goes to `do_join/1` and gets its refusal; a permitted one is throttled,
-  #     nothing is written.
-  defp throttled_join(socket) do
-    if write_window_full?(socket) do
-      if join_permitted_now?(socket) do
-        Logger.warning("[MeetingHooks] meeting_join throttled for user #{socket.assigns.user_id}")
-        socket
-      else
-        do_join(socket)
-      end
-    else
-      joined = do_join(socket)
-
-      if joined == socket do
-        joined
-      else
-        {:ok, recorded} = write_throttle(joined)
-        recorded
-      end
-    end
-  end
-
+  # A join takes its slot unless the gate refused it before any write (see
+  # `attempt_join/1`): the attempt is counted, not the outcome, so a join that
+  # writes and then fails to mint is not free. Consulting
+  # `Meetings.join_permitted?/2` before every join would add an invite query
+  # that `MeetingHooksJoinGateTest` pins at one, so the predicate runs only
+  # when the window is already full (`join_throttled?/1`).
   defp join_permitted_now?(socket) do
     with %{id: space_id} <- socket.assigns[:active_space],
          user_id when is_binary(user_id) <- socket.assigns[:user_id] do
@@ -1116,8 +1132,8 @@ defmodule PlatformWeb.ChatLive.MeetingHooks do
   end
 
   defp handle_event("meeting_rejoin_token", params, socket) do
-    {reply, socket} = gated_rejoin(socket, rejoin_gate(socket, params), &rejoin_mint/2)
-    {:halt, reply, socket}
+    {result, socket} = rejoin_token(socket, params)
+    {:halt, rejoin_reply(result), socket}
   end
 
   defp handle_event("meeting_leave", _params, socket) do
@@ -1370,8 +1386,8 @@ defmodule PlatformWeb.ChatLive.MeetingHooks do
   # it keeps receiving presence/room/meeting broadcasts for a meeting it is
   # no longer in. See `release_guest_topics/1`.
   defp handle_guest_event("meeting_rejoin_token", _params, socket) do
-    {reply, socket} = gated_rejoin(socket, guest_rejoin_gate(socket), &guest_rejoin_mint/2)
-    {:halt, reply, socket}
+    {result, socket} = guest_rejoin_token(socket)
+    {:halt, rejoin_reply(result), socket}
   end
 
   defp handle_guest_event("meeting_leave", _params, socket) do
@@ -2186,7 +2202,13 @@ defmodule PlatformWeb.ChatLive.MeetingHooks do
   defp agent_label(%Agent{name: name}) when is_binary(name) and name != "", do: name
   defp agent_label(%Agent{}), do: "That agent"
 
-  defp do_join(socket) do
+  defp do_join(socket), do: socket |> attempt_join() |> elem(1)
+
+  # `{:refused, socket}` when the join gate (or a missing input) stopped it
+  # before any write: the socket is byte-identical. `{:attempted, socket}` for a
+  # join that reached `Meetings.join_for_user/3`, which may already have
+  # written when it errors.
+  defp attempt_join(socket) do
     # Stage 4 (task 019e2d1a) bugfix: the participant-row check used to
     # gate this `with`, which meant a fresh user — one who has never
     # touched the meeting's bound chat space and therefore has no
@@ -2275,7 +2297,7 @@ defmodule PlatformWeb.ChatLive.MeetingHooks do
         camera_enabled: socket.assigns.camera_enabled
       })
 
-      socket
+      {:attempted, socket}
     else
       # Refusal, not failure. `Meetings.join_for_user/3`'s gate already emitted the
       # access_blocked telemetry; this arm exists so the refusal does not
@@ -2285,17 +2307,17 @@ defmodule PlatformWeb.ChatLive.MeetingHooks do
       # A partial join (row written, token withheld) would be worse than
       # none: the roster would show a person who is not in the call.
       {:error, :join_not_permitted} ->
-        socket
+        {:refused, socket}
 
       {:error, reason} ->
         Logger.warning("[ChatLive] meeting_join failed: #{inspect(reason)}")
-        socket
+        {:attempted, socket}
 
       nil ->
-        socket
+        {:refused, socket}
 
       _ ->
-        socket
+        {:refused, socket}
     end
   end
 
