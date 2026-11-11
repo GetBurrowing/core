@@ -4704,13 +4704,13 @@ defmodule Platform.Meetings do
   # the rejoin, the meeting page's start pre-check, the ringer) inherits each
   # rule.
   #
-  #   * An archived space refuses everyone, except that `space_writable?/1`
-  #     exempts `execution` spaces (orchestration archives them at task
-  #     completion), so those keep admitting joins as they keep admitting
-  #     posts. Meetings do not live in execution spaces; this is a decision to
-  #     reuse the one notion rather than a case anyone wants. It is already read-only for posts
-  #     (`Chat.space_writable?/1`, the same notion, so execution spaces keep
-  #     their exemption); a call there must not outlive the archive. A meeting
+  #   * An archived space refuses everyone. An archived space is already
+  #     read-only for posts, and a call there must not outlive the archive, so
+  #     this reuses the same predicate, `Chat.space_writable?/1`, rather than a
+  #     second notion of "archived". That predicate exempts `execution` spaces
+  #     (orchestration archives them at task completion), so those keep
+  #     admitting joins as they keep admitting posts; meetings do not live in
+  #     execution spaces, so the exemption is inherited, not wanted. A meeting
   #     that has merely ENDED is not refused: a join after the last call ended
   #     is how the next call starts. Costs one `chat_spaces` read per join.
   #   * An external user needs a live invite to the space. Internal users pay
