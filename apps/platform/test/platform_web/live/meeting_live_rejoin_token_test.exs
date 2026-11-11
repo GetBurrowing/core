@@ -188,6 +188,112 @@ defmodule PlatformWeb.MeetingLiveRejoinTokenTest do
     end
   end
 
+  describe "reissue throttle" do
+    # Writes the LiveView process makes (INSERT/UPDATE), counted from the
+    # repo's query telemetry. The handler runs in the querying process, so
+    # filtering on `self()` isolates this view from other tests.
+    defp count_writes(view_pid, fun) do
+      test = self()
+      id = "rejoin-writes-#{System.unique_integer([:positive])}"
+
+      :telemetry.attach(
+        id,
+        [:platform, :repo, :query],
+        fn _e, _m, meta, _c ->
+          if self() == view_pid and meta.query =~ ~r/(INSERT INTO|UPDATE )/,
+            do: send(test, {:write, meta.query})
+        end,
+        nil
+      )
+
+      try do
+        fun.()
+        drain_writes([])
+      after
+        :telemetry.detach(id)
+      end
+    end
+
+    defp drain_writes(acc) do
+      receive do
+        {:write, q} -> drain_writes([q | acc])
+      after
+        50 -> acc
+      end
+    end
+
+    test "the throttle limit covers the client's fastest sustained retry cadence" do
+      # Client: an automatic attempt waits REJOIN_DELAY_MS (1500) after each
+      # drop, so a flapping link cannot ask faster than one per 1.5 s.
+      assert MeetingHooks.rejoin_throttle_limit() >=
+               div(MeetingHooks.rejoin_throttle_window_ms(), 1_500)
+    end
+
+    test "a window's worth of member requests all succeed; one more is unavailable and writes nothing",
+         ctx do
+      {:ok, view, _} = live(ctx.conn, ~p"/meetings/#{ctx.meeting.slug}")
+      view |> render_click("meeting_join", %{})
+      assert_push_event(view, "join-meeting", %{token: _})
+
+      # The write counter must see a granted request, or "no writes" proves nothing.
+      granted =
+        count_writes(view.pid, fn ->
+          render_hook(view, "meeting_rejoin_token", %{})
+          assert_reply(view, %{token: _})
+        end)
+
+      assert granted != []
+
+      for _ <- 2..MeetingHooks.rejoin_throttle_limit() do
+        render_hook(view, "meeting_rejoin_token", %{})
+        assert_reply(view, %{token: _})
+      end
+
+      writes =
+        count_writes(view.pid, fn ->
+          render_hook(view, "meeting_rejoin_token", %{})
+          assert_reply(view, %{error: "unavailable"} = reply)
+          refute Map.has_key?(reply, :token)
+        end)
+
+      assert writes == []
+    end
+
+    test "the window slides: requests are accepted again once old ones age out" do
+      limit = MeetingHooks.rejoin_throttle_limit()
+      window = MeetingHooks.rejoin_throttle_window_ms()
+      socket = %Phoenix.LiveView.Socket{}
+
+      socket =
+        Enum.reduce(1..limit, socket, fn i, sock ->
+          assert {:ok, sock} = MeetingHooks.rejoin_throttle(sock, 1_000 + i)
+          sock
+        end)
+
+      assert {:error, :throttled} = MeetingHooks.rejoin_throttle(socket, 1_000 + limit + 1)
+      # Still inside the window of the newest request.
+      assert {:error, :throttled} = MeetingHooks.rejoin_throttle(socket, 1_001 + window - 1)
+      # The oldest has aged out: exactly one slot opens.
+      assert {:ok, socket} = MeetingHooks.rejoin_throttle(socket, 1_001 + window)
+      assert {:error, :throttled} = MeetingHooks.rejoin_throttle(socket, 1_001 + window)
+    end
+
+    test "a throttled request does not consume a slot" do
+      limit = MeetingHooks.rejoin_throttle_limit()
+      socket = %Phoenix.LiveView.Socket{}
+
+      socket =
+        Enum.reduce(1..limit, socket, fn _, sock ->
+          {:ok, sock} = MeetingHooks.rejoin_throttle(sock, 0)
+          sock
+        end)
+
+      for t <- 1..5, do: assert({:error, :throttled} = MeetingHooks.rejoin_throttle(socket, t))
+      window = MeetingHooks.rejoin_throttle_window_ms()
+      assert {:ok, _} = MeetingHooks.rejoin_throttle(socket, window)
+    end
+  end
+
   describe "guest" do
     defp guest_invite!(meeting, name) do
       %Invite{}
@@ -225,6 +331,21 @@ defmodule PlatformWeb.MeetingLiveRejoinTokenTest do
       assert claims(fresh)["name"] == "Jane Doe (guest)"
       assert claims(fresh)["video"]["room"] == assigns.room_name
       assert fresh != assigns.token
+    end
+
+    test "a guest is throttled too: one past the window is unavailable, no token", ctx do
+      invite = guest_invite!(ctx.meeting, "Jane Doe")
+      token = guest_token(ctx.meeting, invite)
+      {:ok, view, _} = live(guest_conn(build_conn()), "/#{ctx.meeting.slug}/#{token}")
+
+      for _ <- 1..MeetingHooks.rejoin_throttle_limit() do
+        render_hook(view, "meeting_rejoin_token", %{})
+        assert_reply(view, %{token: _})
+      end
+
+      render_hook(view, "meeting_rejoin_token", %{})
+      assert_reply(view, %{error: "unavailable"} = reply)
+      refute Map.has_key?(reply, :token)
     end
 
     test "a guest whose invite was revoked mid-call is refused", ctx do

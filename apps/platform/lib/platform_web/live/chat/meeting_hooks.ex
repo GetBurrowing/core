@@ -953,6 +953,59 @@ defmodule PlatformWeb.ChatLive.MeetingHooks do
 
   defp native_bar_state(_socket), do: %{}
 
+  # ── Rejoin-token throttle ─────────────────────────────────────────────
+  #
+  # Every granted `meeting_rejoin_token` runs `Meetings.join_for_user/3`,
+  # which writes (participant upsert) and broadcasts, so a seated member (or
+  # guest) could otherwise hammer it. A sliding window per socket bounds that.
+  #
+  # Why these numbers are safe for the real client (meeting_client.js): one
+  # token request is made per rejoin attempt. An automatic attempt starts
+  # REJOIN_DELAY_MS (1500 ms) after a drop, and a failed attempt ends in
+  # "lost" with no further automatic retry, so even a link that flaps (drop,
+  # rejoin, drop...) cannot ask faster than once per 1.5 s: at most
+  # 60_000 / 1_500 = 40 per window. The manual Rejoin button is only shown
+  # while lost and each click is one request that must also finish connecting
+  # or fail, so it cannot outpace that. The limit is that 40, i.e. the
+  # client's fastest sustained cadence is never throttled; only a caller
+  # bypassing the client is. A throttled request replies `unavailable` (see
+  # `rejoin_reply/1`), which the client already handles by trying its held
+  # token once.
+  @rejoin_throttle_window_ms 60_000
+  @rejoin_throttle_limit 40
+
+  @doc false
+  def rejoin_throttle_window_ms, do: @rejoin_throttle_window_ms
+  @doc false
+  def rejoin_throttle_limit, do: @rejoin_throttle_limit
+
+  @doc false
+  # Records a rejoin request at `now` (ms) in the socket's window. Returns the
+  # updated socket, or `{:error, :throttled}` when the window is full. A
+  # throttled request is not recorded, so it never extends the lockout.
+  @spec rejoin_throttle(Phoenix.LiveView.Socket.t(), integer()) ::
+          {:ok, Phoenix.LiveView.Socket.t()} | {:error, :throttled}
+  def rejoin_throttle(socket, now \\ System.monotonic_time(:millisecond)) do
+    recent =
+      Enum.filter(
+        socket.assigns[:rejoin_requests] || [],
+        &(&1 > now - @rejoin_throttle_window_ms)
+      )
+
+    if length(recent) >= @rejoin_throttle_limit do
+      {:error, :throttled}
+    else
+      {:ok, assign(socket, :rejoin_requests, [now | recent])}
+    end
+  end
+
+  defp throttled_rejoin(socket, mint) do
+    case rejoin_throttle(socket) do
+      {:ok, socket} -> {rejoin_reply(mint.(socket)), socket}
+      {:error, reason} -> {rejoin_reply({:error, reason}), socket}
+    end
+  end
+
   # ── Hook callbacks ────────────────────────────────────────────────────
 
   defp handle_event("meeting_join", _params, socket) do
@@ -960,7 +1013,8 @@ defmodule PlatformWeb.ChatLive.MeetingHooks do
   end
 
   defp handle_event("meeting_rejoin_token", params, socket) do
-    {:halt, rejoin_reply(rejoin_token(socket, params)), socket}
+    {reply, socket} = throttled_rejoin(socket, &rejoin_token(&1, params))
+    {:halt, reply, socket}
   end
 
   defp handle_event("meeting_leave", _params, socket) do
@@ -1213,7 +1267,8 @@ defmodule PlatformWeb.ChatLive.MeetingHooks do
   # it keeps receiving presence/room/meeting broadcasts for a meeting it is
   # no longer in. See `release_guest_topics/1`.
   defp handle_guest_event("meeting_rejoin_token", _params, socket) do
-    {:halt, rejoin_reply(guest_rejoin_token(socket)), socket}
+    {reply, socket} = throttled_rejoin(socket, &guest_rejoin_token/1)
+    {:halt, reply, socket}
   end
 
   defp handle_guest_event("meeting_leave", _params, socket) do
