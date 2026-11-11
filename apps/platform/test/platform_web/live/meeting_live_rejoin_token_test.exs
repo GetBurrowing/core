@@ -21,6 +21,7 @@ defmodule PlatformWeb.MeetingLiveRejoinTokenTest do
   alias Platform.Meetings.State, as: MeetingState
   alias Platform.Repo
   alias Platform.Tasks
+  alias PlatformWeb.ChatLive.MeetingHooks
   alias Platform.Tenancy.OrgMembership
 
   @livekit_url "wss://livekit.test"
@@ -75,7 +76,7 @@ defmodule PlatformWeb.MeetingLiveRejoinTokenTest do
       assert_push_event(view, "join-meeting", %{token: first, room_name: room_name})
 
       render_hook(view, "meeting_rejoin_token", %{})
-      assert_reply(view, %{token: fresh, url: @livekit_url})
+      assert_reply(view, %{token: fresh, url: @livekit_url, room_name: ^room_name})
 
       assert fresh != first
       assert claims(fresh)["video"]["room"] == room_name
@@ -88,7 +89,7 @@ defmodule PlatformWeb.MeetingLiveRejoinTokenTest do
       {:ok, view, _} = live(ctx.conn, ~p"/meetings/#{ctx.meeting.slug}")
 
       render_hook(view, "meeting_rejoin_token", %{})
-      assert_reply(view, %{error: _} = reply)
+      assert_reply(view, %{error: "unavailable"} = reply)
       refute Map.has_key?(reply, :token)
     end
 
@@ -105,7 +106,7 @@ defmodule PlatformWeb.MeetingLiveRejoinTokenTest do
       {:ok, _} = Chat.remove_participant(row)
 
       render_hook(view, "meeting_rejoin_token", %{})
-      assert_reply(view, %{error: _} = reply)
+      assert_reply(view, %{error: "denied"} = reply)
       refute Map.has_key?(reply, :token)
 
       still_there =
@@ -114,6 +115,76 @@ defmodule PlatformWeb.MeetingLiveRejoinTokenTest do
         |> Enum.any?(&(&1.participant_id == ctx.user.id))
 
       refute still_there
+    end
+  end
+
+  describe "member: call room is the one joined, not the current space" do
+    test "after :active_space moves, the token is still for the room joined in", ctx do
+      {:ok, view, _} = live(ctx.conn, ~p"/meetings/#{ctx.meeting.slug}")
+      view |> render_click("meeting_join", %{})
+      assert_push_event(view, "join-meeting", %{token: first, room_name: room_name})
+
+      {:ok, other} =
+        Chat.create_space(%{
+          name: "Other",
+          slug: "other-#{System.unique_integer([:positive])}",
+          kind: "channel",
+          org_id: Platform.TenancyFixtures.acme_org_id()
+        })
+
+      :sys.replace_state(view.pid, fn state ->
+        update_in(state.socket.assigns, &Map.put(&1, :active_space, other))
+      end)
+
+      render_hook(view, "meeting_rejoin_token", %{})
+      assert_reply(view, %{token: fresh, room_name: ^room_name})
+
+      assert claims(fresh)["video"]["room"] == claims(first)["video"]["room"]
+      assert claims(fresh)["video"]["room"] == room_name
+
+      other_seated =
+        other.id
+        |> Chat.list_participants(participant_type: "user")
+        |> Enum.any?(&(&1.participant_id == ctx.user.id))
+
+      refute other_seated
+    end
+  end
+
+  describe "error replies" do
+    test "every denial reason yields the same reply; non-denials are \"unavailable\"" do
+      # reply shape is a pure function of the class, never of the reason
+      assert MeetingHooks.rejoin_reply({:error, :join_not_permitted}) ==
+               MeetingHooks.rejoin_reply({:error, :not_a_participant})
+
+      assert MeetingHooks.rejoin_reply({:error, :join_not_permitted}) == %{error: "denied"}
+      assert MeetingHooks.rejoin_reply({:error, :revoked}) == %{error: "denied"}
+      assert MeetingHooks.rejoin_reply({:error, :expired}) == %{error: "denied"}
+      assert MeetingHooks.rejoin_reply({:error, :invalid}) == %{error: "denied"}
+
+      assert MeetingHooks.rejoin_reply({:error, :livekit_not_configured}) == %{
+               error: "unavailable"
+             }
+
+      assert MeetingHooks.rejoin_reply({:error, :not_in_meeting}) == %{error: "unavailable"}
+      assert MeetingHooks.rejoin_reply({:error, %Ecto.Changeset{}}) == %{error: "unavailable"}
+    end
+
+    test "a non-denial failure (livekit unconfigured) is unavailable, not denied", ctx do
+      {:ok, view, _} = live(ctx.conn, ~p"/meetings/#{ctx.meeting.slug}")
+      view |> render_click("meeting_join", %{})
+      assert_push_event(view, "join-meeting", %{token: _})
+
+      Application.put_env(:platform, :livekit, api_key: nil, api_secret: nil, url: nil)
+
+      render_hook(view, "meeting_rejoin_token", %{})
+      assert_reply(view, %{error: "unavailable"})
+    end
+
+    test "after a remount (not in the meeting) the reply is unavailable", ctx do
+      {:ok, view, _} = live(ctx.conn, ~p"/meetings/#{ctx.meeting.slug}")
+      render_hook(view, "meeting_rejoin_token", %{})
+      assert_reply(view, %{error: "unavailable"})
     end
   end
 
@@ -147,7 +218,8 @@ defmodule PlatformWeb.MeetingLiveRejoinTokenTest do
       assert String.starts_with?(assigns.identity, "guest:")
 
       render_hook(view, "meeting_rejoin_token", %{})
-      assert_reply(view, %{token: fresh, url: @livekit_url})
+      assert_reply(view, %{token: fresh, url: @livekit_url, room_name: room_name})
+      assert room_name == assigns.room_name
 
       assert claims(fresh)["sub"] == assigns.identity
       assert claims(fresh)["name"] == "Jane Doe (guest)"
@@ -163,7 +235,7 @@ defmodule PlatformWeb.MeetingLiveRejoinTokenTest do
       {:ok, _} = Meetings.revoke_invite(invite)
 
       render_hook(view, "meeting_rejoin_token", %{})
-      assert_reply(view, %{error: _} = reply)
+      assert_reply(view, %{error: "denied"} = reply)
       refute Map.has_key?(reply, :token)
     end
   end

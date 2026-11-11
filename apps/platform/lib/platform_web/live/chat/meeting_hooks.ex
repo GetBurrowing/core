@@ -486,17 +486,23 @@ defmodule PlatformWeb.ChatLive.MeetingHooks do
   Returns `{:ok, %{token: _, url: _}}` or `{:error, reason}`.
   """
   @spec rejoin_token(Phoenix.LiveView.Socket.t()) ::
-          {:ok, %{token: String.t(), url: String.t() | nil}} | {:error, atom()}
+          {:ok, %{token: String.t(), url: String.t() | nil, room_name: String.t() | nil}}
+          | {:error, atom()}
   def rejoin_token(socket) do
+    # The space the call was JOINED in (`do_join/1` records it), never
+    # `:active_space`: that moves when the user navigates inside the same
+    # LiveView, and a token minted for wherever they are now would seat and
+    # activate the wrong room.
     with true <- socket.assigns[:in_meeting] == true || {:error, :not_in_meeting},
-         %{id: space_id} <- socket.assigns[:active_space] || {:error, :not_in_meeting},
+         space_id when is_binary(space_id) <-
+           socket.assigns[:call_space_id] || {:error, :not_in_meeting},
          user_id when is_binary(user_id) <- socket.assigns[:user_id] || {:error, :not_in_meeting},
          true <- still_seated?(space_id, user_id) || {:error, :not_a_participant},
-         {:ok, %{token: token}} <-
+         {:ok, %{token: token, room: room}} <-
            Meetings.join_for_user(space_id, user_id, resolve_display_name(socket)) do
-      {:ok, %{token: token, url: Meetings.livekit_url()}}
+      {:ok, %{token: token, url: Meetings.livekit_url(), room_name: room.livekit_room_name}}
     else
-      {:error, reason} when is_atom(reason) -> {:error, reason}
+      {:error, reason} -> {:error, reason}
       _ -> {:error, :rejoin_refused}
     end
   end
@@ -515,7 +521,8 @@ defmodule PlatformWeb.ChatLive.MeetingHooks do
   gets no new token.
   """
   @spec guest_rejoin_token(Phoenix.LiveView.Socket.t()) ::
-          {:ok, %{token: String.t(), url: String.t() | nil}} | {:error, atom()}
+          {:ok, %{token: String.t(), url: String.t() | nil, room_name: String.t() | nil}}
+          | {:error, atom()}
   def guest_rejoin_token(socket) do
     a = socket.assigns
 
@@ -525,15 +532,43 @@ defmodule PlatformWeb.ChatLive.MeetingHooks do
          {:ok, %{meeting: meeting}} <- Meetings.resolve_guest_invite(slug, invite),
          {:ok, bundle} <-
            Meetings.guest_rejoin_token(meeting, a[:identity] || "", a[:display_name] || "") do
-      {:ok, %{token: bundle.token, url: bundle.livekit_url}}
+      {:ok, %{token: bundle.token, url: bundle.livekit_url, room_name: bundle.room_name}}
     else
-      {:error, reason} when is_atom(reason) -> {:error, reason}
+      {:error, reason} -> {:error, reason}
       _ -> {:error, :rejoin_refused}
     end
   end
 
-  defp rejoin_reply({:ok, %{token: _, url: _} = reply}), do: reply
-  defp rejoin_reply({:error, reason}), do: %{error: to_string(reason)}
+  # Reasons that mean "this person is not allowed back in". Only these reach
+  # the client as `denied`, and the client then gives up. Every other failure
+  # (not mounted in the call after a remount, LiveKit not configured, room
+  # setup failing) is `unavailable`: the held token may still be good, so the
+  # client falls back to it.
+  @rejoin_denials [
+    :join_not_permitted,
+    :not_a_participant,
+    :revoked,
+    :expired,
+    :invalid
+  ]
+
+  @doc false
+  # The reply carries a CLASS, never the reason: the join gate is
+  # deliberately indistinguishable (see `Meetings.join_for_user/3`), so a
+  # revoked external user must not learn which check refused them. The
+  # reason goes to the server log only.
+  @spec rejoin_reply({:ok, map()} | {:error, term()}) :: map()
+  def rejoin_reply({:ok, %{token: _, url: _} = reply}), do: reply
+
+  def rejoin_reply({:error, reason}) when reason in @rejoin_denials do
+    Logger.info("[MeetingHooks] rejoin token denied: #{inspect(reason)}")
+    %{error: "denied"}
+  end
+
+  def rejoin_reply({:error, reason}) do
+    Logger.warning("[MeetingHooks] rejoin token unavailable: #{inspect(reason)}")
+    %{error: "unavailable"}
+  end
 
   @doc """
   Reset every meeting-local assign — media state AND the call shell the
@@ -1955,6 +1990,10 @@ defmodule PlatformWeb.ChatLive.MeetingHooks do
         socket
         |> assign(:current_participant, participant)
         |> assign(:in_meeting, true)
+        # The space and room this call was joined in. `:active_space` can
+        # move during the call; a rejoin token must follow the call.
+        |> assign(:call_space_id, space.id)
+        |> assign(:call_room_name, room.livekit_room_name)
         |> assign_roster(space.id)
         |> hold_roster_topic(space.id)
         |> push_event("join-meeting", %{
@@ -2255,6 +2294,8 @@ defmodule PlatformWeb.ChatLive.MeetingHooks do
     |> leave_call_shell()
     |> release_roster_topic()
     |> assign(:in_meeting, false)
+    |> assign(:call_space_id, nil)
+    |> assign(:call_room_name, nil)
     |> assign(:speaking_identities, MapSet.new())
     |> assign(:muted_identities, MapSet.new())
     |> assign(:camera_off_identities, MapSet.new())
