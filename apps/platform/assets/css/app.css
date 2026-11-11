@@ -11296,3 +11296,12 @@ textarea.cal-input {
 .ba-adv{display:block;margin:16px auto 0;padding:6px 10px}
 @media (prefers-reduced-motion: reduce){.ba-flow,.ba-modal,.ba-step,.ba-card.reveal,.ba-card.reveal::after,.ba-confetti i,.ba-dice.roll,.ba-typing i,.ba-vnow .ic,.ba-vb.swap{animation:none!important}.ba-confetti{display:none}}
 /* ── end character builder ── */
+
+/* The public gaming catalog scrolls as a document, outside the workspace shell. */
+html.gaming-document,
+html.gaming-document body {
+  height: auto;
+  min-height: 100dvh;
+  overflow-y: auto;
+  overscroll-behavior: auto;
+}
