@@ -92,6 +92,7 @@ const MeetingClient = {
     this._joinCreds = null
     this._rejoinGen = 0
     this._rejoinTimers = []
+    this._rejoinInFlightGen = null
     this._connLost = false
     this._ensureConnectionBanner()
     // Tiles are keyed by PERSON (`personIdentity`), never by raw LiveKit
@@ -886,7 +887,20 @@ const MeetingClient = {
     )
   },
 
+  // One token request + connect per attempt. `_rejoinInFlightGen` records the
+  // generation of the attempt now running, so "in flight" means it equals the
+  // CURRENT `_rejoinGen`: a give-up or Leave bumps the generation and the
+  // abandoned attempt stops counting, even while its connect still hangs.
   async _attemptRejoin(gen) {
+    this._rejoinInFlightGen = gen
+    try {
+      await this._runRejoinAttempt(gen)
+    } finally {
+      if (this._rejoinInFlightGen === gen) this._rejoinInFlightGen = null
+    }
+  },
+
+  async _runRejoinAttempt(gen) {
     const creds = this._joinCreds
     if (!creds) return this._enterLost(this._room)
     // A guest token lasts 30 minutes, so the one from the first join may be
@@ -1030,6 +1044,9 @@ const MeetingClient = {
   // "Rejoin" button: one click, the same path as the automatic attempt.
   _manualRejoin() {
     if (!this._connLost || !this._joinCreds) return
+    // A second click (or a held Enter) while an attempt is running would send
+    // another token request and restart the give-up clock. Ignore it.
+    if (this._rejoinInFlightGen === this._rejoinGen) return
     this._clearRejoinTimers()
     const gen = ++this._rejoinGen
     this._emitState("reconnecting", this._room)
