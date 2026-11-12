@@ -1,0 +1,44 @@
+name: Live gaming smoke
+on:
+  workflow_dispatch:
+    inputs:
+      origin:
+        description: Public HTTPS origin of the gaming install
+        required: true
+        type: string
+      games:
+        description: Expected catalog slugs in order, comma separated (optional)
+        required: false
+        type: string
+      commit:
+        description: Expected deployed commit prefix (optional)
+        required: false
+        type: string
+permissions:
+  contents: read
+jobs:
+  public-game-journeys:
+    runs-on: ubuntu-24.04
+    timeout-minutes: 10
+    steps:
+      - uses: actions/checkout@v5
+      - uses: actions/setup-node@v5
+        with:
+          node-version: 24
+      - name: Browser dependencies
+        run: |
+          npm install --prefix "$RUNNER_TEMP/game-live-check" playwright@1.58.2
+          "$RUNNER_TEMP/game-live-check/node_modules/.bin/playwright" install --with-deps chromium
+      - name: Verify the deployed public experience
+        env:
+          GAME_LIVE_ORIGIN: ${{ inputs.origin }}
+          GAME_LIVE_GAMES: ${{ inputs.games }}
+          GAME_LIVE_COMMIT: ${{ inputs.commit }}
+          GAME_LIVE_PLAYWRIGHT: ${{ runner.temp }}/game-live-check/node_modules/playwright
+          GAME_LIVE_SHOTS: ${{ runner.temp }}/game-live-shots
+        run: node .github/scripts/game-live-smoke.cjs
+      - uses: actions/upload-artifact@v4
+        if: always()
+        with:
+          name: live-game-screens
+          path: ${{ runner.temp }}/game-live-shots
