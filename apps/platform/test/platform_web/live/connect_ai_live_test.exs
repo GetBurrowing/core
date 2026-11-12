@@ -453,16 +453,31 @@ defmodule PlatformWeb.ConnectAiLiveTest do
       assert_eventually(fn -> has_element?(view, "a#connect-ai-claude-open") end, 3_000)
     end
 
-    test "Disconnect logs the agent out and offers a fresh sign-in", %{conn: conn} do
+    # Mutant: `stop_agent` → `restart_agent` in `AgentHost.claude_logout/3`.
+    # The fake host, like the real one, reports a logged-out agent whose unit
+    # is up as `running`, so after a restart this page read "Your AI is
+    # connected" and never offered the sign-in (legacypie, 2026-11-12).
+    test "Disconnect logs the agent out, stops it, and offers a fresh sign-in", %{conn: conn} do
       view = open_claude(conn)
       click_open(view)
       submit_code(view, FakeHost.claude_login_code())
       assert_eventually(fn -> has_element?(view, "#connect-ai-claude-disconnect") end, 3_000)
+      agent = Burrow.get()
+      assert %{desired_state: "running"} = NativeAgents.get_managed_runtime(agent)
 
       view |> element("#connect-ai-claude-disconnect") |> render_click()
 
       assert_eventually(fn -> has_element?(view, "a#connect-ai-claude-open") end, 3_000)
       refute has_element?(view, "#connect-ai-claude-connected")
+      refute has_element?(view, "#connect-ai-connected")
+      assert %{desired_state: "stopped"} = NativeAgents.get_managed_runtime(agent)
+
+      # Signing in again brings it back.
+      click_open(view)
+      submit_code(view, FakeHost.claude_login_code())
+      assert_eventually(fn -> has_element?(view, "#connect-ai-claude-disconnect") end, 3_000)
+      assert_eventually(fn -> has_element?(view, "#connect-ai-connected") end, 3_000)
+      assert %{desired_state: "running"} = NativeAgents.get_managed_runtime(agent)
     end
 
     test "an unknown event is refused, and only its name is logged", %{conn: conn} do

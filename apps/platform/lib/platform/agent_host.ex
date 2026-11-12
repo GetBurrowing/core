@@ -462,6 +462,10 @@ defmodule Platform.AgentHost do
 
       case result do
         {:ok, %{"result" => "ok", "account" => account, "plan" => plan}} ->
+          # The host restarts the unit so it starts logged in; a logout left
+          # the agent desired `stopped` (`claude_logout/3`), so the desire is
+          # set back to running here, or the reconciler would stop it again.
+          _ = start_agent(agent)
           {:ok, %{account: account, plan: plan}}
 
         {:ok, %{"result" => r}} when r in ["bad_code", "no_subscription", "no_session"] ->
@@ -482,9 +486,15 @@ defmodule Platform.AgentHost do
   `claude auth status` reads logged out, else `{:error, :failed | :timeout |
   :not_connected}`, or refused like `claude_login_start/3`.
 
-  Logout does not restart the agent's unit on the host, so a running agent
-  keeps its session until it restarts. With `restart: true` (the default) a
-  successful logout is followed by `restart_agent/1`.
+  Logout does not touch the agent's unit on the host, so a running agent
+  keeps its session until it restarts. With `stop: true` (the default) a
+  successful logout is followed by `stop_agent/1`: the agent stays stopped
+  until the next sign-in (`claude_login_submit/4` sets it running again).
+
+  Not a restart: a logged-out Claude Code agent whose unit is up reads
+  `running` to the host (the login prompt sits in its pane and nothing
+  observes it), so a restart here made Connect your AI show "connected" and
+  never offer the sign-in, and the chat found out only at the next reply.
   """
   @spec claude_logout(map() | binary() | nil, Agent.t(), keyword()) ::
           :ok | {:error, login_refusal() | :failed | :timeout | :not_connected | term()}
@@ -496,7 +506,7 @@ defmodule Platform.AgentHost do
 
       case await_claude_login(ref, timeout, fn -> Reconciler.claude_logout(agent.id, ref) end) do
         {:ok, %{"result" => "ok"}} ->
-          if Keyword.get(opts, :restart, true), do: restart_agent(agent), else: :ok
+          if Keyword.get(opts, :stop, true), do: stop_agent(agent), else: :ok
 
         {:ok, _} ->
           {:error, :failed}
