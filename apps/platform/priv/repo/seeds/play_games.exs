@@ -4,20 +4,24 @@
 # Run with:
 #   cd apps/platform && mix run priv/repo/seeds/play_games.exs
 #
-# Needs a writable CHAT_ATTACHMENTS_ROOT for the build zips, a root admin user
-# (visit /dev/login once on a fresh dev DB) and the root
-# org. Everything goes through context functions:
+# Needs a writable CHAT_ATTACHMENTS_ROOT for the build zips and the root org.
+# The owner is resolved at run time: the earliest internal root admin, or on a
+# dev DB with none, the same local user /dev/login creates.
+#
+# Everything goes through context functions:
 #
 #   * Create project      Platform.Tasks.create_project/1, slug "game-<slug>",
 #                         with one epic and a few unassigned backlog tasks
-#   * dev space           Platform.Chat.create_channel/1, slug "game-<slug>-dev",
-#                         metadata %{"game_slug", "project_id"}
+#   * development space   Platform.Chat.create_channel/1, slug "game-<slug>-dev",
+#                         metadata %{"game_slug", "project_id", "goal_project_id"}
+#                         (goal_project_id scopes the channel to the project in
+#                         Create); separate from the players room
 #   * release build       Platform.Chat.AttachmentStorage.persist_binary_upload/3
 #                         and Platform.Chat.create_attachment/1, a small zip
 #   * publication         Platform.Games.Publishing.publish_release/2, which
 #                         also creates the tagged players room (community_space_id)
 #   * presentation        Platform.Games.Publishing.save/2 adds image_path,
-#                         image_alt, portrait_path, project_id, dev_space_id,
+#                         image_alt, portrait_path, theme_color, project_id, development_space_id,
 #                         position, featured and placeholder to the manifest
 #
 # Re-running adds nothing: projects, spaces and epics are found by slug or
@@ -41,6 +45,7 @@ alias Platform.Tasks.{Epic, Project, Task}
 games = [
   %{
     slug: "voltron",
+    theme_color: "#4a7aa6",
     title: "Voltron",
     summary: "Pilot a lion, form Voltron, and smash things with your crew.",
     position: 0,
@@ -59,9 +64,10 @@ games = [
   },
   %{
     slug: "sky-haulers",
+    theme_color: "#7fb8f0",
     title: "Placeholder: Sky Haulers",
     summary:
-      "Placeholder game, a test fixture for Burrow Play. Exercises the store page, download, players room and Create project. Not a real game.",
+      "Placeholder test build: a cargo-hauling co-op between floating islands, used to test downloads and player rooms. Not a real game.",
     position: 1,
     featured: false,
     placeholder: true,
@@ -78,9 +84,10 @@ games = [
   },
   %{
     slug: "tiny-tactics",
+    theme_color: "#8d54c2",
     title: "Placeholder: Tiny Tactics",
     summary:
-      "Placeholder game, a test fixture for Burrow Play. Exercises the store page, download, players room and Create project. Not a real game.",
+      "Placeholder test build: a tiny turn-based hex skirmish, used to test releases, updates and Create projects. Not a real game.",
     position: 2,
     featured: false,
     placeholder: true,
@@ -114,7 +121,20 @@ actor =
     )
   )
   |> List.first() ||
-    raise "play_games.exs: no root admin user. Visit /dev/login once, then re-run."
+    (fn ->
+       # No owner yet: create the same local user /dev/login does. Dev only.
+       if Mix.env() != :dev, do: raise("play_games.exs: no root admin user on this database.")
+
+       result =
+         Platform.Accounts.ExternalAdmission.admit(
+           %{sub: "dev-local-user", email: "dev@localhost", name: "Dev User"},
+           surface: :app
+         )
+
+       if Tenancy.root_admin?(result.user),
+         do: result.user,
+         else: raise("play_games.exs: the dev user is not a root admin; visit /dev/login first.")
+     end).()
 
 ok! = fn
   {:ok, value}, _what -> value
@@ -184,10 +204,31 @@ for game <- games do
               do: "Development space for a placeholder test game.",
               else: "Development space for #{game.title}."
             ),
-          metadata: %{"game_slug" => game.slug, "project_id" => project.id}
+          metadata: %{
+            "game_slug" => game.slug,
+            "project_id" => project.id,
+            "goal_project_id" => project.id
+          }
         }),
         "dev space #{game.slug}"
       )
+
+  dev_space =
+    if dev_space.metadata["goal_project_id"] == project.id do
+      dev_space
+    else
+      ok!.(
+        Chat.update_space(dev_space, %{
+          metadata:
+            Map.merge(dev_space.metadata || %{}, %{
+              "game_slug" => game.slug,
+              "project_id" => project.id,
+              "goal_project_id" => project.id
+            })
+        }),
+        "dev space metadata #{game.slug}"
+      )
+    end
 
   unless Repo.exists?(
            from(p in Chat.Participant,
@@ -271,22 +312,35 @@ for game <- games do
 
   manifest = Repo.get!(Publication, game.slug).manifest
 
+  # Placeholders own their copy; a real game's title and summary stay as published.
+  copy =
+    if game.placeholder,
+      do: %{"title" => game.title, "summary" => game.summary},
+      else: %{}
+
   presentation = %{
     "image_path" => manifest["image_path"] || game.image_path,
     "image_alt" => manifest["image_alt"] || game.image_alt,
     "portrait_path" => game.portrait_path,
     "project_id" => project.id,
-    "dev_space_id" => dev_space.id,
+    "development_space_id" => dev_space.id,
     "position" => game.position,
     "featured" => game.featured,
-    "placeholder" => game.placeholder
+    "placeholder" => game.placeholder,
+    "theme_color" => game.theme_color
   }
 
+  presentation = Map.merge(presentation, copy)
+
   publication =
-    if Map.take(manifest, Map.keys(presentation)) == presentation do
+    if Map.take(manifest, Map.keys(presentation)) == presentation and
+         not Map.has_key?(manifest, "dev_space_id") do
       Repo.get!(Publication, game.slug)
     else
-      ok!.(Publishing.save(actor, Map.merge(manifest, presentation)), "presentation #{game.slug}")
+      ok!.(
+        Publishing.save(actor, manifest |> Map.delete("dev_space_id") |> Map.merge(presentation)),
+        "presentation #{game.slug}"
+      )
     end
 
   IO.puts(
