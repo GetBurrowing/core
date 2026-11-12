@@ -67,5 +67,21 @@ with tempfile.TemporaryDirectory(prefix='burrow-player-test-', dir=parent) as tm
     state['manifest'], state['body'] = package('nolauncher', launch=None)
     out = run(); assert current()['version'] == 'nolauncher'; assert current()['launch_path'] is None
     assert out.strip().endswith(current()['folder'].split('\\')[-1]), out
+    # The launcher is pinned per release: v1 ships A.bat, v2 renames it to B.bat, and rolling back
+    # (a downgrade) must start A.bat again, not the newer release's B.bat.
+    v1 = package('rename-1', launch='A.bat'); v2 = package('rename-2', launch='B.bat')
+    state['manifest'], state['body'] = v1
+    out = run(); assert current()['launch_path'] == 'A.bat'; assert out.strip().endswith('A.bat'), out
+    state['manifest'], state['body'] = v2
+    out = run(); assert current()['version'] == 'rename-2' and current()['launch_path'] == 'B.bat', current(); assert out.strip().endswith('B.bat'), out
+    state['manifest'], state['body'] = v1
+    out = run(); assert current()['version'] == 'rename-1' and current()['launch_path'] == 'A.bat', current(); assert out.strip().endswith('A.bat'), out
+    # A remembered launcher that does not match the installed version is re-resolved without a download,
+    # including a state written before the player remembered launchers at all.
+    for stale in [dict(current(), launch_path='B.bat'), {k: v for k, v in current().items() if k != 'launch_path'}]:
+        (data/'current.json').write_text(json.dumps(stale), encoding='utf-8')
+        downloads = state['downloads']
+        out = run(); assert state['downloads'] == downloads, 'same bytes must not download again'
+        assert current()['launch_path'] == 'A.bat', current(); assert out.strip().endswith('A.bat'), out
 server.shutdown()
-print('WINDOWS_PLAYER PASS: install, no-op, update, same-size corruption, redirect rejection, ZIP traversal, rollback, cleanup, per-game launcher, unsafe launcher refusal, no launcher')
+print('WINDOWS_PLAYER PASS: install, no-op, update, same-size corruption, redirect rejection, ZIP traversal, rollback, cleanup, per-game launcher, unsafe launcher refusal, no launcher, per-release launcher across rename and rollback, stale launcher re-resolved')

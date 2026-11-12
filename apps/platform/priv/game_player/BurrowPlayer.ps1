@@ -36,6 +36,14 @@ function Get-Installed {
     if (Test-Path -LiteralPath $path) { return Get-Content -LiteralPath $path -Raw | ConvertFrom-Json }
     return $null
 }
+# The installed state remembers the launcher of the version it points at. It is rewritten whenever the
+# served release changes (update, rollback or downgrade), so it never carries another version's launcher.
+function Save-Installed($release, [string]$folder) {
+    $state = @{version=$release.version; sha256=$release.sha256; folder=$folder; launch_path=$release.launch_path}
+    $temp = Join-Path $DataRoot 'current.next.json'; $current = Join-Path $DataRoot 'current.json'
+    $state | ConvertTo-Json | Set-Content -LiteralPath $temp -Encoding UTF8
+    if (Test-Path -LiteralPath $current) { [IO.File]::Replace($temp, $current, (Join-Path $DataRoot "current.previous.json")) } else { [IO.File]::Move($temp, $current) }
+}
 function Set-Status([string]$text) {
     if ($CheckOnly) { Write-Host $text } else { $status.Text = $text; $status.Refresh() }
 }
@@ -44,9 +52,12 @@ function Update-Game {
     $release = Get-Release
     $installed = Get-Installed
     $folder = Join-Path $DataRoot "versions\$($release.version)-$($release.sha256.Substring(0,12))"
-    # No launcher named: install anyway and hand back the folder to open.
+    # The launcher is resolved per release: the one this version's ZIP ships. No launcher named: install anyway and hand back the folder.
     $launch = if ($release.launch_path) { Join-Path $folder $release.launch_path } else { $folder }
-    if ($installed -and $installed.version -eq $release.version -and $installed.sha256 -eq $release.sha256 -and (Test-Path -LiteralPath $launch)) {
+    if ($installed -and $installed.version -eq $release.version -and $installed.sha256 -eq $release.sha256 -and $installed.folder -eq $folder -and (Test-Path -LiteralPath $launch)) {
+        # Same bytes, but the release may now name its launcher (or a pin was added): remember that one.
+        $remembered = if ($installed.PSObject.Properties['launch_path']) { $installed.launch_path } else { $null }
+        if ($remembered -cne $release.launch_path) { Save-Installed $release $folder }
         Set-Status "Ready to play - $($release.version)"; return $launch
     }
     $staging = Join-Path $DataRoot ('.update-' + [Guid]::NewGuid().ToString('N'))
@@ -88,10 +99,7 @@ function Update-Game {
         if ($release.launch_path -and -not (Test-Path -LiteralPath (Join-Path $staging $release.launch_path) -PathType Leaf)) { throw 'Game start file is missing.' }
         [IO.Directory]::CreateDirectory((Split-Path $folder)) | Out-Null
         if (Test-Path -LiteralPath $folder) { Remove-Item -LiteralPath $staging -Recurse -Force } else { Move-Item -LiteralPath $staging -Destination $folder }
-        $state = @{version=$release.version; sha256=$release.sha256; folder=$folder; launch_path=$release.launch_path}
-        $temp = Join-Path $DataRoot 'current.next.json'; $current = Join-Path $DataRoot 'current.json'
-        $state | ConvertTo-Json | Set-Content -LiteralPath $temp -Encoding UTF8
-        if (Test-Path -LiteralPath $current) { [IO.File]::Replace($temp, $current, (Join-Path $DataRoot "current.previous.json")) } else { [IO.File]::Move($temp, $current) }
+        Save-Installed $release $folder
         Set-Status "Ready to play - $($release.version)"
         return $launch
     } finally {

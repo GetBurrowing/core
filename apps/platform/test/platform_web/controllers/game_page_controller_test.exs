@@ -721,6 +721,217 @@ defmodule PlatformWeb.GamePageControllerTest do
     end
   end
 
+  describe "per-release launcher" do
+    defp root_publisher(name) do
+      actor =
+        Repo.insert!(
+          User.changeset(%User{}, %{
+            name: name,
+            email: "#{name}@example.net",
+            oidc_sub: name
+          })
+        )
+
+      Repo.insert!(
+        OrgMembership.changeset(%OrgMembership{}, %{
+          user_id: actor.id,
+          org_id: Tenancy.get_org_by_slug!("acme").id,
+          role: "admin"
+        })
+      )
+
+      actor
+    end
+
+    defp zip_attachment(body) do
+      {:ok, stored} =
+        AttachmentStorage.persist_binary_upload(body, "build.zip", "application/zip")
+
+      Repo.insert!(Attachment.changeset(%Attachment{}, stored))
+    end
+
+    defp served_launcher(conn, slug),
+      do: conn |> get("/games/#{slug}/updates") |> json_response(200) |> Map.get("launch_path")
+
+    defp page_launcher(conn, slug) do
+      page = conn |> get("/games/#{slug}") |> html_response(200) |> LazyHTML.from_document()
+      LazyHTML.text(LazyHTML.query(page, "#game-launch-path"))
+    end
+
+    test "a rollback serves the launcher of the release it rolls back to", %{
+      conn: conn,
+      org: org,
+      artifact: artifact
+    } do
+      actor = root_publisher("launcher-publisher")
+      next = zip_attachment("PK-renamed-entrypoint")
+
+      v1 = %{
+        "slug" => "renamer",
+        "title" => "Renamer",
+        "summary" => "Renames its entrypoint",
+        "org_id" => org.id,
+        "version" => "one",
+        "attachment_id" => artifact.id,
+        "launch_path" => "A.bat",
+        "published" => "true"
+      }
+
+      v2 =
+        Map.merge(v1, %{"version" => "two", "attachment_id" => next.id, "launch_path" => "B.bat"})
+
+      assert {:ok, _} = Games.Publishing.publish_release(actor, v1)
+      assert served_launcher(conn, "renamer") == "A.bat"
+      assert {:ok, _} = Games.Publishing.publish_release(actor, v2)
+      assert served_launcher(conn, "renamer") == "B.bat"
+      assert page_launcher(conn, "renamer") == "B.bat"
+
+      # Roll back by republishing v1 without naming a launcher: its own pin wins.
+      assert {:ok, _} = Games.Publishing.publish_release(actor, Map.delete(v1, "launch_path"))
+      assert Games.get("renamer")["current_version"] == "one"
+      assert served_launcher(conn, "renamer") == "A.bat"
+      assert page_launcher(conn, "renamer") == "A.bat"
+      refute Map.has_key?(Games.get("renamer"), "launch_path")
+
+      assert Enum.map(Games.get("renamer")["releases"], &{&1["version"], &1["launch_path"]}) ==
+               [{"one", "A.bat"}, {"two", "B.bat"}]
+
+      # A published release's launcher never changes, through either path.
+      assert {:error, :immutable_release} =
+               Games.Publishing.publish_release(actor, Map.put(v1, "launch_path", "B.bat"))
+
+      manifest = Games.get("renamer")
+      renamed = put_in(manifest, ["releases", Access.at(0), "launch_path"], "B.bat")
+      assert {:error, _} = Games.Publishing.save(actor, renamed)
+
+      assert {:error, :immutable_release} =
+               Games.Publishing.pin_launch_path(actor, "renamer", "one", "B.bat")
+
+      assert served_launcher(conn, "renamer") == "A.bat"
+    end
+
+    test "a legacy release gains a pin once, keeping its bytes and current version", %{
+      conn: conn,
+      org: org,
+      artifact: artifact
+    } do
+      actor = root_publisher("launcher-pinner")
+
+      attrs = %{
+        "slug" => "legacy-pin",
+        "title" => "Legacy pin",
+        "org_id" => org.id,
+        "version" => "one",
+        "attachment_id" => artifact.id,
+        "published" => "true"
+      }
+
+      assert {:ok, _} = Games.Publishing.publish_release(actor, attrs)
+      refute Map.has_key?(hd(Games.get("legacy-pin")["releases"]), "launch_path")
+      assert served_launcher(conn, "legacy-pin") == nil
+
+      assert {:error, :invalid_publication} =
+               Games.Publishing.pin_launch_path(actor, "legacy-pin", "one", "../x.bat")
+
+      assert {:error, :invalid_publication} =
+               Games.Publishing.pin_launch_path(actor, "legacy-pin", "missing", "Play.bat")
+
+      before = Games.get("legacy-pin")
+      assert {:ok, _} = Games.Publishing.pin_launch_path(actor, "legacy-pin", "one", "Play.bat")
+      after_pin = Games.get("legacy-pin")
+      assert served_launcher(conn, "legacy-pin") == "Play.bat"
+
+      assert hd(after_pin["releases"]) ==
+               Map.put(hd(before["releases"]), "launch_path", "Play.bat")
+
+      assert Map.delete(after_pin, "releases") == Map.delete(before, "releases")
+
+      # Idempotent: the same pin again is a no-op.
+      assert {:ok, _} = Games.Publishing.pin_launch_path(actor, "legacy-pin", "one", "Play.bat")
+      assert Games.get("legacy-pin") == after_pin
+    end
+
+    test "resolution order: release, then game (legacy), then Voltron's historical launcher", %{
+      conn: conn,
+      game: game
+    } do
+      release = Games.current_release(game)
+
+      # A legacy manifest with only the game-level value.
+      legacy = Map.put(game, "launch_path", "Start.cmd")
+      assert Games.launch_path(legacy, release) == "Start.cmd"
+      Application.put_env(:platform, :game_publications, [legacy])
+      assert served_launcher(conn, "voltron") == "Start.cmd"
+      assert page_launcher(conn, "voltron") == "Start.cmd"
+
+      # The release's own value beats the game-level one.
+      pinned = put_in(legacy, ["releases", Access.at(0), "launch_path"], "Play Pinned.exe")
+      assert Games.launch_path(pinned, Games.current_release(pinned)) == "Play Pinned.exe"
+      Application.put_env(:platform, :game_publications, [pinned])
+      assert served_launcher(conn, "voltron") == "Play Pinned.exe"
+
+      # Voltron with neither keeps its historical launcher; any other game names none.
+      assert Games.launch_path(game, release) == "Play Voltron.bat"
+      assert Games.launch_path(Map.put(game, "slug", "other"), release) == nil
+    end
+
+    test "a release's launch_path follows the same rules as the game's", %{
+      game: game,
+      org: org,
+      artifact: artifact
+    } do
+      for ok <- ["Play Voltron.bat", "start.cmd", "Game_v2-final.EXE"] do
+        assert Games.valid?(put_in(game, ["releases", Access.at(0), "launch_path"], ok)), ok
+      end
+
+      actor = root_publisher("launcher-validator")
+
+      for bad <- [
+            "../Play.bat",
+            "a..b.bat",
+            "bin/play.bat",
+            "bin\\play.bat",
+            "C:\\Windows\\play.bat",
+            "play.bat & calc.exe",
+            "play|x.bat",
+            "play%PATH%.bat",
+            "play.ps1",
+            "play",
+            ".play.bat",
+            "play.bat\n",
+            42,
+            nil
+          ] do
+        unless is_nil(bad) do
+          refute Games.valid?(put_in(game, ["releases", Access.at(0), "launch_path"], bad)),
+                 inspect(bad)
+        end
+
+        attrs = %{
+          "slug" => "bad-launcher",
+          "title" => "Bad launcher",
+          "org_id" => org.id,
+          "version" => "one",
+          "attachment_id" => artifact.id,
+          "launch_path" => bad,
+          "published" => "true"
+        }
+
+        if is_nil(bad) do
+          # An omitted launcher is fine; nothing is stored on the release.
+          assert {:ok, publication} = Games.Publishing.publish_release(actor, attrs)
+          refute Map.has_key?(hd(publication.manifest["releases"]), "launch_path")
+        else
+          assert {:error, :invalid_publication} =
+                   Games.Publishing.publish_release(actor, attrs),
+                 inspect(bad)
+        end
+      end
+
+      refute Games.get("bad-launcher")["releases"] |> hd() |> Map.has_key?("launch_path")
+    end
+  end
+
   describe "screenshot gallery" do
     @shots [
       %{

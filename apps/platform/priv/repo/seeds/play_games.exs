@@ -22,8 +22,9 @@
 #                         also creates the tagged players room (community_space_id)
 #   * presentation        Platform.Games.Publishing.save/2 adds image_path,
 #                         image_alt, portrait_path, theme_color, project_id, development_space_id,
-#                         position, featured, placeholder, launch_path and
-#                         screenshots to the manifest
+#                         position, featured, placeholder and screenshots to
+#                         the manifest, and pins each release's launch_path
+#                         (the launcher is pinned per release, not per game)
 #
 # Re-running adds nothing: projects, spaces and epics are found by slug or
 # name, tasks by (project, title), and a release version that is already
@@ -210,7 +211,7 @@ build_zip = fn game ->
   </html>
   """
 
-  # The Windows player starts the game's launch_path from the release root.
+  # The Windows player starts the release's launch_path from its root.
   launcher =
     "@echo off\r\nrem #{name} #{label}: opens the test page.\r\nstart \"\" \"%~dp0index.html\"\r\n"
 
@@ -225,10 +226,10 @@ build_zip = fn game ->
 end
 
 # Builds from before per-game launchers carry only the "Play Voltron.bat" shim.
-# Name whichever launcher the current release really ships, or none.
-launcher_in_release = fn manifest, wanted ->
+# Name whichever launcher this release really ships, or none.
+launcher_in_release = fn manifest, version, wanted ->
   names =
-    with {:ok, attachment} <- Platform.Games.artifact(manifest, manifest["current_version"]),
+    with {:ok, attachment} <- Platform.Games.artifact(manifest, version),
          path = AttachmentStorage.path_for(attachment.storage_key),
          {:ok, entries} <- :zip.list_dir(String.to_charlist(path)) do
       for {:zip_file, name, _info, _comment, _offset, _size} <- entries, do: to_string(name)
@@ -360,6 +361,7 @@ for game <- games do
         "version" => game.version,
         "attachment_id" => attachment.id,
         "published" => "true",
+        "launch_path" => game.launch_path,
         "multiplayer_note" =>
           if(game.placeholder,
             do: "Placeholder test build. There is no multiplayer.",
@@ -378,8 +380,19 @@ for game <- games do
       do: %{"title" => game.title, "summary" => game.summary},
       else: %{}
 
+  # Each release carries the launcher its own ZIP ships, so a rollback starts
+  # the right file. A pin is added where missing and never changed.
+  releases =
+    Enum.map(manifest["releases"], fn release ->
+      case release["launch_path"] ||
+             launcher_in_release.(manifest, release["version"], game.launch_path) do
+        nil -> release
+        launcher -> Map.put(release, "launch_path", launcher)
+      end
+    end)
+
   presentation = %{
-    "launch_path" => manifest["launch_path"] || launcher_in_release.(manifest, game.launch_path),
+    "releases" => releases,
     "screenshots" => manifest["screenshots"] || game.screenshots,
     "image_path" => manifest["image_path"] || game.image_path,
     "image_alt" => manifest["image_alt"] || game.image_alt,
@@ -392,7 +405,7 @@ for game <- games do
     "theme_color" => game.theme_color
   }
 
-  # A release with no launcher leaves launch_path unset rather than nil.
+  # Fields with no value stay unset rather than nil.
   presentation =
     presentation
     |> Map.merge(copy)
