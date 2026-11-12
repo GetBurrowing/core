@@ -1956,44 +1956,37 @@ body, .font-suite {
 }
 /* The @mention list above the reply box: the planned exception to "in
    flow". This box is inside #message-list, where a list in flow would push
-   it down and grow the scroller, so the list is attached to the box's top
-   edge instead: exactly its width, no gap, over the thread messages above
-   it. The panel keeps the space list's glass, edge and radius, and no
-   shadow. Taking no space,
-   it never changes the scroller's scrollTop or #message-list's padding. */
+   it down and grow the scroller, and the scroller (overflow: auto) clips
+   anything absolutely positioned inside it: a reply near the top of the
+   timeline lost the top of its list under the channel header. So at EVERY
+   width the panel is fixed, its bottom edge on the field's top edge
+   (translateY(-100%)), placed and capped by ComposeInput
+   (threadMentionPlacement): it opens above the field, over the thread
+   messages and the header if it must, and never past the viewport's top.
+   Taking no space, it never changes the scroller's scrollTop or
+   #message-list's padding. The panel keeps the space list's glass, edge and
+   radius, and no shadow. */
 .thread-field-box .mention-list {
-  position: absolute;
-  left: 0;
-  right: 0;
-  bottom: 100%;
-  z-index: 20;
+  position: fixed;
+  top: var(--thread-mention-top);
+  left: var(--thread-mention-left);
+  width: var(--thread-mention-width);
+  right: auto;
+  bottom: auto;
+  transform: translateY(-100%);
+  z-index: 60;
   display: block;
   height: auto;
   margin: 0;
 }
-/* ComposeInput measures available space after patches, scrolling and
-   keyboard resizes. The shared picker keeps its internal scrolling. */
 .thread-field-box .mention-list-box {
   max-height: min(212px, var(--thread-mention-max-h, 212px));
 }
-@media (max-width: 1023.98px) {
-  /* Escape the timeline's overflow clip; the panel still follows its field,
-     including scroll and visualViewport pan. Never move the LiveView node. */
-  .thread-field-box .mention-list {
-    position: fixed;
-    top: var(--thread-mention-top);
-    left: var(--thread-mention-left);
-    width: var(--thread-mention-width);
-    right: auto;
-    bottom: auto;
-    transform: translateY(-100%);
-  }
-  /* A transformed ancestor would turn fixed positioning back into a clipped
-     local containing block while the suggestion is pressed. */
-  .message-row-inner:has(.thread-input:focus) {
-    scale: none;
-    transform: none;
-  }
+/* A transformed ancestor would turn fixed positioning back into a clipped
+   local containing block while the suggestion is pressed. */
+.message-row-inner:has(.thread-input:focus) {
+  scale: none;
+  transform: none;
 }
 /* The expansion animation must not clip an open suggestion panel. */
 .thread-replies:has(.thread-input[aria-expanded="true"]) {

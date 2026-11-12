@@ -2,6 +2,7 @@ import { describe, it, expect, vi, beforeEach, afterEach } from "vitest"
 import ComposeInput, {
   shouldResetViewportAfterBlur,
   shouldRestoreFocusAfterMove,
+  threadMentionPlacement,
 } from "../../js/hooks/compose_input.js"
 
 /**
@@ -956,10 +957,12 @@ describe("thread mention viewport and ancestor focus", () => {
     const field = { getBoundingClientRect: () => ({ top: 140, left: 30, width: 280 }), closest: s => ({ ".thread-field-box": box, "#chat-message-scroller": scroller, "#chat-drop-zone": { getBoundingClientRect: () => ({ top: 44 }) } })[s] }
     const hook = Object.assign(Object.create(ComposeInput), { el: field })
     hook._mountThreadMentionViewport()
-    expect(values.get("--thread-mention-max-h")).toBe("94px")
+    // Capped to the VISIBLE viewport's top (20), not the drop zone's (44):
+    // 140 - 20 - 8 gutter - 10 panel chrome. The 280px field widens to 300.
+    expect(values.get("--thread-mention-max-h")).toBe("102px")
     expect(values.get("--thread-mention-top")).toBe("140px")
     expect(values.get("--thread-mention-left")).toBe("30px")
-    expect(values.get("--thread-mention-width")).toBe("280px")
+    expect(values.get("--thread-mention-width")).toBe("300px")
     viewport.offsetTop = 160
     const resize = viewport.addEventListener.mock.calls.find(([n]) => n === "resize")[1]
     resize(); win.frame()
@@ -967,5 +970,54 @@ describe("thread mention viewport and ancestor focus", () => {
     hook._threadMentionCleanup()
     expect(listeners.size).toBe(0)
     expect(values.size).toBe(0)
+  })
+})
+
+
+// Regression: "the cut off tagging" (2026-11-12). A reply on the first
+// message of a short channel sits right under the channel header. The list
+// was absolutely positioned inside #chat-message-scroller at >=1024px, so the
+// scroller clipped its top rows; below 1024px it was fixed but as narrow as
+// the reply field (~190px), so every name truncated.
+describe("threadMentionPlacement: the reply list opens above and is never clipped", () => {
+  const desktop = { top: 0, left: 0, width: 1440 }
+  const phone = { top: 0, left: 0, width: 390 }
+
+  it("anchors the panel's bottom to the field's top edge (opens above)", () => {
+    const p = threadMentionPlacement({ top: 500, left: 600, width: 700 }, desktop)
+    expect(p.top).toBe(500)
+    expect(p.left).toBe(600)
+    expect(p.width).toBe(700)
+  })
+
+  it("uses the space up to the viewport top, not the scroller's top", () => {
+    // Field 196px down: the scroller starts at 52px (under the header), which
+    // left 144px; the viewport leaves the full list's room.
+    const p = threadMentionPlacement({ top: 196, left: 600, width: 700 }, desktop)
+    expect(p.maxHeight).toBe(196 - 8 - 10)
+    // The panel (list + 10px chrome) ends 8px under the viewport top.
+    expect(p.top - (p.maxHeight + 10)).toBeGreaterThanOrEqual(desktop.top + 8)
+  })
+
+  it("follows a panned visual viewport (phone keyboard)", () => {
+    const p = threadMentionPlacement({ top: 400, left: 20, width: 300 }, { ...phone, top: 250 })
+    expect(p.maxHeight).toBe(400 - 250 - 8 - 10)
+  })
+
+  it("never goes negative when the field is at the viewport top", () => {
+    expect(threadMentionPlacement({ top: 5, left: 20, width: 300 }, phone).maxHeight).toBe(0)
+  })
+
+  it("widens a narrow phone reply field and keeps it inside the viewport", () => {
+    const p = threadMentionPlacement({ top: 236, left: 105, width: 192 }, phone)
+    expect(p.width).toBe(300)
+    expect(p.left).toBeGreaterThanOrEqual(8)
+    expect(p.left + p.width).toBeLessThanOrEqual(390 - 8)
+  })
+
+  it("never wider than the viewport minus its gutters", () => {
+    const p = threadMentionPlacement({ top: 236, left: 0, width: 192 }, { top: 0, left: 0, width: 280 })
+    expect(p.width).toBe(264)
+    expect(p.left).toBe(8)
   })
 })
