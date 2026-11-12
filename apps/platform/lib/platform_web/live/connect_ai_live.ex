@@ -26,8 +26,10 @@ defmodule PlatformWeb.ConnectAiLive do
       cleared in the browser (`ConnectAiCode` hook), and
       `AgentHost.claude_login_submit/4` hands it to the pending login.
       The pending login is bound to the process that started it, so start and
-      submit both run in this view's own process, each after the screen has
-      rendered its "waiting" line (`send(self(), ...)`). Every submit ends the
+      submit both name this view as the login's owner (`caller:`), each after
+      the screen has rendered its "waiting" line (`send(self(), ...)`), while
+      the wait for the host's answer (up to 35 s) runs in a `start_async`
+      task: the view keeps answering clicks meanwhile. Every submit ends the
       pending login, so a failure fetches a fresh sign-in link. An agent with
       a saved API key stays on the key (`NativeLogin.login_view/2` answers
       `:api_key`).
@@ -370,39 +372,78 @@ defmodule PlatformWeb.ConnectAiLive do
      |> maybe_start_claude()}
   end
 
+  # The host takes up to 35 s to answer a login start or a code (it runs
+  # `claude auth login` as the agent). Waiting here blocked this process, so
+  # the page could answer nothing meanwhile: picking another option did
+  # nothing, and a reload restarted the wait (legacypie, 2026-11-12). The
+  # wait runs in a task; this view stays the login's owner (`caller:`).
   def handle_info(
         :claude_login_start,
         %{assigns: %{selected: :claude_subscription, agent: %{} = agent}} = socket
       ) do
-    claude = socket.assigns.claude
+    user = socket.assigns.current_user_record
+    opts = [{:caller, self()} | login_opts()]
 
-    claude =
-      case AgentHost.claude_login_start(socket.assigns.current_user_record, agent, login_opts()) do
-        {:ok, url} -> %{claude | url: url, link: :ready}
-        {:error, :host_outdated} -> %{claude | url: nil, link: :unavailable, why: :host_outdated}
-        {:error, _reason} -> %{claude | url: nil, link: :unavailable, why: :server}
-      end
-
-    {:noreply, assign(socket, :claude, claude)}
+    {:noreply,
+     start_async(socket, :claude_link, fn -> AgentHost.claude_login_start(user, agent, opts) end)}
   end
 
   def handle_info(
         {:claude_submit, %LoginCode{} = code},
         %{assigns: %{selected: :claude_subscription, agent: %{} = agent}} = socket
       ) do
-    claude = socket.assigns.claude
+    user = socket.assigns.current_user_record
+    opts = [{:caller, self()} | login_opts()]
 
-    case AgentHost.claude_login_submit(
-           socket.assigns.current_user_record,
-           agent,
-           code,
-           login_opts()
-         ) do
-      {:ok, login} ->
+    {:noreply,
+     start_async(socket, :claude_submit, fn ->
+       AgentHost.claude_login_submit(user, agent, code, opts)
+     end)}
+  end
+
+  def handle_info(_msg, socket), do: {:noreply, socket}
+
+  # A link answer lands only on a card still waiting for one: a switch to
+  # another option (or a retry) in the meantime made it stale.
+  @impl true
+  def handle_async(
+        :claude_link,
+        result,
+        %{assigns: %{selected: :claude_subscription, claude: %{link: :loading} = claude}} = socket
+      ) do
+    claude =
+      case result do
+        {:ok, {:ok, url}} ->
+          %{claude | url: url, link: :ready}
+
+        {:ok, {:error, :host_outdated}} ->
+          %{claude | url: nil, link: :unavailable, why: :host_outdated}
+
+        _error_or_exit ->
+          %{claude | url: nil, link: :unavailable, why: :server}
+      end
+
+    {:noreply, assign(socket, :claude, claude)}
+  end
+
+  def handle_async(
+        :claude_submit,
+        result,
+        %{assigns: %{selected: :claude_subscription, claude: %{status: :connecting} = claude}} =
+          socket
+      ) do
+    case result do
+      {:ok, {:ok, login}} ->
         claude = %{claude | status: :connected, login: login}
         {:noreply, socket |> assign(:claude, claude) |> refresh()}
 
-      {:error, reason} ->
+      other ->
+        reason =
+          case other do
+            {:ok, {:error, reason}} -> reason
+            {:exit, _} -> :server
+          end
+
         # The submit ended the pending login: fetch a fresh link for "Open
         # Claude sign-in again".
         send(self(), :claude_login_start)
@@ -419,7 +460,9 @@ defmodule PlatformWeb.ConnectAiLive do
     end
   end
 
-  def handle_info(_msg, socket), do: {:noreply, socket}
+  # Stale: the card moved on (another option picked, a retry started) before
+  # the host answered.
+  def handle_async(_name, _result, socket), do: {:noreply, socket}
 
   # `claude_login_timeout_ms:` in this module's config shortens the wait on
   # the agent host (tests); otherwise `AgentHost`'s own defaults apply.
