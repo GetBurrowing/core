@@ -149,7 +149,6 @@ defmodule Platform.Agents.NativeLogin do
           %{kind: :device_code, url: String.t() | nil, code: String.t() | nil}
           | %{kind: :claude_subscription, account: String.t() | nil, plan: String.t() | nil}
           | :api_key
-          | :subscription_terminal_only
           | :unsupported
 
   @doc """
@@ -160,18 +159,21 @@ defmodule Platform.Agents.NativeLogin do
       (`Platform.AgentHost.State`, kept only in the shapes the reconciler
       accepts), or nil until the host has printed one. Display only.
     * `%{kind: :claude_subscription, account: account, plan: plan}` for Claude
-      Code in the default `:api_key` login mode when no API key is saved: the
-      owner signs in on Anthropic's page and pastes the code
-      (`Platform.AgentHost.claude_login_start/3` and `claude_login_submit/4`).
-      `account` and `plan` come from the `login` given, the `{:ok, %{account,
-      plan}}` of a submit; nil until then. Nothing about a Claude login is
-      read from the host's observed state.
+      Code when no API key is in play: the owner signs in on Anthropic's page
+      and pastes the code (`Platform.AgentHost.claude_login_start/3` and
+      `claude_login_submit/4`). `account` and `plan` come from the `login`
+      given, the `{:ok, %{account, plan}}` of a submit; nil until then.
+      Nothing about a Claude login is read from the host's observed state.
+      In `:operator` mode this is the view whatever key is saved: core sends
+      no key in that mode, and the sign-in is the agent's own `claude auth
+      login` on the host, not a code typed through Burrow. (Until 2026-11-11
+      operator mode answered `:subscription_terminal_only` here, a rule from
+      task 01a17b10 that predates the connect-ai sign-in of task 01a1b365;
+      on legacypie, an operator install, it left the owner with no way to
+      sign Burrow in from the browser at all.)
     * `:api_key` for Claude Code in the `:api_key` login mode when an
       Anthropic API key is saved (`put_api_key/3`): the key wins over a
       subscription login.
-    * `:subscription_terminal_only` for Claude Code in `:operator` mode: a
-      Claude Pro or Max login happens at a terminal on the agent's machine,
-      never through Burrow.
     * `:unsupported` for an agent this install does not run or a harness it
       does not know.
   """
@@ -209,10 +211,8 @@ defmodule Platform.Agents.NativeLogin do
           code: Map.get(observed, :login_code)
         }
 
-      api_key_harness?(harness) and mode == :operator ->
-        :subscription_terminal_only
-
-      api_key_harness?(harness) and Keyword.get(opts, :key_set?, false) ->
+      api_key_harness?(harness) and mode != :operator and
+          Keyword.get(opts, :key_set?, false) ->
         :api_key
 
       api_key_harness?(harness) ->

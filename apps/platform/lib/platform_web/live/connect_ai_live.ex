@@ -725,10 +725,6 @@ defmodule PlatformWeb.ConnectAiLive do
                 <p id="connect-ai-claude-uses-key" class="text-base text-base-content">
                   {@agent_name} is using the API key you saved, so it doesn't need your Claude plan.
                 </p>
-              <% :subscription_terminal_only -> %>
-                <p id="connect-ai-claude-operator" class="text-base text-base-content">
-                  Someone who manages Burrow needs to connect Claude Pro or Max for you.
-                </p>
               <% _ -> %>
                 <p id="connect-ai-claude-preparing" class="text-sm text-subtle">
                   Getting {@agent_name} ready...

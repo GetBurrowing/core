@@ -186,7 +186,7 @@ defmodule Platform.AgentHost.CodexDeviceLoginTest do
                %{kind: :claude_subscription, account: nil, plan: nil}
 
       assert NativeLogin.login_view("claude_code", observed, :operator) ==
-               :subscription_terminal_only
+               %{kind: :claude_subscription, account: nil, plan: nil}
 
       assert NativeLogin.login_view("gemini", nil, :api_key) == :unsupported
     end

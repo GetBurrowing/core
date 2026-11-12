@@ -29,7 +29,7 @@ defmodule PlatformWeb.Components.ReplyFailureRow do
 
   import PlatformWeb.AvatarComponents, only: [agent_avatar: 1]
 
-  alias Platform.Agents.{Agent, NativeAgents}
+  alias Platform.Agents.{Agent, Burrow, NativeAgents}
   alias Platform.Chat.ReplyFailure
   alias Platform.Repo
 
@@ -61,6 +61,7 @@ defmodule PlatformWeb.Components.ReplyFailureRow do
       |> assign(:declined?, declined?)
       |> assign(:can_manage?, NativeAgents.can_manage?(assigns.viewer_user_id, agent))
       |> assign(:native?, NativeAgents.managed?(agent))
+      |> assign(:action_path, action_path(cause, agent))
 
     ~H"""
     <div
@@ -82,7 +83,7 @@ defmodule PlatformWeb.Components.ReplyFailureRow do
         <p :if={@line2}>{@line2}</p>
         <.link
           :if={!@declined? && @can_manage? && @agent}
-          navigate={~p"/control/#{@agent.slug}"}
+          navigate={@action_path}
           data-role="reply-failure-action"
           class={[
             "btn btn-sm mt-2",
@@ -103,6 +104,22 @@ defmodule PlatformWeb.Components.ReplyFailureRow do
     </div>
     """
   end
+
+  @doc """
+  Where the action goes. Burrow's expired Claude login (`needs_login`) goes
+  to `/setup/connect-ai`, the one screen that signs an agent in with a Claude
+  Pro or Max plan (task 01a1b365); Agent Resources only takes an API key, so
+  sending the owner there read as "the Anthropic login never comes up"
+  (legacypie, 2026-11-11). Every other cause, and every other agent, goes to
+  the agent on Agent Resources.
+  """
+  @spec action_path(String.t() | nil, Agent.t() | nil) :: String.t() | nil
+  def action_path("needs_login", %Agent{} = agent) do
+    if Burrow.burrow?(agent), do: ~p"/setup/connect-ai", else: ~p"/control/#{agent.slug}"
+  end
+
+  def action_path(_cause, %Agent{} = agent), do: ~p"/control/#{agent.slug}"
+  def action_path(_cause, nil), do: nil
 
   @doc "The action a manager sees, by cause. Copy verbatim from the canvas."
   @spec action_label(String.t() | nil, String.t()) :: String.t()

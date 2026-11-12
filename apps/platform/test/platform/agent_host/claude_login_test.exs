@@ -392,8 +392,13 @@ defmodule Platform.AgentHost.ClaudeLoginTest do
       assert %{kind: :claude_subscription} =
                NativeLogin.login_view("claude_code", nil, :api_key)
 
-      assert NativeLogin.login_view("claude_code", nil, :operator) ==
-               :subscription_terminal_only
+      # Operator mode (legacypie, 2026-11-11): the plan sign-in is offered,
+      # and a saved key does not win, because core sends none in that mode.
+      assert %{kind: :claude_subscription} =
+               NativeLogin.login_view("claude_code", nil, :operator)
+
+      assert %{kind: :claude_subscription} =
+               NativeLogin.login_view("claude_code", nil, :operator, key_set?: true)
     end
   end
 
