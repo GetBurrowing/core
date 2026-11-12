@@ -4,9 +4,11 @@
 # Run with:
 #   cd apps/platform && mix run priv/repo/seeds/play_games.exs
 #
-# Needs a writable CHAT_ATTACHMENTS_ROOT for the build zips, a root admin user
-# (visit /dev/login once on a fresh dev DB) and the root
-# org. Everything goes through context functions:
+# Needs a writable CHAT_ATTACHMENTS_ROOT for the build zips and the root org.
+# The owner is resolved at run time: the earliest internal root admin, or on a
+# dev DB with none, the same local user /dev/login creates.
+#
+# Everything goes through context functions:
 #
 #   * Create project      Platform.Tasks.create_project/1, slug "game-<slug>",
 #                         with one epic and a few unassigned backlog tasks
@@ -19,7 +21,7 @@
 #   * publication         Platform.Games.Publishing.publish_release/2, which
 #                         also creates the tagged players room (community_space_id)
 #   * presentation        Platform.Games.Publishing.save/2 adds image_path,
-#                         image_alt, portrait_path, project_id, development_space_id,
+#                         image_alt, portrait_path, theme_color, project_id, development_space_id,
 #                         position, featured and placeholder to the manifest
 #
 # Re-running adds nothing: projects, spaces and epics are found by slug or
@@ -43,6 +45,7 @@ alias Platform.Tasks.{Epic, Project, Task}
 games = [
   %{
     slug: "voltron",
+    theme_color: "#4a7aa6",
     title: "Voltron",
     summary: "Pilot a lion, form Voltron, and smash things with your crew.",
     position: 0,
@@ -61,6 +64,7 @@ games = [
   },
   %{
     slug: "sky-haulers",
+    theme_color: "#7fb8f0",
     title: "Placeholder: Sky Haulers",
     summary:
       "Placeholder test build: a cargo-hauling co-op between floating islands, used to test downloads and player rooms. Not a real game.",
@@ -80,6 +84,7 @@ games = [
   },
   %{
     slug: "tiny-tactics",
+    theme_color: "#8d54c2",
     title: "Placeholder: Tiny Tactics",
     summary:
       "Placeholder test build: a tiny turn-based hex skirmish, used to test releases, updates and Create projects. Not a real game.",
@@ -116,7 +121,20 @@ actor =
     )
   )
   |> List.first() ||
-    raise "play_games.exs: no root admin user. Visit /dev/login once, then re-run."
+    (fn ->
+       # No owner yet: create the same local user /dev/login does. Dev only.
+       if Mix.env() != :dev, do: raise("play_games.exs: no root admin user on this database.")
+
+       result =
+         Platform.Accounts.ExternalAdmission.admit(
+           %{sub: "dev-local-user", email: "dev@localhost", name: "Dev User"},
+           surface: :app
+         )
+
+       if Tenancy.root_admin?(result.user),
+         do: result.user,
+         else: raise("play_games.exs: the dev user is not a root admin; visit /dev/login first.")
+     end).()
 
 ok! = fn
   {:ok, value}, _what -> value
@@ -308,7 +326,8 @@ for game <- games do
     "development_space_id" => dev_space.id,
     "position" => game.position,
     "featured" => game.featured,
-    "placeholder" => game.placeholder
+    "placeholder" => game.placeholder,
+    "theme_color" => game.theme_color
   }
 
   presentation = Map.merge(presentation, copy)
