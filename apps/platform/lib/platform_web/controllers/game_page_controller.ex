@@ -19,7 +19,7 @@ defmodule PlatformWeb.GamePageController do
       |> render(:show,
         gaming?: Platform.Gaming.enabled?(),
         games:
-          Platform.Games.list_published() |> Enum.sort_by(&{&1["slug"] != "voltron", &1["title"]}),
+          Platform.Games.list_published(),
         creator?: not is_nil(user) and Platform.Access.authorize_install(user) == :ok,
         project: project,
         workspace_path: Platform.Gaming.workspace_path(game, project, user),

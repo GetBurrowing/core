@@ -6,7 +6,7 @@ defmodule PlatformWeb.GamingController do
   def home(conn, params) do
     if Platform.Gaming.enabled?() do
       games =
-        Platform.Games.list_published() |> Enum.sort_by(&{&1["slug"] != "voltron", &1["title"]})
+        Platform.Games.list_published()
 
       mode = if params["mode"] in ["create", "discover"], do: params["mode"], else: "play"
 

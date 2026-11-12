@@ -155,10 +155,10 @@ defmodule PlatformWeb.GamingControllerTest do
     {:ok, _} = Branding.update_identity(actor, %{experience: "gaming"})
 
     games =
-      for {slug, title, placeholder} <- [
-            {"voltron", "Voltron", false},
-            {"sky-haulers", "Sky Haulers", true},
-            {"tiny-tactics", "Tiny Tactics", true}
+      for {slug, title, placeholder, position} <- [
+            {"voltron", "Voltron", false, 0},
+            {"sky-haulers", "Sky Haulers", true, 1},
+            {"tiny-tactics", "Tiny Tactics", true, 2}
           ] do
         project =
           Repo.insert!(
@@ -192,6 +192,13 @@ defmodule PlatformWeb.GamingControllerTest do
           "slug" => slug,
           "title" => title,
           "placeholder" => placeholder,
+          "position" => position,
+          "image_path" => if(placeholder, do: "/images/play/#{slug}-cover.png", else: "/images/voltron-game.png"),
+          "summary" => case slug do
+            "sky-haulers" -> "Placeholder test build: take a sky delivery for a spin."
+            "tiny-tactics" -> "Placeholder test build: make your move on a tiny battlefield."
+            _ -> game["summary"]
+          end,
           "theme_color" => if(placeholder, do: "#7ef0d0", else: "#4d8bff"),
           "project_id" => project.id,
           "development_space_id" => development.id,
