@@ -79,7 +79,8 @@ defmodule PlatformWeb.SignInSetupControllerTest do
 
   test "sends only a code, retains only its digest, and preserves the native PKCE handoff", %{conn: conn, user: user} do
     provider(user)
-    challenge = String.duplicate("a", 43)
+    verifier = Base.url_encode64(:crypto.strong_rand_bytes(32), padding: false)
+    challenge = :crypto.hash(:sha256, verifier) |> Base.url_encode64(padding: false)
     conn = conn |> init_test_session(app_challenge: challenge) |> post("/auth/email/setup", %{email: " NEW@example.test "})
     assert html_response(conn, 200) =~ "If your account is invited"
     refute conn.resp_body =~ @code
@@ -96,6 +97,17 @@ defmodule PlatformWeb.SignInSetupControllerTest do
     assert get_session(completed, :app_challenge) == challenge
     assert get_session(completed, :email_setup) == nil
     refute get_session(completed, :post_login_path)
+    claims = %{"sub" => user.oidc_sub, "email" => user.email, "name" => user.name}
+    Application.put_env(:platform, :oidc_mock_response, {:ok, %{user: claims, userinfo: claims, id_token: claims, token: %{"id_token" => "t"}}})
+    state = get_session(completed, :oidc_session_params).state
+    callback = completed |> recycle() |> get("/auth/oidc/callback?" <> URI.encode_query(%{code: "provider-code", state: state}))
+    location = URI.parse(redirected_to(callback))
+    assert location.scheme == "burrow"
+    assert location.host == "auth"
+    assert location.path == "/callback"
+    %{"code" => exchange} = URI.decode_query(location.query)
+    assert {:ok, %{session: session}} = Platform.Mobile.exchange_code(exchange, verifier)
+    assert session.user_id == user.id
     # Reusing the completion form cannot start another login.
     replay = completed |> recycle() |> post("/auth/email/complete", %{code: @code})
     assert replay.status == 400

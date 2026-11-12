@@ -19,7 +19,7 @@
         <div :if={@mail?}>
           <p>Or get a setup code at your invited email address. No QR scan needed.</p>
           <.form for={@form} action="/auth/email/setup" method="post" id="email-setup-request" class="space-y-3 mt-4">
-            <.input name="email" value="" type="email" label="Email address" autocomplete="email" required class="input w-full placeholder:text-subtle" />
+            <.input id="setup-email" name="email" value="" type="email" label="Email address" autocomplete="email" required class="input w-full placeholder:text-subtle" />
             <button class="btn btn-outline w-full" type="submit">Email me a setup code</button>
           </.form>
         </div>
@@ -29,7 +29,7 @@
         <p>If your account is invited and has no passkey yet, we’ll email a code. Return here to enter it. Codes expire in 30 minutes.</p>
         <p :if={@error?} role="alert">That code could not be used. Check it or request a new one.</p>
         <.form for={@form} action="/auth/email/complete" method="post" id="email-setup-complete" class="space-y-3">
-          <.input name="code" value="" label="Setup code" autocomplete="one-time-code" spellcheck="false" autocapitalize="none" required maxlength="64" class="input w-full placeholder:text-subtle" />
+          <.input id="setup-code" name="code" value="" label="Setup code" autocomplete="one-time-code" spellcheck="false" autocapitalize="none" required maxlength="64" class="input w-full placeholder:text-subtle" />
           <button class="btn btn-primary w-full" type="submit">Continue</button>
         </.form>
       </section>
