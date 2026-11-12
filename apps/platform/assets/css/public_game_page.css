@@ -53,6 +53,27 @@
 .gp-thumbs img{width:100%;height:100%;object-fit:cover;display:block}
 .gp-thumbs .gp-r img{object-fit:contain}
 
+/* screenshot gallery: thumbnails open a keyboard-driven viewer (links still work without JS) */
+.gp-gallery{margin-top:18px}
+.gp-gallery h2{font-size:15px;font-weight:700;letter-spacing:-.01em;margin:0 0 10px}
+.gp-shots{list-style:none;margin:0;padding:0;display:grid;grid-template-columns:repeat(3,minmax(0,1fr));gap:12px}
+.gp-shot{display:block;aspect-ratio:16/9;border-radius:var(--r-md);overflow:hidden;border:1px solid var(--edge);background:var(--stage);transition:transform .2s,box-shadow .2s}
+.gp-shot img{width:100%;height:100%;object-fit:cover;display:block}
+.gp-shot:hover{transform:translateY(-2px)}
+.gp-shot:focus-visible{outline:3px solid #fff;outline-offset:3px}
+.gp-lightbox{margin:auto;width:min(1100px,calc(100vw - 32px));max-height:calc(100dvh - 32px);padding:14px;border:1px solid var(--edge);border-radius:var(--r-xl);background:var(--surface);color:var(--ink)}
+.gp-lightbox::backdrop{background:rgba(5,7,18,.82);backdrop-filter:blur(6px)}
+.gp-lightbox figure{margin:0}
+.gp-lightbox img{display:block;width:100%;max-height:calc(100dvh - 150px);object-fit:contain;border-radius:var(--r-md);background:var(--stage)}
+.gp-lightbox figcaption{margin:12px 4px 0;font-size:14px;color:var(--muted)}
+.gp-lightbox-nav{display:flex;align-items:center;gap:8px;margin-top:10px}
+.gp-lightbox-nav span{font-size:13px;color:var(--muted);margin-right:auto;padding-left:4px;order:-1}
+.public-game .gp-lightbox-nav button{display:grid;place-items:center;width:44px;height:44px;border-radius:var(--r-pill);background:var(--raised);color:var(--ink)}
+.gp-lightbox-nav button .hero-chevron-left,.gp-lightbox-nav button .hero-chevron-right,.gp-lightbox-nav button .hero-x-mark{width:20px;height:20px}
+.gp-lightbox-nav button:focus-visible{outline:3px solid #fff;outline-offset:3px}
+@media(max-width:767px){.gp-shots{gap:8px}}
+@media(prefers-reduced-motion:reduce){.gp-shot{transition:none}.gp-shot:hover{transform:none}}
+
 /* ── the action card: the only thing that changes between Game-tab states ── */
 .gp-card{position:sticky;top:80px;background:var(--surface);border:1px solid var(--edge);border-radius:var(--r-xl);padding:24px;box-shadow:var(--shadow)}
 .gp-eyebrow{font-size:12px;font-weight:700;letter-spacing:.08em;text-transform:uppercase;color:var(--muted);display:flex;align-items:center;gap:8px}

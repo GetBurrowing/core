@@ -77,6 +77,66 @@
                   else: "Early build"}
               </span>
             </div>
+            <section
+              :if={@screenshots != []}
+              id="game-screenshots"
+              class="gp-gallery"
+              aria-labelledby="game-screenshots-title"
+              data-game-gallery
+            >
+              <h2 id="game-screenshots-title">Screenshots</h2>
+              <ul class="gp-shots">
+                <li :for={{shot, index} <- Enum.with_index(@screenshots)}>
+                  <a
+                    id={"game-shot-#{index + 1}"}
+                    class="gp-shot"
+                    href={shot["path"]}
+                    data-game-shot={index}
+                    data-game-shot-alt={shot["alt"]}
+                    aria-label={"#{shot["alt"]} (screenshot #{index + 1} of #{length(@screenshots)})"}
+                  >
+                    <img src={shot["path"]} alt="" loading="lazy" width="1280" height="720" />
+                  </a>
+                </li>
+              </ul>
+              <dialog
+                id="game-lightbox"
+                class="gp-lightbox"
+                aria-labelledby="game-lightbox-caption"
+                data-game-lightbox
+              >
+                <figure>
+                  <img data-game-lightbox-image src={hd(@screenshots)["path"]} alt="" />
+                  <figcaption id="game-lightbox-caption" data-game-lightbox-caption>
+                    {hd(@screenshots)["alt"]}
+                  </figcaption>
+                </figure>
+                <div class="gp-lightbox-nav">
+                  <button
+                    :if={length(@screenshots) > 1}
+                    type="button"
+                    data-game-lightbox-step="-1"
+                    aria-label="Previous screenshot"
+                  >
+                    <.icon name="hero-chevron-left" />
+                  </button>
+                  <span data-game-lightbox-count aria-live="polite">
+                    1 / {length(@screenshots)}
+                  </span>
+                  <button
+                    :if={length(@screenshots) > 1}
+                    type="button"
+                    data-game-lightbox-step="1"
+                    aria-label="Next screenshot"
+                  >
+                    <.icon name="hero-chevron-right" />
+                  </button>
+                  <button type="button" data-game-lightbox-close aria-label="Close screenshots">
+                    <.icon name="hero-x-mark" />
+                  </button>
+                </div>
+              </dialog>
+            </section>
           </div>
           <aside class="gp-card">
             <div class="gp-eyebrow">
@@ -153,7 +213,7 @@
                   <b>Extract Burrow Player</b><span>Right-click the downloaded file → Extract All.</span>
                 </li>
                 <li>
-                  <b>Open Play.bat</b><span>The player downloads and verifies the latest Voltron build.</span>
+                  <b>Open Play.bat</b><span>The player downloads and verifies the latest {@game["title"]} build.</span>
                 </li>
                 <li>
                   <b>Find your crew</b><span>Get the current room code in the joined player community.</span>
@@ -180,6 +240,13 @@
             >
               Download portable game ZIP instead
             </a>
+            <p id="game-launch-instructions" class="gp-under">
+              <%= if @launch_path do %>
+                To play the portable ZIP, extract it and open <b id="game-launch-path">{@launch_path}</b>.
+              <% else %>
+                To play the portable ZIP, extract it and follow the README inside. This build has no launcher yet.
+              <% end %>
+            </p>
             <noscript>
               <p class="gp-under">
                 After downloading, extract the ZIP and open Play.bat.

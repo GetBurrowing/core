@@ -45,6 +45,32 @@ const path = require('node:path')
         await community.setViewportSize({width:390, height:844})
       }
       await community.screenshot({path:path.join(process.env.GAME_PAGE_SCREENSHOTS, mobile ? 'community-phone.png' : 'community-desktop.png'), fullPage:true})
+      // Screenshot gallery in Console Glass: keyboard reachable, white ring, viewer steps and returns focus.
+      const gallery = await context.newPage()
+      const galleryErrors = []
+      gallery.on('pageerror', error => galleryErrors.push(error.message))
+      await gallery.goto(origin + '/game-page-evidence/gallery-glass.html')
+      await gallery.waitForFunction(() => document.getElementById('public-game')?.dataset.gamePageReady === 'true')
+      assert.equal(await gallery.evaluate(() => document.documentElement.scrollWidth <= innerWidth + 1), true, 'gallery horizontal overflow')
+      await gallery.locator('#game-shot-1').scrollIntoViewIfNeeded()
+      assert.equal(await gallery.locator('#game-screenshots img').evaluateAll(images => images.every(img => img.complete && img.naturalWidth > 0)), true, 'missing screenshot')
+      await gallery.locator('#game-shot-1').focus()
+      await gallery.keyboard.press('ArrowRight')
+      assert.equal(await gallery.evaluate(() => document.activeElement.id), 'game-shot-2', 'arrow keys move between screenshots')
+      await gallery.waitForTimeout(400) // the ring eases in with the tile lift
+      assert.match(await gallery.evaluate(() => getComputedStyle(document.activeElement).boxShadow), /rgb\(255, 255, 255\) 0px 0px 0px 3px/, 'screenshot focus ring')
+      await gallery.screenshot({path:path.join(process.env.GAME_PAGE_SCREENSHOTS, mobile ? 'gallery-phone.png' : 'gallery-desktop.png'), fullPage:true})
+      await gallery.keyboard.press('Enter')
+      assert.equal(await gallery.locator('#game-lightbox').evaluate(dialog => dialog.open), true, 'viewer opens from the keyboard')
+      assert.equal(await gallery.locator('[data-game-lightbox-count]').textContent(), '2 / 3')
+      await gallery.keyboard.press('ArrowRight')
+      assert.equal(await gallery.locator('[data-game-lightbox-count]').textContent(), '3 / 3')
+      await gallery.waitForFunction(() => document.querySelector('[data-game-lightbox-image]').complete)
+      await gallery.screenshot({path:path.join(process.env.GAME_PAGE_SCREENSHOTS, mobile ? 'gallery-viewer-phone.png' : 'gallery-viewer-desktop.png')})
+      await gallery.keyboard.press('Escape')
+      assert.equal(await gallery.locator('#game-lightbox').evaluate(dialog => dialog.open), false, 'Escape closes the viewer')
+      await gallery.waitForFunction(() => document.activeElement.id === 'game-shot-3', null, {timeout: 2000}) // focus returns to the screenshot shown
+      assert.deepEqual(galleryErrors, [], 'gallery JavaScript errors')
       for (const state of ['gaming-visitor', 'gaming-owner', 'gaming-empty', 'gaming-three', 'gaming-create', 'gaming-discover']) {
         const gaming = await context.newPage()
         await gaming.goto(origin + '/game-page-evidence/' + state + '.html')

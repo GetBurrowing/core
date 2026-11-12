@@ -9,6 +9,15 @@ if ($config.slug -notmatch '^[a-z0-9][a-z0-9-]{0,63}$') { throw 'Invalid game.' 
 if (-not $DataRoot) { $DataRoot = Join-Path $env:LOCALAPPDATA "BurrowPlayer\$($config.slug)" }
 [IO.Directory]::CreateDirectory($DataRoot) | Out-Null
 $script:busy = $false
+$gameTitle = if ($config.title -is [string] -and $config.title.Trim()) { $config.title.Trim() } else { 'Voltron' }
+function Start-Game([string]$path) {
+    if (Test-Path -LiteralPath $path -PathType Container) {
+        Start-Process -FilePath 'explorer.exe' -ArgumentList ('"' + $path + '"')
+        Set-Status 'Installed. This game has no launcher yet, so its folder is open.'
+    } else { Start-Process -FilePath $path -WorkingDirectory (Split-Path $path) }
+}
+# A launcher is one plain file name in the release root: no folders, no '..', nothing a shell interprets.
+function Test-LaunchPath($name) { return ($name -is [string]) -and ($name -match '^[A-Za-z0-9][A-Za-z0-9 ._-]{0,62}\.(bat|cmd|exe)$') -and -not $name.Contains('..') }
 function Get-Url([string]$path) { return $origin.GetLeftPart([UriPartial]::Authority) + $path }
 function Get-Release {
     $request = [Net.HttpWebRequest]::Create((Get-Url "/games/$($config.slug)/updates"))
@@ -19,7 +28,7 @@ function Get-Release {
         try { $release = $reader.ReadToEnd() | ConvertFrom-Json } finally { $reader.Dispose() }
     } finally { $response.Dispose() }
     if ($release.version -notmatch '^[a-zA-Z0-9][a-zA-Z0-9._-]{0,63}$' -or $release.version -in @('.', '..') -or $release.sha256 -notmatch '^[a-f0-9]{64}$' -or $release.byte_size -lt 1 -or $release.byte_size -gt 1073741824) { throw 'Invalid release information.' }
-    if ($release.download_path -cne "/games/$($config.slug)/player/releases/$($release.version)" -or $release.launch_path -cne 'Play Voltron.bat') { throw 'Invalid release location.' }
+    if ($release.download_path -cne "/games/$($config.slug)/player/releases/$($release.version)" -or ($null -ne $release.launch_path -and -not (Test-LaunchPath $release.launch_path))) { throw 'Invalid release location.' }
     return $release
 }
 function Get-Installed {
@@ -35,7 +44,8 @@ function Update-Game {
     $release = Get-Release
     $installed = Get-Installed
     $folder = Join-Path $DataRoot "versions\$($release.version)-$($release.sha256.Substring(0,12))"
-    $launch = Join-Path $folder $release.launch_path
+    # No launcher named: install anyway and hand back the folder to open.
+    $launch = if ($release.launch_path) { Join-Path $folder $release.launch_path } else { $folder }
     if ($installed -and $installed.version -eq $release.version -and $installed.sha256 -eq $release.sha256 -and (Test-Path -LiteralPath $launch)) {
         Set-Status "Ready to play - $($release.version)"; return $launch
     }
@@ -75,10 +85,10 @@ function Update-Game {
             }
         } finally { $archive.Dispose() }
         [IO.Compression.ZipFile]::ExtractToDirectory($zipPath, $staging)
-        if (-not (Test-Path -LiteralPath (Join-Path $staging $release.launch_path))) { throw 'Game start file is missing.' }
+        if ($release.launch_path -and -not (Test-Path -LiteralPath (Join-Path $staging $release.launch_path) -PathType Leaf)) { throw 'Game start file is missing.' }
         [IO.Directory]::CreateDirectory((Split-Path $folder)) | Out-Null
         if (Test-Path -LiteralPath $folder) { Remove-Item -LiteralPath $staging -Recurse -Force } else { Move-Item -LiteralPath $staging -Destination $folder }
-        $state = @{version=$release.version; sha256=$release.sha256; folder=$folder}
+        $state = @{version=$release.version; sha256=$release.sha256; folder=$folder; launch_path=$release.launch_path}
         $temp = Join-Path $DataRoot 'current.next.json'; $current = Join-Path $DataRoot 'current.json'
         $state | ConvertTo-Json | Set-Content -LiteralPath $temp -Encoding UTF8
         if (Test-Path -LiteralPath $current) { [IO.File]::Replace($temp, $current, (Join-Path $DataRoot "current.previous.json")) } else { [IO.File]::Move($temp, $current) }
@@ -95,14 +105,14 @@ if (-not $mutex.WaitOne(0)) { throw 'Burrow Player is already open for this game
 try {
     if ($CheckOnly) { $result = Update-Game; Write-Output "INSTALLED $result"; exit 0 }
     Add-Type -AssemblyName System.Windows.Forms
-    $form = New-Object Windows.Forms.Form; $form.Text = 'Voltron - Burrow Player'; $form.Size = New-Object Drawing.Size(470,330); $form.StartPosition='CenterScreen'; $form.BackColor=[Drawing.Color]::FromArgb(20,22,28); $form.ForeColor=[Drawing.Color]::White
-    $title = New-Object Windows.Forms.Label; $title.Text='VOLTRON'; $title.Location=New-Object Drawing.Point(24,20); $title.Size=New-Object Drawing.Size(410,40); $title.Font=New-Object Drawing.Font('Segoe UI',22,[Drawing.FontStyle]::Bold); $form.Controls.Add($title)
+    $form = New-Object Windows.Forms.Form; $form.Text = "$gameTitle - Burrow Player"; $form.Size = New-Object Drawing.Size(470,330); $form.StartPosition='CenterScreen'; $form.BackColor=[Drawing.Color]::FromArgb(20,22,28); $form.ForeColor=[Drawing.Color]::White
+    $title = New-Object Windows.Forms.Label; $title.Text=$gameTitle.ToUpperInvariant(); $title.Location=New-Object Drawing.Point(24,20); $title.Size=New-Object Drawing.Size(410,40); $title.Font=New-Object Drawing.Font('Segoe UI',22,[Drawing.FontStyle]::Bold); $form.Controls.Add($title)
     $status = New-Object Windows.Forms.Label; $status.Text='Play checks for updates before launching.'; $status.Location=New-Object Drawing.Point(24,68); $status.Size=New-Object Drawing.Size(410,55); $form.Controls.Add($status)
     function New-Button($text,$x,$y,$width,$action) {
         $b=New-Object Windows.Forms.Button; $b.Text=$text; $b.Location=New-Object Drawing.Point($x,$y); $b.Size=New-Object Drawing.Size($width,42); $b.FlatStyle='Flat'; $b.Add_Click($action); $form.Controls.Add($b); return $b
     }
     $play=New-Button 'Play' 24 130 200 {
-        try { $play.Enabled=$false; $update.Enabled=$false; $launch=Update-Game; Start-Process -FilePath $launch -WorkingDirectory (Split-Path $launch) }
+        try { $play.Enabled=$false; $update.Enabled=$false; $launch=Update-Game; Start-Game $launch }
         catch { $status.Text='Update failed. You can still play the installed version, or renew sign-in on the game page.'; [Windows.Forms.MessageBox]::Show($_.Exception.Message,'Could not update') | Out-Null }
         finally { $play.Enabled=$true; $update.Enabled=$true }
     }; $play.BackColor=[Drawing.Color]::FromArgb(244,119,33); $play.ForeColor=[Drawing.Color]::Black
@@ -113,7 +123,7 @@ try {
     }
     $null=New-Button 'Chat / renew sign-in' 24 188 200 { Start-Process (Get-Url "/games/$($config.slug)?tab=community") }
     $null=New-Button 'Play installed version' 236 188 200 {
-        try { $installed=Get-Installed; if (-not $installed) { throw 'Install the game using Play first.' }; $launch=Join-Path $installed.folder 'Play Voltron.bat'; Start-Process -FilePath $launch -WorkingDirectory $installed.folder }
+        try { $installed=Get-Installed; if (-not $installed) { throw 'Install the game using Play first.' }; $name = if ($installed.PSObject.Properties['launch_path']) { $installed.launch_path } else { 'Play Voltron.bat' }; if ($name -and -not (Test-LaunchPath $name)) { throw 'Invalid installed game.' }; $launch = if ($name) { Join-Path $installed.folder $name } else { $installed.folder }; Start-Game $launch }
         catch { [Windows.Forms.MessageBox]::Show($_.Exception.Message) | Out-Null }
     }
     if ($ScreenshotPath) {

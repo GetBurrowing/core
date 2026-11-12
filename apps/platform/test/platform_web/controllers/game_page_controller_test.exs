@@ -630,4 +630,193 @@ defmodule PlatformWeb.GamePageControllerTest do
     refute html =~ user.name
     refute html =~ user.email
   end
+
+  describe "per-game launcher" do
+    test "Voltron without a launch_path keeps its historical launcher", %{conn: conn} do
+      assert conn |> get("/games/voltron/updates") |> json_response(200) |> Map.get("launch_path") ==
+               "Play Voltron.bat"
+
+      page = conn |> get("/games/voltron") |> html_response(200) |> LazyHTML.from_document()
+      assert LazyHTML.text(LazyHTML.query(page, "#game-launch-path")) == "Play Voltron.bat"
+    end
+
+    test "a game's own launch_path is what the player and the page name", %{
+      conn: conn,
+      game: game
+    } do
+      sky =
+        Map.merge(game, %{
+          "slug" => "sky-haulers",
+          "title" => "Sky Haulers",
+          "launch_path" => "Play Sky Haulers.cmd"
+        })
+
+      Application.put_env(:platform, :game_publications, [
+        Map.put(game, "launch_path", "Start Voltron.exe"),
+        sky
+      ])
+
+      assert conn
+             |> get("/games/sky-haulers/updates")
+             |> json_response(200)
+             |> Map.get("launch_path") ==
+               "Play Sky Haulers.cmd"
+
+      assert conn |> get("/games/voltron/updates") |> json_response(200) |> Map.get("launch_path") ==
+               "Start Voltron.exe"
+
+      page = conn |> get("/games/sky-haulers") |> html_response(200) |> LazyHTML.from_document()
+      assert LazyHTML.text(LazyHTML.query(page, "#game-launch-path")) == "Play Sky Haulers.cmd"
+      refute LazyHTML.text(LazyHTML.query(page, "#game-setup")) =~ "Voltron"
+    end
+
+    test "a game with no launch_path names no file and says so", %{conn: conn, game: game} do
+      Application.put_env(:platform, :game_publications, [
+        Map.merge(game, %{"slug" => "tiny-tactics", "title" => "Tiny Tactics"})
+      ])
+
+      update = conn |> get("/games/tiny-tactics/updates") |> json_response(200)
+      assert Map.has_key?(update, "launch_path")
+      assert update["launch_path"] == nil
+
+      page = conn |> get("/games/tiny-tactics") |> html_response(200) |> LazyHTML.from_document()
+      assert Enum.count(LazyHTML.query(page, "#game-launch-instructions")) == 1
+      assert Enum.empty?(LazyHTML.query(page, "#game-launch-path"))
+      assert LazyHTML.text(LazyHTML.query(page, "#game-launch-instructions")) =~ "no launcher yet"
+      refute LazyHTML.text(page) =~ "Voltron.bat"
+    end
+
+    test "launch_path is one plain file name; anything else rejects the manifest", %{game: game} do
+      for ok <- ["Play Voltron.bat", "start.cmd", "Game_v2-final.EXE"] do
+        assert Games.launch_path?(ok), ok
+        assert Games.valid?(Map.put(game, "launch_path", ok))
+      end
+
+      for bad <- [
+            "../Play.bat",
+            "..\\Play.bat",
+            "a..b.bat",
+            "/usr/bin/play.bat",
+            "C:\\Windows\\play.bat",
+            "bin/play.bat",
+            "bin\\play.bat",
+            "play.bat & calc.exe",
+            "play|x.bat",
+            "play;x.bat",
+            "play%PATH%.bat",
+            "play$(x).bat",
+            "play`x`.bat",
+            "\"play\".bat",
+            "play.ps1",
+            "play",
+            ".play.bat",
+            " play.bat",
+            "play.bat\n",
+            "",
+            42
+          ] do
+        refute Games.launch_path?(bad), inspect(bad)
+        refute Games.valid?(Map.put(game, "launch_path", bad)), inspect(bad)
+      end
+    end
+  end
+
+  describe "screenshot gallery" do
+    @shots [
+      %{
+        "path" => "/images/play/voltron-shot-1.png",
+        "alt" => "Gameplay: the robot in the street"
+      },
+      %{"path" => "/images/play/voltron-shot-2.png", "alt" => "Concept art: the lions at dusk"},
+      %{"path" => "/images/play/voltron-shot-3.png", "alt" => "Concept art: the city skyline"}
+    ]
+
+    test "renders each screenshot as a keyboard-reachable link with a viewer", %{
+      conn: conn,
+      game: game
+    } do
+      Application.put_env(:platform, :game_publications, [Map.put(game, "screenshots", @shots)])
+      html = conn |> get("/games/voltron") |> html_response(200)
+      browser_evidence("gallery", html)
+      page = LazyHTML.from_document(html)
+
+      assert Enum.count(LazyHTML.query(page, "#game-screenshots")) == 1
+      assert Enum.count(LazyHTML.query(page, "#game-screenshots a.gp-shot[href]")) == 3
+
+      for {shot, n} <- Enum.with_index(@shots, 1) do
+        link = LazyHTML.query(page, "#game-shot-#{n}")
+        assert LazyHTML.attribute(link, "href") == [shot["path"]]
+        assert [label] = LazyHTML.attribute(link, "aria-label")
+        assert label =~ shot["alt"]
+        assert label =~ "#{n} of 3"
+        assert LazyHTML.attribute(LazyHTML.query(link, "img"), "src") == [shot["path"]]
+      end
+
+      assert Enum.count(LazyHTML.query(page, "dialog#game-lightbox[data-game-lightbox]")) == 1
+      assert Enum.count(LazyHTML.query(page, "#game-lightbox [data-game-lightbox-step]")) == 2
+      assert Enum.count(LazyHTML.query(page, "#game-lightbox [data-game-lightbox-close]")) == 1
+
+      # The same gallery inside the Console Glass shell (browser layout evidence).
+      admin =
+        Repo.insert!(
+          User.changeset(%User{}, %{
+            name: "Gallery admin",
+            email: "gallery-admin@example.net",
+            oidc_sub: "gallery-admin"
+          })
+        )
+
+      Repo.insert!(
+        OrgMembership.changeset(%OrgMembership{}, %{
+          user_id: admin.id,
+          org_id: Tenancy.get_org_by_slug!("acme").id,
+          role: "admin"
+        })
+      )
+
+      {:ok, _} = Platform.Branding.update_identity(admin, %{experience: "gaming"})
+      glass = conn |> get("/games/voltron") |> html_response(200)
+      browser_evidence("gallery-glass", glass)
+      glass = LazyHTML.from_document(glass)
+      assert Enum.count(LazyHTML.query(glass, "html.console-glass #game-screenshots")) == 1
+      assert Enum.count(LazyHTML.query(glass, "#game-screenshots a.gp-shot")) == 3
+    end
+
+    test "is hidden when a game has no screenshots", %{conn: conn, game: game} do
+      for manifest <- [game, Map.put(game, "screenshots", [])] do
+        Application.put_env(:platform, :game_publications, [manifest])
+        page = conn |> get("/games/voltron") |> html_response(200) |> LazyHTML.from_document()
+        assert Enum.empty?(LazyHTML.query(page, "#game-screenshots"))
+        assert Enum.empty?(LazyHTML.query(page, "#game-lightbox"))
+      end
+    end
+
+    test "a single screenshot gets a viewer without previous and next", %{conn: conn, game: game} do
+      Application.put_env(:platform, :game_publications, [
+        Map.put(game, "screenshots", Enum.take(@shots, 1))
+      ])
+
+      page = conn |> get("/games/voltron") |> html_response(200) |> LazyHTML.from_document()
+      assert Enum.count(LazyHTML.query(page, "#game-shot-1")) == 1
+      assert Enum.empty?(LazyHTML.query(page, "#game-lightbox [data-game-lightbox-step]"))
+    end
+
+    test "screenshots must be local images with alt text", %{game: game} do
+      assert Games.valid?(Map.put(game, "screenshots", @shots))
+
+      for bad <- [
+            "/images/a.png",
+            [%{"path" => "https://elsewhere/a.png", "alt" => "x"}],
+            [%{"path" => "/images/../secret.png", "alt" => "x"}],
+            [%{"path" => "/uploads/a.png", "alt" => "x"}],
+            [%{"path" => "/images/a.png?x=1", "alt" => "x"}],
+            [%{"path" => "/images/a.png"}],
+            [%{"path" => "/images/a.png", "alt" => ""}],
+            [%{"path" => "/images/a.png", "alt" => "x", "onclick" => "x"}],
+            List.duplicate(hd(@shots), 9)
+          ] do
+        refute Games.valid?(Map.put(game, "screenshots", bad)), inspect(bad)
+      end
+    end
+  end
 end
