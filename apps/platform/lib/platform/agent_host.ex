@@ -383,7 +383,9 @@ defmodule Platform.AgentHost do
   One pending login per agent (`Platform.AgentHost.Reconciler`): it is bound
   to `actor` and to the calling process, and a start by anyone else while it
   is pending is `{:error, :busy}`. Otherwise `{:error, :not_connected}`,
-  `{:error, :timeout}`, or `{:error, :refused}` when the host printed no URL.
+  `{:error, :timeout}`, `{:error, :refused}` when the host printed no URL, or
+  `{:error, :host_outdated}` at once when the connected host predates Claude
+  login (its hello lists no `claude_login` feature) and would never answer.
 
   The URL is returned to the caller only: it is never put in
   `Platform.AgentHost.State`, broadcast on the status topic, audited or
@@ -391,7 +393,8 @@ defmodule Platform.AgentHost do
   """
   @spec claude_login_start(map() | binary() | nil, Agent.t(), keyword()) ::
           {:ok, String.t()}
-          | {:error, login_refusal() | :busy | :not_connected | :timeout | :refused}
+          | {:error,
+             login_refusal() | :busy | :not_connected | :host_outdated | :timeout | :refused}
   def claude_login_start(actor, %Agent{} = agent, opts \\ []) do
     timeout = Keyword.get(opts, :timeout, @login_start_timeout_ms)
 
