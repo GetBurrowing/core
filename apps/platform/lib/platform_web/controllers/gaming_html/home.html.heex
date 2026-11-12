@@ -10,7 +10,7 @@
     <script defer phx-track-static type="text/javascript" src={~p"/assets/js/app.js"}></script>
   </head>
   <body>
-    <.shell games={@games} user={@user} creator={@creator?} mode={@mode}>
+    <.shell games={@games} user={@user} creator={@creator?} mode={@mode} communities={@communities} details={@mode == "play"}>
       <main id="gaming-home" class="cg-home" data-console-shelves>
         <header class="cg-heading">
           <div><p class="cg-eyebrow">BURROW PLAY</p><h1>{case @mode do "discover" -> "Find your next obsession."; "create" -> "Make something worth playing."; _ -> "What are we playing tonight?" end}</h1></div>

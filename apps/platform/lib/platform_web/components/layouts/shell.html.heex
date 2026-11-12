@@ -192,6 +192,9 @@
         />
       </div>
     </header>
+    <div :if={Platform.Gaming.enabled?()} class="cg-workspace-modes lg:hidden">
+      <PlatformWeb.Components.GamingShell.modes mode="create" />
+    </div>
     <%!-- Flash messages --%>
     <.flash_group flash={@flash} connection_status={false} />
     <%!-- Surface. `flex-1` claims the remaining vertical space inside

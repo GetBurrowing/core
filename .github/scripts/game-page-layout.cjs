@@ -6,7 +6,7 @@ const path = require('node:path')
   const origin = 'http://127.0.0.1:8765'
   try {
     for (const mobile of [false, true]) {
-      const context = await browser.newContext({viewport: mobile ? {width:390,height:844} : {width:1280,height:900},
+      const context = await browser.newContext({viewport: mobile ? {width:390,height:844} : {width:1440,height:900},
         userAgent: mobile ? 'Mozilla/5.0 (iPhone; CPU iPhone OS 18_0 like Mac OS X) AppleWebKit/605.1.15 Version/18.0 Mobile/15E148 Safari/604.1' : 'Mozilla/5.0 (Windows NT 10.0; Win64; x64) AppleWebKit/537.36 Chrome/131.0.0.0 Safari/537.36'})
       await context.grantPermissions(['clipboard-read', 'clipboard-write'], {origin})
       const page = await context.newPage()

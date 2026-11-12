@@ -7,12 +7,14 @@ defmodule PlatformWeb.Components.GamingShell do
   attr :games, :list, default: []
   attr :user, :any, default: nil
   attr :creator, :boolean, default: false
+  attr :details, :boolean, default: false
+  attr :communities, :map, default: %{}
   slot :inner_block, required: true
 
   def shell(assigns) do
     ~H"""
     <%= if @enabled do %>
-      <div class="cg-app" id="console-glass-shell">
+      <div class={["cg-app", @details && "cg-with-details"]} id="console-glass-shell">
         <aside class="cg-side cg-glass" aria-label="Burrow Play navigation">
           <a class="cg-brand" href="/play"><img src="/images/burrow-mark.svg" alt="Burrow" /><span>PLAY</span></a>
           <.modes mode={@mode} />
@@ -36,6 +38,14 @@ defmodule PlatformWeb.Components.GamingShell do
           </div>
         </aside>
         <div class="cg-content">{render_slot(@inner_block)}</div>
+        <aside :if={@details} class="cg-details cg-glass" aria-label="Your crew">
+          <h2>Your crew starts here.</h2><p>Pick a game, find its players, make a night of it.</p>
+          <a :for={game <- @games} class="cg-detail-room" href={"/games/#{game["slug"]}?tab=community"}>
+            <img :if={game["image_path"]} src={game["image_path"]} alt="" />
+            <span><b>{game["title"]}</b><small>{if @communities[game["slug"]], do: "#{@communities[game["slug"]].member_count} members", else: "Open player room"}</small></span><.icon name="hero-arrow-up-right" />
+          </a>
+          <div class="cg-detail-note"><.icon name="hero-microphone" /><h3>Stay in the conversation.</h3><p>Keep your Burrow call open while you play. Plan the next session in your game’s room.</p></div>
+        </aside>
       </div>
     <% else %>
       {render_slot(@inner_block)}
