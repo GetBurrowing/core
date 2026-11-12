@@ -93,10 +93,18 @@
                     href={shot["path"]}
                     data-game-shot={index}
                     data-game-shot-alt={shot["alt"]}
+                    data-game-shot-caption={Platform.Games.screenshot_caption(shot)}
                     aria-label={"#{shot["alt"]} (screenshot #{index + 1} of #{length(@screenshots)})"}
                   >
                     <img src={shot["path"]} alt="" loading="lazy" width="1280" height="720" />
                   </a>
+                  <p
+                    id={"game-shot-caption-#{index + 1}"}
+                    class="gp-shot-caption"
+                    aria-hidden={if !shot["caption"], do: "true"}
+                  >
+                    {Platform.Games.screenshot_caption(shot)}
+                  </p>
                 </li>
               </ul>
               <dialog
@@ -106,9 +114,13 @@
                 data-game-lightbox
               >
                 <figure>
-                  <img data-game-lightbox-image src={hd(@screenshots)["path"]} alt="" />
+                  <img
+                    data-game-lightbox-image
+                    src={hd(@screenshots)["path"]}
+                    alt={if hd(@screenshots)["caption"], do: hd(@screenshots)["alt"], else: ""}
+                  />
                   <figcaption id="game-lightbox-caption" data-game-lightbox-caption>
-                    {hd(@screenshots)["alt"]}
+                    {Platform.Games.screenshot_caption(hd(@screenshots))}
                   </figcaption>
                 </figure>
                 <div class="gp-lightbox-nav">
@@ -301,7 +313,7 @@
                 <div>
                   <b>{if @community, do: @community.space.name, else: "Player community"}</b><span :if={
                     @community
-                  }>{@community.member_count} members</span>
+                  }>{member_count(@community.member_count)}</span>
                 </div>
               </header>
               <%= if @community && @community.joined? do %>

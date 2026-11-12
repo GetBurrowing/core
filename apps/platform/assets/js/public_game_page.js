@@ -44,7 +44,12 @@ export function installGameGallery(root) {
     current = stepIndex(index, 0, shots.length)
     const shot = shots[current]
     image.src = shot.getAttribute("href")
-    caption.textContent = shot.dataset.gameShotAlt
+    // The visible caption falls back to the alt text; when a caption is its
+    // own words, the image keeps the alt so neither is lost in the viewer.
+    const alt = shot.dataset.gameShotAlt
+    const label = shot.dataset.gameShotCaption || alt
+    caption.textContent = label
+    image.alt = label === alt ? "" : alt
     count.textContent = `${current + 1} / ${shots.length}`
   }
   gallery.addEventListener("keydown", event => {

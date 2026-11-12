@@ -94,9 +94,13 @@ defmodule PlatformWeb.Components.GamingShell do
     """
   end
 
-  defp member_label(0), do: "Be the first in"
-  defp member_label(1), do: "1 member"
-  defp member_label(count), do: "#{count} members"
+  @doc "A room card's member line: an invitation while empty, else the count."
+  def member_label(0), do: "Be the first in"
+  def member_label(count), do: member_count(count)
+
+  @doc "A pluralised member count: `1 member`, `2 members`."
+  def member_count(1), do: "1 member"
+  def member_count(count), do: "#{count} members"
 
   attr :mode, :string, default: "create"
 

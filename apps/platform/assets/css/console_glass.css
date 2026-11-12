@@ -75,5 +75,6 @@ html.console-glass, html.console-glass[data-theme] {
 @media(max-width:767px){.console-glass .cg-hero{min-height:0}}
 /* Game page screenshots: v4 .shots grid, tiles lift and take the console ring like shelf tiles. */
 .console-glass .gp-shot{border-radius:14px;border-color:var(--cg-border);background:#252d51}.console-glass .gp-shot:hover,.console-glass .gp-shot:focus-visible{outline:none;transform:scale(1.035);box-shadow:var(--cg-ring),0 18px 30px #0004}
+.console-glass .gp-shot-caption{color:var(--cg-muted);letter-spacing:.01em}
 .console-glass .gp-lightbox{border-radius:24px;border-color:var(--cg-border);background:linear-gradient(rgba(255,255,255,.06),rgba(255,255,255,.06)),rgba(10,14,38,.9);backdrop-filter:blur(24px);-webkit-backdrop-filter:blur(24px);color:#fff}.console-glass .gp-lightbox img{border-radius:16px}.console-glass .gp-lightbox figcaption,.console-glass .gp-lightbox-nav span{color:var(--cg-muted)}
 .console-glass .public-game .gp-lightbox-nav button{background:rgba(255,255,255,.09);border:1px solid var(--cg-border);color:#fff}.console-glass .public-game .gp-lightbox-nav button:hover{background:#fff;color:#0a0f24}.console-glass .gp-lightbox-nav button:focus-visible{outline:none;box-shadow:var(--cg-ring)}
