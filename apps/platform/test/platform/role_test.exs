@@ -155,6 +155,7 @@ defmodule Platform.RoleTest do
                Platform.CodeMode.Store,
                Platform.Push.RelayRateLimit,
                Platform.Calendar.BookingRateLimit,
+               Platform.SignIn.EmailSetupRateLimit,
                Platform.Feedback.BrokerRateLimit,
                Platform.Push.APNsFinch,
                Platform.Chat.ContextPlane,

@@ -1,0 +1,112 @@
+<!DOCTYPE html>
+<html lang="en" data-theme="dark">
+  <head>
+    <meta charset="utf-8" />
+    <meta name="viewport" content="width=device-width, initial-scale=1" />
+    <title>Sign in · Burrow</title>
+    <link rel="stylesheet" href={~p"/assets/css/app.css"} />
+  </head>
+  <body class="min-h-dvh bg-base-100 text-base-content p-6">
+    <main id="sign-in-options" class="mx-auto max-w-md space-y-6 py-10">
+      <img src={~p"/images/burrow-mark.svg"} alt="Burrow" width="48" height="48" />
+      <h1 class="text-3xl font-bold">Welcome to Burrow</h1>
+      <section :if={!@sent?} class="space-y-4" aria-labelledby="first-sign-in">
+        <h2 id="first-sign-in" class="text-xl font-semibold">First time signing in?</h2>
+        <p>
+          Use your invitation link on this device. After signing in, open Settings → Passkeys and sign-in to set up Face ID, Touch ID or another passkey.
+        </p>
+        <p :if={@link_error?} role="alert">
+          That link could not be used. Paste the full invitation or sign-in link for this Burrow install, or ask for a new one.
+        </p>
+        <.form
+          for={@form}
+          action="/auth/invitation"
+          method="post"
+          id="invitation-sign-in"
+          class="space-y-3"
+        >
+          <.input
+            id="setup-link"
+            name="setup_link"
+            value=""
+            type="url"
+            label="Invitation or sign-in link"
+            autocomplete="off"
+            spellcheck="false"
+            autocapitalize="none"
+            required
+            maxlength="8192"
+            class="input w-full placeholder:text-subtle"
+          />
+          <button class="btn btn-outline w-full" type="submit">Continue with invitation</button>
+        </.form>
+        <div :if={@mail?}>
+          <p>Or get a setup code at your account’s email address. No QR scan needed.</p>
+          <.form
+            for={@form}
+            action="/auth/email/setup"
+            method="post"
+            id="email-setup-request"
+            class="space-y-3 mt-4"
+          >
+            <.input
+              id="setup-email"
+              name="email"
+              value=""
+              type="email"
+              label="Email address"
+              autocomplete="email"
+              required
+              class="input w-full placeholder:text-subtle"
+            />
+            <button class="btn btn-outline w-full" type="submit">Email me a setup code</button>
+          </.form>
+        </div>
+        <p :if={!@mail?} id="email-setup-unavailable">
+          Email sign-in is not configured on this install. Ask your Burrow admin for an invitation or sign-in link that you can open on this device.
+        </p>
+      </section>
+      <section :if={@sent?} id="email-setup-code" class="space-y-4" aria-live="polite">
+        <p>
+          If an eligible account exists for that address, we’ll email a code. Return here to enter it. Codes expire in 30 minutes.
+        </p>
+        <p :if={@error?} role="alert">
+          That code could not be used. Check it or request a new one.
+        </p>
+        <.form
+          for={@form}
+          action="/auth/email/complete"
+          method="post"
+          id="email-setup-complete"
+          class="space-y-3"
+        >
+          <.input
+            id="setup-code"
+            name="code"
+            value=""
+            label="Setup code"
+            autocomplete="one-time-code"
+            spellcheck="false"
+            autocapitalize="none"
+            required
+            maxlength="64"
+            class="input w-full placeholder:text-subtle"
+          />
+          <button class="btn btn-primary w-full" type="submit">Continue</button>
+        </.form>
+      </section>
+      <a :if={@sent?} href="/auth/sign-in" class="link">
+        Use another sign-in option or request a new code
+      </a>
+      <section :if={!@sent?} class="space-y-3">
+        <h2 class="text-xl font-semibold">Already have a passkey?</h2>
+        <.form for={@form} action="/auth/passkey" method="post" id="passkey-sign-in">
+          <button class="btn btn-primary w-full" type="submit">Sign in with a passkey</button>
+        </.form>
+      </section>
+      <p class="text-sm">
+        Already set up a passkey but cannot use it? Ask your admin for a recovery link.
+      </p>
+    </main>
+  </body>
+</html>
