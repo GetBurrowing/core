@@ -39,6 +39,7 @@ defmodule PlatformWeb.SwitcherConnectController do
           origin: origin,
           origin_host: host_of(origin),
           install_name: Platform.Branding.app_name(),
+          install_host: own_host(conn),
           user_label: user.name || user.email,
           cancel_url: connected_url(conn, origin, %{})
         )
