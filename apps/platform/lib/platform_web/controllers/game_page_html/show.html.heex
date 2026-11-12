@@ -17,7 +17,11 @@
   >
     <.shell enabled={@gaming?} games={@games} user={@user} creator={@creator?} mode="discover">
       <nav :if={@gaming?} class="gp-tabs cg-game-tabs" aria-label="Game page">
-        <a id="game-tab" href={"/games/#{@game["slug"]}"} aria-current={if !@community?, do: "page"}>
+        <a
+          id="game-tab"
+          href={"/games/#{@game["slug"]}"}
+          aria-current={if !@community?, do: "page"}
+        >
           Game
         </a>
         <a

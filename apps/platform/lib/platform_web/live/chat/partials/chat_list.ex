@@ -496,7 +496,13 @@ defmodule PlatformWeb.ChatLive.Partials.ChatList do
                   <%= for {space, index} <- Enum.with_index(@space_rows) do %>
                     <% group = @game_groups[space.id] %>
                     <% previous = Enum.at(@space_rows, index - 1) %>
-                    <h3 :if={group && (index == 0 || @game_groups[previous.id] != group)} class="cg-space-group" data-game-space-heading>{group}</h3>
+                    <h3
+                      :if={group && (index == 0 || @game_groups[previous.id] != group)}
+                      class="cg-space-group"
+                      data-game-space-heading
+                    >
+                      {group}
+                    </h3>
                     <.row
                       space={space}
                       kind={:channel}
@@ -1759,10 +1765,13 @@ defmodule PlatformWeb.ChatLive.Partials.ChatList do
   defp game_groups(%{gaming: true, mask_names?: false}) do
     Platform.Games.list_published()
     |> Enum.flat_map(fn game ->
-      for id <- [game["community_space_id"], game["development_space_id"]], is_binary(id), do: {id, game["title"]}
+      for id <- [game["community_space_id"], game["development_space_id"]],
+          is_binary(id),
+          do: {id, game["title"]}
     end)
     |> Map.new()
   end
+
   defp game_groups(_), do: %{}
 
   defp assign_sorted_rows(assigns) do

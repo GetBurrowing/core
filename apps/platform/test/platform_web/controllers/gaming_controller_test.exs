@@ -193,12 +193,17 @@ defmodule PlatformWeb.GamingControllerTest do
           "title" => title,
           "placeholder" => placeholder,
           "position" => position,
-          "image_path" => if(placeholder, do: "/images/play/#{slug}-cover.png", else: "/images/voltron-game.png"),
-          "summary" => case slug do
-            "sky-haulers" -> "Placeholder test build: take a sky delivery for a spin."
-            "tiny-tactics" -> "Placeholder test build: make your move on a tiny battlefield."
-            _ -> game["summary"]
-          end,
+          "image_path" =>
+            if(placeholder,
+              do: "/images/play/#{slug}-cover.png",
+              else: "/images/voltron-game.png"
+            ),
+          "summary" =>
+            case slug do
+              "sky-haulers" -> "Placeholder test build: take a sky delivery for a spin."
+              "tiny-tactics" -> "Placeholder test build: make your move on a tiny battlefield."
+              _ -> game["summary"]
+            end,
           "theme_color" => if(placeholder, do: "#7ef0d0", else: "#4d8bff"),
           "project_id" => project.id,
           "development_space_id" => development.id,

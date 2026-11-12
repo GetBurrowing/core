@@ -105,8 +105,8 @@
        embedded surfaces alive: `ChatLive.Embedded` has no `@push_permission`
        (ShellLive's on_mount seeds it on routed mounts only). --%>
     <.chat_list
-      gaming={gaming?}
       :if={!@embedded}
+      gaming={gaming?}
       live_action={@live_action}
       embedded={@embedded}
       external?={@external?}

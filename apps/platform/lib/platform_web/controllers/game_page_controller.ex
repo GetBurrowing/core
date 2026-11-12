@@ -18,8 +18,7 @@ defmodule PlatformWeb.GamePageController do
       |> put_resp_header("cache-control", "private, no-store")
       |> render(:show,
         gaming?: Platform.Gaming.enabled?(),
-        games:
-          Platform.Games.list_published(),
+        games: Platform.Games.list_published(),
         creator?: not is_nil(user) and Platform.Access.authorize_install(user) == :ok,
         project: project,
         workspace_path: Platform.Gaming.workspace_path(game, project, user),
