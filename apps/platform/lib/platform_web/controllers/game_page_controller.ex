@@ -41,6 +41,7 @@ defmodule PlatformWeb.GamePageController do
   def sign_in(conn, %{"slug" => slug}) do
     if game = Games.get(slug) do
       render(conn, :sign_in,
+        gaming?: Platform.Gaming.enabled?(),
         game: game,
         signup?: not is_nil(Games.signup_url(game)),
         csrf_token: Plug.CSRFProtection.get_csrf_token()

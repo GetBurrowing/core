@@ -113,6 +113,13 @@ const path = require('node:path')
         await game.evaluate(() => window.scrollTo(0,0))
         await game.screenshot({path:path.join(process.env.GAME_PAGE_SCREENSHOTS, 'gaming-game-' + slug + (mobile ? '-phone.png' : '-desktop.png')),fullPage:true})
       }
+      for (const slug of ['voltron', 'sky-haulers', 'tiny-tactics']) {
+        const signin = await context.newPage()
+        await signin.goto(origin + '/game-page-evidence/gaming-signin-' + slug + '.html')
+        assert.equal(await signin.locator('#continue-sign-in').isVisible(), true, 'sign-in action missing')
+        assert.equal(await signin.evaluate(() => document.documentElement.scrollWidth <= innerWidth + 1), true, 'sign-in overflow')
+        await signin.screenshot({path:path.join(process.env.GAME_PAGE_SCREENSHOTS, 'gaming-signin-' + slug + (mobile ? '-phone.png' : '-desktop.png')), fullPage:true})
+      }
       const workspace = await context.newPage()
       await workspace.goto(origin + '/game-page-evidence/gaming-workspace.html')
       assert.equal(await workspace.locator('#chat-panes').isVisible(), true, 'existing chat workspace missing')

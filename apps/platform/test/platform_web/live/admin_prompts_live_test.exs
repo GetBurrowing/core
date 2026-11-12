@@ -443,6 +443,12 @@ defmodule PlatformWeb.AdminPromptsLiveTest do
     end
 
     test "with ZERO orphans the table renders exactly as it did before", %{conn: conn} do
+      # This compares whole rows, including relative update times. Keep the
+      # fixture away from minute boundaries between the two LiveView mounts.
+      Repo.update_all(Platform.Orchestration.PromptTemplate,
+        set: [updated_at: ~U[2000-01-01 00:00:00.000000Z]]
+      )
+
       {:ok, _view, with_orphan} = live(conn, ~p"/admin/prompts")
 
       # Empty the audit's source rather than stubbing the module: the union is
