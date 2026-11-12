@@ -2,7 +2,7 @@
 @font-face{font-family:Sora;src:url('/fonts/sora-variable.woff2') format('woff2');font-weight:400 800;font-style:normal;font-display:swap}
 html.console-glass, html.console-glass[data-theme] {
   --cg-bg0:#0a0f24;--cg-bg1:#1a1f45;--cg-ink:#fff;--cg-muted:#dde0f4;--cg-faint:#c6cbea;
-  --cg-blue:#4d8bff;--cg-mint:#7ef0d0;--cg-pink:#ff6b8b;
+  --cg-tint:#4d8bff;--cg-blue:#4d8bff;--cg-mint:#7ef0d0;--cg-pink:#ff6b8b;
   --cg-glass:rgba(255,255,255,.07);--cg-border:rgba(255,255,255,.16);
   --cg-ring:0 0 0 3px #fff,0 0 0 8px rgba(255,255,255,.16);
   --color-base-100:#0a0f24;--color-base-200:#151b39;--color-base-300:#252d51;
@@ -11,7 +11,7 @@ html.console-glass, html.console-glass[data-theme] {
   --font-sans:Sora,system-ui,sans-serif;
   background:var(--cg-bg0)!important;color-scheme:dark;
 }
-.console-glass body{font-family:Sora,system-ui,sans-serif;color:var(--cg-ink);background:radial-gradient(900px 620px at 28% 12%,rgba(77,139,255,.37),transparent 70%),radial-gradient(700px 600px at 88% 72%,rgba(255,107,139,.20),transparent 70%),radial-gradient(600px 460px at 6% 96%,rgba(126,240,208,.13),transparent 70%),linear-gradient(160deg,var(--cg-bg0),var(--cg-bg1));background-attachment:fixed}
+.console-glass body{font-family:Sora,system-ui,sans-serif;color:var(--cg-ink);background:radial-gradient(900px 620px at 28% 12%,rgba(77,139,255,.37),transparent 70%),radial-gradient(700px 600px at 88% 72%,rgba(255,107,139,.20),transparent 70%),radial-gradient(600px 460px at 6% 96%,rgba(126,240,208,.13),transparent 70%),linear-gradient(160deg,var(--cg-bg0),var(--cg-bg1));background-attachment:scroll}
 .console-glass a{text-decoration:none}
 .console-glass :focus-visible{outline:3px solid #fff;outline-offset:4px}
 .console-glass .cg-glass{background:linear-gradient(rgba(255,255,255,.06),rgba(255,255,255,.06)),rgba(10,14,38,.34);border:1px solid var(--cg-border);box-shadow:0 20px 40px rgba(0,0,0,.18),inset 0 1px 0 rgba(255,255,255,.1);backdrop-filter:blur(24px);-webkit-backdrop-filter:blur(24px)}
@@ -52,3 +52,10 @@ html.console-glass, html.console-glass[data-theme] {
 @media(max-width:767px){.cg-mobile-publish{display:grid;place-items:center;flex-shrink:0;width:32px;height:36px;border-radius:14px;color:#fff;background:rgba(255,255,255,.1)}.cg-side{gap:8px}.cg-modes a{padding-inline:5px}}
 
 .console-glass .cg-game-tabs{display:flex;height:auto}
+
+.cg-app{background:radial-gradient(900px 620px at 28% 12%,color-mix(in srgb,var(--cg-tint) 38%,transparent),transparent 70%),radial-gradient(700px 600px at 88% 72%,rgba(255,107,139,.2),transparent 70%),linear-gradient(160deg,#0a0f24,#1a1f45)}
+.cg-hero{background:linear-gradient(100deg,#080c22,color-mix(in srgb,var(--cg-tint) 28%,#0a0f24))}.cg-hero h2{font-weight:800;text-transform:uppercase;letter-spacing:-.055em}.cg-hero>img{opacity:.9}
+.cg-shelf{padding-left:18px;padding-right:18px;scroll-padding:18px;margin-inline:-18px}
+
+.cg-project-context{display:none;width:260px;flex-shrink:0;overflow-y:auto;padding:22px 18px;gap:16px;background:rgba(255,255,255,.05);border-left:1px solid var(--cg-border)}.cg-project-context h2{font-size:21px;font-weight:700;letter-spacing:-.04em}.cg-context-card{padding:18px;border-radius:20px;border:1px solid var(--cg-border);background:var(--cg-glass)}.cg-context-card h3{font-size:10px;text-transform:uppercase;letter-spacing:.12em;color:var(--cg-faint);margin-bottom:12px}.cg-context-card b{font-size:13px}.cg-context-card p{font-size:11px;color:var(--cg-muted);line-height:1.8;margin-top:10px}.cg-context-agent{display:flex;align-items:center;gap:10px;margin:12px 0}.cg-context-agent b{font-size:12px}
+@media(min-width:1440px){.cg-project-context{display:flex;flex-direction:column}}

@@ -229,6 +229,8 @@ defmodule Platform.RepoLookupBoundaryTest do
     # ── Accounts ───────────────────────────────────────────────────────
     {"platform/games.ex", :get, "Attachment", 1, :safe_internal,
      "artifact/2 canonicalizes the manifest attachment ID with Platform.UUID.cast/1 before Repo.get; only explicitly published release metadata reaches this call"},
+    {"platform/gaming.ex", :platform_uuid_guard, "-", 1, :must_cast,
+     "Optional development-space IDs from game metadata are UUID-validated before Chat.get_space, then checked against the project org, scope and viewer chat permission"},
     {"platform/games.ex", :platform_uuid_guard, "-", 8, :must_cast,
      "operator manifest UUIDs (including optional project references) and the browser session user ID cross a boundary; Platform.UUID.cast/1 rejects 16-byte slugs before any lookup"},
     {"platform/accounts.ex", :get, "User", 1, :safe_internal,

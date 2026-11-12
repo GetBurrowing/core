@@ -66,7 +66,7 @@
                   <p>{game["summary"]}</p>
                   <a
                     :if={@projects[game["slug"]]}
-                    href={"/files/#{@projects[game["slug"]].id}"}
+                    href={@workspaces[game["slug"]]}
                     class="cg-button cg-primary"
                   >
                     Open project
@@ -84,7 +84,7 @@
             </div>
           </section>
         <% else %>
-          <section :if={@mode == "play" && @games != []} class="cg-hero">
+          <section :if={@mode == "play" && @games != []} class="cg-hero" style={"--cg-tint: " <> Platform.Gaming.tint(hd(@games))}>
             <% featured = hd(@games) %>
             <img
               :if={featured["image_path"]}
@@ -141,6 +141,7 @@
                   href={"/games/#{game["slug"]}"}
                   class="cg-tile"
                   data-game-tile
+                  data-game-tint={Platform.Gaming.tint(game)}
                 >
                   <img
                     :if={game["image_path"]}
@@ -182,7 +183,7 @@
               href={"/games/#{game["slug"]}?tab=community"}
               class="cg-room cg-glass"
             >
-              <span class="cg-room-icon"><.icon name="hero-chat-bubble-left-right" /></span><span><b>{game["title"]}</b><small>{if @communities[game["slug"]], do: "#{@communities[game["slug"]].member_count} members", else: "Player community"}</small></span>
+              <span class="cg-room-icon"><.icon name="hero-chat-bubble-left-right" /></span><span><b>{game["title"]}</b><small>{if @communities[game["slug"]], do: if(@communities[game["slug"]].member_count == 0, do: "Be the first in", else: "#{@communities[game["slug"]].member_count} members"), else: "Player community"}</small></span>
               <.icon name="hero-arrow-up-right" />
             </a>
           </div>

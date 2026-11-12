@@ -67,7 +67,7 @@ defmodule PlatformWeb.Components.GamingShell do
           >
             <img :if={game["image_path"]} src={game["image_path"]} alt="" />
             <span>
-              <b>{game["title"]}</b><small>{if @communities[game["slug"]], do: "#{@communities[game["slug"]].member_count} members", else: "Open player room"}</small>
+              <b>{game["title"]}</b><small>{if @communities[game["slug"]], do: member_label(@communities[game["slug"]].member_count), else: "Open player room"}</small>
             </span>
             <.icon name="hero-arrow-up-right" />
           </a>
@@ -85,6 +85,10 @@ defmodule PlatformWeb.Components.GamingShell do
     <% end %>
     """
   end
+
+  defp member_label(0), do: "Be the first in"
+  defp member_label(1), do: "1 member"
+  defp member_label(count), do: "#{count} members"
 
   attr :mode, :string, default: "create"
 

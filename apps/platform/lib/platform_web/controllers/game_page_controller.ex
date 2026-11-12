@@ -12,6 +12,7 @@ defmodule PlatformWeb.GamePageController do
          %{} = release <- Games.current_release(game) do
       user = Games.user(get_session(conn, :current_user_id))
 
+      project = Platform.Gaming.projects(user, [game])[game["slug"]]
       conn
       |> put_resp_header("cache-control", "private, no-store")
       |> render(:show,
@@ -19,7 +20,8 @@ defmodule PlatformWeb.GamePageController do
         games:
           Platform.Games.list_published() |> Enum.sort_by(&{&1["slug"] != "voltron", &1["title"]}),
         creator?: not is_nil(user) and Platform.Access.authorize_install(user) == :ok,
-        project: Platform.Gaming.projects(user, [game])[game["slug"]],
+        project: project,
+        workspace_path: Platform.Gaming.workspace_path(game, project, user),
         game: game,
         signup?: not is_nil(Games.signup_url(game)),
         release: release,

@@ -28,6 +28,9 @@ defmodule PlatformWeb.GamingController do
       user = Platform.Games.user(get_session(conn, :current_user_id))
       communities = Map.new(games, &{&1["slug"], Platform.Games.community(&1, user)})
 
+      projects = Platform.Gaming.projects(user, games)
+      workspaces = Map.new(games, &{&1["slug"], Platform.Gaming.workspace_path(&1, projects[&1["slug"]], user)})
+
       conn
       |> put_resp_header("cache-control", "private, no-store")
       |> render(:home,
@@ -35,7 +38,8 @@ defmodule PlatformWeb.GamingController do
         visible_games: visible_games,
         mode: mode,
         search_form: Phoenix.Component.to_form(%{"q" => query}, as: :catalog),
-        projects: Platform.Gaming.projects(user, games),
+        projects: projects,
+        workspaces: workspaces,
         communities: communities,
         user: user,
         branding: Platform.Branding.get(),
