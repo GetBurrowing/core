@@ -51,7 +51,7 @@ defmodule PlatformWeb.Components.GamingProjectPanel do
       <a class="cg-button cg-ghost" href={"/files/#{@project.id}"}>Project files</a>
       <a class="cg-button cg-ghost" href="/tasks">Tasks</a>
       <a class="cg-text-link" href="/play?mode=create">
-        All game projects<.icon name="hero-arrow-left" />
+        <.icon name="hero-arrow-left" />All game projects
       </a>
     </aside>
     """

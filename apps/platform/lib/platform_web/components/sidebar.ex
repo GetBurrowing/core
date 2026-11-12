@@ -85,6 +85,12 @@ defmodule PlatformWeb.Components.Sidebar do
 
   def sidebar(assigns) do
     {tabs, more} = rows(assigns[:access_scope], Map.get(assigns, :root_user, false))
+    {tabs, more} =
+      if assigns.gaming do
+        Enum.split_with(tabs ++ more, &(&1.key in [:chat, :voice, :tasks, :meetings]))
+      else
+        {tabs, more}
+      end
     resolved = resolved_mode(assigns[:user])
 
     assigns =
@@ -164,7 +170,7 @@ defmodule PlatformWeb.Components.Sidebar do
         </.row>
 
         <div
-          :if={@more != []}
+          :if={@more != [] && !@gaming}
           class="px-2 pt-3 pb-1 text-xs font-[650] uppercase tracking-[.08em] text-subtle"
           data-role="sidebar-more-label"
         >
@@ -173,11 +179,16 @@ defmodule PlatformWeb.Components.Sidebar do
 
         <.row
           :for={dest <- @more}
+          :if={!@gaming}
           dest={dest}
           icon={Map.get(dest, :hero_icon) || "hero-puzzle-piece"}
           current?={dest.key == @current_key}
           inbox_count={if dest.key == :inbox, do: @inbox_unread_count}
         />
+        <details :if={@gaming && @more != []} id="gaming-more-modules" class="cg-module-more" open={Enum.any?(@more, &(&1.key == @current_key))}>
+          <summary>More<.icon name="hero-chevron-down" class="size-4" /></summary>
+          <.row :for={dest <- @more} dest={dest} icon={Map.get(dest, :hero_icon) || "hero-puzzle-piece"} current?={dest.key == @current_key} inbox_count={if dest.key == :inbox, do: @inbox_unread_count} />
+        </details>
       </nav>
 
       <div class="flex shrink-0 flex-col gap-0.5 pt-2">
@@ -187,7 +198,7 @@ defmodule PlatformWeb.Components.Sidebar do
           current?={@current_key == :settings}
         />
 
-        <div class="relative">
+        <div :if={!@gaming} class="relative">
           <button
             id="mode-toggle"
             type="button"

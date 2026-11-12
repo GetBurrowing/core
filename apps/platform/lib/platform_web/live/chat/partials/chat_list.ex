@@ -305,6 +305,8 @@ defmodule PlatformWeb.ChatLive.Partials.ChatList do
   attr(:pinned_undo, :any, default: nil)
 
   @doc "The list. Renders nothing unless the gate in the moduledoc holds."
+  attr(:gaming, :boolean, default: false)
+
   def chat_list(assigns) do
     assigns =
       assigns
@@ -313,6 +315,7 @@ defmodule PlatformWeb.ChatLive.Partials.ChatList do
       |> assign(:active_id, active_id(assigns.active_space))
       |> assign_sorted_rows()
       |> assign_folds()
+      |> assign(:game_groups, game_groups(assigns))
 
     ~H"""
     <section
@@ -490,7 +493,10 @@ defmodule PlatformWeb.ChatLive.Partials.ChatList do
                     event="new_channel_open"
                   />
                 <% else %>
-                  <%= for space <- @space_rows do %>
+                  <%= for {space, index} <- Enum.with_index(@space_rows) do %>
+                    <% group = @game_groups[space.id] %>
+                    <% previous = Enum.at(@space_rows, index - 1) %>
+                    <h3 :if={group && (index == 0 || @game_groups[previous.id] != group)} class="cg-space-group" data-game-space-heading>{group}</h3>
                     <.row
                       space={space}
                       kind={:channel}
@@ -1749,6 +1755,16 @@ defmodule PlatformWeb.ChatLive.Partials.ChatList do
   # Every section's rows in display order (the moduledoc's `## Order` and
   # `## Holding the order`). The Agents row is not among `:pinned_rows`: it
   # renders first on its own.
+  # Label the already-authorized rows without changing unread/manual ordering.
+  defp game_groups(%{gaming: true, mask_names?: false}) do
+    Platform.Games.list_published()
+    |> Enum.flat_map(fn game ->
+      for id <- [game["community_space_id"], game["development_space_id"]], is_binary(id), do: {id, game["title"]}
+    end)
+    |> Map.new()
+  end
+  defp game_groups(_), do: %{}
+
   defp assign_sorted_rows(assigns) do
     rows = sorted_rows(assigns, assigns[:list_order_hold])
 

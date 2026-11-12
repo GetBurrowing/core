@@ -56,6 +56,7 @@
      a meeting's canvas tile) runs disconnected instead of crashing it. --%>
 <span hidden data-canvas-rooms></span>
 
+<% gaming? = !@embedded && Platform.Gaming.enabled?() %>
 <div id="chat-surface" class="flex h-full min-h-0 flex-col overflow-hidden">
   <%!-- An always-rendered, box-less slot (rung 10 stage 5): whatever comes
      and goes inside it is never a new sibling ahead of a composer field's
@@ -104,6 +105,7 @@
        embedded surfaces alive: `ChatLive.Embedded` has no `@push_permission`
        (ShellLive's on_mount seeds it on routed mounts only). --%>
     <.chat_list
+      gaming={gaming?}
       :if={!@embedded}
       live_action={@live_action}
       embedded={@embedded}
@@ -548,7 +550,7 @@
     </div>
 
     <PlatformWeb.Components.GamingProjectPanel.panel
-      :if={!@embedded && is_nil(@details_panel) && Platform.Gaming.enabled?()}
+      :if={gaming? && is_nil(@details_panel)}
       space={@active_space}
       user={assigns[:current_user_record]}
       participants={@space_participants}
