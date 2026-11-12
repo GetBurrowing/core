@@ -5,7 +5,7 @@
     <title>Join {@game["title"]} · Burrow</title>
     <link rel="stylesheet" href={~p"/assets/css/app.css"} />
   </head>
-  <body class="public-game">
+  <body class={["public-game", @gaming? && "cg-signin-document"]}>
     <main class={["gp-signin", @gaming? && "cg-signin"]}>
       <section :if={@gaming?} class="cg-signin-art" aria-label={@game["title"]}>
         <img :if={@game["image_path"]} src={@game["image_path"]} alt="" />
