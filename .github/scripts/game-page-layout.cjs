@@ -70,6 +70,7 @@ const path = require('node:path')
           assert.equal(await gaming.locator('#game-tile-sky-haulers').evaluate(el => document.activeElement === el), true)
           await gaming.locator('[data-game-tile]').first().focus()
           await gaming.locator('.cg-shelf').evaluate(el => el.scrollLeft = 0)
+          assert.equal(await gaming.locator('[data-game-tile]').first().evaluate(el => document.activeElement === el && getComputedStyle(el).outlineStyle === 'solid' && parseFloat(getComputedStyle(el).outlineWidth) >= 3), true, 'selected tile must have a visible white focus ring')
           await gaming.evaluate(() => window.scrollTo(0, 0))
         }
         await gaming.screenshot({path:path.join(process.env.GAME_PAGE_SCREENSHOTS, state + (mobile ? '-phone.png' : '-desktop.png')), fullPage:true})
