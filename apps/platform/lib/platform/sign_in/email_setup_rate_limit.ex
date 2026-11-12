@@ -7,19 +7,17 @@ defmodule Platform.SignIn.EmailSetupRateLimit do
   def start_link(opts \\ []), do: GenServer.start_link(__MODULE__, opts, name: __MODULE__)
 
   def request(ip, email) do
-    with :ok <- count({:ip, ip}, 20), do: count({:email, :crypto.hash(:sha256, email)}, 3)
+    with :ok <- count({:ip, ip}, 120), do: count({:email, :crypto.hash(:sha256, email)}, 3)
   end
 
-  def verify(ip), do: count({:verify, ip}, 30)
+  def verify(ip), do: count({:verify, ip}, 300)
 
   defp count(key, limit) do
     key = {key, div(System.system_time(:second), @window)}
-    if :ets.info(@table, :size) >= 20_000 and not :ets.member(@table, key) do
-      {:error, :rate_limited}
-    else
-      if :ets.update_counter(@table, key, {2, 1}, {key, 0}) <= limit,
-        do: :ok, else: {:error, :rate_limited}
-    end
+    if :ets.info(@table, :size) >= 20_000 and not :ets.member(@table, key),
+      do: :ets.delete(@table, :ets.first(@table))
+    if :ets.update_counter(@table, key, {2, 1}, {key, 0}) <= limit,
+      do: :ok, else: {:error, :rate_limited}
   end
 
   @impl true

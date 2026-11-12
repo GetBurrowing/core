@@ -29,24 +29,28 @@ defmodule Platform.SignIn.SetupLink do
 
     cond do
       origin(uri) == origin(install) and uri.path == "/auth/link" ->
-        with {:ok, %{user: user}} <- DurableLink.verify(query["token"]),
-             do: PocketId.one_time_token(user.oidc_sub)
+        with {:ok, %{user: user, purpose: purpose}} <- DurableLink.verify(query["token"]),
+             {:ok, token} <- PocketId.one_time_token(user.oidc_sub),
+             do: {:ok, %{token: token, purpose: purpose}}
 
       origin(uri) == origin(install) and uri.path == "/auth/handover" ->
-        token(query["code"])
+        token(query["code"], :handover)
 
       origin(uri) == origin(provider) and is_binary(uri.path) and
           String.starts_with?(uri.path, "/lc/") ->
-        token(String.replace_prefix(uri.path, "/lc/", ""))
+        token(String.replace_prefix(uri.path, "/lc/", ""), :invite)
 
       true ->
         {:error, :invalid}
     end
   end
 
-  defp token(code) when is_binary(code) do
-    if Regex.match?(@code, code), do: {:ok, %PocketId.Token{value: code}}, else: {:error, :invalid}
+  defp token(code, purpose) when is_binary(code) do
+    if Regex.match?(@code, code),
+      do: {:ok, %{token: %PocketId.Token{value: code}, purpose: purpose}},
+      else: {:error, :invalid}
   end
-  defp token(_), do: {:error, :invalid}
+
+  defp token(_, _), do: {:error, :invalid}
   defp origin(uri), do: {uri.scheme, uri.host, uri.port}
 end

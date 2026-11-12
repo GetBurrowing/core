@@ -7,8 +7,17 @@ defmodule PlatformWeb.SignInSetupControllerTest do
   @code "AbCd1234EfGh"
 
   setup do
-    keys = [:sign_in_admin_enabled, :sign_in_admin_url, :sign_in_admin_api_key, :oidc_mock_response, SystemMail]
+    keys = [
+      :sign_in_admin_enabled,
+      :sign_in_admin_url,
+      :sign_in_admin_api_key,
+      :oidc_mock_response,
+      :trust_proxy_headers,
+      SystemMail
+    ]
+
     saved = for key <- keys, do: {key, Application.fetch_env(:platform, key)}
+
     on_exit(fn ->
       for {key, old} <- saved do
         case old do
@@ -17,22 +26,48 @@ defmodule PlatformWeb.SignInSetupControllerTest do
         end
       end
     end)
+
     Application.put_env(:platform, :sign_in_admin_enabled, true)
     Application.put_env(:platform, :sign_in_admin_url, "http://pocket-id.test")
     Application.put_env(:platform, :sign_in_admin_api_key, "test-key-not-a-secret")
-    Application.put_env(:platform, SystemMail, from: "Burrow <noreply@example.test>", host: "smtp.example.test")
+
+    Application.put_env(:platform, SystemMail,
+      from: "Burrow <noreply@example.test>",
+      host: "smtp.example.test"
+    )
+
     :ets.delete_all_objects(:sign_in_email_setup_rate)
-    user = Repo.insert!(%Accounts.User{email: "new@example.test", name: "New", oidc_sub: Ecto.UUID.generate()})
+    handler = {__MODULE__, self()}
+    :ok = :telemetry.attach(handler, [:platform, :sign_in, :setup, :delivery], fn _, _, meta, pid ->
+      send(pid, {:setup_delivery, meta.challenge_id, meta.result})
+    end, self())
+    on_exit(fn -> :telemetry.detach(handler) end)
+
+    user =
+      Repo.insert!(%Accounts.User{
+        email: "new@example.test",
+        name: "New",
+        oidc_sub: Ecto.UUID.generate()
+      })
+
     %{user: user}
   end
 
   defp provider(user, opts \\ []) do
     pid = self()
+
     Req.Test.stub(PocketId, fn conn ->
       send(pid, {:provider_request, conn.request_path})
+
       case conn.request_path do
         "/api/users/" <> rest when rest == user.oidc_sub ->
-          Req.Test.json(conn, %{id: user.oidc_sub, email: opts[:email] || user.email, emailVerified: true, disabled: opts[:disabled] || false})
+          Req.Test.json(conn, %{
+            id: user.oidc_sub,
+            email: opts[:email] || user.email,
+            emailVerified: true,
+            disabled: opts[:disabled] || false
+          })
+
         path ->
           if String.ends_with?(path, "/webauthn-credentials") do
             Req.Test.json(conn, if(opts[:enrolled], do: [%{id: "passkey"}], else: []))
@@ -41,6 +76,17 @@ defmodule PlatformWeb.SignInSetupControllerTest do
           end
       end
     end)
+  end
+
+  defp delivered(conn) do
+    id = get_session(conn, :email_setup).id
+    assert_receive {:setup_delivery, ^id, result}, 2_000
+    result
+  end
+
+  defp mailed_code(mail) do
+    [_, code] = Regex.run(~r/\n([A-Z2-7]{8})\n/, mail.text_body)
+    code
   end
 
   test "bundled login offers first-time setup without losing native continuation", %{conn: conn} do
@@ -52,6 +98,7 @@ defmodule PlatformWeb.SignInSetupControllerTest do
     doc = LazyHTML.from_document(html_response(page, 200))
     assert LazyHTML.query(doc, "#email-setup-request") |> LazyHTML.to_tree() != []
     assert LazyHTML.query(doc, "#passkey-sign-in") |> LazyHTML.to_tree() != []
+
     if dir = System.get_env("SIGN_IN_SETUP_EVIDENCE") do
       File.mkdir_p!(dir)
       File.write!(Path.join(dir, "sign-in.html"), page.resp_body)
@@ -62,7 +109,7 @@ defmodule PlatformWeb.SignInSetupControllerTest do
     Application.put_env(:platform, :sign_in_admin_enabled, false)
     conn = get(conn, "/auth/login")
     assert redirected_to(conn) =~ "https://issuer.example.com/authorize?"
-    assert EmailSetup.request("new@example.test", {1, 2, 3, 4}) != EmailSetup.digest(@code)
+    assert %{id: _, binding: _} = EmailSetup.request("new@example.test", {1, 2, 3, 4})
     refute_received {:mail_test_adapter, _, _}
   end
 
@@ -77,34 +124,68 @@ defmodule PlatformWeb.SignInSetupControllerTest do
     refute_received {:mail_test_adapter, _, _}
   end
 
-  test "sends only a code, retains only its digest, and preserves the native PKCE handoff", %{conn: conn, user: user} do
+  test "sends only a code, retains only its digest, and preserves the native PKCE handoff", %{
+    conn: conn,
+    user: user
+  } do
     provider(user)
     verifier = Base.url_encode64(:crypto.strong_rand_bytes(32), padding: false)
     challenge = :crypto.hash(:sha256, verifier) |> Base.url_encode64(padding: false)
-    conn = conn |> init_test_session(app_challenge: challenge) |> post("/auth/email/setup", %{email: " NEW@example.test "})
+
+    conn =
+      conn
+      |> init_test_session(app_challenge: challenge)
+      |> post("/auth/email/setup", %{email: " NEW@example.test "})
+
     assert html_response(conn, 200) =~ "If your account is invited"
     refute conn.resp_body =~ @code
-    assert get_session(conn, :email_setup).hash == EmailSetup.digest(@code)
+    pending = get_session(conn, :email_setup)
+    assert Map.keys(pending) |> Enum.sort() == [:binding, :id]
+    assert delivered(conn) == :sent
+
     if dir = System.get_env("SIGN_IN_SETUP_EVIDENCE") do
       File.mkdir_p!(dir)
       File.write!(Path.join(dir, "code.html"), conn.resp_body)
     end
-    assert_received {:mail_test_adapter, mail, _}
+
+    assert_receive {:mail_test_adapter, mail, _}, 2_000
     assert mail.to == [{"", user.email}]
-    assert mail.text_body =~ @code
-    assert Repo.get!(Accounts.User, user.id).sign_in_link_expires_at
+    refute mail.text_body =~ @code
+    code = mailed_code(mail)
+    refute conn.resp_body =~ code
+    assert {:error, :invalid} = EmailSetup.complete(%{pending | binding: "wrong-browser-binding"}, code)
+
     Req.Test.stub(Platform.OIDC, fn conn ->
-      conn |> Plug.Conn.put_resp_header("location", "/interaction?interaction=e8a7f28d-4e78-4f21-bec0-53dc068d471f") |> Plug.Conn.send_resp(302, "")
+      conn
+      |> Plug.Conn.put_resp_header(
+        "location",
+        "/interaction?interaction=e8a7f28d-4e78-4f21-bec0-53dc068d471f"
+      )
+      |> Plug.Conn.send_resp(302, "")
     end)
-    completed = conn |> recycle() |> post("/auth/email/complete", %{code: @code})
+
+    completed = conn |> recycle() |> post("/auth/email/complete", %{code: code})
     assert redirected_to(completed) =~ "https://issuer.example.com/lc/" <> @code
     assert get_session(completed, :app_challenge) == challenge
     assert get_session(completed, :email_setup) == nil
     refute get_session(completed, :post_login_path)
+    assert Repo.get!(Accounts.User, user.id).sign_in_link_expires_at
+    assert {:error, :invalid} = EmailSetup.complete(pending, code)
     claims = %{"sub" => user.oidc_sub, "email" => user.email, "name" => user.name}
-    Application.put_env(:platform, :oidc_mock_response, {:ok, %{user: claims, userinfo: claims, id_token: claims, token: %{"id_token" => "t"}}})
+
+    Application.put_env(
+      :platform,
+      :oidc_mock_response,
+      {:ok, %{user: claims, userinfo: claims, id_token: claims, token: %{"id_token" => "t"}}}
+    )
+
     state = get_session(completed, :oidc_session_params).state
-    callback = completed |> recycle() |> get("/auth/oidc/callback?" <> URI.encode_query(%{code: "provider-code", state: state}))
+
+    callback =
+      completed
+      |> recycle()
+      |> get("/auth/oidc/callback?" <> URI.encode_query(%{code: "provider-code", state: state}))
+
     location = URI.parse(redirected_to(callback))
     assert location.scheme == "burrow"
     assert location.host == "auth"
@@ -113,78 +194,136 @@ defmodule PlatformWeb.SignInSetupControllerTest do
     assert {:ok, %{session: session}} = Platform.Mobile.exchange_code(exchange, verifier)
     assert session.user_id == user.id
     # Reusing the completion form cannot start another login.
-    replay = completed |> recycle() |> post("/auth/email/complete", %{code: @code})
+    replay = completed |> recycle() |> post("/auth/email/complete", %{code: code})
     assert replay.status == 400
   end
 
-  test "unknown, archived, disabled, enrolled and mismatched-email accounts never get codes", %{conn: conn, user: user} do
+  test "unknown, archived, disabled, enrolled and mismatched-email accounts never get codes", %{
+    conn: conn,
+    user: user
+  } do
     generic = post(conn, "/auth/email/setup", %{email: "unknown@example.test"})
     assert html_response(generic, 200) =~ "If your account is invited"
+    assert delivered(generic) == :skipped
     refute_received {:provider_request, _}
+
     for opts <- [[disabled: true], [enrolled: true], [email: "other@example.test"]] do
       :ets.delete_all_objects(:sign_in_email_setup_rate)
       provider(user, opts)
       result = post(build_conn(), "/auth/email/setup", %{email: user.email})
       assert html_response(result, 200) =~ "If your account is invited"
+      assert delivered(result) == :skipped
       refute_received {:mail_test_adapter, _, _}
-      refute get_session(result, :email_setup).hash == EmailSetup.digest(@code)
     end
+
     Repo.update!(Ecto.Changeset.change(user, archived_at: DateTime.utc_now()))
     :ets.delete_all_objects(:sign_in_email_setup_rate)
     result = post(build_conn(), "/auth/email/setup", %{email: user.email})
     assert html_response(result, 200) =~ "If your account is invited"
+    assert delivered(result) == :skipped
     refute_received {:mail_test_adapter, _, _}
   end
 
-  test "email request limits prevent repeated sends and wrong or expired codes are refused", %{conn: conn, user: user} do
+  test "email request limits prevent repeated sends and wrong or expired codes are refused", %{
+    conn: conn,
+    user: user
+  } do
     provider(user)
-    for _ <- 1..3 do
-      post(build_conn(), "/auth/email/setup", %{email: user.email})
-      assert_received {:mail_test_adapter, _, _}
+
+    attempts = for _ <- 1..3 do
+      sent = post(build_conn(), "/auth/email/setup", %{email: user.email})
+      assert delivered(sent) == :sent
+      assert_receive {:mail_test_adapter, mail, _}, 2_000
+      {get_session(sent, :email_setup), mailed_code(mail)}
     end
     result = post(conn, "/auth/email/setup", %{email: user.email})
     refute_received {:mail_test_adapter, _, _}
     assert html_response(result, 200) =~ "If your account is invited"
-    wrong = result |> recycle() |> post("/auth/email/complete", %{code: "wrongcode1234"})
-    assert wrong.status == 400
-    expired = build_conn() |> init_test_session(email_setup: %{hash: EmailSetup.digest(@code), expires_at: 0}) |> post("/auth/email/complete", %{code: @code})
-    assert expired.status == 400
+    {pending, code} = List.first(attempts)
+    for _ <- 1..5, do: assert({:error, :invalid} == EmailSetup.complete(pending, "WRONG123"))
+    assert {:error, :invalid} = EmailSetup.complete(pending, code)
+    {pending, code} = List.last(attempts)
+    row = Repo.get!(Platform.SignIn.SetupChallenge, pending.id)
+    Repo.update!(Ecto.Changeset.change(row, expires_at: DateTime.add(DateTime.utc_now(), -1, :second)))
+    assert {:error, :invalid} = EmailSetup.complete(pending, code)
   end
-  test "pasting the existing provider invitation keeps the native app session even without SMTP", %{conn: conn} do
+
+  test "pasting the existing provider invitation keeps the native app session even without SMTP",
+       %{conn: conn} do
     Application.delete_env(:platform, SystemMail)
     challenge = String.duplicate("a", 43)
+
     Req.Test.stub(Platform.OIDC, fn conn ->
-      conn |> Plug.Conn.put_resp_header("location", "/interaction?interaction=e8a7f28d-4e78-4f21-bec0-53dc068d471f") |> Plug.Conn.send_resp(302, "")
+      conn
+      |> Plug.Conn.put_resp_header(
+        "location",
+        "/interaction?interaction=e8a7f28d-4e78-4f21-bec0-53dc068d471f"
+      )
+      |> Plug.Conn.send_resp(302, "")
     end)
-    result = conn |> init_test_session(app_challenge: challenge) |> post("/auth/invitation", %{setup_link: "https://issuer.example.com/lc/" <> @code <> "?redirect=%2Fsettings%2Faccount"})
+
+    result =
+      conn
+      |> init_test_session(app_challenge: challenge)
+      |> post("/auth/invitation", %{
+        setup_link: "https://issuer.example.com/lc/" <> @code <> "?redirect=%2Fsettings%2Faccount"
+      })
+
     assert redirected_to(result) =~ "https://issuer.example.com/lc/" <> @code
     assert get_session(result, :app_challenge) == challenge
     refute_received {:mail_test_adapter, _, _}
   end
 
-  test "invitation parser refuses foreign origins, HTTP, credentials, fragments and tampered signed links", %{conn: conn} do
-    for value <- ["https://evil.example/lc/" <> @code, "http://issuer.example.com/lc/" <> @code,
-                  "https://user:password@issuer.example.com/lc/" <> @code,
-                  "https://issuer.example.com/lc/" <> @code <> "#fragment",
-                  "https://issuer.example.com/authorize?token=" <> @code,
-                  "/lc/" <> @code, String.duplicate("a", 8193)] do
+  test "invitation parser refuses foreign origins, HTTP, credentials, fragments and tampered signed links",
+       %{conn: conn} do
+    for value <- [
+          "https://evil.example/lc/" <> @code,
+          "http://issuer.example.com/lc/" <> @code,
+          "https://user:password@issuer.example.com/lc/" <> @code,
+          "https://issuer.example.com/lc/" <> @code <> "#fragment",
+          "https://issuer.example.com/authorize?token=" <> @code,
+          "/lc/" <> @code,
+          String.duplicate("a", 8193)
+        ] do
       result = post(conn, "/auth/invitation", %{setup_link: value})
       assert result.status == 400
       refute result.resp_body =~ @code
       refute get_session(result, :oidc_session_params)
     end
+
     refute_received {:provider_request, _}
   end
 
-  test "a valid signed invitation is verified for this install and archived users cannot redeem it", %{conn: conn, user: user} do
+  test "a valid signed invitation is verified for this install and archived users cannot redeem it",
+       %{conn: conn, user: user} do
     provider(user)
     link = Platform.SignIn.DurableLink.url(user, :invite)
-    assert {:ok, %PocketId.Token{value: @code}} = Platform.SignIn.SetupLink.redeem(link)
+    assert {:ok, %{token: %PocketId.Token{value: @code}, purpose: :invite}} = Platform.SignIn.SetupLink.redeem(link)
     assert {:error, _} = Platform.SignIn.SetupLink.redeem(link <> "tampered")
     Repo.update!(Ecto.Changeset.change(user, archived_at: DateTime.utc_now()))
     result = post(conn, "/auth/invitation", %{setup_link: link})
     assert result.status == 400
     refute get_session(result, :oidc_session_params)
+  end
+  test "adding a passkey after code delivery ends eligibility before a provider token is minted", %{conn: conn, user: user} do
+    provider(user)
+    sent = post(conn, "/auth/email/setup", %{email: user.email})
+    assert delivered(sent) == :sent
+    assert_receive {:mail_test_adapter, mail, _}, 2_000
+    provider(user, enrolled: true)
+    assert {:error, :invalid} = EmailSetup.complete(get_session(sent, :email_setup), mailed_code(mail))
+  end
+
+  test "a pasted owner link retains owner onboarding and the app continuation", %{conn: conn, user: user} do
+    provider(user)
+    Req.Test.stub(Platform.OIDC, fn conn ->
+      conn |> Plug.Conn.put_resp_header("location", "/interaction?interaction=e8a7f28d-4e78-4f21-bec0-53dc068d471f") |> Plug.Conn.send_resp(302, "")
+    end)
+    result = conn |> init_test_session(app_challenge: String.duplicate("a", 43)) |> post("/auth/invitation", %{setup_link: Platform.SignIn.DurableLink.url(user, :handover)})
+    assert redirected_to(result) =~ "/lc/" <> @code
+    assert get_session(result, :post_login_path) == "/setup/connect-ai"
+    assert get_session(result, :signed_in_with_link) == true
+    assert get_session(result, :app_challenge) == String.duplicate("a", 43)
   end
 
 end
