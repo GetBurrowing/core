@@ -11,13 +11,18 @@ defmodule PlatformWeb.Plugs.SwitcherBadgeAuth do
     * `OPTIONS` (the preflight carries no credential) answers `204`. It
       echoes `Access-Control-Allow-Origin` for a well-formed request `Origin`
       so the browser will send the real request, and allows the `GET` and
-      `DELETE` methods and the `Authorization` header. A missing or malformed `Origin` gets no
-      allow header.
+      `DELETE` methods and the `Authorization` header. A missing or
+      malformed `Origin` gets no allow header.
     * `GET` and `DELETE` verify the key against the request `Origin`
-      (`Platform.Switcher.verify/2`). Only on success is
-      `Access-Control-Allow-Origin` set, to the request `Origin`, which then
-      equals the key's `bound_origin`. A refusal is `401` with no allow
-      header, so a page on another origin cannot even read that it failed.
+      (`Platform.Switcher.verify/2`). On success
+      `Access-Control-Allow-Origin` is the request `Origin`, which then
+      equals the key's `bound_origin`. A refusal is `401`
+      `{"error": "unauthorized"}`, and (task 01a1ccd4 stage 3) it echoes a
+      well-formed request `Origin` exactly as the preflight already does, so
+      the switcher page holding a revoked or expired key can READ the 401
+      and show "Reconnect" instead of "Can't reach". The body says nothing
+      but "unauthorized"; a malformed or missing `Origin` still gets no
+      allow header.
 
   Never `*`, never `Access-Control-Allow-Credentials`, always
   `Vary: Origin`.
@@ -69,9 +74,17 @@ defmodule PlatformWeb.Plugs.SwitcherBadgeAuth do
     else
       _ ->
         conn
+        |> allow_request_origin()
         |> put_resp_content_type("application/json")
         |> send_resp(401, Jason.encode!(%{error: "unauthorized"}))
         |> halt()
+    end
+  end
+
+  defp allow_request_origin(conn) do
+    case request_origin(conn) do
+      {:ok, origin} -> put_resp_header(conn, "access-control-allow-origin", origin)
+      :error -> conn
     end
   end
 

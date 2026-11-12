@@ -74,12 +74,24 @@ defmodule PlatformWeb.SwitcherUnreadControllerTest do
     end
   end
 
-  describe "refusals are 401 with no CORS allow header" do
+  # Stage 3 changed the refusal's CORS: a 401 echoes a well-formed request
+  # Origin (as the preflight does) so the switcher holding a dead key can read
+  # the 401 and show "Reconnect". It still never carries credentials, and a
+  # malformed or missing Origin still gets no allow header.
+  describe "refusals are 401, readable only by a well-formed origin" do
     test "origin mismatch", %{conn: conn, token: token} do
       for origin <- ["https://evil.example", "https://a.example:8443", "http://a.example", nil] do
         conn = unread(conn, token, origin)
         assert json_response(conn, 401) == %{"error" => "unauthorized"}, inspect(origin)
-        assert header(conn, "access-control-allow-origin") == [], inspect(origin)
+
+        expected =
+          case Switcher.normalize_origin(origin) do
+            {:ok, o} -> [o]
+            _ -> []
+          end
+
+        assert header(conn, "access-control-allow-origin") == expected, inspect(origin)
+        assert header(conn, "access-control-allow-credentials") == []
         assert header(conn, "vary") == ["Origin"]
       end
     end
@@ -93,7 +105,7 @@ defmodule PlatformWeb.SwitcherUnreadControllerTest do
       for t <- ["bk_garbage", nil] do
         conn = unread(conn, t, @a)
         assert conn.status == 401
-        assert header(conn, "access-control-allow-origin") == []
+        assert header(conn, "access-control-allow-origin") == [@a]
       end
 
       {:ok, %{token: expired}} =
@@ -101,12 +113,13 @@ defmodule PlatformWeb.SwitcherUnreadControllerTest do
 
       conn2 = unread(conn, expired, "https://e.example")
       assert conn2.status == 401
-      assert header(conn2, "access-control-allow-origin") == []
+      assert header(conn2, "access-control-allow-origin") == ["https://e.example"]
 
       {:ok, _} = Switcher.revoke(user, key.id)
       conn3 = unread(conn, token, @a)
       assert conn3.status == 401
-      assert header(conn3, "access-control-allow-origin") == []
+      assert header(conn3, "access-control-allow-origin") == [@a]
+      assert json_response(conn3, 401) == %{"error" => "unauthorized"}
     end
 
     test "the key in the query string is not read", %{conn: conn, token: token} do

@@ -43,7 +43,7 @@ defmodule PlatformWeb.SwitcherKeyControllerTest do
     for {t, origin} <- [{token, "https://evil.example"}, {nil, @a}, {"bk_nope", @a}] do
       c = conn |> recycle() |> with_key(t, origin) |> delete("/api/switcher/key")
       assert c.status == 401
-      assert get_resp_header(c, "access-control-allow-origin") == []
+      assert get_resp_header(c, "access-control-allow-credentials") == []
     end
 
     assert {:ok, _user, _key} = Switcher.verify(token, @a)

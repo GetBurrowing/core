@@ -27,14 +27,20 @@ const DOT_SELECTOR = "[data-role='install-unread-dot']"
 const HOP_DELAY_MS = 700
 const TOAST_MS = 3200
 
+// Sizes follow the stage-1 prototype's CSS (row 52px desktop / 60px phone,
+// 32/36px tiles, 20px pills, pill-shaped 36px buttons). Hover is the
+// base-content 8% mix, press 12%; base-300 is only ever a raised surface.
 const ROW_CLASS =
-  "flex w-full min-w-0 flex-1 items-center gap-2.5 rounded-lg px-2 py-1.5 text-left hover:bg-base-content/8 active:bg-base-content/8 focus-visible-ring"
+  "flex w-full min-w-0 flex-1 items-center gap-2.5 rounded-lg px-2.5 py-2 text-left hover:bg-base-content/8 active:bg-base-content/12 focus-visible-ring"
 const PILL_CLASS =
-  "inline-flex h-[18px] min-w-[18px] shrink-0 items-center justify-center rounded-full bg-primary px-[5px] text-xs font-bold leading-none tabular-nums text-primary-content"
-const PRIMARY_BTN =
-  "inline-flex items-center justify-center rounded-lg bg-primary px-4 py-2 text-sm font-medium text-primary-content disabled:opacity-60 focus-visible-ring"
-const GHOST_BTN =
-  "inline-flex items-center justify-center rounded-lg border border-edge px-4 py-2 text-sm font-medium text-base-content hover:bg-base-content/8 focus-visible-ring"
+  "inline-flex h-5 min-w-5 shrink-0 items-center justify-center rounded-full bg-primary px-1.5 text-[11px] font-bold leading-none tabular-nums text-primary-content"
+const BTN =
+  "inline-flex h-9 items-center justify-center gap-1.5 whitespace-nowrap rounded-full px-3.5 text-[13px] font-semibold focus-visible-ring"
+const PRIMARY_BTN = BTN + " bg-primary text-primary-content hover:brightness-107 disabled:opacity-45"
+const GHOST_BTN = BTN + " border border-edge text-base-content hover:bg-base-content/8"
+const DANGER_BTN = BTN + " bg-error text-error-content"
+const TEXT_BTN =
+  "inline-flex h-7 shrink-0 items-center rounded-full px-2 text-xs font-semibold text-primary hover:bg-base-content/8 focus-visible-ring"
 
 /** Build an element. Strings become text nodes; `text` sets textContent. */
 export function el(doc, tag, props = {}, children = []) {
@@ -342,7 +348,7 @@ export function createWebSwitch(env = {}) {
     return ctl.states.get(row.origin)?.status || "loading"
   }
 
-  function logoTile(row) {
+  function logoTile(row, phone = false) {
     const initial = (row.name || row.host || "?").trim().charAt(0).toUpperCase() || "?"
     const img = el(doc, "img", {
       src: (row.current ? "" : row.origin) + "/branding/current/apple_touch",
@@ -357,14 +363,16 @@ export function createWebSwitch(env = {}) {
       "span",
       {
         class:
-          "relative inline-flex size-8 shrink-0 items-center justify-center overflow-hidden rounded-lg border border-edge bg-base-300 text-xs font-semibold text-subtle",
+          "relative inline-flex shrink-0 items-center justify-center overflow-hidden rounded-lg border border-edge text-sm font-extrabold text-base-content " +
+          (phone ? "size-9 " : "size-8 ") +
+          (row.current ? "bg-base-200" : "bg-base-300"),
         "aria-hidden": "true"
       },
       [el(doc, "span", { text: initial }), img]
     )
   }
 
-  function buildRow(row) {
+  function buildRow(row, phone = false) {
     const status = rowStatus(row)
     const state = row.current ? { unread: row.unread } : ctl.states.get(row.origin) || {}
     const faded = status === "stale"
@@ -392,17 +400,8 @@ export function createWebSwitch(env = {}) {
         })
       )
     }
-    if (status === "unreachable") {
-      trailing.push(
-        el(doc, "span", {
-          class: "size-[7px] shrink-0 rounded-full bg-error",
-          "data-role": "install-row-unreachable",
-          "aria-hidden": "true"
-        })
-      )
-    }
     if (status === "current") {
-      trailing.push(icon(doc, "hero-check", "size-4 text-primary"))
+      trailing.push(icon(doc, "hero-check", "size-[18px] text-primary"))
     }
 
     const main = el(
@@ -410,7 +409,7 @@ export function createWebSwitch(env = {}) {
       "button",
       {
         type: "button",
-        class: ROW_CLASS,
+        class: ROW_CLASS + (phone ? " min-h-[60px]" : " min-h-[52px]"),
         "data-role": "install-row",
         "data-origin": row.origin,
         "data-status": status,
@@ -418,18 +417,27 @@ export function createWebSwitch(env = {}) {
         onclick: () => rowClick(row, status)
       },
       [
-        logoTile(row),
+        logoTile(row, phone),
         el(doc, "span", { class: "flex min-w-0 flex-1 flex-col" + (faded ? " opacity-45" : "") }, [
           el(doc, "span", {
-            class: "truncate text-sm font-medium text-base-content",
+            class: "truncate text-sm font-semibold text-base-content",
             "data-role": "install-row-name",
             text: row.name
           }),
-          el(doc, "span", {
-            class: "truncate text-xs text-subtle",
-            "data-role": "install-row-sub",
-            text: sub
-          })
+          el(doc, "span", { class: "flex min-w-0 items-center gap-1.5 text-xs" }, [
+            status === "unreachable"
+              ? el(doc, "span", {
+                  class: "size-[7px] shrink-0 rounded-full bg-error",
+                  "data-role": "install-row-unreachable",
+                  "aria-hidden": "true"
+                })
+              : null,
+            el(doc, "span", {
+              class: "truncate " + (status === "unreachable" ? "text-base-content" : "text-subtle"),
+              "data-role": "install-row-sub",
+              text: sub
+            })
+          ])
         ]),
         ...trailing
       ]
@@ -440,14 +448,14 @@ export function createWebSwitch(env = {}) {
       children.push(
         el(doc, "button", {
           type: "button",
-          class: "shrink-0 rounded-md px-2 py-1 text-sm font-medium text-primary hover:bg-base-content/8 focus-visible-ring",
+          class: TEXT_BTN + " mr-1.5",
           "data-role": "install-row-reconnect",
           text: "Reconnect",
           onclick: () => startHop(row.origin, row.name)
         })
       )
     }
-    return el(doc, "li", { class: "flex items-center gap-1", "data-role": "install-row-item" }, children)
+    return el(doc, "li", { class: "flex items-center", "data-role": "install-row-item" }, children)
   }
 
   function filteredRows() {
@@ -457,8 +465,8 @@ export function createWebSwitch(env = {}) {
     return all.filter(r => r.name.toLowerCase().includes(q) || r.host.toLowerCase().includes(q))
   }
 
-  function renderList(list) {
-    list.replaceChildren(...filteredRows().map(buildRow))
+  function renderList(list, phone) {
+    list.replaceChildren(...filteredRows().map(row => buildRow(row, phone)))
   }
 
   function renderPanel(view) {
@@ -466,11 +474,12 @@ export function createWebSwitch(env = {}) {
     if (!host) return
     const all = rows()
     const phone = view.variant !== "sidebar"
+    // About 8 rows before scrolling on desktop, 6.5 on a phone (canvas).
     const list = el(doc, "ul", {
-      class: "flex flex-col gap-0.5 overflow-y-auto " + (phone ? "max-h-[21rem]" : "max-h-[26rem]"),
+      class: "flex min-h-0 flex-col gap-px overflow-y-auto " + (phone ? "max-h-[396px]" : "max-h-[424px]"),
       "data-role": "install-switch-list"
     })
-    renderList(list)
+    renderList(list, phone)
 
     const find =
       all.length >= S.FIND_AT
@@ -480,10 +489,10 @@ export function createWebSwitch(env = {}) {
             "aria-label": "Find an install",
             "data-role": "install-switch-find",
             class:
-              "mx-1 mb-1 rounded-lg border border-edge bg-base-100 px-2.5 py-1.5 text-sm text-base-content placeholder:text-subtle focus:outline-none focus:ring-2 focus:ring-primary",
+              "mx-1 mb-1.5 h-[34px] rounded-lg border border-edge bg-base-100 px-3 text-[13px] text-base-content placeholder:text-subtle focus:border-primary focus:outline-none focus:ring-[3px] focus:ring-primary/22",
             oninput: event => {
               ctl.query = event?.target?.value ?? ""
-              renderList(list)
+              renderList(list, phone)
             }
           })
         : null
@@ -491,13 +500,13 @@ export function createWebSwitch(env = {}) {
 
     const empty =
       all.length === 1
-        ? el(doc, "div", { class: "px-2 py-3", "data-role": "install-switch-empty" }, [
+        ? el(doc, "div", { class: "px-3 pt-3 pb-1.5", "data-role": "install-switch-empty" }, [
             el(doc, "p", {
-              class: "text-sm font-semibold text-base-content",
+              class: "mb-1 text-sm font-bold text-base-content",
               text: "Switch between Burrow installs"
             }),
             el(doc, "p", {
-              class: "mt-1 text-xs leading-relaxed text-subtle",
+              class: "text-[13px] leading-normal text-subtle",
               text: "Add another install, like a second team, a client's Burrow or a friend's server, and jump to it from here. Each install keeps its own spaces and sign-in. When one has unread, a dot shows next to this name."
             })
           ])
@@ -509,7 +518,8 @@ export function createWebSwitch(env = {}) {
       {
         type: "button",
         class:
-          "mt-1 flex w-full items-center gap-2.5 rounded-lg px-2 py-1.5 text-left text-sm text-base-content hover:bg-base-content/8 focus-visible-ring",
+          "flex w-full items-center gap-2.5 rounded-lg px-2.5 text-left text-sm text-base-content hover:bg-base-content/8 focus-visible-ring " +
+          (phone ? "h-12" : "h-10"),
         "data-role": "install-switch-add",
         onclick: () => openAdd(view)
       },
@@ -519,7 +529,7 @@ export function createWebSwitch(env = {}) {
           "span",
           {
             class:
-              "inline-flex size-8 shrink-0 items-center justify-center rounded-lg border border-dashed border-edge text-subtle",
+              "inline-flex size-8 shrink-0 items-center justify-center rounded-lg border border-dashed border-edge bg-transparent text-subtle",
             "aria-hidden": "true"
           },
           [icon(doc, "hero-plus")]
@@ -533,7 +543,8 @@ export function createWebSwitch(env = {}) {
         ? el(doc, "button", {
             type: "button",
             class:
-              "w-full rounded-lg px-2 py-1.5 text-left text-sm text-subtle hover:bg-base-content/8 focus-visible-ring",
+              "flex w-full items-center rounded-lg pr-2.5 text-left text-sm text-subtle hover:bg-base-content/8 focus-visible-ring " +
+              (phone ? "h-12 pl-14" : "h-10 pl-[52px]"),
             "data-role": "install-switch-manage",
             text: "Manage installs",
             onclick: () => openManage(view)
@@ -549,18 +560,20 @@ export function createWebSwitch(env = {}) {
         "data-role": "install-switch-panel",
         "data-variant": view.variant,
         class: phone
-          ? "fixed inset-x-2 z-50 flex flex-col rounded-xl border border-edge bg-base-100 p-1.5 shadow-lg"
-          : "fixed z-50 flex w-[300px] flex-col rounded-xl border border-edge bg-base-100 p-1.5 shadow-lg"
+          ? "fixed inset-x-2 z-50 flex max-h-[600px] flex-col rounded-xl border border-edge bg-base-100 p-1.5 shadow-xl"
+          : "fixed z-50 flex max-h-[640px] w-[320px] flex-col rounded-xl border border-edge bg-base-100 p-1.5 shadow-xl"
       },
       [
         el(doc, "div", {
-          class: "px-2 pt-1 pb-1.5 text-xs font-medium text-subtle",
+          class: "px-2.5 pt-2 pb-1 text-[11px] font-[650] uppercase tracking-[.08em] text-subtle",
           text: "Installs on this browser"
         }),
         find,
         list,
         empty,
-        el(doc, "div", { class: "mt-1 border-t border-edge pt-1" }, [add, manage])
+        el(doc, "div", { class: "mx-1 my-1.5 h-px shrink-0 bg-edge", "aria-hidden": "true" }),
+        add,
+        manage
       ]
     )
 
@@ -702,7 +715,9 @@ export function createWebSwitch(env = {}) {
     }
   }
 
-  function modalFrame(children, { sheet = false, label }) {
+  // Desktop: a 460px modal 120px from the top. Phone: a bottom sheet from
+  // 60px down with a grab handle (auto height for the Remove confirm).
+  function modalFrame(children, { sheet = false, label, short = false }) {
     const card = el(
       doc,
       "div",
@@ -711,16 +726,22 @@ export function createWebSwitch(env = {}) {
         "aria-modal": "true",
         "aria-label": label,
         class: sheet
-          ? "relative w-full rounded-t-2xl border border-edge bg-base-100 p-5 pb-8 shadow-xl"
-          : "relative w-full max-w-md rounded-2xl border border-edge bg-base-100 p-5 shadow-xl"
+          ? "absolute inset-x-0 bottom-0 flex flex-col rounded-t-2xl border border-b-0 border-edge bg-base-100 px-4 pt-5 pb-6 shadow-xl " +
+            (short ? "" : "top-[60px]")
+          : "absolute left-1/2 top-[120px] flex w-[460px] max-w-[calc(100%-2rem)] -translate-x-1/2 flex-col rounded-2xl border border-edge bg-base-100 p-[22px] shadow-xl"
       },
-      children
+      [
+        sheet
+          ? el(doc, "div", { class: "mx-auto -mt-2.5 mb-3.5 h-[5px] w-9 shrink-0 rounded-full bg-edge", "aria-hidden": "true" })
+          : null,
+        ...children
+      ]
     )
     return el(
       doc,
       "div",
       {
-        class: "fixed inset-0 z-[60] flex justify-center " + (sheet ? "items-end" : "items-center p-4"),
+        class: "fixed inset-0 z-[60]",
         "data-role": "install-switch-modal",
         "data-kind": ctl.modal?.kind
       },
@@ -738,18 +759,48 @@ export function createWebSwitch(env = {}) {
   }
 
   function title(text, role) {
-    return el(doc, "h2", { class: "text-base font-semibold text-base-content", "data-role": role, text })
+    return el(doc, "h2", {
+      class: "mb-1 text-lg font-bold tracking-[-.01em] text-base-content",
+      "data-role": role,
+      text
+    })
   }
 
   function body(text, role) {
-    return el(doc, "p", { class: "mt-2 text-sm leading-relaxed text-subtle", "data-role": role, text })
+    return el(doc, "p", { class: "mb-4 text-[13px] leading-normal text-subtle", "data-role": role, text })
   }
 
-  function spinner() {
+  function foot(sheet, buttons) {
+    return el(
+      doc,
+      "div",
+      { class: sheet ? "mt-auto flex flex-col-reverse gap-2 pt-4" : "mt-[18px] flex justify-end gap-2" },
+      sheet ? buttons.map(b => (b.setAttribute("class", b.getAttribute("class") + " h-11 w-full"), b)) : buttons
+    )
+  }
+
+  function bigSpinner() {
     return el(doc, "span", {
-      class: "inline-block size-5 animate-spin rounded-full border-2 border-primary border-t-transparent",
+      class: "mx-auto mb-3.5 block size-[22px] animate-spin rounded-full border-[2.5px] border-edge border-t-primary",
       "aria-hidden": "true"
     })
+  }
+
+  // Hop and switching are whole-page states (canvas): base-200 page.
+  function pageFrame(children, label) {
+    return el(
+      doc,
+      "div",
+      {
+        role: "dialog",
+        "aria-modal": "true",
+        "aria-label": label,
+        class: "fixed inset-0 z-[60] flex items-center justify-center bg-base-200 p-5",
+        "data-role": "install-switch-modal",
+        "data-kind": ctl.modal?.kind
+      },
+      children
+    )
   }
 
   function buildModal() {
@@ -767,9 +818,10 @@ export function createWebSwitch(env = {}) {
         autocapitalize: "off",
         spellcheck: "false",
         placeholder: "burrow.yourteam.com",
+        disabled: checking,
         "data-role": "install-switch-address",
         class:
-          "mt-1 w-full rounded-lg border border-edge bg-base-100 px-3 py-2 text-sm text-base-content placeholder:text-subtle focus:outline-none focus:ring-2 focus:ring-primary",
+          "h-10 w-full rounded-lg border border-edge bg-base-100 px-3 text-sm text-base-content placeholder:text-subtle focus:border-primary focus:outline-none focus:ring-[3px] focus:ring-primary/22",
         oninput: event => {
           m.value = event?.target?.value ?? ""
         },
@@ -781,62 +833,105 @@ export function createWebSwitch(env = {}) {
         }
       })
       input.value = m.value
-      const children = [
-        title("Add an install", "install-switch-add-title"),
-        body(
-          "Enter the address your team uses for Burrow. We'll open it so you can sign in there, then bring you back.",
-          "install-switch-add-body"
-        ),
-        el(doc, "label", { for: "install-switch-address", class: "mt-4 block text-xs font-medium text-subtle", text: "Address" }),
-        input,
-        m.phase === "notfound"
-          ? el(doc, "p", {
-              class: "mt-2 text-sm text-error",
-              "data-role": "install-switch-notfound",
-              text: "Couldn't find Burrow at this address. Check the spelling, or ask your admin for the link."
-            })
-          : null,
-        el(doc, "div", { class: "mt-5 flex justify-end gap-2" }, [
-          el(doc, "button", { type: "button", class: GHOST_BTN, text: "Cancel", onclick: () => closeModal() }),
-          el(
-            doc,
-            "button",
-            {
-              type: "button",
-              class: PRIMARY_BTN + " gap-2",
-              "data-role": "install-switch-check",
-              disabled: checking,
-              onclick: () => submitAdd()
-            },
-            checking ? [spinnerSmall(), "Checking"] : ["Check and add"]
-          )
-        ])
-      ]
-      return modalFrame(children, { sheet, label: "Add an install" })
+      return modalFrame(
+        [
+          title("Add an install", "install-switch-add-title"),
+          body(
+            "Enter the address your team uses for Burrow. We'll open it so you can sign in there, then bring you back.",
+            "install-switch-add-body"
+          ),
+          el(doc, "label", {
+            for: "install-switch-address",
+            class: "mb-1.5 block text-xs font-semibold text-base-content",
+            text: "Address"
+          }),
+          input,
+          m.phase === "notfound"
+            ? el(doc, "p", {
+                class: "mt-2 text-xs text-error",
+                "data-role": "install-switch-notfound",
+                text: "Couldn't find Burrow at this address. Check the spelling, or ask your admin for the link."
+              })
+            : null,
+          foot(sheet, [
+            el(doc, "button", { type: "button", class: GHOST_BTN, text: "Cancel", onclick: () => closeModal() }),
+            el(
+              doc,
+              "button",
+              {
+                type: "button",
+                class: PRIMARY_BTN,
+                "data-role": "install-switch-check",
+                disabled: checking,
+                onclick: () => submitAdd()
+              },
+              checking ? [smallSpinner(), "Checking"] : ["Check and add"]
+            )
+          ])
+        ],
+        { sheet, label: "Add an install" }
+      )
     }
 
     if (m.kind === "hop") {
       const host = S.hostOf(m.origin)
-      return modalFrame(
+      return pageFrame(
         [
-          el(doc, "div", { class: "flex items-center gap-3" }, [spinner(), title(`Opening ${m.label}`, "install-switch-hop-title")]),
-          body(
-            `${host} needs to say it's OK to show its unread here. If you're not signed in there yet, it will ask you to sign in first, with its own sign-in.`,
-            "install-switch-hop-body"
-          ),
-          body(`You'll come back to ${here.name} when that's done.`, "install-switch-hop-back")
+          el(
+            doc,
+            "div",
+            {
+              class:
+                "w-[440px] max-w-full rounded-2xl border border-edge bg-base-100 text-center " +
+                (sheet ? "px-[18px] py-[22px]" : "p-7")
+            },
+            [
+              bigSpinner(),
+              el(doc, "div", { class: "mt-1.5 mb-[18px] flex items-center justify-center gap-3" }, [
+                logoTile(here),
+                el(doc, "span", { class: "text-subtle", "aria-hidden": "true", text: "\u2192" }),
+                logoTile({ origin: m.origin, name: m.label, host })
+              ]),
+              el(doc, "h2", {
+                class: "mb-2.5 text-[19px] font-bold leading-snug tracking-[-.01em] text-base-content",
+                "data-role": "install-switch-hop-title",
+                text: `Opening ${m.label}`
+              }),
+              el(doc, "p", {
+                class: "mb-2.5 text-[13px] leading-[1.55] text-subtle",
+                "data-role": "install-switch-hop-body",
+                text: `${host} needs to say it's OK to show its unread here. If you're not signed in there yet, it will ask you to sign in first, with its own sign-in.`
+              }),
+              el(doc, "p", {
+                class: "text-[13px] leading-[1.55] text-subtle",
+                "data-role": "install-switch-hop-back",
+                text: `You'll come back to ${here.name} when that's done.`
+              })
+            ]
+          )
         ],
-        { sheet: false, label: `Opening ${m.label}` }
+        `Opening ${m.label}`
       )
     }
 
     if (m.kind === "switching") {
-      return modalFrame(
+      return pageFrame(
         [
-          el(doc, "div", { class: "flex items-center gap-3" }, [spinner(), title(`Opening ${m.name}`, "install-switch-switching-title")]),
-          body("Already signed in with the same account? You go straight in.", "install-switch-switching-body")
+          el(doc, "div", { class: "text-center" }, [
+            bigSpinner(),
+            el(doc, "div", {
+              class: "font-semibold text-base-content",
+              "data-role": "install-switch-switching-title",
+              text: `Opening ${m.name}`
+            }),
+            el(doc, "div", {
+              class: "mt-1 text-xs text-subtle",
+              "data-role": "install-switch-switching-body",
+              text: "Already signed in with the same account? You go straight in."
+            })
+          ])
         ],
-        { sheet: false, label: `Opening ${m.name}` }
+        `Opening ${m.name}`
       )
     }
 
@@ -847,7 +942,7 @@ export function createWebSwitch(env = {}) {
         if (row.current) {
           actions.push(
             el(doc, "span", {
-              class: "shrink-0 rounded-md border border-edge px-1.5 py-0.5 text-xs text-subtle",
+              class: "shrink-0 whitespace-nowrap rounded-full border border-edge px-2 py-0.5 text-[11px] text-subtle",
               text: "This install"
             })
           )
@@ -856,7 +951,7 @@ export function createWebSwitch(env = {}) {
             actions.push(
               el(doc, "button", {
                 type: "button",
-                class: "shrink-0 rounded-md px-2 py-1 text-sm font-medium text-primary hover:bg-base-content/8 focus-visible-ring",
+                class: TEXT_BTN,
                 "data-role": "install-manage-reconnect",
                 text: "Reconnect",
                 onclick: () => startHop(row.origin, row.name)
@@ -866,7 +961,8 @@ export function createWebSwitch(env = {}) {
           actions.push(
             el(doc, "button", {
               type: "button",
-              class: "shrink-0 rounded-md px-2 py-1 text-sm font-medium text-error hover:bg-base-content/8 focus-visible-ring",
+              class:
+                "shrink-0 rounded-full px-2.5 py-1.5 text-[13px] font-semibold text-error hover:bg-base-content/8 focus-visible-ring",
               "data-role": "install-manage-remove",
               "data-origin": row.origin,
               text: "Remove",
@@ -874,14 +970,27 @@ export function createWebSwitch(env = {}) {
             })
           )
         }
-        return el(doc, "li", { class: "flex items-center gap-2.5 py-2", "data-role": "install-manage-row", "data-origin": row.origin }, [
-          logoTile(row),
-          el(doc, "span", { class: "flex min-w-0 flex-1 flex-col" }, [
-            el(doc, "span", { class: "truncate text-sm font-medium text-base-content", "data-role": "install-row-name", text: row.name }),
-            el(doc, "span", { class: "truncate text-xs text-subtle", text: row.host })
-          ]),
-          ...actions
-        ])
+        return el(
+          doc,
+          "li",
+          {
+            class: "flex items-center gap-2.5 border-b border-edge px-1 py-2.5 last:border-b-0",
+            "data-role": "install-manage-row",
+            "data-origin": row.origin
+          },
+          [
+            logoTile(row),
+            el(doc, "span", { class: "flex min-w-0 flex-1 flex-col" }, [
+              el(doc, "span", {
+                class: "truncate text-sm font-semibold text-base-content",
+                "data-role": "install-row-name",
+                text: row.name
+              }),
+              el(doc, "span", { class: "truncate text-xs text-subtle", text: row.host })
+            ]),
+            ...actions
+          ]
+        )
       })
       return modalFrame(
         [
@@ -890,9 +999,24 @@ export function createWebSwitch(env = {}) {
             "These installs are saved in this browser only. Removing one doesn't sign you out of it or delete anything there.",
             "install-manage-body"
           ),
-          el(doc, "ul", { class: "mt-3 max-h-[50vh] divide-y divide-edge overflow-y-auto" }, items),
-          el(doc, "div", { class: "mt-4 flex justify-end" }, [
-            el(doc, "button", { type: "button", class: PRIMARY_BTN, "data-role": "install-manage-done", text: "Done", onclick: () => closeModal() })
+          el(
+            doc,
+            "ul",
+            {
+              class:
+                "overflow-y-auto rounded-xl border border-edge px-2.5 " +
+                (sheet ? "min-h-0 flex-1" : "max-h-[420px]")
+            },
+            items
+          ),
+          foot(sheet, [
+            el(doc, "button", {
+              type: "button",
+              class: GHOST_BTN,
+              "data-role": "install-manage-done",
+              text: "Done",
+              onclick: () => closeModal()
+            })
           ])
         ],
         { sheet, label: "Manage installs" }
@@ -907,27 +1031,26 @@ export function createWebSwitch(env = {}) {
             `It stops showing here, and ${here.name} stops getting its unread count. You stay signed in to ${m.name}, and nothing there is deleted. You can add it again any time.`,
             "install-remove-body"
           ),
-          el(doc, "div", { class: "mt-5 flex justify-end gap-2" }, [
+          foot(sheet, [
             el(doc, "button", { type: "button", class: GHOST_BTN, text: "Cancel", onclick: () => showModal({ kind: "manage" }) }),
             el(doc, "button", {
               type: "button",
-              class:
-                "inline-flex items-center justify-center rounded-lg bg-error px-4 py-2 text-sm font-medium text-error-content focus-visible-ring",
+              class: DANGER_BTN,
               "data-role": "install-remove-confirm",
               text: "Remove",
               onclick: () => removeInstall(m.origin)
             })
           ])
         ],
-        { sheet, label: "Remove install" }
+        { sheet, label: "Remove install", short: true }
       )
     }
     return null
   }
 
-  function spinnerSmall() {
+  function smallSpinner() {
     return el(doc, "span", {
-      class: "inline-block size-4 animate-spin rounded-full border-2 border-primary-content border-t-transparent",
+      class: "inline-block size-3.5 animate-spin rounded-full border-2 border-primary-content/40 border-t-primary-content",
       "aria-hidden": "true"
     })
   }
@@ -950,7 +1073,7 @@ export function createWebSwitch(env = {}) {
       role: "status",
       "data-role": "install-switch-toast",
       class:
-        "fixed bottom-24 left-1/2 z-[70] -translate-x-1/2 rounded-full border border-edge bg-base-300 px-4 py-2 text-sm text-base-content shadow-lg lg:bottom-6",
+        "fixed bottom-24 left-1/2 z-[70] -translate-x-1/2 whitespace-nowrap rounded-full border border-edge bg-base-300 px-4 py-[9px] text-[13px] text-base-content shadow-xl lg:bottom-7",
       text
     })
     host.appendChild(toast)
