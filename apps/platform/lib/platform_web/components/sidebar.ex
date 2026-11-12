@@ -60,6 +60,7 @@ defmodule PlatformWeb.Components.Sidebar do
   alias Platform.Accounts
   alias PlatformWeb.Components.IconRail
 
+  attr :gaming, :boolean, default: false
   attr :current_path, :string, default: "/"
   attr :root_user, :boolean, default: false, doc: "legacy filter, used only without a Scope"
   attr :access_scope, :any, default: nil, doc: "the actor's `%Platform.Access.Scope{}`"
@@ -131,7 +132,7 @@ defmodule PlatformWeb.Components.Sidebar do
         </button>
       </div>
 
-      <PlatformWeb.Components.GamingShell.modes :if={Platform.Gaming.enabled?()} mode="create" />
+      <PlatformWeb.Components.GamingShell.modes :if={@gaming} mode="create" />
 
       <nav
         id="sidebar-nav"

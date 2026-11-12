@@ -1,13 +1,13 @@
 /* Console Glass: install-scoped game presentation, based on the approved v4 canvas. */
 @font-face{font-family:Sora;src:url('/fonts/sora-variable.woff2') format('woff2');font-weight:400 800;font-style:normal;font-display:swap}
-html.console-glass {
+html.console-glass, html.console-glass[data-theme] {
   --cg-bg0:#0a0f24;--cg-bg1:#1a1f45;--cg-ink:#fff;--cg-muted:#dde0f4;--cg-faint:#c6cbea;
   --cg-blue:#4d8bff;--cg-mint:#7ef0d0;--cg-pink:#ff6b8b;
   --cg-glass:rgba(255,255,255,.07);--cg-border:rgba(255,255,255,.16);
   --cg-ring:0 0 0 3px #fff,0 0 0 8px rgba(255,255,255,.16);
   --color-base-100:#0a0f24;--color-base-200:#151b39;--color-base-300:#252d51;
   --color-base-content:#fff;--color-primary:#b8ceff;--color-primary-content:#0a0f24;
-  --color-text-subtle:#dde0f4;--color-border-edge:rgba(255,255,255,.16);
+  --subtle:#dde0f4;--edge:rgba(255,255,255,.16);
   --font-sans:Sora,system-ui,sans-serif;
   background:var(--cg-bg0)!important;color-scheme:dark;
 }

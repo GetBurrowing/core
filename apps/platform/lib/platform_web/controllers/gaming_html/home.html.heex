@@ -7,30 +7,77 @@
     <meta name="color-scheme" content="dark" />
     <title>{@branding.app_name} · Let's play</title>
     <link phx-track-static rel="stylesheet" href={~p"/assets/css/app.css"} />
-    <script defer phx-track-static type="text/javascript" src={~p"/assets/js/app.js"}></script>
+    <script defer phx-track-static type="text/javascript" src={~p"/assets/js/app.js"}>
+    </script>
   </head>
   <body>
-    <.shell games={@games} user={@user} creator={@creator?} mode={@mode} communities={@communities} details={@mode == "play"}>
+    <.shell
+      games={@games}
+      user={@user}
+      creator={@creator?}
+      mode={@mode}
+      communities={@communities}
+      details={@mode == "play"}
+    >
       <main id="gaming-home" class="cg-home" data-console-shelves>
         <header class="cg-heading">
-          <div><p class="cg-eyebrow">BURROW PLAY</p><h1>{case @mode do "discover" -> "Find your next obsession."; "create" -> "Make something worth playing."; _ -> "What are we playing tonight?" end}</h1></div>
-          <a :if={@games != []} class="cg-button cg-ghost" href="#rooms"><.icon name="hero-user-group" />Find your crew</a>
+          <div>
+            <p class="cg-eyebrow">BURROW PLAY</p>
+            <h1>
+              {case @mode do
+                "discover" -> "Find your next obsession."
+                "create" -> "Make something worth playing."
+                _ -> "What are we playing tonight?"
+              end}
+            </h1>
+          </div>
+          <a :if={@games != []} class="cg-button cg-ghost" href="#rooms">
+            <.icon name="hero-user-group" />Find your crew
+          </a>
         </header>
         <%= if @mode == "create" do %>
           <section class="cg-panel cg-glass cg-create-intro">
-            <span class="cg-badge">YOUR WORKSHOP</span><h2>Big ideas. Small teams. Your agents.</h2>
-            <p>Build together in Burrow. Chat, tasks, agents and canvases stay right where you know them.</p>
-            <div class="cg-actions"><a href="/chat" class="cg-button cg-primary">Open workspace<.icon name="hero-arrow-right" /></a><a href="/tasks" class="cg-button cg-ghost">Tasks</a><a href="/control" class="cg-button cg-ghost">Agents</a><a href="/files" class="cg-button cg-ghost">Files</a></div>
+            <span class="cg-badge">YOUR WORKSHOP</span>
+            <h2>Big ideas. Small teams. Your agents.</h2>
+            <p>
+              Build together in Burrow. Chat, tasks, agents and canvases stay right where you know them.
+            </p>
+            <div class="cg-actions">
+              <a href="/chat" class="cg-button cg-primary">
+                Open workspace<.icon name="hero-arrow-right" />
+              </a><a href="/tasks" class="cg-button cg-ghost">Tasks</a><a
+                href="/control"
+                class="cg-button cg-ghost"
+              >Agents</a><a href="/files" class="cg-button cg-ghost">Files</a>
+            </div>
           </section>
           <section class="cg-shelf-section">
-            <div class="cg-section-heading"><h2>Your game projects</h2><span>One workspace for each world</span></div>
+            <div class="cg-section-heading">
+              <h2>Your game projects</h2>
+              <span>One workspace for each world</span>
+            </div>
             <div class="cg-game-grid" id="gaming-projects">
               <article :for={game <- @games} class="cg-project cg-glass">
                 <img :if={game["image_path"]} src={game["image_path"]} alt="" />
-                <div><span :if={game["placeholder"] == true} class="cg-badge">Placeholder</span><h3>{game["title"]}</h3><p>{game["summary"]}</p>
-                  <a :if={@projects[game["slug"]]} href={"/files/#{@projects[game["slug"]].id}"} class="cg-button cg-primary">Open project</a>
-                  <p :if={!@projects[game["slug"]]} class="cg-muted">{if @user, do: "Project access is managed in your workspace.", else: "Sign in to access your projects."}</p>
-                  <a href={"/games/#{game["slug"]}"} class="cg-text-link">View game page<.icon name="hero-arrow-up-right" /></a>
+                <div>
+                  <span :if={game["placeholder"] == true} class="cg-badge">Placeholder</span>
+                  <h3>{game["title"]}</h3>
+                  <p>{game["summary"]}</p>
+                  <a
+                    :if={@projects[game["slug"]]}
+                    href={"/files/#{@projects[game["slug"]].id}"}
+                    class="cg-button cg-primary"
+                  >
+                    Open project
+                  </a>
+                  <p :if={!@projects[game["slug"]]} class="cg-muted">
+                    {if @user,
+                      do: "Project access is managed in your workspace.",
+                      else: "Sign in to access your projects."}
+                  </p>
+                  <a href={"/games/#{game["slug"]}"} class="cg-text-link">
+                    View game page<.icon name="hero-arrow-up-right" />
+                  </a>
                 </div>
               </article>
             </div>
@@ -38,41 +85,109 @@
         <% else %>
           <section :if={@mode == "play" && @games != []} class="cg-hero">
             <% featured = hd(@games) %>
-            <img :if={featured["image_path"]} src={featured["image_path"]} alt={featured["image_alt"] || featured["title"]} />
+            <img
+              :if={featured["image_path"]}
+              src={featured["image_path"]}
+              alt={featured["image_alt"] || featured["title"]}
+            />
             <div class="cg-hero-copy">
-              <div class="cg-tags"><span class="cg-badge cg-mint">FEATURED</span><span class="cg-badge">{if featured["placeholder"] == true, do: "Placeholder build", else: "Early access"}</span></div>
-              <h2>{featured["title"]}</h2><p>{featured["summary"]}</p>
-              <div class="cg-actions"><a id="gaming-play" href={"/games/#{featured["slug"]}"} class="cg-button cg-primary cg-large"><.icon name="hero-play" />Play {featured["title"]}</a><a href={"/games/#{featured["slug"]}?tab=community"} class="cg-button cg-ghost cg-large">Meet the crew</a></div>
+              <div class="cg-tags">
+                <span class="cg-badge cg-mint">FEATURED</span><span class="cg-badge">{if featured["placeholder"] == true, do: "Placeholder build", else: "Early access"}</span>
+              </div>
+              <h2>{featured["title"]}</h2>
+              <p>{featured["summary"]}</p>
+              <div class="cg-actions">
+                <a
+                  id="gaming-play"
+                  href={"/games/#{featured["slug"]}"}
+                  class="cg-button cg-primary cg-large"
+                >
+                  <.icon name="hero-play" />Play {featured["title"]}
+                </a><a
+                  href={"/games/#{featured["slug"]}?tab=community"}
+                  class="cg-button cg-ghost cg-large"
+                >Meet the crew</a>
+              </div>
               <p class="cg-hero-note">Your game. Your people. One place to get together.</p>
             </div>
           </section>
-          <.form :if={@mode == "discover"} for={@search_form} id="game-search" action="/play" method="get" class="cg-search cg-glass">
-            <input type="hidden" name="mode" value="discover" /><.input field={@search_form[:q]} label="Find a game" placeholder="Search games…" /><button class="cg-button cg-primary" type="submit">Search</button>
+          <.form
+            :if={@mode == "discover"}
+            for={@search_form}
+            id="game-search"
+            action="/play"
+            method="get"
+            class="cg-search cg-glass"
+          >
+            <input type="hidden" name="mode" value="discover" /><.input
+              field={@search_form[:q]}
+              label="Find a game"
+              placeholder="Search games…"
+            /><button class="cg-button cg-primary" type="submit">Search</button>
           </.form>
           <section class="cg-shelf-section" id="gaming-library">
-            <div class="cg-section-heading"><h2>{if @mode == "discover", do: "Explore Burrow", else: "Pick your next world"}</h2><a href="/play?mode=discover">All games<.icon name="hero-arrow-right" /></a></div>
+            <div class="cg-section-heading">
+              <h2>
+                {if @mode == "discover", do: "Explore Burrow", else: "Pick your next world"}
+              </h2>
+              <a href="/play?mode=discover">All games<.icon name="hero-arrow-right" /></a>
+            </div>
             <div class="cg-shelf" role="region" aria-label="Published games" tabindex="0">
               <article :for={game <- @visible_games} class="cg-game-card">
-                <a id={"game-tile-#{game["slug"]}"} href={"/games/#{game["slug"]}"} class="cg-tile" data-game-tile>
-                  <img :if={game["image_path"]} src={game["image_path"]} alt={game["image_alt"] || game["title"]} />
-                  <div class="cg-tile-scrim"></div><span class="cg-badge">{if game["placeholder"] == true, do: "PLACEHOLDER · TEST BUILD", else: "EARLY ACCESS"}</span><h3>{game["title"]}</h3>
+                <a
+                  id={"game-tile-#{game["slug"]}"}
+                  href={"/games/#{game["slug"]}"}
+                  class="cg-tile"
+                  data-game-tile
+                >
+                  <img
+                    :if={game["image_path"]}
+                    src={game["image_path"]}
+                    alt={game["image_alt"] || game["title"]}
+                  />
+                  <div class="cg-tile-scrim"></div>
+                  <span class="cg-badge">
+                    {if game["placeholder"] == true,
+                      do: "PLACEHOLDER · TEST BUILD",
+                      else: "EARLY ACCESS"}
+                  </span>
+                  <h3>{game["title"]}</h3>
                 </a>
-                <p>{game["summary"]}</p><a href={"/games/#{game["slug"]}?tab=community"} class="cg-text-link">Player room<.icon name="hero-arrow-up-right" /></a>
+                <p>{game["summary"]}</p>
+                <a href={"/games/#{game["slug"]}?tab=community"} class="cg-text-link">
+                  Player room<.icon name="hero-arrow-up-right" />
+                </a>
               </article>
             </div>
-            <p :if={@games != []} class="cg-key-hint"><kbd>←</kbd><kbd>→</kbd> move <kbd>Enter</kbd> open</p>
-            <p :if={@visible_games == []} id="gaming-empty" class="cg-panel cg-glass">{if @games == [], do: "A fresh place to play. The first game is on its way.", else: "No games match that search. Try another name."}</p>
+            <p :if={@games != []} class="cg-key-hint">
+              <kbd>←</kbd><kbd>→</kbd> move <kbd>Enter</kbd> open
+            </p>
+            <p :if={@visible_games == []} id="gaming-empty" class="cg-panel cg-glass">
+              {if @games == [],
+                do: "A fresh place to play. The first game is on its way.",
+                else: "No games match that search. Try another name."}
+            </p>
           </section>
         <% end %>
         <section id="rooms" class="cg-shelf-section">
-          <div class="cg-section-heading"><h2>Better with a crew.</h2><span>Chat, plan a session, share what happened.</span></div>
+          <div class="cg-section-heading">
+            <h2>Better with a crew.</h2>
+            <span>Chat, plan a session, share what happened.</span>
+          </div>
           <div class="cg-room-grid">
-            <a :for={game <- @games} href={"/games/#{game["slug"]}?tab=community"} class="cg-room cg-glass">
-              <span class="cg-room-icon"><.icon name="hero-chat-bubble-left-right" /></span><span><b>{game["title"]}</b><small>{if @communities[game["slug"]], do: "#{@communities[game["slug"]].member_count} members", else: "Player community"}</small></span><.icon name="hero-arrow-up-right" />
+            <a
+              :for={game <- @games}
+              href={"/games/#{game["slug"]}?tab=community"}
+              class="cg-room cg-glass"
+            >
+              <span class="cg-room-icon"><.icon name="hero-chat-bubble-left-right" /></span><span><b>{game["title"]}</b><small>{if @communities[game["slug"]], do: "#{@communities[game["slug"]].member_count} members", else: "Player community"}</small></span>
+              <.icon name="hero-arrow-up-right" />
             </a>
           </div>
         </section>
-        <footer class="cg-footer">A place to play, make things, and find your people. Powered by Burrow.</footer>
+        <footer class="cg-footer">
+          A place to play, make things, and find your people. Powered by Burrow.
+        </footer>
       </main>
     </.shell>
   </body>
