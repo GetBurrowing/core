@@ -99,12 +99,13 @@ defmodule Platform.Games.Publishing do
   """
   def pin_launch_path(actor, slug, version, launch_path) do
     with true <- authorized?(actor),
-         %Publication{manifest: manifest} <- Repo.get(Publication, slug),
+         true <- is_binary(slug),
+         %Publication{manifest: manifest} = publication <- Repo.get(Publication, slug),
          %{} = release <- Games.release(manifest, version),
          true <- Games.launch_path?(launch_path) do
       case release["launch_path"] do
         ^launch_path ->
-          {:ok, Repo.get(Publication, slug)}
+          {:ok, publication}
 
         nil ->
           releases =
