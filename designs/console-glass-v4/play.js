@@ -41,13 +41,13 @@ var I={
  controller:sv('<path d="M6 9h12a4 4 0 0 1 3.9 4.8l-.7 3.4a2.5 2.5 0 0 1-4.3 1.2L14.5 16h-5l-2.4 2.4a2.5 2.5 0 0 1-4.3-1.2l-.7-3.4A4 4 0 0 1 6 9z"/><path d="M8 11.5v3M6.5 13h3"/>')
 };
 var STAR5='<span class="stars">'+[1,2,3,4,5].map(function(){return I.star;}).join('')+'</span>';
-var P={J:['Jordan','#ff9a4a',14],M:['Maya','#ff6b8b',22],T:['Theo','#5fe3ff',19],P:['Priya','#ffd27a',31],S:['Sam','#b49bff',9],R:['rook_17','#7ef0a0',40,'r'],I:['mira','#ff8a7a',27,'m']};
+var P={J:['Player','#ff9a4a',14],M:['Maya','#ff6b8b',22],T:['Theo','#5fe3ff',19],P:['Priya','#ffd27a',31],S:['Sam','#b49bff',9],R:['rook_17','#7ef0a0',40,'r'],I:['mira','#ff8a7a',27,'m']};
 function av(k,size,o){o=o||{};var p=P[k];var cls='av '+(size||'');if(o.ring)cls+=' ring '+(o.ring==='on'?'':o.ring);if(o.talk)cls+=' talk';
   return '<span class="'+cls+'" style="--c:'+p[1]+'" title="'+p[0]+'">'+(p[3]||k)+(o.lv?'<span class="lv">'+p[2]+'</span>':'')+'</span>';}
 function seat(size){return '<span class="av empty '+(size||'')+'">+</span>';}
 function partyAv(size){return '<span class="av party '+(size||'sm')+'">'+I.voice+'</span>';}
 var EQ='<span class="eq"><i></i><i></i><i></i><i></i></span>';
-var AG={lore:['Lore','var(--ag-purple)','L','game design'],forge:['Forge','var(--ag-brick)','F','art & 3D models'],atlas:['Atlas','var(--ag-green)','A','level design'],echo:['Echo','var(--ag-blue)','E','sound & music'],bridge:['Bridge','var(--ag-teal)','B','engine bridge'],oct:['Octavius','var(--ag-orange)','O','your agent']};
+var AG={lore:['Lore','var(--ag-purple)','L','game design'],forge:['Forge','var(--ag-brick)','F','art & 3D models'],atlas:['Atlas','var(--ag-green)','A','level design'],echo:['Echo','var(--ag-blue)','E','sound & music'],bridge:['Bridge','var(--ag-teal)','B','engine bridge'],oct:['Guide','var(--ag-orange)','O','your agent']};
 function agAv(k,size){var a=AG[k];return '<span class="av agent '+(size||'sm')+'" style="--c:'+a[1]+'" title="'+a[0]+'">'+a[2]+'</span>';}
 var PARTY_GAME='maneframe';
 function ttl(id,cls){var g=GM[id];return '<span class="ttl tf-'+g.tf+(cls?' '+cls:'')+'">'+g.title+'</span>';}
@@ -108,10 +108,10 @@ function sideHTML(){
   o+='<button class="nav" data-go="party">'+av('T','xs')+'Theo<span class="badge">2</span></button>';
   o+='<button class="nav" data-go="party">'+av('P','xs')+'Priya<span class="sub">Moth Lantern</span></button>';
   o+='<button class="nav" data-go="game" data-g="maneframe"><span class="av chan xs">#</span>maneframe-players<span class="cnt">1.2k</span></button>';
-  o+='<button class="nav" data-go="create">'+agAv('oct','xs')+'Octavius<span class="sub">your agent</span></button>';
+  o+='<button class="nav" data-go="create">'+agAv('oct','xs')+'Guide<span class="sub">your agent</span></button>';
   o+='<div class="grow"></div></div><div class="ft">';
   o+='<div class="voicebar"><div class="t"><span class="livedot"></span>Friday lions'+EQ+'</div><div class="s"><span class="pile">'+av('J','xs')+av('M','xs')+av('T','xs')+'</span>picking a game</div><div class="c"><button title="Mute">'+I.mic+'</button><button title="Deafen">'+I.head+'</button><button data-go="party" title="Open party">'+I.party+'</button><button class="leave" title="Leave">'+I.x+'</button></div></div>';
-  o+='<button class="user">'+av('J','md',{ring:'on'})+'<span class="who"><b>Jordan<em>LV 14</em></b><span class="xp"><i style="width:72%"></i></span><small>2,160 / 3,000 XP · online</small></span></button></div>';
+  o+='<button class="user">'+av('J','md',{ring:'on'})+'<span class="who"><b>Player<em>LV 14</em></b><span class="xp"><i style="width:72%"></i></span><small>2,160 / 3,000 XP · online</small></span></button></div>';
   return o;
 }
 /* ---------- nav B: console top bar ---------- */
@@ -160,7 +160,7 @@ function party(){
   o+='</div><div style="display:grid;grid-template-columns:minmax(0,1.4fr) minmax(0,1fr);gap:16px;padding:14px 4px 30px;align-items:start">';
   o+='<div class="panel" style="padding:0;display:flex;flex-direction:column;height:430px"><div class="chat"><div class="msgs"><div class="day">Tonight</div>'+msg('T','lions at 9? bring a mic')+msg('me','in. Maya you on?')+msg('M','yes but i want kart after');
   o+='<div class="sysline">'+I.trophy+'Theo started a vote</div>';
-  o+=agMsg('oct','Octavius','All three of you have Mane Frame on the same build (d4afd4e). Maya’s mic is quiet, so I nudged her input gain.');
+  o+=agMsg('oct','Guide','All three of you have Mane Frame on the same build (d4afd4e). Maya’s mic is quiet, so I nudged her input gain.');
   o+='<div class="card" style="margin-left:38px"><span class="thumb">'+art('maneframe',{ttl:false,tile:false})+'</span><span class="ct"><b>Mane Frame is ready</b><span>Lobby on the match server · 3/5 seats</span></span><span class="stk mint">Ready</span></div>';
   o+='</div><div class="composer"><div class="box"><button class="emo" title="Reactions">'+I.smile+'</button><input placeholder="Message Friday lions"><button class="emo" title="Send a clip">'+I.gift+'</button><button class="send">'+I.send+'</button></div></div></div></div>';
   o+='<div><div class="panel tight"><div class="eyebrow" style="margin-bottom:6px">'+I.mic+'Voice check</div>';
@@ -174,7 +174,7 @@ function partyDetails(){
   o+='<div class="vt talking">'+av('J','lg',{ring:'voice',talk:1,lv:1})+'You<small>talking</small></div>';
   o+='<div class="vt">'+av('M','lg',{ring:'voice',lv:1})+'Maya<small>quiet · gain up</small></div>';
   o+='<div class="vt talking">'+av('T','lg',{ring:'voice',talk:1,lv:1})+'Theo<small>talking</small></div>';
-  o+='<div class="vt">'+agAv('oct','lg')+'Octavius<small>listening</small></div>';
+  o+='<div class="vt">'+agAv('oct','lg')+'Guide<small>listening</small></div>';
   o+='<div class="vt seat">'+seat('lg')+'Open seat</div><div class="vt seat">'+seat('lg')+'Open seat</div></div>';
   o+='<div class="segs" style="padding:10px 0"><button class="ghost">'+I.mic+'Mute</button><button class="ghost">'+I.head+'Deafen</button><button class="ghost">Push to talk</button></div>';
   o+='<div class="section-label">Invite</div><div class="row">'+av('P','sm',{ring:'on'})+'<span class="txt"><span class="name">Priya</span><span class="last">Playing Moth Lantern</span></span><button class="ghost">Invite</button></div><div class="row">'+av('S','sm',{ring:'on'})+'<span class="txt"><span class="name">Sam</span><span class="last">In Create · Moon Lions</span></span><button class="ghost">Invite</button></div><div class="row"><span class="av chan sm">'+I.link+'</span><span class="txt"><span class="name">Copy party link</span><span class="last">Friends only · expires in 2h</span></span></div>';
@@ -298,7 +298,7 @@ function phPlay(){
 }
 function phChat(){
   return vbar()+'<div class="segs" style="margin-bottom:10px;flex-wrap:nowrap;overflow:hidden"><button class="seg" aria-pressed="true">All</button><button class="seg">Parties</button><button class="seg">Friends</button><button class="seg">Projects</button></div>'+
-    [[partyAv('md'),'Friday lions','Theo: lions at 9? bring a mic','2'],[av('T','md',{ring:'voice'}),'Theo','bring a mic','1'],[av('M','md',{ring:'voice'}),'Maya','kart after?',''],['<span class="av chan md">#</span>','maneframe-players','rook_17: need one more lion',''],['<span class="av agent md" style="--c:#7a85ff">M</span>','Moon Lions · #levels','Atlas: arena 2 ready to playtest',''],[av('P','md',{ring:'on'}),'Priya','lantern run, need a 3rd',''],[agAv('oct','md'),'Octavius','Maya’s mic is quiet','']].map(function(c){return '<div class="row" style="padding:10px 4px">'+c[0]+'<span class="txt"><span class="name">'+c[1]+'<time>now</time></span><span class="last">'+c[2]+'</span></span>'+(c[3]?'<span class="badge">'+c[3]+'</span>':'')+'</div>';}).join('');
+    [[partyAv('md'),'Friday lions','Theo: lions at 9? bring a mic','2'],[av('T','md',{ring:'voice'}),'Theo','bring a mic','1'],[av('M','md',{ring:'voice'}),'Maya','kart after?',''],['<span class="av chan md">#</span>','maneframe-players','rook_17: need one more lion',''],['<span class="av agent md" style="--c:#7a85ff">M</span>','Moon Lions · #levels','Atlas: arena 2 ready to playtest',''],[av('P','md',{ring:'on'}),'Priya','lantern run, need a 3rd',''],[agAv('oct','md'),'Guide','Maya’s mic is quiet','']].map(function(c){return '<div class="row" style="padding:10px 4px">'+c[0]+'<span class="txt"><span class="name">'+c[1]+'<time>now</time></span><span class="last">'+c[2]+'</span></span>'+(c[3]?'<span class="badge">'+c[3]+'</span>':'')+'</div>';}).join('');
 }
 function phDiscover(){
   var g=GM[FEAT];
