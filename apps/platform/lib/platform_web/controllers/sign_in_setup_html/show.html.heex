@@ -13,7 +13,7 @@
       <section :if={!@sent?} class="space-y-4" aria-labelledby="first-sign-in">
         <h2 id="first-sign-in" class="text-xl font-semibold">First time signing in?</h2>
         <p>
-          Use your invitation link on this device. You can set up Face ID, Touch ID or another passkey afterward.
+          Use your invitation link on this device. After signing in, open Settings → Passkeys and sign-in to set up Face ID, Touch ID or another passkey.
         </p>
         <p :if={@link_error?} role="alert">
           That link could not be used. Paste the full invitation or sign-in link for this Burrow install, or ask for a new one.

@@ -13,7 +13,7 @@ defmodule Platform.SignIn.EmailSetup do
   alias Platform.SignInAdmin.{Config, PocketId}
   alias Platform.SignIn.{EmailSetupRateLimit, SetupChallenge}
 
-  def enabled?, do: Config.enabled?()
+  def enabled?, do: Config.enabled?() and is_binary(Platform.OIDC.issuer()) and String.trim(Platform.OIDC.issuer()) != ""
   def mail_available?, do: enabled?() and SystemMail.configured?()
 
   def request(email, ip) do
