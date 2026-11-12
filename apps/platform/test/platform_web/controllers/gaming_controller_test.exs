@@ -192,6 +192,7 @@ defmodule PlatformWeb.GamingControllerTest do
           "slug" => slug,
           "title" => title,
           "placeholder" => placeholder,
+          "theme_color" => if(placeholder, do: "#7ef0d0", else: "#4d8bff"),
           "project_id" => project.id,
           "development_space_id" => development.id,
           "community_space_id" => room.id
@@ -241,6 +242,8 @@ defmodule PlatformWeb.GamingControllerTest do
     assert Enum.count(LazyHTML.query(workspace_doc, "#chat-panes")) == 1
     assert Enum.count(LazyHTML.query(workspace_doc, "#gaming-project-context")) == 1
     assert workspace =~ "Godot"
+    assert Enum.count(LazyHTML.query(workspace_doc, "[data-game-space-heading]")) == 3
+    assert Enum.count(LazyHTML.query(workspace_doc, "#gaming-more-modules:not([open])")) == 1
 
     # A publication cannot expose a project from a different organisation.
     wrong = Map.put(hd(games), "org_id", Ecto.UUID.generate())
