@@ -9,6 +9,7 @@ defmodule PlatformWeb.GamingController do
         Platform.Games.list_published() |> Enum.sort_by(&{&1["slug"] != "voltron", &1["title"]})
 
       mode = if params["mode"] in ["create", "discover"], do: params["mode"], else: "play"
+
       query =
         case params["catalog"] do
           %{"q" => value} when is_binary(value) -> String.slice(value, 0, 100)

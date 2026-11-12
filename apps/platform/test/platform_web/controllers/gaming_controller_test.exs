@@ -219,6 +219,20 @@ defmodule PlatformWeb.GamingControllerTest do
     assert LazyHTML.attribute(tiles, "href") == ["/games/sky-haulers"]
   end
 
+  test "Create mode navigation keeps the existing workspace modules" do
+    html =
+      Phoenix.LiveViewTest.render_component(&PlatformWeb.Components.Sidebar.sidebar/1,
+        gaming: true,
+        root_user: true,
+        current_path: "/chat"
+      )
+    doc = LazyHTML.from_fragment(html)
+    assert Enum.count(LazyHTML.query(doc, ".cg-modes a[href='/play']")) == 1
+    assert Enum.count(LazyHTML.query(doc, ".cg-modes a[aria-current='page']")) == 1
+    assert Enum.count(LazyHTML.query(doc, "#sidebar-nav a[href='/chat']")) == 1
+    assert Enum.count(LazyHTML.query(doc, "#sidebar-nav a[href='/tasks']")) == 1
+  end
+
   defp evidence(name, html) do
     if directory = System.get_env("GAME_PAGE_BROWSER_EVIDENCE") do
       File.mkdir_p!(directory)
