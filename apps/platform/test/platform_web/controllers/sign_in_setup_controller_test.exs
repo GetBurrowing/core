@@ -399,7 +399,8 @@ defmodule PlatformWeb.SignInSetupControllerTest do
     assert_receive {:mail_test_adapter, mail, _}, 2_000
     pending = get_session(sent, :email_setup)
     code = mailed_code(mail)
-    tasks = for _ <- 1..2, do: Task.async(fn -> EmailSetup.complete(pending, code) end)
+    supervisor = start_supervised!(Task.Supervisor)
+    tasks = for _ <- 1..2, do: Task.Supervisor.async_nolink(supervisor, fn -> EmailSetup.complete(pending, code) end)
     results = Enum.map(tasks, &Task.await(&1, 5_000))
     assert Enum.count(results, &match?({:ok, %PocketId.Token{}}, &1)) == 1
     assert Enum.count(results, &(&1 == {:error, :invalid})) == 1
