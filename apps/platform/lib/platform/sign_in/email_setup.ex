@@ -95,7 +95,11 @@ defmodule Platform.SignIn.EmailSetup do
     with {:ok, identity} <- PocketId.get_user(sub),
          true <- identity.disabled == false and identity.email_verified == true,
          true <- is_binary(identity.email) and String.downcase(String.trim(identity.email)) == String.downcase(String.trim(email)),
-         {:ok, 0} <- PocketId.passkey_count(sub), do: {:ok, identity}
+         {:ok, 0} <- PocketId.passkey_count(sub) do
+      {:ok, identity}
+    else
+      _ -> {:error, :ineligible}
+    end
   end
   defp eligible(_), do: {:error, :invalid}
   defp digest(value), do: :crypto.hash(:sha256, value)

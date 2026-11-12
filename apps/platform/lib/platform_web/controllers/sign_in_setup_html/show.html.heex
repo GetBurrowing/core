@@ -41,7 +41,7 @@
           <button class="btn btn-outline w-full" type="submit">Continue with invitation</button>
         </.form>
         <div :if={@mail?}>
-          <p>Or get a setup code at your invited email address. No QR scan needed.</p>
+          <p>Or get a setup code at your account’s email address. No QR scan needed.</p>
           <.form
             for={@form}
             action="/auth/email/setup"
@@ -68,7 +68,7 @@
       </section>
       <section :if={@sent?} id="email-setup-code" class="space-y-4" aria-live="polite">
         <p>
-          If your account is invited and has no passkey yet, we’ll email a code. Return here to enter it. Codes expire in 30 minutes.
+          If an eligible account exists for that address, we’ll email a code. Return here to enter it. Codes expire in 30 minutes.
         </p>
         <p :if={@error?} role="alert">
           That code could not be used. Check it or request a new one.

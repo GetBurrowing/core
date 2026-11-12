@@ -138,7 +138,7 @@ defmodule PlatformWeb.SignInSetupControllerTest do
       |> init_test_session(app_challenge: challenge)
       |> post("/auth/email/setup", %{email: " NEW@example.test "})
 
-    assert html_response(conn, 200) =~ "If your account is invited"
+    assert html_response(conn, 200) =~ "If an eligible account exists"
     refute conn.resp_body =~ @code
     pending = get_session(conn, :email_setup)
     assert Map.keys(pending) |> Enum.sort() == [:binding, :id]
@@ -206,7 +206,7 @@ defmodule PlatformWeb.SignInSetupControllerTest do
     user: user
   } do
     generic = post(conn, "/auth/email/setup", %{email: "unknown@example.test"})
-    assert html_response(generic, 200) =~ "If your account is invited"
+    assert html_response(generic, 200) =~ "If an eligible account exists"
     assert delivered(generic) == :skipped
     refute_received {:provider_request, _}
 
@@ -214,7 +214,7 @@ defmodule PlatformWeb.SignInSetupControllerTest do
       :ets.delete_all_objects(:sign_in_email_setup_rate)
       provider(user, opts)
       result = post(build_conn(), "/auth/email/setup", %{email: user.email})
-      assert html_response(result, 200) =~ "If your account is invited"
+      assert html_response(result, 200) =~ "If an eligible account exists"
       assert delivered(result) == :skipped
       refute_received {:mail_test_adapter, _, _}
     end
@@ -222,7 +222,7 @@ defmodule PlatformWeb.SignInSetupControllerTest do
     Repo.update!(Ecto.Changeset.change(user, archived_at: DateTime.utc_now()))
     :ets.delete_all_objects(:sign_in_email_setup_rate)
     result = post(build_conn(), "/auth/email/setup", %{email: user.email})
-    assert html_response(result, 200) =~ "If your account is invited"
+    assert html_response(result, 200) =~ "If an eligible account exists"
     assert delivered(result) == :skipped
     refute_received {:mail_test_adapter, _, _}
   end
@@ -241,7 +241,7 @@ defmodule PlatformWeb.SignInSetupControllerTest do
     end
     result = post(conn, "/auth/email/setup", %{email: user.email})
     refute_received {:mail_test_adapter, _, _}
-    assert html_response(result, 200) =~ "If your account is invited"
+    assert html_response(result, 200) =~ "If an eligible account exists"
     {pending, code} = List.first(attempts)
     for _ <- 1..5, do: assert({:error, :invalid} == EmailSetup.complete(pending, "WRONG123"))
     assert {:error, :invalid} = EmailSetup.complete(pending, code)

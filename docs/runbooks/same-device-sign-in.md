@@ -17,7 +17,7 @@ installer configures (`POCKET_ID_ADMIN_ENABLED`, `POCKET_ID_ADMIN_URL`,
 OIDC subject to enable this.
 
 The email request does not create accounts or memberships. It only serves an
-active, already invited Burrow account whose matching provider identity has a
+active, existing Burrow account whose matching provider identity has a
 verified email, is enabled, and has zero passkeys. Existing passkey accounts
 use passkey sign-in or an admin-issued recovery link. Unknown, archived,
 disabled, already-enrolled and mismatched identities receive the same page
