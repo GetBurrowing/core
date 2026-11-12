@@ -147,6 +147,34 @@ defmodule Platform.AgentHost.ClaudeLoginTest do
       assert {:error, :no_session} = AgentHost.claude_login_submit(owner, agent, good_code())
     end
 
+    test "a host whose hello lists no claude_login is refused at once, nothing pushed", %{
+      owner: owner,
+      agent: agent
+    } do
+      # A full_machine host's daemon is installed at boot and not moved by
+      # core's updater, so it can predate Claude login; it ignores the push.
+      :ok = Reconciler.host_joined(self(), %{"profile" => "full_machine", "full_root" => false})
+
+      {micros, result} = :timer.tc(fn -> AgentHost.claude_login_start(owner, agent) end)
+      assert {:error, :host_outdated} = result
+      # Not after the 35 s wait for an answer that never comes.
+      assert micros < 5_000_000
+      refute_received {:agent_host_push, "agent.claude_login_start", _}
+      refute Reconciler.claude_login_pending?(agent.id)
+    end
+
+    test "a host that lists claude_login gets the push", %{owner: owner, agent: agent} do
+      :ok =
+        Reconciler.host_joined(self(), %{
+          "profile" => "full_machine",
+          "features" => ["claude_login"]
+        })
+
+      assert {:error, :timeout} = AgentHost.claude_login_start(owner, agent, timeout: 50)
+      assert_received {:agent_host_push, "agent.claude_login_start", %{"agent_id" => id}}
+      assert id == agent.id
+    end
+
     test "no host connected", %{owner: owner, agent: agent} do
       assert {:error, :not_connected} = AgentHost.claude_login_start(owner, agent)
       assert {:error, :not_connected} = AgentHost.claude_login_submit(owner, agent, good_code())
@@ -283,7 +311,13 @@ defmodule Platform.AgentHost.ClaudeLoginTest do
           connect_info: %{x_headers: [{"x-agent-host-token", @token}]}
         )
 
-      {:ok, _reply, channel} = subscribe_and_join(socket, "agent_host:control", %{})
+      # The hello a current host sends (agent-host host.ts `hello()`).
+      {:ok, _reply, channel} =
+        subscribe_and_join(socket, "agent_host:control", %{
+          "profile" => "contained",
+          "features" => ["claude_login"]
+        })
+
       code = good_code()
 
       # One caller starts and submits; this test process plays the host.

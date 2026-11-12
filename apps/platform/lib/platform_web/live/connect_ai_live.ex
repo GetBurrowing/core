@@ -88,10 +88,11 @@ defmodule PlatformWeb.ConnectAiLive do
   }
 
   # The Claude card's state. `link`: :idle (no sign-in link asked for yet),
-  # :loading, :ready or :unavailable. `status`: :idle, :connecting,
+  # :loading, :ready or :unavailable, and `why` it is unavailable (:server,
+  # or :host_outdated when the agent host predates Claude login). `status`: :idle, :connecting,
   # {:failed, :bad_code | :no_subscription | :server} or :connected. `login`
   # is a submit's `%{account, plan}`. Never the code.
-  @claude_idle %{url: nil, link: :idle, opened?: false, status: :idle, login: nil}
+  @claude_idle %{url: nil, link: :idle, why: :server, opened?: false, status: :idle, login: nil}
 
   @doc "The configured option order, unknown entries dropped, missing ones appended."
   @spec provider_order() :: [atom()]
@@ -378,7 +379,8 @@ defmodule PlatformWeb.ConnectAiLive do
     claude =
       case AgentHost.claude_login_start(socket.assigns.current_user_record, agent, login_opts()) do
         {:ok, url} -> %{claude | url: url, link: :ready}
-        {:error, _reason} -> %{claude | url: nil, link: :unavailable}
+        {:error, :host_outdated} -> %{claude | url: nil, link: :unavailable, why: :host_outdated}
+        {:error, _reason} -> %{claude | url: nil, link: :unavailable, why: :server}
       end
 
     {:noreply, assign(socket, :claude, claude)}
@@ -810,7 +812,7 @@ defmodule PlatformWeb.ConnectAiLive do
             <% @claude.link == :unavailable -> %>
               <p id="connect-ai-claude-link-error" class="flex items-start gap-2 text-sm text-error">
                 <span class="hero-exclamation-circle mt-0.5 size-4 shrink-0" />
-                <span>{claude_failure_text(:server)}</span>
+                <span>{claude_failure_text(@claude.why)}</span>
               </p>
               <button
                 id="connect-ai-claude-retry-link"
@@ -1010,6 +1012,11 @@ defmodule PlatformWeb.ConnectAiLive do
 
   def claude_failure_text(:server),
     do: "Burrow didn't answer. Try again in a minute. If it keeps happening, ask Burrow support."
+
+  def claude_failure_text(:host_outdated),
+    do:
+      "This install's agent host is older than Claude sign-in, so it can't make a sign-in link yet. " <>
+        "Ask whoever runs this install to update its agent host, then try again."
 
   @doc "The Claude card's connected line: the account and plan when a submit returned them."
   def claude_connected_text(%{account: account} = login) when is_binary(account) do
