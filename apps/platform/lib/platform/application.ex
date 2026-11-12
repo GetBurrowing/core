@@ -202,6 +202,7 @@ defmodule Platform.Application do
          # Endpoint takes a relay POST. Idle on installs not in relay mode.
          Platform.Push.RelayRateLimit,
          Platform.Calendar.BookingRateLimit,
+         Platform.SignIn.EmailSetupRateLimit,
          # Feedback broker per-IP counters (task 01a1a6a5 stage 3). Idle on
          # installs that do not run FEEDBACK_BROKER_SERVER.
          Platform.Feedback.BrokerRateLimit,

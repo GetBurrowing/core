@@ -531,6 +531,10 @@ defmodule PlatformWeb.Router do
 
     get("/health", HealthController, :index)
     get("/auth/login", AuthController, :login)
+    get("/auth/sign-in", SignInSetupController, :show)
+    post("/auth/passkey", AuthController, :passkey)
+    post("/auth/email/setup", SignInSetupController, :request)
+    post("/auth/email/complete", SignInSetupController, :complete)
     get("/auth/oidc/callback", AuthController, :callback)
     get("/auth/logout", AuthController, :logout)
 
