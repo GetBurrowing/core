@@ -690,7 +690,7 @@ defmodule PlatformWeb.SettingsLive do
                 phx-click="revoke_switcher_key"
                 phx-value-id={key.id}
                 data-role="settings-switcher-key-revoke"
-                class="shrink-0 rounded-md px-2 py-1 text-sm text-error focus-visible-ring"
+                class="shrink-0 rounded-md border border-edge px-2 py-1 text-sm text-base-content active:bg-base-100 focus-visible-ring"
               >
                 Remove
               </button>

@@ -16,6 +16,8 @@ defmodule Platform.Repo.Migrations.CreateSwitcherBadgeKeys do
   """
   use Ecto.Migration
 
+  # old-code-compatible: a new table (and its own indexes) that no earlier release reads or writes.
+
   def change do
     create table(:switcher_badge_keys, primary_key: false) do
       add(:id, :binary_id, primary_key: true)
