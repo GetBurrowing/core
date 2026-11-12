@@ -1,5 +1,6 @@
 defmodule PlatformWeb.GamingControllerTest do
   use PlatformWeb.ConnCase, async: false
+  require Phoenix.LiveViewTest
   alias Platform.{Branding, Games, Repo, Tenancy}
   alias Platform.Accounts.User
   alias Platform.Tenancy.OrgMembership
@@ -164,7 +165,8 @@ defmodule PlatformWeb.GamingControllerTest do
             Platform.Tasks.Project.changeset(%Platform.Tasks.Project{}, %{
               name: title,
               slug: slug,
-              org_id: game["org_id"]
+              org_id: game["org_id"],
+              tech_stack: %{"engine" => "Godot"}
             })
           )
 
@@ -177,11 +179,14 @@ defmodule PlatformWeb.GamingControllerTest do
             metadata: %{"public_game_slug" => slug}
           })
 
-        Map.merge(game, %{
+        {:ok, development} = Platform.Chat.create_space(%{name: title <> " development", slug: slug <> "-development", kind: "channel", org_id: game["org_id"], metadata: %{"goal_project_id" => project.id}})
+
+      Map.merge(game, %{
           "slug" => slug,
           "title" => title,
           "placeholder" => placeholder,
           "project_id" => project.id,
+          "development_space_id" => development.id,
           "community_space_id" => room.id
         })
       end
@@ -208,7 +213,17 @@ defmodule PlatformWeb.GamingControllerTest do
     owner = init_test_session(build_conn(), current_user_id: actor.id)
     create = get(owner, "/play?mode=create") |> html_response(200)
     evidence("gaming-create", create)
-    for game <- games, do: assert(create =~ "/files/#{game["project_id"]}")
+    for game <- games do
+      assert create =~ "/chat/#{game["slug"]}-development"
+      assert Platform.Gaming.workspace_path(Map.put(game, "development_space_id", game["community_space_id"]), Platform.Gaming.projects(actor, [game])[game["slug"]], actor) == "/files/#{game["project_id"]}"
+    end
+    workspace = init_test_session(build_conn(), current_user_id: actor.id) |> get("/chat/voltron-development") |> html_response(200)
+    evidence("gaming-workspace", workspace)
+    workspace_doc = LazyHTML.from_document(workspace)
+    assert Enum.count(LazyHTML.query(workspace_doc, "#chat-panes")) == 1
+    assert Enum.count(LazyHTML.query(workspace_doc, "#gaming-project-context")) == 1
+    assert workspace =~ "Godot"
+
     # A publication cannot expose a project from a different organisation.
     wrong = Map.put(hd(games), "org_id", Ecto.UUID.generate())
     assert Platform.Gaming.projects(actor, [wrong])[wrong["slug"]] == nil

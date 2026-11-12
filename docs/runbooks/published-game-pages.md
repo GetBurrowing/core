@@ -184,3 +184,17 @@ attachment, org and room IDs are not portable database references. Verify the
 imported ZIP against its approved digest before publishing. The native match
 server can stay shared when the PCK matches; a new web instance does not
 require another game-server droplet.
+
+
+### Console Glass game spaces
+
+The Gaming experience keeps Play, Create and Discover navigation around the published catalog and applies the same visual tokens to the existing workspace. The regular Workspace profile is unchanged. The production shell does not import the prototype’s fictional friends, activity, matchmaking, ratings or voice states.
+
+Optional publication metadata:
+
+- `placeholder: true` labels a test game and its download clearly.
+- `project_id` links a real Create project. Only viewers with project access see the link, and its org must match the publication.
+- `development_space_id` identifies a separate development channel whose `metadata.goal_project_id` matches that project. It must share its org, be active, and pass the viewer’s `chat.read` check; player community channels cannot double as development channels. If no valid readable development channel exists, Create opens the authorised project’s files instead.
+- `theme_color` can provide a six-digit hex color for focus tint; other values are ignored.
+
+The development chat remains the existing chat workspace. Its game context panel shows the configured engine and actual assigned agents; it does not claim an engine connection or install specialist agents implicitly. Player rooms keep their existing publication-scoped membership and persona protections.

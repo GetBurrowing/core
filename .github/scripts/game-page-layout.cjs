@@ -85,6 +85,12 @@ const path = require('node:path')
         await game.evaluate(() => window.scrollTo(0,0))
         await game.screenshot({path:path.join(process.env.GAME_PAGE_SCREENSHOTS, 'gaming-game-' + slug + (mobile ? '-phone.png' : '-desktop.png')),fullPage:true})
       }
+      const workspace = await context.newPage()
+      await workspace.goto(origin + '/game-page-evidence/gaming-workspace.html')
+      assert.equal(await workspace.locator('#chat-panes').isVisible(), true, 'existing chat workspace missing')
+      if (!mobile) assert.equal(await workspace.locator('#gaming-project-context').isVisible(), true, 'game project context missing')
+      assert.equal(await workspace.evaluate(() => document.documentElement.scrollWidth <= innerWidth + 1), true, 'workspace overflow')
+      await workspace.screenshot({path:path.join(process.env.GAME_PAGE_SCREENSHOTS, 'gaming-workspace' + (mobile ? '-phone.png' : '-desktop.png')), fullPage:true})
       await context.close()
     }
   } finally { await browser.close() }
