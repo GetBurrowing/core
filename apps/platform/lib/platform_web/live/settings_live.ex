@@ -207,7 +207,22 @@ defmodule PlatformWeb.SettingsLive do
        Platform.InstructionPacks.Owner.authorize(socket.assigns[:current_user_record]) == :ok
      )
      |> reset_feedback()
+     |> assign_switcher_keys()
      |> open_from_params(params)}
+  end
+
+  # Task 01a1ccd4 stage 2: the badge keys other installs' switchers hold for
+  # this one (`Platform.Switcher`). Minimal rows; stage 3 styles them.
+  defp assign_switcher_keys(socket) do
+    keys =
+      case socket.assigns[:current_user_record] do
+        %Accounts.User{} = user -> Platform.Switcher.list_for_user(user)
+        _ -> []
+      end
+
+    socket
+    |> assign(:switcher_key_count, length(keys))
+    |> stream(:switcher_keys, keys, reset: true)
   end
 
   # `?sheet=` (the command palette's Settings items, Burrow redesign 23):
@@ -297,6 +312,25 @@ defmodule PlatformWeb.SettingsLive do
   end
 
   @impl true
+  def handle_event("revoke_switcher_key", %{"id" => id}, socket) do
+    case socket.assigns[:current_user_record] do
+      %Accounts.User{} = user ->
+        case Platform.Switcher.revoke(user, id) do
+          {:ok, key} ->
+            {:noreply,
+             socket
+             |> stream_delete(:switcher_keys, key)
+             |> update(:switcher_key_count, &max(&1 - 1, 0))}
+
+          {:error, :not_found} ->
+            {:noreply, assign_switcher_keys(socket)}
+        end
+
+      _ ->
+        {:noreply, socket}
+    end
+  end
+
   def handle_event("set_mask_names", params, socket) do
     masked? = params["masked"] in ["true", true]
     # The shell's one web writer refreshes `:current_user_record` on success
@@ -637,6 +671,32 @@ defmodule PlatformWeb.SettingsLive do
             <span class="hero-chevron-right size-4 shrink-0 text-subtle" aria-hidden="true"></span>
           </span>
         </button>
+
+        <div :if={@switcher_key_count > 0} data-role="settings-switcher-keys">
+          <p class={section_label_class()}>Unread shown in other installs</p>
+          <div id="settings-switcher-keys" phx-update="stream">
+            <div
+              :for={{dom_id, key} <- @streams.switcher_keys}
+              id={dom_id}
+              data-role="settings-switcher-key"
+              class={row_class()}
+            >
+              <span class="min-w-0">
+                <span class="block truncate">{key.label || key.bound_origin}</span>
+                <span class="block truncate text-xs text-subtle">{key.bound_origin}</span>
+              </span>
+              <button
+                type="button"
+                phx-click="revoke_switcher_key"
+                phx-value-id={key.id}
+                data-role="settings-switcher-key-revoke"
+                class="shrink-0 rounded-md px-2 py-1 text-sm text-error focus-visible-ring"
+              >
+                Remove
+              </button>
+            </div>
+          </div>
+        </div>
 
         <p :if={@install_owner?} class={section_label_class()}>Sharing with Burrow</p>
         <button

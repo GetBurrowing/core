@@ -295,6 +295,7 @@ defmodule PlatformWeb.AuthController do
       # clearing it after would be a `put_session` on an already-sent conn.
       |> delete_session(:oidc_session_params)
       |> delete_session(:post_login_path)
+      |> delete_session(PlatformWeb.ReturnPath.session_key())
       |> put_session(:current_user_id, user.id)
       |> maybe_put_id_token(auth)
       |> maybe_put_end_session_endpoint(session_params)
@@ -325,7 +326,9 @@ defmodule PlatformWeb.AuthController do
   # Where a full internal user lands: `/`, or `/setup/connect-ai` (or the
   # starter conversation, see `handover_landing/0`) when the login began at
   # `handover/2`. A closed set read from the signed session,
-  # never from a parameter, so this is not an open redirect.
+  # never from a parameter, so this is not an open redirect. Without a
+  # hand-over landing, the local return path `RequireAuth` stored (task
+  # 01a1ccd4), re-checked by `PlatformWeb.ReturnPath.safe/1`.
   defp post_login_path(conn, user) do
     if Platform.Gaming.enabled?() do
       "/play"
@@ -338,7 +341,16 @@ defmodule PlatformWeb.AuthController do
     case get_session(conn, :post_login_path) do
       @connect_landing -> @connect_landing
       @starter_landing -> Platform.Agents.Burrow.Starter.handover_landing(user)
-      _ -> ~p"/"
+      _ -> stored_return_path(conn)
+    end
+  end
+
+  # Task 01a1ccd4 stage 2: the local path `RequireAuth` stored before sending
+  # a signed-out browser to `/auth/login`, re-checked here; `/` otherwise.
+  defp stored_return_path(conn) do
+    case PlatformWeb.ReturnPath.safe(get_session(conn, PlatformWeb.ReturnPath.session_key())) do
+      {:ok, path} -> path
+      :error -> ~p"/"
     end
   end
 
