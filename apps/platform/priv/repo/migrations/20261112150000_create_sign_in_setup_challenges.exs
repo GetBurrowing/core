@@ -1,4 +1,9 @@
 defmodule Platform.Repo.Migrations.CreateSignInSetupChallenges do
+  @moduledoc """
+  PR #171: short-lived, browser-bound first-sign-in challenges. Server-side
+  expiry, attempt counts and consumption prevent an old cookie or concurrent
+  request from replaying an emailed setup code across nodes.
+  """
   use Ecto.Migration
   # old-code-compatible: a new, short-lived authentication table that older releases never access.
   def change do
