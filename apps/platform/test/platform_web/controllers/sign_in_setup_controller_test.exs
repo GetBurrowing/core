@@ -405,6 +405,7 @@ defmodule PlatformWeb.SignInSetupControllerTest do
       Enum.map(1..2, fn _ ->
         Task.Supervisor.async_nolink(supervisor, fn -> EmailSetup.complete(pending, code) end)
       end)
+
     results = Enum.map(tasks, &Task.await(&1, 5_000))
     assert Enum.count(results, &match?({:ok, %PocketId.Token{}}, &1)) == 1
     assert Enum.count(results, &(&1 == {:error, :invalid})) == 1
