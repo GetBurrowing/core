@@ -10,8 +10,8 @@ defmodule Platform.SignIn.SetupLink do
 
   def redeem(value) when is_binary(value) and byte_size(value) <= 8192 do
     with true <- Config.enabled?(),
-         %URI{scheme: "https", host: host, userinfo: nil, fragment: nil} = uri
-         when is_binary(host) <- URI.parse(String.trim(value)) do
+         %URI{scheme: scheme, host: host, userinfo: nil, fragment: nil} = uri
+         when scheme in ["https", "http"] and is_binary(host) <- URI.parse(String.trim(value)) do
       redeem_uri(uri)
     else
       _ -> {:error, :invalid}

@@ -172,4 +172,15 @@ defmodule PlatformWeb.SignInSetupControllerTest do
     refute_received {:provider_request, _}
   end
 
+  test "a valid signed invitation is verified for this install and archived users cannot redeem it", %{conn: conn, user: user} do
+    provider(user)
+    link = Platform.SignIn.DurableLink.url(user, :invite)
+    assert {:ok, %PocketId.Token{value: @code}} = Platform.SignIn.SetupLink.redeem(link)
+    assert {:error, _} = Platform.SignIn.SetupLink.redeem(link <> "tampered")
+    Repo.update!(Ecto.Changeset.change(user, archived_at: DateTime.utc_now()))
+    result = post(conn, "/auth/invitation", %{setup_link: link})
+    assert result.status == 400
+    refute get_session(result, :oidc_session_params)
+  end
+
 end
