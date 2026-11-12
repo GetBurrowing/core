@@ -157,10 +157,22 @@ defmodule Platform.AgentHost.ClaudeLoginTest do
       fake_host!()
       {:ok, _url} = AgentHost.claude_login_start(owner, agent)
 
-      assert :ok = AgentHost.claude_logout(owner, agent, restart: false)
+      {:ok, _} = NativeAgents.set_desired_state(agent, "running")
+      assert :ok = AgentHost.claude_logout(owner, agent, stop: false)
       refute Reconciler.claude_login_pending?(agent.id)
-      # Default: the agent is restarted so it drops the login at once.
+      # `stop: false` leaves the desire alone.
+      assert %{desired_state: "running"} = NativeAgents.get_managed_runtime(agent)
+
+      # Default: the agent is stopped, not restarted. A restarted unit with no
+      # credentials reads `running` to the host, and every screen then calls
+      # the agent connected; stopped, it stays visibly signed out until the
+      # next sign-in sets it running again.
       assert :ok = AgentHost.claude_logout(owner, agent)
+      assert %{desired_state: "stopped"} = NativeAgents.get_managed_runtime(agent)
+
+      {:ok, _url} = AgentHost.claude_login_start(owner, agent)
+      assert {:ok, _} = AgentHost.claude_login_submit(owner, agent, good_code())
+      assert %{desired_state: "running"} = NativeAgents.get_managed_runtime(agent)
     end
 
     test "a codex agent is refused before anything reaches the host", %{owner: owner} do

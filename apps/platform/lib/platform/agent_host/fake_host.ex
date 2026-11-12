@@ -16,9 +16,12 @@ defmodule Platform.AgentHost.FakeHost do
       `POST /dev/fake-agent-host/<agent_id>/complete`) marks it logged in;
       after that it reports `running`;
     * a `claude_code` agent reports `running` when its start carried an API
-      key (`env["ANTHROPIC_API_KEY"]`, which is never kept or logged here),
-      and otherwise `needs_login` at step `login`. Never a Claude login URL or
-      code in an observation (task 01a17b10).
+      key (`env["ANTHROPIC_API_KEY"]`, which is never kept or logged here) or
+      a fake Claude login has succeeded for it, and otherwise `needs_login`
+      at step `login`. Never a Claude login URL or code in an observation
+      (task 01a17b10). As on a real host, `agent.claude_logout` does NOT
+      change what a later start reports: a logged-out Claude Code agent whose
+      unit is up still reads `running` (the login prompt sits in its pane).
 
   A stubbed Claude subscription login (task 01a1b365 stage 2,
   `claude_login_reply/3`): `agent.claude_login_start` is answered with a fake
@@ -136,6 +139,7 @@ defmodule Platform.AgentHost.FakeHost do
     state = %{
       agents: %{},
       completed: MapSet.new(),
+      claude_logged_in: MapSet.new(),
       claude_login: :ok,
       report_after_ms: Keyword.get(opts, :report_after_ms, @report_after_ms),
       endpoint: Keyword.get(opts, :endpoint, PlatformWeb.Endpoint),
@@ -198,7 +202,7 @@ defmodule Platform.AgentHost.FakeHost do
       when event in ["agent.claude_login_start", "agent.claude_login_code", "agent.claude_logout"] do
     case claude_login_reply(event, payload, state.claude_login) do
       nil ->
-        :ok
+        {:noreply, state}
 
       reply ->
         # Through the real channel handler's sanitising, as the host's reply would be.
@@ -208,11 +212,15 @@ defmodule Platform.AgentHost.FakeHost do
           %Phoenix.Socket{}
         )
 
-        if reply["result"] == "ok" and event == "agent.claude_login_code",
-          do: report(id, %{"agent_id" => id, "state" => "running"})
+        if reply["result"] == "ok" and event == "agent.claude_login_code" do
+          # The real host restarts the unit, which then reads running; every
+          # later start reads running too (the credentials persist).
+          report(id, %{"agent_id" => id, "state" => "running"})
+          {:noreply, %{state | claude_logged_in: MapSet.put(state.claude_logged_in, id)}}
+        else
+          {:noreply, state}
+        end
     end
-
-    {:noreply, state}
   end
 
   def handle_info({:agent_host_push, _event, _payload}, state), do: {:noreply, state}
@@ -253,7 +261,13 @@ defmodule Platform.AgentHost.FakeHost do
 
   def observation(id, %{api_key?: true}, _state), do: %{"agent_id" => id, "state" => "running"}
 
-  def observation(id, _agent, _state),
+  def observation(id, _agent, state) do
+    if MapSet.member?(state.claude_logged_in, id),
+      do: %{"agent_id" => id, "state" => "running"},
+      else: needs_login(id)
+  end
+
+  defp needs_login(id),
     do: %{
       "agent_id" => id,
       "state" => "needs_login",
