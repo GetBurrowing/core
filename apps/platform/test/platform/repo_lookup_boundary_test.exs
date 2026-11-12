@@ -824,8 +824,8 @@ defmodule Platform.RepoLookupBoundaryTest do
     # ── Mobile app (task 01a10882) ─────────────────────────────────────
     {"platform/mobile.ex", :get_by, "AppSession", 1, :safe_internal,
      "task 01a10882 stage 1: `verify_bearer/1` looks the session up by `token_hash`, a :binary column holding the SHA-256 of the presented bearer token. No UUID column is pinned, so no client-supplied value can raise Ecto.Query.CastError here"},
-    {"platform/switcher.ex", :get_by, "BadgeKey", 2, :safe_internal,
-     "task 01a1ccd4 stage 2: (1) `verify/3` looks the badge key up by `token_hash`, a :binary column holding the SHA-256 of the presented key, so no client value reaches a UUID column; (2) `revoke/2` calls Repo.get_by(BadgeKey, id: key_id, user_id: user_id) only after `Platform.UUID.valid?(key_id)` heads the same with-chain (the id comes from a LiveView phx-value), and `user_id` is a loaded %User{} struct's primary key; a malformed id answers {:error, :not_found}"},
+    {"platform/switcher.ex", :get_by, "BadgeKey", 3, :safe_internal,
+     "task 01a1ccd4 stage 2: (1) `verify/3` and (stage 4) `refusal_origin/2` look the badge key up by `token_hash`, a :binary column holding the SHA-256 of the presented key, so no client value reaches a UUID column; (2) `revoke/2` calls Repo.get_by(BadgeKey, id: key_id, user_id: user_id) only after `Platform.UUID.valid?(key_id)` heads the same with-chain (the id comes from a LiveView phx-value), and `user_id` is a loaded %User{} struct's primary key; a malformed id answers {:error, :not_found}"},
     {"platform/switcher.ex", :platform_uuid_guard, "-", 1, :safe_internal,
      "task 01a1ccd4 stage 2: `revoke/2` guards the LiveView-supplied badge key id with Platform.UUID.valid?/1 as a BOOLEAN at the head of its with-chain; a malformed id folds into {:error, :not_found} instead of raising Ecto.Query.CastError"},
     {"platform/mobile/app_entities.ex", :platform_uuid_guard, "-", 5, :safe_internal,
