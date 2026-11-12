@@ -1986,6 +1986,8 @@ defmodule Platform.RepoLookupBoundaryTest do
     # Task 01a1b678 stage 3: `space/0` selects by the constant slug and kind,
     # `limit: 1`; no id is cast.
     "platform/sharing/help_channel.ex" => 1,
+    # First-sign-in lookup filters a text email and archived_at; no UUID is pinned.
+    "platform/sign_in/email_setup.ex" => 1,
     # 6 -> 7 with task 019f9b61 stage 2: `plan_task_id/1`, whose
     # `where: p.id == ^plan_id` pins a UUID column. Its caller is the
     # TaskRouter's `{:stage_transitioned, stage}` clause (`stage.plan_id`, an
