@@ -232,7 +232,10 @@ defmodule PlatformWeb.GamingControllerTest do
       evidence("gaming-signin-" <> game["slug"], signin)
       signin_doc = LazyHTML.from_document(signin)
       assert Enum.count(LazyHTML.query(signin_doc, ".cg-signin")) == 1
-      assert LazyHTML.attribute(LazyHTML.query(signin_doc, "#continue-sign-in"), "href") == ["/auth/login?game=#{game["slug"]}"]
+
+      assert LazyHTML.attribute(LazyHTML.query(signin_doc, "#continue-sign-in"), "href") == [
+               "/auth/login?game=#{game["slug"]}"
+             ]
     end
 
     owner = init_test_session(build_conn(), current_user_id: actor.id)
