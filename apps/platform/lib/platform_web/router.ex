@@ -340,6 +340,10 @@ defmodule PlatformWeb.Router do
 
     get("/unread", SwitcherUnreadController, :show)
     options("/unread", SwitcherUnreadController, :show)
+    # Stage 3: "Remove" in A's Manage installs revokes the key it holds
+    # (best effort, from the browser, with that same key).
+    delete("/key", SwitcherKeyController, :delete)
+    options("/key", SwitcherKeyController, :delete)
   end
 
   scope "/api/app", PlatformWeb do
@@ -988,6 +992,8 @@ defmodule PlatformWeb.Router do
         {PlatformWeb.ModuleGate, :default}
       ],
       layout: {PlatformWeb.Layouts, :shell} do
+      # Task 01a1ccd4 stage 3: where another install's consent hop lands.
+      live("/switcher/connected", SwitcherConnectedLive, :show)
       live("/access/view-as/role/:id/:key", AccessViewAsLive, :show)
       live("/access/view-as/:type/:id", AccessViewAsLive, :show)
       live("/access", AccessLive, :index)

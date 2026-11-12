@@ -190,6 +190,19 @@ defmodule Platform.Switcher do
 
   def revoke(_user, _key_id), do: {:error, :not_found}
 
+  @doc """
+  Revoke the key a request presented (`DELETE /api/switcher/key`, task
+  01a1ccd4 stage 3): install A's switcher removing this install calls it with
+  the key it is dropping. Idempotent: an already-revoked key stays revoked.
+  """
+  @spec revoke_key(BadgeKey.t()) :: :ok
+  def revoke_key(%BadgeKey{id: id}) do
+    from(k in BadgeKey, where: k.id == ^id and is_nil(k.revoked_at))
+    |> Repo.update_all(set: [revoked_at: DateTime.utc_now()])
+
+    :ok
+  end
+
   @doc "The user's live (unrevoked, unexpired) keys, newest first."
   @spec list_for_user(User.t(), keyword()) :: [BadgeKey.t()]
   def list_for_user(%User{id: user_id}, opts \\ []) do

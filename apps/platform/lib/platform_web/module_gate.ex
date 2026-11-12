@@ -73,7 +73,15 @@ defmodule PlatformWeb.ModuleGate do
   # signed-in user has one, so no module permission can sensibly gate it.
   # Each row on the page checks its own destination through `mounts?/2`
   # instead, so the page reveals nothing its viewer could not already open.
-  @ungated [PlatformWeb.AccessViewAsLive, PlatformWeb.SettingsLive]
+  #
+  # `/switcher/connected` (task 01a1ccd4 stage 3) only finishes adding an
+  # install to THIS browser's switcher list: it reads and writes nothing on
+  # the server, so it is every signed-in user's, like Settings.
+  @ungated [
+    PlatformWeb.AccessViewAsLive,
+    PlatformWeb.SettingsLive,
+    PlatformWeb.SwitcherConnectedLive
+  ]
 
   @doc "The explicit module mapping used by the mount gate and its route sweep."
   def view_modules, do: @view_modules

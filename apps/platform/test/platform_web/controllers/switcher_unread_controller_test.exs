@@ -148,7 +148,7 @@ defmodule PlatformWeb.SwitcherUnreadControllerTest do
 
       assert conn.status == 204
       assert header(conn, "access-control-allow-origin") == ["https://any.example"]
-      assert header(conn, "access-control-allow-methods") == ["GET"]
+      assert header(conn, "access-control-allow-methods") == ["GET, DELETE"]
       assert header(conn, "access-control-allow-headers") == ["Authorization"]
       assert header(conn, "access-control-allow-credentials") == []
       assert header(conn, "vary") == ["Origin"]

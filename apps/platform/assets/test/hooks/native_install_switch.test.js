@@ -2,6 +2,8 @@ import { describe, it, expect, vi, afterEach } from "vitest"
 import NativeInstallSwitch, {
   installBadgesPlugin
 } from "../../js/hooks/native_install_switch.js"
+import { __resetWebSwitchForTests } from "../../js/hooks/install_switch_web.js"
+import { fakeDoc, fakeStorage, switchButton } from "../lib/switcher_fake_dom.js"
 
 /**
  * The `NativeInstallSwitch` hook (task 01a1261e stage 3): the install
@@ -69,7 +71,26 @@ function mount() {
 const flush = () => new Promise(resolve => setTimeout(resolve, 0))
 const visible = el => !el.classList.contains("hidden")
 
+// The web path needs a real-ish DOM: swap the stubbed document for the
+// switcher fake DOM, keeping the stubbed window's listeners.
+function mountWeb(stubbedDoc) {
+  const doc = Object.assign(fakeDoc(), { listeners: stubbedDoc.listeners })
+  const win = globalThis.window
+  Object.assign(win, {
+    location: { origin: "https://a.example", host: "a.example", pathname: "/", search: "", assign: vi.fn() },
+    localStorage: fakeStorage(),
+    sessionStorage: fakeStorage(),
+    fetch: vi.fn()
+  })
+  vi.stubGlobal("document", doc)
+  const { button } = switchButton(doc)
+  const hook = Object.assign(Object.create(NativeInstallSwitch), { el: button })
+  hook.mounted()
+  return { el: button, hook }
+}
+
 afterEach(() => {
+  __resetWebSwitchForTests()
   vi.unstubAllGlobals()
 })
 
@@ -116,15 +137,21 @@ describe("installBadgesPlugin", () => {
 })
 
 describe("visibility of the button", () => {
-  it("stays hidden in a browser, with no listeners attached", async () => {
-    const { win, doc } = stubEnv({ native: false, plugin: { installBadges: vi.fn() } })
-    const { el, dot } = mount()
+  // Task 01a1ccd4 stage 3 changed this on purpose: in a browser the button
+  // now reveals and runs the WEB switcher (install_switch_web.test.js). What
+  // stays true is that the native bridge is never touched there.
+  it("in a browser the native bridge is never called and no native listener is attached", async () => {
+    const installBadges = vi.fn()
+    const { win, doc } = stubEnv({ native: false, plugin: { installBadges } })
+    const switchInstall = vi.fn()
+    win.Capacitor.Plugins.SuiteNative.switchInstall = switchInstall
+    const { el } = mountWeb(doc)
+    el.click()
     await flush()
 
-    expect(visible(el)).toBe(false)
-    expect(visible(dot)).toBe(false)
-    expect(win.listeners).toEqual({})
-    expect(doc.listeners).toEqual({})
+    expect(installBadges).not.toHaveBeenCalled()
+    expect(switchInstall).not.toHaveBeenCalled()
+    expect(win.listeners.burrowInstallBadges || []).toEqual([])
   })
 
   it("stays hidden on a native build without installBadges", async () => {
