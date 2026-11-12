@@ -31,6 +31,9 @@ export const MAX_IN_FLIGHT = 4
 export const REFRESH_MS = 60000
 export const FIND_AT = 8
 export const PENDING_TTL_MS = 30 * 60 * 1000
+// The largest unread body read (stage 4). A real answer is ~60 bytes; a
+// bigger one is refused without being read to the end.
+export const MAX_BODY_BYTES = 4096
 
 const MAX_ENTRIES = 50
 const MAX_NAME = 120
@@ -183,11 +186,15 @@ export function patchEntry(storage, origin, fields) {
 }
 
 /**
- * The unread body, strictly: an object whose `unread` is a non-negative
- * integer and whose `as_of` is an ISO-8601 timestamp. Anything else is null.
+ * The unread body, strictly: an object with EXACTLY two keys, `unread` a
+ * non-negative integer and `as_of` an ISO-8601 timestamp. Anything else,
+ * extra fields included (stage 4: a hostile install padding its answer), is
+ * null and never lights the dot.
  */
 export function parseUnread(body) {
   if (!body || typeof body !== "object" || Array.isArray(body)) return null
+  const keys = Object.keys(body)
+  if (keys.length !== 2 || !keys.includes("unread") || !keys.includes("as_of")) return null
   const { unread, as_of } = body
   if (!Number.isInteger(unread) || unread < 0) return null
   if (!validIso(as_of)) return null
@@ -239,12 +246,7 @@ export async function fetchUnread(entry, opts = {}) {
     if (res.status === 401) return { kind: "reconnect" }
     if (res.status >= 500) return { kind: "stale" }
     if (res.status !== 200) return { kind: "rejected" }
-    let body
-    try {
-      body = await res.json()
-    } catch {
-      return { kind: "rejected" }
-    }
+    const body = await readCapped(res, ctrl)
     const parsed = parseUnread(body)
     return parsed ? { kind: "ok", ...parsed } : { kind: "rejected" }
   })()
@@ -253,6 +255,45 @@ export async function fetchUnread(entry, opts = {}) {
     return await Promise.race([request, timeout])
   } finally {
     clearTimeout(timer)
+  }
+}
+
+/**
+ * The JSON body, or null: refused unread when the declared length or the
+ * bytes read pass MAX_BODY_BYTES (the stream is cancelled there), or when it
+ * is not JSON. Stage 4: a hostile install's 5 MB answer is never buffered.
+ */
+async function readCapped(res, ctrl) {
+  try {
+    const declared = Number(res.headers?.get?.("content-length"))
+    if (Number.isFinite(declared) && declared > MAX_BODY_BYTES) {
+      ctrl?.abort()
+      return null
+    }
+    const reader = res.body?.getReader?.()
+    if (!reader) return await res.json()
+    const chunks = []
+    let size = 0
+    for (;;) {
+      const { done, value } = await reader.read()
+      if (done) break
+      size += value.byteLength
+      if (size > MAX_BODY_BYTES) {
+        reader.cancel?.().catch?.(() => {})
+        ctrl?.abort()
+        return null
+      }
+      chunks.push(value)
+    }
+    const bytes = new Uint8Array(size)
+    let at = 0
+    for (const c of chunks) {
+      bytes.set(c, at)
+      at += c.byteLength
+    }
+    return JSON.parse(new TextDecoder().decode(bytes))
+  } catch {
+    return null
   }
 }
 

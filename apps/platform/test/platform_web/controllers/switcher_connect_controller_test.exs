@@ -70,10 +70,12 @@ defmodule PlatformWeb.SwitcherConnectControllerTest do
       frag = URI.decode_query(f)
       refute Map.has_key?(frag, "key")
       assert frag["name"] == name
-      # B's own host (with its port when not the scheme's default).
-      %URI{host: host, port: port} = PlatformWeb.Endpoint.struct_url()
-      assert frag["host"] in [host, "#{host}:#{port}"]
-      if port not in [80, 443], do: assert(frag["host"] == "#{host}:#{port}")
+      # B's own host as the browser reached it (stage 4: the request's host,
+      # with its port when not the scheme's default).
+      assert frag["host"] == conn.host
+
+      # Stage 4: neither the page nor its Cancel link sends a Referer to A.
+      assert get_resp_header(conn, "referrer-policy") == ["no-referrer"]
 
       # Showing the page mints nothing.
       assert Platform.Repo.aggregate(BadgeKey, :count) == 0
@@ -128,6 +130,43 @@ defmodule PlatformWeb.SwitcherConnectControllerTest do
       assert frag["name"] == Platform.Branding.app_name()
       assert {:ok, %{id: user_id}, %BadgeKey{bound_origin: @a}} = Switcher.verify(frag["key"], @a)
       assert user_id == user.id
+      # Stage 4: the redirect to A carries no Referer.
+      assert get_resp_header(conn, "referrer-policy") == ["no-referrer"]
+    end
+
+    test "the fragment's host is the host the browser used, not the endpoint's (stage 4)", %{
+      conn: conn
+    } do
+      # An install served under an alias, or the dev rig's b.localhost:4202:
+      # A compares `host` with the address it sent the browser to.
+      user = member!()
+
+      for {host, port, expected} <- [
+            {"B.Alias.Example", 80, "b.alias.example"},
+            {"b.localhost", 4202, "b.localhost:4202"}
+          ] do
+        conn =
+          %{conn | host: host, port: port}
+          |> signed_in(user)
+          |> post(~p"/switcher/connect", %{"origin" => @a})
+
+        frag =
+          conn |> redirected_to(302) |> URI.parse() |> Map.fetch!(:fragment) |> URI.decode_query()
+
+        assert frag["host"] == expected
+      end
+
+      # A malformed host falls back to the endpoint's host.
+      conn =
+        %{conn | host: "evil.example/x#y"}
+        |> signed_in(user)
+        |> post(~p"/switcher/connect", %{"origin" => @a})
+
+      frag =
+        conn |> redirected_to(302) |> URI.parse() |> Map.fetch!(:fragment) |> URI.decode_query()
+
+      %URI{host: host, port: port} = PlatformWeb.Endpoint.struct_url()
+      assert frag["host"] in [host, "#{host}:#{port}"]
     end
 
     test "a bad origin mints nothing and never redirects", %{conn: conn} do

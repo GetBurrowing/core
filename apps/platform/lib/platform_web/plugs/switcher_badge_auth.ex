@@ -17,12 +17,14 @@ defmodule PlatformWeb.Plugs.SwitcherBadgeAuth do
       (`Platform.Switcher.verify/2`). On success
       `Access-Control-Allow-Origin` is the request `Origin`, which then
       equals the key's `bound_origin`. A refusal is `401`
-      `{"error": "unauthorized"}`, and (task 01a1ccd4 stage 3) it echoes a
-      well-formed request `Origin` exactly as the preflight already does, so
-      the switcher page holding a revoked or expired key can READ the 401
-      and show "Reconnect" instead of "Can't reach". The body says nothing
-      but "unauthorized"; a malformed or missing `Origin` still gets no
-      allow header.
+      `{"error": "unauthorized"}`. It carries `Access-Control-Allow-Origin`
+      only when the presented key is one this install minted (live, revoked
+      or expired) and the request `Origin` is that key's own bound origin
+      (`Platform.Switcher.refusal_origin/2`, task 01a1ccd4 stage 4): the
+      switcher page holding a revoked or expired key can READ the 401 and
+      show "Reconnect" instead of "Can't reach", while any other origin (a
+      hostile page replaying the key, an unknown key) gets no allow header
+      and the browser hides the response from it.
 
   Never `*`, never `Access-Control-Allow-Credentials`, always
   `Vary: Origin`.
@@ -61,28 +63,43 @@ defmodule PlatformWeb.Plugs.SwitcherBadgeAuth do
       |> put_resp_header("vary", "Origin")
       |> put_resp_header("cache-control", "no-store")
 
-    with [header] <- get_req_header(conn, "authorization"),
-         "Bearer " <> token <- header,
-         [origin] <- get_req_header(conn, "origin"),
-         {:ok, user, key} <- Switcher.verify(token, origin) do
-      :ok = Switcher.touch(key)
+    token = bearer(conn)
+    origin = single_header(conn, "origin")
 
-      conn
-      |> put_resp_header("access-control-allow-origin", key.bound_origin)
-      |> assign(:current_user, user)
-      |> assign(:switcher_badge_key, key)
-    else
-      _ ->
+    case Switcher.verify(token, origin) do
+      {:ok, user, key} ->
+        :ok = Switcher.touch(key)
+
         conn
-        |> allow_request_origin()
+        |> put_resp_header("access-control-allow-origin", key.bound_origin)
+        |> assign(:current_user, user)
+        |> assign(:switcher_badge_key, key)
+
+      :error ->
+        conn
+        |> allow_key_origin(token, origin)
         |> put_resp_content_type("application/json")
         |> send_resp(401, Jason.encode!(%{error: "unauthorized"}))
         |> halt()
     end
   end
 
-  defp allow_request_origin(conn) do
-    case request_origin(conn) do
+  defp bearer(conn) do
+    case get_req_header(conn, "authorization") do
+      ["Bearer " <> token] -> token
+      _ -> nil
+    end
+  end
+
+  defp single_header(conn, name) do
+    case get_req_header(conn, name) do
+      [value] -> value
+      _ -> nil
+    end
+  end
+
+  defp allow_key_origin(conn, token, origin) do
+    case Switcher.refusal_origin(token, origin) do
       {:ok, origin} -> put_resp_header(conn, "access-control-allow-origin", origin)
       :error -> conn
     end

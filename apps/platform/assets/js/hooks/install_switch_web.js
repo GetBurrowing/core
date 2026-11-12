@@ -93,6 +93,23 @@ export function imageProbe(win, origin, timeoutMs = S.FETCH_TIMEOUT_MS) {
   })
 }
 
+/**
+ * Task 01a1ccd4 stage 4: a top-level navigation to another install carries
+ * no Referer. `location.assign` takes no referrer policy, so the document's
+ * own policy is set to `no-referrer` (a `<meta name="referrer">`, honoured
+ * when inserted) just before leaving. Idempotent; a failure only means the
+ * browser's default policy (origin only, cross-origin) applies.
+ */
+export function dropReferrer(doc) {
+  try {
+    const head = doc?.head
+    if (!head || head.querySelector?.("meta[data-role='install-switch-referrer']")) return
+    head.appendChild(el(doc, "meta", { name: "referrer", content: "no-referrer", "data-role": "install-switch-referrer" }))
+  } catch {
+    // keep the browser default
+  }
+}
+
 export function createWebSwitch(env = {}) {
   const win = env.win || globalThis.window
   const doc = env.doc || globalThis.document
@@ -608,6 +625,7 @@ export function createWebSwitch(env = {}) {
     if (!origin) return
     close()
     showModal({ kind: "switching", name: row.name })
+    dropReferrer(doc)
     win.location.assign(origin + "/")
   }
 
@@ -627,6 +645,7 @@ export function createWebSwitch(env = {}) {
     close()
     showModal({ kind: "hop", origin: target, label: label || S.hostOf(target) })
     setTimeout(() => {
+      dropReferrer(doc)
       win.location.assign(`${target}/switcher/connect?origin=${encodeURIComponent(win.location.origin)}`)
     }, HOP_DELAY_MS)
   }

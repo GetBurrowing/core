@@ -14,7 +14,7 @@ import {
   safeReturnPath,
   fetchUnread
 } from "../../js/lib/install_switch_store.js"
-import { completeConnect } from "../../js/hooks/switcher_connected.js"
+import SwitcherConnected, { completeConnect } from "../../js/hooks/switcher_connected.js"
 import { fakeDoc, fakeStorage, switchButton } from "../lib/switcher_fake_dom.js"
 
 /**
@@ -22,7 +22,9 @@ import { fakeDoc, fakeStorage, switchButton } from "../lib/switcher_fake_dom.js"
  * through the real NativeInstallSwitch hook with a stubbed window/document.
  * Named mutations this file must catch: M5 credentials "include", M6 the
  * name rendered with innerHTML, M7 the dot on a malformed answer, M8 the web
- * path running when the native plugin exists.
+ * path running when the native plugin exists. Stage 4: M10 the connected
+ * page skipping the hop/host check, M11 the key left in the address bar (no
+ * replaceState), and a Referer on a navigation to another install.
  */
 
 const KEY_B = "bk_" + "b".repeat(43)
@@ -202,7 +204,9 @@ describe("the web path", () => {
     ["a missing as_of", { unread: 3 }],
     ["a non-ISO as_of", { unread: 3, as_of: "yesterday" }],
     ["an array", [3]],
-    ["null", null]
+    ["null", null],
+    // Stage 4: a hostile install's extra fields are not a valid answer.
+    ["extra fields", { unread: 4, as_of: AS_OF, name: "<img src=x onerror=alert(1)>", nested: { unread: 9 } }]
   ]) {
     it(`a malformed answer (${label}) hides the dot and the count (M7)`, async () => {
       const ctx = setup({ entries: [entry("https://b.example")], fetch: vi.fn(async () => answer(200, body)) })
@@ -212,6 +216,47 @@ describe("the web path", () => {
       expect(panel.querySelector("[data-role='install-row-count']")).toBe(null)
     })
   }
+
+  it("an oversized body is refused without being read to the end (stage 4)", async () => {
+    const big = new TextEncoder().encode(JSON.stringify({ unread: 5, as_of: AS_OF, pad: "x".repeat(10000) }))
+    let reads = 0
+    let cancelled = false
+    const streamed = {
+      status: 200,
+      ok: true,
+      headers: { get: () => null },
+      body: {
+        getReader: () => ({
+          read: async () => {
+            const at = reads++ * 1024
+            return at >= big.length ? { done: true } : { done: false, value: big.slice(at, at + 1024) }
+          },
+          cancel: async () => {
+            cancelled = true
+          }
+        })
+      },
+      json: async () => {
+        throw new Error("must not buffer the whole body")
+      }
+    }
+    expect(await fetchUnread(entry("https://b.example"), { fetch: async () => streamed })).toEqual({ kind: "rejected" })
+    expect(cancelled).toBe(true)
+    expect(reads).toBeLessThanOrEqual(5)
+
+    const declared = { status: 200, ok: true, headers: { get: h => (h === "content-length" ? "5242880" : null) }, json: async () => ({ unread: 5, as_of: AS_OF }) }
+    expect(await fetchUnread(entry("https://b.example"), { fetch: async () => declared })).toEqual({ kind: "rejected" })
+
+    const small = new TextEncoder().encode(JSON.stringify({ unread: 5, as_of: AS_OF }))
+    let done = false
+    const ok = {
+      status: 200,
+      ok: true,
+      headers: { get: () => String(small.length) },
+      body: { getReader: () => ({ read: async () => (done ? { done: true } : ((done = true), { done: false, value: small })) }) }
+    }
+    expect(await fetchUnread(entry("https://b.example"), { fetch: async () => ok })).toEqual({ kind: "ok", unread: 5, as_of: AS_OF })
+  })
 
   it("a body that is not JSON hides the dot (M7)", async () => {
     const ctx = setup({
@@ -490,8 +535,17 @@ describe("entries and rendering", () => {
   it("clicking another install navigates top-level to its origin, nothing in the URL", async () => {
     const ctx = setup({ entries: [entry("https://b.example")] })
     const panel = await open(ctx)
+    const policyAtNavigation = []
+    ctx.location.assign.mockImplementation(() =>
+      policyAtNavigation.push(
+        ctx.doc.head.querySelector("meta[data-role='install-switch-referrer']")?.getAttribute("content")
+      )
+    )
     rowFor(panel, "https://b.example").click()
     expect(ctx.location.assign).toHaveBeenCalledWith("https://b.example/")
+    // Stage 4: the navigation carries no Referer (policy set before leaving).
+    expect(policyAtNavigation).toEqual(["no-referrer"])
+    expect(ctx.doc.head.querySelector("meta[name='referrer']").getAttribute("content")).toBe("no-referrer")
     const modal = ctx.doc.body.querySelector("[data-role='install-switch-modal']")
     expect(modal.getAttribute("data-kind")).toBe("switching")
     expect(modal.textContent).toContain("Already signed in with the same account? You go straight in.")
@@ -551,7 +605,10 @@ describe("add and remove", () => {
     expect(modal.textContent).toContain("Opening burrow.team.example")
     expect(modal.textContent).toContain("You'll come back to Acme when that's done.")
 
+    expect(ctx.doc.head.querySelector("meta[name='referrer']")).toBe(null)
     await vi.advanceTimersByTimeAsync(1000)
+    // Stage 4: the hop to B carries no Referer either.
+    expect(ctx.doc.head.querySelector("meta[name='referrer']").getAttribute("content")).toBe("no-referrer")
     expect(ctx.location.assign).toHaveBeenCalledWith(
       "https://burrow.team.example/switcher/connect?origin=https%3A%2F%2Fa.example"
     )
@@ -634,6 +691,57 @@ describe("/switcher/connected", () => {
     expect(completeConnect({ hash, session: pending(), local, now: 1000 + 31 * 60 * 1000 }).ok).toBe(false)
     expect(completeConnect({ hash, session: pending({ origin: "http://b.example" }), local, now: 2000 }).ok).toBe(false)
     expect(readList(local)).toEqual([])
+  })
+
+  // Stage 4 (M11): the key must leave the address bar and the history entry
+  // before anything else runs, on success and on refusal alike.
+  function mountConnected({ hash, session }) {
+    const doc = fakeDoc()
+    const root = doc.createElement("div")
+    const working = doc.createElement("div")
+    working.setAttribute("data-role", "connected-working")
+    const invalid = doc.createElement("div")
+    invalid.setAttribute("data-role", "connected-invalid")
+    invalid.classList.add("hidden")
+    root.appendChild(working)
+    root.appendChild(invalid)
+    const calls = []
+    const location = {
+      origin: "https://a.example",
+      pathname: "/switcher/connected",
+      hash,
+      replace: vi.fn(url => calls.push(["replace", url]))
+    }
+    const history = {
+      replaceState: vi.fn((state, title, url) => {
+        calls.push(["replaceState", url])
+        location.hash = ""
+      })
+    }
+    vi.stubGlobal("window", { location, history, sessionStorage: session, localStorage: fakeStorage() })
+    const hook = Object.assign(Object.create(SwitcherConnected), { el: root })
+    hook.mounted()
+    return { root, calls, history, location }
+  }
+
+  it("strips the fragment with replaceState before returning (M11)", () => {
+    const { calls, history, root } = mountConnected({
+      hash: `#host=b.example&key=${KEY_B}&name=Bravo`,
+      session: pending({ at: Date.now() })
+    })
+    expect(history.replaceState).toHaveBeenCalledWith(null, "", "/switcher/connected")
+    expect(calls.map(c => c[0])).toEqual(["replaceState", "replace"])
+    expect(calls.flat().join(" ")).not.toContain(KEY_B)
+    expect(root.getAttribute("data-state")).toBe("added")
+  })
+
+  it("strips the fragment even when it refuses the link (M11)", () => {
+    const { calls, root } = mountConnected({
+      hash: `#host=evil.example&key=${KEY_B}&name=Evil`,
+      session: pending({ at: Date.now() })
+    })
+    expect(calls).toEqual([["replaceState", "/switcher/connected"]])
+    expect(root.getAttribute("data-state")).toBe("invalid")
   })
 
   it("never returns off-site", () => {

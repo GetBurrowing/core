@@ -155,6 +155,26 @@ defmodule Platform.Switcher do
   def verify(_token, _origin, _opts), do: :error
 
   @doc """
+  The origin a refused request may READ its `401` from (task 01a1ccd4 stage
+  4): `{:ok, origin}` only when `token` is a key this install minted (live,
+  revoked or expired) AND `origin` normalizes to that key's `bound_origin`.
+  So the switcher holding a dead key can show "Reconnect", while any other
+  origin, including one that replays someone else's key, gets no CORS allow
+  and cannot read anything. `:error` otherwise.
+  """
+  @spec refusal_origin(term(), term()) :: {:ok, String.t()} | :error
+  def refusal_origin(token, origin) when is_binary(token) and token != "" do
+    with {:ok, origin} <- normalize_origin(origin),
+         %BadgeKey{bound_origin: ^origin} <- Repo.get_by(BadgeKey, token_hash: hash(token)) do
+      {:ok, origin}
+    else
+      _ -> :error
+    end
+  end
+
+  def refusal_origin(_token, _origin), do: :error
+
+  @doc """
   Bump `last_used_at`, at most once per #{@touch_interval_seconds} seconds per
   key (the guard is in the UPDATE's WHERE clause).
   """

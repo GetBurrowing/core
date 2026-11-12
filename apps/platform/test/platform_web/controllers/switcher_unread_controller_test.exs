@@ -74,23 +74,16 @@ defmodule PlatformWeb.SwitcherUnreadControllerTest do
     end
   end
 
-  # Stage 3 changed the refusal's CORS: a 401 echoes a well-formed request
-  # Origin (as the preflight does) so the switcher holding a dead key can read
-  # the 401 and show "Reconnect". It still never carries credentials, and a
-  # malformed or missing Origin still gets no allow header.
-  describe "refusals are 401, readable only by a well-formed origin" do
-    test "origin mismatch", %{conn: conn, token: token} do
+  # The refusal's CORS (stage 3, narrowed in stage 4): a 401 is readable
+  # ONLY by the presented key's own bound origin, so the switcher holding a
+  # dead key can show "Reconnect" while a hostile page replaying the key (or
+  # any unknown key) gets no allow header. Never credentials.
+  describe "refusals are 401, readable only by the key's own origin" do
+    test "origin mismatch: no allow header for any other origin", %{conn: conn, token: token} do
       for origin <- ["https://evil.example", "https://a.example:8443", "http://a.example", nil] do
         conn = unread(conn, token, origin)
         assert json_response(conn, 401) == %{"error" => "unauthorized"}, inspect(origin)
-
-        expected =
-          case Switcher.normalize_origin(origin) do
-            {:ok, o} -> [o]
-            _ -> []
-          end
-
-        assert header(conn, "access-control-allow-origin") == expected, inspect(origin)
+        assert header(conn, "access-control-allow-origin") == [], inspect(origin)
         assert header(conn, "access-control-allow-credentials") == []
         assert header(conn, "vary") == ["Origin"]
       end
@@ -102,10 +95,11 @@ defmodule PlatformWeb.SwitcherUnreadControllerTest do
       token: token,
       key: key
     } do
+      # An unknown or missing key: nobody may read the refusal.
       for t <- ["bk_garbage", nil] do
         conn = unread(conn, t, @a)
         assert conn.status == 401
-        assert header(conn, "access-control-allow-origin") == [@a]
+        assert header(conn, "access-control-allow-origin") == []
       end
 
       {:ok, %{token: expired}} =
@@ -120,6 +114,12 @@ defmodule PlatformWeb.SwitcherUnreadControllerTest do
       assert conn3.status == 401
       assert header(conn3, "access-control-allow-origin") == [@a]
       assert json_response(conn3, 401) == %{"error" => "unauthorized"}
+
+      # The same dead key replayed from another origin: not readable there.
+      conn4 = unread(conn, token, "https://d.example")
+      assert conn4.status == 401
+      assert header(conn4, "access-control-allow-origin") == []
+      assert header(build_conn() |> unread(expired, @a), "access-control-allow-origin") == []
     end
 
     test "the key in the query string is not read", %{conn: conn, token: token} do

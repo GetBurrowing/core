@@ -215,6 +215,7 @@ export function fakeDoc() {
     getElementById: id => (doc.body.getAttribute("id") === id ? doc.body : doc.body.querySelector("#" + id))
   }
   doc.body = new El(doc, "body")
+  doc.head = new El(doc, "head")
   return doc
 }
 

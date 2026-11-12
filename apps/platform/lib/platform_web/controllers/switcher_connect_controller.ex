@@ -22,6 +22,11 @@ defmodule PlatformWeb.SwitcherConnectController do
 
   alias Platform.Switcher
 
+  # Task 01a1ccd4 stage 4: the consent page and its redirect back to A carry
+  # no Referer, so A learns nothing from the hop but the fragment it asked
+  # for (the 302's own Referrer-Policy governs the redirected request).
+  plug :no_referrer
+
   def show(conn, params) do
     case Switcher.normalize_origin(params["origin"]) do
       {:ok, origin} ->
@@ -35,7 +40,7 @@ defmodule PlatformWeb.SwitcherConnectController do
           origin_host: host_of(origin),
           install_name: Platform.Branding.app_name(),
           user_label: user.name || user.email,
-          cancel_url: connected_url(origin, %{})
+          cancel_url: connected_url(conn, origin, %{})
         )
 
       {:error, :invalid_origin} ->
@@ -46,11 +51,13 @@ defmodule PlatformWeb.SwitcherConnectController do
   def allow(conn, params) do
     with {:ok, origin} <- Switcher.normalize_origin(params["origin"]),
          {:ok, %{token: token}} <- Switcher.mint(conn.assigns.current_user, origin) do
-      redirect(conn, external: connected_url(origin, %{key: token}))
+      redirect(conn, external: connected_url(conn, origin, %{key: token}))
     else
       _ -> invalid(conn)
     end
   end
+
+  defp no_referrer(conn, _opts), do: put_resp_header(conn, "referrer-policy", "no-referrer")
 
   defp invalid(conn) do
     conn
@@ -61,17 +68,59 @@ defmodule PlatformWeb.SwitcherConnectController do
 
   # `<A>/switcher/connected#key=...&name=...&host=...`. `name` and `host`
   # describe THIS install (B) so A can list it.
-  defp connected_url(origin, extra) do
+  defp connected_url(conn, origin, extra) do
     fragment =
       extra
-      |> Map.merge(%{name: Platform.Branding.app_name(), host: own_host()})
+      |> Map.merge(%{name: Platform.Branding.app_name(), host: own_host(conn)})
       |> Enum.sort()
       |> URI.encode_query()
 
     origin <> "/switcher/connected#" <> fragment
   end
 
-  defp own_host do
+  # The host (and non-default port) the browser used to reach this page
+  # (task 01a1ccd4 stage 4). A checks it against the address it sent the
+  # browser to, so it must be what the BROWSER sees: the endpoint's
+  # configured host is not, on an install served under an alias
+  # (OWN_HOST_ALIASES, a second apex) or on the dev rig, and A would refuse
+  # every Allow ("This link doesn't work"). The host is `conn.host`; the port
+  # is the one in the `Host` header (none means the scheme's default, which
+  # is right behind a TLS-terminating proxy), or `conn.port` when the request
+  # carried no `Host` header. Anything malformed falls back to the endpoint's
+  # host.
+  @host_name ~r/\A[a-z0-9]([a-z0-9.-]{0,251}[a-z0-9])?\z/
+
+  defp own_host(conn) do
+    host = String.downcase(conn.host || "")
+
+    with true <- Regex.match?(@host_name, host),
+         {:ok, suffix} <- port_suffix(conn) do
+      host <> suffix
+    else
+      _ -> endpoint_host()
+    end
+  end
+
+  defp port_suffix(conn) do
+    case get_req_header(conn, "host") do
+      [value] ->
+        case String.split(value, ":") do
+          [_host] -> {:ok, ""}
+          [_host, port] -> if port =~ ~r/\A[0-9]{1,5}\z/, do: {:ok, ":" <> port}, else: :error
+          _ -> :error
+        end
+
+      [] ->
+        if {conn.scheme, conn.port} in [{:https, 443}, {:http, 80}],
+          do: {:ok, ""},
+          else: {:ok, ":#{conn.port}"}
+
+      _ ->
+        :error
+    end
+  end
+
+  defp endpoint_host do
     %URI{host: host, port: port, scheme: scheme} = PlatformWeb.Endpoint.struct_url()
 
     if is_nil(port) or {scheme, port} in [{"https", 443}, {"http", 80}],
