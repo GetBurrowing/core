@@ -380,7 +380,7 @@ defmodule PlatformWeb.SignInSetupControllerTest do
   end
 
   test "counter capacity does not disable invitation completion globally" do
-    :ets.insert(:sign_in_email_setup_rate, for n <- 1..20_000, do: {{{:noise, n}, 0}, 1})
+    :ets.insert(:sign_in_email_setup_rate, (for n <- 1..20_000, do: {{{:noise, n}, 0}, 1}))
     assert :ok = Platform.SignIn.EmailSetupRateLimit.verify({198, 51, 100, 10})
   end
 
