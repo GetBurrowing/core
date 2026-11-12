@@ -93,15 +93,25 @@ defmodule Platform.Games do
 
   def launch_path?(_), do: false
 
-  # Releases published before launchers became per game all shipped this file.
+  # Voltron releases published before launchers were named all shipped this file.
   @legacy_launch_path "Play Voltron.bat"
 
-  @doc "The file the player starts from the release root, or nil when the game names none."
-  def launch_path(%{"launch_path" => path}) when is_binary(path),
-    do: if(launch_path?(path), do: path)
+  @doc """
+  The file the player starts from `release`'s root, or nil when none is named.
 
-  def launch_path(%{"slug" => "voltron"}), do: @legacy_launch_path
-  def launch_path(_), do: nil
+  Resolved per release, so a rollback serves the launcher the rolled-back ZIP
+  actually ships: the release's own `launch_path`, then the game-level one
+  (manifests from before launchers were pinned per release), then Voltron's
+  historical launcher. A game-level value is only ever a legacy fallback.
+  """
+  def launch_path(game, release) when is_map(game) do
+    cond do
+      is_map(release) and launch_path?(release["launch_path"]) -> release["launch_path"]
+      launch_path?(game["launch_path"]) -> game["launch_path"]
+      game["slug"] == "voltron" -> @legacy_launch_path
+      true -> nil
+    end
+  end
 
   @doc "Gallery screenshots, each a local `/images/` asset with alt text."
   def screenshots(%{"screenshots" => shots}) do
@@ -115,7 +125,8 @@ defmodule Platform.Games do
       Regex.match?(~r/^[a-zA-Z0-9][a-zA-Z0-9._-]{0,63}$/, release["version"]) and
       match?({:ok, _}, Platform.UUID.cast(release["attachment_id"])) and
       is_binary(release["sha256"]) and Regex.match?(~r/^[a-f0-9]{64}$/, release["sha256"]) and
-      is_integer(release["byte_size"]) and release["byte_size"] > 0
+      is_integer(release["byte_size"]) and release["byte_size"] > 0 and
+      (is_nil(release["launch_path"]) or launch_path?(release["launch_path"]))
   end
 
   defp valid_release?(_), do: false

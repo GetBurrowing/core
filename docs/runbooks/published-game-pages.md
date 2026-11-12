@@ -19,7 +19,6 @@ Absent configuration means no published games. Keep install-specific manifests i
   "summary": "A little chaos with friends.",
   "image_path": "/images/my-game.png",
   "image_alt": "Gameplay screenshot",
-  "launch_path": "Play My Game.bat",
   "screenshots": [
     {"path": "/images/play/my-game-shot-1.png", "alt": "Gameplay: the crew lines up a jump"}
   ],
@@ -29,7 +28,8 @@ Absent configuration means no published games. Keep install-specific manifests i
     "version": "v1",
     "attachment_id": "<approved-release-attachment-uuid>",
     "sha256": "<64-lowercase-hex-sha256-of-zip>",
-    "byte_size": 89458340
+    "byte_size": 89458340,
+    "launch_path": "Play My Game.bat"
   }]
 }]
 ```
@@ -43,13 +43,26 @@ server secret in a manifest. The public page's version and checksum refer to
 the ZIP, not its embedded PCK. Retain older version entries when changing the
 current pointer; do not repoint a version to different bytes.
 
-`launch_path` names the file the Windows player starts from the release root.
-It must be a single file name ending in `.bat`, `.cmd` or `.exe`, with no
-folders, no `..` and no shell characters; a manifest with anything else is
-rejected. Every release of the game must ship that file at its ZIP root. When
-it is absent, `voltron` keeps its historical `Play Voltron.bat` and any other
-game installs normally, then opens its folder instead of launching. The game
-page tells portable-ZIP players which file to open.
+`launch_path` on a release names the file the Windows player starts from that
+release's ZIP root. It is pinned with the release, so a version that renames its
+entrypoint (`A.bat` to `B.bat`) does not break a rollback: rolling back to the
+older version serves `A.bat` again. It must be a single file name ending in
+`.bat`, `.cmd` or `.exe`, with no folders, no `..` and no shell characters; a
+manifest with anything else is rejected. Like the bytes, a release's launcher
+never changes once set.
+
+For a release with no `launch_path`, the player falls back to the older
+game-level `launch_path` (manifests written before launchers were pinned per
+release), then for `voltron` its historical `Play Voltron.bat`, and otherwise
+installs normally and opens the folder instead of launching. The `/updates`
+metadata, the game page's portable-ZIP hint and the player's remembered
+launcher all resolve against the release being served, not the game.
+
+The admin publish form (`/admin/games`) takes the launcher with each release.
+To pin a launcher on a release published before this, without touching its
+bytes or the current version, call
+`Platform.Games.Publishing.pin_launch_path(actor, slug, version, launch_path)`
+as a root admin. It refuses to change a launcher that is already set.
 
 `screenshots` is optional: at most eight `{"path", "alt"}` entries, each path a
 local `/images/` asset like `image_path`, each alt 1 to 200 characters. The game

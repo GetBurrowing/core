@@ -5,7 +5,7 @@ defmodule PlatformWeb.AdminGamesLive do
   def mount(params, _session, socket) do
     if Platform.Tenancy.root_admin?(socket.assigns.current_user_record) do
       defaults = %{"slug" => "voltron", "title" => "Voltron", "published" => "true"}
-      fields = ~w(slug title summary org_id version attachment_id multiplayer_note)
+      fields = ~w(slug title summary org_id version attachment_id launch_path multiplayer_note)
       form = to_form(Map.merge(defaults, Map.take(params, fields)), as: :game)
 
       {:ok,
@@ -53,6 +53,9 @@ defmodule PlatformWeb.AdminGamesLive do
           Map.merge(manifest, %{
             "version" => release["version"],
             "attachment_id" => release["attachment_id"],
+            # Prefill the launcher the current release resolves to; a new
+            # version that renames its entrypoint changes it here.
+            "launch_path" => Platform.Games.launch_path(manifest, release),
             "published" => to_string(manifest["published"])
           })
 
@@ -81,6 +84,10 @@ defmodule PlatformWeb.AdminGamesLive do
           <.input field={@form[:version]} label="Release version" required />
           <.input field={@form[:attachment_id]} label="Uploaded Windows ZIP attachment ID" required />
           <.input
+            field={@form[:launch_path]}
+            label="Launcher in the ZIP root (for example Play Voltron.bat)"
+          />
+          <.input
             field={@form[:published]}
             type="select"
             label="Visibility"
@@ -91,7 +98,7 @@ defmodule PlatformWeb.AdminGamesLive do
           </button>
         </.form>
         <p class="text-sm">
-          Publish a new version to update players. Reuse an older version and its original attachment to roll back. Downloads use the uploaded ZIP’s verified size and checksum. The ZIP must contain the game’s launcher (its launch_path, for example Play Voltron.bat) at its root.
+          Publish a new version to update players. Reuse an older version and its original attachment to roll back. Downloads use the uploaded ZIP’s verified size and checksum. Each release keeps the launcher it was published with, so a rollback starts the file that older ZIP ships. The launcher is one .bat, .cmd or .exe file name at the ZIP root. Left empty, the player falls back to the game’s older launcher setting, or opens the folder when there is none.
         </p>
         <div id="published-games" class="space-y-3" phx-update="stream">
           <div
