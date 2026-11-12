@@ -367,24 +367,32 @@ defmodule PlatformWeb.SignInSetupControllerTest do
     assert get_session(result, :signed_in_with_link) == true
     assert get_session(result, :app_challenge) == String.duplicate("a", 43)
   end
+
   test "proxy-added final hop, rather than spoofed leftmost XFF, controls request limits" do
     Application.put_env(:platform, :trust_proxy_headers, true)
+
     for n <- 1..4 do
-      conn = build_conn()
-      |> put_req_header("x-forwarded-for", "203.0.113.#{n}, 198.51.100.9")
-      |> post("/auth/email/setup", %{email: "unknown-#{n}@example.test"})
+      conn =
+        build_conn()
+        |> put_req_header("x-forwarded-for", "203.0.113.#{n}, 198.51.100.9")
+        |> post("/auth/email/setup", %{email: "unknown-#{n}@example.test"})
+
       assert delivered(conn) == :skipped
     end
+
     ips = for {{{:ip, ip}, _}, count} <- :ets.tab2list(:sign_in_email_setup_rate), do: {ip, count}
     assert ips == [{{198, 51, 100, 9}, 4}]
   end
 
   test "counter capacity does not disable invitation completion globally" do
-    :ets.insert(:sign_in_email_setup_rate, (for n <- 1..20_000, do: {{{:noise, n}, 0}, 1}))
+    :ets.insert(:sign_in_email_setup_rate, for(n <- 1..20_000, do: {{{:noise, n}, 0}, 1}))
     assert :ok = Platform.SignIn.EmailSetupRateLimit.verify({198, 51, 100, 10})
   end
 
-  test "concurrent redemption of one browser challenge mints only one provider token", %{conn: conn, user: user} do
+  test "concurrent redemption of one browser challenge mints only one provider token", %{
+    conn: conn,
+    user: user
+  } do
     provider(user)
     sent = post(conn, "/auth/email/setup", %{email: user.email})
     assert delivered(sent) == :sent
@@ -398,5 +406,4 @@ defmodule PlatformWeb.SignInSetupControllerTest do
     assert_received :provider_token_minted
     refute_received :provider_token_minted
   end
-
 end
