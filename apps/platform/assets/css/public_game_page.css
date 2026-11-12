@@ -174,7 +174,7 @@
   .gp-media{border-radius:0;border-width:0 0 1px}
   .gp-thumbs{display:none}
   .gp-card{position:static;border-radius:0;border:0;box-shadow:none;padding:18px 18px 8px;background:var(--ground)}
-  h1{font-size:38px;margin-top:8px}
+  .public-game h1{font-size:38px;margin-top:8px}
   .gp-pitch{font-size:16px}
   .gp-section{margin:26px 18px 0}
   .gp-pilots{grid-template-columns:1fr;padding:14px}

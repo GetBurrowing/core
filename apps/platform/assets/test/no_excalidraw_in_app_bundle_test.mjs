@@ -88,7 +88,15 @@ const ASSETS = resolve(HERE, "..");
 // deliberate-leave guard on meeting_left). Measured with esbuild --minify:
 // the hook grew from 29,405 to 33,193 bytes, first-party code with no new
 // dependency. 1024 KB still catches the ~8.2 MB leak.
-const MAX_BYTES = 1024 * 1024;
+//
+// Raised from 1024 KB to 1056 KB by task 01a1ccd4 (install switcher at the
+// Burrow icon): the WITH-Play app.js measured 1,068,465 bytes in CI run
+// 43147207267 (PR #157), 19,889 over 1024 KB, after hooks/install_switch_web.js,
+// hooks/switcher_connected.js and lib/install_switch_store.js (the shared web
+// switcher dropdown, browser-held install list, CORS unread). Main measured
+// 1,041,163 before it. First-party hook code with no new dependency; the
+// overage is past one 16 KB step, so two. 1056 KB still catches the ~8.2 MB leak.
+const MAX_BYTES = 1056 * 1024;
 
 // The profile also sets `env: %{"NODE_PATH" => [.../deps, build_path]}`, and
 // that half was missing here until this commit. js/app.js has exactly three

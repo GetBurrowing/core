@@ -54,6 +54,7 @@ defmodule PlatformWeb.Components.Sidebar do
   import PlatformWeb.AvatarComponents, only: [human_avatar: 1]
   import PlatformWeb.Components.ThemePicker, only: [theme_picker: 1]
   import PlatformWeb.Components.MaskNamesChip, only: [mask_names_chip: 1]
+  import PlatformWeb.Components.InstallSwitch, only: [install_switch: 1]
 
   alias Phoenix.LiveView.JS
   alias Platform.Accounts
@@ -106,10 +107,15 @@ defmodule PlatformWeb.Components.Sidebar do
         class="flex h-9 shrink-0 items-center gap-2 px-2 pb-1"
         data-role="sidebar-brand"
       >
-        <img src={~p"/images/burrow-mark.svg"} alt={@brand_name} class="size-5 shrink-0" />
-        <span class="min-w-0 truncate text-sm font-semibold text-base-content">
-          {@brand_name}
-        </span>
+        <%!-- Task 01a1ccd4 stage 3: the install switcher replaces the bare
+             mark + name, the same component as the phone top bar's
+             #native-install-switch (canvas 01a1cd29-e313). --%>
+        <.install_switch
+          id="sidebar-install-switch"
+          variant={:sidebar}
+          brand_name={@brand_name}
+          current_unread={@chat_unread_count}
+        />
         <span class="flex-1"></span>
         <%!-- masters #cmdk-btn (L570, .icon-btn L65): opens the palette
              mounted once in the shell (CommandPaletteLive, #command-palette). --%>

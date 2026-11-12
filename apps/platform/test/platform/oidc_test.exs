@@ -25,6 +25,19 @@ defmodule Platform.OIDCTest do
       assert scope == "openid email profile groups"
     end
 
+    # Task 01a1ccd4 stage 4 (M9): carry-over sign-in between installs relies
+    # on the IdP answering silently when it already has a session. A
+    # `prompt` (login, consent, select_account) or `max_age` would force a
+    # credential prompt on every switch.
+    test "carries no prompt or max_age, and this install's own client_id" do
+      {:ok, %{url: url}} = OIDC.authorize_url()
+      query = url |> URI.parse() |> Map.get(:query) |> URI.decode_query()
+
+      refute Map.has_key?(query, "prompt")
+      refute Map.has_key?(query, "max_age")
+      assert query["client_id"] == Application.get_env(:platform, :oidc)[:client_id]
+    end
+
     test "an OIDC_SCOPE override (config :scope) replaces the default" do
       original = Application.get_env(:platform, :oidc, [])
 

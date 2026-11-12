@@ -173,6 +173,15 @@ defmodule PlatformWeb.Router do
     plug(PlatformWeb.Plugs.AppBearerAuth)
   end
 
+  # Web install switcher unread (task 01a1ccd4 stage 2). A badge key in the
+  # Authorization header, CORS bound to the key's origin. NO `fetch_session`
+  # and NO `:accepts` (a preflight's Accept is the browser's, and the only
+  # body is JSON): `SwitcherBadgeAuth` answers the preflight and refuses
+  # everything else without a key whose origin matches.
+  pipeline :switcher_api do
+    plug(PlatformWeb.Plugs.SwitcherBadgeAuth)
+  end
+
   # Push relay (task 01a1261e stage 2): 404 unless relay mode is on, 401
   # without a live install credential.
   pipeline :push_relay do
@@ -322,6 +331,19 @@ defmodule PlatformWeb.Router do
     get("/instruction-packs/:pack_id/:version", InstructionPackController, :show, log: false)
     # Anonymous usage counts (task 01a1b678 stage 2).
     post("/usage", FeedbackBrokerController, :usage, log: false)
+  end
+
+  # HOST-AGNOSTIC (`/api/*` machine caller): another install's switcher page
+  # calls this cross-origin with a badge key, never a cookie.
+  scope "/api/switcher", PlatformWeb do
+    pipe_through(:switcher_api)
+
+    get("/unread", SwitcherUnreadController, :show)
+    options("/unread", SwitcherUnreadController, :show)
+    # Stage 3: "Remove" in A's Manage installs revokes the key it holds
+    # (best effort, from the browser, with that same key).
+    delete("/key", SwitcherKeyController, :delete)
+    options("/key", SwitcherKeyController, :delete)
   end
 
   scope "/api/app", PlatformWeb do
@@ -959,6 +981,9 @@ defmodule PlatformWeb.Router do
 
     get("/artifacts/preview", ArtifactPreviewController, :show)
     get("/api/transcripts/:id/download", TranscriptController, :show)
+    # Task 01a1ccd4 stage 2: the web install switcher's consent hop.
+    get("/switcher/connect", SwitcherConnectController, :show)
+    post("/switcher/connect", SwitcherConnectController, :allow)
 
     live_session :authenticated,
       on_mount: [
@@ -967,6 +992,8 @@ defmodule PlatformWeb.Router do
         {PlatformWeb.ModuleGate, :default}
       ],
       layout: {PlatformWeb.Layouts, :shell} do
+      # Task 01a1ccd4 stage 3: where another install's consent hop lands.
+      live("/switcher/connected", SwitcherConnectedLive, :show)
       live("/access/view-as/role/:id/:key", AccessViewAsLive, :show)
       live("/access/view-as/:type/:id", AccessViewAsLive, :show)
       live("/access", AccessLive, :index)
