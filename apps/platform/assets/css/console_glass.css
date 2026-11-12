@@ -50,3 +50,5 @@ html.console-glass, html.console-glass[data-theme] {
 
 .cg-mobile-publish{display:none}
 @media(max-width:767px){.cg-mobile-publish{display:grid;place-items:center;flex-shrink:0;width:32px;height:36px;border-radius:14px;color:#fff;background:rgba(255,255,255,.1)}.cg-side{gap:8px}.cg-modes a{padding-inline:5px}}
+
+.console-glass .cg-game-tabs{display:flex;height:auto}
