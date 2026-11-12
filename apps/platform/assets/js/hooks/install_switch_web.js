@@ -565,7 +565,7 @@ export function createWebSwitch(env = {}) {
       },
       [
         el(doc, "div", {
-          class: "px-2.5 pt-2 pb-1 text-[11px] font-[650] uppercase tracking-[.08em] text-subtle",
+          class: "px-2.5 pt-2 pb-1 text-xs font-[650] uppercase tracking-[.08em] text-subtle",
           text: "Installs on this browser"
         }),
         find,
@@ -942,7 +942,7 @@ export function createWebSwitch(env = {}) {
         if (row.current) {
           actions.push(
             el(doc, "span", {
-              class: "shrink-0 whitespace-nowrap rounded-full border border-edge px-2 py-0.5 text-[11px] text-subtle",
+              class: "shrink-0 whitespace-nowrap rounded-full border border-edge px-2 py-0.5 text-xs text-subtle",
               text: "This install"
             })
           )
