@@ -16,6 +16,11 @@
       <section class="space-y-4" aria-labelledby="first-sign-in">
         <h2 id="first-sign-in" class="text-xl font-semibold">First time signing in?</h2>
         <p>Use your invitation link on this device. You can set up Face ID, Touch ID or another passkey afterward.</p>
+        <p :if={@link_error?} role="alert">That link could not be used. Paste the full invitation or sign-in link for this Burrow install, or ask for a new one.</p>
+        <.form for={@form} action="/auth/invitation" method="post" id="invitation-sign-in" class="space-y-3">
+          <.input id="setup-link" name="setup_link" value="" type="url" label="Invitation or sign-in link" autocomplete="off" spellcheck="false" autocapitalize="none" required maxlength="8192" class="input w-full placeholder:text-subtle" />
+          <button class="btn btn-outline w-full" type="submit">Continue with invitation</button>
+        </.form>
         <div :if={@mail?}>
           <p>Or get a setup code at your invited email address. No QR scan needed.</p>
           <.form for={@form} action="/auth/email/setup" method="post" id="email-setup-request" class="space-y-3 mt-4">

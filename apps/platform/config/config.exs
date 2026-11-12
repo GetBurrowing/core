@@ -473,7 +473,8 @@ config :phoenix, :filter_parameters, [
   "secret",
   "api_key",
   "code",
-  "sealed"
+  "sealed",
+  "setup_link"
 ]
 
 # Timezone database — Tzdata (IANA rules) backs `DateTime.shift_zone!/2`

@@ -535,6 +535,7 @@ defmodule PlatformWeb.Router do
     post("/auth/passkey", AuthController, :passkey)
     post("/auth/email/setup", SignInSetupController, :request)
     post("/auth/email/complete", SignInSetupController, :complete)
+    post("/auth/invitation", SignInSetupController, :invitation)
     get("/auth/oidc/callback", AuthController, :callback)
     get("/auth/logout", AuthController, :logout)
 

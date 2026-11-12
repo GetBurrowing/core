@@ -146,4 +146,30 @@ defmodule PlatformWeb.SignInSetupControllerTest do
     expired = build_conn() |> init_test_session(email_setup: %{hash: EmailSetup.digest(@code), expires_at: 0}) |> post("/auth/email/complete", %{code: @code})
     assert expired.status == 400
   end
+  test "pasting the existing provider invitation keeps the native app session even without SMTP", %{conn: conn} do
+    Application.delete_env(:platform, SystemMail)
+    challenge = String.duplicate("a", 43)
+    Req.Test.stub(Platform.OIDC, fn conn ->
+      conn |> Plug.Conn.put_resp_header("location", "/interaction?interaction=e8a7f28d-4e78-4f21-bec0-53dc068d471f") |> Plug.Conn.send_resp(302, "")
+    end)
+    result = conn |> init_test_session(app_challenge: challenge) |> post("/auth/invitation", %{setup_link: "https://issuer.example.com/lc/" <> @code <> "?redirect=%2Fsettings%2Faccount"})
+    assert redirected_to(result) =~ "https://issuer.example.com/lc/" <> @code
+    assert get_session(result, :app_challenge) == challenge
+    refute_received {:mail_test_adapter, _, _}
+  end
+
+  test "invitation parser refuses foreign origins, HTTP, credentials, fragments and tampered signed links", %{conn: conn} do
+    for value <- ["https://evil.example/lc/" <> @code, "http://issuer.example.com/lc/" <> @code,
+                  "https://user:password@issuer.example.com/lc/" <> @code,
+                  "https://issuer.example.com/lc/" <> @code <> "#fragment",
+                  "https://issuer.example.com/authorize?token=" <> @code,
+                  "/lc/" <> @code, String.duplicate("a", 8193)] do
+      result = post(conn, "/auth/invitation", %{setup_link: value})
+      assert result.status == 400
+      refute result.resp_body =~ @code
+      refute get_session(result, :oidc_session_params)
+    end
+    refute_received {:provider_request, _}
+  end
+
 end

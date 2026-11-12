@@ -36,3 +36,11 @@ Upgrade Core normally to adopt the new entry screen. Updating Core does not
 configure an SMTP relay, enroll devices, migrate identities or modify an
 external provider. Verify both the web and native app flows on an install
 before advertising it as ready for new users.
+
+On an install without SMTP, the first-time screen also accepts a pasted
+invitation/sign-in link. It recognises only the primary install's signed
+`/auth/link?token=...` or `/auth/handover?code=...`, or the configured provider's
+`/lc/...` link. Burrow extracts and verifies that credential without fetching
+the supplied URL; the resulting OIDC interaction keeps the original app PKCE
+challenge. This avoids switching out to a different browser session to redeem
+an invitation. The `setup_link` field is filtered from request logs.

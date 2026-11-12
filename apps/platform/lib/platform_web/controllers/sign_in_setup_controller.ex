@@ -33,6 +33,17 @@ defmodule PlatformWeb.SignInSetupController do
 
   def complete(conn, _), do: conn |> put_status(:bad_request) |> page(sent?: true, error?: true)
 
+  def invitation(conn, params) do
+    with true <- EmailSetup.enabled?(),
+         :ok <- EmailSetupRateLimit.verify(conn.remote_ip),
+         {:ok, %Platform.SignInAdmin.PocketId.Token{value: code}} <-
+           Platform.SignIn.SetupLink.redeem(params["setup_link"]) do
+      PlatformWeb.AuthController.setup_code_login(conn, code)
+    else
+      _ -> conn |> put_status(:bad_request) |> page(link_error?: true)
+    end
+  end
+
   defp page(conn, opts \\ []) do
     conn
     |> put_resp_header("cache-control", "no-store")
@@ -40,6 +51,7 @@ defmodule PlatformWeb.SignInSetupController do
     |> put_layout(false)
     |> put_view(html: PlatformWeb.SignInSetupHTML)
     |> render(:show, mail?: EmailSetup.mail_available?(), sent?: opts[:sent?] || false,
-      error?: opts[:error?] || false, form: Phoenix.Component.to_form(%{}))
+      error?: opts[:error?] || false, link_error?: opts[:link_error?] || false,
+      form: Phoenix.Component.to_form(%{}))
   end
 end
