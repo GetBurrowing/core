@@ -16,6 +16,10 @@ defmodule PlatformWeb.Components.InstallSwitch do
   `#<id>-menu` container that is `phx-update="ignore"`: the hook draws the
   dropdown into it, so a LiveView patch never wipes an open dropdown.
 
+  The phone button keeps the classes 01a1261e shipped, plus
+  `aria-expanded:bg-base-300` (the canvas's open fill), which only the web
+  path ever triggers: the native path never sets `aria-expanded`.
+
   `data-install-name` and `data-current-unread` hand the hook this install's
   name and its own unread (shown beside the check on the current row).
   """
@@ -38,7 +42,7 @@ defmodule PlatformWeb.Components.InstallSwitch do
       data-current-unread={@current_unread}
       phx-hook="NativeInstallSwitch"
       aria-label={"Switch install, current: #{@brand_name}"}
-      class="hidden -ml-1 shrink-0 items-center gap-1.5 rounded-md px-1 py-0.5 hover:bg-base-300/60"
+      class="hidden -ml-1 shrink-0 items-center gap-1.5 rounded-md px-1 py-0.5 hover:bg-base-300/60 aria-expanded:bg-base-300"
     >
       <img
         src="/branding/current/apple_touch"
