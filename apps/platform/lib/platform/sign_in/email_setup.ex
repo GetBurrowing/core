@@ -80,8 +80,16 @@ defmodule Platform.SignIn.EmailSetup do
       else
         _ -> :skipped
       end
-    :telemetry.execute([:platform, :sign_in, :setup, :delivery], %{}, %{challenge_id: row.id, result: result})
+    delivery_result(row, result)
+  rescue
+    # A supervised child can outlive a test's sandbox owner. No credential
+    # is returned on a database failure, in tests or in production.
+    DBConnection.OwnershipError -> delivery_result(row, :unavailable)
+    DBConnection.ConnectionError -> delivery_result(row, :unavailable)
   end
+
+  defp delivery_result(row, result),
+    do: :telemetry.execute([:platform, :sign_in, :setup, :delivery], %{}, %{challenge_id: row.id, result: result})
 
   defp eligible(%Accounts.User{archived_at: nil, oidc_sub: sub, email: email}) when is_binary(sub) and is_binary(email) do
     with {:ok, identity} <- PocketId.get_user(sub),

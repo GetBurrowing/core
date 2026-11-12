@@ -72,6 +72,7 @@ defmodule PlatformWeb.SignInSetupControllerTest do
           if String.ends_with?(path, "/webauthn-credentials") do
             Req.Test.json(conn, if(opts[:enrolled], do: [%{id: "passkey"}], else: []))
           else
+            send(pid, :provider_token_minted)
             Req.Test.json(conn, %{token: @code})
           end
       end
@@ -150,6 +151,7 @@ defmodule PlatformWeb.SignInSetupControllerTest do
 
     assert_receive {:mail_test_adapter, mail, _}, 2_000
     assert mail.to == [{"", user.email}]
+    refute_received :provider_token_minted
     refute mail.text_body =~ @code
     code = mailed_code(mail)
     refute conn.resp_body =~ code
@@ -166,6 +168,7 @@ defmodule PlatformWeb.SignInSetupControllerTest do
 
     completed = conn |> recycle() |> post("/auth/email/complete", %{code: code})
     assert redirected_to(completed) =~ "https://issuer.example.com/lc/" <> @code
+    assert_received :provider_token_minted
     assert get_session(completed, :app_challenge) == challenge
     assert get_session(completed, :email_setup) == nil
     refute get_session(completed, :post_login_path)
@@ -312,6 +315,7 @@ defmodule PlatformWeb.SignInSetupControllerTest do
     assert_receive {:mail_test_adapter, mail, _}, 2_000
     provider(user, enrolled: true)
     assert {:error, :invalid} = EmailSetup.complete(get_session(sent, :email_setup), mailed_code(mail))
+    refute_received :provider_token_minted
   end
 
   test "a pasted owner link retains owner onboarding and the app continuation", %{conn: conn, user: user} do
