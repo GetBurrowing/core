@@ -20,8 +20,12 @@ defmodule Platform.Games do
     (Enum.map(stored, & &1.manifest) ++
        Enum.reject(configured, &MapSet.member?(slugs, &1["slug"])))
     |> Enum.filter(&(valid?(&1) and &1["published"] == true))
-    |> Enum.sort_by(& &1["title"])
+    |> Enum.sort_by(&{position(&1), &1["title"]})
   end
+
+  # Optional manifest "position" (lower first); unpositioned games follow, by title.
+  defp position(%{"position" => position}) when is_integer(position), do: position
+  defp position(_game), do: :infinity
 
   def get(slug) when is_binary(slug) do
     stored = Repo.get(Platform.Games.Publication, slug)
