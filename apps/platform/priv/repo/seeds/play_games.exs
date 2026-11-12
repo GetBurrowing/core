@@ -10,14 +10,16 @@
 #
 #   * Create project      Platform.Tasks.create_project/1, slug "game-<slug>",
 #                         with one epic and a few unassigned backlog tasks
-#   * dev space           Platform.Chat.create_channel/1, slug "game-<slug>-dev",
-#                         metadata %{"game_slug", "project_id"}
+#   * development space   Platform.Chat.create_channel/1, slug "game-<slug>-dev",
+#                         metadata %{"game_slug", "project_id", "goal_project_id"}
+#                         (goal_project_id scopes the channel to the project in
+#                         Create); separate from the players room
 #   * release build       Platform.Chat.AttachmentStorage.persist_binary_upload/3
 #                         and Platform.Chat.create_attachment/1, a small zip
 #   * publication         Platform.Games.Publishing.publish_release/2, which
 #                         also creates the tagged players room (community_space_id)
 #   * presentation        Platform.Games.Publishing.save/2 adds image_path,
-#                         image_alt, portrait_path, project_id, dev_space_id,
+#                         image_alt, portrait_path, project_id, development_space_id,
 #                         position, featured and placeholder to the manifest
 #
 # Re-running adds nothing: projects, spaces and epics are found by slug or
@@ -184,10 +186,31 @@ for game <- games do
               do: "Development space for a placeholder test game.",
               else: "Development space for #{game.title}."
             ),
-          metadata: %{"game_slug" => game.slug, "project_id" => project.id}
+          metadata: %{
+            "game_slug" => game.slug,
+            "project_id" => project.id,
+            "goal_project_id" => project.id
+          }
         }),
         "dev space #{game.slug}"
       )
+
+  dev_space =
+    if dev_space.metadata["goal_project_id"] == project.id do
+      dev_space
+    else
+      ok!.(
+        Chat.update_space(dev_space, %{
+          metadata:
+            Map.merge(dev_space.metadata || %{}, %{
+              "game_slug" => game.slug,
+              "project_id" => project.id,
+              "goal_project_id" => project.id
+            })
+        }),
+        "dev space metadata #{game.slug}"
+      )
+    end
 
   unless Repo.exists?(
            from(p in Chat.Participant,
@@ -282,7 +305,7 @@ for game <- games do
     "image_alt" => manifest["image_alt"] || game.image_alt,
     "portrait_path" => game.portrait_path,
     "project_id" => project.id,
-    "dev_space_id" => dev_space.id,
+    "development_space_id" => dev_space.id,
     "position" => game.position,
     "featured" => game.featured,
     "placeholder" => game.placeholder
@@ -291,10 +314,14 @@ for game <- games do
   presentation = Map.merge(presentation, copy)
 
   publication =
-    if Map.take(manifest, Map.keys(presentation)) == presentation do
+    if Map.take(manifest, Map.keys(presentation)) == presentation and
+         not Map.has_key?(manifest, "dev_space_id") do
       Repo.get!(Publication, game.slug)
     else
-      ok!.(Publishing.save(actor, Map.merge(manifest, presentation)), "presentation #{game.slug}")
+      ok!.(
+        Publishing.save(actor, manifest |> Map.delete("dev_space_id") |> Map.merge(presentation)),
+        "presentation #{game.slug}"
+      )
     end
 
   IO.puts(
