@@ -179,9 +179,16 @@ defmodule PlatformWeb.GamingControllerTest do
             metadata: %{"public_game_slug" => slug}
           })
 
-        {:ok, development} = Platform.Chat.create_space(%{name: title <> " development", slug: slug <> "-development", kind: "channel", org_id: game["org_id"], metadata: %{"goal_project_id" => project.id}})
+        {:ok, development} =
+          Platform.Chat.create_space(%{
+            name: title <> " development",
+            slug: slug <> "-development",
+            kind: "channel",
+            org_id: game["org_id"],
+            metadata: %{"goal_project_id" => project.id}
+          })
 
-      Map.merge(game, %{
+        Map.merge(game, %{
           "slug" => slug,
           "title" => title,
           "placeholder" => placeholder,
@@ -213,11 +220,22 @@ defmodule PlatformWeb.GamingControllerTest do
     owner = init_test_session(build_conn(), current_user_id: actor.id)
     create = get(owner, "/play?mode=create") |> html_response(200)
     evidence("gaming-create", create)
+
     for game <- games do
       assert create =~ "/chat/#{game["slug"]}-development"
-      assert Platform.Gaming.workspace_path(Map.put(game, "development_space_id", game["community_space_id"]), Platform.Gaming.projects(actor, [game])[game["slug"]], actor) == "/files/#{game["project_id"]}"
+
+      assert Platform.Gaming.workspace_path(
+               Map.put(game, "development_space_id", game["community_space_id"]),
+               Platform.Gaming.projects(actor, [game])[game["slug"]],
+               actor
+             ) == "/files/#{game["project_id"]}"
     end
-    workspace = init_test_session(build_conn(), current_user_id: actor.id) |> get("/chat/voltron-development") |> html_response(200)
+
+    workspace =
+      init_test_session(build_conn(), current_user_id: actor.id)
+      |> get("/chat/voltron-development")
+      |> html_response(200)
+
     evidence("gaming-workspace", workspace)
     workspace_doc = LazyHTML.from_document(workspace)
     assert Enum.count(LazyHTML.query(workspace_doc, "#chat-panes")) == 1
@@ -241,6 +259,7 @@ defmodule PlatformWeb.GamingControllerTest do
         root_user: true,
         current_path: "/chat"
       )
+
     doc = LazyHTML.from_fragment(html)
     assert Enum.count(LazyHTML.query(doc, ".cg-modes a[href='/play']")) == 1
     assert Enum.count(LazyHTML.query(doc, ".cg-modes a[aria-current='page']")) == 1

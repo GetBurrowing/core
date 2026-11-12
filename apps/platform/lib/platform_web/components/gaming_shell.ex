@@ -20,7 +20,15 @@ defmodule PlatformWeb.Components.GamingShell do
             <img src="/images/burrow-mark.svg" alt="Burrow" /><span>PLAY</span>
           </a>
           <.modes mode={@mode} />
-          <a :if={@creator} id="gaming-publish-mobile" class="cg-mobile-publish" href="/admin/games" aria-label="Publish a build"><.icon name="hero-arrow-up-tray" /></a>
+          <a
+            :if={@creator}
+            id="gaming-publish-mobile"
+            class="cg-mobile-publish"
+            href="/admin/games"
+            aria-label="Publish a build"
+          >
+            <.icon name="hero-arrow-up-tray" />
+          </a>
           <nav class="cg-subnav" aria-label="Game navigation">
             <a href="/play"><.icon name="hero-home" />Tonight</a>
             <a href="/play?mode=discover">

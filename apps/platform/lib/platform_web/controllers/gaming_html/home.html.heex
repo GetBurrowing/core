@@ -84,7 +84,11 @@
             </div>
           </section>
         <% else %>
-          <section :if={@mode == "play" && @games != []} class="cg-hero" style={"--cg-tint: " <> Platform.Gaming.tint(hd(@games))}>
+          <section
+            :if={@mode == "play" && @games != []}
+            class="cg-hero"
+            style={"--cg-tint: " <> Platform.Gaming.tint(hd(@games))}
+          >
             <% featured = hd(@games) %>
             <img
               :if={featured["image_path"]}
@@ -108,7 +112,9 @@
                 <a
                   href={"/games/#{featured["slug"]}?tab=community"}
                   class="cg-button cg-ghost cg-large"
-                >Meet the crew</a>
+                >
+                  Meet the crew
+                </a>
               </div>
               <p class="cg-hero-note">Your game. Your people. One place to get together.</p>
             </div>

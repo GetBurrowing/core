@@ -549,8 +549,10 @@
 
     <PlatformWeb.Components.GamingProjectPanel.panel
       :if={!@embedded && is_nil(@details_panel) && Platform.Gaming.enabled?()}
-      space={@active_space} user={assigns[:current_user_record]}
-      participants={@space_participants} agents={@agents_by_id}
+      space={@active_space}
+      user={assigns[:current_user_record]}
+      participants={@space_participants}
+      agents={@agents_by_id}
     />
     <%!-- The desktop details panel (Burrow redesign 22 stage 3): the space
        sheet's sections at lg, a flex sibling after the conversation column

@@ -13,6 +13,7 @@ defmodule PlatformWeb.GamePageController do
       user = Games.user(get_session(conn, :current_user_id))
 
       project = Platform.Gaming.projects(user, [game])[game["slug"]]
+
       conn
       |> put_resp_header("cache-control", "private, no-store")
       |> render(:show,

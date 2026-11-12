@@ -17,8 +17,16 @@
   >
     <.shell enabled={@gaming?} games={@games} user={@user} creator={@creator?} mode="discover">
       <nav :if={@gaming?} class="gp-tabs cg-game-tabs" aria-label="Game page">
-        <a id="game-tab" href={"/games/#{@game["slug"]}"} aria-selected={to_string(!@community?)}>Game</a>
-        <a id="community-tab" href={"/games/#{@game["slug"]}?tab=community"} aria-selected={to_string(@community?)}>Community <span :if={@community} class="gp-count">{@community.member_count}</span></a>
+        <a id="game-tab" href={"/games/#{@game["slug"]}"} aria-selected={to_string(!@community?)}>
+          Game
+        </a>
+        <a
+          id="community-tab"
+          href={"/games/#{@game["slug"]}?tab=community"}
+          aria-selected={to_string(@community?)}
+        >
+          Community <span :if={@community} class="gp-count">{@community.member_count}</span>
+        </a>
       </nav>
       <header :if={!@gaming?} class="gp-bar">
         <a href={Platform.Gaming.home_path(@game)} aria-label="Game home">
@@ -177,7 +185,11 @@
         </div>
         <div :if={!@community?}>
           <section class="gp-section">
-            <h2>{if @game["placeholder"] == true, do: "Your next test world.", else: "Four pilots. One robot."}</h2>
+            <h2>
+              {if @game["placeholder"] == true,
+                do: "Your next test world.",
+                else: "Four pilots. One robot."}
+            </h2>
             <p>{@game["summary"]}</p>
             <p :if={@game["placeholder"] != true}>
               Pick a foot or a fist. Coordinate your next move, explore the city, and see how much destruction your crew can cause.
