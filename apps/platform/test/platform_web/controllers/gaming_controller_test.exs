@@ -228,6 +228,11 @@ defmodule PlatformWeb.GamingControllerTest do
 
       refute page =~ "/files/#{game["project_id"]}"
       assert Games.community(game, nil).space.id == game["community_space_id"]
+      signin = get(build_conn(), "/games/#{game["slug"]}/sign-in") |> html_response(200)
+      evidence("gaming-signin-" <> game["slug"], signin)
+      signin_doc = LazyHTML.from_document(signin)
+      assert Enum.count(LazyHTML.query(signin_doc, ".cg-signin")) == 1
+      assert LazyHTML.attribute(LazyHTML.query(signin_doc, "#continue-sign-in"), "href") == ["/auth/login?game=#{game["slug"]}"]
     end
 
     owner = init_test_session(build_conn(), current_user_id: actor.id)

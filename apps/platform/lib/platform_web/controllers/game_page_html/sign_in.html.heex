@@ -1,15 +1,21 @@
 <!DOCTYPE html>
-<html lang="en" data-theme="dark" class="public-game-document">
+<html lang="en" data-theme="dark" class={["public-game-document", @gaming? && "console-glass"]}>
   <head>
     <meta charset="utf-8" /><meta name="viewport" content="width=device-width,initial-scale=1" />
     <title>Join {@game["title"]} · Burrow</title>
     <link rel="stylesheet" href={~p"/assets/css/app.css"} />
   </head>
   <body class="public-game">
-    <main class="gp-signin">
+    <main class={["gp-signin", @gaming? && "cg-signin"]}>
+      <section :if={@gaming?} class="cg-signin-art" aria-label={@game["title"]}>
+        <img :if={@game["image_path"]} src={@game["image_path"]} alt="" />
+        <div><span class="cg-badge">{if @game["placeholder"] == true, do: "PLACEHOLDER · TEST BUILD", else: "JOIN THE CREW"}</span><h2>{@game["title"]}</h2><p>{@game["summary"]}</p></div>
+      </section>
+      <div class={@gaming? && "cg-signin-card cg-glass"}>
       <img src={~p"/images/burrowplay.svg"} alt="Burrow" width="100" />
       <h1>Come play {@game["title"]}.</h1>
       <p>Your Burrow account gets you the game and its player community.</p>
+      <ol :if={@gaming?} class="cg-signin-steps" aria-label="Get into the game"><li aria-current="step"><b>1</b>Sign in</li><li><b>2</b>Download</li><li><b>3</b>Meet the crew</li></ol>
       <a
         id="continue-sign-in"
         class="gp-btn gp-primary"
@@ -27,6 +33,7 @@
       </p>
       <p :if={!@signup?}>New account registration is not open on this game page yet.</p>
       <a href={"/games/#{@game["slug"]}"}>← Back to the game</a>
+      </div>
     </main>
   </body>
 </html>

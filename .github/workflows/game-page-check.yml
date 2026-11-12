@@ -1,7 +1,7 @@
 name: Gaming experience smoke
 on:
   push:
-    branches: [feat/gaming-experience, feat/console-glass]
+    branches: [feat/gaming-experience, feat/console-glass, feat/console-glass-signin]
   workflow_dispatch:
 permissions:
   contents: read
