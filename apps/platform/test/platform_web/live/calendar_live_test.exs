@@ -1019,6 +1019,42 @@ defmodule PlatformWeb.CalendarLiveTest do
     refute copy =~ "Revoked Invitee"
   end
 
+  test "an invitee answers Accept / Maybe / Decline in the meeting details", %{
+    conn: conn,
+    user: user
+  } do
+    zone = midday_zone()
+    today = local_today(zone)
+    meeting = seed_meeting!(zone, today, "scheduled")
+    {:ok, _} = Platform.Meetings.invite_user(meeting, user.id)
+    {:ok, view, _} = live(zoned(conn, zone), "/calendar")
+    open_chip(view, "meeting")
+
+    rsvp = "[data-role=calendar-details] [data-role=meeting-rsvp]"
+    assert has_element?(view, "#{rsvp}[data-rsvp=invited]")
+    assert has_element?(view, "[data-role=meeting-invite-rsvp][data-rsvp=invited]", "Invited")
+
+    view |> element("#{rsvp} [data-value=accepted]") |> render_click()
+    assert has_element?(view, "#{rsvp}[data-rsvp=accepted]")
+    assert has_element?(view, "#{rsvp} [data-value=accepted][aria-pressed=true]")
+    assert has_element?(view, "[data-role=meeting-invite-rsvp][data-rsvp=accepted]", "Accepted")
+    assert Platform.Meetings.invite_rsvp(meeting, user) == "accepted"
+
+    view |> element("#{rsvp} [data-value=declined]") |> render_click()
+    assert has_element?(view, "[data-role=meeting-invite-rsvp][data-rsvp=declined]", "Declined")
+    assert Repo.get!(Platform.Meetings.Meeting, meeting.id).ical_sequence == 2
+  end
+
+  test "no answer control for a viewer who is not invited", %{conn: conn} do
+    zone = midday_zone()
+    today = local_today(zone)
+    seed_meeting!(zone, today, "scheduled")
+    {:ok, view, _} = live(zoned(conn, zone), "/calendar")
+    open_chip(view, "meeting")
+
+    refute has_element?(view, "[data-role=meeting-rsvp]")
+  end
+
   # ── Live invites in the meeting details (task 01a19e7b stage 2) ────────
 
   describe "meeting invites" do

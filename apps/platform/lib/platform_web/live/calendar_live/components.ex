@@ -949,6 +949,7 @@ defmodule PlatformWeb.CalendarLive.Components do
        `.cal-details` is overflow:hidden and `.cal-dbody` is the scroll
        region, so a floating dropdown would be clipped. No meeting-wide
        invite link: invites are minted per person. --%>
+    <.rsvp_control :if={@detail[:my_rsvp] && !@detail[:cancelled?]} rsvp={@detail.my_rsvp} />
     <.invite_list
       mode={:live}
       entries={@detail.invite_entries}
@@ -983,6 +984,42 @@ defmodule PlatformWeb.CalendarLive.Components do
     <p :if={@detail.stale} class="m-0 text-xs font-[550] text-error" role="status">
       Refresh required; availability unknown.
     </p>
+    """
+  end
+
+  attr(:rsvp, :string, required: true)
+
+  # The viewer's own answer to their invite. The pressed button is the
+  # current answer; "invited" means none yet.
+  defp rsvp_control(assigns) do
+    assigns =
+      assign(assigns, :choices, [
+        {"accepted", "Accept"},
+        {"tentative", "Maybe"},
+        {"declined", "Decline"}
+      ])
+
+    ~H"""
+    <div class="cal-dl" data-role="meeting-rsvp" data-rsvp={@rsvp}>
+      <.icon name="hero-envelope-open" class="size-3.5" />
+      <span class="min-w-0 flex-1">
+        Going?
+        <span class="mt-1 flex flex-wrap gap-1.5" role="group" aria-label="Your answer">
+          <button
+            :for={{value, label} <- @choices}
+            type="button"
+            class={[if(@rsvp == value, do: primary_btn(), else: ghost_btn())]}
+            aria-pressed={to_string(@rsvp == value)}
+            data-role="meeting-rsvp-choice"
+            data-value={value}
+            phx-click="meeting_rsvp"
+            phx-value-status={value}
+          >
+            {label}
+          </button>
+        </span>
+      </span>
+    </div>
     """
   end
 

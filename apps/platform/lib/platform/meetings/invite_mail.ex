@@ -115,6 +115,7 @@ defmodule Platform.Meetings.InviteMail do
           optional(:brand) => brand(),
           optional(:calendar_url) => String.t() | nil,
           optional(:attendees) => [String.t()],
+          optional(:calendar_attendees) => [Platform.Meetings.IcsAttendees.attendee()],
           optional(:reason) => String.t() | nil
         }
   @type palette :: %{
@@ -193,6 +194,7 @@ defmodule Platform.Meetings.InviteMail do
     parties = %{
       organizer: ctx.organizer,
       attendee: {Map.get(recipient, :name), recipient.email},
+      attendees: Map.get(ctx, :calendar_attendees, []),
       location: join_url
     }
 
