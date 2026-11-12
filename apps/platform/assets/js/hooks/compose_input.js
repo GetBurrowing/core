@@ -101,6 +101,38 @@ export function shouldHoldFocusOnSend(target, activeElement, el) {
   return target.closest('button[type="submit"]') !== null;
 }
 
+// The visible viewport in layout-viewport coordinates (what
+// getBoundingClientRect and `position: fixed` use). visualViewport shrinks
+// and pans under a phone keyboard; without it, the window is the viewport.
+function viewportBounds(vv) {
+  const width = vv?.width ?? window.innerWidth ?? Infinity;
+  return { top: vv?.offsetTop || 0, left: vv?.offsetLeft || 0, width };
+}
+
+// Where a reply's @mention panel goes, given the field's rect and the
+// visible viewport. The panel's bottom edge sits on the field's top edge
+// (CSS translates it up by its own height), so it always opens ABOVE the
+// field. Its list may use every pixel between the field and the viewport's
+// top, minus a small gutter, so no ancestor and no viewport edge clips it.
+// It is at least THREAD_MENTION_MIN_W wide (the reply field alone can be
+// ~190px on a phone, which truncated every name) and is pulled back inside
+// the viewport's side gutters.
+export const THREAD_MENTION_GUTTER = 8;
+export const THREAD_MENTION_MIN_W = 300;
+// The panel's border and the list's vertical padding, outside max-height.
+const THREAD_MENTION_CHROME = 10;
+
+export function threadMentionPlacement(field, vp) {
+  const g = THREAD_MENTION_GUTTER;
+  const usable = Math.max(0, vp.width - 2 * g);
+  const width = Math.min(Math.max(field.width, THREAD_MENTION_MIN_W), usable);
+  const minLeft = vp.left + g;
+  const maxLeft = vp.left + vp.width - g - width;
+  const left = Math.max(minLeft, Math.min(field.left, maxLeft));
+  const maxHeight = Math.max(0, Math.floor(field.top - vp.top - g - THREAD_MENTION_CHROME));
+  return { top: field.top, left, width, maxHeight };
+}
+
 const ComposeInput = {
   mounted() {
     // The chat composer and the inline thread reply are a contenteditable
@@ -763,9 +795,13 @@ const ComposeInput = {
     this._applyRichPlaceholder();
   },
 
-  // A reply lives in the timeline scroller. Its mobile panel escapes that
-  // clipping with fixed positioning, capped to the visible chat surface.
-  // ChatDock and this field share the existing keyboard watcher.
+  // A reply lives in the timeline scroller (overflow: auto). At every width
+  // its panel escapes that clip with fixed positioning: anchored to the
+  // field's top edge and opening upward, capped to the space between the
+  // field and the top of the visible viewport (not the scroller's top: a
+  // reply on the first message of a short channel sits right under the
+  // header, and capping to the scroller left a one-row sliver or cut the
+  // panel off). ChatDock and this field share the existing keyboard watcher.
   _mountThreadMentionViewport() {
     const box = this.el.closest(".thread-field-box");
     if (!box) return;
@@ -773,14 +809,14 @@ const ComposeInput = {
     const viewport = window.visualViewport;
     const unwatch = watchKeyboard();
     this._measureThreadMentionSpace = () => {
-      const zone = this.el.closest("#chat-drop-zone");
-      const top = Math.max(viewport?.offsetTop || 0, zone?.getBoundingClientRect().top || 0);
-      const rect = this.el.getBoundingClientRect();
-      const height = Math.max(0, Math.floor(rect.top - top - 2));
-      box.style.setProperty("--thread-mention-max-h", `${height}px`);
-      box.style.setProperty("--thread-mention-top", `${rect.top}px`);
-      box.style.setProperty("--thread-mention-left", `${rect.left}px`);
-      box.style.setProperty("--thread-mention-width", `${rect.width}px`);
+      const place = threadMentionPlacement(
+        this.el.getBoundingClientRect(),
+        viewportBounds(viewport),
+      );
+      box.style.setProperty("--thread-mention-max-h", `${place.maxHeight}px`);
+      box.style.setProperty("--thread-mention-top", `${place.top}px`);
+      box.style.setProperty("--thread-mention-left", `${place.left}px`);
+      box.style.setProperty("--thread-mention-width", `${place.width}px`);
     };
     let frame = null;
     const measure = () => {
