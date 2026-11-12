@@ -3,16 +3,48 @@ defmodule PlatformWeb.GamingController do
   plug :put_layout, html: false
   plug :put_root_layout, html: false
 
-  def home(conn, _params) do
+  def home(conn, params) do
     if Platform.Gaming.enabled?() do
-      games = Platform.Games.list_published()
+      games =
+        Platform.Games.list_published()
+
+      mode = if params["mode"] in ["create", "discover"], do: params["mode"], else: "play"
+
+      query =
+        case params["catalog"] do
+          %{"q" => value} when is_binary(value) -> String.slice(value, 0, 100)
+          _ -> ""
+        end
+
+      visible_games =
+        Enum.filter(
+          games,
+          &String.contains?(
+            String.downcase(&1["title"] <> " " <> &1["summary"]),
+            String.downcase(query)
+          )
+        )
+
       user = Platform.Games.user(get_session(conn, :current_user_id))
       communities = Map.new(games, &{&1["slug"], Platform.Games.community(&1, user)})
+
+      projects = Platform.Gaming.projects(user, games)
+
+      workspaces =
+        Map.new(
+          games,
+          &{&1["slug"], Platform.Gaming.workspace_path(&1, projects[&1["slug"]], user)}
+        )
 
       conn
       |> put_resp_header("cache-control", "private, no-store")
       |> render(:home,
         games: games,
+        visible_games: visible_games,
+        mode: mode,
+        search_form: Phoenix.Component.to_form(%{"q" => query}, as: :catalog),
+        projects: projects,
+        workspaces: workspaces,
         communities: communities,
         user: user,
         branding: Platform.Branding.get(),

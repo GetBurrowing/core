@@ -1,8 +1,8 @@
 <!DOCTYPE html>
-<html lang="en" data-theme="dark" class="gaming-document">
+<html lang="en" data-theme="dark" class="gaming-document console-glass">
   <head>
     <meta charset="utf-8" />
-    <meta name="viewport" content="width=device-width, initial-scale=1" />
+    <meta name="viewport" content="width=device-width, initial-scale=1, viewport-fit=cover" />
     <meta name="csrf-token" content={@csrf_token} />
     <meta name="color-scheme" content="dark" />
     <title>{@branding.app_name} · Let's play</title>
@@ -10,143 +10,195 @@
     <script defer phx-track-static type="text/javascript" src={~p"/assets/js/app.js"}>
     </script>
   </head>
-  <body class="min-h-screen bg-base-100 text-base-content">
-    <header class="border-b border-edge">
-      <nav class="navbar flex-wrap mx-auto max-w-7xl gap-4 px-5 py-4" aria-label="Gaming">
-        <a
-          href="/play"
-          class="flex w-full items-center gap-3 text-lg sm:w-auto font-bold tracking-tight"
-        >
-          <img src={~p"/images/burrow-mark.svg"} alt="" class="h-8 w-8" />
-          <span>{@branding.app_name}</span>
-        </a>
-        <div class="flex w-full flex-wrap items-center gap-2 sm:ml-auto sm:w-auto sm:gap-5">
-          <a href="/play" class="btn btn-ghost btn-sm">Games</a>
-          <a
-            :if={List.first(@games)}
-            href={"/games/#{List.first(@games)["slug"]}?tab=community"}
-            class="btn btn-ghost btn-sm"
-          >
-            Community
-          </a>
-          <a :if={@creator?} id="gaming-create" href="/admin/games" class="btn btn-ghost btn-sm">
-            Create
-          </a>
-          <a
-            :if={!@user && List.first(@games)}
-            href={"/games/#{List.first(@games)["slug"]}/sign-in"}
-            class="btn btn-ghost btn-sm"
-          >
-            Sign in
-          </a>
-          <span :if={@user} id="gaming-persona" class="hidden text-sm text-subtle sm:block">
-            {Platform.Games.player_display_name(@user)}
-          </span>
-        </div>
-      </nav>
-    </header>
-    <main id="gaming-home" class="mx-auto max-w-7xl space-y-10 px-5 py-8 sm:py-12">
-      <div>
-        <p class="mb-2 text-sm font-semibold uppercase tracking-widest text-primary">
-          Good times start here
-        </p>
-        <h1 class="text-4xl font-bold tracking-tight sm:text-6xl">What are we playing?</h1>
-        <p class="mt-4 max-w-xl text-lg text-subtle">
-          Grab a game. Find your crew. Make a little chaos.
-        </p>
-      </div>
-      <div :if={@games == []} id="gaming-empty" class="card border border-edge bg-base-200 p-8">
-        <h2 class="text-2xl font-bold">A fresh place to play.</h2>
-        <p class="mt-3 text-subtle">The first game is on its way.</p>
-        <a :if={@creator?} href="/admin/games" class="btn btn-primary mt-6 w-fit">
-          Publish your first game
-        </a>
-      </div>
-      <section
-        :if={List.first(@games)}
-        id="gaming-featured"
-        class="grid items-stretch gap-5 lg:grid-cols-[minmax(0,2fr)_minmax(280px,1fr)]"
-      >
-        <% game = List.first(@games) %>
-        <% community = @communities[game["slug"]] %>
-        <article class="card overflow-hidden border border-edge bg-base-200">
-          <a href={"/games/#{game["slug"]}"} class="block overflow-hidden">
-            <img
-              :if={game["image_path"]}
-              src={game["image_path"]}
-              alt={game["image_alt"] || game["title"]}
-              class="aspect-video w-full object-cover transition-transform duration-300 hover:scale-[1.02]"
-            />
-          </a>
-          <div class="card-body gap-4 p-6 sm:p-8">
-            <div class="flex items-center gap-3">
-              <span class="badge badge-outline">Early access</span><span class="text-sm text-subtle">Windows</span>
-            </div>
-            <h2 class="text-3xl font-bold">{game["title"]}</h2>
-            <p class="max-w-xl text-lg leading-relaxed text-subtle">{game["summary"]}</p>
-            <div class="card-actions mt-3 items-center gap-4">
-              <a
-                id="gaming-play"
-                href={"/games/#{game["slug"]}"}
-                class="btn btn-primary btn-lg px-10"
-              >
-                Play {game["title"]}<.icon name="hero-arrow-right" class="size-5" />
-              </a>
-              <a href={"/games/#{game["slug"]}?tab=community"} class="btn btn-ghost">
-                Meet the crew
-              </a>
-            </div>
+  <body>
+    <.shell
+      games={@games}
+      user={@user}
+      creator={@creator?}
+      mode={@mode}
+      communities={@communities}
+      details={@mode == "play"}
+    >
+      <main id="gaming-home" class="cg-home" data-console-shelves>
+        <header class="cg-heading">
+          <div>
+            <p class="cg-eyebrow">BURROW PLAY</p>
+            <h1>
+              {case @mode do
+                "discover" -> "Find your next obsession."
+                "create" -> "Make something worth playing."
+                _ -> "What are we playing tonight?"
+              end}
+            </h1>
           </div>
-        </article>
-        <aside class="flex flex-col gap-5">
-          <section class="card flex-1 border border-edge bg-base-200 p-6 sm:p-8">
-            <div class="mb-6 flex size-12 items-center justify-center rounded-2xl bg-primary/15 text-primary">
-              <.icon name="hero-chat-bubble-left-right" class="size-6" />
-            </div>
-            <h2 class="text-2xl font-bold">Better with a crew.</h2>
-            <p class="mt-3 leading-relaxed text-subtle">
-              Find people to play with, plan your next match, or share the ridiculous thing that just happened.
-            </p>
-            <p :if={community} id="gaming-community-count" class="mt-5 text-sm text-subtle">
-              {community.member_count} in the {game["title"]} community
-            </p>
-            <a href={"/games/#{game["slug"]}?tab=community"} class="btn btn-outline mt-6 w-full">
-              Open community
-            </a>
-          </section>
-          <section class="card border border-edge bg-base-200 p-6">
-            <h2 class="font-bold">One player. Less setup.</h2>
-            <p class="mt-2 text-sm leading-relaxed text-subtle">
-              Download Burrow Player from the game page. It checks for updates before you play, so you can get on with the fun.
-            </p>
-          </section>
-        </aside>
-      </section>
-      <section :if={length(@games) > 1} id="games" class="space-y-5">
-        <h2 class="text-2xl font-bold">More to play</h2>
-        <div class="grid gap-5 sm:grid-cols-2 lg:grid-cols-3">
-          <a
-            :for={game <- Enum.drop(@games, 1)}
-            id={"gaming-game-#{game["slug"]}"}
-            href={"/games/#{game["slug"]}"}
-            class="card overflow-hidden border border-edge bg-base-200 transition-colors hover:bg-base-300"
-          >
-            <img
-              :if={game["image_path"]}
-              src={game["image_path"]}
-              alt={game["image_alt"] || game["title"]}
-              class="aspect-video object-cover"
-            />
-            <div class="card-body">
-              <h3 class="card-title">{game["title"]}</h3>
-              <p class="text-subtle">{game["summary"]}</p>
-            </div>
+          <a :if={@games != []} class="cg-button cg-ghost" href="#rooms">
+            <.icon name="hero-user-group" />Find your crew
           </a>
-        </div>
-      </section>
-    </main>
-    <footer class="mx-auto max-w-7xl px-5 py-8 text-sm text-subtle">
-      A place to play, make things, and find your people. Powered by Burrow.
-    </footer>
+        </header>
+        <%= if @mode == "create" do %>
+          <section class="cg-panel cg-glass cg-create-intro">
+            <span class="cg-badge">YOUR WORKSHOP</span>
+            <h2>Big ideas. Small teams. Your agents.</h2>
+            <p>
+              Build together in Burrow. Chat, tasks, agents and canvases stay right where you know them.
+            </p>
+            <div class="cg-actions">
+              <a href="/chat" class="cg-button cg-primary">
+                Open workspace<.icon name="hero-arrow-right" />
+              </a>
+              <a href="/tasks" class="cg-button cg-ghost">Tasks</a><a
+                href="/control"
+                class="cg-button cg-ghost"
+              >Agents</a><a href="/files" class="cg-button cg-ghost">Files</a>
+            </div>
+          </section>
+          <section class="cg-shelf-section">
+            <div class="cg-section-heading">
+              <h2>Your game projects</h2>
+              <span>One workspace for each world</span>
+            </div>
+            <div class="cg-game-grid" id="gaming-projects">
+              <article :for={game <- @games} class="cg-project cg-glass">
+                <img :if={game["image_path"]} src={game["image_path"]} alt="" />
+                <div>
+                  <span :if={game["placeholder"] == true} class="cg-badge">Placeholder</span>
+                  <h3>{game["title"]}</h3>
+                  <p>{game["summary"]}</p>
+                  <a
+                    :if={@projects[game["slug"]]}
+                    href={@workspaces[game["slug"]]}
+                    class="cg-button cg-primary"
+                  >
+                    Open project
+                  </a>
+                  <p :if={!@projects[game["slug"]]} class="cg-muted">
+                    {if @user,
+                      do: "Project access is managed in your workspace.",
+                      else: "Sign in to access your projects."}
+                  </p>
+                  <a href={"/games/#{game["slug"]}"} class="cg-text-link">
+                    View game page<.icon name="hero-arrow-up-right" />
+                  </a>
+                </div>
+              </article>
+            </div>
+          </section>
+        <% else %>
+          <section
+            :if={@mode == "play" && @games != []}
+            class="cg-hero"
+            style={"--cg-tint: " <> Platform.Gaming.tint(hd(@games))}
+          >
+            <% featured = hd(@games) %>
+            <img
+              :if={featured["image_path"]}
+              src={featured["image_path"]}
+              alt={featured["image_alt"] || featured["title"]}
+            />
+            <div class="cg-hero-copy">
+              <div class="cg-tags">
+                <span class="cg-badge cg-mint">FEATURED</span><span class="cg-badge">{if featured["placeholder"] == true, do: "Placeholder build", else: "Early access"}</span>
+              </div>
+              <h2>{featured["title"]}</h2>
+              <p>{featured["summary"]}</p>
+              <div class="cg-actions">
+                <a
+                  id="gaming-play"
+                  href={"/games/#{featured["slug"]}"}
+                  class="cg-button cg-primary cg-large"
+                >
+                  <.icon name="hero-play" />Play {featured["title"]}
+                </a>
+                <a
+                  href={"/games/#{featured["slug"]}?tab=community"}
+                  class="cg-button cg-ghost cg-large"
+                >
+                  Meet the crew
+                </a>
+              </div>
+              <p class="cg-hero-note">Your game. Your people. One place to get together.</p>
+            </div>
+          </section>
+          <.form
+            :if={@mode == "discover"}
+            for={@search_form}
+            id="game-search"
+            action="/play"
+            method="get"
+            class="cg-search cg-glass"
+          >
+            <input type="hidden" name="mode" value="discover" /><.input
+              field={@search_form[:q]}
+              label="Find a game"
+              placeholder="Search games…"
+              class="input w-full bg-base-200 text-base-content placeholder:text-subtle"
+            /><button class="cg-button cg-primary" type="submit">Search</button>
+          </.form>
+          <section class="cg-shelf-section" id="gaming-library">
+            <div class="cg-section-heading">
+              <h2>
+                {if @mode == "discover", do: "Explore Burrow", else: "Pick your next world"}
+              </h2>
+              <a href="/play?mode=discover">All games<.icon name="hero-arrow-right" /></a>
+            </div>
+            <div class="cg-shelf" role="region" aria-label="Published games" tabindex="0">
+              <article :for={game <- @visible_games} class="cg-game-card">
+                <a
+                  id={"game-tile-#{game["slug"]}"}
+                  href={"/games/#{game["slug"]}"}
+                  class="cg-tile"
+                  data-game-tile
+                  data-game-tint={Platform.Gaming.tint(game)}
+                >
+                  <img
+                    :if={game["image_path"]}
+                    src={game["image_path"]}
+                    alt={game["image_alt"] || game["title"]}
+                  />
+                  <div class="cg-tile-scrim"></div>
+                  <span class="cg-badge">
+                    {if game["placeholder"] == true,
+                      do: "PLACEHOLDER · TEST BUILD",
+                      else: "EARLY ACCESS"}
+                  </span>
+                  <h3>{game["title"]}</h3>
+                </a>
+                <p>{game["summary"]}</p>
+                <a href={"/games/#{game["slug"]}?tab=community"} class="cg-text-link">
+                  Player room<.icon name="hero-arrow-up-right" />
+                </a>
+              </article>
+            </div>
+            <p :if={@games != []} class="cg-key-hint">
+              <kbd>←</kbd><kbd>→</kbd> move <kbd>Enter</kbd> open
+            </p>
+            <p :if={@visible_games == []} id="gaming-empty" class="cg-panel cg-glass">
+              {if @games == [],
+                do: "A fresh place to play. The first game is on its way.",
+                else: "No games match that search. Try another name."}
+            </p>
+          </section>
+        <% end %>
+        <section id="rooms" class="cg-shelf-section">
+          <div class="cg-section-heading">
+            <h2>Better with a crew.</h2>
+            <span>Chat, plan a session, share what happened.</span>
+          </div>
+          <div class="cg-room-grid">
+            <a
+              :for={game <- @games}
+              href={"/games/#{game["slug"]}?tab=community"}
+              class="cg-room cg-glass"
+            >
+              <span class="cg-room-icon"><.icon name="hero-chat-bubble-left-right" /></span><span><b>{game["title"]}</b><small>{if @communities[game["slug"]], do: if(@communities[game["slug"]].member_count == 0, do: "Be the first in", else: "#{@communities[game["slug"]].member_count} members"), else: "Player community"}</small></span>
+              <.icon name="hero-arrow-up-right" />
+            </a>
+          </div>
+        </section>
+        <footer class="cg-footer">
+          A place to play, make things, and find your people. Powered by Burrow.
+        </footer>
+      </main>
+    </.shell>
   </body>
 </html>

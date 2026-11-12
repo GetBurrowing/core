@@ -68,6 +68,8 @@ defmodule Platform.Design.PlaceholderContrastTest do
   ]
 
   @template_sites [
+    # Console Glass catalog search uses the same accessible placeholder token.
+    "platform_web/controllers/gaming_html/home.html.heex",
     "platform_web/live/chat/partials/external_rail.ex",
     "platform_web/live/chat/partials/chat_list.ex",
     # The briefing detail's fields (task 01a15ee1 stage 6), from main.

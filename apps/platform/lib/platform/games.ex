@@ -55,6 +55,8 @@ defmodule Platform.Games do
       Enum.any?(releases, &(&1["version"] == game["current_version"])) and
       (is_nil(game["community_space_id"]) or
          match?({:ok, _}, Platform.UUID.cast(game["community_space_id"]))) and
+      (is_nil(game["project_id"]) or Platform.UUID.valid?(game["project_id"])) and
+      (is_nil(game["placeholder"]) or is_boolean(game["placeholder"])) and
       (is_nil(game["image_path"]) or
          (is_binary(game["image_path"]) and String.starts_with?(game["image_path"], "/images/") and
             not String.contains?(game["image_path"], ["..", "?", "#", "\\"])))

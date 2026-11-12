@@ -6,7 +6,7 @@ const path = require('node:path')
   const origin = 'http://127.0.0.1:8765'
   try {
     for (const mobile of [false, true]) {
-      const context = await browser.newContext({viewport: mobile ? {width:390,height:844} : {width:1280,height:900},
+      const context = await browser.newContext({viewport: mobile ? {width:390,height:844} : {width:1440,height:900},
         userAgent: mobile ? 'Mozilla/5.0 (iPhone; CPU iPhone OS 18_0 like Mac OS X) AppleWebKit/605.1.15 Version/18.0 Mobile/15E148 Safari/604.1' : 'Mozilla/5.0 (Windows NT 10.0; Win64; x64) AppleWebKit/537.36 Chrome/131.0.0.0 Safari/537.36'})
       await context.grantPermissions(['clipboard-read', 'clipboard-write'], {origin})
       const page = await context.newPage()
@@ -45,7 +45,7 @@ const path = require('node:path')
         await community.setViewportSize({width:390, height:844})
       }
       await community.screenshot({path:path.join(process.env.GAME_PAGE_SCREENSHOTS, mobile ? 'community-phone.png' : 'community-desktop.png'), fullPage:true})
-      for (const state of ['gaming-visitor', 'gaming-owner', 'gaming-empty']) {
+      for (const state of ['gaming-visitor', 'gaming-owner', 'gaming-empty', 'gaming-three', 'gaming-create', 'gaming-discover']) {
         const gaming = await context.newPage()
         await gaming.goto(origin + '/game-page-evidence/' + state + '.html')
         assert.equal(await gaming.locator('#gaming-home').isVisible(), true)
@@ -58,10 +58,47 @@ const path = require('node:path')
         }
         await gaming.evaluate(() => window.scrollTo(0, 0))
         assert.equal(await gaming.evaluate(() => document.documentElement.scrollWidth <= innerWidth + 1), true, 'gaming home overflow')
-        if (state !== 'gaming-empty') assert.equal(await gaming.locator('#gaming-play').isVisible(), true)
-        if (state === 'gaming-owner') assert.equal(await gaming.locator('#gaming-create').isVisible(), true)
+        if (['gaming-visitor', 'gaming-owner', 'gaming-three'].includes(state)) assert.equal(await gaming.locator('#gaming-play').isVisible(), true)
+        if (state === 'gaming-owner') assert.equal(await gaming.locator(mobile ? '#gaming-publish-mobile' : '#gaming-create').isVisible(), true)
+        if (state === 'gaming-three') {
+          await gaming.locator('[data-game-tile]').first().focus()
+          await gaming.keyboard.press('ArrowRight')
+          assert.equal(await gaming.locator('#game-tile-sky-haulers').evaluate(el => document.activeElement === el), true, 'arrow navigation failed')
+          assert.equal(await gaming.locator('#game-tile-sky-haulers').evaluate(el => document.documentElement.style.getPropertyValue('--cg-tint') === el.dataset.gameTint), true, 'focus should tint the game backdrop')
+          await gaming.keyboard.press('ArrowRight')
+          assert.equal(await gaming.locator('#game-tile-tiny-tactics').evaluate(el => document.activeElement === el), true)
+          await gaming.keyboard.press('ArrowLeft')
+          assert.equal(await gaming.locator('#game-tile-sky-haulers').evaluate(el => document.activeElement === el), true)
+          await gaming.locator('[data-game-tile]').first().focus()
+          await gaming.locator('.cg-shelf').evaluate(el => el.scrollLeft = 0)
+          assert.equal(await gaming.locator('[data-game-tile]').first().evaluate(el => document.activeElement === el && getComputedStyle(el).outlineStyle === 'solid' && parseFloat(getComputedStyle(el).outlineWidth) >= 3), true, 'selected tile must have a visible white focus ring')
+          await gaming.evaluate(() => window.scrollTo(0, 0))
+        }
         await gaming.screenshot({path:path.join(process.env.GAME_PAGE_SCREENSHOTS, state + (mobile ? '-phone.png' : '-desktop.png')), fullPage:true})
       }
+      for (const slug of ['voltron', 'sky-haulers', 'tiny-tactics']) {
+        const game = await context.newPage()
+        await game.goto(origin + '/game-page-evidence/gaming-game-' + slug + '.html')
+        assert.equal(await game.locator('#console-glass-shell').isVisible(), true)
+        assert.equal(await game.locator('#community-tab').isVisible(), true, 'game community tab must remain reachable')
+        assert.equal(await game.locator('#game-tab').isVisible(), true)
+        assert.equal(await game.evaluate(() => document.documentElement.scrollWidth <= innerWidth + 1), true, 'game page overflow')
+        await game.locator('.gp-foot').scrollIntoViewIfNeeded()
+        await game.evaluate(() => window.scrollTo(0,0))
+        await game.screenshot({path:path.join(process.env.GAME_PAGE_SCREENSHOTS, 'gaming-game-' + slug + (mobile ? '-phone.png' : '-desktop.png')),fullPage:true})
+      }
+      const workspace = await context.newPage()
+      await workspace.goto(origin + '/game-page-evidence/gaming-workspace.html')
+      assert.equal(await workspace.locator('#chat-panes').isVisible(), true, 'existing chat workspace missing')
+      if (!mobile) {
+        assert.equal(await workspace.locator('#gaming-project-context').isVisible(), true, 'game project context missing')
+        assert.equal(await workspace.locator('#gaming-more-modules a[href="/files"]').isVisible(), false, 'secondary modules should start collapsed')
+        await workspace.locator('#gaming-more-modules summary').click()
+        assert.equal(await workspace.locator('#gaming-more-modules a[href="/files"]').isVisible(), true, 'secondary modules must remain accessible')
+        await workspace.locator('#gaming-more-modules summary').click()
+      }
+      assert.equal(await workspace.evaluate(() => document.documentElement.scrollWidth <= innerWidth + 1), true, 'workspace overflow')
+      await workspace.screenshot({path:path.join(process.env.GAME_PAGE_SCREENSHOTS, 'gaming-workspace' + (mobile ? '-phone.png' : '-desktop.png')), fullPage:true})
       await context.close()
     }
   } finally { await browser.close() }

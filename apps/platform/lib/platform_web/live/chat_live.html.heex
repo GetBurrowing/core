@@ -56,6 +56,7 @@
      a meeting's canvas tile) runs disconnected instead of crashing it. --%>
 <span hidden data-canvas-rooms></span>
 
+<% gaming? = !@embedded && assigns[:gaming_experience?] == true %>
 <div id="chat-surface" class="flex h-full min-h-0 flex-col overflow-hidden">
   <%!-- An always-rendered, box-less slot (rung 10 stage 5): whatever comes
      and goes inside it is never a new sibling ahead of a composer field's
@@ -105,6 +106,7 @@
        (ShellLive's on_mount seeds it on routed mounts only). --%>
     <.chat_list
       :if={!@embedded}
+      gaming={gaming?}
       live_action={@live_action}
       embedded={@embedded}
       external?={@external?}
@@ -547,6 +549,13 @@
       />
     </div>
 
+    <PlatformWeb.Components.GamingProjectPanel.panel
+      :if={gaming? && is_nil(@details_panel)}
+      space={@active_space}
+      user={assigns[:current_user_record]}
+      participants={@space_participants}
+      agents={@agents_by_id}
+    />
     <%!-- The desktop details panel (Burrow redesign 22 stage 3): the space
        sheet's sections at lg, a flex sibling after the conversation column
        so it pushes the main pane. Closed renders nothing.

@@ -1,5 +1,6 @@
 defmodule PlatformWeb.GamingControllerTest do
   use PlatformWeb.ConnCase, async: false
+  require Phoenix.LiveViewTest
   alias Platform.{Branding, Games, Repo, Tenancy}
   alias Platform.Accounts.User
   alias Platform.Tenancy.OrgMembership
@@ -144,6 +145,141 @@ defmodule PlatformWeb.GamingControllerTest do
     response = get(conn, "/auth/oidc/callback?code=test&state=gaming-state")
     assert redirected_to(response) == "/play"
     assert get_session(response, :current_user_id) == actor.id
+  end
+
+  test "three independent games keep their pages, rooms and scoped create projects", %{
+    conn: conn,
+    actor: actor,
+    game: game
+  } do
+    {:ok, _} = Branding.update_identity(actor, %{experience: "gaming"})
+
+    games =
+      for {slug, title, placeholder, position} <- [
+            {"voltron", "Voltron", false, 0},
+            {"sky-haulers", "Sky Haulers", true, 1},
+            {"tiny-tactics", "Tiny Tactics", true, 2}
+          ] do
+        project =
+          Repo.insert!(
+            Platform.Tasks.Project.changeset(%Platform.Tasks.Project{}, %{
+              name: title,
+              slug: slug,
+              org_id: game["org_id"],
+              tech_stack: %{"engine" => "Godot"}
+            })
+          )
+
+        {:ok, room} =
+          Platform.Chat.create_space(%{
+            name: title <> " players",
+            slug: slug <> "-players",
+            kind: "channel",
+            org_id: game["org_id"],
+            metadata: %{"public_game_slug" => slug}
+          })
+
+        {:ok, development} =
+          Platform.Chat.create_space(%{
+            name: title <> " development",
+            slug: slug <> "-development",
+            kind: "channel",
+            org_id: game["org_id"],
+            metadata: %{"goal_project_id" => project.id}
+          })
+
+        Map.merge(game, %{
+          "slug" => slug,
+          "title" => title,
+          "placeholder" => placeholder,
+          "position" => position,
+          "image_path" =>
+            if(placeholder,
+              do: "/images/play/#{slug}-cover.png",
+              else: "/images/voltron-game.png"
+            ),
+          "summary" =>
+            case slug do
+              "sky-haulers" -> "Placeholder test build: take a sky delivery for a spin."
+              "tiny-tactics" -> "Placeholder test build: make your move on a tiny battlefield."
+              _ -> game["summary"]
+            end,
+          "theme_color" => if(placeholder, do: "#7ef0d0", else: "#4d8bff"),
+          "project_id" => project.id,
+          "development_space_id" => development.id,
+          "community_space_id" => room.id
+        })
+      end
+
+    Application.put_env(:platform, :game_publications, games)
+    visitor = get(conn, "/play") |> html_response(200)
+    evidence("gaming-three", visitor)
+    doc = LazyHTML.from_document(visitor)
+    assert Enum.count(LazyHTML.query(doc, "[data-game-tile]")) == 3
+    assert Enum.count(LazyHTML.query(doc, "#gaming-play[href='/games/voltron']")) == 1
+
+    for game <- games do
+      page = get(build_conn(), "/games/#{game["slug"]}") |> html_response(200)
+      evidence("gaming-game-" <> game["slug"], page)
+      assert Enum.count(LazyHTML.query(LazyHTML.from_document(page), "#console-glass-shell")) == 1
+
+      assert Enum.count(LazyHTML.query(LazyHTML.from_document(page), "#game-placeholder-notice")) ==
+               if(game["placeholder"], do: 1, else: 0)
+
+      refute page =~ "/files/#{game["project_id"]}"
+      assert Games.community(game, nil).space.id == game["community_space_id"]
+    end
+
+    owner = init_test_session(build_conn(), current_user_id: actor.id)
+    create = get(owner, "/play?mode=create") |> html_response(200)
+    evidence("gaming-create", create)
+
+    for game <- games do
+      assert create =~ "/chat/#{game["slug"]}-development"
+
+      assert Platform.Gaming.workspace_path(
+               Map.put(game, "development_space_id", game["community_space_id"]),
+               Platform.Gaming.projects(actor, [game])[game["slug"]],
+               actor
+             ) == "/files/#{game["project_id"]}"
+    end
+
+    workspace =
+      init_test_session(build_conn(), current_user_id: actor.id)
+      |> get("/chat/voltron-development")
+      |> html_response(200)
+
+    evidence("gaming-workspace", workspace)
+    workspace_doc = LazyHTML.from_document(workspace)
+    assert Enum.count(LazyHTML.query(workspace_doc, "#chat-panes")) == 1
+    assert Enum.count(LazyHTML.query(workspace_doc, "#gaming-project-context")) == 1
+    assert workspace =~ "Godot"
+    assert Enum.count(LazyHTML.query(workspace_doc, "[data-game-space-heading]")) == 3
+    assert Enum.count(LazyHTML.query(workspace_doc, "#gaming-more-modules:not([open])")) == 1
+
+    # A publication cannot expose a project from a different organisation.
+    wrong = Map.put(hd(games), "org_id", Ecto.UUID.generate())
+    assert Platform.Gaming.projects(actor, [wrong])[wrong["slug"]] == nil
+    discover = get(build_conn(), "/play?mode=discover&catalog[q]=sky") |> html_response(200)
+    evidence("gaming-discover", discover)
+    tiles = LazyHTML.query(LazyHTML.from_document(discover), "[data-game-tile]")
+    assert Enum.count(tiles) == 1
+    assert LazyHTML.attribute(tiles, "href") == ["/games/sky-haulers"]
+  end
+
+  test "Create mode navigation keeps the existing workspace modules" do
+    html =
+      Phoenix.LiveViewTest.render_component(&PlatformWeb.Components.Sidebar.sidebar/1,
+        gaming: true,
+        root_user: true,
+        current_path: "/chat"
+      )
+
+    doc = LazyHTML.from_fragment(html)
+    assert Enum.count(LazyHTML.query(doc, ".cg-modes a[href='/play']")) == 1
+    assert Enum.count(LazyHTML.query(doc, ".cg-modes a[aria-current='page']")) == 1
+    assert Enum.count(LazyHTML.query(doc, "#sidebar-nav a[href='/chat']")) == 1
+    assert Enum.count(LazyHTML.query(doc, "#sidebar-nav a[href='/tasks']")) == 1
   end
 
   defp evidence(name, html) do

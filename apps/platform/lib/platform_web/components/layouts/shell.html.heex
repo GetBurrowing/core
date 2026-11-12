@@ -1,3 +1,4 @@
+<% gaming? = assigns[:gaming_experience?] == true %>
 <%!-- PWA app-shell scroll lock: the shell occupies exactly the full
      viewport, matching the `html, body` height rules in app.css for
      both display modes:
@@ -99,6 +100,7 @@
        and desktop cannot disagree; see PlatformWeb.Components.Sidebar.
        `hidden lg:flex` inside the component. --%>
   <.sidebar
+    gaming={gaming?}
     current_path={@current_path}
     root_user={@root_user}
     access_scope={assigns[:access_scope]}
@@ -192,6 +194,9 @@
         />
       </div>
     </header>
+    <div :if={gaming?} class="cg-workspace-modes lg:hidden">
+      <PlatformWeb.Components.GamingShell.modes mode="create" />
+    </div>
     <%!-- Flash messages --%>
     <.flash_group flash={@flash} connection_status={false} />
     <%!-- Surface. `flex-1` claims the remaining vertical space inside

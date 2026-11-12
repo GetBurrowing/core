@@ -1,3 +1,5 @@
+import {installConsoleShelves} from './console_shelves'
+installConsoleShelves()
 // If you want to use Phoenix channels, run `mix help phx.gen.channel`
 // to get started and then uncomment the line below.
 // import "./user_socket.js"

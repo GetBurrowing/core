@@ -16,6 +16,7 @@
 <% theme_boot = PlatformWeb.Layouts.theme_boot(assigns) %>
 <html
   lang="en"
+  class={if branding.experience == "gaming", do: "console-glass"}
   style={"background-color: #{branding.background_color}"}
   data-theme={theme_boot.html_theme}
   data-preset={theme_boot.html_preset}
