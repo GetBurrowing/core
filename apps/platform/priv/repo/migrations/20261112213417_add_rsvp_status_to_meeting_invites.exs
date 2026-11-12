@@ -1,6 +1,6 @@
 defmodule Platform.Repo.Migrations.AddRsvpStatusToMeetingInvites do
   @moduledoc """
-  An invitee's answer to a meeting invite: `invited` (no answer yet),
+  PR #175 (calendar attendee status in iCal). An invitee's answer to a meeting invite: `invited` (no answer yet),
   `accepted`, `tentative` or `declined`, and when they gave it.
 
   It now has readers: the invite list in the meeting details, and the
