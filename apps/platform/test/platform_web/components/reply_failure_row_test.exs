@@ -104,6 +104,27 @@ defmodule PlatformWeb.Components.ReplyFailureRowTest do
     end
   end
 
+  # legacypie, 2026-11-11: Burrow's Claude login expired and "Log in" sent the
+  # owner to Agent Resources, which only takes an API key, so no Anthropic
+  # page ever opened. Burrow's needs_login goes to /setup/connect-ai, the
+  # screen that signs it in with a Claude plan (task 01a1b365). Mutant: route
+  # every needs_login there → the Ada case above (an agent that is not
+  # Burrow) fails.
+  test "Burrow's expired Claude login goes to Connect your AI", %{owner: owner} do
+    {:ok, burrow} = Platform.Agents.Burrow.ensure(owner.id, "claude_code")
+    assert Platform.Agents.Burrow.burrow?(burrow)
+
+    doc = notice(burrow, "needs_login") |> row_html(owner) |> LazyHTML.from_fragment()
+    [action] = doc |> LazyHTML.query(~s([data-role="reply-failure-action"])) |> Enum.to_list()
+    assert String.trim(LazyHTML.text(action)) == "Log in"
+    assert LazyHTML.attribute(action, "href") == ["/setup/connect-ai"]
+
+    # Any other cause still goes to the agent on Agent Resources.
+    doc = notice(burrow, "crashed") |> row_html(owner) |> LazyHTML.from_fragment()
+    [action] = doc |> LazyHTML.query(~s([data-role="reply-failure-action"])) |> Enum.to_list()
+    assert LazyHTML.attribute(action, "href") == ["/control/#{burrow.slug}"]
+  end
+
   test "an admin who does not own the agent is a manager too", %{agent: agent} do
     admin = user!("admin", "admin")
     html = row_html(notice(agent, "stopped"), admin)
