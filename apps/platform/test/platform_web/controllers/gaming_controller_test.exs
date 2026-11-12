@@ -146,6 +146,41 @@ defmodule PlatformWeb.GamingControllerTest do
     assert get_session(response, :current_user_id) == actor.id
   end
 
+  test "three independent games keep their pages, rooms and scoped create projects", %{conn: conn, actor: actor, game: game} do
+    {:ok, _} = Branding.update_identity(actor, %{experience: "gaming"})
+    games = for {slug, title, placeholder} <- [{"voltron", "Voltron", false}, {"sky-haulers", "Sky Haulers", true}, {"tiny-tactics", "Tiny Tactics", true}] do
+      project = Repo.insert!(Platform.Tasks.Project.changeset(%Platform.Tasks.Project{}, %{name: title, slug: slug, org_id: game["org_id"]}))
+      {:ok, room} = Platform.Chat.create_space(%{name: title <> " players", slug: slug <> "-players", kind: "channel", org_id: game["org_id"], metadata: %{"public_game_slug" => slug}})
+      Map.merge(game, %{"slug" => slug, "title" => title, "placeholder" => placeholder, "project_id" => project.id, "community_space_id" => room.id})
+    end
+    Application.put_env(:platform, :game_publications, games)
+    visitor = get(conn, "/play") |> html_response(200)
+    evidence("gaming-three", visitor)
+    doc = LazyHTML.from_document(visitor)
+    assert Enum.count(LazyHTML.query(doc, "[data-game-tile]")) == 3
+    assert Enum.count(LazyHTML.query(doc, "#gaming-play[href='/games/voltron']")) == 1
+    for game <- games do
+      page = get(build_conn(), "/games/#{game["slug"]}") |> html_response(200)
+      evidence("gaming-game-" <> game["slug"], page)
+      assert Enum.count(LazyHTML.query(LazyHTML.from_document(page), "#console-glass-shell")) == 1
+      assert Enum.count(LazyHTML.query(LazyHTML.from_document(page), "#game-placeholder-notice")) == if(game["placeholder"], do: 1, else: 0)
+      refute page =~ "/files/#{game["project_id"]}"
+      assert Games.community(game, nil).space.id == game["community_space_id"]
+    end
+    owner = init_test_session(build_conn(), current_user_id: actor.id)
+    create = get(owner, "/play?mode=create") |> html_response(200)
+    evidence("gaming-create", create)
+    for game <- games, do: assert(create =~ "/files/#{game["project_id"]}")
+    # A publication cannot expose a project from a different organisation.
+    wrong = Map.put(hd(games), "org_id", Ecto.UUID.generate())
+    assert Platform.Gaming.projects(actor, [wrong])[wrong["slug"]] == nil
+    discover = get(build_conn(), "/play?mode=discover&catalog[q]=sky") |> html_response(200)
+    evidence("gaming-discover", discover)
+    tiles = LazyHTML.query(LazyHTML.from_document(discover), "[data-game-tile]")
+    assert Enum.count(tiles) == 1
+    assert LazyHTML.attribute(tiles, "href") == ["/games/sky-haulers"]
+  end
+
   defp evidence(name, html) do
     if directory = System.get_env("GAME_PAGE_BROWSER_EVIDENCE") do
       File.mkdir_p!(directory)

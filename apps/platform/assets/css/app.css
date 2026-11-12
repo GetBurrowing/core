@@ -8,6 +8,7 @@
 @import "./meeting_ask.css";
 @import "./theme_presets.css";
 @import "./public_game_page.css";
+@import "./console_glass.css";
 @source "../css";
 @source "../js";
 @source "../../lib/platform_web";

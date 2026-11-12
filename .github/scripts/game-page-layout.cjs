@@ -45,7 +45,7 @@ const path = require('node:path')
         await community.setViewportSize({width:390, height:844})
       }
       await community.screenshot({path:path.join(process.env.GAME_PAGE_SCREENSHOTS, mobile ? 'community-phone.png' : 'community-desktop.png'), fullPage:true})
-      for (const state of ['gaming-visitor', 'gaming-owner', 'gaming-empty']) {
+      for (const state of ['gaming-visitor', 'gaming-owner', 'gaming-empty', 'gaming-three', 'gaming-create', 'gaming-discover']) {
         const gaming = await context.newPage()
         await gaming.goto(origin + '/game-page-evidence/' + state + '.html')
         assert.equal(await gaming.locator('#gaming-home').isVisible(), true)
@@ -58,9 +58,28 @@ const path = require('node:path')
         }
         await gaming.evaluate(() => window.scrollTo(0, 0))
         assert.equal(await gaming.evaluate(() => document.documentElement.scrollWidth <= innerWidth + 1), true, 'gaming home overflow')
-        if (state !== 'gaming-empty') assert.equal(await gaming.locator('#gaming-play').isVisible(), true)
+        if (['gaming-visitor', 'gaming-owner', 'gaming-three'].includes(state)) assert.equal(await gaming.locator('#gaming-play').isVisible(), true)
         if (state === 'gaming-owner') assert.equal(await gaming.locator('#gaming-create').isVisible(), true)
+        if (state === 'gaming-three') {
+          await gaming.locator('[data-game-tile]').first().focus()
+          await gaming.keyboard.press('ArrowRight')
+          assert.equal(await gaming.locator('#game-tile-sky-haulers').evaluate(el => document.activeElement === el), true, 'arrow navigation failed')
+          await gaming.keyboard.press('ArrowRight')
+          assert.equal(await gaming.locator('#game-tile-tiny-tactics').evaluate(el => document.activeElement === el), true)
+          await gaming.keyboard.press('ArrowLeft')
+          assert.equal(await gaming.locator('#game-tile-sky-haulers').evaluate(el => document.activeElement === el), true)
+          await gaming.evaluate(() => window.scrollTo(0, 0))
+        }
         await gaming.screenshot({path:path.join(process.env.GAME_PAGE_SCREENSHOTS, state + (mobile ? '-phone.png' : '-desktop.png')), fullPage:true})
+      }
+      for (const slug of ['voltron', 'sky-haulers', 'tiny-tactics']) {
+        const game = await context.newPage()
+        await game.goto(origin + '/game-page-evidence/gaming-game-' + slug + '.html')
+        assert.equal(await game.locator('#console-glass-shell').isVisible(), true)
+        assert.equal(await game.evaluate(() => document.documentElement.scrollWidth <= innerWidth + 1), true, 'game page overflow')
+        await game.locator('.gp-foot').scrollIntoViewIfNeeded()
+        await game.evaluate(() => window.scrollTo(0,0))
+        await game.screenshot({path:path.join(process.env.GAME_PAGE_SCREENSHOTS, 'gaming-game-' + slug + (mobile ? '-phone.png' : '-desktop.png')),fullPage:true})
       }
       await context.close()
     }

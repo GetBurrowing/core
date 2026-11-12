@@ -1,5 +1,5 @@
 <!DOCTYPE html>
-<html lang="en" data-theme="dark" class="public-game-document">
+<html lang="en" data-theme="dark" class={["public-game-document", @gaming? && "console-glass"]}>
   <head>
     <meta charset="utf-8" />
     <meta name="viewport" content="width=device-width, initial-scale=1" />
@@ -15,6 +15,7 @@
     id="public-game"
     data-community-joined={to_string((@community && @community.joined?) || false)}
   >
+    <.shell enabled={@gaming?} games={@games} user={@user} creator={@creator?} mode="discover">
     <header class="gp-bar">
       <a href={Platform.Gaming.home_path(@game)} aria-label="Game home">
         <img class="gp-logo" src={~p"/images/burrowplay.svg"} alt="Burrow" />
@@ -51,13 +52,13 @@
           <div :if={@game["image_path"]} class="gp-media">
             <img src={@game["image_path"]} alt={@game["image_alt"] || @game["title"]} />
             <span class="gp-chip">
-              Early build
+              {if @game["placeholder"] == true, do: "Placeholder · test build", else: "Early build"}
             </span>
           </div>
         </div>
         <aside class="gp-card">
           <div class="gp-eyebrow">
-            <span class="gp-seats"><i class="gp-s-r"></i><i class="gp-s-g"></i><i class="gp-s-b"></i><i class="gp-s-y"></i></span>Co-op · up to 4 pilots
+            <span class="gp-seats"><i class="gp-s-r"></i><i class="gp-s-g"></i><i class="gp-s-b"></i><i class="gp-s-y"></i></span>{if @game["placeholder"] == true, do: "Placeholder game · test build", else: "Co-op · up to 4 pilots"}
           </div>
           <h1>{@game["title"]}</h1>
           <p class="gp-by">Made by the team · hosted on Burrow</p>
@@ -87,7 +88,7 @@
             </a>
             <p class="gp-under">
               {if @user,
-                do: "Extract Burrow Player, then open Play.bat. It keeps Voltron up to date.",
+                do: "Extract Burrow Player, then open Play.bat. It keeps this game up to date.",
                 else: "One Burrow account for the game and its community."}
             </p>
           </div>
@@ -161,9 +162,16 @@
         <section class="gp-section">
           <h2>Four pilots. One robot.</h2>
           <p>{@game["summary"]}</p>
-          <p>
+          <p :if={@game["placeholder"] != true}>
             Pick a foot or a fist. Coordinate your next move, explore the city, and see how much destruction your crew can cause.
           </p>
+        </section>
+        <section :if={@game["placeholder"] == true} id="game-placeholder-notice" class="gp-section">
+          <h2>Clearly a placeholder. Fully its own space.</h2>
+          <p>This test game lets us try publishing, downloads, updates and community in a separate game space. The download is a labeled test build.</p>
+        </section>
+        <section :if={@project && @gaming?} class="gp-section" id="game-project-link">
+          <h2>Make it together.</h2><a href={"/files/#{@project.id}"} class="gp-btn gp-secondary">Open this game’s project</a>
         </section>
         <section class="gp-section" id="game-instructions">
           <h2>Good to know</h2>
@@ -256,5 +264,6 @@
         <img src={~p"/images/burrowplay.svg"} alt="Burrow" />Hosted on Burrow. Downloads are Windows only for now.
       </p>
     </main>
+    </.shell>
   </body>
 </html>

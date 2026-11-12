@@ -131,6 +131,8 @@ defmodule PlatformWeb.Components.Sidebar do
         </button>
       </div>
 
+      <PlatformWeb.Components.GamingShell.modes :if={Platform.Gaming.enabled?()} mode="create" />
+
       <nav
         id="sidebar-nav"
         class="-mx-2 flex min-h-0 flex-1 flex-col gap-0.5 overflow-y-auto px-2"

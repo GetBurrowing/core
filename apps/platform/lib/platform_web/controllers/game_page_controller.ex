@@ -15,6 +15,10 @@ defmodule PlatformWeb.GamePageController do
       conn
       |> put_resp_header("cache-control", "private, no-store")
       |> render(:show,
+        gaming?: Platform.Gaming.enabled?(),
+        games: Platform.Games.list_published() |> Enum.sort_by(&{&1["slug"] != "voltron", &1["title"]}),
+        creator?: not is_nil(user) and Platform.Access.authorize_install(user) == :ok,
+        project: Platform.Gaming.projects(user, [game])[game["slug"]],
         game: game,
         signup?: not is_nil(Games.signup_url(game)),
         release: release,

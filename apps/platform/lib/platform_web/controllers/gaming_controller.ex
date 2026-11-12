@@ -3,9 +3,12 @@ defmodule PlatformWeb.GamingController do
   plug :put_layout, html: false
   plug :put_root_layout, html: false
 
-  def home(conn, _params) do
+  def home(conn, params) do
     if Platform.Gaming.enabled?() do
-      games = Platform.Games.list_published()
+      games = Platform.Games.list_published() |> Enum.sort_by(&{&1["slug"] != "voltron", &1["title"]})
+      mode = if params["mode"] in ["create", "discover"], do: params["mode"], else: "play"
+      query = String.slice(to_string(get_in(params, ["catalog", "q"]) || ""), 0, 100)
+      visible_games = Enum.filter(games, &String.contains?(String.downcase(&1["title"] <> " " <> &1["summary"]), String.downcase(query)))
       user = Platform.Games.user(get_session(conn, :current_user_id))
       communities = Map.new(games, &{&1["slug"], Platform.Games.community(&1, user)})
 
@@ -13,6 +16,10 @@ defmodule PlatformWeb.GamingController do
       |> put_resp_header("cache-control", "private, no-store")
       |> render(:home,
         games: games,
+        visible_games: visible_games,
+        mode: mode,
+        search_form: Phoenix.Component.to_form(%{"q" => query}, as: :catalog),
+        projects: Platform.Gaming.projects(user, games),
         communities: communities,
         user: user,
         branding: Platform.Branding.get(),
