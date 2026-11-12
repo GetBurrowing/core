@@ -32,7 +32,7 @@ jobs:
       PGHOST: postgres
       PGUSER: postgres
       PGPASSWORD: postgres
-      GAME_PAGE_BROWSER_EVIDENCE: /tmp/game-page-browser/game-page-evidence
+      SIGN_IN_SETUP_EVIDENCE: /tmp/sign-in-setup-evidence
     defaults:
       run:
         working-directory: apps/platform
@@ -72,3 +72,19 @@ jobs:
           mix ecto.create
           mix ecto.migrate
           mix precommit test/platform_web/controllers/sign_in_setup_controller_test.exs test/platform_web/controllers/auth_controller_test.exs test/platform_web/controllers/auth_controller_app_login_test.exs test/platform_web/controllers/auth_controller_handover_test.exs test/platform_web/controllers/auth_controller_link_test.exs test/platform/sign_in_admin_test.exs test/platform/sign_in/durable_link_test.exs test/platform/repo_lookup_boundary_test.exs
+      - uses: actions/setup-node@v5
+        with:
+          node-version: 24
+      - name: Render the real setup screen on phone and desktop
+        run: |
+          sh "$GITHUB_WORKSPACE/scripts/fetch-github-release-binaries.sh" tailwind .
+          mix tailwind platform --minify
+          cp -r priv/static/assets priv/static/images priv/static/fonts /tmp/sign-in-setup-evidence/
+          npm install --prefix /tmp/sign-in-setup-playwright playwright@1.58.2
+          /tmp/sign-in-setup-playwright/node_modules/.bin/playwright install --with-deps chromium
+          node "$GITHUB_WORKSPACE/.github/scripts/sign-in-setup-browser.cjs"
+      - uses: actions/upload-artifact@v4
+        if: always()
+        with:
+          name: sign-in-setup-screens
+          path: /tmp/sign-in-setup-evidence/*png

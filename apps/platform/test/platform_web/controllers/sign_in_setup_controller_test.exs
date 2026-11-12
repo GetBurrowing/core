@@ -85,6 +85,10 @@ defmodule PlatformWeb.SignInSetupControllerTest do
     assert html_response(conn, 200) =~ "If your account is invited"
     refute conn.resp_body =~ @code
     assert get_session(conn, :email_setup).hash == EmailSetup.digest(@code)
+    if dir = System.get_env("SIGN_IN_SETUP_EVIDENCE") do
+      File.mkdir_p!(dir)
+      File.write!(Path.join(dir, "code.html"), conn.resp_body)
+    end
     assert_received {:mail_test_adapter, mail, _}
     assert mail.to == [{"", user.email}]
     assert mail.text_body =~ @code
