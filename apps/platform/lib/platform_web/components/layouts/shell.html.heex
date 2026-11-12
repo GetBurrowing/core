@@ -1,4 +1,4 @@
-<% gaming? = Platform.Gaming.enabled?() %>
+<% gaming? = assigns[:gaming_experience?] == true %>
 <%!-- PWA app-shell scroll lock: the shell occupies exactly the full
      viewport, matching the `html, body` height rules in app.css for
      both display modes:

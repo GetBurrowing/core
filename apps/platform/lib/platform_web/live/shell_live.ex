@@ -138,6 +138,7 @@ defmodule PlatformWeb.ShellLive do
     # reconciling there would turn one badge broadcast into a scan-and-write
     # storm that can re-enter itself via `{:inbox_changed, …}`.
     reconcile_inbox(raw_user_id)
+    branding = Platform.Branding.get()
 
     socket =
       socket
@@ -152,7 +153,8 @@ defmodule PlatformWeb.ShellLive do
       # The install's app name, read once per mount from the branding row:
       # the alt text of the Burrow mark (task 01a120c5 stage 2) and the label
       # text (stage 3) in the sidebar header, never a compiled product name.
-      |> assign(:brand_name, Platform.Branding.app_name())
+      |> assign(:brand_name, branding.app_name)
+      |> assign(:gaming_experience?, branding.experience == "gaming")
       |> assign(:tasks_count, compute_tasks_count(raw_user_id))
       |> assign(:inbox_unread_count, compute_inbox_count(raw_user_id))
       # Task 01a01b29 stage 1: one chat-unread total for the whole viewer, so

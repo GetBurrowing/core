@@ -56,7 +56,7 @@
      a meeting's canvas tile) runs disconnected instead of crashing it. --%>
 <span hidden data-canvas-rooms></span>
 
-<% gaming? = !@embedded && Platform.Gaming.enabled?() %>
+<% gaming? = !@embedded && assigns[:gaming_experience?] == true %>
 <div id="chat-surface" class="flex h-full min-h-0 flex-col overflow-hidden">
   <%!-- An always-rendered, box-less slot (rung 10 stage 5): whatever comes
      and goes inside it is never a new sibling ahead of a composer field's
