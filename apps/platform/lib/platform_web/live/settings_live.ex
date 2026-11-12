@@ -184,8 +184,13 @@ defmodule PlatformWeb.SettingsLive do
      socket
      |> assign(:page_title, "Settings")
      |> assign(:app_name, Platform.Branding.app_name())
-     |> assign(:passkey_settings_url, if(Platform.SignIn.EmailSetup.enabled?(),
-       do: String.trim_trailing(Platform.OIDC.issuer(), "/") <> "/settings/account", else: nil))
+     |> assign(
+       :passkey_settings_url,
+       if(Platform.SignIn.EmailSetup.enabled?(),
+         do: String.trim_trailing(Platform.OIDC.issuer(), "/") <> "/settings/account",
+         else: nil
+       )
+     )
      |> assign(:sheet, nil)
      |> assign(:time_zone, zone)
      |> assign(:mask_error, nil)
@@ -710,7 +715,9 @@ defmodule PlatformWeb.SettingsLive do
         >
           <span class="min-w-0">
             <span class="block">Passkeys and sign-in</span>
-            <span class="block text-xs text-subtle">Set up Face ID, Touch ID or a passkey on this device.</span>
+            <span class="block text-xs text-subtle">
+              Set up Face ID, Touch ID or a passkey on this device.
+            </span>
           </span>
           <.icon name="hero-arrow-top-right-on-square" class="size-4 shrink-0 text-subtle" />
         </a>

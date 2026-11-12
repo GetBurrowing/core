@@ -9,6 +9,7 @@ defmodule PlatformWeb.SignInSetupController do
   def request(conn, params) do
     if EmailSetup.mail_available?() do
       challenge = EmailSetup.request(params["email"], limiter_ip(conn))
+
       conn
       |> put_session(:email_setup, challenge)
       |> page(sent?: true)
@@ -22,7 +23,8 @@ defmodule PlatformWeb.SignInSetupController do
 
     with true <- EmailSetup.mail_available?(),
          :ok <- EmailSetupRateLimit.verify(limiter_ip(conn)),
-         {:ok, %Platform.SignInAdmin.PocketId.Token{value: token}} <- EmailSetup.complete(get_session(conn, :email_setup), code) do
+         {:ok, %Platform.SignInAdmin.PocketId.Token{value: token}} <-
+           EmailSetup.complete(get_session(conn, :email_setup), code) do
       conn |> delete_session(:email_setup) |> PlatformWeb.AuthController.setup_code_login(token)
     else
       _ -> conn |> put_status(:bad_request) |> page(sent?: true, error?: true)
@@ -46,8 +48,17 @@ defmodule PlatformWeb.SignInSetupController do
   defp limiter_ip(conn) do
     if Application.get_env(:platform, :trust_proxy_headers, false) do
       value = conn |> get_req_header("x-forwarded-for") |> List.last()
+
       with value when is_binary(value) <- value,
-           {:ok, ip} <- value |> String.split(",") |> List.last() |> String.trim() |> String.to_charlist() |> :inet.parse_address(), do: ip, else: (_ -> :unknown_proxy)
+           {:ok, ip} <-
+             value
+             |> String.split(",")
+             |> List.last()
+             |> String.trim()
+             |> String.to_charlist()
+             |> :inet.parse_address(),
+           do: ip,
+           else: (_ -> :unknown_proxy)
     else
       conn.remote_ip
     end

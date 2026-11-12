@@ -38,9 +38,17 @@ defmodule PlatformWeb.SignInSetupControllerTest do
 
     :ets.delete_all_objects(:sign_in_email_setup_rate)
     handler = {__MODULE__, self()}
-    :ok = :telemetry.attach(handler, [:platform, :sign_in, :setup, :delivery], fn _, _, meta, pid ->
-      send(pid, {:setup_delivery, meta.challenge_id, meta.result})
-    end, self())
+
+    :ok =
+      :telemetry.attach(
+        handler,
+        [:platform, :sign_in, :setup, :delivery],
+        fn _, _, meta, pid ->
+          send(pid, {:setup_delivery, meta.challenge_id, meta.result})
+        end,
+        self()
+      )
+
     on_exit(fn -> :telemetry.detach(handler) end)
 
     user =
@@ -155,7 +163,9 @@ defmodule PlatformWeb.SignInSetupControllerTest do
     refute mail.text_body =~ @code
     code = mailed_code(mail)
     refute conn.resp_body =~ code
-    assert {:error, :invalid} = EmailSetup.complete(%{pending | binding: "wrong-browser-binding"}, code)
+
+    assert {:error, :invalid} =
+             EmailSetup.complete(%{pending | binding: "wrong-browser-binding"}, code)
 
     Req.Test.stub(Platform.OIDC, fn conn ->
       conn
@@ -233,12 +243,14 @@ defmodule PlatformWeb.SignInSetupControllerTest do
   } do
     provider(user)
 
-    attempts = for _ <- 1..3 do
-      sent = post(build_conn(), "/auth/email/setup", %{email: user.email})
-      assert delivered(sent) == :sent
-      assert_receive {:mail_test_adapter, mail, _}, 2_000
-      {get_session(sent, :email_setup), mailed_code(mail)}
-    end
+    attempts =
+      for _ <- 1..3 do
+        sent = post(build_conn(), "/auth/email/setup", %{email: user.email})
+        assert delivered(sent) == :sent
+        assert_receive {:mail_test_adapter, mail, _}, 2_000
+        {get_session(sent, :email_setup), mailed_code(mail)}
+      end
+
     result = post(conn, "/auth/email/setup", %{email: user.email})
     refute_received {:mail_test_adapter, _, _}
     assert html_response(result, 200) =~ "If an eligible account exists"
@@ -247,7 +259,11 @@ defmodule PlatformWeb.SignInSetupControllerTest do
     assert {:error, :invalid} = EmailSetup.complete(pending, code)
     {pending, code} = List.last(attempts)
     row = Repo.get!(Platform.SignIn.SetupChallenge, pending.id)
-    Repo.update!(Ecto.Changeset.change(row, expires_at: DateTime.add(DateTime.utc_now(), -1, :second)))
+
+    Repo.update!(
+      Ecto.Changeset.change(row, expires_at: DateTime.add(DateTime.utc_now(), -1, :second))
+    )
+
     assert {:error, :invalid} = EmailSetup.complete(pending, code)
   end
 
@@ -301,33 +317,86 @@ defmodule PlatformWeb.SignInSetupControllerTest do
        %{conn: conn, user: user} do
     provider(user)
     link = Platform.SignIn.DurableLink.url(user, :invite)
-    assert {:ok, %{token: %PocketId.Token{value: @code}, purpose: :invite}} = Platform.SignIn.SetupLink.redeem(link)
+
+    assert {:ok, %{token: %PocketId.Token{value: @code}, purpose: :invite}} =
+             Platform.SignIn.SetupLink.redeem(link)
+
     assert {:error, _} = Platform.SignIn.SetupLink.redeem(link <> "tampered")
     Repo.update!(Ecto.Changeset.change(user, archived_at: DateTime.utc_now()))
     result = post(conn, "/auth/invitation", %{setup_link: link})
     assert result.status == 400
     refute get_session(result, :oidc_session_params)
   end
-  test "adding a passkey after code delivery ends eligibility before a provider token is minted", %{conn: conn, user: user} do
+
+  test "adding a passkey after code delivery ends eligibility before a provider token is minted",
+       %{conn: conn, user: user} do
     provider(user)
     sent = post(conn, "/auth/email/setup", %{email: user.email})
     assert delivered(sent) == :sent
     assert_receive {:mail_test_adapter, mail, _}, 2_000
     provider(user, enrolled: true)
-    assert {:error, :invalid} = EmailSetup.complete(get_session(sent, :email_setup), mailed_code(mail))
+
+    assert {:error, :invalid} =
+             EmailSetup.complete(get_session(sent, :email_setup), mailed_code(mail))
+
     refute_received :provider_token_minted
   end
 
-  test "a pasted owner link retains owner onboarding and the app continuation", %{conn: conn, user: user} do
+  test "a pasted owner link retains owner onboarding and the app continuation", %{
+    conn: conn,
+    user: user
+  } do
     provider(user)
+
     Req.Test.stub(Platform.OIDC, fn conn ->
-      conn |> Plug.Conn.put_resp_header("location", "/interaction?interaction=e8a7f28d-4e78-4f21-bec0-53dc068d471f") |> Plug.Conn.send_resp(302, "")
+      conn
+      |> Plug.Conn.put_resp_header(
+        "location",
+        "/interaction?interaction=e8a7f28d-4e78-4f21-bec0-53dc068d471f"
+      )
+      |> Plug.Conn.send_resp(302, "")
     end)
-    result = conn |> init_test_session(app_challenge: String.duplicate("a", 43)) |> post("/auth/invitation", %{setup_link: Platform.SignIn.DurableLink.url(user, :handover)})
+
+    result =
+      conn
+      |> init_test_session(app_challenge: String.duplicate("a", 43))
+      |> post("/auth/invitation", %{setup_link: Platform.SignIn.DurableLink.url(user, :handover)})
+
     assert redirected_to(result) =~ "/lc/" <> @code
     assert get_session(result, :post_login_path) == "/setup/connect-ai"
     assert get_session(result, :signed_in_with_link) == true
     assert get_session(result, :app_challenge) == String.duplicate("a", 43)
+  end
+  test "proxy-added final hop, rather than spoofed leftmost XFF, controls request limits" do
+    Application.put_env(:platform, :trust_proxy_headers, true)
+    for n <- 1..4 do
+      conn = build_conn()
+      |> put_req_header("x-forwarded-for", "203.0.113.#{n}, 198.51.100.9")
+      |> post("/auth/email/setup", %{email: "unknown-#{n}@example.test"})
+      assert delivered(conn) == :skipped
+    end
+    ips = for {{{:ip, ip}, _}, count} <- :ets.tab2list(:sign_in_email_setup_rate), do: {ip, count}
+    assert ips == [{{198, 51, 100, 9}, 4}]
+  end
+
+  test "counter capacity does not disable invitation completion globally" do
+    :ets.insert(:sign_in_email_setup_rate, for n <- 1..20_000, do: {{{:noise, n}, 0}, 1})
+    assert :ok = Platform.SignIn.EmailSetupRateLimit.verify({198, 51, 100, 10})
+  end
+
+  test "concurrent redemption of one browser challenge mints only one provider token", %{conn: conn, user: user} do
+    provider(user)
+    sent = post(conn, "/auth/email/setup", %{email: user.email})
+    assert delivered(sent) == :sent
+    assert_receive {:mail_test_adapter, mail, _}, 2_000
+    pending = get_session(sent, :email_setup)
+    code = mailed_code(mail)
+    tasks = for _ <- 1..2, do: Task.async(fn -> EmailSetup.complete(pending, code) end)
+    results = Enum.map(tasks, &Task.await(&1, 5_000))
+    assert Enum.count(results, &match?({:ok, %PocketId.Token{}}, &1)) == 1
+    assert Enum.count(results, &(&1 == {:error, :invalid})) == 1
+    assert_received :provider_token_minted
+    refute_received :provider_token_minted
   end
 
 end

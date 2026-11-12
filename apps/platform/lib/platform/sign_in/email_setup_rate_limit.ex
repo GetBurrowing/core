@@ -14,10 +14,13 @@ defmodule Platform.SignIn.EmailSetupRateLimit do
 
   defp count(key, limit) do
     key = {key, div(System.system_time(:second), @window)}
+
     if :ets.info(@table, :size) >= 20_000 and not :ets.member(@table, key),
       do: :ets.delete(@table, :ets.first(@table))
+
     if :ets.update_counter(@table, key, {2, 1}, {key, 0}) <= limit,
-      do: :ok, else: {:error, :rate_limited}
+      do: :ok,
+      else: {:error, :rate_limited}
   end
 
   @impl true

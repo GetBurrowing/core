@@ -12,6 +12,7 @@ defmodule Platform.Repo.Migrations.CreateSignInSetupChallenges do
       add(:consumed_at, :utc_datetime_usec)
       add(:attempts, :integer, null: false, default: 0)
     end
+
     create(index(:sign_in_setup_challenges, [:expires_at]))
   end
 end
