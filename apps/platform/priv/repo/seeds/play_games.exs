@@ -22,7 +22,8 @@
 #                         also creates the tagged players room (community_space_id)
 #   * presentation        Platform.Games.Publishing.save/2 adds image_path,
 #                         image_alt, portrait_path, theme_color, project_id, development_space_id,
-#                         position, featured and placeholder to the manifest
+#                         position, featured, placeholder, launch_path and
+#                         screenshots to the manifest
 #
 # Re-running adds nothing: projects, spaces and epics are found by slug or
 # name, tasks by (project, title), and a release version that is already
@@ -55,6 +56,21 @@ games = [
     image_path: "/images/voltron-game.png",
     image_alt: "Voltron gameplay",
     portrait_path: "/images/play/voltron-portrait.png",
+    launch_path: "Play Voltron.bat",
+    screenshots: [
+      %{
+        "path" => "/images/play/voltron-shot-1.png",
+        "alt" => "Gameplay: the assembled robot strides down a city street"
+      },
+      %{
+        "path" => "/images/play/voltron-shot-2.png",
+        "alt" => "Concept art: the four pilots and their lion over the skyline"
+      },
+      %{
+        "path" => "/images/play/voltron-shot-3.png",
+        "alt" => "Concept art: close on the lion and its four pilot seats"
+      }
+    ],
     build_label: "DEV STUB",
     tasks: [
       "Playtest the current Windows release with the crew",
@@ -75,6 +91,21 @@ games = [
     image_path: "/images/play/sky-haulers-cover.png",
     image_alt: "Placeholder cover: floating islands and kites",
     portrait_path: "/images/play/sky-haulers-portrait.png",
+    launch_path: "Play Sky Haulers.bat",
+    screenshots: [
+      %{
+        "path" => "/images/play/sky-haulers-shot-1.png",
+        "alt" => "Placeholder art: floating islands with kites"
+      },
+      %{
+        "path" => "/images/play/sky-haulers-shot-2.png",
+        "alt" => "Placeholder art: a cottage on a floating island"
+      },
+      %{
+        "path" => "/images/play/sky-haulers-shot-3.png",
+        "alt" => "Placeholder art: islands drifting at sunset"
+      }
+    ],
     build_label: "TEST BUILD",
     tasks: [
       "Download the test build from the game page and check its SHA-256",
@@ -95,6 +126,21 @@ games = [
     image_path: "/images/play/tiny-tactics-cover.png",
     image_alt: "Placeholder cover: a hex board with a star",
     portrait_path: "/images/play/tiny-tactics-portrait.png",
+    launch_path: "Play Tiny Tactics.bat",
+    screenshots: [
+      %{
+        "path" => "/images/play/tiny-tactics-shot-1.png",
+        "alt" => "Placeholder art: a hex board with a star"
+      },
+      %{
+        "path" => "/images/play/tiny-tactics-shot-2.png",
+        "alt" => "Placeholder art: close on the star and coloured hexes"
+      },
+      %{
+        "path" => "/images/play/tiny-tactics-shot-3.png",
+        "alt" => "Placeholder art: the hex board in blue"
+      }
+    ],
     build_label: "TEST BUILD",
     tasks: [
       "Download the test build from the game page and check its SHA-256",
@@ -164,19 +210,33 @@ build_zip = fn game ->
   </html>
   """
 
-  # The Windows player currently launches "Play Voltron.bat" from every
-  # release root (GamePageController.updates/2), so each build carries it.
+  # The Windows player starts the game's launch_path from the release root.
   launcher =
     "@echo off\r\nrem #{name} #{label}: opens the test page.\r\nstart \"\" \"%~dp0index.html\"\r\n"
 
   files = [
     {~c"README.txt", readme},
     {~c"index.html", page},
-    {~c"Play Voltron.bat", launcher}
+    {String.to_charlist(game.launch_path), launcher}
   ]
 
   {:ok, {_, bytes}} = :zip.create(~c"build.zip", files, [:memory])
   bytes
+end
+
+# Builds from before per-game launchers carry only the "Play Voltron.bat" shim.
+# Name whichever launcher the current release really ships, or none.
+launcher_in_release = fn manifest, wanted ->
+  names =
+    with {:ok, attachment} <- Platform.Games.artifact(manifest, manifest["current_version"]),
+         path = AttachmentStorage.path_for(attachment.storage_key),
+         {:ok, entries} <- :zip.list_dir(String.to_charlist(path)) do
+      for {:zip_file, name, _info, _comment, _offset, _size} <- entries, do: to_string(name)
+    else
+      _ -> []
+    end
+
+  Enum.find([wanted, "Play Voltron.bat"], &(&1 in names))
 end
 
 for game <- games do
@@ -319,6 +379,8 @@ for game <- games do
       else: %{}
 
   presentation = %{
+    "launch_path" => manifest["launch_path"] || launcher_in_release.(manifest, game.launch_path),
+    "screenshots" => manifest["screenshots"] || game.screenshots,
     "image_path" => manifest["image_path"] || game.image_path,
     "image_alt" => manifest["image_alt"] || game.image_alt,
     "portrait_path" => game.portrait_path,
@@ -330,7 +392,11 @@ for game <- games do
     "theme_color" => game.theme_color
   }
 
-  presentation = Map.merge(presentation, copy)
+  # A release with no launcher leaves launch_path unset rather than nil.
+  presentation =
+    presentation
+    |> Map.merge(copy)
+    |> Map.reject(fn {_key, value} -> is_nil(value) end)
 
   publication =
     if Map.take(manifest, Map.keys(presentation)) == presentation and

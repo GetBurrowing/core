@@ -3,13 +3,13 @@ import hashlib, http.server, io, json, os, pathlib, subprocess, tempfile, thread
 ROOT = pathlib.Path(__file__).resolve().parents[2]
 SCRIPT = ROOT / 'apps/platform/priv/game_player/BurrowPlayer.ps1'
 state = {}
-def package(version, traversal=False):
+def package(version, traversal=False, launch='Play Voltron.bat', manifest_launch=False):
     stream = io.BytesIO()
     with zipfile.ZipFile(stream, 'w') as z:
-        z.writestr('Play Voltron.bat', '@echo off\r\nrem fixture '+version)
+        if launch: z.writestr(launch, '@echo off\r\nrem fixture '+version)
         z.writestr('../escaped.txt' if traversal else 'version.txt', version)
     body = stream.getvalue()
-    return dict(version=version, sha256=hashlib.sha256(body).hexdigest(), byte_size=len(body), download_path='/games/voltron/player/releases/'+version, launch_path='Play Voltron.bat'), body
+    return dict(version=version, sha256=hashlib.sha256(body).hexdigest(), byte_size=len(body), download_path='/games/voltron/player/releases/'+version, launch_path=launch if manifest_launch is False else manifest_launch), body
 class Handler(http.server.BaseHTTPRequestHandler):
     def do_GET(self):
         if self.path.endswith('/updates'):
@@ -39,6 +39,7 @@ with tempfile.TemporaryDirectory(prefix='burrow-player-test-', dir=parent) as tm
     def run(success=True):
         result = subprocess.run([ps, '-NoProfile', '-ExecutionPolicy', 'Bypass', '-File', windows(SCRIPT), '-ConfigPath', windows(config), '-DataRoot', windows(data), '-CheckOnly'], capture_output=True, text=True, timeout=60)
         assert (result.returncode == 0) == success, result.stdout + result.stderr
+        return result.stdout
     def current(): return json.loads((data/'current.json').read_text(encoding='utf-8-sig'))
     original = package('one'); state['manifest'], state['body'] = original; state['downloads'] = 0
     run(); assert current()['version'] == 'one'
@@ -56,5 +57,15 @@ with tempfile.TemporaryDirectory(prefix='burrow-player-test-', dir=parent) as tm
     run(); assert current()['version'] == 'one', 'rollback should work'
     assert len(list((data/'versions').iterdir())) == 2
     assert not list(data.glob('.update-*')), 'staging is cleaned'
+    # Each game names its own launcher; the player starts only that file from the release root.
+    state['manifest'], state['body'] = package('custom', launch='Start Game.cmd')
+    out = run(); assert current()['launch_path'] == 'Start Game.cmd'; assert out.strip().endswith('Start Game.cmd'), out
+    for bad in ['..\\escape.bat', 'C:\\Windows\\evil.bat', 'sub\\inner.bat', 'evil&calc.bat', 'evil.ps1', '.hidden.bat']:
+        state['manifest'], state['body'] = package('bad-launch', manifest_launch=bad)
+        run(False); assert current()['version'] == 'custom', 'unsafe launcher must be refused: ' + bad
+    # A game that names no launcher still installs; the player hands back its folder.
+    state['manifest'], state['body'] = package('nolauncher', launch=None)
+    out = run(); assert current()['version'] == 'nolauncher'; assert current()['launch_path'] is None
+    assert out.strip().endswith(current()['folder'].split('\\')[-1]), out
 server.shutdown()
-print('WINDOWS_PLAYER PASS: install, no-op, update, same-size corruption, redirect rejection, ZIP traversal, rollback, cleanup')
+print('WINDOWS_PLAYER PASS: install, no-op, update, same-size corruption, redirect rejection, ZIP traversal, rollback, cleanup, per-game launcher, unsafe launcher refusal, no launcher')

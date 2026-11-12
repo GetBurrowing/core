@@ -57,12 +57,58 @@ defmodule Platform.Games do
          match?({:ok, _}, Platform.UUID.cast(game["community_space_id"]))) and
       (is_nil(game["project_id"]) or Platform.UUID.valid?(game["project_id"])) and
       (is_nil(game["placeholder"]) or is_boolean(game["placeholder"])) and
-      (is_nil(game["image_path"]) or
-         (is_binary(game["image_path"]) and String.starts_with?(game["image_path"], "/images/") and
-            not String.contains?(game["image_path"], ["..", "?", "#", "\\"])))
+      (is_nil(game["image_path"]) or local_image?(game["image_path"])) and
+      (is_nil(game["launch_path"]) or launch_path?(game["launch_path"])) and
+      (is_nil(game["screenshots"]) or screenshots?(game["screenshots"]))
   end
 
   def valid?(_), do: false
+
+  defp local_image?(path),
+    do:
+      is_binary(path) and String.starts_with?(path, "/images/") and
+        not String.contains?(path, ["..", "?", "#", "\\"])
+
+  @max_screenshots 8
+
+  defp screenshots?(shots) when is_list(shots) and length(shots) <= @max_screenshots,
+    do: Enum.all?(shots, &screenshot?/1)
+
+  defp screenshots?(_), do: false
+
+  defp screenshot?(%{"path" => path, "alt" => alt} = shot) when map_size(shot) == 2,
+    do: local_image?(path) and is_binary(alt) and String.length(alt) in 1..200
+
+  defp screenshot?(_), do: false
+
+  @doc """
+  True for a launcher the Windows player may start from a release root: one
+  plain file name (`Play Voltron.bat`), never a path, never `..`, and nothing
+  a command shell would interpret.
+  """
+  def launch_path?(path) when is_binary(path) do
+    Regex.match?(~r/\A[A-Za-z0-9][A-Za-z0-9 ._-]{0,62}\.(bat|cmd|exe)\z/i, path) and
+      not String.contains?(path, "..")
+  end
+
+  def launch_path?(_), do: false
+
+  # Releases published before launchers became per game all shipped this file.
+  @legacy_launch_path "Play Voltron.bat"
+
+  @doc "The file the player starts from the release root, or nil when the game names none."
+  def launch_path(%{"launch_path" => path}) when is_binary(path),
+    do: if(launch_path?(path), do: path)
+
+  def launch_path(%{"slug" => "voltron"}), do: @legacy_launch_path
+  def launch_path(_), do: nil
+
+  @doc "Gallery screenshots, each a local `/images/` asset with alt text."
+  def screenshots(%{"screenshots" => shots}) do
+    if screenshots?(shots), do: shots, else: []
+  end
+
+  def screenshots(_), do: []
 
   defp valid_release?(release) when is_map(release) do
     is_binary(release["version"]) and

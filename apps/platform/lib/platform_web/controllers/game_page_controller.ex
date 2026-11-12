@@ -23,6 +23,8 @@ defmodule PlatformWeb.GamePageController do
         project: project,
         workspace_path: Platform.Gaming.workspace_path(game, project, user),
         game: game,
+        launch_path: Games.launch_path(game),
+        screenshots: Games.screenshots(game),
         signup?: not is_nil(Games.signup_url(game)),
         release: release,
         user: user,
@@ -124,7 +126,9 @@ defmodule PlatformWeb.GamePageController do
         sha256: release["sha256"],
         byte_size: release["byte_size"],
         download_path: "/games/#{slug}/player/releases/#{release["version"]}",
-        launch_path: "Play Voltron.bat"
+        # nil when the game names no launcher: the player installs the
+        # verified release and opens its folder instead of guessing a file.
+        launch_path: Games.launch_path(game)
       })
     else
       send_resp(conn, 404, "Game not found")

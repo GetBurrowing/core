@@ -91,7 +91,7 @@ defmodule PlatformWeb.AdminGamesLive do
           </button>
         </.form>
         <p class="text-sm">
-          Publish a new version to update players. Reuse an older version and its original attachment to roll back. Downloads use the uploaded ZIP’s verified size and checksum. The ZIP must contain Play Voltron.bat at its root for this prototype.
+          Publish a new version to update players. Reuse an older version and its original attachment to roll back. Downloads use the uploaded ZIP’s verified size and checksum. The ZIP must contain the game’s launcher (its launch_path, for example Play Voltron.bat) at its root.
         </p>
         <div id="published-games" class="space-y-3" phx-update="stream">
           <div
