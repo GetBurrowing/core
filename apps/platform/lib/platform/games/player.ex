@@ -21,7 +21,14 @@ defmodule Platform.Games.Player do
   def authorize(_, _), do: {:error, :unauthorized}
 
   def bootstrap(game, user, origin) do
-    config = Jason.encode!(%{base_url: origin, slug: game["slug"], token: token(game, user)})
+    config =
+      Jason.encode!(%{
+        base_url: origin,
+        slug: game["slug"],
+        title: game["title"],
+        token: token(game, user)
+      })
+
     script = File.read!(Application.app_dir(:platform, "priv/game_player/BurrowPlayer.ps1"))
 
     files = [

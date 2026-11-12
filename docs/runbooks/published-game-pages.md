@@ -19,6 +19,10 @@ Absent configuration means no published games. Keep install-specific manifests i
   "summary": "A little chaos with friends.",
   "image_path": "/images/my-game.png",
   "image_alt": "Gameplay screenshot",
+  "launch_path": "Play My Game.bat",
+  "screenshots": [
+    {"path": "/images/play/my-game-shot-1.png", "alt": "Gameplay: the crew lines up a jump"}
+  ],
   "multiplayer_note": "Describe the verified launch and admission instructions here.",
   "current_version": "v1",
   "releases": [{
@@ -38,6 +42,20 @@ same digest and size. Never put a room code, OIDC credential, user config or
 server secret in a manifest. The public page's version and checksum refer to
 the ZIP, not its embedded PCK. Retain older version entries when changing the
 current pointer; do not repoint a version to different bytes.
+
+`launch_path` names the file the Windows player starts from the release root.
+It must be a single file name ending in `.bat`, `.cmd` or `.exe`, with no
+folders, no `..` and no shell characters; a manifest with anything else is
+rejected. Every release of the game must ship that file at its ZIP root. When
+it is absent, `voltron` keeps its historical `Play Voltron.bat` and any other
+game installs normally, then opens its folder instead of launching. The game
+page tells portable-ZIP players which file to open.
+
+`screenshots` is optional: at most eight `{"path", "alt"}` entries, each path a
+local `/images/` asset like `image_path`, each alt 1 to 200 characters. The game
+page shows them as a gallery with a viewer and hides the gallery when the list
+is empty or absent. Published games can change either field without a new
+release through `Platform.Games.Publishing.save/2`.
 
 ## Community identity
 

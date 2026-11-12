@@ -24,6 +24,59 @@ export function startDownloadTracking({readCookie, nonce, onStarted, onTimeout, 
   return () => cancel(timer)
 }
 
+// Arrow keys step through screenshots and wrap at either end.
+export function stepIndex(index, delta, count) {
+  return count > 0 ? (index + delta + count) % count : 0
+}
+
+// Thumbnails are plain links to the image; with a dialog available they open
+// the viewer instead. Arrow keys move between thumbnails and inside the viewer.
+export function installGameGallery(root) {
+  const gallery = root.querySelector("[data-game-gallery]")
+  const dialog = gallery?.querySelector("[data-game-lightbox]")
+  if (!gallery) return
+  const shots = Array.from(gallery.querySelectorAll("[data-game-shot]"))
+  const image = dialog?.querySelector("[data-game-lightbox-image]")
+  const caption = dialog?.querySelector("[data-game-lightbox-caption]")
+  const count = dialog?.querySelector("[data-game-lightbox-count]")
+  let current = 0
+  const show = index => {
+    current = stepIndex(index, 0, shots.length)
+    const shot = shots[current]
+    image.src = shot.getAttribute("href")
+    caption.textContent = shot.dataset.gameShotAlt
+    count.textContent = `${current + 1} / ${shots.length}`
+  }
+  gallery.addEventListener("keydown", event => {
+    if (event.key !== "ArrowLeft" && event.key !== "ArrowRight") return
+    const delta = event.key === "ArrowLeft" ? -1 : 1
+    if (dialog?.open) {
+      event.preventDefault()
+      show(current + delta)
+    } else if (event.target.matches?.("[data-game-shot]")) {
+      event.preventDefault()
+      shots[stepIndex(shots.indexOf(event.target), delta, shots.length)].focus()
+    }
+  })
+  if (!dialog || typeof dialog.showModal !== "function") return
+  gallery.addEventListener("click", event => {
+    const shot = event.target.closest("[data-game-shot]")
+    const step = event.target.closest("[data-game-lightbox-step]")
+    if (shot) {
+      event.preventDefault()
+      show(shots.indexOf(shot))
+      dialog.showModal()
+    } else if (step) {
+      show(current + Number(step.dataset.gameLightboxStep))
+    } else if (event.target.closest("[data-game-lightbox-close]") || event.target === dialog) {
+      dialog.close()
+    }
+  })
+  // Closing returns focus to the screenshot that is showing. The browser
+  // restores focus to the opener first, so this runs after it.
+  dialog.addEventListener("close", () => setTimeout(() => shots[current]?.focus(), 0))
+}
+
 export function installPublicGamePage(doc = document, win = window) {
   const root = doc.getElementById("public-game")
   if (!root) return
@@ -40,6 +93,7 @@ export function installPublicGamePage(doc = document, win = window) {
   resize()
   win.visualViewport?.addEventListener("resize", resize)
   win.addEventListener("resize", resize)
+  installGameGallery(root)
   root.dataset.gamePageReady = "true"
   let stop = null, frame = null
   root.addEventListener("click", async event => {
