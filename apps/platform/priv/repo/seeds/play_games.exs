@@ -61,7 +61,7 @@ games = [
     slug: "sky-haulers",
     title: "Placeholder: Sky Haulers",
     summary:
-      "Placeholder game, a test fixture for Burrow Play. Exercises the store page, download, players room and Create project. Not a real game.",
+      "Placeholder test build: a cargo-hauling co-op between floating islands, used to test downloads and player rooms. Not a real game.",
     position: 1,
     featured: false,
     placeholder: true,
@@ -80,7 +80,7 @@ games = [
     slug: "tiny-tactics",
     title: "Placeholder: Tiny Tactics",
     summary:
-      "Placeholder game, a test fixture for Burrow Play. Exercises the store page, download, players room and Create project. Not a real game.",
+      "Placeholder test build: a tiny turn-based hex skirmish, used to test releases, updates and Create projects. Not a real game.",
     position: 2,
     featured: false,
     placeholder: true,
@@ -271,6 +271,12 @@ for game <- games do
 
   manifest = Repo.get!(Publication, game.slug).manifest
 
+  # Placeholders own their copy; a real game's title and summary stay as published.
+  copy =
+    if game.placeholder,
+      do: %{"title" => game.title, "summary" => game.summary},
+      else: %{}
+
   presentation = %{
     "image_path" => manifest["image_path"] || game.image_path,
     "image_alt" => manifest["image_alt"] || game.image_alt,
@@ -281,6 +287,8 @@ for game <- games do
     "featured" => game.featured,
     "placeholder" => game.placeholder
   }
+
+  presentation = Map.merge(presentation, copy)
 
   publication =
     if Map.take(manifest, Map.keys(presentation)) == presentation do
