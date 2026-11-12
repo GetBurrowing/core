@@ -22,7 +22,8 @@
 #                         also creates the tagged players room (community_space_id)
 #   * presentation        Platform.Games.Publishing.save/2 adds image_path,
 #                         image_alt, portrait_path, theme_color, project_id, development_space_id,
-#                         position, featured, placeholder and screenshots to
+#                         position, featured, placeholder and screenshots (with
+#                         captions; an existing shot gains a missing caption) to
 #                         the manifest, and pins each release's launch_path
 #                         (the launcher is pinned per release, not per game)
 #
@@ -61,15 +62,18 @@ games = [
     screenshots: [
       %{
         "path" => "/images/play/voltron-shot-1.png",
-        "alt" => "Gameplay: the assembled robot strides down a city street"
+        "alt" => "Gameplay: the assembled robot strides down a city street",
+        "caption" => "In-game"
       },
       %{
         "path" => "/images/play/voltron-shot-2.png",
-        "alt" => "Concept art: the four pilots and their lion over the skyline"
+        "alt" => "Concept art: the four pilots and their lion over the skyline",
+        "caption" => "Concept art"
       },
       %{
         "path" => "/images/play/voltron-shot-3.png",
-        "alt" => "Concept art: close on the lion and its four pilot seats"
+        "alt" => "Concept art: close on the lion and its four pilot seats",
+        "caption" => "Concept art"
       }
     ],
     build_label: "DEV STUB",
@@ -96,15 +100,18 @@ games = [
     screenshots: [
       %{
         "path" => "/images/play/sky-haulers-shot-1.png",
-        "alt" => "Placeholder art: floating islands with kites"
+        "alt" => "Placeholder art: floating islands with kites",
+        "caption" => "Placeholder art"
       },
       %{
         "path" => "/images/play/sky-haulers-shot-2.png",
-        "alt" => "Placeholder art: a cottage on a floating island"
+        "alt" => "Placeholder art: a cottage on a floating island",
+        "caption" => "Placeholder art"
       },
       %{
         "path" => "/images/play/sky-haulers-shot-3.png",
-        "alt" => "Placeholder art: islands drifting at sunset"
+        "alt" => "Placeholder art: islands drifting at sunset",
+        "caption" => "Placeholder art"
       }
     ],
     build_label: "TEST BUILD",
@@ -131,15 +138,18 @@ games = [
     screenshots: [
       %{
         "path" => "/images/play/tiny-tactics-shot-1.png",
-        "alt" => "Placeholder art: a hex board with a star"
+        "alt" => "Placeholder art: a hex board with a star",
+        "caption" => "Placeholder art"
       },
       %{
         "path" => "/images/play/tiny-tactics-shot-2.png",
-        "alt" => "Placeholder art: close on the star and coloured hexes"
+        "alt" => "Placeholder art: close on the star and coloured hexes",
+        "caption" => "Placeholder art"
       },
       %{
         "path" => "/images/play/tiny-tactics-shot-3.png",
-        "alt" => "Placeholder art: the hex board in blue"
+        "alt" => "Placeholder art: the hex board in blue",
+        "caption" => "Placeholder art"
       }
     ],
     build_label: "TEST BUILD",
@@ -238,6 +248,23 @@ launcher_in_release = fn manifest, version, wanted ->
     end
 
   Enum.find([wanted, "Play Voltron.bat"], &(&1 in names))
+end
+
+# Published screenshots stay as they are; a shot this seed also lists (same
+# path) gains the seed's caption when it has none yet.
+with_captions = fn
+  nil, seeded ->
+    seeded
+
+  published, seeded ->
+    captions = Map.new(seeded, &{&1["path"], &1["caption"]})
+
+    Enum.map(published, fn shot ->
+      case captions[shot["path"]] do
+        caption when is_binary(caption) -> Map.put_new(shot, "caption", caption)
+        _ -> shot
+      end
+    end)
 end
 
 for game <- games do
@@ -393,7 +420,7 @@ for game <- games do
 
   presentation = %{
     "releases" => releases,
-    "screenshots" => manifest["screenshots"] || game.screenshots,
+    "screenshots" => with_captions.(manifest["screenshots"], game.screenshots),
     "image_path" => manifest["image_path"] || game.image_path,
     "image_alt" => manifest["image_alt"] || game.image_alt,
     "portrait_path" => game.portrait_path,
