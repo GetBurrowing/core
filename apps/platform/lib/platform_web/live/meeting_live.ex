@@ -3643,9 +3643,11 @@ defmodule PlatformWeb.MeetingLive do
   # account already names them), so a plain action rather than a form
   # submit. Clears the `:lobby` state back to `nil` — the member's post-join
   # state, which the call-shell member identity badge (`is_nil(@state)`)
-  # keys on — then runs the SAME `maybe_start_meeting |> MeetingHooks.join()`
-  # path the `:auto_join` handler's live branch runs, so a scheduled meeting
-  # is flipped `live` on entry and the `:mic_enabled`/`:camera_enabled` the
+  # keys on — then runs the SAME
+  # `maybe_start_meeting_if_permitted |> MeetingHooks.join()` path the
+  # `:auto_join` handler's live branch runs, so a scheduled meeting is
+  # flipped `live` on entry (for a joiner the invite gate admits; a refused
+  # joiner changes nothing) and the `:mic_enabled`/`:camera_enabled` the
   # lobby toggles committed ride into the room via `do_join/1`. Guarded on a
   # connected socket + binary `:user_id`: `MeetingHooks.join/1` no-ops
   # without a real user, so a stray click on a disconnected mount cannot
@@ -3659,8 +3661,7 @@ defmodule PlatformWeb.MeetingLive do
       # leaves the lobby on screen with a message instead of stranding the
       # viewer out of both. Only a permitted join is throttled here: when the
       # window is full and the join gate refuses, this check passes and
-      # `maybe_start_meeting/1` still runs before `join/1` refuses (as before
-      # the throttle existed).
+      # `join/1` refuses it, with the meeting untouched.
       MeetingHooks.join_throttled?(socket) ->
         {:noreply, put_flash(socket, :error, MeetingHooks.join_throttled_message())}
 
@@ -3668,7 +3669,7 @@ defmodule PlatformWeb.MeetingLive do
         socket =
           socket
           |> assign(:state, nil)
-          |> maybe_start_meeting()
+          |> maybe_start_meeting_if_permitted()
           |> MeetingHooks.join()
 
         {:noreply, socket}
@@ -5109,17 +5110,17 @@ defmodule PlatformWeb.MeetingLive do
         {:noreply, socket}
 
       MeetingHooks.join_throttled?(socket) ->
-        # Checked before `maybe_start_meeting/1` for a permitted join only (see
-        # "join_meeting"): a gate-refused join with a full window still reaches
-        # `maybe_start_meeting/1` before `join/1` refuses it, as before the
-        # throttle. The viewer keeps the page they have.
+        # Checked before the start for a permitted join only (see
+        # "join_meeting"): a gate-refused join with a full window passes this
+        # clause and `join/1` refuses it, the meeting untouched. The viewer
+        # keeps the page they have.
         {:noreply, put_flash(socket, :error, MeetingHooks.join_throttled_message())}
 
       true ->
-        # The same `maybe_start_meeting |> MeetingHooks.join()` pair every
-        # explicit Join runs (lobby Join, call-shell Join), so the restore
-        # cannot drift from a first join.
-        socket = socket |> maybe_start_meeting() |> MeetingHooks.join()
+        # The same `maybe_start_meeting_if_permitted |> MeetingHooks.join()`
+        # pair every explicit Join runs (lobby Join, call-shell Join), so the
+        # restore cannot drift from a first join.
+        socket = socket |> maybe_start_meeting_if_permitted() |> MeetingHooks.join()
         {:noreply, socket}
     end
   end
@@ -6011,12 +6012,36 @@ defmodule PlatformWeb.MeetingLive do
     is_binary(author_user_id) and author_user_id == socket.assigns[:user_id]
   end
 
+  # `maybe_start_meeting/1`, but only for a joiner the invite gate admits.
+  #
+  # The gate (`Meetings.authorize_join/2` -> `join_permitted?/2`) runs inside
+  # `MeetingHooks.join/1`, AFTER this start must already have happened:
+  # `do_join/1` reads the live meeting row (native hand-off id, call shell,
+  # rail), so the start cannot move behind the join. This is therefore a
+  # READ-ONLY pre-check with the same predicate: a refused joiner gets the
+  # socket back unchanged (no status write, no assign). It does not telemeter;
+  # the refusal is still emitted once, by `join/1`. For an external user it
+  # costs one extra `meeting_invites` query on this page.
+  defp maybe_start_meeting_if_permitted(
+         %{assigns: %{user_id: user_id, meeting: %{chat_space_id: space_id}}} = socket
+       )
+       when is_binary(user_id) and is_binary(space_id) do
+    if Meetings.join_permitted?(space_id, user_id),
+      do: maybe_start_meeting(socket),
+      else: socket
+  end
+
+  # No user, or no meeting on this surface (the index): nothing to start.
+  defp maybe_start_meeting_if_permitted(socket), do: socket
+
   # Flip a `scheduled` meeting to `live` (stamping `started_at` and
   # broadcasting `{:meeting_started, _}` so the index re-buckets it under
   # "Live now"). Guarded on `"scheduled"` because `status_changeset` rejects
   # illegal transitions (a live→live attempt errors). An ended meeting is
-  # resumed by the next clause; any other status is a no-op. On success the updated meeting is re-assigned so the render path
-  # sees the live status.
+  # resumed by the next clause; any other status is a no-op. On success the
+  # updated meeting is re-assigned so the render path sees the live status.
+  # Call it through `maybe_start_meeting_if_permitted/1`: the start/resume is
+  # gated by `join_permitted?/2`.
   defp maybe_start_meeting(%{assigns: %{meeting: %{status: "scheduled"} = m}} = socket) do
     # The joining user is recorded as the starter (task 01a10db7); a guest
     # surface has no `:user_id`, and the stamp is then simply absent.
@@ -7909,10 +7934,11 @@ defmodule PlatformWeb.MeetingLive do
 
       "meeting_join", _params, socket ->
         # The call-shell Join CTA is handled by MeetingHooks next. Resume
-        # here, before that hook joins, just as the lobby Join does.
+        # here, before that hook joins, just as the lobby Join does, and only
+        # for a joiner the invite gate admits (`join_permitted?/2`).
         socket =
           if connected?(socket) and is_binary(socket.assigns[:user_id]),
-            do: maybe_start_meeting(socket),
+            do: maybe_start_meeting_if_permitted(socket),
             else: socket
 
         {:cont, assign(socket, :call_recap, nil)}
