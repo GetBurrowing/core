@@ -1,0 +1,34 @@
+I001 [*] Import block is un-sorted or un-formatted
+  --> tests/test_dynamic_captions.py:3:1
+   |
+ 1 |   """Temporal, transcript and geometry contracts, independent of config acceptance."""
+ 2 |
+ 3 | / import json
+ 4 | | import shutil
+ 5 | | import subprocess
+ 6 | | from pathlib import Path
+ 7 | |
+ 8 | | import pytest
+ 9 | | from click.testing import CliRunner
+10 | | from clip_agent import dynamic_captions as dc
+11 | | from clip_agent.captions import render_caption_pngs
+12 | | from clip_agent.cli import cli
+13 | | from clip_agent.config import FONTS_DIR, CaptionConfig, Config
+14 | | from clip_agent.models import CaptionStyle as S
+15 | | from clip_agent.models import Word
+16 | | from PIL import Image, ImageChops
+   | |_________________________________^
+help: Organize imports
+   |
+9  | from click.testing import CliRunner
+10 + from PIL import Image, ImageChops
+11 +
+12 | from clip_agent import dynamic_captions as dc
+--------------------------------------------------------------------------------
+17 | from clip_agent.models import Word
+   - from PIL import Image, ImageChops
+18 |
+   |
+
+Found 1 error.
+[*] 1 fixable with `--fix`.

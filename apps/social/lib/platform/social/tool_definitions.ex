@@ -619,6 +619,12 @@ defmodule Platform.Social.ToolDefinitions do
           "Complete a job you claimed with the rendered video and its metadata (the social_clip_submit arguments). For new_clip and rerender the clip gets the new file and a new rev and returns to review as pending; save_default writes no clip. " <>
             @runner_contract <> " " <> @review_only <> " " <> @human_approves,
         parameters: %{
+          headline_render: %{
+            type: "object",
+            required: false,
+            description:
+              "Content-free applied template receipt matching the enqueued contract, private wording artifact digest and fresh output digest. Required for branded headline jobs; never send generated wording."
+          },
           headline_applied: %{
             type: "boolean",
             required: false,

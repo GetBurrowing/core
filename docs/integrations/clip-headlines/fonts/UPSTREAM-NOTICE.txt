@@ -1,0 +1,89 @@
+clip-agent
+==========
+
+This product includes or uses the third-party works below. The full register
+(versions, revisions, hashes, licences, redistribution duties) is in
+THIRD-PARTY.md.
+
+----------------------------------------------------------------------------
+1. WhisperX — word-to-speaker assignment (adapted code)
+----------------------------------------------------------------------------
+clip_agent/diarize.py (assign_speakers) is adapted from WhisperX
+assign_word_speakers, https://github.com/m-bain/whisperX
+
+BSD 2-Clause License
+
+Copyright (c) 2022, Max Bain
+All rights reserved.
+
+Redistribution and use in source and binary forms, with or without
+modification, are permitted provided that the following conditions are met:
+
+1. Redistributions of source code must retain the above copyright notice, this
+   list of conditions and the following disclaimer.
+
+2. Redistributions in binary form must reproduce the above copyright notice,
+   this list of conditions and the following disclaimer in the documentation
+   and/or other materials provided with the distribution.
+
+THIS SOFTWARE IS PROVIDED BY THE COPYRIGHT HOLDERS AND CONTRIBUTORS "AS IS"
+AND ANY EXPRESS OR IMPLIED WARRANTIES, INCLUDING, BUT NOT LIMITED TO, THE
+IMPLIED WARRANTIES OF MERCHANTABILITY AND FITNESS FOR A PARTICULAR PURPOSE ARE
+DISCLAIMED. IN NO EVENT SHALL THE COPYRIGHT HOLDER OR CONTRIBUTORS BE LIABLE
+FOR ANY DIRECT, INDIRECT, INCIDENTAL, SPECIAL, EXEMPLARY, OR CONSEQUENTIAL
+DAMAGES (INCLUDING, BUT NOT LIMITED TO, PROCUREMENT OF SUBSTITUTE GOODS OR
+SERVICES; LOSS OF USE, DATA, OR PROFITS; OR BUSINESS INTERRUPTION) HOWEVER
+CAUSED AND ON ANY THEORY OF LIABILITY, WHETHER IN CONTRACT, STRICT LIABILITY,
+OR TORT (INCLUDING NEGLIGENCE OR OTHERWISE) ARISING IN ANY WAY OUT OF THE USE
+OF THIS SOFTWARE, EVEN IF ADVISED OF THE POSSIBILITY OF SUCH DAMAGE.
+
+----------------------------------------------------------------------------
+2. pyannote speaker-diarization-community-1 (model, downloaded by the user)
+----------------------------------------------------------------------------
+Speaker detection uses the pyannote "speaker-diarization-community-1"
+pipeline by pyannoteAI / the pyannote.audio authors,
+https://huggingface.co/pyannote/speaker-diarization-community-1
+(revision 3533c8cf8e369892e6b79ff1bf80f7b0286a54ee), licensed under the
+Creative Commons Attribution 4.0 International licence (CC-BY-4.0),
+https://creativecommons.org/licenses/by/4.0/ . Access is gated: each user
+accepts the model's terms on Hugging Face. The weights are not modified.
+
+pyannote.audio (software) — MIT License, Copyright (c) 2020 CNRS.
+It contains resnet.py from WeSpeaker, Apache License 2.0,
+Copyright (c) 2021 Shuai Wang, 2022 Zhengyang Chen, 2023 Bing Han.
+
+----------------------------------------------------------------------------
+3. Fonts (bundled)
+----------------------------------------------------------------------------
+Anton — Copyright 2020 The Anton Project Authors
+(https://github.com/googlefonts/AntonFont). SIL Open Font License 1.1;
+full text in clip_agent/fonts/Anton-OFL.txt.
+
+Inter — Copyright (c) 2016 The Inter Project Authors (https://github.com/rsms/inter).
+SIL Open Font License 1.1; full text in clip_agent/fonts/Inter-OFL.txt.
+
+----------------------------------------------------------------------------
+4. Models and programs used but not distributed with clip-agent
+----------------------------------------------------------------------------
+- OpenAI Whisper model weights in ggml format (whisper.cpp project) — MIT.
+- whisper.cpp (whisper-cli) — MIT, The ggml authors (https://github.com/ggml-org/whisper.cpp).
+- Silero VAD — MIT, Silero Team (https://github.com/snakers4/silero-vad).
+- Qwen3.8-27B (Ollama library build) — Apache License 2.0, Qwen team, Alibaba
+  Cloud (Qwen team).
+- Any other Ollama model a user chooses to run locally — under that model's own
+  licence. None is distributed with clip-agent.
+- Ollama — MIT.
+- Homebrew — BSD 2-Clause License; uv — MIT or Apache License 2.0. Setup tools
+  the installer downloads and runs; not distributed with clip-agent.
+- PyObjC (pyobjc-core, pyobjc-framework-Vision, -Cocoa, -CoreML, -Quartz),
+  version 12.2.2 — MIT License, Ronald Oussoren and the PyObjC contributors
+  (https://github.com/ronaldoussoren/pyobjc). Installed from PyPI on macOS
+  for face detection with Apple's Vision framework (reframe "shots" mode).
+- Apple Vision framework — part of macOS, called at run time; not distributed.
+- icalendar 7.3.0 — BSD 2-Clause License, development/test dependency only
+  (not installed for users).
+- FFmpeg — the Homebrew build used is licensed GPL-3.0-or-later
+  (--enable-gpl --enable-version3). clip-agent runs it as a separate program
+  and does not distribute it. FFmpeg is a trademark of Fabrice Bellard.
+- Python dependencies installed from PyPI under their own licences
+  (listed in THIRD-PARTY.md).

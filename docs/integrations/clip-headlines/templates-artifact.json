@@ -1,0 +1,153 @@
+{
+  "task_id": "01a18ef6-f0aa-7000-84b2-0dbea407507a",
+  "stage": 1,
+  "implementation_commit": "25add7874049c18e4d37063104b4e261f88e3751",
+  "upstream": "82ef5132b926fed33a80a304364fdda14335c2d5",
+  "caption_core": "d17048339c6cbbe95794ad748393c4724dffb410",
+  "headline_templates": 1,
+  "production_installed": false,
+  "runner_integration": "Following approved stages; canonical helper0.9.2 unchanged",
+  "requirements_sha256": "de778cea24a669ffdf8f5e061985f136035cdb736c4aacf0dc5222aca721dbf0",
+  "patch_sha256": "55dbb8927f37b0f969ea38e0bb8abb9b7167a7cd2acb3d068ee2b3ff18b0c493",
+  "runtime": "isolated-linux-runtime",
+  "python": "3.14.4",
+  "ffmpeg": "8.0.1-3ubuntu2",
+  "font_logo_assets": "assets-manifest.json",
+  "source_sha256": "a56d9f934de436211d92c2e9a5688cd9b6c8f0c52527d25c6c3d3b7f5fd66d91",
+  "face_model_sha256": "8f2383e4dd3cfbb4553ea8718107fc0423210dc964f9f4280604804ed2552fa4",
+  "installed_modules": {
+    "captions.py": {
+      "path": "/home/jordan/openai/worktrees/01a18ef6-f0aa-7000-84b2-0dbea407507a/.headline-delivery/clip-agent/src/clip_agent/captions.py",
+      "sha256": "f4e12581ef8399328345e767d6fdcfb0d39f6c9acae668c71adc82b338bd7603"
+    },
+    "cli.py": {
+      "path": "/home/jordan/openai/worktrees/01a18ef6-f0aa-7000-84b2-0dbea407507a/.headline-delivery/clip-agent/src/clip_agent/cli.py",
+      "sha256": "811ab7549c085bf0477bf80acf352db03512579e0fa5d3a39242af2a5c0ef492"
+    },
+    "config.py": {
+      "path": "/home/jordan/openai/worktrees/01a18ef6-f0aa-7000-84b2-0dbea407507a/.headline-delivery/clip-agent/src/clip_agent/config.py",
+      "sha256": "6a6aaa3c4659f6f367b570559d67e59ad39a8b75e8b321e46b36419179d92934"
+    },
+    "editing.py": {
+      "path": "/home/jordan/openai/worktrees/01a18ef6-f0aa-7000-84b2-0dbea407507a/.headline-delivery/clip-agent/src/clip_agent/editing.py",
+      "sha256": "a371d3437165fd8054b0279f0bd91e99b543db4fa4dd6934f6b2cdaa24f14ebc"
+    },
+    "headline_templates.py": {
+      "path": "/home/jordan/openai/worktrees/01a18ef6-f0aa-7000-84b2-0dbea407507a/.headline-delivery/clip-agent/src/clip_agent/headline_templates.py",
+      "sha256": "b36d7ec515da07e5e432d1eca57c639ecc6007126cc68110d1bb367c99b45d84"
+    },
+    "pipeline.py": {
+      "path": "/home/jordan/openai/worktrees/01a18ef6-f0aa-7000-84b2-0dbea407507a/.headline-delivery/clip-agent/src/clip_agent/pipeline.py",
+      "sha256": "129a33b0d258dbb35ce02b76ad162e7b94767266c3fbfec5eb9c3ee44cd21a88"
+    },
+    "review.py": {
+      "path": "/home/jordan/openai/worktrees/01a18ef6-f0aa-7000-84b2-0dbea407507a/.headline-delivery/clip-agent/src/clip_agent/review.py",
+      "sha256": "9d0ddba9feeeae4cd6e8cea0ee268fbeeb665532bbc1ac0932b4e443c37447f1"
+    }
+  },
+  "samples": [
+    {
+      "template": "chrome-hook",
+      "text": "Come back.",
+      "font_size": 53,
+      "lines": [
+        [
+          "Come",
+          "back."
+        ]
+      ],
+      "sha256": "2a7ff84a34320116e59328104d252c219a9a260a9222fa09b8d5d43511f9ef17",
+      "frames": 300,
+      "mp4_title_diff_hold": 13.88999914266118,
+      "mp4_title_diff_after_max": 1.8630186899862826
+    },
+    {
+      "template": "neon-broadcast",
+      "text": "I'll save that for next week.",
+      "font_size": 36,
+      "lines": [
+        [
+          "I'll",
+          "save",
+          "that",
+          "for",
+          "next"
+        ],
+        [
+          "week."
+        ]
+      ],
+      "sha256": "e110236d06e75d28d2b7a4c1855eeccc63a36678746fa1820e7d18796cd069a3",
+      "frames": 300,
+      "mp4_title_diff_hold": 22.003613683127572,
+      "mp4_title_diff_after_max": 1.8915745027434843
+    },
+    {
+      "template": "arcade-punch",
+      "text": "I'll save that for next week. You'll have to come back.",
+      "font_size": 32,
+      "lines": [
+        [
+          "I'll",
+          "save",
+          "that",
+          "for",
+          "next",
+          "week."
+        ],
+        [
+          "You'll",
+          "have",
+          "to",
+          "come",
+          "back."
+        ]
+      ],
+      "sha256": "bcd6618f8b075a14b4b25486b66917e0cb82e31b1a10fd4bc1988069a2b0f317",
+      "frames": 300,
+      "mp4_title_diff_hold": 20.939124657064472,
+      "mp4_title_diff_after_max": 1.9176033093278464
+    }
+  ],
+  "validation": {
+    "focused": "103 passed, final clean installed renderer",
+    "integration_full": "3511 passed,20 skipped,6 legacy baseline failures; preceding final caption-disable/padding refinements",
+    "installed_full": {
+      "status": "not_green_existing_baseline_failures",
+      "raw_passed": 3513,
+      "failed": 5,
+      "skipped": 20,
+      "seconds": 546.97,
+      "baseline_failures": [
+        "test_captions_safe.py::test_hook_title_png_in_top_band_and_safe_area",
+        "test_installer.py::test_eof_at_the_name_prompt_stops_with_a_message",
+        "test_render_finish.py::test_a_loud_bed_is_capped_under_the_speech[steady]",
+        "test_render_finish.py::test_a_loud_bed_is_capped_under_the_speech[unnormalised]",
+        "test_render_finish.py::test_a_bed_already_under_the_margin_is_left_as_it_is"
+      ],
+      "note": "The unchanged combined baseline reproduces these five failures. Audio arms vary between full runs; a later raw pass is not treated as a stable pass."
+    },
+    "full_lint": {
+      "status": "existing_baseline_error",
+      "error": "I001 in unchanged tests/test_dynamic_captions.py, reproduced on unchanged combined baseline"
+    },
+    "changed_lint": "Full renderer source, added tests, Core fixture and installer pass configured Ruff; four newly authored files pass format check."
+  },
+  "evidence_canvas": "01a18f04-9946-7000-bac3-f573d9fdd428",
+  "sample_attachments": [
+    "01a18f13-ce0f-7000-9a9a-e06ea24311ae",
+    "01a18f13-ce3e-7000-a525-5a3531488d14",
+    "01a18f13-ce6a-7000-9ef0-65ad50a92f5f"
+  ],
+  "caption_independence": "All decoded lower caption pixels byte-identical between templates",
+  "no_publication": true,
+  "source_policy": {
+    "boundary": "hooks.generate_variants",
+    "fixture_selection_proposals": true,
+    "live_model_generation": false,
+    "voice_revision": "8-provisional"
+  },
+  "baseline_render_sha256": "a7d904421755849d3eeee6a0aa7e704ee7d8306b5e644435acb2f3788ac623d8",
+  "fixture_sha256": "6ce6ffb94991f2339672e10e15009359ffdf009bbb3304c0304be3af2cf4ccd1",
+  "installed_module_identity_verified": true
+}

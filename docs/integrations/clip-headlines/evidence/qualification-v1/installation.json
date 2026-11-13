@@ -1,0 +1,85 @@
+{
+  "upstream": "82ef5132b926fed33a80a304364fdda14335c2d5",
+  "imported_modules": {
+    "captions": {
+      "path": "/home/jordan/openai/rig/htc-template-s4/operator-release/clip-agent/src/clip_agent/captions.py",
+      "sha256": "f4e12581ef8399328345e767d6fdcfb0d39f6c9acae668c71adc82b338bd7603"
+    },
+    "cli": {
+      "path": "/home/jordan/openai/rig/htc-template-s4/operator-release/clip-agent/src/clip_agent/cli.py",
+      "sha256": "789b72e527d36506aebdf3a74d7f43164cab096f245f25c071b662a0eff06ee8"
+    },
+    "headline_templates": {
+      "path": "/home/jordan/openai/rig/htc-template-s4/operator-release/clip-agent/src/clip_agent/headline_templates.py",
+      "sha256": "b36d7ec515da07e5e432d1eca57c639ecc6007126cc68110d1bb367c99b45d84"
+    },
+    "reframe": {
+      "path": "/home/jordan/openai/rig/htc-template-s4/operator-release/clip-agent/src/clip_agent/reframe.py",
+      "sha256": "7db058c1312dad20afc67d2291bad39d37ef4636eabb6cc99fee216a2186c169"
+    },
+    "shots": {
+      "path": "/home/jordan/openai/rig/htc-template-s4/operator-release/clip-agent/src/clip_agent/shots.py",
+      "sha256": "df26a73d56c7cfe7c295b711a6e2781bb514f5a1aadb5a82a024a1ab17e2dd49"
+    },
+    "pipeline": {
+      "path": "/home/jordan/openai/rig/htc-template-s4/operator-release/clip-agent/src/clip_agent/pipeline.py",
+      "sha256": "129a33b0d258dbb35ce02b76ad162e7b94767266c3fbfec5eb9c3ee44cd21a88"
+    },
+    "opencv_faces": {
+      "path": "/home/jordan/openai/rig/htc-template-s4/operator-release/clip-agent/src/clip_agent/opencv_faces.py",
+      "sha256": "907189949e0c387df4eae75b4e64f01e8b04d4056ac7b575bdb58500360cf523"
+    }
+  },
+  "caption_core": "d17048339c6cbbe95794ad748393c4724dffb410",
+  "asset_directory": "/home/jordan/openai/rig/htc-template-s4/operator-release/headline-assets",
+  "patch_sha256": [
+    "9a128ddb62c3d72da10a0c91ee813ac7a7e2a0409a7e81e82994f0d18581660f",
+    "37596cefadf68872e36ce12b7ccec6c5ec6d158b882bf1924164b460c5e59e9f",
+    "55dbb8927f37b0f969ea38e0bb8abb9b7167a7cd2acb3d068ee2b3ff18b0c493",
+    "f6cf1043f9e454d290d74741a970d9ed62f650237a5eea6f13fe7c19f50b3f68"
+  ],
+  "install": {
+    "version": "0.9.0",
+    "source": "file:///home/jordan/openai/rig/htc-template-s4/operator-release/clip-agent",
+    "commit": "82ef5132b926fed33a80a304364fdda14335c2d5",
+    "ref": null,
+    "editable": true,
+    "python": "/home/jordan/openai/rig/htc-template-s4/operator-release/.venv/bin/python",
+    "content_free": 2,
+    "headline_review": 1,
+    "headline_template_renderer": {
+      "path": "/home/jordan/openai/rig/htc-template-s4/operator-release/clip-agent/src/clip_agent/headline_templates.py",
+      "sha256": "b36d7ec515da07e5e432d1eca57c639ecc6007126cc68110d1bb367c99b45d84"
+    },
+    "headline_templates": 1,
+    "headline_template_names": [
+      "chrome-hook",
+      "neon-broadcast",
+      "arcade-punch"
+    ],
+    "caption_treatments": 1,
+    "caption_styles": [
+      "none",
+      "plain",
+      "phrase-pop",
+      "karaoke",
+      "type-on",
+      "focus-word",
+      "editorial-punch"
+    ],
+    "caption_renderer": {
+      "path": "/home/jordan/openai/rig/htc-template-s4/operator-release/clip-agent/src/clip_agent/captions.py",
+      "sha256": "f4e12581ef8399328345e767d6fdcfb0d39f6c9acae668c71adc82b338bd7603",
+      "temporal_path": "/home/jordan/openai/rig/htc-template-s4/operator-release/clip-agent/src/clip_agent/dynamic_captions.py",
+      "temporal_sha256": "385f5e446c09bd06bb5fb11aaa4228fa95e47fa808e1c1d750bf6633d039aee7"
+    }
+  },
+  "face_model_sha256": "8f2383e4dd3cfbb4553ea8718107fc0423210dc964f9f4280604804ed2552fa4",
+  "runtime_modules": {
+    "opencv_faces.py": "907189949e0c387df4eae75b4e64f01e8b04d4056ac7b575bdb58500360cf523",
+    "reframe.py": "7db058c1312dad20afc67d2291bad39d37ef4636eabb6cc99fee216a2186c169",
+    "shots.py": "df26a73d56c7cfe7c295b711a6e2781bb514f5a1aadb5a82a024a1ab17e2dd49",
+    "pipeline.py": "129a33b0d258dbb35ce02b76ad162e7b94767266c3fbfec5eb9c3ee44cd21a88",
+    "cli.py": "789b72e527d36506aebdf3a74d7f43164cab096f245f25c071b662a0eff06ee8"
+  }
+}

@@ -1,0 +1,136 @@
+{
+  "tool": {
+    "version": "0.9.0",
+    "source": "file:///home/jordan/openai/worktrees/01a18ef6-f0aa-7000-84b2-0dbea407507a/.headline-delivery/clip-agent",
+    "commit": "82ef5132b926fed33a80a304364fdda14335c2d5",
+    "ref": null,
+    "editable": true,
+    "python": "/home/jordan/openai/worktrees/01a18ef6-f0aa-7000-84b2-0dbea407507a/.headline-delivery/.venv/bin/python",
+    "content_free": 2,
+    "headline_review": 1,
+    "headline_template_renderer": {
+      "path": "/home/jordan/openai/worktrees/01a18ef6-f0aa-7000-84b2-0dbea407507a/.headline-delivery/clip-agent/src/clip_agent/headline_templates.py",
+      "sha256": "b36d7ec515da07e5e432d1eca57c639ecc6007126cc68110d1bb367c99b45d84"
+    },
+    "headline_templates": 1,
+    "headline_template_names": [
+      "chrome-hook",
+      "neon-broadcast",
+      "arcade-punch"
+    ],
+    "caption_treatments": 1,
+    "caption_styles": [
+      "none",
+      "plain",
+      "phrase-pop",
+      "karaoke",
+      "type-on",
+      "focus-word",
+      "editorial-punch"
+    ],
+    "caption_renderer": {
+      "path": "/home/jordan/openai/worktrees/01a18ef6-f0aa-7000-84b2-0dbea407507a/.headline-delivery/clip-agent/src/clip_agent/captions.py",
+      "sha256": "f4e12581ef8399328345e767d6fdcfb0d39f6c9acae668c71adc82b338bd7603",
+      "temporal_path": "/home/jordan/openai/worktrees/01a18ef6-f0aa-7000-84b2-0dbea407507a/.headline-delivery/clip-agent/src/clip_agent/dynamic_captions.py",
+      "temporal_sha256": "385f5e446c09bd06bb5fb11aaa4228fa95e47fa808e1c1d750bf6633d039aee7"
+    }
+  },
+  "headline_policy": {
+    "boundary": "hooks.generate_variants",
+    "fixture_selection_proposals": true,
+    "live_model_generation": false,
+    "voice_revision": "8-provisional"
+  },
+  "logo_sha256": "7cbddeac97ad8fe3aa53e867cf0e5648329f500e528f2302e1b2ebcba8bf767f",
+  "font_sha256": "a4ba3a92350ebb031da0cb47630ac49eb265082ca1bc0450442f4a83ab947cab",
+  "timing": {
+    "title_exit_s": 3.5,
+    "entrance_s": 0.2,
+    "exit_s": 0.25
+  },
+  "python": "/home/jordan/openai/worktrees/01a18ef6-f0aa-7000-84b2-0dbea407507a/.headline-delivery/.venv/bin/python",
+  "source_sha256": "a56d9f934de436211d92c2e9a5688cd9b6c8f0c52527d25c6c3d3b7f5fd66d91",
+  "source_start": 1479.0,
+  "duration": 10.0,
+  "face_union": [
+    0.36377852033860614,
+    0.31997612847222223,
+    0.6862868003719317,
+    0.49612760190610533
+  ],
+  "modules": {
+    "clip_agent.captions": {
+      "path": "/home/jordan/openai/worktrees/01a18ef6-f0aa-7000-84b2-0dbea407507a/.headline-delivery/clip-agent/src/clip_agent/captions.py",
+      "sha256": "f4e12581ef8399328345e767d6fdcfb0d39f6c9acae668c71adc82b338bd7603"
+    },
+    "clip_agent.headline_templates": {
+      "path": "/home/jordan/openai/worktrees/01a18ef6-f0aa-7000-84b2-0dbea407507a/.headline-delivery/clip-agent/src/clip_agent/headline_templates.py",
+      "sha256": "b36d7ec515da07e5e432d1eca57c639ecc6007126cc68110d1bb367c99b45d84"
+    }
+  },
+  "samples": [
+    {
+      "template": "chrome-hook",
+      "text": "Come back.",
+      "font_size": 53,
+      "lines": [
+        [
+          "Come",
+          "back."
+        ]
+      ],
+      "sha256": "2a7ff84a34320116e59328104d252c219a9a260a9222fa09b8d5d43511f9ef17",
+      "frames": 300,
+      "mp4_title_diff_hold": 13.88999914266118,
+      "mp4_title_diff_after_max": 1.8630186899862826
+    },
+    {
+      "template": "neon-broadcast",
+      "text": "I'll save that for next week.",
+      "font_size": 36,
+      "lines": [
+        [
+          "I'll",
+          "save",
+          "that",
+          "for",
+          "next"
+        ],
+        [
+          "week."
+        ]
+      ],
+      "sha256": "e110236d06e75d28d2b7a4c1855eeccc63a36678746fa1820e7d18796cd069a3",
+      "frames": 300,
+      "mp4_title_diff_hold": 22.003613683127572,
+      "mp4_title_diff_after_max": 1.8915745027434843
+    },
+    {
+      "template": "arcade-punch",
+      "text": "I'll save that for next week. You'll have to come back.",
+      "font_size": 32,
+      "lines": [
+        [
+          "I'll",
+          "save",
+          "that",
+          "for",
+          "next",
+          "week."
+        ],
+        [
+          "You'll",
+          "have",
+          "to",
+          "come",
+          "back."
+        ]
+      ],
+      "sha256": "bcd6618f8b075a14b4b25486b66917e0cb82e31b1a10fd4bc1988069a2b0f317",
+      "frames": 300,
+      "mp4_title_diff_hold": 20.939124657064472,
+      "mp4_title_diff_after_max": 1.9176033093278464
+    }
+  ],
+  "original_project_unchanged": true
+}

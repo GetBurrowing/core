@@ -32,6 +32,8 @@ defmodule Platform.Social.ClipFixes do
     text = String.trim(text)
 
     if String.length(text) in 1..200 and not String.match?(text, ~r/[\r\n\x00-\x1f]/u) do
+      text = text |> String.split() |> Enum.join(" ")
+
       {:ok,
        %{
          "operation" => "edit_headline",

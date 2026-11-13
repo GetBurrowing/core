@@ -1,0 +1,473 @@
+<frozen site>:107: RuntimeWarning: Unexpected value in sys.prefix, expected /home/jordan/openai/worktrees/01a18ef6-f0aa-7000-84b2-0dbea407507a/.headline-tool/.venv, got /home/jordan/openai/worktrees/01a18ef6-f0aa-7000-84b2-0dbea407507a/.headline-tool/clip-agent/../.venv
+<frozen site>:107: RuntimeWarning: Unexpected value in sys.exec_prefix, expected /home/jordan/openai/worktrees/01a18ef6-f0aa-7000-84b2-0dbea407507a/.headline-tool/.venv, got /home/jordan/openai/worktrees/01a18ef6-f0aa-7000-84b2-0dbea407507a/.headline-tool/clip-agent/../.venv
+........................................................................ [  2%]
+..................................................................s..... [  4%]
+........................................................................ [  6%]
+........................................................................ [  8%]
+........................................................................ [ 10%]
+..................................................................F..... [ 12%]
+........................................................................ [ 14%]
+........................................................................ [ 16%]
+........................................................................ [ 18%]
+........................................................................ [ 20%]
+................................s....................................... [ 22%]
+...............................................................s........ [ 24%]
+...........F............................................................ [ 26%]
+.....................................................................s.. [ 28%]
+........................................................................ [ 30%]
+........................................................................ [ 32%]
+........................................................................ [ 34%]
+........FF..............................................F............... [ 36%]
+........................................................................ [ 38%]
+...................................................ssss................. [ 40%]
+........................................................................ [ 42%]
+........................................................................ [ 44%]
+........................................................................ [ 46%]
+........................................................................ [ 48%]
+........................................................................ [ 50%]
+........................................................................ [ 52%]
+........................................................................ [ 55%]
+........................................................................ [ 57%]
+........................................................................ [ 59%]
+........................................................................ [ 61%]
+........................................................................ [ 63%]
+........................................................................ [ 65%]
+........................................................................ [ 67%]
+........................................................................ [ 69%]
+........................................................................ [ 71%]
+..........................................................s............. [ 73%]
+........................................s.ss............................ [ 75%]
+........................................................................ [ 77%]
+........................................................................ [ 79%]
+........................................................................ [ 81%]
+..............................................................ss........ [ 83%]
+.........FFFF........................................................... [ 85%]
+........................................................................ [ 87%]
+........................................................................ [ 89%]
+........................................................................ [ 91%]
+................ss...................................................... [ 93%]
+........................................................................ [ 95%]
+..................................................s..................... [ 97%]
+..................................................sss................... [ 99%]
+.....                                                                    [100%]
+=================================== FAILURES ===================================
+________________ test_hook_title_png_in_top_band_and_safe_area _________________
+
+tmp_path = PosixPath('/tmp/pytest-of-jordan/pytest-69/test_hook_title_png_in_top_ban0')
+fonts_dir = PosixPath('/home/jordan/openai/worktrees/01a18ef6-f0aa-7000-84b2-0dbea407507a/.headline-tool/clip-agent/src/clip_agent/fonts')
+
+    def test_hook_title_png_in_top_band_and_safe_area(tmp_path, fonts_dir):
+        c = podcast_cfg(hook_title=True)
+        look = captions.resolve_look(c)
+        p = captions.render_hook_title_png("Why small models win: the 3 rules nobody follows at scale",
+                                           tmp_path / "t.png", width=W, height=H, look=look, fonts_dir=fonts_dir)
+        band = captions.hook_title_box(W, H, look)
+        assert band[1] >= 0.15 * H - 1 and band[3] <= 0.27 * H + 1
+>       assert_inside(p, band)
+
+tests/test_captions_safe.py:268: 
+_ _ _ _ _ _ _ _ _ _ _ _ _ _ _ _ _ _ _ _ _ _ _ _ _ _ _ _ _ _ _ _ _ _ _ _ _ _ _ _ 
+
+path = PosixPath('/tmp/pytest-of-jordan/pytest-69/test_hook_title_png_in_top_ban0/t.png')
+box = (120, 288, 900, 518)
+
+    def assert_inside(path, box):
+        l, t, r, b = box
+        bb = ink_bbox(alpha(path))
+        assert bb is not None, f"{Path(path).name} is empty"
+        x0, y0, x1, y1 = bb
+>       assert x0 >= l and y0 >= t and x1 < r and y1 < b, f"{Path(path).name}: ink {bb} outside safe {box}"
+E       AssertionError: t.png: ink (np.int64(120), np.int64(321), np.int64(900), np.int64(486)) outside safe (120, 288, 900, 518)
+E       assert (np.int64(120) >= 120 and np.int64(321) >= 288 and np.int64(900) < 900)
+
+tests/test_captions_safe.py:74: AssertionError
+____________________ test_tuning_documents_every_config_key ____________________
+
+    def test_tuning_documents_every_config_key():
+        """docs/TUNING.md has a `### `[section]`` heading per config section and names every key in it."""
+        from clip_agent.config import SECTIONS, Config
+    
+        text = (CLIP_AGENT / "docs" / "TUNING.md").read_text()
+        missing = []
+        for section in SECTIONS:
+            m = re.search(rf"^### `\[{section}\]`.*?$(.*?)(?=^### |^---|\Z)", text, re.M | re.S)
+            if not m:
+                missing.append(f"[{section}] (no section heading)")
+                continue
+            body = m.group(1)
+            model = Config.model_fields[section].annotation
+            for key in model.model_fields:  # type: ignore[union-attr]
+                if not re.search(rf"`{re.escape(key)}`", body):
+                    missing.append(f"{section}.{key}")
+>       assert not missing, "TUNING.md does not document: " + ", ".join(missing)
+E       AssertionError: TUNING.md does not document: captions.hook_title_template, captions.hook_title_logo_path, captions.hook_title_logo_sha256, captions.hook_title_emphasis, captions.hook_title_emphasis_text, captions.hook_title_face_boxes
+E       assert not ['captions.hook_title_template', 'captions.hook_title_logo_path', 'captions.hook_title_logo_sha256', 'captions.hook_title_emphasis', 'captions.hook_title_emphasis_text', 'captions.hook_title_face_boxes']
+
+tests/test_docs_commands.py:90: AssertionError
+_________ test_htc_profile_resolved_config_unchanged[how-to-computer] __________
+
+profile = 'how-to-computer'
+clip_home = PosixPath('/tmp/pytest-of-jordan/pytest-69/test_htc_profile_resolved_conf0/clip-agent-home')
+
+    @pytest.mark.parametrize("profile", PROFILES)
+    def test_htc_profile_resolved_config_unchanged(profile, clip_home):
+        config = load_config(None, profile=profile)
+        dumped = json.dumps(config.model_dump(mode="json"), indent=2, sort_keys=True,
+                            ensure_ascii=False) + "\n"
+>       _check(f"{profile}.config.json", _normalise(dumped, clip_home))
+
+tests/test_htc_lock.py:88: 
+_ _ _ _ _ _ _ _ _ _ _ _ _ _ _ _ _ _ _ _ _ _ _ _ _ _ _ _ _ _ _ _ _ _ _ _ _ _ _ _ 
+
+name = 'how-to-computer.config.json'
+actual = '{\n  "audio": {\n    "channel_map": {},\n    "fade_ms": 40,\n    "normalize": true,\n    "stream_index": 0,\n    "tar...n    "repair": true,\n    "timeout_s": 14400.0,\n    "vad": true,\n    "vad_model": "ggml-silero-v5.1.2.bin"\n  }\n}\n'
+
+    def _check(name: str, actual: str) -> None:
+        """Compare ``actual`` with ``tests/data/htc_lock/<name>``, or write it when
+        ``CLIP_UPDATE_HTC_LOCK=1``."""
+        path = FIXTURES / name
+        if _updating():
+            FIXTURES.mkdir(parents=True, exist_ok=True)
+            path.write_bytes(actual.encode("utf-8"))
+            return
+        if not path.is_file():
+            pytest.fail(
+                f"The How To Computer fixture {path} is missing. Restore it from git, or "
+                "regenerate it on purpose with CLIP_UPDATE_HTC_LOCK=1."
+            )
+        expected = path.read_bytes().decode("utf-8")
+        if actual != expected:
+            diff = "\n".join(difflib.unified_diff(
+                expected.splitlines(), actual.splitlines(),
+                fromfile=f"fixture/{name}", tofile="current", lineterm="", n=2,
+            ))
+>           pytest.fail(
+                f"How To Computer's {name} changed. A change to the generic defaults "
+                "must not alter How To Computer's own profiles.\n" + diff
+            )
+E           Failed: How To Computer's how-to-computer.config.json changed. A change to the generic defaults must not alter How To Computer's own profiles.
+E           --- fixture/how-to-computer.config.json
+E           +++ current
+E           @@ -34,6 +34,12 @@
+E                "hook_title": true,
+E                "hook_title_box": false,
+E           +    "hook_title_emphasis": [],
+E           +    "hook_title_emphasis_text": "",
+E           +    "hook_title_face_boxes": [],
+E           +    "hook_title_logo_path": "",
+E           +    "hook_title_logo_sha256": "",
+E                "hook_title_seconds": 3.0,
+E                "hook_title_size_frac": 0.06,
+E           +    "hook_title_template": "legacy",
+E                "hook_title_two_lines": true,
+E                "max_words": 3,
+
+tests/test_htc_lock.py:68: Failed
+______ test_htc_profile_resolved_config_unchanged[how-to-computer-local] _______
+
+profile = 'how-to-computer-local'
+clip_home = PosixPath('/tmp/pytest-of-jordan/pytest-69/test_htc_profile_resolved_conf1/clip-agent-home')
+
+    @pytest.mark.parametrize("profile", PROFILES)
+    def test_htc_profile_resolved_config_unchanged(profile, clip_home):
+        config = load_config(None, profile=profile)
+        dumped = json.dumps(config.model_dump(mode="json"), indent=2, sort_keys=True,
+                            ensure_ascii=False) + "\n"
+>       _check(f"{profile}.config.json", _normalise(dumped, clip_home))
+
+tests/test_htc_lock.py:88: 
+_ _ _ _ _ _ _ _ _ _ _ _ _ _ _ _ _ _ _ _ _ _ _ _ _ _ _ _ _ _ _ _ _ _ _ _ _ _ _ _ 
+
+name = 'how-to-computer-local.config.json'
+actual = '{\n  "audio": {\n    "channel_map": {},\n    "fade_ms": 40,\n    "normalize": true,\n    "stream_index": 0,\n    "tar...n    "repair": true,\n    "timeout_s": 14400.0,\n    "vad": true,\n    "vad_model": "ggml-silero-v5.1.2.bin"\n  }\n}\n'
+
+    def _check(name: str, actual: str) -> None:
+        """Compare ``actual`` with ``tests/data/htc_lock/<name>``, or write it when
+        ``CLIP_UPDATE_HTC_LOCK=1``."""
+        path = FIXTURES / name
+        if _updating():
+            FIXTURES.mkdir(parents=True, exist_ok=True)
+            path.write_bytes(actual.encode("utf-8"))
+            return
+        if not path.is_file():
+            pytest.fail(
+                f"The How To Computer fixture {path} is missing. Restore it from git, or "
+                "regenerate it on purpose with CLIP_UPDATE_HTC_LOCK=1."
+            )
+        expected = path.read_bytes().decode("utf-8")
+        if actual != expected:
+            diff = "\n".join(difflib.unified_diff(
+                expected.splitlines(), actual.splitlines(),
+                fromfile=f"fixture/{name}", tofile="current", lineterm="", n=2,
+            ))
+>           pytest.fail(
+                f"How To Computer's {name} changed. A change to the generic defaults "
+                "must not alter How To Computer's own profiles.\n" + diff
+            )
+E           Failed: How To Computer's how-to-computer-local.config.json changed. A change to the generic defaults must not alter How To Computer's own profiles.
+E           --- fixture/how-to-computer-local.config.json
+E           +++ current
+E           @@ -34,6 +34,12 @@
+E                "hook_title": true,
+E                "hook_title_box": false,
+E           +    "hook_title_emphasis": [],
+E           +    "hook_title_emphasis_text": "",
+E           +    "hook_title_face_boxes": [],
+E           +    "hook_title_logo_path": "",
+E           +    "hook_title_logo_sha256": "",
+E                "hook_title_seconds": 3.0,
+E                "hook_title_size_frac": 0.06,
+E           +    "hook_title_template": "legacy",
+E                "hook_title_two_lines": true,
+E                "max_words": 3,
+
+tests/test_htc_lock.py:68: Failed
+_______________ test_eof_at_the_name_prompt_stops_with_a_message _______________
+
+    def test_eof_at_the_name_prompt_stops_with_a_message():
+>       code, out, err = _plan_at_terminal("\x04")                 # Ctrl-D: end of input
+                         ^^^^^^^^^^^^^^^^^^^^^^^^^
+
+tests/test_installer.py:352: 
+_ _ _ _ _ _ _ _ _ _ _ _ _ _ _ _ _ _ _ _ _ _ _ _ _ _ _ _ _ _ _ _ _ _ _ _ _ _ _ _ 
+tests/test_installer.py:85: in _plan_at_terminal
+    out, err = p.communicate(timeout=120)
+               ^^^^^^^^^^^^^^^^^^^^^^^^^^
+/usr/lib/python3.14/subprocess.py:1221: in communicate
+    stdout, stderr = self._communicate(input, endtime, timeout)
+                     ^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^
+/usr/lib/python3.14/subprocess.py:2154: in _communicate
+    self._check_timeout(endtime, orig_timeout, stdout, stderr)
+_ _ _ _ _ _ _ _ _ _ _ _ _ _ _ _ _ _ _ _ _ _ _ _ _ _ _ _ _ _ _ _ _ _ _ _ _ _ _ _ 
+
+self = <Popen: returncode: None args: ['/bin/bash', '/home/jordan/openai/worktrees/...>
+endtime = 111135.480092741, orig_timeout = 120, stdout_seq = []
+stderr_seq = [b"\nFirst, your show. The AI reads these answers when it picks clips. Only the name is\nneeded: press Return to skip a question (you can fill it in later in the show's profile).\n\n", b"What's your show called? "]
+skip_check_and_raise = False
+
+    def _check_timeout(self, endtime, orig_timeout, stdout_seq, stderr_seq,
+                       skip_check_and_raise=False):
+        """Convenience for checking if a timeout has expired."""
+        if endtime is None:
+            return
+        if skip_check_and_raise or _time() > endtime:
+>           raise TimeoutExpired(
+                    self.args, orig_timeout,
+                    output=b''.join(stdout_seq) if stdout_seq else None,
+                    stderr=b''.join(stderr_seq) if stderr_seq else None)
+E           subprocess.TimeoutExpired: Command '['/bin/bash', '/home/jordan/openai/worktrees/01a18ef6-f0aa-7000-84b2-0dbea407507a/.headline-tool/clip-agent/install.sh', '--print-plan']' timed out after 120 seconds
+
+/usr/lib/python3.14/subprocess.py:1268: TimeoutExpired
+______________ test_a_loud_bed_is_capped_under_the_speech[edited] ______________
+
+speech_src = PosixPath('/tmp/pytest-of-jordan/pytest-69/speech0/s.mp4')
+loud_low_bed = PosixPath('/tmp/pytest-of-jordan/pytest-69/low_bed0/bed.wav')
+loud_outro = PosixPath('/tmp/pytest-of-jordan/pytest-69/loud_outro0/outro.mp4')
+tmp_path = PosixPath('/tmp/pytest-of-jordan/pytest-69/test_a_loud_bed_is_capped_unde3')
+case = 'edited'
+
+    @pytest.mark.parametrize("case", ["steady", "ducked", "outro", "edited", "unnormalised", "wider"])
+    def test_a_loud_bed_is_capped_under_the_speech(speech_src, loud_low_bed, loud_outro, tmp_path, case):
+        """A bed louder than the speech (a mastered track at level_db = 0). Normalising the
+        finished mix then turned the speech down by about the difference: measured 7 dB
+        (ducked: 3.5 dB), the bed 6.6 LU OVER the speech. The bed is now capped at
+        music.speech_margin_lu (default 11) under the dialogue first, so:
+    
+        * the file still meets audio.target_lufs (normalised cases);
+        * the speech sits no lower than in the same render without a bed, within 0.5 dB
+          (a bed at 11 LU under adds at most about 0.33 LU to the mix, which the
+          normalisation takes back off everything);
+        * the bed plays at least the margin under the speech while the clip runs, within
+          0.2 LU (the band filters' loss and the AAC encode; measured 10.95 to 11.03).
+    
+        ``outro``: a loud kept card sound after the speech is not part of the dialogue the
+        cap is measured on (it would loosen the cap under the speech). ``unnormalised``: the
+        cap holds without audio.normalize too. ``wider``: speech_margin_lu = 15 is used."""
+        normalize = case != "unnormalised"
+        margin = 15.0 if case == "wider" else 11.0
+        card = {"outro": {"path": str(loud_outro), "audio": "keep"}} if case == "outro" else {}
+        bed = {"music": {"enabled": True, "path": str(loud_low_bed), "level_db": 0,
+                         "duck_db": 8 if case == "ducked" else 0,
+                         **({"speech_margin_lu": margin} if case == "wider" else {})}}
+    
+        def cfg_(**sections):
+            return build_config([("t", {"reframe": {"mode": "fit"}, "audio": {"normalize": normalize, "fade_ms": 0},
+                                        **card, **sections})])
+    
+        go = _render_edited if case == "edited" else _render_long
+        c = cfg_(**bed)
+        out = go(speech_src, tmp_path / "bed.mp4", c)
+        ref = go(speech_src, tmp_path / "ref.mp4", cfg_())
+        speech, under = _lufs(out, _BODY_S, _SPEECH_BAND), _lufs(out, _BODY_S, _BED_BAND)
+        alone = _lufs(ref, _BODY_S, _SPEECH_BAND)
+        if normalize:
+            whole = _lufs(out, 8.0)
+            assert abs(whole - c.audio.target_lufs) <= 0.5, whole
+        assert speech >= alone - 0.5, (speech, alone)                   # the speech is not turned down
+>       assert speech - under >= margin - 0.2, (speech, under)          # the bed stays under it
+        ^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^
+E       AssertionError: (-12.65, -23.4)
+E       assert (-12.65 - -23.4) >= (11.0 - 0.2)
+
+tests/test_render_finish.py:364: AssertionError
+___________ test_a_loud_bed_is_capped_under_the_speech[unnormalised] ___________
+
+speech_src = PosixPath('/tmp/pytest-of-jordan/pytest-69/speech0/s.mp4')
+loud_low_bed = PosixPath('/tmp/pytest-of-jordan/pytest-69/low_bed0/bed.wav')
+loud_outro = PosixPath('/tmp/pytest-of-jordan/pytest-69/loud_outro0/outro.mp4')
+tmp_path = PosixPath('/tmp/pytest-of-jordan/pytest-69/test_a_loud_bed_is_capped_unde4')
+case = 'unnormalised'
+
+    @pytest.mark.parametrize("case", ["steady", "ducked", "outro", "edited", "unnormalised", "wider"])
+    def test_a_loud_bed_is_capped_under_the_speech(speech_src, loud_low_bed, loud_outro, tmp_path, case):
+        """A bed louder than the speech (a mastered track at level_db = 0). Normalising the
+        finished mix then turned the speech down by about the difference: measured 7 dB
+        (ducked: 3.5 dB), the bed 6.6 LU OVER the speech. The bed is now capped at
+        music.speech_margin_lu (default 11) under the dialogue first, so:
+    
+        * the file still meets audio.target_lufs (normalised cases);
+        * the speech sits no lower than in the same render without a bed, within 0.5 dB
+          (a bed at 11 LU under adds at most about 0.33 LU to the mix, which the
+          normalisation takes back off everything);
+        * the bed plays at least the margin under the speech while the clip runs, within
+          0.2 LU (the band filters' loss and the AAC encode; measured 10.95 to 11.03).
+    
+        ``outro``: a loud kept card sound after the speech is not part of the dialogue the
+        cap is measured on (it would loosen the cap under the speech). ``unnormalised``: the
+        cap holds without audio.normalize too. ``wider``: speech_margin_lu = 15 is used."""
+        normalize = case != "unnormalised"
+        margin = 15.0 if case == "wider" else 11.0
+        card = {"outro": {"path": str(loud_outro), "audio": "keep"}} if case == "outro" else {}
+        bed = {"music": {"enabled": True, "path": str(loud_low_bed), "level_db": 0,
+                         "duck_db": 8 if case == "ducked" else 0,
+                         **({"speech_margin_lu": margin} if case == "wider" else {})}}
+    
+        def cfg_(**sections):
+            return build_config([("t", {"reframe": {"mode": "fit"}, "audio": {"normalize": normalize, "fade_ms": 0},
+                                        **card, **sections})])
+    
+        go = _render_edited if case == "edited" else _render_long
+        c = cfg_(**bed)
+        out = go(speech_src, tmp_path / "bed.mp4", c)
+        ref = go(speech_src, tmp_path / "ref.mp4", cfg_())
+        speech, under = _lufs(out, _BODY_S, _SPEECH_BAND), _lufs(out, _BODY_S, _BED_BAND)
+        alone = _lufs(ref, _BODY_S, _SPEECH_BAND)
+        if normalize:
+            whole = _lufs(out, 8.0)
+            assert abs(whole - c.audio.target_lufs) <= 0.5, whole
+        assert speech >= alone - 0.5, (speech, alone)                   # the speech is not turned down
+>       assert speech - under >= margin - 0.2, (speech, under)          # the bed stays under it
+        ^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^
+E       AssertionError: (-14.67, -25.46)
+E       assert (-14.67 - -25.46) >= (11.0 - 0.2)
+
+tests/test_render_finish.py:364: AssertionError
+______________ test_a_loud_bed_is_capped_under_the_speech[wider] _______________
+
+speech_src = PosixPath('/tmp/pytest-of-jordan/pytest-69/speech0/s.mp4')
+loud_low_bed = PosixPath('/tmp/pytest-of-jordan/pytest-69/low_bed0/bed.wav')
+loud_outro = PosixPath('/tmp/pytest-of-jordan/pytest-69/loud_outro0/outro.mp4')
+tmp_path = PosixPath('/tmp/pytest-of-jordan/pytest-69/test_a_loud_bed_is_capped_unde5')
+case = 'wider'
+
+    @pytest.mark.parametrize("case", ["steady", "ducked", "outro", "edited", "unnormalised", "wider"])
+    def test_a_loud_bed_is_capped_under_the_speech(speech_src, loud_low_bed, loud_outro, tmp_path, case):
+        """A bed louder than the speech (a mastered track at level_db = 0). Normalising the
+        finished mix then turned the speech down by about the difference: measured 7 dB
+        (ducked: 3.5 dB), the bed 6.6 LU OVER the speech. The bed is now capped at
+        music.speech_margin_lu (default 11) under the dialogue first, so:
+    
+        * the file still meets audio.target_lufs (normalised cases);
+        * the speech sits no lower than in the same render without a bed, within 0.5 dB
+          (a bed at 11 LU under adds at most about 0.33 LU to the mix, which the
+          normalisation takes back off everything);
+        * the bed plays at least the margin under the speech while the clip runs, within
+          0.2 LU (the band filters' loss and the AAC encode; measured 10.95 to 11.03).
+    
+        ``outro``: a loud kept card sound after the speech is not part of the dialogue the
+        cap is measured on (it would loosen the cap under the speech). ``unnormalised``: the
+        cap holds without audio.normalize too. ``wider``: speech_margin_lu = 15 is used."""
+        normalize = case != "unnormalised"
+        margin = 15.0 if case == "wider" else 11.0
+        card = {"outro": {"path": str(loud_outro), "audio": "keep"}} if case == "outro" else {}
+        bed = {"music": {"enabled": True, "path": str(loud_low_bed), "level_db": 0,
+                         "duck_db": 8 if case == "ducked" else 0,
+                         **({"speech_margin_lu": margin} if case == "wider" else {})}}
+    
+        def cfg_(**sections):
+            return build_config([("t", {"reframe": {"mode": "fit"}, "audio": {"normalize": normalize, "fade_ms": 0},
+                                        **card, **sections})])
+    
+        go = _render_edited if case == "edited" else _render_long
+        c = cfg_(**bed)
+        out = go(speech_src, tmp_path / "bed.mp4", c)
+        ref = go(speech_src, tmp_path / "ref.mp4", cfg_())
+        speech, under = _lufs(out, _BODY_S, _SPEECH_BAND), _lufs(out, _BODY_S, _BED_BAND)
+        alone = _lufs(ref, _BODY_S, _SPEECH_BAND)
+        if normalize:
+            whole = _lufs(out, 8.0)
+            assert abs(whole - c.audio.target_lufs) <= 0.5, whole
+        assert speech >= alone - 0.5, (speech, alone)                   # the speech is not turned down
+>       assert speech - under >= margin - 0.2, (speech, under)          # the bed stays under it
+        ^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^
+E       AssertionError: (-14.3, -29.07)
+E       assert (-14.3 - -29.07) >= (15.0 - 0.2)
+
+tests/test_render_finish.py:364: AssertionError
+_____________ test_a_bed_already_under_the_margin_is_left_as_it_is _____________
+
+speech_src = PosixPath('/tmp/pytest-of-jordan/pytest-69/speech0/s.mp4')
+loud_low_bed = PosixPath('/tmp/pytest-of-jordan/pytest-69/low_bed0/bed.wav')
+tmp_path = PosixPath('/tmp/pytest-of-jordan/pytest-69/test_a_bed_already_under_the_m0')
+monkeypatch = <_pytest.monkeypatch.MonkeyPatch object at 0x7202b435bcb0>
+
+    def test_a_bed_already_under_the_margin_is_left_as_it_is(speech_src, loud_low_bed, tmp_path, monkeypatch):
+        """level_db = -24 puts the bed about 21 LU under the speech: the cap leaves it alone
+        (it never turns a bed up). The render is the one the finish made before the cap
+        existed: the same render with the cap step taken out. Within 40 dB under the signal:
+        two runs of the same bed graph are not always sample-identical (measured up to about
+        50 dB under it, before the cap existed too); a bed turned up to the margin is about
+        10 dB under it."""
+        c = build_config([("t", {"reframe": {"mode": "fit"}, "audio": {"normalize": True, "fade_ms": 0},
+                                 "music": {"enabled": True, "path": str(loud_low_bed), "level_db": -24,
+                                           "duck_db": 8}})])
+        out = _render_long(speech_src, tmp_path / "q.mp4", c)
+        monkeypatch.setattr(render, "_capped_bed", lambda src, finish, **kw: finish)
+        before = _render_long(speech_src, tmp_path / "r.mp4", c)
+        a, b = _pcm(out), _pcm(before)
+        assert a.shape == b.shape
+        diff_db = 20 * np.log10(np.sqrt(np.mean((a - b) ** 2)) / np.sqrt(np.mean(b ** 2)) + 1e-15)
+>       assert diff_db <= -40, diff_db
+E       AssertionError: np.float32(-39.190716)
+E       assert np.float32(-39.190716) <= -40
+
+tests/test_render_finish.py:383: AssertionError
+=============================== warnings summary ===============================
+tests/test_dynamic_captions.py: 21 warnings
+  /home/jordan/openai/worktrees/01a18ef6-f0aa-7000-84b2-0dbea407507a/.headline-tool/clip-agent/tests/test_dynamic_captions.py:87: DeprecationWarning: Image.Image.getdata is deprecated and will be removed in Pillow 14 (2027-10-15). Use get_flattened_data instead.
+    assert not any(r > 180 and g > 150 and b < 100 and a > 200 for im in images for r, g, b, a in im.getdata())
+
+tests/test_dynamic_captions.py::test_intermediate_png_opacity_and_pill_geometry
+  /home/jordan/openai/worktrees/01a18ef6-f0aa-7000-84b2-0dbea407507a/.headline-tool/clip-agent/tests/test_dynamic_captions.py:179: DeprecationWarning: Image.Image.getdata is deprecated and will be removed in Pillow 14 (2027-10-15). Use get_flattened_data instead.
+    assert max(Image.open(path).getchannel("A").getdata()) == 128
+
+tests/test_dynamic_captions.py::test_intermediate_png_opacity_and_pill_geometry
+  /home/jordan/openai/worktrees/01a18ef6-f0aa-7000-84b2-0dbea407507a/.headline-tool/clip-agent/tests/test_dynamic_captions.py:181: DeprecationWarning: Image.Image.getdata is deprecated and will be removed in Pillow 14 (2027-10-15). Use get_flattened_data instead.
+    assert max(Image.open(path).getchannel("A").getdata()) == 255
+
+tests/test_prefs_page.py::test_cli_page_writes_file
+  /home/jordan/openai/worktrees/01a18ef6-f0aa-7000-84b2-0dbea407507a/.headline-tool/clip-agent/tests/test_prefs_page.py:945: DeprecationWarning: 'isolated_filesystem' is deprecated and will be removed in Click 9.0. Use 'tempfile.TemporaryDirectory' or pytest's 'tmp_path' fixture with absolute paths instead.
+    with runner.isolated_filesystem(temp_dir=tmp_path):
+
+-- Docs: https://docs.pytest.org/en/stable/how-to/capture-warnings.html
+=========================== short test summary info ============================
+FAILED tests/test_captions_safe.py::test_hook_title_png_in_top_band_and_safe_area
+FAILED tests/test_docs_commands.py::test_tuning_documents_every_config_key - ...
+FAILED tests/test_htc_lock.py::test_htc_profile_resolved_config_unchanged[how-to-computer]
+FAILED tests/test_htc_lock.py::test_htc_profile_resolved_config_unchanged[how-to-computer-local]
+FAILED tests/test_installer.py::test_eof_at_the_name_prompt_stops_with_a_message
+FAILED tests/test_render_finish.py::test_a_loud_bed_is_capped_under_the_speech[edited]
+FAILED tests/test_render_finish.py::test_a_loud_bed_is_capped_under_the_speech[unnormalised]
+FAILED tests/test_render_finish.py::test_a_loud_bed_is_capped_under_the_speech[wider]
+FAILED tests/test_render_finish.py::test_a_bed_already_under_the_margin_is_left_as_it_is
+9 failed, 3504 passed, 20 skipped, 24 warnings in 586.90s (0:09:46)

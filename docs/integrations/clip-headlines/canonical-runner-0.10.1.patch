@@ -1,0 +1,54 @@
+--- canonical-runner-0.10.0.md
++++ canonical-runner-0.10.1.md
+@@ -5 +5 @@
+-**Helper version: 0.10.0 (immutable branded headlines; preserves selected-profile readiness, qualified captions and closing video/music).** Explicit caption styles override saved process-time style through finalize --captions; appearance rerenders require the mapped original project and exact candidate, and never reprocess the submitted rendered video. Styles plain, phrase-pop and karaoke have real CLI render evidence. Refresh context.clip_next_rev from social_clip_list.next_rev when rerendering after removal; immutable tombstones can leave revision gaps.  Adds typed version-based nudge, caption-word and alternate-cut fixes. The expanded fake suite passes (88 tests), including episode fan-out, zero picks and partial failure. Real installed `clip` 0.9.0 commit `58960577337d5682761e1538ff4365d4ba0b4e18` rendered a short deterministic fixture with all four ±1s nudges, a visibly changed caption word, and alternate promotion followed by process/resume and finalize. Fixture transcript/proposals were supplied during test setup; rendering and resume CLI subprocesses were real and unpatched. This was an isolated renderer test, not a production upload/claim run.
++**Helper version: 0.10.1 (immutable branded headlines; preserves selected-profile readiness, qualified captions and closing video/music).** Explicit caption styles override saved process-time style through finalize --captions; appearance rerenders require the mapped original project and exact candidate, and never reprocess the submitted rendered video. Styles plain, phrase-pop and karaoke have real CLI render evidence. Refresh context.clip_next_rev from social_clip_list.next_rev when rerendering after removal; immutable tombstones can leave revision gaps.  Adds typed version-based nudge, caption-word and alternate-cut fixes. The expanded fake suite passes (88 tests), including episode fan-out, zero picks and partial failure. Real installed `clip` 0.9.0 commit `58960577337d5682761e1538ff4365d4ba0b4e18` rendered a short deterministic fixture with all four ±1s nudges, a visibly changed caption word, and alternate promotion followed by process/resume and finalize. Fixture transcript/proposals were supplied during test setup; rendering and resume CLI subprocesses were real and unpatched. This was an isolated renderer test, not a production upload/claim run.
+@@ -37 +37,9 @@
+-## Branded headline templates (helper 0.10.0)
++## Branded headline templates (helper 0.10.1)
++
++Social supports an explicit per-clip `look.title.enabled=false` appearance rerender.
++It forces `captions.hook_title=false` in the same disposable profile, preserves
++caption/music/closing settings and original-project rendering. Disabling is
++currently per-clip only: new-clip generation with disabled title fails explicitly
++with HEADLINE_DISABLED_GENERATION_UNSUPPORTED. Social refuses saving a disabled
++show default. Template defaults remain independently saveable and reversible.
++
+@@ -146 +154 @@
+-Canonical helper SHA256 `2aee11721000b2505a0e660b3d9355d88e31c93c9c2246a7042cd6fd985813a1`. Isolated local fixture used unmodified upstream 82ef513 music implementation through the existing compatible Python environment (version metadata still identifies the installed 0.9.0 distribution; actual module path/commit recorded in receipt). It rendered original project/candidate with a 997 Hz test song: off amplitude 1.97e−6, −42 dB 0.0003233, −24 dB 0.002562, three distinct MP4 hashes. This proves actual audio/gain change under the upstream renderer; it is not a production run or an upstream headline patch rollout. 106 helper tests pass, including 12 music identity/download/privacy/failure/cleanup cases.
++Canonical helper SHA256 `f15a7976f12c4e2d369693d5eae15a354806003affc899ad85284d585b18f5ec`. Isolated local fixture used unmodified upstream 82ef513 music implementation through the existing compatible Python environment (version metadata still identifies the installed 0.9.0 distribution; actual module path/commit recorded in receipt). It rendered original project/candidate with a 997 Hz test song: off amplitude 1.97e−6, −42 dB 0.0003233, −24 dB 0.002562, three distinct MP4 hashes. This proves actual audio/gain change under the upstream renderer; it is not a production run or an upstream headline patch rollout. 106 helper tests pass, including 12 music identity/download/privacy/failure/cleanup cases.
+@@ -232 +240 @@
+-Pinned sha256 of `clip_runner.py` 0.10.0: `2aee11721000b2505a0e660b3d9355d88e31c93c9c2246a7042cd6fd985813a1`
++Pinned sha256 of `clip_runner.py` 0.10.1: `f15a7976f12c4e2d369693d5eae15a354806003affc899ad85284d585b18f5ec`
+@@ -387 +395 @@
+-VERSION = "0.10.0"
++VERSION = "0.10.1"
+@@ -1950,0 +1959,3 @@
++    title_enabled = ((payload.get("look") or {}).get("title") or {}).get("enabled")
++    if title_enabled is False and consumer:
++        raise ClipError("HEADLINE_DISABLED_GENERATION_UNSUPPORTED", "headline")
+@@ -1963,0 +1975,2 @@
++    if type(title_enabled) is bool:
++        mapped["captions.hook_title"] = title_enabled
+@@ -4084,0 +4098,21 @@
++
++def test_disabled_opening_rerenders_original_without_altering_captions(shim, state_dir):
++    first_new_clip(shim, state_dir)
++    client = FakeJobClient(jobs=[rerender_job(base_render_id="render-fixture-1", appearance=True,
++        look={"title": {"enabled": False}, "cap": {"style": "karaoke"}},
++        clip_overrides={"mapped": {"captions.hook_title": True}, "unmapped": []})])
++    assert run(client, state_dir)["status"] == "done"
++    profile = tomllib.loads(logged(shim, "imported")[-1]["imported"])
++    assert profile["captions"]["hook_title"] is False
++    assert profile["captions"]["style"] == "karaoke"
++    assert not list((shim.home / "profiles").glob("*-job-*"))
++    assert not client.named("complete")[0][2].get("headline_applied")
++
++
++def test_disabled_automatic_generation_fails_explicitly_instead_of_claiming_headline_success(shim, state_dir):
++    from conftest import make_job
++    client = FakeJobClient(jobs=[make_job("job-01", "new_clip", look={"title": {"enabled": False}})])
++    assert run(client, state_dir)["code"] == "HEADLINE_DISABLED_GENERATION_UNSUPPORTED"
++    assert not client.named("complete")
++    assert not any(args[0] == "finalize" for args in shim.argvs())
++

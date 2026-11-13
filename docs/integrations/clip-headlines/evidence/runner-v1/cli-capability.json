@@ -1,0 +1,36 @@
+{
+  "version": "0.9.0",
+  "source": "file:///home/jordan/openai/worktrees/01a18ef6-f0aa-7000-84b2-0dbea407507a/.headline-delivery/clip-agent",
+  "commit": "82ef5132b926fed33a80a304364fdda14335c2d5",
+  "ref": null,
+  "editable": true,
+  "python": "/home/jordan/openai/worktrees/01a18ef6-f0aa-7000-84b2-0dbea407507a/.headline-delivery/.venv/bin/python",
+  "content_free": 2,
+  "headline_review": 1,
+  "headline_template_renderer": {
+    "path": "/home/jordan/openai/worktrees/01a18ef6-f0aa-7000-84b2-0dbea407507a/.headline-delivery/clip-agent/src/clip_agent/headline_templates.py",
+    "sha256": "b36d7ec515da07e5e432d1eca57c639ecc6007126cc68110d1bb367c99b45d84"
+  },
+  "headline_templates": 1,
+  "headline_template_names": [
+    "chrome-hook",
+    "neon-broadcast",
+    "arcade-punch"
+  ],
+  "caption_treatments": 1,
+  "caption_styles": [
+    "none",
+    "plain",
+    "phrase-pop",
+    "karaoke",
+    "type-on",
+    "focus-word",
+    "editorial-punch"
+  ],
+  "caption_renderer": {
+    "path": "/home/jordan/openai/worktrees/01a18ef6-f0aa-7000-84b2-0dbea407507a/.headline-delivery/clip-agent/src/clip_agent/captions.py",
+    "sha256": "f4e12581ef8399328345e767d6fdcfb0d39f6c9acae668c71adc82b338bd7603",
+    "temporal_path": "/home/jordan/openai/worktrees/01a18ef6-f0aa-7000-84b2-0dbea407507a/.headline-delivery/clip-agent/src/clip_agent/dynamic_captions.py",
+    "temporal_sha256": "385f5e446c09bd06bb5fb11aaa4228fa95e47fa808e1c1d750bf6633d039aee7"
+  }
+}

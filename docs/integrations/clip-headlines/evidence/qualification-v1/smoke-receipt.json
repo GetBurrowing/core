@@ -1,0 +1,594 @@
+{
+  "runtime": "isolated-linux-runtime",
+  "verified_existing_outputs": false,
+  "helper_sha256": "b7d59b22d251d1a3bafd4f49fa9c7e0343eddf60149f0a2047ec27048eaeac3c",
+  "tool": {
+    "version": "0.9.0",
+    "source": "file:///home/jordan/openai/rig/htc-template-s4/release-renderer/clip-agent",
+    "commit": "82ef5132b926fed33a80a304364fdda14335c2d5",
+    "ref": null,
+    "editable": true,
+    "python": "/home/jordan/openai/rig/htc-template-s4/release-renderer/.venv/bin/python",
+    "content_free": 2,
+    "headline_review": 1,
+    "headline_template_renderer": {
+      "path": "/home/jordan/openai/rig/htc-template-s4/release-renderer/clip-agent/src/clip_agent/headline_templates.py",
+      "sha256": "b36d7ec515da07e5e432d1eca57c639ecc6007126cc68110d1bb367c99b45d84"
+    },
+    "headline_templates": 1,
+    "headline_template_names": [
+      "chrome-hook",
+      "neon-broadcast",
+      "arcade-punch"
+    ],
+    "caption_treatments": 1,
+    "caption_styles": [
+      "none",
+      "plain",
+      "phrase-pop",
+      "karaoke",
+      "type-on",
+      "focus-word",
+      "editorial-punch"
+    ],
+    "caption_renderer": {
+      "path": "/home/jordan/openai/rig/htc-template-s4/release-renderer/clip-agent/src/clip_agent/captions.py",
+      "sha256": "f4e12581ef8399328345e767d6fdcfb0d39f6c9acae668c71adc82b338bd7603",
+      "temporal_path": "/home/jordan/openai/rig/htc-template-s4/release-renderer/clip-agent/src/clip_agent/dynamic_captions.py",
+      "temporal_sha256": "385f5e446c09bd06bb5fb11aaa4228fa95e47fa808e1c1d750bf6633d039aee7"
+    }
+  },
+  "modules": {
+    "clip_agent.captions": {
+      "path": "/home/jordan/openai/rig/htc-template-s4/release-renderer/clip-agent/src/clip_agent/captions.py",
+      "sha256": "f4e12581ef8399328345e767d6fdcfb0d39f6c9acae668c71adc82b338bd7603"
+    },
+    "clip_agent.headline_templates": {
+      "path": "/home/jordan/openai/rig/htc-template-s4/release-renderer/clip-agent/src/clip_agent/headline_templates.py",
+      "sha256": "b36d7ec515da07e5e432d1eca57c639ecc6007126cc68110d1bb367c99b45d84"
+    },
+    "clip_agent.opencv_faces": {
+      "path": "/home/jordan/openai/rig/htc-template-s4/release-renderer/clip-agent/src/clip_agent/opencv_faces.py",
+      "sha256": "907189949e0c387df4eae75b4e64f01e8b04d4056ac7b575bdb58500360cf523"
+    },
+    "clip_agent.pipeline": {
+      "path": "/home/jordan/openai/rig/htc-template-s4/release-renderer/clip-agent/src/clip_agent/pipeline.py",
+      "sha256": "129a33b0d258dbb35ce02b76ad162e7b94767266c3fbfec5eb9c3ee44cd21a88"
+    },
+    "clip_agent.reframe": {
+      "path": "/home/jordan/openai/rig/htc-template-s4/release-renderer/clip-agent/src/clip_agent/reframe.py",
+      "sha256": "7db058c1312dad20afc67d2291bad39d37ef4636eabb6cc99fee216a2186c169"
+    },
+    "clip_agent.shots": {
+      "path": "/home/jordan/openai/rig/htc-template-s4/release-renderer/clip-agent/src/clip_agent/shots.py",
+      "sha256": "df26a73d56c7cfe7c295b711a6e2781bb514f5a1aadb5a82a024a1ab17e2dd49"
+    }
+  },
+  "source_sha256": "a56d9f934de436211d92c2e9a5688cd9b6c8f0c52527d25c6c3d3b7f5fd66d91",
+  "source_span": [
+    1502,
+    1504
+  ],
+  "original_candidate_id": "facb5784c2",
+  "original_candidate_span": [
+    1488.6,
+    1541.28
+  ],
+  "original_project_unchanged": true,
+  "receipts": [
+    {
+      "name": "chrome-edit",
+      "result": {
+        "file_id": "fixture-file-chrome-edit",
+        "candidate_id": "facb5784c2",
+        "headline_render": {
+          "version": 1,
+          "revision": 1,
+          "template": "chrome-hook",
+          "renderer_sha256": "b36d7ec515da07e5e432d1eca57c639ecc6007126cc68110d1bb367c99b45d84",
+          "assets": {
+            "logo_sha256": "7cbddeac97ad8fe3aa53e867cf0e5648329f500e528f2302e1b2ebcba8bf767f",
+            "font_sha256": "a4ba3a92350ebb031da0cb47630ac49eb265082ca1bc0450442f4a83ab947cab",
+            "provenance": "assets-manifest.json; HTC-only authorized logo; OFL font"
+          },
+          "timing": {
+            "entrance_s": 0.2,
+            "hold_s": 0.55,
+            "exit_s": 0.25,
+            "total_s": 1.0
+          },
+          "emphasis": [],
+          "content": {
+            "artifact": "sha256:7e5b6d66d610046fd6dd2dd0d71c38be9cc7f3368307f7248b656e2cb63fb504",
+            "sha256": "7e5b6d66d610046fd6dd2dd0d71c38be9cc7f3368307f7248b656e2cb63fb504"
+          },
+          "output_sha256": "782af72339a03ebbbb6739d9d7033f08ca17085b4a71182bcb472811f81bd289"
+        },
+        "headline_applied": true,
+        "duration_s": 2.0,
+        "title": null,
+        "caption": null,
+        "speaker": null,
+        "episode_code": null,
+        "source_label": "htc-clip-tool"
+      },
+      "sha256": "782af72339a03ebbbb6739d9d7033f08ca17085b4a71182bcb472811f81bd289"
+    },
+    {
+      "name": "disabled",
+      "result": {
+        "file_id": "fixture-file-disabled",
+        "candidate_id": "facb5784c2",
+        "duration_s": 2.0,
+        "title": null,
+        "caption": null,
+        "speaker": null,
+        "episode_code": null,
+        "source_label": "htc-clip-tool"
+      },
+      "sha256": "82865b7d1f6db804542d5d42908d8d72e2cac3bb6d51c691a68042b76fa615ea"
+    }
+  ],
+  "decoded": [
+    {
+      "name": "chrome-edit",
+      "frames": 60,
+      "sample_fps": 30,
+      "native": {
+        "width": 540,
+        "height": 960,
+        "r_frame_rate": "24000/1001",
+        "duration": "2.002000",
+        "nb_read_frames": "48"
+      },
+      "speech_correlation": 1.0,
+      "face_checks": 60,
+      "title_face_checks": 30
+    },
+    {
+      "name": "disabled",
+      "frames": 60,
+      "sample_fps": 30,
+      "native": {
+        "width": 540,
+        "height": 960,
+        "r_frame_rate": "24000/1001",
+        "duration": "2.002000",
+        "nb_read_frames": "48"
+      },
+      "speech_correlation": 1.0,
+      "face_checks": 0,
+      "title_face_checks": 0
+    }
+  ],
+  "negative_probes": [
+    {
+      "name": "unsafe-fit",
+      "code": "HEADLINE_LAYOUT_SHORTEN_TEXT",
+      "upload": false
+    },
+    {
+      "name": "wrong-asset",
+      "code": "HEADLINE_ASSET_MISMATCH",
+      "upload": false
+    }
+  ],
+  "layout_matrix": [
+    {
+      "template": "chrome-hook",
+      "case": "short",
+      "error": null,
+      "sha256": "f28227432e79c88013678604ba8744c086f1fb29142a72be8cb798d8d1b40dbf"
+    },
+    {
+      "template": "chrome-hook",
+      "case": "long",
+      "error": null,
+      "sha256": "b53bd27937b6e61de72a36e4e4ff6c08b5078b59cdf2993bad39d4e120710c1f"
+    },
+    {
+      "template": "chrome-hook",
+      "case": "unbroken",
+      "error": "HEADLINE_LAYOUT_SHORTEN_TEXT",
+      "sha256": null
+    },
+    {
+      "template": "chrome-hook",
+      "case": "unicode",
+      "error": null,
+      "sha256": "eae1cd5bf40da252e8b5ba5b02bab8f9a73ce203e6e49bd327f1641c4664632e"
+    },
+    {
+      "template": "chrome-hook",
+      "case": "unsupported-unicode",
+      "error": "HEADLINE_GLYPH_UNSUPPORTED",
+      "sha256": null
+    },
+    {
+      "template": "neon-broadcast",
+      "case": "short",
+      "error": null,
+      "sha256": "55772c879368c9f6955d3b80b7e3ae7cee0662d35b4c2e1aeb71b03b8ee4ea7d"
+    },
+    {
+      "template": "neon-broadcast",
+      "case": "long",
+      "error": null,
+      "sha256": "c3b6dd42dcde0dc5899cf8273c2209020019d527731efe7eb1eb9ce33f9a84ac"
+    },
+    {
+      "template": "neon-broadcast",
+      "case": "unbroken",
+      "error": "HEADLINE_LAYOUT_SHORTEN_TEXT",
+      "sha256": null
+    },
+    {
+      "template": "neon-broadcast",
+      "case": "unicode",
+      "error": null,
+      "sha256": "ac28141b1a928ab2fc816c526a56d179219aa73ba4a60af4aa425d1d7072d587"
+    },
+    {
+      "template": "neon-broadcast",
+      "case": "unsupported-unicode",
+      "error": "HEADLINE_GLYPH_UNSUPPORTED",
+      "sha256": null
+    },
+    {
+      "template": "arcade-punch",
+      "case": "short",
+      "error": null,
+      "sha256": "1b47a56599ff277ce8240fc03c2cf5b2ea4596dc4c778b327f3925a4d49a8768"
+    },
+    {
+      "template": "arcade-punch",
+      "case": "long",
+      "error": null,
+      "sha256": "95062ecd3ac63f28360a4977d9cd32492457575281b540db9607ce719ef893ea"
+    },
+    {
+      "template": "arcade-punch",
+      "case": "unbroken",
+      "error": "HEADLINE_LAYOUT_SHORTEN_TEXT",
+      "sha256": null
+    },
+    {
+      "template": "arcade-punch",
+      "case": "unicode",
+      "error": null,
+      "sha256": "730195577d1b255cc8c9f2e47657f2205d687ebadab47479bb3a689d1e316cff"
+    },
+    {
+      "template": "arcade-punch",
+      "case": "unsupported-unicode",
+      "error": "HEADLINE_GLYPH_UNSUPPORTED",
+      "sha256": null
+    }
+  ],
+  "commands": [
+    {
+      "command": "profile",
+      "exit": 0
+    },
+    {
+      "command": "review",
+      "exit": 0
+    },
+    {
+      "step": "version",
+      "command": "version",
+      "profile": null
+    },
+    {
+      "step": "profile_path",
+      "command": "profile",
+      "profile": null
+    },
+    {
+      "step": "doctor",
+      "command": "doctor",
+      "profile": "burrow-qualification"
+    },
+    {
+      "step": "project_info",
+      "command": "project",
+      "profile": null
+    },
+    {
+      "step": "review",
+      "command": "review",
+      "profile": null
+    },
+    {
+      "step": "headline_template_capability",
+      "command": "version",
+      "profile": null
+    },
+    {
+      "step": "caption_style",
+      "command": "config",
+      "profile": "burrow-qualification"
+    },
+    {
+      "step": "closing_capability",
+      "command": "config",
+      "profile": "burrow-qualification"
+    },
+    {
+      "step": "closing_path_capability",
+      "command": "config",
+      "profile": "burrow-qualification"
+    },
+    {
+      "step": "profile_derive",
+      "command": "profile",
+      "profile": null
+    },
+    {
+      "step": "doctor",
+      "command": "doctor",
+      "profile": "burrow-qualification-job-chrome-edit"
+    },
+    {
+      "step": "review_apply",
+      "command": "review",
+      "profile": "burrow-qualification-job-chrome-edit"
+    },
+    {
+      "step": "review",
+      "command": "review",
+      "profile": "burrow-qualification-job-chrome-edit"
+    },
+    {
+      "step": "review_apply",
+      "command": "review",
+      "profile": "burrow-qualification-job-chrome-edit"
+    },
+    {
+      "step": "review",
+      "command": "review",
+      "profile": "burrow-qualification-job-chrome-edit"
+    },
+    {
+      "step": "headline_review_apply",
+      "command": "review",
+      "profile": "burrow-qualification-job-chrome-edit"
+    },
+    {
+      "step": "headline_prepare",
+      "command": "hooks",
+      "profile": "burrow-qualification-job-chrome-edit"
+    },
+    {
+      "step": "headline_apply",
+      "command": "review",
+      "profile": "burrow-qualification-job-chrome-edit"
+    },
+    {
+      "step": "headline_verify",
+      "command": "hooks",
+      "profile": "burrow-qualification-job-chrome-edit"
+    },
+    {
+      "step": "finalize",
+      "command": "finalize",
+      "profile": "burrow-qualification-job-chrome-edit"
+    },
+    {
+      "step": "profile_remove",
+      "command": "profile",
+      "profile": null
+    },
+    {
+      "step": "version",
+      "command": "version",
+      "profile": null
+    },
+    {
+      "step": "profile_path",
+      "command": "profile",
+      "profile": null
+    },
+    {
+      "step": "doctor",
+      "command": "doctor",
+      "profile": "burrow-qualification"
+    },
+    {
+      "step": "project_info",
+      "command": "project",
+      "profile": null
+    },
+    {
+      "step": "review",
+      "command": "review",
+      "profile": null
+    },
+    {
+      "step": "closing_capability",
+      "command": "config",
+      "profile": "burrow-qualification"
+    },
+    {
+      "step": "closing_path_capability",
+      "command": "config",
+      "profile": "burrow-qualification"
+    },
+    {
+      "step": "profile_derive",
+      "command": "profile",
+      "profile": null
+    },
+    {
+      "step": "doctor",
+      "command": "doctor",
+      "profile": "burrow-qualification-job-disabled"
+    },
+    {
+      "step": "review_apply",
+      "command": "review",
+      "profile": "burrow-qualification-job-disabled"
+    },
+    {
+      "step": "review",
+      "command": "review",
+      "profile": "burrow-qualification-job-disabled"
+    },
+    {
+      "step": "review_apply",
+      "command": "review",
+      "profile": "burrow-qualification-job-disabled"
+    },
+    {
+      "step": "review",
+      "command": "review",
+      "profile": "burrow-qualification-job-disabled"
+    },
+    {
+      "step": "finalize",
+      "command": "finalize",
+      "profile": "burrow-qualification-job-disabled"
+    },
+    {
+      "step": "profile_remove",
+      "command": "profile",
+      "profile": null
+    },
+    {
+      "step": "version",
+      "command": "version",
+      "profile": null
+    },
+    {
+      "step": "profile_path",
+      "command": "profile",
+      "profile": null
+    },
+    {
+      "step": "doctor",
+      "command": "doctor",
+      "profile": "burrow-qualification"
+    },
+    {
+      "step": "project_info",
+      "command": "project",
+      "profile": null
+    },
+    {
+      "step": "review",
+      "command": "review",
+      "profile": null
+    },
+    {
+      "step": "headline_template_capability",
+      "command": "version",
+      "profile": null
+    },
+    {
+      "step": "closing_capability",
+      "command": "config",
+      "profile": "burrow-qualification"
+    },
+    {
+      "step": "closing_path_capability",
+      "command": "config",
+      "profile": "burrow-qualification"
+    },
+    {
+      "step": "profile_derive",
+      "command": "profile",
+      "profile": null
+    },
+    {
+      "step": "doctor",
+      "command": "doctor",
+      "profile": "burrow-qualification-job-unsafe-fit"
+    },
+    {
+      "step": "review_apply",
+      "command": "review",
+      "profile": "burrow-qualification-job-unsafe-fit"
+    },
+    {
+      "step": "review",
+      "command": "review",
+      "profile": "burrow-qualification-job-unsafe-fit"
+    },
+    {
+      "step": "review_apply",
+      "command": "review",
+      "profile": "burrow-qualification-job-unsafe-fit"
+    },
+    {
+      "step": "review",
+      "command": "review",
+      "profile": "burrow-qualification-job-unsafe-fit"
+    },
+    {
+      "step": "headline_review_apply",
+      "command": "review",
+      "profile": "burrow-qualification-job-unsafe-fit"
+    },
+    {
+      "step": "headline_prepare",
+      "command": "hooks",
+      "profile": "burrow-qualification-job-unsafe-fit"
+    },
+    {
+      "step": "headline_apply",
+      "command": "review",
+      "profile": "burrow-qualification-job-unsafe-fit"
+    },
+    {
+      "step": "headline_verify",
+      "command": "hooks",
+      "profile": "burrow-qualification-job-unsafe-fit"
+    },
+    {
+      "step": "finalize",
+      "command": "finalize",
+      "profile": "burrow-qualification-job-unsafe-fit"
+    },
+    {
+      "step": "profile_remove",
+      "command": "profile",
+      "profile": null
+    },
+    {
+      "step": "version",
+      "command": "version",
+      "profile": null
+    },
+    {
+      "step": "profile_path",
+      "command": "profile",
+      "profile": null
+    },
+    {
+      "step": "doctor",
+      "command": "doctor",
+      "profile": "burrow-qualification"
+    },
+    {
+      "step": "project_info",
+      "command": "project",
+      "profile": null
+    },
+    {
+      "step": "review",
+      "command": "review",
+      "profile": null
+    },
+    {
+      "step": "headline_template_capability",
+      "command": "version",
+      "profile": null
+    },
+    {
+      "command": "version",
+      "exit": 0
+    }
+  ],
+  "live_generation_exercised": false,
+  "publication": false
+}

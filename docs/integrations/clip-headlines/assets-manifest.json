@@ -1,0 +1,37 @@
+{
+  "version": 1,
+  "assets": [
+    {
+      "path": "assets/htc-official-channel-logo.jpg",
+      "sha256": "b0d1f610a75b6e9fe3b0c217cdc6e1067bbc65446c8b13437f7d3076cbdd3224",
+      "origin": "https://www.youtube.com/@HowToComputer_JR (official channel og:image, fetched 2026-10-30)",
+      "rights": "HTC show asset used under Jordan\u2019s explicit task authorization for HTC branded clip outputs; no independent open-source or third-party reuse license asserted.",
+      "transform": "Original bytes"
+    },
+    {
+      "path": "assets/htc-official-logo-crop.png",
+      "sha256": "7cbddeac97ad8fe3aa53e867cf0e5648329f500e528f2302e1b2ebcba8bf767f",
+      "origin": "https://www.youtube.com/@HowToComputer_JR (official channel og:image, fetched 2026-10-30)",
+      "rights": "HTC show asset used under Jordan\u2019s explicit task authorization for HTC branded clip outputs; no independent open-source or third-party reuse license asserted.",
+      "transform": "Lossless rectangular crop [0,200,900,720] from original channel logo JPEG; no redraw, invented lettering, or AI image generation."
+    },
+    {
+      "path": "fonts/Anton-Regular.ttf",
+      "sha256": "a4ba3a92350ebb031da0cb47630ac49eb265082ca1bc0450442f4a83ab947cab",
+      "origin": "Pinned htc-clip-tool 82ef5132b926fed33a80a304364fdda14335c2d5 bundled fonts; fonts/SOURCES.txt",
+      "license": "OFL-1.1; accompanying family OFL and UPSTREAM-NOTICE.txt retained"
+    },
+    {
+      "path": "fonts/Inter-SemiBold.ttf",
+      "sha256": "78a843fade9d4612a5567302fb595b56976eb5fcebf4fea5a5912d638bafcde3",
+      "origin": "Pinned htc-clip-tool 82ef5132b926fed33a80a304364fdda14335c2d5 bundled fonts; fonts/SOURCES.txt",
+      "license": "OFL-1.1; accompanying family OFL and UPSTREAM-NOTICE.txt retained"
+    },
+    {
+      "path": "fonts/Inter-Regular.ttf",
+      "sha256": "40d692fce188e4471e2b3cba937be967878f631ad3ebbbdcd587687c7ebe0c82",
+      "origin": "https://github.com/rsms/inter/releases/download/v4.1/Inter-4.1.zip; archive SHA256 9883fdd4a49d4fb66bd8177ba6625ef9a64aa45899767dde3d36aa425756b11e; extras/ttf/Inter-Regular.ttf, unmodified",
+      "license": "OFL-1.1; Inter-OFL.txt and UPSTREAM-NOTICE.txt retained"
+    }
+  ]
+}

@@ -1,0 +1,1172 @@
+diff --git a/clip-agent/docs/TUNING.md b/clip-agent/docs/TUNING.md
+index 1ef4653..804a0c3 100644
+--- a/clip-agent/docs/TUNING.md
++++ b/clip-agent/docs/TUNING.md
+@@ -225,6 +225,19 @@ Transcript times are the source's own times. The audio that whisper, speaker det
+ | `safe_top` / `safe_bottom` / `safe_side` | 0.14 / 0.645 / 0.111 | Safe area for burned-in text on vertical exports, as fractions of height/width, so platform buttons never cover it: the top margin, the bottom edge and the LEFT margin (`safe_right` is the right one). These are one conservative zone for TikTok, Reels and Shorts together, not per-platform measurements. Captions and the hook title are centred inside it. In `shots` mode captions are placed below the detected face but never outside this area, which is why they can touch the chin on tight close-ups (RUNBOOK). |
+ | `safe_right` | 0.1667 | Right margin of that safe area (180 px at 1080 wide). It is wider than the left because of the platforms' button rail: at 1080×1920 text stays inside x 120–900, y 269–1238. |
+
++Opt-in branded openings use `hook_title_template` (`legacy`, `chrome-hook`,
++`neon-broadcast`, `arcade-punch`). `hook_title_logo_path` selects an authorized
++asset whose exact bytes match `hook_title_logo_sha256`. `hook_title_emphasis`
++is a list of zero-based word indices; `hook_title_emphasis_text` must equal the
++current full headline whenever emphasis is nonempty. `hook_title_face_boxes`
++contains normalized exclusion rectangles for direct renderer callers; ordinary
++finalize derives them from the actual full-frame crop plan. Missing geometry,
++face overlap, stale emphasis, unsupported glyphs and unreadably long text fail
++explicitly. No text is omitted. Branded `hook_title_seconds` must be >0.5 and
++<=6 seconds, including 0.2-second entrance and 0.25-second exit fades. Captions
++retain their independent style and timeline. Empty opt-in defaults are omitted
++from serialized config to preserve legacy profiles exactly.
++
+ ### `[outro]`
+ | Key | Default | Meaning |
+ |---|---|---|
+diff --git a/clip-agent/src/clip_agent/captions.py b/clip-agent/src/clip_agent/captions.py
+index 5b12136..c3e1b3c 100644
+--- a/clip-agent/src/clip_agent/captions.py
++++ b/clip-agent/src/clip_agent/captions.py
+@@ -1026,6 +1026,9 @@ def render_hook_title_png(
+     lets it be bigger), heavy font, on a rounded semi-opaque box
+     (``captions.hook_title_box``; else outlined text) at ``captions.hook_title_size_frac``, centred inside
+     :func:`hook_title_box` (the font shrinks until box and text fit)."""
++    if look.hook_title_template != "legacy":
++        from .headline_templates import render
++        return render(text, path, width=width, height=height, look=look, fonts_dir=fonts_dir)
+     path = Path(path)
+     lines = wrap_hook_title(text)
+     img = Image.new("RGBA", (width, height), (0, 0, 0, 0))
+@@ -1193,6 +1196,11 @@ def render_caption_pngs(
+         return []
+     from . import dynamic_captions
+
++    if style == CaptionStyle.SUBTLE:
++        from .subtle_captions import render_segments
++        return render_segments(words, out_dir, width=width, height=height, config=config,
++                                       fonts_dir=fonts_dir, clip_start=clip_start, clip_dur=clip_dur,
++                                       vpos_track=vpos_track, breaks=breaks)
+     if style in dynamic_captions.STYLES:
+         return dynamic_captions.render_segments(
+             words, out_dir, width=width, height=height, style=style, fonts_dir=fonts_dir,
+@@ -1358,12 +1366,18 @@ def render_caption_track(
+                     cache[png] = out
+                 return cache[png]
+
+-            timeline = _overlay_window(timeline, until, with_title)
++            if config.captions.hook_title_template != "legacy":
++                from .headline_templates import animate
++                if not .5 < secs <= 6:
++                    raise ValueError("HEADLINE_TIMING_INVALID")
++                timeline = animate(timeline, title_png, until=until, directory=tmpd, duration=clip_dur)
++            else:
++                timeline = _overlay_window(timeline, until, with_title)
+
+         # concat list -> transparent caption track (qtrle .mov keeps alpha)
+         listf = tmpd / "concat.txt"
+         lines = []
+-        temporal = style in {CaptionStyle.TYPE_ON, CaptionStyle.FOCUS_WORD, CaptionStyle.EDITORIAL_PUNCH}
++        temporal = (bool(title_text) and config.captions.hook_title and config.captions.hook_title_template != "legacy") or style in {CaptionStyle.TYPE_ON, CaptionStyle.FOCUS_WORD, CaptionStyle.EDITORIAL_PUNCH}
+         for png, d in timeline:
+             lines.append(f"file {_concat_quote(Path(png).as_posix())}")
+             if temporal:
+diff --git a/clip-agent/src/clip_agent/cli.py b/clip-agent/src/clip_agent/cli.py
+index 0dac6b2..362d114 100644
+--- a/clip-agent/src/clip_agent/cli.py
++++ b/clip-agent/src/clip_agent/cli.py
+@@ -145,6 +145,18 @@ def _friendly_errors(func):
+         except _FRIENDLY as exc:
+             if _debug():
+                 raise
++            # Finite content-free codes let the canonical runner surface actionable
++            # layout failures without capturing potentially content-bearing stderr.
++            headline_codes = {
++                "HEADLINE_GLYPH_UNSUPPORTED", "HEADLINE_LAYOUT_SHORTEN_TEXT",
++                "HEADLINE_EMPHASIS_STALE", "HEADLINE_FACE_GEOMETRY_MISSING",
++                "HEADLINE_FACE_GEOMETRY_INVALID", "HEADLINE_FACE_REGION_UNSAFE",
++                "HEADLINE_ASSET_MISMATCH", "HEADLINE_TEMPLATE_UNSUPPORTED",
++                "CAPTION_LAYOUT_SHORTEN_TEXT", "CAPTION_GLYPH_UNSUPPORTED", "CAPTION_LAYOUT_UNSAFE",
++                "HEADLINE_ASSET_CHANGED", "HEADLINE_ASSET_TOO_LARGE",
++            }
++            if _content_free() and str(exc) in headline_codes:
++                click.echo(json.dumps({"ok": False, "error": {"code": str(exc)}}))
+             _out(f"Error: {_error_text(exc)}", err=True)
+             sys.exit(1)
+         except Exception as exc:
+@@ -2486,12 +2498,13 @@ def install_info() -> dict:
+     this build implements (:data:`CONTENT_FREE_VERSION`; absent = older builds),
+     which the clip-studio preflight reads.
+     """
+-    from . import captions, dynamic_captions
++    from . import captions, dynamic_captions, headline_templates, packaging_assets, subtle_captions
+     from .provenance import install_info as _install_info
+
+     renderer = Path(captions.__file__).resolve()
+     temporal = Path(dynamic_captions.__file__).resolve()
+-    return {**_install_info(), "content_free": CONTENT_FREE_VERSION, "headline_review": 1, "caption_treatments": 1,
++    return {**_install_info(), "content_free": CONTENT_FREE_VERSION, "headline_review": 1, "headline_template_renderer": {"path": str(Path(headline_templates.__file__).resolve()), "sha256": hashlib.sha256(Path(headline_templates.__file__).read_bytes()).hexdigest()}, "headline_templates": 1, "headline_template_names": ["chrome-hook", "neon-broadcast", "arcade-punch"], "caption_treatments": 1,
++            "packaging_dependencies": {name: {"path": m.__file__, "sha256": hashlib.sha256(Path(m.__file__).read_bytes()).hexdigest()} for name, m in [("packaging_assets", packaging_assets), ("subtle_captions", subtle_captions)]},
+             "caption_styles": _CAPTION_CHOICES,
+             "caption_renderer": {"path": str(renderer), "sha256": hashlib.sha256(renderer.read_bytes()).hexdigest(),
+                                  "temporal_path": str(temporal),
+diff --git a/clip-agent/src/clip_agent/config.py b/clip-agent/src/clip_agent/config.py
+index a26de0b..9ffa0e7 100644
+--- a/clip-agent/src/clip_agent/config.py
++++ b/clip-agent/src/clip_agent/config.py
+@@ -42,7 +42,7 @@ import tomllib
+ from pathlib import Path
+ from typing import Any, Literal
+
+-from pydantic import BaseModel, ConfigDict, Field, ValidationError, field_validator, model_validator
++from pydantic import BaseModel, ConfigDict, Field, ValidationError, field_validator, model_serializer, model_validator
+
+ from .models import CaptionStyle
+ from .prefs_toml import toml_string
+@@ -363,6 +363,32 @@ class CaptionConfig(_Section):
+     # Hook title overlay at the top of the frame (text = the clip's hook title).
+     hook_title: bool = False
+     hook_title_seconds: float = Field(default=3.5, ge=0, le=600)  # 0 = whole clip
++    hook_title_template: str = "legacy"
++    hook_title_logo_path: str = ""
++    hook_title_logo_sha256: str = ""
++    hook_title_emphasis: list[int] = Field(default_factory=list)
++    hook_title_emphasis_text: str = ""
++    hook_title_face_boxes: list[list[float]] = Field(default_factory=list)
++
++    @model_serializer(mode="wrap")
++    def _serialize_headline_defaults(self, handler):
++        # Opt-in packaging leaves existing effective-profile snapshots byte-identical.
++        data = handler(self)
++        defaults = {"hook_title_template": "legacy", "hook_title_logo_path": "",
++                    "hook_title_logo_sha256": "", "hook_title_emphasis": [],
++                    "hook_title_emphasis_text": "", "hook_title_face_boxes": []}
++        for key, value in defaults.items():
++            if data.get(key) == value:
++                data.pop(key, None)
++        return data
++
++    @field_validator("hook_title_template")
++    @classmethod
++    def _headline_template(cls, value: str) -> str:
++        if value not in {"legacy", "chrome-hook", "neon-broadcast", "arcade-punch"}:
++            raise ValueError("HEADLINE_TEMPLATE_UNSUPPORTED")
++        return value
++
+     hook_title_size_frac: float = Field(default=0.033, gt=0, le=0.2)  # vertical font size / frame height (shrinks to fit)
+     hook_title_box: bool = True               # semi-opaque box behind the title; false = outlined text only
+     hook_title_two_lines: bool = False        # a title that only fits one line by shrinking may use two balanced lines
+diff --git a/clip-agent/src/clip_agent/editing.py b/clip-agent/src/clip_agent/editing.py
+index b03e71f..0f2a12e 100644
+--- a/clip-agent/src/clip_agent/editing.py
++++ b/clip-agent/src/clip_agent/editing.py
+@@ -1183,6 +1183,8 @@ def packaging_hash(title: str, titles: Sequence[str], hook_line: str = "",
+     parts: list = [title, list(titles), hook_line]
+     if overlay is not None:
+         parts.append({"overlay": overlay[0], "seconds": float(overlay[1])})
++        if len(overlay) > 2:
++            parts.append({"headline_template": overlay[2]})
+     blob = json.dumps(parts, sort_keys=False).encode()
+     return hashlib.sha256(blob).hexdigest()[:16]
+
+diff --git a/clip-agent/src/clip_agent/headline_templates.py b/clip-agent/src/clip_agent/headline_templates.py
+new file mode 100644
+index 0000000..7c400fd
+--- /dev/null
++++ b/clip-agent/src/clip_agent/headline_templates.py
+@@ -0,0 +1,258 @@
++"""Deterministic branded opening packaging; never generates text or edits video pixels."""
++
++from __future__ import annotations
++
++import copy
++import json
++import math
++from pathlib import Path
++
++from PIL import Image, ImageDraw, ImageFilter
++
++from . import packaging_assets as assets
++
++TEMPLATES = ("chrome-hook", "neon-broadcast", "arcade-punch")
++VERSION = 1
++PACKAGING_ASSETS_SHA256 = "47cb88ddee9a8c1d25884cca3e6362b3cbc61e78d9a914728de6c22028524122"
++SUBTLE_RENDERER_SHA256 = "f0ad451b76f12b79b1b4aaa644b98f0bedbafd8e2281c4c914d9b0cd67bd1b51"
++
++
++def _fail(code):
++    raise ValueError(code)
++
++
++def layout(text, *, width, height, look, font_path):
++    digest, raw = assets.verified(font_path)
++    cmap = assets.cmap(raw, digest)
++    if any(not c.isspace() and ord(c) not in cmap for c in text):
++        _fail("HEADLINE_GLYPH_UNSUPPORTED")
++    words = text.split()
++    if not words or len(text) > 500:
++        _fail("HEADLINE_LAYOUT_SHORTEN_TEXT")
++    spans = look.hook_title_emphasis
++    if any(i < 0 or i >= len(words) for i in spans) or len(set(spans)) != len(spans):
++        _fail("HEADLINE_EMPHASIS_STALE")
++    if spans and look.hook_title_emphasis_text != text:
++        _fail("HEADLINE_EMPHASIS_STALE")
++    if not look.hook_title_face_boxes:
++        _fail("HEADLINE_FACE_GEOMETRY_MISSING")
++    left = math.ceil(max(0.08, look.safe_side) * width)
++    right = math.floor((1 - max(0.12, look.safe_right)) * width)
++    top = math.ceil(max(0.08, look.safe_top) * height)
++    bottom = math.floor(0.29 * height)
++    # Include every decorative pixel and entrance displacement in the reserved region.
++    for box in look.hook_title_face_boxes:
++        if len(box) != 4 or not (0 <= box[0] < box[2] <= 1 and 0 <= box[1] < box[3] <= 1):
++            _fail("HEADLINE_FACE_GEOMETRY_INVALID")
++        if left < box[2] * width and right > box[0] * width and top < box[3] * height and bottom > box[1] * height:
++            _fail("HEADLINE_FACE_REGION_UNSAFE")
++    logo_h = round(height * 0.065)
++    # Reserve worst-case shear, stroke, offset and resampling before fitting text.
++    effect_pad = math.ceil((bottom - top - logo_h) * 0.06) + math.ceil(height * 0.055 * 0.045) + 5
++    pad = max(8, round(width * 0.025), effect_pad)
++    text_top = top + logo_h + pad
++    for size in range(round(height * 0.055), max(12, round(height * 0.024)) - 1, -1):
++        font = assets.font(raw, digest, size)
++        lines, current = [], []
++        for i, word in enumerate(words):
++            proposed = current + [(i, word)]
++            if font.getlength(" ".join(w for _, w in proposed)) <= right - left - 2 * pad:
++                current = proposed
++            else:
++                if not current:
++                    break
++                lines.append(current)
++                current = [(i, word)]
++        else:
++            if current:
++                lines.append(current)
++            if len(lines) <= 3 and len(lines) * round(size * 1.22) + 2 * pad <= bottom - text_top:
++                if all(font.getlength(" ".join(w for _, w in line)) <= right - left - 2 * pad for line in lines):
++                    return dict(
++                        words=words,
++                        lines=lines,
++                        size=size,
++                        region=(left, top, right, bottom),
++                        text_top=text_top,
++                        pad=pad,
++                        logo_h=logo_h,
++                    )
++    _fail("HEADLINE_LAYOUT_SHORTEN_TEXT")
++
++
++def render(text, path, *, width, height, look, fonts_dir):
++    assets.verified(Path(__file__).with_name("packaging_assets.py"), PACKAGING_ASSETS_SHA256)
++    assets.verified(Path(__file__).with_name("subtle_captions.py"), SUBTLE_RENDERER_SHA256)
++    # Verify bytes before even looking up a completed text/effect raster.
++    logo_digest, logo_raw = assets.verified(look.hook_title_logo_path, look.hook_title_logo_sha256)
++    font_path = Path(fonts_dir) / "Anton-Regular.ttf"
++    font_digest, font_raw = assets.verified(
++        font_path, "a4ba3a92350ebb031da0cb47630ac49eb265082ca1bc0450442f4a83ab947cab"
++    )
++    config = json.dumps(look.model_dump(mode="json"), sort_keys=True, separators=(",", ":"))
++    key = ("headline", VERSION, text, width, height, config, logo_digest, font_digest)
++
++    def paint():
++        return _render(
++            text,
++            width=width,
++            height=height,
++            look=look,
++            fonts_dir=fonts_dir,
++            logo_digest=logo_digest,
++            logo_raw=logo_raw,
++            font_digest=font_digest,
++            font_raw=font_raw,
++        )
++
++    image = assets.cached(key, paint, weight=lambda x: x.width * x.height * 4).copy()
++    image.save(path)
++    return Path(path)
++
++
++def _render(text, *, width, height, look, fonts_dir, logo_digest, logo_raw, font_digest, font_raw):
++    if look.hook_title_template not in TEMPLATES:
++        _fail("HEADLINE_TEMPLATE_UNSUPPORTED")
++    font_path = Path(fonts_dir) / "Anton-Regular.ttf"
++    key = (
++        "layout",
++        VERSION,
++        text,
++        width,
++        height,
++        font_digest,
++        json.dumps(look.model_dump(mode="json"), sort_keys=True),
++    )
++    spec = copy.deepcopy(
++        assets.cached(
++            key, lambda: layout(text, width=width, height=height, look=look, font_path=font_path), weight=8192
++        )
++    )
++    font = assets.font(font_raw, font_digest, spec["size"])
++    left, top, right, bottom = spec["region"]
++    img = Image.new("RGBA", (width, height))
++    draw = ImageDraw.Draw(img)
++    pad = spec["pad"]
++    a = assets.logo(logo_raw, logo_digest, (right - left - 2 * pad, spec["logo_h"]))
++    img.alpha_composite(a, ((left + right - a.width) // 2, top))
++    panel = (left + pad // 2, spec["text_top"] - pad // 2, right - pad // 2, bottom - pad // 2)
++    style = look.hook_title_template
++    if style == "neon-broadcast":
++        x0, y0, x1, y1 = panel
++        points = [(x0 + pad, y0), (x1, y0), (x1 - pad, y1), (x0, y1), (x0 + pad, y0)]
++        draw.polygon(points, fill=(4, 5, 20, 230))
++        draw.line(points, fill="#00E5FF", width=max(2, width // 180))
++        draw.line([(x0, y1), (x1 - pad, y1), (x1, y0)], fill="#FF22DD", width=max(2, width // 180))
++    if style == "arcade-punch":
++        for y in range(spec["text_top"], bottom - pad, max(4, width // 60)):
++            for x in range(left + pad, right - pad, max(4, width // 60)):
++                draw.ellipse((x, y, x + 1, y + 1), fill=(0, 210, 255, 100))
++    ink = Image.new("RGBA", img.size)
++    d = ImageDraw.Draw(ink)
++    for row, line in enumerate(spec["lines"]):
++        whole = " ".join(w for _, w in line)
++        x = (left + right - font.getlength(whole)) / 2
++        y = spec["text_top"] + pad // 2 + row * round(spec["size"] * 1.22)
++        for index, word in line:
++            fill = "#FFE600" if index in look.hook_title_emphasis else "#FFFFFF"
++            stroke = max(1, round(spec["size"] * 0.045))
++            if style == "arcade-punch":
++                d.text(
++                    (x + 3, y + 3),
++                    word,
++                    font=font,
++                    fill="#FF22DD",
++                    stroke_width=stroke + 1,
++                    stroke_fill="#FF22DD",
++                    anchor="lt",
++                )
++            d.text(
++                (x, y),
++                word,
++                font=font,
++                fill=fill,
++                stroke_width=stroke,
++                stroke_fill="#FF22DD" if style == "chrome-hook" else "#090518",
++                anchor="lt",
++            )
++            if style == "chrome-hook" and index not in look.hook_title_emphasis:
++                mask = Image.new("L", img.size)
++                ImageDraw.Draw(mask).text((x, y), word, font=font, fill=255, anchor="lt")
++                metal = Image.new("RGBA", img.size)
++                md = ImageDraw.Draw(metal)
++                for stripe in range(spec["size"] + 2):
++                    ratio = stripe / spec["size"]
++                    color = "#FFFFFF" if ratio < 0.36 or 0.51 < ratio < 0.73 else "#86BCD7"
++                    if 0.43 < ratio < 0.5:
++                        color = "#293A65"
++                    md.line((left, round(y) + stripe, right, round(y) + stripe), fill=color)
++                metal.putalpha(mask)
++                ink = Image.alpha_composite(ink, metal)
++                d = ImageDraw.Draw(ink)
++            x += font.getlength(word + " ")
++    if style == "chrome-hook":
++        alpha = ink.getchannel("A")
++        glow = Image.new("RGBA", img.size, "#00E5FF")
++        glow.putalpha(alpha.filter(ImageFilter.GaussianBlur(max(1, width / 220))))
++        img = Image.alpha_composite(img, glow)
++        # Chrome light is a deterministic highlight within the existing glyph mask.
++        shine = Image.new("RGBA", img.size)
++        sd = ImageDraw.Draw(shine)
++        for y in range(spec["text_top"], bottom):
++            if y % max(3, spec["size"]) < max(1, spec["size"] // 3):
++                sd.line((left, y, right, y), fill=(255, 255, 255, 90))
++        shine.putalpha(Image.composite(shine.getchannel("A"), Image.new("L", img.size), alpha))
++        ink = Image.alpha_composite(ink, shine)
++    ink_bounds = ink.getbbox()
++    if ink_bounds and not (
++        left <= ink_bounds[0] < ink_bounds[2] <= right and top <= ink_bounds[1] < ink_bounds[3] <= bottom
++    ):
++        _fail("HEADLINE_DECORATION_OUT_OF_BOUNDS")
++    if style == "arcade-punch":
++        # Bounded shear inside the reserved region, with full padding retained.
++        band = ink.crop((left, spec["text_top"], right, bottom))
++        band = band.transform(
++            band.size,
++            Image.Transform.AFFINE,
++            (1, 0.12, -(bottom - spec["text_top"]) * 0.06, 0, 1, 0),
++            resample=Image.Resampling.BICUBIC,
++        )
++        ink = Image.new("RGBA", img.size)
++        ink.alpha_composite(band, (left, spec["text_top"]))
++    img = Image.alpha_composite(img, ink)
++    bbox = img.getbbox()
++    if bbox and not (left <= bbox[0] < bbox[2] <= right and top <= bbox[1] < bbox[3] <= bottom):
++        _fail("HEADLINE_DECORATION_OUT_OF_BOUNDS")
++    return img
++
++
++def animate(timeline, title_path, *, until, directory, duration, fps=30):
++    """Sample only the opening at 30 Hz; captions continue untouched after exit."""
++    title = Image.open(title_path).convert("RGBA")
++    output = []
++    cursor = 0.0
++    frame_index = 0
++    for png, seconds in timeline:
++        end = cursor + seconds
++        while cursor < min(end, until) - 1e-8:
++            next_time = min(end, until, (frame_index + 1) / fps)
++            if next_time <= cursor + 1e-8:
++                frame_index += 1
++                continue
++            t = cursor
++            opacity = min(1.0, t / 0.2, max(0.0, (until - t) / 0.25))
++            opacity = max(0.0, opacity)
++            opacity = opacity * opacity * (3 - 2 * opacity)
++            overlay = title.copy()
++            overlay.putalpha(title.getchannel("A").point(lambda a, opacity=opacity: round(a * opacity)))
++            base = Image.open(png).convert("RGBA")
++            base = Image.alpha_composite(base, overlay)
++            dest = Path(directory) / f"_headline_{len(output):06}.png"
++            base.save(dest)
++            output.append((dest, next_time - cursor))
++            cursor = next_time
++            frame_index = int(cursor * fps + 1e-7)
++        if end > cursor + 1e-8:
++            output.append((png, end - cursor))
++            cursor = end
++    return output
+diff --git a/clip-agent/src/clip_agent/models.py b/clip-agent/src/clip_agent/models.py
+index 552098c..9633352 100644
+--- a/clip-agent/src/clip_agent/models.py
++++ b/clip-agent/src/clip_agent/models.py
+@@ -73,6 +73,7 @@ class CaptionStyle(str, Enum):
+     PLAIN = "plain"        # simple bottom subtitle lines
+     PHRASE_POP = "phrase-pop"  # a few words (captions.max_words) pop on at once (default)
+     KARAOKE = "karaoke"    # per-word highlight in sync
++    SUBTLE = "subtle"      # regular single-line text with a restrained soft shadow
+     TYPE_ON = "type-on"
+     FOCUS_WORD = "focus-word"
+     EDITORIAL_PUNCH = "editorial-punch"
+diff --git a/clip-agent/src/clip_agent/packaging_assets.py b/clip-agent/src/clip_agent/packaging_assets.py
+new file mode 100644
+index 0000000..cd7d0c5
+--- /dev/null
++++ b/clip-agent/src/clip_agent/packaging_assets.py
+@@ -0,0 +1,111 @@
++"""Process-local bounded render caches. No cache persists across CLI processes.
++
++File identities include inode/device, size, mtime AND ctime nanoseconds. Every
++lookup stats the path, so replacement or in-place edits invalidate the cached
++bytes. A pinned hash is checked on EVERY call, including warm image/layout hits.
++Decoded assets/fonts use content hashes, never paths. Cached images are private:
++callers receive copies. All stores share a 64 MiB / 256 entry LRU budget.
++"""
++
++from __future__ import annotations
++
++import hashlib
++import io
++import sys
++from collections import OrderedDict
++from threading import RLock
++
++from PIL import Image, ImageFont
++
++MAX_BYTES = 64 * 1024 * 1024
++MAX_ENTRIES = 256
++MAX_ASSET_BYTES = 16 * 1024 * 1024
++_entries = OrderedDict()
++_bytes = 0
++_lock = RLock()
++
++
++def cached(key, load, *, weight):
++    global _bytes
++    with _lock:
++        if key in _entries:
++            value, cost = _entries.pop(key)
++            _entries[key] = value, cost
++            return value
++        value = load()
++        cost = weight(value) if callable(weight) else weight
++        cost += sum(sys.getsizeof(part) for part in key) + sys.getsizeof(key)
++        if cost <= MAX_BYTES:
++            while _entries and (_bytes + cost > MAX_BYTES or len(_entries) >= MAX_ENTRIES):
++                _, (_, removed) = _entries.popitem(last=False)
++                _bytes -= removed
++            _entries[key] = value, cost
++            _bytes += cost
++        return value
++
++
++def clear():
++    global _bytes
++    with _lock:
++        _entries.clear()
++        _bytes = 0
++
++
++def info():
++    with _lock:
++        return {"entries": len(_entries), "bytes": _bytes, "max_bytes": MAX_BYTES, "max_entries": MAX_ENTRIES}
++
++
++def verified(path, expected=None):
++    from pathlib import Path
++
++    path = Path(path).resolve()
++    try:
++        stat = path.stat()
++        if stat.st_size > MAX_ASSET_BYTES:
++            raise ValueError("HEADLINE_ASSET_TOO_LARGE")
++        identity = (stat.st_dev, stat.st_ino, stat.st_size, stat.st_mtime_ns, stat.st_ctime_ns)
++
++        def load():
++            with path.open("rb") as file:
++                raw = file.read(MAX_ASSET_BYTES + 1)
++                after = file.fileno()
++                import os
++
++                current = os.fstat(after)
++            observed = (current.st_dev, current.st_ino, current.st_size, current.st_mtime_ns, current.st_ctime_ns)
++            if identity != observed or len(raw) > MAX_ASSET_BYTES:
++                raise ValueError("HEADLINE_ASSET_CHANGED")
++            return hashlib.sha256(raw).hexdigest(), raw
++
++        digest, raw = cached(("bytes", str(path), identity), load, weight=lambda x: len(x[1]))
++    except OSError:
++        raise ValueError("HEADLINE_ASSET_MISMATCH") from None
++    if expected is not None and digest != expected:
++        raise ValueError("HEADLINE_ASSET_MISMATCH")
++    return digest, raw
++
++
++def font(raw, digest, size):
++    # FreeType objects retain a backing bytes stream; budget its full font size.
++    return cached(("font", digest, size), lambda: ImageFont.truetype(io.BytesIO(raw), size), weight=len(raw) + 16384)
++
++
++def cmap(raw, digest):
++    def load():
++        from fontTools.ttLib import TTFont
++
++        with TTFont(io.BytesIO(raw)) as face:
++            return frozenset(face.getBestCmap())
++
++    return cached(("cmap", digest), load, weight=lambda x: len(x) * 48)
++
++
++def logo(raw, digest, box):
++    def load():
++        with Image.open(io.BytesIO(raw)) as source:
++            image = source.convert("RGBA")
++        image.thumbnail(box)
++        return image
++
++    return cached(("logo", digest, tuple(box)), load, weight=lambda x: x.width * x.height * 4).copy()
+diff --git a/clip-agent/src/clip_agent/pipeline.py b/clip-agent/src/clip_agent/pipeline.py
+index d753d48..9399895 100644
+--- a/clip-agent/src/clip_agent/pipeline.py
++++ b/clip-agent/src/clip_agent/pipeline.py
+@@ -2320,6 +2320,8 @@ def _render_fingerprint(cand: Candidate, clip_start: float, clip_end: float, wor
+                if style != CaptionStyle.NONE else None)
+     if overlay is not None:
+         more["overlay"] = [overlay[0], overlay[1]]
++        if len(overlay) > 2:
++            more["headline_template"] = overlay[2]
+     if turns:
+         more["turns"] = _turns_digest(list(turns))
+     look = resolve_look(config).model_dump(mode="json")
+@@ -3496,7 +3498,7 @@ def _render_deliverables(cand: Candidate, paths: dict, words: list[Word],
+         if style != CaptionStyle.NONE:
+             track = render_caption_track(
+                 words, Path(tmp) / "captions.mov", width=plan.out_w, height=plan.out_h,
+-                style=style, config=config, fonts_dir=FONTS_DIR,
++                style=style, config=_headline_config_for_plan(plan, config), fonts_dir=FONTS_DIR,
+                 clip_start=clip_start, clip_dur=clip_dur,
+                 hook_title=hook_title,
+                 vpos_track=_caption_vpos_track(plan, config),
+@@ -3556,7 +3558,7 @@ def _render_edited(cand: Candidate, media: _Media, paths: dict, words: list[Word
+         if style != CaptionStyle.NONE:
+             track = render_caption_track(
+                 words, Path(tmp) / "captions.mov", width=out_plan.out_w, height=out_plan.out_h,
+-                style=style, config=config, fonts_dir=FONTS_DIR, clip_start=0.0, clip_dur=edl.duration,
++                style=style, config=_headline_config_for_plan(out_plan, config), fonts_dir=FONTS_DIR, clip_start=0.0, clip_dur=edl.duration,
+                 hook_title=hook_title, vpos_track=_caption_vpos_track(out_plan, config),
+                 edl=edl, override=cand.transcript_override,
+             )
+@@ -3611,6 +3613,18 @@ def _write_publish_kit(project_dir: Path, cand: Candidate, clip_text: str, paths
+     return out
+
+
++def _headline_config_for_plan(plan, config: Config) -> Config:
++    if not config.captions.hook_title or config.captions.hook_title_template == "legacy":
++        return config
++    until = config.captions.hook_title_seconds
++    segments = [seg for seg in plan.segments if seg.start < until]
++    if not segments or any(seg.layout != "crop" or seg.face_box is None for seg in segments):
++        raise ValueError("HEADLINE_FACE_GEOMETRY_MISSING")
++    result = config.model_copy(deep=True)
++    result.captions.hook_title_face_boxes = [list(seg.face_box) for seg in segments]
++    return result
++
++
+ def _caption_vpos_track(plan, config: Config) -> list[tuple[float, float, float]] | None:
+     """Face-aware caption placement for vertical renders (None = profile vpos)."""
+     if config.reframe.mode == "off":
+diff --git a/clip-agent/src/clip_agent/review.py b/clip-agent/src/clip_agent/review.py
+index 59ae205..7351dd5 100644
+--- a/clip-agent/src/clip_agent/review.py
++++ b/clip-agent/src/clip_agent/review.py
+@@ -250,7 +250,30 @@ def hook_overlay(c: Candidate, config: Config, *, words) -> tuple[str, float] |
+     """The on-screen hook overlay as packaging: ``(text, seconds shown)`` (0 s =
+     the whole clip), or None when no hook title is burned in."""
+     text = hook_title_for(c, config, words=words)
+-    return None if text is None else (text, float(config.captions.hook_title_seconds))
++    if text is None:
++        return None
++    if config.captions.hook_title_template != "legacy":
++        import hashlib
++        from pathlib import Path
++
++        from . import headline_templates
++        from .config import FONTS_DIR
++        from .headline_templates import VERSION
++        logo = Path(config.captions.hook_title_logo_path)
++        digest = hashlib.sha256(logo.read_bytes()).hexdigest() if logo.is_file() else None
++        return (text, float(config.captions.hook_title_seconds), {
++            "template_version": VERSION,
++            "template_sha256": hashlib.sha256(Path(headline_templates.__file__).read_bytes()).hexdigest(),
++            "font_sha256": hashlib.sha256((FONTS_DIR / "Anton-Regular.ttf").read_bytes()).hexdigest(),
++            "template": config.captions.hook_title_template,
++            "asset_sha256": digest,
++            "requested_asset_sha256": config.captions.hook_title_logo_sha256,
++            "emphasis": config.captions.hook_title_emphasis,
++            "emphasis_text": config.captions.hook_title_emphasis_text,
++            "safe_area": [config.captions.safe_top, config.captions.safe_side, config.captions.safe_right],
++            "entrance_s": .2, "exit_s": .25,
++        })
++    return (text, float(config.captions.hook_title_seconds))
+
+
+ def revision_record(c: Candidate, *, source_fp: str | None, words, config: Config) -> dict:
+@@ -515,9 +538,12 @@ def _packaging_lines(c: Candidate, config: Config, words) -> list[str]:
+     overlay = hook_overlay(c, config, words=words)
+     report = delivered_title_report(c, words)
+     if overlay is not None:
+-        title, secs = overlay
++        title, secs = overlay[:2]
+         when = "for the whole clip" if secs <= 0 else f"for the first {secs:g} s"
+         out.append(f"#   on-screen hook title: {_quoted(title)} (burned into the captioned video {when})")
++        if len(overlay) > 2:
++            out.append(f"#   headline template: {overlay[2]['template']} (v{overlay[2]['template_version']})")
++            out.append(f"#   headline logo SHA256: {overlay[2]['asset_sha256']}")
+         if title != c.title.strip():
+             out.append("#     (the first title variant the delivered clip backs, not the `title` above — "
+                        "`title` names the clip)")
+diff --git a/clip-agent/src/clip_agent/subtle_captions.py b/clip-agent/src/clip_agent/subtle_captions.py
+new file mode 100644
+index 0000000..78fe6e0
+--- /dev/null
++++ b/clip-agent/src/clip_agent/subtle_captions.py
+@@ -0,0 +1,93 @@
++"""Independent subtle caption style in the existing caption-track boundary."""
++
++from pathlib import Path
++
++from PIL import Image, ImageDraw, ImageFilter
++
++from . import packaging_assets as assets
++
++FONT_SHA256 = "40d692fce188e4471e2b3cba937be967878f631ad3ebbbdcd587687c7ebe0c82"
++REVISION = 1
++
++
++def render_segments(
++    words, out_dir, *, width, height, config, fonts_dir, clip_start, clip_dur, vpos_track=None, breaks=()
++):
++    from .captions import build_phrases, caption_safe_box
++
++    digest, raw = assets.verified(Path(fonts_dir) / "Inter-Regular.ttf", FONT_SHA256)
++    # 24 px at 960px high: 25% smaller than the approved sample's 32px baseline.
++    size = max(12, round(height * 0.025))
++    font = assets.font(raw, digest, size)
++    cmap = assets.cmap(raw, digest)
++    look = config.captions
++    safe = caption_safe_box(config, width, height, look)
++    if safe is None:
++        safe = (round(width * 0.08), round(height * 0.08), round(width * 0.88), round(height * 0.9))
++    radius = max(1, round(height * 0.001))
++    offset = max(1, round(height * 0.001))
++    pad = 3 * radius + offset + 2
++    max_width = safe[2] - safe[0] - 2 * pad
++    phases = build_phrases(words, clip_start, clip_dur, max_words=6, breaks=breaks)
++    split = []
++    for phase in phases:
++        group = []
++        for word in phase.words:
++            if any(not c.isspace() and ord(c) not in cmap for c in word.text):
++                raise ValueError("CAPTION_GLYPH_UNSUPPORTED")
++            bb = font.getbbox(word.text)
++            if bb[2] - bb[0] > max_width:
++                raise ValueError("CAPTION_LAYOUT_SHORTEN_TEXT")
++            proposed = " ".join(w.text for w in group + [word])
++            bb = font.getbbox(proposed)
++            if group and (bb[2] - bb[0] > max_width or group[-1].text.endswith((".", "?", "!", ",", ";", ":"))):
++                split.append((group, phase.end))
++                group = []
++            group.append(word)
++        if group:
++            split.append((group, phase.end))
++    result = []
++    out_dir = Path(out_dir)
++    out_dir.mkdir(parents=True, exist_ok=True)
++    for i, (group, phase_end) in enumerate(split):
++        start = max(0.0, group[0].start - clip_start)
++        end = min(clip_dur, split[i + 1][0][0].start - clip_start if i + 1 < len(split) else phase_end)
++        if end <= start:
++            continue
++        text = " ".join(w.text for w in group)
++        mid = (start + end) / 2
++        vpos = next((v for a, b, v in (vpos_track or []) if a <= mid < b), look.vpos)
++        key = ("subtle", REVISION, text, digest, width, height, size, tuple(safe), vpos, radius, offset)
++
++        def paint(text=text, vpos=vpos):
++            ink = Image.new("RGBA", (width, height))
++            draw = ImageDraw.Draw(ink)
++            bbox = font.getbbox(text)
++            tw, th = bbox[2] - bbox[0], bbox[3] - bbox[1]
++            if th + 2 * pad > safe[3] - safe[1]:
++                raise ValueError("CAPTION_LAYOUT_SHORTEN_TEXT")
++            x = (safe[0] + safe[2] - tw) / 2 - bbox[0]
++            y = max(safe[1] + pad, min(round(height * vpos) - th // 2, safe[3] - pad - th)) - bbox[1]
++            draw.text((x, y), text, font=font, fill="white", stroke_width=0)
++            shadow = Image.new("RGBA", ink.size, (0, 0, 0, 0))
++            alpha = (
++                ink.getchannel("A")
++                .filter(ImageFilter.GaussianBlur(radius))
++                .point([round(alpha * 0.35) for alpha in range(256)])
++            )
++            shadow.putalpha(alpha)
++            shifted = Image.new("RGBA", ink.size)
++            shifted.alpha_composite(shadow, (offset, offset))
++            image = Image.alpha_composite(shifted, ink)
++            bounds = image.getbbox()
++            if bounds and not (
++                safe[0] <= bounds[0] < bounds[2] <= safe[2] and safe[1] <= bounds[1] < bounds[3] <= safe[3]
++            ):
++                raise ValueError("CAPTION_LAYOUT_UNSAFE")
++            return image
++
++        image = assets.cached(key, paint, weight=lambda x: x.width * x.height * 4).copy()
++        path = out_dir / f"cap{i:04d}.png"
++        image.save(path)
++        result.append((path, start, end))
++    return result
+diff --git a/clip-agent/tests/test_dynamic_captions.py b/clip-agent/tests/test_dynamic_captions.py
+index 6763c5a..5323859 100644
+--- a/clip-agent/tests/test_dynamic_captions.py
++++ b/clip-agent/tests/test_dynamic_captions.py
+@@ -7,13 +7,14 @@ from pathlib import Path
+
+ import pytest
+ from click.testing import CliRunner
++from PIL import Image, ImageChops
++
+ from clip_agent import dynamic_captions as dc
+ from clip_agent.captions import render_caption_pngs
+ from clip_agent.cli import cli
+ from clip_agent.config import FONTS_DIR, CaptionConfig, Config
+ from clip_agent.models import CaptionStyle as S
+ from clip_agent.models import Word
+-from PIL import Image, ImageChops
+
+
+ def words():
+@@ -36,7 +37,7 @@ def test_capability_and_style_validation():
+     c = json.loads(r.output)
+     assert c["caption_treatments"] == 1
+     assert c["headline_review"] == 1
+-    assert c["caption_styles"] == ["none", "plain", "phrase-pop", "karaoke", "type-on", "focus-word", "editorial-punch"]
++    assert c["caption_styles"] == ["none", "plain", "phrase-pop", "karaoke", "subtle", "type-on", "focus-word", "editorial-punch"]
+     for style in ["type-on", "focus-word", "editorial-punch"]:
+         assert CaptionConfig(style=style).style == style
+     with pytest.raises(ValueError):
+diff --git a/clip-agent/tests/test_headline_templates.py b/clip-agent/tests/test_headline_templates.py
+new file mode 100644
+index 0000000..7412413
+--- /dev/null
++++ b/clip-agent/tests/test_headline_templates.py
+@@ -0,0 +1,156 @@
++import hashlib
++
++import pytest
++from PIL import Image
++
++from clip_agent.config import FONTS_DIR, CaptionConfig
++from clip_agent.headline_templates import TEMPLATES, animate, layout, render
++
++
++@pytest.fixture
++def look(tmp_path):
++    logo = tmp_path / "logo.png"
++    Image.new("RGBA", (200, 80), "cyan").save(logo)
++    return CaptionConfig(
++        hook_title_template="chrome-hook",
++        safe_top=0.04,
++        hook_title_face_boxes=[[0.2, 0.34, 0.7, 0.6]],
++        hook_title_logo_path=str(logo),
++        hook_title_logo_sha256=hashlib.sha256(logo.read_bytes()).hexdigest(),
++    )
++
++
++@pytest.mark.parametrize("template", TEMPLATES)
++@pytest.mark.parametrize(
++    "text", ["Come back.", "I'll save that for next week.", "I'll save that for next week. You'll have to come back."]
++)
++def test_full_wording_bounded_and_deterministic(tmp_path, look, template, text):
++    look.hook_title_template = template
++    look.hook_title_emphasis = [len(text.split()) - 1]
++    look.hook_title_emphasis_text = text
++    spec = layout(text, width=540, height=960, look=look, font_path=FONTS_DIR / "Anton-Regular.ttf")
++    assert [w for line in spec["lines"] for _, w in line] == text.split()
++    a = render(text, tmp_path / "a.png", width=540, height=960, look=look, fonts_dir=FONTS_DIR)
++    b = render(text, tmp_path / "b.png", width=540, height=960, look=look, fonts_dir=FONTS_DIR)
++    assert a.read_bytes() == b.read_bytes()
++    bb = Image.open(a).getbbox()
++    l, t, r, bot = spec["region"]
++    assert l <= bb[0] < bb[2] <= r and t <= bb[1] < bb[3] <= bot
++    assert spec["size"] >= 23
++
++
++@pytest.mark.parametrize(
++    "mutation,code",
++    [
++        ({"hook_title_face_boxes": []}, "HEADLINE_FACE_GEOMETRY_MISSING"),
++        ({"hook_title_face_boxes": [[0.1, 0.1, 0.8, 0.5]]}, "HEADLINE_FACE_REGION_UNSAFE"),
++        ({"hook_title_face_boxes": [[0.5, 0.4, 0.2, 0.8]]}, "HEADLINE_FACE_GEOMETRY_INVALID"),
++        ({"hook_title_emphasis": [3]}, "HEADLINE_EMPHASIS_STALE"),
++        ({"hook_title_emphasis": [0], "hook_title_emphasis_text": "old text"}, "HEADLINE_EMPHASIS_STALE"),
++        ({"hook_title_emphasis": [0, 0]}, "HEADLINE_EMPHASIS_STALE"),
++        ({"hook_title_logo_sha256": "0" * 64}, "HEADLINE_ASSET_MISMATCH"),
++    ],
++)
++def test_fail_closed(tmp_path, look, mutation, code):
++    for k, v in mutation.items():
++        setattr(look, k, v)
++    with pytest.raises(ValueError, match=code):
++        render("Come back.", tmp_path / "fail.png", width=540, height=960, look=look, fonts_dir=FONTS_DIR)
++    assert not (tmp_path / "fail.png").exists()
++
++
++@pytest.mark.parametrize("text", ["enormous" * 100, "many words " * 100])
++def test_never_ellipsizes(look, text):
++    with pytest.raises(ValueError, match="HEADLINE_LAYOUT_SHORTEN_TEXT"):
++        layout(text, width=540, height=960, look=look, font_path=FONTS_DIR / "Anton-Regular.ttf")
++
++
++def test_animation_exit_keeps_caption_pixels(tmp_path):
++    blank = tmp_path / "blank.png"
++    title = tmp_path / "title.png"
++    base = Image.new("RGBA", (90, 160))
++    base.putpixel((40, 120), (255, 255, 255, 255))
++    base.save(blank)
++    overlay = Image.new("RGBA", (90, 160))
++    overlay.putpixel((40, 20), (255, 255, 255, 255))
++    overlay.save(title)
++    timeline = animate([(blank, 5.0)], title, until=3.5, directory=tmp_path, duration=5.0)
++    assert sum(s for _, s in timeline) == pytest.approx(5.0)
++    assert Image.open(timeline[0][0]).getpixel((40, 20))[3] == 0
++    assert Image.open(timeline[10][0]).getpixel((40, 20))[3] == 255
++    assert timeline[-1] == (blank, pytest.approx(1.5))
++    for path, _ in timeline:
++        assert Image.open(path).getpixel((40, 120)) == (255, 255, 255, 255)
++
++
++def test_packaging_binds_template_assets_emphasis_and_timing(look):
++    from clip_agent import editing
++
++    base = ("same text", 3.5, {"template": "chrome-hook", "asset": "a", "emphasis": [1]})
++    original = editing.packaging_hash("title", [], "", base)
++    for changed in [
++        ("same text", 2.5, base[2]),
++        ("new text", 3.5, base[2]),
++        ("same text", 3.5, {**base[2], "template": "arcade-punch"}),
++        ("same text", 3.5, {**base[2], "asset": "b"}),
++        ("same text", 3.5, {**base[2], "emphasis": [0]}),
++    ]:
++        assert editing.packaging_hash("title", [], "", changed) != original
++
++
++def test_unsupported_glyph_is_explicit(look):
++    with pytest.raises(ValueError, match="HEADLINE_GLYPH_UNSUPPORTED"):
++        layout("Hello 🐱", width=540, height=960, look=look, font_path=FONTS_DIR / "Anton-Regular.ttf")
++
++
++def test_pipeline_uses_actual_face_plan_not_profile_claim(look):
++    from clip_agent.config import Config
++    from clip_agent.pipeline import _headline_config_for_plan
++    from clip_agent.reframe import PlanSegment, ReframePlan
++
++    cfg = Config(captions=look)
++    cfg.captions.hook_title = True
++    unsafe = ReframePlan(540, 960, [PlanSegment(0, 5, "fit", face_box=(0.2, 0.4, 0.7, 0.6))])
++    with pytest.raises(ValueError, match="HEADLINE_FACE_GEOMETRY_MISSING"):
++        _headline_config_for_plan(unsafe, cfg)
++    real = ReframePlan(540, 960, [PlanSegment(0, 5, "crop", face_box=(0.2, 0.1, 0.7, 0.6))])
++    derived = _headline_config_for_plan(real, cfg)
++    assert derived.captions.hook_title_face_boxes == [[0.2, 0.1, 0.7, 0.6]]
++    assert cfg.captions.hook_title_face_boxes == [[0.2, 0.34, 0.7, 0.6]]
++
++
++def test_review_file_shows_packaging_and_invalidates_on_template_change(tmp_path, look):
++    import tomllib
++
++    from clip_agent.config import Config
++    from clip_agent.manifest import Candidate, ProjectManifest, SourceInfo
++    from clip_agent.models import Word
++    from clip_agent.review import write_review_file
++
++    cfg = Config(captions=look)
++    cfg.captions.hook_title = True
++    candidate = Candidate(id="1234567890", rank=1, start=0, end=20, title="Come back.", filename="01.mp4", status="cut")
++    manifest = ProjectManifest(
++        name="fixture",
++        source=SourceInfo(path="/original.mp4", probe={"duration": 30}),
++        config_resolved=cfg.model_dump(mode="json"),
++        candidates=[candidate],
++    )
++    words = [Word("Come", 0, 0.5), Word("back.", 0.5, 1)]
++    path = write_review_file(tmp_path, manifest, words=words, config=cfg)
++    first = tomllib.loads(path.read_text())["clip"][0]["packaging"]
++    assert "#   headline template: chrome-hook (v1)" in path.read_text()
++    cfg.captions.hook_title_template = "arcade-punch"
++    path = write_review_file(tmp_path, manifest, words=words, config=cfg, overwrite=True)
++    assert tomllib.loads(path.read_text())["clip"][0]["packaging"] != first
++
++
++def test_disabled_title_keeps_caption_only_render_independent(look):
++    from clip_agent.config import Config
++    from clip_agent.pipeline import _headline_config_for_plan
++    from clip_agent.reframe import PlanSegment, ReframePlan
++
++    cfg = Config(captions=look)
++    cfg.captions.hook_title = False
++    plan = ReframePlan(540, 960, [PlanSegment(0, 5, "fit")])
++    assert _headline_config_for_plan(plan, cfg) is cfg
+diff --git a/clip-agent/tests/test_models.py b/clip-agent/tests/test_models.py
+index 1778a63..fe8ac39 100644
+--- a/clip-agent/tests/test_models.py
++++ b/clip-agent/tests/test_models.py
+@@ -28,4 +28,4 @@ def test_transcript_words_between_is_half_open():
+
+ def test_caption_style_values():
+     assert CaptionStyle.PHRASE_POP.value == "phrase-pop"
+-    assert {s.value for s in CaptionStyle} == {"none", "plain", "phrase-pop", "karaoke", "type-on", "focus-word", "editorial-punch"}
++    assert {s.value for s in CaptionStyle} == {"none", "plain", "phrase-pop", "karaoke", "subtle", "type-on", "focus-word", "editorial-punch"}
+diff --git a/clip-agent/tests/test_packaging_assets.py b/clip-agent/tests/test_packaging_assets.py
+new file mode 100644
+index 0000000..b391e00
+--- /dev/null
++++ b/clip-agent/tests/test_packaging_assets.py
+@@ -0,0 +1,118 @@
++import hashlib
++import os
++from pathlib import Path
++from unittest.mock import patch
++
++import pytest
++from PIL import Image
++
++from clip_agent import headline_templates
++from clip_agent import packaging_assets as assets
++from clip_agent.config import FONTS_DIR, CaptionConfig
++from clip_agent.headline_templates import render
++
++
++@pytest.fixture(autouse=True)
++def empty_cache():
++    assets.clear()
++    yield
++    assets.clear()
++
++
++def setup(tmp_path):
++    logo = tmp_path / "logo.png"
++    Image.new("RGBA", (100, 40), "cyan").save(logo)
++    return CaptionConfig(
++        hook_title_template="chrome-hook",
++        safe_top=0.04,
++        hook_title_logo_path=str(logo),
++        hook_title_logo_sha256=hashlib.sha256(logo.read_bytes()).hexdigest(),
++        hook_title_face_boxes=[[0.2, 0.34, 0.7, 0.6]],
++    )
++
++
++def test_identical_key_loads_font_logo_effects_once(tmp_path):
++    look = setup(tmp_path)
++    with (
++        patch.object(assets.Image, "open", wraps=assets.Image.open) as opened,
++        patch.object(assets.ImageFont, "truetype", wraps=assets.ImageFont.truetype) as fonts,
++        patch.object(Path, "open", autospec=True, side_effect=Path.open) as files,
++        patch.object(headline_templates, "_render", wraps=headline_templates._render) as effects,
++    ):
++        render("Come back.", tmp_path / "first.png", width=540, height=960, look=look, fonts_dir=FONTS_DIR)
++        counts = (opened.call_count, fonts.call_count, files.call_count)
++        assert opened.call_count == 1 and fonts.call_count > 0 and files.call_count >= 2
++        render("Come back.", tmp_path / "next.png", width=540, height=960, look=look, fonts_dir=FONTS_DIR)
++        # Neither source asset is read again; Pillow saves through its own output stream.
++        assert (opened.call_count, fonts.call_count) == counts[:2]
++        assert files.call_count == counts[2]
++        assert effects.call_count == 1
++    assert (tmp_path / "first.png").read_bytes() == (tmp_path / "next.png").read_bytes()
++
++
++def test_warm_hit_still_refuses_wrong_pinned_digest(tmp_path):
++    look = setup(tmp_path)
++    render("Come back.", tmp_path / "first.png", width=540, height=960, look=look, fonts_dir=FONTS_DIR)
++    look.hook_title_logo_sha256 = "0" * 64
++    with pytest.raises(ValueError, match="HEADLINE_ASSET_MISMATCH"):
++        render("Come back.", tmp_path / "wrong.png", width=540, height=960, look=look, fonts_dir=FONTS_DIR)
++    assert not (tmp_path / "wrong.png").exists()
++
++
++@pytest.mark.parametrize("replace", [False, True])
++def test_same_path_replacement_invalidates_even_restored_mtime(tmp_path, replace):
++    look = setup(tmp_path)
++    path = Path(look.hook_title_logo_path)
++    render("Come back.", tmp_path / "first.png", width=540, height=960, look=look, fonts_dir=FONTS_DIR)
++    before = path.stat()
++    if replace:
++        other = tmp_path / "other.png"
++        Image.new("RGBA", (100, 40), "red").save(other)
++        os.replace(other, path)
++    else:
++        Image.new("RGBA", (100, 40), "red").save(path)
++    os.utime(path, ns=(before.st_atime_ns, before.st_mtime_ns))
++    with pytest.raises(ValueError, match="HEADLINE_ASSET_MISMATCH"):
++        render("Come back.", tmp_path / "wrong.png", width=540, height=960, look=look, fonts_dir=FONTS_DIR)
++    look.hook_title_logo_sha256 = hashlib.sha256(path.read_bytes()).hexdigest()
++    render("Come back.", tmp_path / "fresh.png", width=540, height=960, look=look, fonts_dir=FONTS_DIR)
++    assert (tmp_path / "fresh.png").read_bytes() != (tmp_path / "first.png").read_bytes()
++
++
++def test_wording_emphasis_size_and_config_change_pixels(tmp_path):
++    look = setup(tmp_path)
++    render("Come back.", tmp_path / "original.png", width=540, height=960, look=look, fonts_dir=FONTS_DIR)
++    for i, (text, change) in enumerate(
++        [
++            ("Next week.", {}),
++            ("Come back.", {"hook_title_emphasis": [0], "hook_title_emphasis_text": "Come back."}),
++            ("Come back.", {"hook_title_template": "arcade-punch"}),
++            ("Come back.", {"safe_side": 0.16}),
++        ]
++    ):
++        cfg = look.model_copy(update=change)
++        render(text, tmp_path / f"{i}.png", width=540, height=960, look=cfg, fonts_dir=FONTS_DIR)
++        assert (tmp_path / f"{i}.png").read_bytes() != (tmp_path / "original.png").read_bytes()
++    render("Come back.", tmp_path / "small.png", width=360, height=640, look=look, fonts_dir=FONTS_DIR)
++    assert Image.open(tmp_path / "small.png").size == (360, 640)
++
++
++def test_logo_callers_cannot_corrupt_shared_image(tmp_path):
++    look = setup(tmp_path)
++    digest, raw = assets.verified(look.hook_title_logo_path)
++    one = assets.logo(raw, digest, (100, 40))
++    expected = one.tobytes()
++    one.paste("black", (0, 0, 100, 40))
++    assert assets.logo(raw, digest, (100, 40)).tobytes() == expected
++
++
++def test_lru_entry_and_memory_budget(monkeypatch):
++    monkeypatch.setattr(assets, "MAX_BYTES", 1000)
++    monkeypatch.setattr(assets, "MAX_ENTRIES", 3)
++    for i in range(20):
++        assets.cached(("probe", i), lambda: b"x" * 40, weight=len)
++    assert assets.info()["bytes"] <= 1000
++    assert assets.info()["entries"] <= 3
++    assert assets.info()["entries"] > 0
++    assets.cached(("oversize",), lambda: b"x" * 1001, weight=len)
++    assert assets.info()["bytes"] <= 1000
+diff --git a/clip-agent/tests/test_prefs_schema.py b/clip-agent/tests/test_prefs_schema.py
+index f20e651..15ac20a 100644
+--- a/clip-agent/tests/test_prefs_schema.py
++++ b/clip-agent/tests/test_prefs_schema.py
+@@ -146,7 +146,7 @@ def test_choices_are_values_the_config_accepts():
+             model.model_validate({name: c})       # raises if the config refuses it
+         if typing.get_origin(info.annotation) is typing.Literal:
+             assert set(p.choices) == set(typing.get_args(info.annotation)), p.key
+-    assert _pref("captions.font").choices == ("Anton-Regular.ttf", "Inter-SemiBold.ttf")
++    assert _pref("captions.font").choices == ("Anton-Regular.ttf", "Inter-Regular.ttf", "Inter-SemiBold.ttf")
+     assert _pref("selection.rubric_weights").choices == tuple(selection.SCORE_RANGES)
+
+
+diff --git a/clip-agent/tests/test_subtle_captions.py b/clip-agent/tests/test_subtle_captions.py
+new file mode 100644
+index 0000000..045c2b0
+--- /dev/null
++++ b/clip-agent/tests/test_subtle_captions.py
+@@ -0,0 +1,67 @@
++from unittest.mock import patch
++
++import pytest
++from PIL import Image
++
++from clip_agent import captions
++from clip_agent import packaging_assets as assets
++from clip_agent.config import FONTS_DIR, Config
++from clip_agent.models import Word
++
++
++def render(words, tmp_path, style="subtle"):
++    cfg = Config()
++    cfg.captions.safe_top = 0.04
++    cfg.captions.safe_bottom = 0.645
++    return captions.render_caption_pngs(
++        words, tmp_path, width=540, height=960, style=style, config=cfg, fonts_dir=FONTS_DIR, clip_start=0, clip_dur=5
++    )
++
++
++def test_subtle_single_line_24px_regular_white_no_outline_or_highlight(tmp_path):
++    assets.clear()
++    words = [
++        Word(w, i * 0.3, i * 0.3 + 0.2)
++        for i, w in enumerate("Who gets access? This is a longer phrase that breaks safely.".split())
++    ]
++    result = render(words, tmp_path)
++    assert len(result) >= 3
++    assert len(result) < len(words)
++    for path, start, end in result:
++        image = Image.open(path)
++        bounds = image.getbbox()
++        assert bounds[3] - bounds[1] < 35  # exactly one 24px line plus soft shadow
++        assert 60 <= bounds[0] < bounds[2] <= 450
++        assert 39 <= bounds[1] < bounds[3] <= 619
++        opaque = [pixel for pixel in image.get_flattened_data() if pixel[3] == 255]
++        assert opaque and all(p[:3] == (255, 255, 255) for p in opaque)
++        assert 0 <= start < end <= 5
++
++
++def test_subtle_preserves_wording_and_uses_regular_font(tmp_path):
++    words = [Word(w, i * 0.2, i * 0.2 + 0.1) for i, w in enumerate("Google gives AI access.".split())]
++    with patch.object(ImageDraw := captions.ImageDraw.ImageDraw, "text", autospec=True, wraps=ImageDraw.text) as draw:
++        render(words, tmp_path)
++    assert draw.call_count > 0
++    assert " ".join(call.args[2] for call in draw.call_args_list) == "Google gives AI access."
++    assert all(call.kwargs["stroke_width"] == 0 for call in draw.call_args_list)
++    assert all(call.kwargs["font"].size == 24 for call in draw.call_args_list)
++    assert all(call.kwargs["font"].getname()[1] == "Regular" for call in draw.call_args_list)
++
++
++@pytest.mark.parametrize(
++    "word,code", [("unbroken" * 80, "CAPTION_LAYOUT_SHORTEN_TEXT"), ("Hello🐱", "CAPTION_GLYPH_UNSUPPORTED")]
++)
++def test_subtle_fails_without_silent_omission(tmp_path, word, code):
++    with pytest.raises(ValueError, match=code):
++        render([Word(word, 0, 1)], tmp_path)
++
++
++def test_subtle_font_pin_is_checked_after_cache_hit(tmp_path, monkeypatch):
++    words = [Word("Readably", 0, 1)]
++    render(words, tmp_path / "one")
++    from clip_agent import subtle_captions
++
++    monkeypatch.setattr(subtle_captions, "FONT_SHA256", "0" * 64)
++    with pytest.raises(ValueError, match="HEADLINE_ASSET_MISMATCH"):
++        render(words, tmp_path / "two")

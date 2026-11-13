@@ -1,0 +1,5 @@
+.headline-runner/original_helper.py:671:20: BLE001 Do not catch blind exception: `Exception`
+.headline-runner/original_helper.py:908:14: PIE810 Call `startswith` once with a `tuple`
+.headline-runner/original_helper.py:1128:16: BLE001 Do not catch blind exception: `Exception`
+Found 3 errors.
+1 unsafe fix available with `--fix --unsafe-fixes`.

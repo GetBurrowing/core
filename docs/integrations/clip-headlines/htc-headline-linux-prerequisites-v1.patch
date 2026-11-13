@@ -1,0 +1,224 @@
+--- a/clip-agent/pyproject.toml
++++ b/clip-agent/pyproject.toml
+@@ -45,0 +46 @@
++    { file = "src/clip_agent/models/*" },
+--- /dev/null
++++ b/clip-agent/src/clip_agent/opencv_faces.py
+@@ -0,0 +1,65 @@
++"""Local YuNet face boxes for the existing shot planner on non-macOS hosts.
++
++Provision the OpenCV Zoo YuNet model before running; inference never downloads
++models or sends images over the network.
++"""
++
++import hashlib
++import os
++from functools import lru_cache
++from pathlib import Path
++
++MODEL_SHA256 = "8f2383e4dd3cfbb4553ea8718107fc0423210dc964f9f4280604804ed2552fa4"
++
++
++def model_path() -> Path:
++    return Path(
++        os.environ.get("CLIP_FACE_MODEL", str(Path(__file__).parent / "models/face_detection_yunet_2023mar.onnx"))
++    ).expanduser()
++
++
++def available() -> bool:
++    try:
++        import cv2
++
++        return (
++            hasattr(cv2, "FaceDetectorYN")
++            and model_path().is_file()
++            and hashlib.sha256(model_path().read_bytes()).hexdigest() == MODEL_SHA256
++        )
++    except ImportError:
++        return False
++
++
++@lru_cache(maxsize=1)
++def _detector(path: str):
++    import cv2
++
++    cv2.setNumThreads(1)
++    return cv2.FaceDetectorYN.create(path, "", (640, 640), 0.85, 0.3, 5000)
++
++
++def detect(image: str | Path):
++    import cv2
++
++    from .shots import Face
++
++    if not available():
++        raise RuntimeError("FACE_MODEL_MISSING_OR_MISMATCH: provision the pinned YuNet model")
++    pixels = cv2.imread(str(image))
++    if pixels is None:
++        raise RuntimeError("Face detection could not decode the input image")
++    height, width = pixels.shape[:2]
++    detector = _detector(str(model_path()))
++    detector.setInputSize((width, height))
++    _, rows = detector.detect(pixels)
++    if rows is None:
++        return []
++    faces = []
++    for row in rows:
++        x, y, w, h = map(float, row[:4])
++        x0, y0 = max(0.0, x), max(0.0, y)
++        x1, y1 = min(float(width), x + w), min(float(height), y + h)
++        if x1 > x0 and y1 > y0:
++            faces.append(Face(x0 / width, y0 / height, (x1 - x0) / width, (y1 - y0) / height, float(row[14])))
++    return faces
+--- a/clip-agent/src/clip_agent/shots.py
++++ b/clip-agent/src/clip_agent/shots.py
+@@ -158 +158 @@
+-    '(or reinstall clip-agent), or use reframe.mode = "fit" / "seats".'
++    '(or provision the pinned local YuNet adapter/model on Linux). No detector means no shots render.'
+@@ -171,0 +172,5 @@
++def face_detection_available() -> bool:
++    from .opencv_faces import available
++    return vision_available() or available()
++
++
+@@ -187,2 +192,3 @@
+-    except Exception as e:  # noqa: BLE001
+-        raise RuntimeError(_VISION_HINT) from e
++    except Exception:  # noqa: BLE001
++        from .opencv_faces import detect
++        return detect(image)
+@@ -308 +314 @@
+-        if not vision_available():
++        if not face_detection_available():
+--- a/clip-agent/src/clip_agent/reframe.py
++++ b/clip-agent/src/clip_agent/reframe.py
+@@ -558,0 +559,38 @@
++def _headline_shot_crop(seg, shot, *, aspect, src_w, src_h):
++    """Reserve actual headroom using the union of measured faces, for the WHOLE shot.
++
++    No padding, blur, speaker choice or manufactured geometry. Refuse a crop if
++    the complete detected face cannot fit below the title at the existing zoom cap.
++    """
++    if seg.layout != "crop" or seg.face_box is None:
++        return seg  # The existing headline geometry guard rejects split/unknown.
++    samples = [fs for fs in shot.samples if fs]
++    if not samples or any(len(fs) != 1 for fs in samples):
++        raise ValueError("HEADLINE_FACE_REGION_UNSAFE")
++    fs = [faces[0] for faces in samples]
++    left = min(f.x for f in fs) * src_w
++    top = max(0.0, min(f.y for f in fs) - 0.02) * src_h
++    right = max(f.x + f.w for f in fs) * src_w
++    bottom = min(1.0, max(f.y + f.h for f in fs) + 0.02) * src_h
++    # Safety padding on both edges also absorbs even-integer rounding.
++    y0, y1 = 0.32, 0.86
++    minimum = max(src_h / _MAX_SHOT_ZOOM, (bottom - top) / (y1 - y0),
++                  (right - left) * _FACE_FIT / aspect)
++    maximum = min(float(src_h), src_w / aspect, top / y0,
++                  (src_h - bottom) / (1 - y1))
++    ch = _even_floor(maximum)
++    cw = _even_floor(ch * aspect)
++    if ch < minimum or cw <= 0:
++        raise ValueError("HEADLINE_FACE_REGION_UNSAFE")
++    low = max(0.0, bottom - y1 * ch)
++    high = min(src_h - ch, top - y0 * ch)
++    cy = _even_floor((low + high) / 2)
++    cx = _even_floor(max(0.0, min(src_w - cw, (left + right - cw) / 2)))
++    box = CropBox(cx, cy, cw, ch)
++    face_box = ((left - cx) / cw, (top - cy) / ch,
++                (right - cx) / cw, (bottom - cy) / ch)
++    if not (0 <= face_box[0] < face_box[2] <= 1 and 0.30 <= face_box[1] < face_box[3] <= 0.88):
++        raise ValueError("HEADLINE_FACE_REGION_UNSAFE")
++    return PlanSegment(seg.start, seg.end, "crop", [box], seg.speaker, face_box)
++
++
+@@ -604,0 +643,2 @@
++        if config.captions.hook_title and config.captions.hook_title_template != "legacy":
++            seg = _headline_shot_crop(seg, sh, aspect=aspect, src_w=src_w, src_h=src_h)
+--- /dev/null
++++ b/clip-agent/tests/test_headline_installation.py
+@@ -0,0 +1,78 @@
++"""Independent safety/installation contracts for the Linux prerequisite."""
++
++import pytest
++
++from clip_agent import opencv_faces, reframe
++from clip_agent.config import Config
++from clip_agent.shots import Face, ShotFaces
++
++
++def test_missing_or_wrong_model_is_not_a_detector(monkeypatch, tmp_path):
++    model = tmp_path / "model.onnx"
++    monkeypatch.setenv("CLIP_FACE_MODEL", str(model))
++    assert opencv_faces.available() is False
++    model.write_bytes(b"not the qualified model")
++    assert opencv_faces.available() is False
++    with pytest.raises(RuntimeError, match="FACE_MODEL_MISSING_OR_MISMATCH"):
++        opencv_faces.detect(tmp_path / "image.png")
++
++
++def test_face_model_pin_is_literal():
++    assert opencv_faces.MODEL_SHA256 == "8f2383e4dd3cfbb4553ea8718107fc0423210dc964f9f4280604804ed2552fa4"
++
++
++def test_union_crop_reserves_headroom_for_whole_shot_and_keeps_full_face():
++    cfg = Config()
++    cfg.reframe.width, cfg.reframe.height = 540, 960
++    cfg.captions.hook_title = True
++    cfg.captions.hook_title_template = "chrome-hook"
++    faces = [Face(0.48, 0.26, 0.14, 0.32), Face(0.49, 0.27, 0.14, 0.32)]
++    sh = ShotFaces(0, 4, [[face] for face in faces])
++    plan = reframe.plan_shots([sh], 4, 1920, 1080, cfg)
++    assert len(plan.segments) == 1  # Never change crop at title exit.
++    seg = plan.segments[0]
++    assert (seg.start, seg.end, seg.layout) == (0, 4, "crop")
++    x0, y0, x1, y1 = seg.face_box
++    assert 0 <= x0 < x1 <= 1
++    assert 0.30 <= y0 < y1 <= 0.88
++    box = seg.boxes[0]
++    for face in faces:
++        assert box.x <= face.x * 1920 < (face.x + face.w) * 1920 <= box.x + box.w
++        assert box.y <= face.y * 1080 < (face.y + face.h) * 1080 <= box.y + box.h
++
++
++def test_impossible_headroom_fails_instead_of_fit_or_clipping():
++    sh = ShotFaces(0, 4, [[Face(0.4, 0.01, 0.2, 0.8)]])
++    seg = reframe.PlanSegment(0, 4, "crop", [reframe.CropBox(0, 0, 606, 1080)], face_box=(0.1, 0.01, 0.8, 0.9))
++    with pytest.raises(ValueError, match="HEADLINE_FACE_REGION_UNSAFE"):
++        reframe._headline_shot_crop(seg, sh, aspect=9 / 16, src_w=1920, src_h=1080)
++
++
++def test_legacy_shot_crop_stays_unchanged():
++    cfg = Config()
++    cfg.captions.hook_title = True
++    cfg.captions.hook_title_template = "legacy"
++    sh = ShotFaces(0, 4, [[Face(0.48, 0.26, 0.14, 0.32)]])
++    plan = reframe.plan_shots([sh], 4, 1920, 1080, cfg)
++    assert plan.segments[0].boxes[0].h == 1080
++
++
++@pytest.mark.parametrize("code", ["HEADLINE_LAYOUT_SHORTEN_TEXT", "HEADLINE_FACE_REGION_UNSAFE"])
++def test_cli_content_free_layout_codes_survive_without_stderr_capture(monkeypatch, code):
++    import json
++
++    import click
++    from click.testing import CliRunner
++
++    from clip_agent import cli
++
++    monkeypatch.setenv("CLIP_NO_CONTENT", "1")
++
++    @click.command()
++    @cli._friendly_errors
++    def fail():
++        raise ValueError(code)
++
++    result = CliRunner().invoke(fail)
++    assert result.exit_code == 1
++    assert json.loads(result.stdout) == {"ok": False, "error": {"code": code}}
+--- a/clip-agent/tests/test_shots.py
++++ b/clip-agent/tests/test_shots.py
+@@ -276,2 +276,2 @@
+-    monkeypatch.setattr(shots, "vision_available", lambda: False)
+-    with pytest.raises(RuntimeError, match=r"pyobjc-framework-Vision.*reframe.mode"):
++    monkeypatch.setattr(shots, "face_detection_available", lambda: False)
++    with pytest.raises(RuntimeError, match=r"pyobjc-framework-Vision.*pinned local YuNet"):
