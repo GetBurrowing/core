@@ -143,6 +143,9 @@ defmodule Platform.AgentHost.FakeHost do
       claude_login: :ok,
       report_after_ms: Keyword.get(opts, :report_after_ms, @report_after_ms),
       endpoint: Keyword.get(opts, :endpoint, PlatformWeb.Endpoint),
+      # The hello's `features` (agent-host host.ts HOST_FEATURES); `[]` stands
+      # in for a host built before Claude login.
+      features: Keyword.get(opts, :features, ["claude_login"]),
       reconciler: nil
     }
 
@@ -293,7 +296,8 @@ defmodule Platform.AgentHost.FakeHost do
         state
 
       {pid, _endpoint} ->
-        with :ok <- Reconciler.host_joined(self(), %{"profile" => "fake"}),
+        with :ok <-
+               Reconciler.host_joined(self(), %{"profile" => "fake", "features" => state.features}),
              :ok <- Reconciler.inventory(self(), %{"profile" => "fake", "agents" => []}) do
           %{state | reconciler: Process.monitor(pid)}
         else

@@ -286,6 +286,7 @@ write_files:
       # Agents reach core at its public URL, through Caddy on this host.
       grep -q ' burrow-01a0d69d.test$' /etc/hosts || printf '127.0.0.1 burrow-01a0d69d.test\n' >> /etc/hosts
       # The daemon ships in the agent-host image, the artefact `contained` runs.
+      docker pull "$image" >/dev/null || echo "burrow-agent-host-setup: pull failed; using the local $image" >&2
       ctr="$(docker create --pull missing "$image")"
       trap 'docker rm -f "$ctr" >/dev/null 2>&1 || true' EXIT
       rm -rf "$dest.incoming"

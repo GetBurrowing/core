@@ -1028,6 +1028,13 @@ defmodule PlatformWeb.GamePageControllerTest do
       glass = LazyHTML.from_document(glass)
       assert Enum.count(LazyHTML.query(glass, "html.console-glass #game-screenshots")) == 1
       assert Enum.count(LazyHTML.query(glass, "#game-screenshots a.gp-shot")) == 3
+      # The brand opens the install switcher here too, clear of the iOS top inset.
+      assert Enum.count(LazyHTML.query(glass, ".cg-side button#gaming-install-switch")) == 1
+
+      assert [viewport] =
+               LazyHTML.attribute(LazyHTML.query(glass, "meta[name='viewport']"), "content")
+
+      assert viewport =~ "viewport-fit=cover"
     end
 
     test "shows a visible caption under each shot and in the viewer, falling back to alt", %{

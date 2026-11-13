@@ -38,8 +38,13 @@ import {installPressHold} from "./hooks/button_loading"
 import {installThemePreviewReceiver} from "./hooks/theme_preview_receiver"
 
 import {installPublicGamePage} from "./public_game_page"
+import {installDeadViewInstallSwitch} from "./lib/dead_view_install_switch"
 
 installPublicGamePage()
+
+// The gaming pages are dead views; their brand's install switcher still needs
+// its hook. The script is `defer`, so the DOM is parsed by now.
+installDeadViewInstallSwitch(document)
 
 // The theme editor's preview frames (task 01a1557a-fe9b stage 2): installs a
 // message listener only when this page is framed AND carries

@@ -381,9 +381,13 @@ defmodule Platform.AgentHost do
   Claude Code.
 
   One pending login per agent (`Platform.AgentHost.Reconciler`): it is bound
-  to `actor` and to the calling process, and a start by anyone else while it
-  is pending is `{:error, :busy}`. Otherwise `{:error, :not_connected}`,
-  `{:error, :timeout}`, or `{:error, :refused}` when the host printed no URL.
+  to `actor` and to the calling process (or `opts[:caller]`, for a screen
+  that waits for the host in a task of its own and must stay the login's
+  owner), and a start by anyone else while it is pending is `{:error,
+  :busy}`. Otherwise `{:error, :not_connected}`, `{:error, :timeout}`,
+  `{:error, :refused}` when the host printed no URL, or
+  `{:error, :host_outdated}` at once when the connected host predates Claude
+  login (its hello lists no `claude_login` feature) and would never answer.
 
   The URL is returned to the caller only: it is never put in
   `Platform.AgentHost.State`, broadcast on the status topic, audited or
@@ -391,16 +395,19 @@ defmodule Platform.AgentHost do
   """
   @spec claude_login_start(map() | binary() | nil, Agent.t(), keyword()) ::
           {:ok, String.t()}
-          | {:error, login_refusal() | :busy | :not_connected | :timeout | :refused}
+          | {:error,
+             login_refusal() | :busy | :not_connected | :host_outdated | :timeout | :refused}
   def claude_login_start(actor, %Agent{} = agent, opts \\ []) do
     timeout = Keyword.get(opts, :timeout, @login_start_timeout_ms)
 
     with {:ok, actor_id} <- login_gate(actor, agent) do
       ref = new_ref()
 
+      caller = Keyword.get(opts, :caller, self())
+
       result =
         await_claude_login(ref, timeout, fn ->
-          Reconciler.claude_login_start(agent.id, actor_id, self(), ref)
+          Reconciler.claude_login_start(agent.id, actor_id, caller, ref)
         end)
 
       case result do
@@ -454,10 +461,11 @@ defmodule Platform.AgentHost do
 
     with {:ok, actor_id} <- login_gate(actor, agent) do
       ref = new_ref()
+      caller = Keyword.get(opts, :caller, self())
 
       result =
         await_claude_login(ref, timeout, fn ->
-          Reconciler.claude_login_code(agent.id, actor_id, self(), ref, code)
+          Reconciler.claude_login_code(agent.id, actor_id, caller, ref, code)
         end)
 
       case result do

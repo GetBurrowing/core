@@ -869,9 +869,9 @@ describe("full root (task 01a17b10 stage 3)", () => {
     return { docker, calls };
   }
 
-  test("the hello advertises full_root, false by default", () => {
-    expect(new Host(deps, { push: async () => "ok" }, "contained").hello()).toEqual({ profile: "contained", full_root: false });
-    expect(new Host(deps, { push: async () => "ok" }, "contained", undefined, true, null).hello()).toEqual({ profile: "contained", full_root: true });
+  test("the hello advertises full_root, false by default, and the claude_login feature", () => {
+    expect(new Host(deps, { push: async () => "ok" }, "contained").hello()).toEqual({ profile: "contained", full_root: false, features: ["claude_login"] });
+    expect(new Host(deps, { push: async () => "ok" }, "contained", undefined, true, null).hello()).toEqual({ profile: "contained", full_root: true, features: ["claude_login"] });
   });
 
   test("with full root off, restart/deploy/rollback answer requires_full_root and touch no socket", async () => {
