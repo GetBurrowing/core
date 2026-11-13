@@ -211,15 +211,27 @@ defmodule PlatformWeb.Components.ChatMessageThreadComposerTest do
     refute composer =~ "hover:"
   end
 
-  test "app.css anchors the thread list to the box's top edge, at its width" do
+  # Regression (2026-11-12, "the cut off tagging"): absolute inside
+  # #chat-message-scroller (overflow: auto) let the scroller clip the list's
+  # top rows whenever the reply sat near the top of the timeline. The list
+  # is fixed at every width, its bottom on the field's top edge, placed by
+  # ComposeInput's threadMentionPlacement.
+  test "app.css opens the thread list above the field, fixed so the scroller cannot clip it" do
     css = File.read!(@css_path)
 
     [body] =
       Regex.run(~r/\.thread-field-box \.mention-list\s*\{([^}]*)\}/, css, capture: :all_but_first)
 
-    for decl <- ["position: absolute", "left: 0", "right: 0", "bottom: 100%", "margin: 0"] do
+    for decl <- [
+          "position: fixed",
+          "top: var(--thread-mention-top)",
+          "transform: translateY(-100%)",
+          "margin: 0"
+        ] do
       assert body =~ decl, ".thread-field-box .mention-list lacks `#{decl}`"
     end
+
+    refute body =~ "position: absolute"
 
     refute body =~ "box-shadow"
 

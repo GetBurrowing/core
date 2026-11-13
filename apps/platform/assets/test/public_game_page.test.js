@@ -103,6 +103,18 @@ describe("game screenshot gallery", () => {
     }
     expect(g.shots[0].focus).toHaveBeenCalled()
   })
+  it("shows each shot's caption in the viewer and keeps alt on the image when they differ", () => {
+    const g = fakeGallery(2)
+    g.shots[0].dataset.gameShotCaption = "In-game"
+    g.shots[1].dataset.gameShotCaption = "Shot 2"
+    installGameGallery(g.root)
+    g.click(g.shots[0])
+    expect(g.caption.textContent).toBe("In-game")
+    expect(g.image.alt).toBe("Shot 1")
+    g.key(g.dialog, "ArrowRight")
+    expect(g.caption.textContent).toBe("Shot 2")
+    expect(g.image.alt).toBe("")
+  })
   it("leaves plain image links working when dialogs are unsupported", () => {
     const g = fakeGallery(2)
     g.dialog.showModal = undefined

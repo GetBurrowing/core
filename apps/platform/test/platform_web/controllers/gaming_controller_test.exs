@@ -74,10 +74,64 @@ defmodule PlatformWeb.GamingControllerTest do
     evidence("gaming-visitor", page)
     doc = LazyHTML.from_document(page)
     assert Enum.count(LazyHTML.query(doc, "#gaming-play[href='/games/example-game']")) == 1
+    assert Enum.count(LazyHTML.query(doc, ".cg-side button#gaming-install-switch")) == 1
+    assert Enum.count(LazyHTML.query(doc, "body > #gaming-install-switch-menu")) == 1
     assert Enum.empty?(LazyHTML.query(doc, "#gaming-create"))
     assert Enum.empty?(LazyHTML.query(doc, "a[href='/tasks']"))
     assert Enum.empty?(LazyHTML.query(doc, "#gaming-community-count"))
     assert Enum.map(Games.list_published(), & &1["slug"]) == ["example-game"]
+  end
+
+  test "room cards pluralise members and invite in while a room is empty", %{
+    conn: conn,
+    actor: actor,
+    game: game
+  } do
+    {:ok, _} = Branding.update_identity(actor, %{experience: "gaming"})
+
+    {:ok, room} =
+      Platform.Chat.create_space(%{
+        name: "Example players",
+        slug: "example-game-players",
+        kind: "channel",
+        org_id: game["org_id"],
+        metadata: %{"public_game_slug" => game["slug"]}
+      })
+
+    Application.put_env(:platform, :game_publications, [
+      Map.put(game, "community_space_id", room.id)
+    ])
+
+    card_labels = fn ->
+      doc = conn |> get("/play") |> html_response(200) |> LazyHTML.from_document()
+
+      for selector <- ["#rooms .cg-room small", ".cg-details .cg-detail-room small"] do
+        doc |> LazyHTML.query(selector) |> LazyHTML.text() |> String.trim()
+      end
+    end
+
+    assert card_labels.() == ["Be the first in", "Be the first in"]
+
+    for n <- 1..2 do
+      member =
+        Repo.insert!(
+          User.changeset(%User{}, %{
+            name: "Member #{n}",
+            email: "room-member-#{n}@example.invalid",
+            oidc_sub: "room-member-#{n}"
+          })
+        )
+
+      {:ok, _} =
+        Platform.Chat.add_participant(room.id, %{
+          participant_type: "user",
+          participant_id: member.id,
+          joined_at: DateTime.utc_now()
+        })
+
+      expected = if n == 1, do: "1 member", else: "2 members"
+      assert card_labels.() == [expected, expected]
+    end
   end
 
   test "home shows the player persona and creator entry without account identity", %{

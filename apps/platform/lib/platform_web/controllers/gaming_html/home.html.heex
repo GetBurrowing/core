@@ -190,7 +190,7 @@
               href={"/games/#{game["slug"]}?tab=community"}
               class="cg-room cg-glass"
             >
-              <span class="cg-room-icon"><.icon name="hero-chat-bubble-left-right" /></span><span><b>{game["title"]}</b><small>{if @communities[game["slug"]], do: if(@communities[game["slug"]].member_count == 0, do: "Be the first in", else: "#{@communities[game["slug"]].member_count} members"), else: "Player community"}</small></span>
+              <span class="cg-room-icon"><.icon name="hero-chat-bubble-left-right" /></span><span><b>{game["title"]}</b><small>{if @communities[game["slug"]], do: member_label(@communities[game["slug"]].member_count), else: "Player community"}</small></span>
               <.icon name="hero-arrow-up-right" />
             </a>
           </div>

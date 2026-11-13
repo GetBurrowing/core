@@ -76,10 +76,17 @@ defmodule Platform.Games do
 
   defp screenshots?(_), do: false
 
-  defp screenshot?(%{"path" => path, "alt" => alt} = shot) when map_size(shot) == 2,
-    do: local_image?(path) and is_binary(alt) and String.length(alt) in 1..200
+  # `path` and `alt` are required; `caption` is the optional visible label
+  # (falls back to `alt`), held to the same rule as `alt`. Nothing else.
+  defp screenshot?(%{"path" => path, "alt" => alt} = shot) do
+    Enum.all?(Map.keys(shot), &(&1 in ["path", "alt", "caption"])) and local_image?(path) and
+      screenshot_text?(alt) and
+      (not Map.has_key?(shot, "caption") or screenshot_text?(shot["caption"]))
+  end
 
   defp screenshot?(_), do: false
+
+  defp screenshot_text?(text), do: is_binary(text) and String.length(text) in 1..200
 
   @doc """
   True for a launcher the Windows player may start from a release root: one
@@ -113,12 +120,18 @@ defmodule Platform.Games do
     end
   end
 
-  @doc "Gallery screenshots, each a local `/images/` asset with alt text."
+  @doc "Gallery screenshots, each a local `/images/` asset with alt text and an optional caption."
   def screenshots(%{"screenshots" => shots}) do
     if screenshots?(shots), do: shots, else: []
   end
 
   def screenshots(_), do: []
+
+  @doc "The visible label under a screenshot: its `caption`, else its `alt` text."
+  def screenshot_caption(%{"caption" => caption}) when is_binary(caption) and caption != "",
+    do: caption
+
+  def screenshot_caption(%{"alt" => alt}), do: alt
 
   defp valid_release?(release) when is_map(release) do
     is_binary(release["version"]) and

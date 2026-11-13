@@ -1400,4 +1400,33 @@ defmodule PlatformWeb.SettingsLiveTest do
       refute source =~ "Submission.submit("
     end
   end
+
+  test "bundled users can find passkey enrollment in Settings, external-provider users keep their provider flow" do
+    keys = [:sign_in_admin_enabled, :sign_in_admin_url, :sign_in_admin_api_key]
+    saved = for key <- keys, do: {key, Application.fetch_env(:platform, key)}
+
+    on_exit(fn ->
+      for {key, value} <- saved do
+        case value do
+          {:ok, v} -> Application.put_env(:platform, key, v)
+          :error -> Application.delete_env(:platform, key)
+        end
+      end
+    end)
+
+    Application.put_env(:platform, :sign_in_admin_enabled, true)
+    Application.put_env(:platform, :sign_in_admin_url, "http://pocket-id.test")
+    Application.put_env(:platform, :sign_in_admin_api_key, "test-key-not-secret")
+    user = member!()
+    {:ok, view, _} = live(authed(user), "/settings")
+
+    assert has_element?(
+             view,
+             "a[data-role=settings-passkeys][href='https://issuer.example.com/settings/account'][rel=noopener]"
+           )
+
+    Application.put_env(:platform, :sign_in_admin_enabled, false)
+    {:ok, other, _} = live(authed(user), "/settings")
+    refute has_element?(other, "[data-role=settings-passkeys]")
+  end
 end

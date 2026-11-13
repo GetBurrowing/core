@@ -88,7 +88,9 @@ defmodule Platform.AgentHost.NoLoginRelayTest do
       NativeAgents.create(owner.id, %{name: "Relay #{n}", harness: "claude_code"})
 
     host = spawn_link(fn -> receive_forever() end)
-    :ok = Reconciler.host_joined(host, %{"profile" => "contained"})
+
+    :ok =
+      Reconciler.host_joined(host, %{"profile" => "contained", "features" => ["claude_login"]})
 
     %{agent: agent, host: host, owner: owner}
   end

@@ -453,16 +453,88 @@ defmodule PlatformWeb.ConnectAiLiveTest do
       assert_eventually(fn -> has_element?(view, "a#connect-ai-claude-open") end, 3_000)
     end
 
-    test "Disconnect logs the agent out and offers a fresh sign-in", %{conn: conn} do
+    # An agent host built before Claude login ignores `agent.claude_login_start`,
+    # so every start waited out the whole timeout and said "Burrow didn't
+    # answer" (a hosted full_machine install, 2026-11-12: core had moved on, its
+    # agent host was still the 31 Oct build). Core now reads the host's hello
+    # and says what is wrong at once, pushing nothing.
+    test "an agent host that predates Claude login says so, not \"Burrow didn't answer\"", %{
+      conn: conn
+    } do
+      stop_supervised!(FakeHost)
+      old = start_supervised!({FakeHost, report_after_ms: 0, features: []})
+      assert_eventually(fn -> Reconciler.host_pid() == old end, 3_000)
+
+      {:ok, view, _html} = live(conn, ~p"/setup/connect-ai")
+      choose(view, "claude_subscription")
+
+      assert_eventually(
+        fn ->
+          has_element?(
+            view,
+            "#connect-ai-claude-link-error.text-error",
+            "This install's agent host is older than Claude sign-in"
+          )
+        end,
+        3_000
+      )
+
+      refute has_element?(view, "a#connect-ai-claude-open")
+      refute render(view) =~ "Burrow didn't answer"
+      refute Reconciler.claude_login_pending?(Burrow.get().id)
+    end
+
+    # Mutant: wait for the host inside the view (no `start_async`) → the view
+    # answers nothing until the 20 s login timeout, and the change below takes
+    # that long (legacypie, 2026-11-12: "it looks frozen").
+    test "the page keeps answering while the host is slow to hand out a link", %{conn: conn} do
+      :ok = FakeHost.set_claude_login(:timeout)
+
+      Application.put_env(
+        :platform,
+        PlatformWeb.ConnectAiLive,
+        Keyword.put(
+          Application.get_env(:platform, PlatformWeb.ConnectAiLive, []),
+          :claude_login_timeout_ms,
+          20_000
+        )
+      )
+
+      {:ok, view, _html} = live(conn, ~p"/setup/connect-ai")
+      choose(view, "claude_subscription")
+      assert has_element?(view, "#connect-ai-claude-open-pending")
+
+      {micros, html} = :timer.tc(fn -> choose(view, "codex") end)
+      assert html =~ "provider-panel-codex"
+      assert micros < 2_000_000, "the view took #{div(micros, 1000)} ms to answer a change"
+      refute has_element?(view, "#connect-ai-claude-open-pending")
+    end
+
+    # Mutant: `stop_agent` → `restart_agent` in `AgentHost.claude_logout/3`.
+    # The fake host, like the real one, reports a logged-out agent whose unit
+    # is up as `running`, so after a restart this page read "Your AI is
+    # connected" and never offered the sign-in (legacypie, 2026-11-12).
+    test "Disconnect logs the agent out, stops it, and offers a fresh sign-in", %{conn: conn} do
       view = open_claude(conn)
       click_open(view)
       submit_code(view, FakeHost.claude_login_code())
       assert_eventually(fn -> has_element?(view, "#connect-ai-claude-disconnect") end, 3_000)
+      agent = Burrow.get()
+      assert %{desired_state: "running"} = NativeAgents.get_managed_runtime(agent)
 
       view |> element("#connect-ai-claude-disconnect") |> render_click()
 
       assert_eventually(fn -> has_element?(view, "a#connect-ai-claude-open") end, 3_000)
       refute has_element?(view, "#connect-ai-claude-connected")
+      refute has_element?(view, "#connect-ai-connected")
+      assert %{desired_state: "stopped"} = NativeAgents.get_managed_runtime(agent)
+
+      # Signing in again brings it back.
+      click_open(view)
+      submit_code(view, FakeHost.claude_login_code())
+      assert_eventually(fn -> has_element?(view, "#connect-ai-claude-disconnect") end, 3_000)
+      assert_eventually(fn -> has_element?(view, "#connect-ai-connected") end, 3_000)
+      assert %{desired_state: "running"} = NativeAgents.get_managed_runtime(agent)
     end
 
     test "an unknown event is refused, and only its name is logged", %{conn: conn} do

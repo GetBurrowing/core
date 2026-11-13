@@ -245,10 +245,9 @@ describe("app.css — the jump-to-latest control is unconditional", () => {
     // rule. Send feel "4g" adds the phone disc's flash and ring inset.
     // Still no `.chat-jump` selector.
     expect(gated.map((r) => r.selector)).toEqual([
-      // Mobile mention anchoring/capping shares this breakpoint; the jump
-      // chip still has no breakpoint-specific selector.
-      ".thread-field-box .mention-list",
-      ".message-row-inner:has(.thread-input:focus)",
+      // Mobile mention capping shares this breakpoint; the jump chip still
+      // has no breakpoint-specific selector. (The reply list's fixed
+      // anchoring is no longer gated: it applies at every width.)
       "#compose-form > .mention-list:not(.mention-list--pick) .mention-list-box",
       ".compose-input-area",
       ":root .compose-input-area .compose-pill-bar",
@@ -297,5 +296,30 @@ describe("app.css — the jump-to-latest control is unconditional", () => {
     const token = gated.find((r) => r.selector === ":root:has([data-bottom-rail])");
     expect(token.body).toContain("--bottom-nav-height");
     expect(gated.every((r) => !r.selector.includes(".chat-jump"))).toBe(true);
+  });
+});
+
+// Regression (2026-11-12, "the cut off tagging"): the reply's @mention list
+// lives inside #chat-message-scroller (overflow: auto). Absolutely
+// positioned, the scroller clipped its top rows at >=1024px. It must be
+// fixed at EVERY width, opening upward from the field (translateY(-100%)).
+describe("app.css — the reply @mention list escapes the scroller at every width", () => {
+  it("is position: fixed and translated above the field, outside any @media", () => {
+    const rules = parseRules(readSource()).filter(
+      (r) => r.selector === ".thread-field-box .mention-list",
+    );
+    expect(rules.length).toBeGreaterThan(0);
+    expect(rules.every((r) => !inMedia(r))).toBe(true);
+    const body = rules.map((r) => r.body).join("\n");
+    expect(body).toMatch(/position:\s*fixed/);
+    expect(body).toMatch(/transform:\s*translateY\(-100%\)/);
+    expect(body).not.toMatch(/position:\s*absolute/);
+  });
+
+  it("lifts the focused row's transform at every width (fixed needs no transformed ancestor)", () => {
+    const rules = parseRules(readSource()).filter(
+      (r) => r.selector === ".message-row-inner:has(.thread-input:focus)",
+    );
+    expect(rules.some((r) => !inMedia(r) && /transform:\s*none/.test(r.body))).toBe(true);
   });
 });

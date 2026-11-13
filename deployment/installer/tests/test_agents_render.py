@@ -311,6 +311,18 @@ class FullMachineTest(unittest.TestCase):
         ids = read(os.path.join(AGENT_HOST_DIR, "src", "ids.ts"))
         self.assertIn(f'"{agents.AGENTS_GROUP}"', ids)
 
+    def test_setup_script_pulls_the_daemon_before_installing_it(self):
+        # Core's updater moves core only. With `--pull missing` alone a reboot
+        # reinstalled the boot-day daemon, which ignored core's newer commands
+        # (Claude login). The pull comes first and a failed one is not fatal.
+        pull = 'docker pull "$image" >/dev/null || echo'
+        # This fixture preloads its images (`--pull never`): nothing to pull.
+        self.assertNotIn(pull, self.files["/opt/burrow/bin/burrow-agent-host-setup"][1])
+        # A droplet pulls from the registry.
+        droplet = read(os.path.join(HERE, "golden", "do-droplet", "user-data"))
+        self.assertIn(pull, droplet)
+        self.assertLess(droplet.index(pull), droplet.index("docker create --pull missing"))
+
     def test_agent_host_env_is_0600_and_carries_the_same_token_as_core(self):
         perms, text = self.files[agents.HOST_ENV_PATH]
         self.assertEqual(perms, "0600")

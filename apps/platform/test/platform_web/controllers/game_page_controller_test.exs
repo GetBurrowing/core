@@ -932,6 +932,43 @@ defmodule PlatformWeb.GamePageControllerTest do
     end
   end
 
+  test "the community header pluralises its member count", %{
+    conn: conn,
+    community: community
+  } do
+    header = fn ->
+      conn
+      |> get("/games/voltron?tab=community")
+      |> html_response(200)
+      |> LazyHTML.from_document()
+      |> LazyHTML.query("#game-community .gp-room header div > span")
+      |> LazyHTML.text()
+      |> String.trim()
+    end
+
+    assert header.() == "0 members"
+
+    for n <- 1..2 do
+      member =
+        Repo.insert!(
+          User.changeset(%User{}, %{
+            name: "Pilot #{n}",
+            email: "pilot-#{n}@example.net",
+            oidc_sub: "pilot-#{n}"
+          })
+        )
+
+      {:ok, _} =
+        Chat.add_participant(community.id, %{
+          participant_type: "user",
+          participant_id: member.id,
+          joined_at: DateTime.utc_now()
+        })
+
+      assert header.() == if(n == 1, do: "1 member", else: "2 members")
+    end
+  end
+
   describe "screenshot gallery" do
     @shots [
       %{
@@ -991,6 +1028,54 @@ defmodule PlatformWeb.GamePageControllerTest do
       glass = LazyHTML.from_document(glass)
       assert Enum.count(LazyHTML.query(glass, "html.console-glass #game-screenshots")) == 1
       assert Enum.count(LazyHTML.query(glass, "#game-screenshots a.gp-shot")) == 3
+      # The brand opens the install switcher here too, clear of the iOS top inset.
+      assert Enum.count(LazyHTML.query(glass, ".cg-side button#gaming-install-switch")) == 1
+
+      assert [viewport] =
+               LazyHTML.attribute(LazyHTML.query(glass, "meta[name='viewport']"), "content")
+
+      assert viewport =~ "viewport-fit=cover"
+    end
+
+    test "shows a visible caption under each shot and in the viewer, falling back to alt", %{
+      conn: conn,
+      game: game
+    } do
+      shots = [
+        Map.put(hd(@shots), "caption", "In-game"),
+        Map.put(Enum.at(@shots, 1), "caption", "Concept art"),
+        Enum.at(@shots, 2)
+      ]
+
+      Application.put_env(:platform, :game_publications, [Map.put(game, "screenshots", shots)])
+      page = conn |> get("/games/voltron") |> html_response(200) |> LazyHTML.from_document()
+
+      caption = fn n ->
+        page |> LazyHTML.query("#game-shot-caption-#{n}") |> LazyHTML.text() |> String.trim()
+      end
+
+      assert caption.(1) == "In-game"
+      assert caption.(2) == "Concept art"
+      assert caption.(3) == "Concept art: the city skyline"
+
+      # A caption that repeats the link's alt is hidden from assistive tech.
+      assert LazyHTML.attribute(LazyHTML.query(page, "#game-shot-caption-1"), "aria-hidden") == []
+
+      assert LazyHTML.attribute(LazyHTML.query(page, "#game-shot-caption-3"), "aria-hidden") == [
+               "true"
+             ]
+
+      assert LazyHTML.attribute(LazyHTML.query(page, "#game-shot-1"), "data-game-shot-caption") ==
+               ["In-game"]
+
+      assert LazyHTML.attribute(LazyHTML.query(page, "#game-shot-3"), "data-game-shot-caption") ==
+               ["Concept art: the city skyline"]
+
+      assert page |> LazyHTML.query("#game-lightbox-caption") |> LazyHTML.text() |> String.trim() ==
+               "In-game"
+
+      assert LazyHTML.attribute(LazyHTML.query(page, "[data-game-lightbox-image]"), "alt") ==
+               [hd(@shots)["alt"]]
     end
 
     test "is hidden when a game has no screenshots", %{conn: conn, game: game} do
@@ -1012,8 +1097,12 @@ defmodule PlatformWeb.GamePageControllerTest do
       assert Enum.empty?(LazyHTML.query(page, "#game-lightbox [data-game-lightbox-step]"))
     end
 
-    test "screenshots must be local images with alt text", %{game: game} do
+    test "screenshots must be local images with alt text and an optional caption", %{game: game} do
       assert Games.valid?(Map.put(game, "screenshots", @shots))
+
+      assert Games.valid?(
+               Map.put(game, "screenshots", [Map.put(hd(@shots), "caption", "In-game")])
+             )
 
       for bad <- [
             "/images/a.png",
@@ -1024,6 +1113,10 @@ defmodule PlatformWeb.GamePageControllerTest do
             [%{"path" => "/images/a.png"}],
             [%{"path" => "/images/a.png", "alt" => ""}],
             [%{"path" => "/images/a.png", "alt" => "x", "onclick" => "x"}],
+            [%{"path" => "/images/a.png", "alt" => "x", "caption" => ""}],
+            [%{"path" => "/images/a.png", "alt" => "x", "caption" => nil}],
+            [%{"path" => "/images/a.png", "alt" => "x", "caption" => 7}],
+            [%{"path" => "/images/a.png", "alt" => "x", "caption" => String.duplicate("c", 201)}],
             List.duplicate(hd(@shots), 9)
           ] do
         refute Games.valid?(Map.put(game, "screenshots", bad)), inspect(bad)

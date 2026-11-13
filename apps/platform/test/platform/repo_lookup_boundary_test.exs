@@ -112,6 +112,8 @@ defmodule Platform.RepoLookupBoundaryTest do
 
   # {relative_path, call_kind, schema_alias, call_count, classification, reason}
   @inventory [
+    {"platform/sign_in/email_setup.ex", :platform_uuid_guard, "-", 1, :must_cast,
+     "complete/2 checks the browser challenge id before the locked query; malformed ids are refused"},
     {"platform/instruction_packs/check.ex", :get, "Check", 1, :safe_internal,
      "Check has a boolean singleton primary key; the only Repo.get argument is the literal true, never a caller-supplied value"},
     {"platform/instruction_packs/owner.ex", :get, "State", 1, :safe_internal,
@@ -1986,6 +1988,9 @@ defmodule Platform.RepoLookupBoundaryTest do
     # Task 01a1b678 stage 3: `space/0` selects by the constant slug and kind,
     # `limit: 1`; no id is cast.
     "platform/sharing/help_channel.ex" => 1,
+    # First-sign-in email lookup pins only text. Challenge redemption pins a
+    # browser-supplied id behind Platform.UUID.valid?/1 and a row lock.
+    "platform/sign_in/email_setup.ex" => 2,
     # 6 -> 7 with task 019f9b61 stage 2: `plan_task_id/1`, whose
     # `where: p.id == ^plan_id` pins a UUID column. Its caller is the
     # TaskRouter's `{:stage_transitioned, stage}` clause (`stage.plan_id`, an

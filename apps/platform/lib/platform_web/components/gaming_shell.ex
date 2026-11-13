@@ -1,6 +1,7 @@
 defmodule PlatformWeb.Components.GamingShell do
   @moduledoc "Console Glass navigation around published games; workspace flows remain intact."
   use PlatformWeb, :html
+  import PlatformWeb.Components.InstallSwitch, only: [install_switch: 1, install_switch_menu: 1]
 
   attr :enabled, :boolean, default: true
   attr :mode, :string, default: "play"
@@ -9,14 +10,36 @@ defmodule PlatformWeb.Components.GamingShell do
   attr :creator, :boolean, default: false
   attr :details, :boolean, default: false
   attr :communities, :map, default: %{}
+  attr :brand_name, :string, default: nil, doc: "this install's name; defaults to the branding"
   slot :inner_block, required: true
 
   def shell(assigns) do
+    assigns =
+      assign_new(assigns, :install_name, fn ->
+        assigns.brand_name || Platform.Branding.app_name()
+      end)
+
     ~H"""
     <%= if @enabled do %>
       <div class={["cg-app", @details && "cg-with-details"]} id="console-glass-shell">
-        <aside class="cg-side cg-glass" aria-label="Burrow Play navigation">
-          <a class="cg-brand" href="/play">
+        <aside
+          class="cg-side cg-glass"
+          aria-label="Burrow Play navigation"
+          data-install-switch-bar
+        >
+          <%!-- The brand opens the install switcher (the same component and
+               hook as the workspace shell). It renders hidden and the hook
+               reveals it; until then, or where nothing reveals it (an app
+               build without the switcher bridge), the plain /play link that
+               follows it shows instead (console_glass.css). Its dropdown
+               container sits outside .cg-app, below. --%>
+          <.install_switch
+            id="gaming-install-switch"
+            variant={:play}
+            brand_name={@install_name}
+            menu={false}
+          />
+          <a class="cg-brand cg-brand-fallback" href="/play">
             <img src="/images/burrow-mark.svg" alt="Burrow" /><span>PLAY</span>
           </a>
           <.modes mode={@mode} />
@@ -88,15 +111,20 @@ defmodule PlatformWeb.Components.GamingShell do
           </div>
         </aside>
       </div>
+      <.install_switch_menu id="gaming-install-switch" />
     <% else %>
       {render_slot(@inner_block)}
     <% end %>
     """
   end
 
-  defp member_label(0), do: "Be the first in"
-  defp member_label(1), do: "1 member"
-  defp member_label(count), do: "#{count} members"
+  @doc "A room card's member line: an invitation while empty, else the count."
+  def member_label(0), do: "Be the first in"
+  def member_label(count), do: member_count(count)
+
+  @doc "A pluralised member count: `1 member`, `2 members`."
+  def member_count(1), do: "1 member"
+  def member_count(count), do: "#{count} members"
 
   attr :mode, :string, default: "create"
 

@@ -147,6 +147,34 @@ defmodule Platform.AgentHost.ClaudeLoginTest do
       assert {:error, :no_session} = AgentHost.claude_login_submit(owner, agent, good_code())
     end
 
+    test "a host whose hello lists no claude_login is refused at once, nothing pushed", %{
+      owner: owner,
+      agent: agent
+    } do
+      # A full_machine host's daemon is installed at boot and not moved by
+      # core's updater, so it can predate Claude login; it ignores the push.
+      :ok = Reconciler.host_joined(self(), %{"profile" => "full_machine", "full_root" => false})
+
+      {micros, result} = :timer.tc(fn -> AgentHost.claude_login_start(owner, agent) end)
+      assert {:error, :host_outdated} = result
+      # Not after the 35 s wait for an answer that never comes.
+      assert micros < 5_000_000
+      refute_received {:agent_host_push, "agent.claude_login_start", _}
+      refute Reconciler.claude_login_pending?(agent.id)
+    end
+
+    test "a host that lists claude_login gets the push", %{owner: owner, agent: agent} do
+      :ok =
+        Reconciler.host_joined(self(), %{
+          "profile" => "full_machine",
+          "features" => ["claude_login"]
+        })
+
+      assert {:error, :timeout} = AgentHost.claude_login_start(owner, agent, timeout: 50)
+      assert_received {:agent_host_push, "agent.claude_login_start", %{"agent_id" => id}}
+      assert id == agent.id
+    end
+
     test "no host connected", %{owner: owner, agent: agent} do
       assert {:error, :not_connected} = AgentHost.claude_login_start(owner, agent)
       assert {:error, :not_connected} = AgentHost.claude_login_submit(owner, agent, good_code())
@@ -157,10 +185,22 @@ defmodule Platform.AgentHost.ClaudeLoginTest do
       fake_host!()
       {:ok, _url} = AgentHost.claude_login_start(owner, agent)
 
-      assert :ok = AgentHost.claude_logout(owner, agent, restart: false)
+      {:ok, _} = NativeAgents.set_desired_state(agent, "running")
+      assert :ok = AgentHost.claude_logout(owner, agent, stop: false)
       refute Reconciler.claude_login_pending?(agent.id)
-      # Default: the agent is restarted so it drops the login at once.
+      # `stop: false` leaves the desire alone.
+      assert %{desired_state: "running"} = NativeAgents.get_managed_runtime(agent)
+
+      # Default: the agent is stopped, not restarted. A restarted unit with no
+      # credentials reads `running` to the host, and every screen then calls
+      # the agent connected; stopped, it stays visibly signed out until the
+      # next sign-in sets it running again.
       assert :ok = AgentHost.claude_logout(owner, agent)
+      assert %{desired_state: "stopped"} = NativeAgents.get_managed_runtime(agent)
+
+      {:ok, _url} = AgentHost.claude_login_start(owner, agent)
+      assert {:ok, _} = AgentHost.claude_login_submit(owner, agent, good_code())
+      assert %{desired_state: "running"} = NativeAgents.get_managed_runtime(agent)
     end
 
     test "a codex agent is refused before anything reaches the host", %{owner: owner} do
@@ -271,7 +311,13 @@ defmodule Platform.AgentHost.ClaudeLoginTest do
           connect_info: %{x_headers: [{"x-agent-host-token", @token}]}
         )
 
-      {:ok, _reply, channel} = subscribe_and_join(socket, "agent_host:control", %{})
+      # The hello a current host sends (agent-host host.ts `hello()`).
+      {:ok, _reply, channel} =
+        subscribe_and_join(socket, "agent_host:control", %{
+          "profile" => "contained",
+          "features" => ["claude_login"]
+        })
+
       code = good_code()
 
       # One caller starts and submits; this test process plays the host.

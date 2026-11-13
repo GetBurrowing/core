@@ -338,8 +338,11 @@ defmodule PlatformWeb.Tasks.SteeringComponent do
                    at the textarea, which rewrites the in-progress `@query` into
                    `@[Name] `. --%>
             <div :if={@mention_suggestions != []} class="relative">
-              <div class="absolute bottom-0 left-0 z-50 w-64 rounded-2xl border border-base-content/10 bg-base-100 shadow-lg overflow-hidden">
-                <div class="py-1">
+              <div class="absolute bottom-0 left-0 z-50 w-64 max-w-[calc(100vw-2rem)] rounded-2xl border border-base-content/10 bg-base-100 shadow-lg overflow-hidden">
+                <%!-- Capped and scrollable like the chat picker, so a long
+                     roster scrolls inside the list instead of running off
+                     the top of the panel. --%>
+                <div class="py-1 max-h-[212px] overflow-y-auto overscroll-contain">
                   <button
                     :for={{suggestion, idx} <- Enum.with_index(@mention_suggestions)}
                     type="button"

@@ -52,6 +52,13 @@ defmodule PlatformWeb.AuthController do
     |> start_login()
   end
 
+  # The options page is already in the same signed browser session as the
+  # app PKCE challenge / game continuation established by login/2.
+  def passkey(conn, _params), do: start_provider_login(conn)
+
+  def setup_code_login(conn, code, purpose \\ :invite) when purpose in [:invite, :handover],
+    do: start_code_login(conn, code, {:setup_code, purpose})
+
   # Task 01a10315 stage 6 round 2: the hand-over sign-in link of a new
   # install. bootstrap-admin points it HERE, at the install's own host, with
   # pocket-id's one-time code: `/auth/handover?code=<code>` (query string, so
@@ -121,8 +128,7 @@ defmodule PlatformWeb.AuthController do
          {:ok, %{url: url, session_params: session_params}} <- OIDC.authorize_url(),
          {:ok, interaction} <- OIDC.begin_interaction(url) do
       conn
-      |> delete_session(:app_challenge)
-      |> delete_session(:game_login)
+      |> clear_handover_continuation(purpose)
       |> put_session(:oidc_session_params, session_params)
       |> put_landing(purpose)
       |> LoginOrigin.capture()
@@ -145,6 +151,11 @@ defmodule PlatformWeb.AuthController do
     end
   end
 
+  defp clear_handover_continuation(conn, {:setup_code, _}), do: conn
+
+  defp clear_handover_continuation(conn, _),
+    do: conn |> delete_session(:app_challenge) |> delete_session(:game_login)
+
   defp put_landing(conn, :handover) do
     conn
     |> put_session(:post_login_path, handover_landing())
@@ -152,6 +163,7 @@ defmodule PlatformWeb.AuthController do
   end
 
   defp put_landing(conn, :invite), do: delete_session(conn, :post_login_path)
+  defp put_landing(conn, {:setup_code, purpose}), do: put_landing(conn, purpose)
 
   defp handover_invalid(conn) do
     conn
@@ -181,6 +193,12 @@ defmodule PlatformWeb.AuthController do
   end
 
   defp start_login(conn) do
+    if Platform.SignIn.EmailSetup.enabled?(),
+      do: redirect(conn, to: "/auth/sign-in"),
+      else: start_provider_login(conn)
+  end
+
+  defp start_provider_login(conn) do
     # An ordinary login never inherits an abandoned hand-over's landing.
     conn = delete_session(conn, :post_login_path)
 
