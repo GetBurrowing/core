@@ -32,8 +32,14 @@ jobs:
           driver-opts: image=ghcr.io/getburrowing/buildkit:buildx-stable-1@sha256:cec9f139f45e93c5c69c60f8b07cfad9f43f4ef6b6a6cd917527fea5ff2e3dea
       - name: Cut newest verified main batch
         env:
+          STABLE_CANARY_HEALTH_URL: ${{ vars.STABLE_CANARY_HEALTH_URL }}
+          STABLE_SOAK_HOURS: ${{ vars.STABLE_SOAK_HOURS }}
           GH_TOKEN: ${{ secrets.GITHUB_TOKEN }}
           STABLE_BATCH_ENABLED: ${{ vars.STABLE_BATCH_ENABLED }}
           STABLE_SOAK_MODE: ${{ vars.STABLE_SOAK_MODE }}
           STABLE_HOLD: ${{ vars.STABLE_HOLD }}
-        run: python3 deployment/release/cut_candidate.py
+          STABLE_HELD_BOOTSTRAP: ${{ vars.STABLE_HELD_BOOTSTRAP }}
+        run: |
+          args=()
+          if [[ "$STABLE_HELD_BOOTSTRAP" == "true" ]]; then args+=(--held-bootstrap); fi
+          python3 deployment/release/cut_candidate.py "${args[@]}"

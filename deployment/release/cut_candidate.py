@@ -42,7 +42,7 @@ def latest_verified(refs, current, repository):
     for run in data["workflow_runs"]:
         sha = run.get("head_sha", "")
         if (run.get("run_attempt") != 1 or not release.SHA_RE.fullmatch(sha)
-                or sha == current or refs.fail.get(sha)):
+                or sha == current or sha in refs.failed_any):
             continue
         jobs = api(f"repos/{repository}/actions/runs/{run['id']}/jobs?per_page=100")
         if boot_checked(jobs["jobs"]) and release.known_commit(sha):
@@ -50,11 +50,17 @@ def latest_verified(refs, current, repository):
     return None
 
 
-def main():
+def main(held_bootstrap=False):
+    if held_bootstrap:
+        try:
+            release.held_bootstrap_config()
+        except ValueError as exc:
+            release.log(f"error: {exc}")
+            return 1
     if not release.truthy(os.environ.get("STABLE_BATCH_ENABLED")):
         release.log("batch cutting is not activated; no channels changed")
         return 0
-    if release.truthy(os.environ.get("STABLE_HOLD")):
+    if release.truthy(os.environ.get("STABLE_HOLD")) and not held_bootstrap:
         release.log("stable hold is set; candidate stays put")
         return 0
     mode = os.environ.get("STABLE_SOAK_MODE") or "both"
@@ -62,6 +68,9 @@ def main():
         release.log("error: invalid soak mode")
         return 1
     refs = release.list_refs(mode)
+    if refs.pending:
+        release.log("error: candidate publication pending; reconcile registry and Git state before another cut")
+        return 1
     now = release.now_utc()
     day = now.strftime("%Y%m%d")
     if day in refs.cuts:
@@ -69,7 +78,12 @@ def main():
         return 0
     repo = os.environ.get("PROMOTE_REPO") or release.DEFAULT_REPO
     current = release.stable_revision(repo)
-    if refs.candidate and refs.candidate != current and not refs.fail.get(refs.candidate):
+    if refs.candidate:
+        for flavour in ("core", "play"):
+            if release.stable_revision(repo, f"{flavour}-candidate") != refs.candidate:
+                release.log("error: candidate registry/Git mismatch; reconciliation required")
+                return 1
+    if refs.candidate and refs.candidate != current and refs.candidate not in refs.failed_any:
         release.log("candidate is still soaking; not replacing it with a moving main")
         return 0
     sha = latest_verified(refs, current, os.environ["GITHUB_REPOSITORY"])
@@ -78,21 +92,39 @@ def main():
         return 0
     # Require BOTH flavours. A canary must test the flavour customers run.
     for flavour in ("core", "play"):
-        rc, _, err = release.imagetools("inspect", f"{repo}:{flavour}-{sha}")
+        rc, _, _err = release.imagetools("inspect", f"{repo}:{flavour}-{sha}")
         if rc:
             release.log(f"error: {flavour} candidate image unavailable")
             return 1
+    # Durable intent first: a crash/partial registry publication remains visibly
+    # pending, including to the observer. CAS prevents competing candidate identities taking intent.
+    rc, _, _ = release.git(
+        "push", "--atomic", "--force-with-lease=refs/release-candidate/pending:",
+        "origin", f"{sha}:refs/release-candidate/pending",
+    )
+    if rc:
+        release.log("error: candidate publication intent not recorded; no registry writes")
+        return 1
     for flavour in ("core", "play"):
-        rc, _, err = release.imagetools(
+        rc, _, _err = release.imagetools(
             "create", "-t", f"{repo}:{flavour}-candidate", f"{repo}:{flavour}-{sha}"
         )
         if rc:
             release.log(f"error: {flavour} candidate tag did not move")
             return 1
+    for flavour in ("core", "play"):
+        if release.stable_revision(repo, f"{flavour}-candidate") != sha:
+            release.log("error: registry publication identity unverified; candidate remains pending")
+            return 1
+    ledger = release.state_commit(release.soak_state.initial(sha, mode))
+    ledger_ref = release.state_ref(sha, mode)
     rc, _, _ = release.git(
-        "push", "--atomic", "origin",
-        f"+{sha}:refs/release-candidate/current",
+        "push", "--atomic", f"--force-with-lease={ledger_ref}:", f"--force-with-lease=refs/release-candidate/pending:{sha}",
+        f"--force-with-lease=refs/release-candidate/current:{refs.candidate or ''}", "origin",
+        f"{ledger}:{ledger_ref}",
+        f"{sha}:refs/release-candidate/current",
         f"{sha}:refs/release-candidate/cut/{day}",
+        ":refs/release-candidate/pending",
     )
     if rc:
         release.log("error: candidate state not recorded; no stable promotion")
@@ -102,4 +134,4 @@ def main():
 
 
 if __name__ == "__main__":
-    raise SystemExit(main())
+    raise SystemExit(release.entrypoint(main))

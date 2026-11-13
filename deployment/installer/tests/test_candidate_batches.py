@@ -1,9 +1,9 @@
 """Automatic candidate selection and policy boundaries; no network or registry."""
 import datetime as dt
 import os
-from pathlib import Path
 import sys
 import unittest
+from pathlib import Path
 from unittest.mock import patch
 
 sys.path.insert(0, str(Path(__file__).resolve().parents[2] / "release"))
@@ -31,8 +31,7 @@ class BatchTest(unittest.TestCase):
         self.assertFalse(cut.boot_checked(jobs))
 
     def test_selection_skips_retried_and_failed_candidates(self):
-        refs = release.Refs([])
-        refs.fail[OTHER] = {"20261108T00Z"}
+        refs = release.Refs([f"{OTHER}\trefs/soak-fail/{OTHER}/20261108T00Z"])
         runs = [{"id": 1, "head_sha": SHA, "run_attempt": 2},
                 {"id": 2, "head_sha": OTHER, "run_attempt": 1},
                 {"id": 3, "head_sha": SHA, "run_attempt": 1}]
@@ -62,9 +61,10 @@ class BatchTest(unittest.TestCase):
         with patch.dict(os.environ, env, clear=True), \
              patch.object(release, "list_refs", return_value=refs), \
              patch.object(release, "now_utc", return_value=dt.datetime(2026, 11, 8, tzinfo=dt.UTC)), \
-             patch.object(release, "stable_revision", return_value=OTHER), \
+             patch.object(release, "stable_revision", side_effect=lambda repo, channel="core-stable": OTHER if channel == "core-stable" else (refs.candidate or SHA)), \
              patch.object(cut, "latest_verified", return_value=SHA) as select, \
              patch.object(release, "imagetools", return_value=(0, "", "")) as images, \
+             patch.object(release, "state_commit", return_value="d" * 40), \
              patch.object(release, "git", return_value=(0, "", "")) as git:
             status = cut.main()
             return status, select, images, git
@@ -95,18 +95,20 @@ class BatchTest(unittest.TestCase):
         self.assertEqual(creates, [
             ("create", "-t", f"{release.DEFAULT_REPO}:{f}-candidate", f"{release.DEFAULT_REPO}:{f}-{SHA}")
             for f in ("core", "play")])
-        self.assertIn(f"+{SHA}:refs/release-candidate/current", git.call_args.args)
+        self.assertIn(f"{SHA}:refs/release-candidate/current", git.call_args.args)
+        self.assertIn(f"--force-with-lease=refs/soak-state/both/{SHA}:", git.call_args.args)
+        self.assertIn(f"{'d' * 40}:refs/soak-state/both/{SHA}", git.call_args.args)
 
     def test_failed_image_lookup_never_updates_candidate_state(self):
-        with patch.object(release, "imagetools", return_value=(1, "", "")):
-            # Exercise the real main with the failure after selection.
-            with patch.dict(os.environ, {"STABLE_BATCH_ENABLED": "true", "GITHUB_REPOSITORY": "owner/repo"}, clear=True), \
-                 patch.object(release, "list_refs", return_value=release.Refs([])), \
-                 patch.object(release, "stable_revision", return_value=None), \
-                 patch.object(cut, "latest_verified", return_value=SHA), \
-                 patch.object(release, "git") as git:
-                self.assertEqual(cut.main(), 1)
-                git.assert_not_called()
+        # Exercise the real main with the failure after selection.
+        with patch.object(release, "imagetools", return_value=(1, "", "")), \
+             patch.dict(os.environ, {"STABLE_BATCH_ENABLED": "true", "GITHUB_REPOSITORY": "owner/repo"}, clear=True), \
+             patch.object(release, "list_refs", return_value=release.Refs([])), \
+             patch.object(release, "stable_revision", return_value=None), \
+             patch.object(cut, "latest_verified", return_value=SHA), \
+             patch.object(release, "git") as git:
+            self.assertEqual(cut.main(), 1)
+            git.assert_not_called()
 
     def test_batch_does_not_shorten_the_soak(self):
         with patch.dict(os.environ, {"STABLE_BATCH_ENABLED": "true", "STABLE_SOAK_HOURS": "23",

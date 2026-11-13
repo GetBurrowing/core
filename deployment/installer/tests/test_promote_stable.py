@@ -33,7 +33,7 @@ HOUR = "20261107T21Z"
 
 FAKE = textwrap.dedent(
     r"""
-    import json, os, sys
+    import json, os, sys, hashlib
     state_path = os.environ["FAKE_STATE"]
     with open(state_path) as f:
         st = json.load(f)
@@ -48,13 +48,25 @@ FAKE = textwrap.dedent(
     if tool == "git":
         if args[:2] == ["ls-remote", "--refs"]:
             out = "".join(f"{sha}\t{ref}\n" for ref, sha in sorted(st["remote"].items()))
+        elif args[:3] == ["hash-object", "-t", "tree"]:
+            out = "4b825dc642cb6eb9a060e54bf8d69288fbee4904"
+        elif args[0] == "commit-tree":
+            message = args[args.index("-m") + 1]
+            out = hashlib.sha1(message.encode()).hexdigest()
+            st.setdefault("objects", {})[out] = message
+        elif args[0] == "fetch":
+            rc = 1 if st.get("fetch_fail") else 0
+        elif args[:3] == ["show", "-s", "--format=%B"]:
+            out = st.get("objects", {}).get(args[3], "")
+            rc = 0 if out else 1
         elif args[:2] == ["cat-file", "-e"]:
             rc = 0 if args[2].split("^")[0] in st["commits"] else 1
         elif args[0] == "push":
-            if st.get("push_fail"):
+            leases = [a.split("=", 1)[1].split(":", 1) for a in args if a.startswith("--force-with-lease=")]
+            if st.get("push_fail") or any(st["remote"].get(ref, "") != sha for ref, sha in leases) or (st.get("finish_fail") and ":refs/release-candidate/pending" in args):
                 rc = 1
             else:
-                for spec in [a for a in args[1:] if a not in ("--atomic", "origin")]:
+                for spec in [a for a in args[1:] if a != "origin" and not a.startswith("--")]:
                     if spec.startswith(":"):
                         st["remote"].pop(spec[1:], None)
                     elif ":" in spec:
@@ -377,30 +389,30 @@ class BatchPromotionTest(PromoteHarness):
     def test_batch_never_promotes_a_non_candidate_even_with_enough_history(self):
         self.state["remote"].update(soak_refs(S, range(1, 24)))
         self.state["remote"]["refs/release-candidate/current"] = T
-        self.assertEqual(self.run_promote(STABLE_BATCH_ENABLED="true"), 0)
+        self.assertEqual(self.run_promote(STABLE_BATCH_ENABLED="true"), 1)
         self.assertEqual(self.creates(), [])
 
     def test_batch_without_a_cut_never_promotes_historical_evidence(self):
         self.state["remote"].update(soak_refs(S, range(1, 24)))
-        self.assertEqual(self.run_promote(STABLE_BATCH_ENABLED="true"), 0)
+        self.assertEqual(self.run_promote(STABLE_BATCH_ENABLED="true"), 1)
         self.assertEqual(self.creates(), [])
 
-    def test_both_policy_promotes_only_the_current_candidate(self):
+    def test_both_policy_rejects_legacy_hour_only_evidence(self):
         self.state["remote"].update(soak_refs(S, range(1, 24)))
         self.state["remote"]["refs/release-candidate/current"] = S
-        self.assertEqual(self.run_promote(STABLE_BATCH_ENABLED="true"), 0)
-        self.assertTrue(self.creates())
+        self.assertEqual(self.run_promote(STABLE_BATCH_ENABLED="true"), 1)
+        self.assertEqual(self.creates(), [])
 
-    def test_canary_policy_promotes_with_its_own_hours_while_prod_differs(self):
+    def test_canary_policy_rejects_legacy_hour_only_evidence(self):
         self.state["health"]["prod-health"]["body"]["commit"] = T
         self.state["remote"].update({
             k.replace("refs/soak/", "refs/soak-canary/"): v
             for k, v in soak_refs(S, range(1, 24)).items()
         })
         self.state["remote"]["refs/release-candidate/current"] = S
-        self.assertEqual(self.run_promote(STABLE_BATCH_ENABLED="true", STABLE_SOAK_MODE="canary"), 0)
-        self.assertTrue(self.creates())
-        self.assertEqual(len(self.calls("curl")), 1)
+        self.assertEqual(self.run_promote(STABLE_BATCH_ENABLED="true", STABLE_SOAK_MODE="canary"), 1)
+        self.assertEqual(self.creates(), [])
+        self.assertEqual(len(self.calls("curl")), 0)
 
 
 class PruneTest(PromoteHarness):
@@ -416,7 +428,7 @@ class PruneTest(PromoteHarness):
         )
         self.assertEqual(self.run_promote(), 0)
         self.assertNotIn(f"refs/soak/{T}/{old_hour}", self.state["remote"])
-        self.assertNotIn(f"refs/soak-fail/{T}/{old_hour}", self.state["remote"])
+        self.assertIn(f"refs/soak-fail/{T}/{old_hour}", self.state["remote"])
         self.assertIn(f"refs/soak/{T}/{fresh_hour}", self.state["remote"])
         pushes = [c for c in self.calls("git") if c[:1] == ["push"]]
         self.assertIn(f":refs/soak/{T}/{old_hour}", pushes[0])
