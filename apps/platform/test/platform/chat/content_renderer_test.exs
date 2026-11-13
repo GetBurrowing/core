@@ -3,6 +3,16 @@ defmodule Platform.Chat.ContentRendererTest do
 
   alias Platform.Chat.ContentRenderer
 
+  test "renders a group token as a distinct friendly chip without displaying its UUID" do
+    id = "12345678-1234-1234-1234-123456789abc"
+    result = render("Ask @[group:#{id}|Design Team] and @[Design Lead]")
+    assert result =~ "data-mention-type=\"group\""
+    assert result =~ "@Design Team</span>"
+    assert result =~ "@Design Lead</span>"
+    refute result =~ "> @group:"
+    refute result =~ "@group:#{id}"
+  end
+
   describe "render_message/1" do
     test "returns empty for nil" do
       assert {:safe, ""} = ContentRenderer.render_message(nil)

@@ -14,6 +14,15 @@ defmodule PlatformWeb.ChatLive.MentionsHooksTest do
   alias Platform.Repo
   alias PlatformWeb.ChatLive.MentionsHooks
 
+  test "groups have a distinct type and stable insertion token, and external users never see them" do
+    group = %{id: Ecto.UUID.generate(), name: "Design team", members: []}
+    assert [suggestion] = MentionsHooks.build_suggestions("design", %{}, groups: [group])
+    assert suggestion.name == "Design team"
+    assert suggestion.participant_type == "group"
+    assert suggestion.token == "group:#{group.id}|Design team"
+    assert [] == MentionsHooks.build_suggestions("design", %{}, groups: [group], external?: true)
+  end
+
   defp participant(id, name, type \\ "user", opts \\ []) do
     %{
       id: id,
