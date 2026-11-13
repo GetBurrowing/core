@@ -2,6 +2,9 @@ defmodule PlatformWeb.Components.GamingShell do
   @moduledoc "Console Glass navigation around published games; workspace flows remain intact."
   use PlatformWeb, :html
   import PlatformWeb.Components.InstallSwitch, only: [install_switch: 1, install_switch_menu: 1]
+  import PlatformWeb.Components.IconRail, only: [bottom_rail: 1]
+
+  alias PlatformWeb.Components.IconRail
 
   attr :enabled, :boolean, default: true
   attr :mode, :string, default: "play"
@@ -15,9 +18,9 @@ defmodule PlatformWeb.Components.GamingShell do
 
   def shell(assigns) do
     assigns =
-      assign_new(assigns, :install_name, fn ->
-        assigns.brand_name || Platform.Branding.app_name()
-      end)
+      assigns
+      |> assign_new(:install_name, fn -> assigns.brand_name || Platform.Branding.app_name() end)
+      |> assign_workspace_nav()
 
     ~H"""
     <%= if @enabled do %>
@@ -112,11 +115,42 @@ defmodule PlatformWeb.Components.GamingShell do
         </aside>
       </div>
       <.install_switch_menu id="gaming-install-switch" />
+      <%!-- The workspace's phone tab bar (Chat, Calendar, Meetings, Inbox,
+           More): the same component the workspace shell renders, so its
+           items follow it. Signed-in only, filtered by the viewer's Scope.
+           Outside .cg-app and .cg-side: .cg-side's backdrop-filter would
+           trap the fixed bar. Phone widths only on these pages
+           (console_glass.css); .cg-app pads its end to clear it. These are
+           dead views, so More is a link that opens the More sheet in the
+           workspace, and app.js mounts the bar's hooks by hand. --%>
+      <.bottom_rail
+        :if={@workspace_nav}
+        current_path="/play"
+        access_scope={@workspace_nav.scope}
+        more_href={@workspace_nav.more_href}
+      />
     <% else %>
       {render_slot(@inner_block)}
     <% end %>
     """
   end
+
+  # The phone tab bar for a signed-in viewer whose Scope admits at least one
+  # of its link tabs; nil otherwise (a signed-out player sees no workspace
+  # nav). More opens the sheet on the first tab's workspace page.
+  defp assign_workspace_nav(%{enabled: true, user: %{id: _} = user} = assigns) do
+    scope = Platform.Access.Scope.for_user(user)
+
+    nav =
+      case IconRail.tab_destinations(scope) do
+        [first | _] -> %{scope: scope, more_href: first.path <> "?more=1"}
+        [] -> nil
+      end
+
+    assign(assigns, :workspace_nav, nav)
+  end
+
+  defp assign_workspace_nav(assigns), do: assign(assigns, :workspace_nav, nil)
 
   @doc "A room card's member line: an invitation while empty, else the count."
   def member_label(0), do: "Be the first in"

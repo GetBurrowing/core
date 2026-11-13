@@ -260,8 +260,14 @@ defmodule PlatformWeb.ShellLive do
       # the event.
       |> push_app_badge()
       |> maybe_seed_meeting_state(raw_user_id)
-      |> attach_hook(:track_path, :handle_params, fn _params, url, socket ->
+      |> attach_hook(:track_path, :handle_params, fn params, url, socket ->
         uri = URI.parse(url)
+
+        # `?more=1` arrives with the More sheet up: the More tab on the
+        # Burrow Play pages (dead views, `GamingShell`) is a link here, as
+        # there is no ShellLive there to take `open_more_sheet`.
+        socket =
+          if params["more"] == "1", do: assign(socket, :more_sheet_open, true), else: socket
 
         # Hide the bar on any surface that represents the active meeting:
         # legacy chat surface (`/chat/<slug>` or `/chat/<space_id>` — the
