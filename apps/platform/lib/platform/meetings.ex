@@ -3337,6 +3337,161 @@ defmodule Platform.Meetings do
   # means cannot land in the listing and miss the access gate.
   defp exclude_revoked(query), do: from(i in query, where: is_nil(i.revoked_at))
 
+  @rsvp_answers ~w(accepted tentative declined)
+
+  @doc """
+  Record `user`'s answer to their invite to `meeting`: `"accepted"`,
+  `"tentative"` or `"declined"`.
+
+  Updates every LIVE invite this user holds for the meeting (the same
+  identity rule as `invited_meeting_ids_query/1`: `user_id`, or an
+  address-only invite matching their email). When the answer changes
+  anything, the same transaction bumps `meetings.ical_sequence` and
+  `updated_at`, so the calendar feed's SEQUENCE, DTSTAMP and LAST-MODIFIED
+  advance and a subscribed client replaces the event with the new
+  attendee status (`Platform.Meetings.CalendarFeed`). Answering the same
+  thing twice writes nothing.
+
+  Returns `{:ok, status}`, `{:error, :not_invited}` when the user holds no
+  live invite, or `{:error, :invalid_status}`.
+  """
+  @spec respond_to_invite(Meeting.t() | binary(), map(), String.t()) ::
+          {:ok, String.t()} | {:error, :not_invited | :invalid_status}
+  def respond_to_invite(%Meeting{id: id}, user, status), do: respond_to_invite(id, user, status)
+
+  def respond_to_invite(meeting_id, %{id: user_id} = user, status)
+      when is_binary(meeting_id) and is_binary(user_id) and status in @rsvp_answers do
+    if Platform.UUID.valid?(meeting_id) do
+      invite_ids =
+        user
+        |> active_invite_query()
+        |> where([i, _m], i.meeting_id == ^meeting_id)
+        |> select([i, _m], i.id)
+        |> Repo.all()
+
+      case invite_ids do
+        [] -> {:error, :not_invited}
+        ids -> record_rsvp(meeting_id, ids, status)
+      end
+    else
+      {:error, :not_invited}
+    end
+  end
+
+  def respond_to_invite(_meeting, %{id: user_id}, _status) when is_binary(user_id),
+    do: {:error, :invalid_status}
+
+  def respond_to_invite(_meeting, _user, _status), do: {:error, :not_invited}
+
+  defp record_rsvp(meeting_id, invite_ids, status) do
+    now = DateTime.utc_now()
+
+    Repo.transaction(fn ->
+      {changed, _} =
+        from(i in Invite, where: i.id in ^invite_ids and i.rsvp_status != ^status)
+        |> Repo.update_all(set: [rsvp_status: status, rsvp_at: now, updated_at: now])
+
+      if changed > 0 do
+        from(m in Meeting, where: m.id == ^meeting_id)
+        |> Repo.update_all(set: [updated_at: now], inc: [ical_sequence: 1])
+      end
+
+      status
+    end)
+  end
+
+  @doc """
+  The answer `user` gave to their invite to `meeting`: `"invited"` (none
+  yet), `"accepted"`, `"tentative"` or `"declined"`, or `nil` when they
+  hold no live invite (so there is nothing to answer).
+  """
+  @spec invite_rsvp(Meeting.t(), map() | nil) :: String.t() | nil
+  def invite_rsvp(%Meeting{id: meeting_id}, %{id: user_id} = user) when is_binary(user_id) do
+    user
+    |> active_invite_query()
+    |> where([i, _m], i.meeting_id == ^meeting_id)
+    |> select([i, _m], i.rsvp_status)
+    |> Repo.all()
+    |> case do
+      [] -> nil
+      statuses -> Enum.find(statuses, "invited", &(&1 != "invited"))
+    end
+  end
+
+  def invite_rsvp(_meeting, _user), do: nil
+
+  @doc """
+  The organizer and invitees of each of `meetings`, for iCalendar output
+  (`Platform.Meetings.CalendarFeed.render/2`, `Platform.Meetings.InviteIcs`).
+
+  Returns `%{meeting_id => %{organizer: {name, email} | nil, attendees:
+  [%{name, address, partstat}], updated_at: DateTime}}`. Invitees are the
+  live (non-revoked) invites, in invite order: a member by their account
+  name and email, a guest by display name and address (or `urn:uuid:` of
+  the invite when they have none); one line per address. The organizer is
+  the meeting's creator.
+  """
+  @spec calendar_parties([Meeting.t()]) :: %{binary() => map()}
+  def calendar_parties([]), do: %{}
+
+  def calendar_parties(meetings) when is_list(meetings) do
+    ids = Enum.map(meetings, & &1.id)
+
+    invites =
+      from(i in Invite,
+        where: i.meeting_id in ^ids,
+        order_by: [asc: i.inserted_at, asc: i.id],
+        preload: [:user]
+      )
+      |> exclude_revoked()
+      |> Repo.all()
+      |> Enum.group_by(& &1.meeting_id)
+
+    creators =
+      meetings
+      |> Enum.map(& &1.created_by_user_id)
+      |> Enum.reject(&is_nil/1)
+      |> Enum.uniq()
+      |> then(&Repo.all(from(u in User, where: u.id in ^&1)))
+      |> Map.new(&{&1.id, &1})
+
+    Map.new(meetings, fn meeting ->
+      organizer =
+        case Map.get(creators, meeting.created_by_user_id) do
+          %User{email: email, name: name} when is_binary(email) and email != "" -> {name, email}
+          _ -> nil
+        end
+
+      attendees =
+        invites
+        |> Map.get(meeting.id, [])
+        |> Enum.map(&calendar_attendee/1)
+        |> Enum.uniq_by(&String.downcase(&1.address))
+
+      {meeting.id, %{organizer: organizer, attendees: attendees, updated_at: meeting.updated_at}}
+    end)
+  end
+
+  defp calendar_attendee(%Invite{user: %User{} = user} = invite) do
+    %{
+      name: present_or(user.name, invite.display_name),
+      address: present_or(user.email, invite.email) || "urn:uuid:" <> invite.id,
+      partstat: Invite.rsvp_partstat(invite)
+    }
+  end
+
+  defp calendar_attendee(%Invite{} = invite) do
+    %{
+      name: invite.display_name,
+      address: present_or(invite.email, nil) || "urn:uuid:" <> invite.id,
+      partstat: Invite.rsvp_partstat(invite)
+    }
+  end
+
+  defp present_or(value, fallback) do
+    if is_binary(value) and String.trim(value) != "", do: String.trim(value), else: fallback
+  end
+
   @doc """
   Does `user` hold a live invite to a meeting with this `slug`?
 

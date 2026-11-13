@@ -9,10 +9,20 @@ defmodule Platform.Calendar.Feed do
       if Platform.Access.can?(scope, "meetings.join") do
         # Omitted for the same reason as cancelled events (`feed_events/1`).
         # The single-meeting invite keeps METHOD:CANCEL; this feed does not.
-        Platform.Meetings.list_meetings_for_user(scope.actor)
-        |> Enum.reject(&(&1.status == "cancelled"))
+        live =
+          Platform.Meetings.list_meetings_for_user(scope.actor)
+          |> Enum.reject(&(&1.status == "cancelled"))
+
+        # This feed's reader is the account it belongs to, who already sees
+        # the invite list in the meeting details, so each meeting carries
+        # ORGANIZER and one ATTENDEE (with PARTSTAT) per invitee.
+        parties = Platform.Meetings.calendar_parties(live)
+
+        live
         |> Enum.flat_map(fn meeting ->
-          case Platform.Meetings.CalendarFeed.render(meeting) do
+          case Platform.Meetings.CalendarFeed.render(meeting,
+                 parties: Map.get(parties, meeting.id)
+               ) do
             {:ok, document} ->
               # The meeting serializer owns UID, cancellation and invite privacy.
               [_before, event] = String.split(document, "BEGIN:VEVENT\r\n", parts: 2)

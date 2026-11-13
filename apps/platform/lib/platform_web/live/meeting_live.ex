@@ -2308,6 +2308,8 @@ defmodule PlatformWeb.MeetingLive do
       # The invite email's receipt (task 01a1a933 stage 4): the row warns
       # when it did not go, and a member row carries the absolute meeting
       # URL the warning's Copy link shares (a guest row has `copy_url`).
+      # The invitee's own answer (`meeting_invites.rsvp_status`).
+      rsvp: invite.rsvp_status,
       email_failed: Meetings.invite_mail_failed?(invite),
       share_url: invite_row_share_url(meeting, invite)
     }

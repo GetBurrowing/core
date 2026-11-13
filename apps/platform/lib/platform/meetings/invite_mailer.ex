@@ -228,7 +228,8 @@ defmodule Platform.Meetings.InviteMailer do
            guest_url: guest_url(),
            brand: brand(app_url),
            calendar_url: app_url <> Meetings.calendar_link_path(meeting),
-           attendees: attendee_names(meeting)
+           attendees: attendee_names(meeting),
+           calendar_attendees: calendar_attendees(meeting)
          }
        }}
     end
@@ -360,6 +361,15 @@ defmodule Platform.Meetings.InviteMailer do
     end)
     |> Enum.reject(&(is_nil(&1) or &1 == ""))
     |> Enum.uniq()
+  end
+
+  # Every invitee with their RSVP, for the calendar part's ATTENDEE lines.
+  defp calendar_attendees(%Meeting{} = meeting) do
+    meeting
+    |> List.wrap()
+    |> Meetings.calendar_parties()
+    |> Map.get(meeting.id, %{})
+    |> Map.get(:attendees, [])
   end
 
   defp guest_url do

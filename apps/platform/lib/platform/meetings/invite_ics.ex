@@ -20,8 +20,12 @@ defmodule Platform.Meetings.InviteIcs do
     * `ORGANIZER;CN=<name>:mailto:<address>` — the SENDING account's
       address, passed in by the caller; never a platform address. A
       client's Accept/Decline reply goes to it;
-    * `ATTENDEE;CN=<name>;ROLE=REQ-PARTICIPANT;PARTSTAT=NEEDS-ACTION;
-      RSVP=TRUE:mailto:<invitee>` — this recipient only, never the list;
+    * one `ATTENDEE;CN=<name>;ROLE=REQ-PARTICIPANT;PARTSTAT=<status>;
+      RSVP=TRUE:mailto:<address>` per invitee when the caller passes
+      `parties.attendees` (`Platform.Meetings.calendar_attendees/1`), so
+      the recipient's calendar shows who is invited and who has accepted or
+      declined, as Google and Outlook invites do. The recipient is always
+      among them. Without `attendees`, only the recipient is listed;
     * `LOCATION` — the recipient's own join URL.
 
   ## SEQUENCE
@@ -37,6 +41,7 @@ defmodule Platform.Meetings.InviteIcs do
 
   alias Platform.ICal
   alias Platform.Meetings.CalendarFeed
+  alias Platform.Meetings.IcsAttendees
   alias Platform.Meetings.Meeting
 
   @prodid "-//Burrow//Meetings//EN"
@@ -45,7 +50,8 @@ defmodule Platform.Meetings.InviteIcs do
   @type parties :: %{
           required(:organizer) => person(),
           required(:attendee) => person(),
-          required(:location) => String.t() | nil
+          required(:location) => String.t() | nil,
+          optional(:attendees) => [IcsAttendees.attendee()]
         }
 
   @doc """
@@ -67,7 +73,7 @@ defmodule Platform.Meetings.InviteIcs do
         :cancel -> {"CANCEL", "CANCELLED", CalendarFeed.sequence(meeting) + 1}
       end
 
-    document =
+    lines =
       [
         "BEGIN:VCALENDAR",
         "VERSION:2.0",
@@ -81,16 +87,20 @@ defmodule Platform.Meetings.InviteIcs do
         "DTEND:" <> ICal.utc_stamp(meeting.scheduled_end_at),
         "SUMMARY:" <> ICal.escape(meeting.name || ""),
         location(Map.get(parties, :location)),
-        "ORGANIZER" <> cn(organizer) <> ":mailto:" <> address(organizer),
-        "ATTENDEE" <>
-          cn(attendee) <>
-          ";ROLE=REQ-PARTICIPANT;PARTSTAT=NEEDS-ACTION;RSVP=TRUE:mailto:" <> address(attendee),
-        "STATUS:" <> status,
-        "SEQUENCE:" <> Integer.to_string(sequence),
-        "TRANSP:OPAQUE",
-        "END:VEVENT",
-        "END:VCALENDAR"
-      ]
+        IcsAttendees.organizer_line(organizer)
+      ] ++
+        Enum.map(attendees(attendee, Map.get(parties, :attendees)), &IcsAttendees.attendee_line/1) ++
+        [
+          "STATUS:" <> status,
+          "SEQUENCE:" <> Integer.to_string(sequence),
+          "LAST-MODIFIED:" <> ICal.utc_stamp(meeting.updated_at),
+          "TRANSP:OPAQUE",
+          "END:VEVENT",
+          "END:VCALENDAR"
+        ]
+
+    document =
+      lines
       |> Enum.reject(&is_nil/1)
       |> Enum.map(&[ICal.fold(&1), "\r\n"])
       |> IO.iodata_to_binary()
@@ -101,16 +111,18 @@ defmodule Platform.Meetings.InviteIcs do
   defp location(url) when is_binary(url) and url != "", do: "LOCATION:" <> ICal.escape(url)
   defp location(_url), do: nil
 
-  # RFC 5545 §3.2.2 CN is a param-value: quoted, and a DQUOTE cannot appear
-  # inside a quoted-string at all, so it is dropped along with controls.
-  defp cn({name, _address}) when is_binary(name) do
-    case name |> String.replace(~r/["\x00-\x1F\x7F]/u, "") |> String.trim() do
-      "" -> ""
-      clean -> ";CN=\"" <> clean <> "\""
+  # The whole invitee list when the caller passes it, with this recipient's
+  # line always present: a recipient missing from `attendees` (the list was
+  # read before their row) is added as NEEDS-ACTION, so a client always
+  # finds itself among the attendees and offers Accept/Decline.
+  defp attendees({name, address}, list) when is_list(list) and list != [] do
+    if Enum.any?(list, &IcsAttendees.same_address?(&1.address, address)) do
+      list
+    else
+      [%{name: name, address: String.trim(address), partstat: "NEEDS-ACTION"} | list]
     end
   end
 
-  defp cn(_person), do: ""
-
-  defp address({_name, address}) when is_binary(address), do: String.trim(address)
+  defp attendees({name, address}, _list),
+    do: [%{name: name, address: String.trim(address), partstat: "NEEDS-ACTION"}]
 end

@@ -243,6 +243,24 @@ defmodule PlatformWeb.Components.Meetings.InviteControl do
   end
 
   @doc """
+  The label of an invite row's RSVP chip (`meeting_invites.rsvp_status`),
+  or nil for a row with no RSVP (a staged draft, the producer row).
+  """
+  @spec rsvp_label(binary() | nil) :: binary() | nil
+  def rsvp_label("invited"), do: "Invited"
+  def rsvp_label("accepted"), do: "Accepted"
+  def rsvp_label("tentative"), do: "Maybe"
+  def rsvp_label("declined"), do: "Declined"
+  def rsvp_label(_rsvp), do: nil
+
+  @doc "The chip tone for `rsvp_label/1`."
+  @spec rsvp_tone(binary() | nil) :: binary()
+  def rsvp_tone("accepted"), do: "success"
+  def rsvp_tone("tentative"), do: "warning"
+  def rsvp_tone("declined"), do: "error"
+  def rsvp_tone(_rsvp), do: "neutral"
+
+  @doc """
   The `CoreComponents.chip/1` tone for a tag. See the moduledoc on why
   `external` is `info` rather than `secondary`.
   """
@@ -614,6 +632,16 @@ defmodule PlatformWeb.Components.Meetings.InviteControl do
         data-role="invite-ring-state"
       >
         {Map.get(@entry, :ring_state)}
+      </.chip>
+
+      <.chip
+        :if={rsvp_label(Map.get(@entry, :rsvp))}
+        tone={rsvp_tone(Map.get(@entry, :rsvp))}
+        class="shrink-0 text-[10px]"
+        data-role="meeting-invite-rsvp"
+        data-rsvp={Map.get(@entry, :rsvp)}
+      >
+        {rsvp_label(Map.get(@entry, :rsvp))}
       </.chip>
 
       <.chip
