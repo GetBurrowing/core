@@ -95,3 +95,15 @@ html.console-glass, html.console-glass[data-theme] {
 .cg-brand-switch>.cg-brand-chevron{border:0;border-radius:0;padding:0;background:currentColor;width:14px;height:14px;margin-left:-6px;opacity:.75;flex-shrink:0}
 .cg-brand-switch>.cg-brand-dot{border:0;padding:0;width:8px;height:8px;margin-left:-6px;border-radius:50%;background:var(--cg-pink);flex-shrink:0}.cg-brand-switch>.cg-brand-dot.hidden{display:none}
 @media(max-width:767px){.cg-brand-switch{gap:2px}.cg-brand-switch>.cg-brand-chevron{display:inline-block;width:12px;height:12px;margin-left:0}.cg-brand-switch>.cg-brand-dot:not(.hidden){display:block;margin-left:0}}
+/* The workspace's phone tab bar on the gaming pages (GamingShell renders
+   bottom_rail/1 after .cg-app, so .cg-side's backdrop-filter cannot trap it).
+   Phone widths only: from 768px .cg-side is the sidebar and carries its own
+   navigation. Below that .cg-app ends with the bar's clearance (its top edge,
+   safe area included, plus 8px) so the last row scrolls clear of the glass,
+   and the community room, sized to the viewport, gives the same height back
+   so its composer sits above the bar. The player chat's text field hides the
+   bar while focused, as a focused workspace composer does. */
+@media(min-width:768px){.console-glass .cg-app~.bottom-nav{display:none}}
+@media(max-width:767px){.console-glass .cg-app:has(~[data-bottom-rail]){padding-bottom:var(--phone-chrome-bottom)}.console-glass:has([data-bottom-rail]) .gp-room{height:calc(var(--game-viewport-height,100dvh) - 52px - 46px - var(--phone-chrome-bottom))}}
+:root:has(#game-message-text:focus){--bottom-nav-height:0px;--bottom-nav-gap:0px}
+:root:has(#game-message-text:focus) .bottom-nav{transform:translateY(calc(100% + var(--bottom-nav-offset)));opacity:0;visibility:hidden}

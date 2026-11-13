@@ -79,6 +79,8 @@ defmodule PlatformWeb.GamingControllerTest do
     assert Enum.empty?(LazyHTML.query(doc, "#gaming-create"))
     assert Enum.empty?(LazyHTML.query(doc, "a[href='/tasks']"))
     assert Enum.empty?(LazyHTML.query(doc, "#gaming-community-count"))
+    # No workspace tab bar for a signed-out visitor.
+    assert Enum.empty?(LazyHTML.query(doc, "#bottom-nav"))
     assert Enum.map(Games.list_published(), & &1["slug"]) == ["example-game"]
   end
 
@@ -144,6 +146,8 @@ defmodule PlatformWeb.GamingControllerTest do
     evidence("gaming-owner", page)
     doc = LazyHTML.from_document(page)
     assert Enum.count(LazyHTML.query(doc, "#gaming-create[href='/admin/games']")) == 1
+    # The workspace's phone tab bar, at body level outside the shell.
+    assert Enum.count(LazyHTML.query(doc, "body > nav#bottom-nav[data-bottom-rail]")) == 1
 
     assert doc |> LazyHTML.query("#gaming-persona") |> LazyHTML.text() |> String.trim() ==
              Games.player_display_name(actor)

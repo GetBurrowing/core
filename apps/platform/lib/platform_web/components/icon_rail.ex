@@ -96,6 +96,13 @@ defmodule PlatformWeb.Components.IconRail do
     doc: "the viewer's unread inbox count; above 0 puts the count badge on the Inbox tab"
   )
 
+  attr(:more_href, :string,
+    default: nil,
+    doc:
+      "on a dead view (no ShellLive to take `open_more_sheet`), More is a link here " <>
+        "instead, e.g. `/chat?more=1`, which ShellLive opens with the sheet up"
+  )
+
   def bottom_rail(assigns) do
     current_path = Map.get(assigns, :current_path, "/")
     scope = assigns[:access_scope]
@@ -158,7 +165,18 @@ defmodule PlatformWeb.Components.IconRail do
         <span class="bottom-nav-label">{dest.label}</span>
       </.link>
 
+      <a
+        :if={@more_href}
+        href={@more_href}
+        class={["bottom-nav-tab", @more_active? && "bottom-nav-tab--active"]}
+        data-destination="more"
+        aria-label="More"
+      >
+        <.icon name={tab_icon(:more, @more_active?)} class="bottom-nav-icon size-5" />
+        <span class="bottom-nav-label">More</span>
+      </a>
       <button
+        :if={!@more_href}
         type="button"
         phx-click={if @more_open, do: "close_more_sheet", else: "open_more_sheet"}
         class={["bottom-nav-tab press-hold", @more_active? && "bottom-nav-tab--active"]}
