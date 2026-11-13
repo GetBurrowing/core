@@ -22,14 +22,28 @@ defmodule PlatformWeb.Components.InstallSwitch do
 
   `data-install-name` and `data-current-unread` hand the hook this install's
   name and its own unread (shown beside the check on the current row).
+
+    * `variant={:play}`, the Console Glass brand (the burrow mark and the PLAY
+      pill) in the gaming shell's `.cg-side`, on /play and /games/*. Rendered
+      `hidden` like the phone button, with `data-variant="play"`: the web path
+      lays its dropdown out as `:sidebar` at desktop widths and as `:phone`
+      below 768px, where `.cg-side` is the phone top bar. Those pages are dead
+      views, so `app.js` mounts the same hook on them by hand. The gaming
+      shell keeps a plain `/play` link beside it for when nothing reveals it.
+
+  `menu={false}` leaves out the `#<id>-menu` container so the caller can put
+  it with `install_switch_menu/1` somewhere a fixed-position dropdown is not
+  trapped (the gaming shell's `.cg-side` has a `backdrop-filter`, which makes
+  it the containing block for fixed descendants and clips them).
   """
   use Phoenix.Component
   use PlatformWeb, :verified_routes
 
   attr :id, :string, required: true
-  attr :variant, :atom, values: [:phone, :sidebar], required: true
+  attr :variant, :atom, values: [:phone, :sidebar, :play], required: true
   attr :brand_name, :string, required: true
   attr :current_unread, :integer, default: 0
+  attr :menu, :boolean, default: true, doc: "render the sibling `#<id>-menu` container"
 
   def install_switch(%{variant: :phone} = assigns) do
     ~H"""
@@ -59,7 +73,7 @@ defmodule PlatformWeb.Components.InstallSwitch do
       >
       </span>
     </button>
-    <div id={"#{@id}-menu"} data-role="install-switch-menu" phx-update="ignore"></div>
+    <.install_switch_menu :if={@menu} id={@id} />
     """
   end
 
@@ -86,6 +100,36 @@ defmodule PlatformWeb.Components.InstallSwitch do
       >
       </span>
     </button>
+    <.install_switch_menu :if={@menu} id={@id} />
+    """
+  end
+
+  def install_switch(%{variant: :play} = assigns) do
+    ~H"""
+    <button
+      id={@id}
+      type="button"
+      data-role="play-install-switch"
+      data-variant="play"
+      data-install-name={@brand_name}
+      data-current-unread={@current_unread}
+      phx-hook="NativeInstallSwitch"
+      aria-label={"Switch install, current: #{@brand_name}"}
+      class="hidden cg-brand cg-brand-switch"
+    >
+      <img src={~p"/images/burrow-mark.svg"} alt="" /><span>PLAY</span>
+      <span class="hero-chevron-down cg-brand-chevron" aria-hidden="true"></span>
+      <span data-role="install-unread-dot" class="hidden cg-brand-dot" aria-hidden="true"></span>
+    </button>
+    <.install_switch_menu :if={@menu} id={@id} />
+    """
+  end
+
+  attr :id, :string, required: true, doc: "the switch button's id; the container is `<id>-menu`"
+
+  @doc "The dropdown container the hook draws into, `phx-update=\"ignore\"`."
+  def install_switch_menu(assigns) do
+    ~H"""
     <div id={"#{@id}-menu"} data-role="install-switch-menu" phx-update="ignore"></div>
     """
   end
