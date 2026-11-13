@@ -74,6 +74,8 @@ defmodule PlatformWeb.GamingControllerTest do
     evidence("gaming-visitor", page)
     doc = LazyHTML.from_document(page)
     assert Enum.count(LazyHTML.query(doc, "#gaming-play[href='/games/example-game']")) == 1
+    assert Enum.count(LazyHTML.query(doc, ".cg-side button#gaming-install-switch")) == 1
+    assert Enum.count(LazyHTML.query(doc, "body > #gaming-install-switch-menu")) == 1
     assert Enum.empty?(LazyHTML.query(doc, "#gaming-create"))
     assert Enum.empty?(LazyHTML.query(doc, "a[href='/tasks']"))
     assert Enum.empty?(LazyHTML.query(doc, "#gaming-community-count"))

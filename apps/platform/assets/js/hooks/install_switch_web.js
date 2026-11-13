@@ -270,7 +270,11 @@ export function createWebSwitch(env = {}) {
     const view = {
       button,
       menu,
-      variant: button.getAttribute("data-variant") === "sidebar" ? "sidebar" : "phone"
+      // Read on every use: the gaming shell's `play` brand is the desktop
+      // sidebar's brand row at 768px and up, and the phone top bar below.
+      get variant() {
+        return layoutVariant(button, win)
+      }
     }
     view.onClick = event => {
       event?.preventDefault?.()
@@ -354,7 +358,8 @@ export function createWebSwitch(env = {}) {
       panel.style.top = `${Math.round(rect.bottom + 6)}px`
       panel.style.left = `${Math.round(rect.left)}px`
     } else {
-      const bar = view.button.closest?.("header")?.getBoundingClientRect?.() || rect
+      const bar =
+        view.button.closest?.("header, [data-install-switch-bar]")?.getBoundingClientRect?.() || rect
       panel.style.top = `${Math.round(bar.bottom + 6)}px`
       if (scrim) scrim.style.top = `${Math.round(bar.bottom)}px`
     }
@@ -1141,6 +1146,19 @@ export function __resetWebSwitchForTests() {
  * nothing) on a Capacitor native platform: an app build without
  * `installBadges` keeps today's hidden button.
  */
+/**
+ * How a switch button lays its dropdown and modals out: `sidebar` (anchored
+ * under the button) or `phone` (full-width under the top bar, bottom sheets).
+ * `data-variant="play"` (the gaming shell's brand) follows the Console Glass
+ * breakpoint, where `.cg-side` turns from a sidebar into the phone top bar.
+ */
+export function layoutVariant(button, win = globalThis.window) {
+  const variant = button.getAttribute("data-variant")
+  if (variant === "sidebar") return "sidebar"
+  if (variant === "play") return win?.matchMedia?.("(min-width: 768px)")?.matches ? "sidebar" : "phone"
+  return "phone"
+}
+
 export function mountWebSwitch(hook, env) {
   const win = env?.win || globalThis.window
   if (win?.Capacitor?.isNativePlatform?.()) return null
