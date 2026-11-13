@@ -563,8 +563,8 @@ class NoBakedEndpointsTest(PositiveControlMixin, TempDirMixin, unittest.TestCase
         raw = load(BYO)
         raw["models"]["endpoints"][0]["base_url"] = f"http://llm.{planted_term()}.example/v1"
         raw["models"]["endpoints"][0].pop("api_key_ref")
-        # identity_scan_text redacts generated secrets: random tokens split on
-        # camelCase can spell a denied term by chance (e.g. "...xSbsQ...").
+        # identity_scan_text redacts generated secrets: a random token split on
+        # camelCase can spell a denied term by chance.
         hits = identity_hits(identity_scan_text(build(valid(raw))))
         # the endpoint is rendered more than once (models.json and user-data)
         self.assertGreater(len(hits), 0)
