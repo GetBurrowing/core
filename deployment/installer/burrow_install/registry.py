@@ -966,8 +966,11 @@ def _core_env(ctx):
         "OIDC_PKCE_ENABLED": "true",
     }
     if ctx.mac:
-        # cloudflared / tailscale -> Caddy -> core: the client address is in
-        # X-Forwarded-For (lib/platform_web/plugs/rewrite_remote_ip.ex).
+        # cloudflared / tailscale -> Caddy -> core. Core walks X-Forwarded-For
+        # right to left past TRUSTED_PROXIES (default loopback + private
+        # ranges) and keys on the first untrusted hop
+        # (lib/platform_web/plugs/rewrite_remote_ip.ex). Caddy and the edge
+        # sidecar are private peers, so this chain renders no TRUSTED_PROXIES.
         env["TRUST_PROXY_HEADERS"] = "true"
     if ctx.m["install"].get("org_name") is not None:
         # Task 01a10315: read once, by the first migrate (seed_root_orgs).

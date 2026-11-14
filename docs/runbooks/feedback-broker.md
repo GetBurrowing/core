@@ -59,7 +59,12 @@ environment:
 | `FEEDBACK_GITHUB_APP_PRIVATE_KEY` | The App's private key (PEM). Read from the process environment at call time; never copied into application config. |
 | `FEEDBACK_POLICY` | `quarantined`. The broker runs the same `Submission.submit` as an install, which refuses when the policy is off. |
 | `FEEDBACK_BROKER_RATE_PER_HOUR` | Optional. Requests per client IP per hour (default 30). |
-| `TRUST_PROXY_HEADERS` | Must be `true` behind Cloudflare and Caddy. The per-IP limit keys on `conn.remote_ip` after `PlatformWeb.Plugs.RewriteRemoteIp`. Without it every request carries the proxy's address and all callers share one bucket. Check it by confirming that two clients get separate 429 budgets. |
+| `TRUST_PROXY_HEADERS` | Must be `true` behind Cloudflare and Caddy. The per-IP limit keys on `conn.remote_ip` after `PlatformWeb.Plugs.RewriteRemoteIp`. Without it every request carries the proxy's address and all callers share one bucket. With it, forwarding headers are believed only when the immediate peer is in `TRUSTED_PROXIES`; `X-Forwarded-For` is then walked right to left past trusted hops and the first untrusted hop is the client, so a client-supplied leading entry is never used. An unparsable hop fails closed (the peer address is kept). |
+| `TRUSTED_PROXIES` | Optional. Comma-separated addresses or CIDRs of the proxies in front of core. Unset, it is loopback plus the private ranges (`127.0.0.0/8`, `::1`, `10.0.0.0/8`, `172.16.0.0/12`, the RFC 1918 /16, `fc00::/7`), which covers a Caddy and cloudflared/tailscale chain on a private network. An explicit value replaces the default, it does not extend it. A bad entry stops boot. |
+
+`CF-Connecting-IP` is honoured only when the first untrusted `X-Forwarded-For` hop is a published Cloudflare edge address; from any other hop, or from an untrusted peer, it is ignored.
+
+Check the chain after any proxy change: two real clients must get separate 429 budgets, and resending with a different forged leading `X-Forwarded-For` entry must not reset a client's budget (the request after the limit still answers 429).
 
 What the broker does with every request, all of which are unauthenticated
 and treated as hostile:
