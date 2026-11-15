@@ -104,7 +104,7 @@ defmodule Platform.Goals.ToolsTest do
         assert result.wake_up.status == "closed"
         assert result.entry.reading_id == reading.id
         Jason.encode!(result)
-        {tool, wake, reading, result}
+        {tool, wake, reading, Map.put(result, :predicted_by, args["predicted_by"])}
       end
 
     assert {:ok, got} = call("goal_get", %{"goal_id" => c.goal.id}, c.coach)
@@ -120,7 +120,7 @@ defmodule Platform.Goals.ToolsTest do
 
       if tool != "goal_wait" do
         assert entry.prediction == "This will help"
-        assert entry.predicted_by == date_after(3)
+        assert entry.predicted_by == result.predicted_by
       end
     end
 
