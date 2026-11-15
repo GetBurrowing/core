@@ -25,6 +25,22 @@ defmodule Platform.Goals.Extension do
   @behaviour Platform.Extension
 
   @impl true
+  def briefing_sections do
+    if Platform.Goals.enabled?() do
+      [
+        %{
+          key: "goals",
+          prepare: &Platform.Goals.Brief.Section.prepare/2,
+          summary: &Platform.Goals.Brief.Section.summary/2,
+          component: PlatformWeb.GoalsBriefComponent
+        }
+      ]
+    else
+      []
+    end
+  end
+
+  @impl true
   def canvas_kinds, do: []
 
   # Every `goal_*` name is Goals', listed or not, so an invented one gets

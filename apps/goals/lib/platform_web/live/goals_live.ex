@@ -31,6 +31,8 @@ defmodule PlatformWeb.GoalsLive do
 
   ## Design deviations
 
+  Daily brief deviations are recorded in `PlatformWeb.GoalsBriefComponent`.
+
   The one place deviations from the prototype are recorded; later stages
   append here and copy this list into their evidence canvas.
 
