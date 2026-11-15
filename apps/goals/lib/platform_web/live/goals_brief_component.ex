@@ -146,13 +146,25 @@ defmodule PlatformWeb.GoalsBriefComponent do
     ~H"""
     <div id={@id} data-role="goals-brief" phx-target={@myself}>
       <section :if={@items != []} aria-labelledby={@id <> "-heading"}>
-        <h3 id={@id <> "-heading"} class="mb-2 mt-6 text-xs font-bold uppercase tracking-wider text-subtle">Your goals · {length(@items)}</h3>
+        <h3
+          id={@id <> "-heading"}
+          class="mb-2 mt-6 text-xs font-bold uppercase tracking-wider text-subtle"
+        >
+          Your goals · {length(@items)}
+        </h3>
         <ul role="list" class="space-y-3">
           <li :for={item <- @items}>
-            <GoalsBriefCards.card item={item} target={@myself} ask_open={MapSet.member?(@open_asks, item.id)} blank={MapSet.member?(@blank, item.id)} />
+            <GoalsBriefCards.card
+              item={item}
+              target={@myself}
+              ask_open={MapSet.member?(@open_asks, item.id)}
+              blank={MapSet.member?(@blank, item.id)}
+            />
           </li>
         </ul>
-        <p class="mt-6 border-t border-edge pt-3 text-xs text-subtle">Each goal sends what fits it: a report when your coach does the work, an offer when you share it, practice when it's yours to do.</p>
+        <p class="mt-6 border-t border-edge pt-3 text-xs text-subtle">
+          Each goal sends what fits it: a report when your coach does the work, an offer when you share it, practice when it's yours to do.
+        </p>
       </section>
     </div>
     """
