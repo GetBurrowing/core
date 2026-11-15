@@ -241,7 +241,25 @@ defmodule Platform.Extension do
   @doc "Deferred: no reader yet (see the moduledoc)."
   @callback prompt_templates() :: [term()]
 
-  @optional_callbacks rail_items: 0,
+  @type briefing_section :: %{
+          required(:key) => String.t(),
+          required(:prepare) => (binary(), Date.t() -> non_neg_integer()),
+          required(:summary) => (binary(), Date.t() -> map() | nil),
+          required(:component) => module()
+        }
+
+  @doc """
+  Sections contributed to the daily briefing. Keys are unique lowercase path segments.
+  Prepare records membership on the extension's tables and returns the new item count;
+  it must be idempotent per reader and date. Summary is a pure read; nil or total zero
+  hides the section. Core mounts the component with id, user_id, date, today and refresh.
+  The component owns its heading and targeted events and must authorise every operation.
+  After a write call Platform.Memory.Insights.BriefingSections.changed/2.
+  """
+  @callback briefing_sections() :: [briefing_section()]
+
+  @optional_callbacks briefing_sections: 0,
+                      rail_items: 0,
                       permissions: 0,
                       assets: 0,
                       routes: 0,
@@ -251,3 +269,4 @@ defmodule Platform.Extension do
                       responsibility_providers: 0,
                       prompt_templates: 0
 end
+

@@ -165,6 +165,15 @@ defmodule Platform.Extensions do
     Enum.flat_map(list(), &ext_inbox_kinds/1)
   end
 
+  @doc "Every extension's optional daily briefing sections, read per call."
+  def briefing_sections do
+    Enum.flat_map(list(), &ext_briefing_sections/1)
+  end
+
+  defp ext_briefing_sections(ext) do
+    if implements?(ext, :briefing_sections, 0), do: ext.briefing_sections(), else: []
+  end
+
   @doc "The registered extension's inbox kind spec for `kind`, or nil."
   @spec inbox_kind(term()) :: Platform.Extension.inbox_kind() | nil
   def inbox_kind(kind) when is_binary(kind), do: Enum.find(inbox_kinds(), &(&1.kind == kind))
@@ -268,6 +277,7 @@ defmodule Platform.Extensions do
        fn ext -> Enum.map(ext.experiment_surfaces(), & &1.key()) end},
       {"experiment metric slug", Platform.Experiments.Metrics.core_metric_slugs(),
        fn ext -> Map.keys(ext.experiment_metrics()) end},
+      {"briefing section key", [], fn ext -> Enum.map(ext_briefing_sections(ext), & &1.key) end},
       {"route prefix", [], &route_prefixes/1},
       {"live page prefix", [], &live_page_prefixes/1},
       {"inbox kind", Platform.Inbox.Item.core_kinds(),
@@ -279,7 +289,8 @@ defmodule Platform.Extensions do
     case Enum.flat_map(checks, &clashes(&1, extensions)) ++
            normalised_tool_name_clashes(extensions) ++
            bad_route_prefixes(extensions) ++
-           bad_live_page_prefixes(extensions) do
+           bad_live_page_prefixes(extensions) ++
+           bad_briefing_section_keys(extensions) do
       [] -> :ok
       messages -> {:error, messages}
     end
@@ -339,6 +350,14 @@ defmodule Platform.Extensions do
         not one_segment?(prefix),
         do:
           "live page prefix #{inspect(prefix)} of #{inspect(ext)} is not one lowercase path segment"
+  end
+
+  defp bad_briefing_section_keys(extensions) do
+    for ext <- extensions,
+        section <- ext_briefing_sections(ext),
+        not one_segment?(section.key),
+        do:
+          "briefing section key #{inspect(section.key)} of #{inspect(ext)} is not one lowercase path segment"
   end
 
   defp one_segment?(prefix),
@@ -406,3 +425,4 @@ defmodule Platform.Extensions do
     Code.ensure_loaded?(module) and function_exported?(module, fun, arity)
   end
 end
+

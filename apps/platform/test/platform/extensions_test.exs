@@ -1285,4 +1285,32 @@ defmodule Platform.ExtensionsTest do
       assert digest(legacy_schemas) == @main_kinds_tool_schemas_digest_off
     end
   end
+
+  defmodule BadBriefingSection do
+    def briefing_sections, do: [%{key: "Bad Key"}]
+    defdelegate mcp_tool_bundles(), to: Platform.FixtureExtension
+    defdelegate runtime_channel_events(), to: Platform.FixtureExtension
+    defdelegate canvas_kinds(), to: Platform.FixtureExtension
+    defdelegate experiment_surfaces(), to: Platform.FixtureExtension
+    defdelegate experiment_metrics(), to: Platform.FixtureExtension
+  end
+
+  test "briefing sections are optional, listed live and validate their keys" do
+    assert {:briefing_sections, 0} in Platform.Extension.behaviour_info(:optional_callbacks)
+    FixtureExtension.register([])
+    assert Extensions.briefing_sections() == []
+    FixtureExtension.register()
+    assert [%{key: "fixture"}] = Extensions.briefing_sections()
+    FixtureExtension.register([FixtureExtension, FixtureExtension])
+    assert {:error, errors} = Extensions.validate()
+    assert Enum.any?(errors, &String.contains?(&1, "briefing section key"))
+    FixtureExtension.register([BadBriefingSection])
+    assert {:error, errors} = Extensions.validate()
+
+    assert Enum.any?(
+             errors,
+             &(String.contains?(&1, "Bad Key") and String.contains?(&1, "BadBriefingSection"))
+           )
+  end
 end
+

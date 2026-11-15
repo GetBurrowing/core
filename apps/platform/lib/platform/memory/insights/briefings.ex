@@ -381,12 +381,18 @@ defmodule Platform.Memory.Insights.Briefings do
     needs_call = by_section.(:needs_call) ++ Enum.filter(calendar, &(&1.section == :needs_call))
     fyi = by_section.(:fyi)
     done = by_section.(:done) ++ Enum.filter(calendar, &(&1.section == :done))
-    total = length(rendered) + elsewhere + length(calendar)
-    open = length(needs_call) + length(fyi)
+    sections = Platform.Memory.Insights.BriefingSections.for_view(briefing, scope)
+
+    total =
+      length(rendered) + elsewhere + length(calendar) + Enum.sum(Enum.map(sections, & &1.total))
+
+    open = length(needs_call) + length(fyi) + Enum.sum(Enum.map(sections, & &1.open))
+    calls = length(needs_call) + Enum.sum(Enum.map(sections, & &1.calls))
 
     %{
+      sections: sections,
       date: briefing.digest_date,
-      counts: %{total: total, open: open, calls: length(needs_call), handled: total - open},
+      counts: %{total: total, open: open, calls: calls, handled: total - open},
       needs_call: needs_call,
       fyi: fyi,
       done: done
@@ -1149,3 +1155,4 @@ defmodule Platform.Memory.Insights.Briefings do
 
   defp node(type, id, props), do: %{"type" => type, "id" => id, "props" => props}
 end
+
