@@ -1305,4 +1305,3 @@ defmodule PlatformWeb.InboxLive.BriefingComponent do
   defp field, do: @field
   defp link, do: @link
 end
-

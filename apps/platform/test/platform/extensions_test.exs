@@ -1299,6 +1299,8 @@ defmodule Platform.ExtensionsTest do
     assert {:briefing_sections, 0} in Platform.Extension.behaviour_info(:optional_callbacks)
     FixtureExtension.register([])
     assert Extensions.briefing_sections() == []
+    FixtureExtension.register([FixtureExtension.Twin])
+    assert Extensions.briefing_sections() == []
     FixtureExtension.register()
     assert [%{key: "fixture"}] = Extensions.briefing_sections()
     FixtureExtension.register([FixtureExtension, FixtureExtension])
@@ -1313,4 +1315,3 @@ defmodule Platform.ExtensionsTest do
            )
   end
 end
-

@@ -10,6 +10,10 @@ defmodule Platform.Memory.Insights.Disseminator do
   synchronous `run/1` that tests and operators call directly. Disabled in
   `config/test.exs` (`:start_insight_disseminator false`).
 
+  Optional extension sections run after the insights pass, even when insight
+  delivery is disabled or nobody holds the dreaming role. With no registered
+  sections that pass reads no users and preserves the original result.
+
   ## One run
 
   1. `Platform.Memory.Insights.Digest.select/2` decides who gets what. While
@@ -569,4 +573,3 @@ defmodule Platform.Memory.Insights.Disseminator do
   defp schedule_next,
     do: Process.send_after(self(), :tick, ms_until_next_fire(DateTime.utc_now()))
 end
-

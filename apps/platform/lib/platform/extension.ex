@@ -40,6 +40,19 @@ defmodule Platform.Extension do
   (`Platform.Extensions.inbox_kinds/0`, read per call by `Platform.Inbox.Item`,
   `Platform.Inbox` and `PlatformWeb.Components.InboxItem`).
 
+  ## briefing_sections/0 has a reader
+
+  Each section has a unique lowercase path-segment key. Core calls prepare
+  once per internal reader per delivery run, after the insights pass; it
+  records membership on the extension's own tables, returns the new item
+  count, and must be idempotent for the same reader and date. Summary is a
+  pure read on every view; nil or total zero omits the section entirely.
+  Core mounts its Phoenix.LiveComponent with id, user_id, date, today and
+  refresh. The component owns its heading and targeted events. It receives
+  only a user id and must re-read and authorise every read and write itself,
+  as with live_pages/0. After writing it calls
+  Platform.Memory.Insights.BriefingSections.changed/2.
+
   ## routes/0 has a reader: runtime dispatch under /api/ext
 
   `routes/0` returns `[%{prefix: String.t(), plug: module(), opts: term()}]`,
@@ -244,7 +257,13 @@ defmodule Platform.Extension do
   @type briefing_section :: %{
           required(:key) => String.t(),
           required(:prepare) => (binary(), Date.t() -> non_neg_integer()),
-          required(:summary) => (binary(), Date.t() -> map() | nil),
+          required(:summary) => (binary(), Date.t() ->
+                                   %{
+                                     total: non_neg_integer(),
+                                     open: non_neg_integer(),
+                                     calls: non_neg_integer()
+                                   }
+                                   | nil),
           required(:component) => module()
         }
 
@@ -269,4 +288,3 @@ defmodule Platform.Extension do
                       responsibility_providers: 0,
                       prompt_templates: 0
 end
-

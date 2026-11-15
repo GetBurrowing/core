@@ -240,7 +240,7 @@ defmodule Platform.Extensions do
   extensions share one, across every registry the extensions merge into:
   tool bundle names, tool names, runtime-channel event names, canvas kind
   names, experiment surface keys, experiment metric slugs, HTTP route
-  prefixes, live page prefixes, inbox kinds and inbox source types. A route
+  prefixes, live page prefixes, inbox kinds, inbox source types and briefing section keys. A route
   prefix and a live page prefix must also each be one lowercase path segment.
 
   Core's tool names include its hidden legacy aliases
@@ -425,4 +425,3 @@ defmodule Platform.Extensions do
     Code.ensure_loaded?(module) and function_exported?(module, fun, arity)
   end
 end
-

@@ -88,4 +88,3 @@ defmodule Platform.Memory.Insights.BriefingSections do
       fallback
   end
 end
-

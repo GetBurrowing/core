@@ -397,4 +397,3 @@ defmodule Platform.FixtureExtension do
     def compute(_experiment_id, _variant_slug), do: :no_data
   end
 end
-

@@ -1155,4 +1155,3 @@ defmodule Platform.Memory.Insights.Briefings do
 
   defp node(type, id, props), do: %{"type" => type, "id" => id, "props" => props}
 end
-
