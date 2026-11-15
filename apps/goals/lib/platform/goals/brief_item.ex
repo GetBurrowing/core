@@ -43,4 +43,3 @@ defmodule Platform.Goals.BriefItem do
     |> foreign_key_constraint(:ask_id)
   end
 end
-

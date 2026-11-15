@@ -30,4 +30,3 @@ defmodule Platform.Goals.Brief.Section do
          else: (_ -> {:error, :not_found})
   end
 end
-

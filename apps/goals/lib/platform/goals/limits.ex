@@ -28,4 +28,3 @@ defmodule Platform.Goals.Limits do
     Map.get(value(:max_open_asks, %{}), outreach, Map.fetch!(defaults, outreach))
   end
 end
-

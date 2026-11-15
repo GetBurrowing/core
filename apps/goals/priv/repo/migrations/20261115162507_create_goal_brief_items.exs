@@ -40,4 +40,3 @@ defmodule Platform.Repo.Migrations.CreateGoalBriefItems do
     create(index(:goal_brief_items, [:user_id, :digest_date]))
   end
 end
-
