@@ -84,7 +84,15 @@ defmodule PlatformWeb.GoalsOpenUpTest do
     event(owner, "share_tab", %{"tab" => "teams"})
     toggle(owner, "team", c.org_id)
     assert has_element?(page(c.viewer, c.goal), "[data-role='goal-title']")
-    hidden(external, c.goal)
+    # Core rejects external users before the extension page mounts; both
+    # existing and missing goal URLs get the same forbidden response.
+    assert {:error, :not_found} = Goals.get_goal(external, c.goal.id)
+    existing = get(login(external), "/m/goals?goal=#{c.goal.id}")
+    missing = get(login(external), "/m/goals?goal=#{Ecto.UUID.generate()}")
+    assert existing.status == 403
+    assert missing.status == 403
+    assert existing.resp_body == missing.resp_body
+    refute existing.resp_body =~ c.goal.title
     hidden(other, c.goal)
     toggle(owner, "team", c.org_id)
     hidden(c.viewer, c.goal)

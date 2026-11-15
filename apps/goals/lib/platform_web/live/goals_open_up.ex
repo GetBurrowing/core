@@ -36,7 +36,11 @@ defmodule PlatformWeb.GoalsOpenUp do
       )
 
     ~H"""
-    <span class="priv inline-flex flex-wrap items-center gap-2" data-role="privacy-badge">
+    <span
+      class="priv inline-flex flex-wrap items-center gap-2"
+      data-role="privacy-badge"
+      data-goals-slot="privacy"
+    >
       <span class={["chip-soft", if(@shared?, do: "chip-success", else: "chip-neutral")]}>
         <.icon name={if @shared?, do: "hero-users", else: "hero-lock-closed"} class="size-3 shrink-0" />
         {@label}

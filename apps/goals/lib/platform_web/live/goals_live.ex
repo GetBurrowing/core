@@ -112,6 +112,9 @@ defmodule PlatformWeb.GoalsLive do
        utilities anchor its panel at the bottom, capped at 90dvh. The
        single toast also has a Dismiss control; settings label weekdays
        with a Day legend.
+   25. Core rejects external users before the extension mounts: they get
+       the same 403 for existing and missing goal URLs. Internal viewers
+       and root admins get the goal's uniform 404 when it is hidden.
   """
   use PlatformWeb, :live_view
 
