@@ -34,13 +34,26 @@ defmodule Platform.Memory.Insights.BriefingSectionsTest do
   test "no extensions leaves delivery result intact and summaries issue no query" do
     id = "brief-sections-#{System.unique_integer()}"
     pid = self()
-    :telemetry.attach(id, [:platform, :repo, :query], fn _, _, _, _ -> send(pid, :query) end, nil)
+
+    :telemetry.attach(
+      id,
+      [:platform, :repo, :query],
+      fn _, _, metadata, _ ->
+        send(pid, {:query, metadata.query})
+      end,
+      nil
+    )
+
     on_exit(fn -> :telemetry.detach(id) end)
     assert BriefingSections.summaries(Ecto.UUID.generate(), @date) == []
+    assert BriefingSections.prepare(Ecto.UUID.generate(), @date) == 0
+    refute_received {:query, _}
     assert {:ok, %{users: 0, items: 0}} = Disseminator.run(now: @now)
-    refute_received :query
+    assert_received {:query, settings_query}
+    assert settings_query =~ "install_insight_settings"
+    refute_received {:query, _}
     Repo.query!("SELECT 1")
-    assert_received :query
+    assert_received {:query, "SELECT 1"}
     assert Repo.aggregate(Briefing, :count) == 0
   end
 
@@ -125,4 +138,3 @@ defmodule Platform.Memory.Insights.BriefingSectionsTest do
     refute_received {:fixture_briefing, :prepare, ^opted_id, _}
   end
 end
-

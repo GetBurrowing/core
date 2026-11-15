@@ -2,6 +2,7 @@ defmodule PlatformWeb.InboxLiveBriefingSectionsTest do
   use PlatformWeb.ConnCase, async: false
   import Phoenix.LiveViewTest
   import Platform.InsightFixtures
+  alias Platform.Repo
   alias Platform.FixtureExtension
   alias Platform.Memory.Briefing
   alias Platform.Memory.Insights.BriefingCard
@@ -49,4 +50,3 @@ defmodule PlatformWeb.InboxLiveBriefingSectionsTest do
     assert render(lv) =~ "3 of 4 handled"
   end
 end
-
