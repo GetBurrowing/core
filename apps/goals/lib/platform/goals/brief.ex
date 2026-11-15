@@ -589,7 +589,7 @@ defmodule Platform.Goals.Brief do
 
               cards =
                 if pass == 1,
-                  do: Enum.map(0..(count - 1), &changed[&1]),
+                  do: Enum.map(results, &Map.put(&1, "pass", pass)),
                   else: Enum.map(old_cards, &Map.get(changed, &1["index"], &1))
 
               got = Enum.count(cards, &(&1["result"] == "got"))
