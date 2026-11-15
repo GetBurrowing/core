@@ -370,7 +370,9 @@ defmodule Platform.Goals do
             do: from(row in query, where: row.kind == "takeaway"),
             else: query
 
-        if Repo.exists?(query),
+        valid_id? = match?({:ok, _}, Ecto.UUID.cast(id))
+
+        if valid_id? and Repo.exists?(query),
           do: changeset,
           else:
             Ecto.Changeset.add_error(
