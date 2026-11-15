@@ -11,15 +11,14 @@ defmodule Platform.Goals.Application do
 
   ## Children
 
-  None yet. The `@web` / `@background` lists and `children/1` follow Play's
-  shape (`Platform.Role.select/3`), so a later member adds a child in one
-  place.
+  The clock scheduler runs only on enabled background nodes. Child role
+  selection follows `Platform.Role.select/3`.
   """
 
   use Application
 
   # Web-role classification (task 01a155a6), by child id, under the rule in
-  # `Platform.Role`'s moduledoc. Empty: Goals starts no process yet.
+  # `Platform.Role`'s moduledoc.
   @web []
   @background [Platform.Goals.Clock.Scheduler]
 

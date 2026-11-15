@@ -182,10 +182,16 @@ defmodule Platform.Goals.Clock do
       }
     }
 
-    {module, function} =
+    dispatcher =
       Application.get_env(:goals, :wake_up_dispatcher, {Platform.Chat.AgentResponder, :respond})
 
-    case apply(module, function, [signal]) do
+    result =
+      case dispatcher do
+        {module, function} -> apply(module, function, [signal])
+        function when is_function(function, 1) -> function.(signal)
+      end
+
+    case result do
       :ok -> "sent"
       {:error, :runtime_offline} -> "offline"
       _ -> "failed"
@@ -220,9 +226,12 @@ defmodule Platform.Goals.Clock do
     end
   end
 
+  defp load_coach(nil), do: nil
+  defp load_coach(id), do: Repo.one(from(a in Platform.Agents.Agent, where: a.id == ^id))
+
   defp unanswered(wake, now) do
     wake = wake |> WakeUp.changeset(%{status: "unanswered", closed_at: now}) |> Repo.update!()
-    coach = Repo.one(from(a in Platform.Agents.Agent, where: a.id == ^wake.coach_agent_id))
+    coach = load_coach(wake.coach_agent_id)
 
     with {:ok, %{coach_agent_id: coach_id}} <- Goals.get_goal(coach, wake.goal_id),
          true <- coach_id == wake.coach_agent_id,

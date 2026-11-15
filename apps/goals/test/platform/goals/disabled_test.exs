@@ -9,7 +9,7 @@ defmodule Platform.Goals.DisabledTest do
     Application.put_env(:goals, :enabled, false)
     before = counts()
     functions = Goals.__info__(:functions) |> Enum.reject(fn {name, _} -> name == :enabled? end)
-    assert length(functions) >= 18
+    assert length(functions) >= 23
     refute Goals.enabled?()
 
     for {name, arity} <- functions do

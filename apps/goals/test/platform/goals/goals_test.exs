@@ -192,7 +192,11 @@ defmodule Platform.Goals.GoalsTest do
       "Repo.all(Stop",
       "Repo.all(Entry",
       "Repo.all(Grant",
-      "Repo.all(Reading"
+      "Repo.all(Reading",
+      "Repo.all(WakeUp",
+      "Repo.all(GoalClock",
+      "Repo.all(Ask",
+      "Repo.all(TaskLink"
     ]
 
     defp hits(text), do: Enum.filter(@forbidden, &String.contains?(text, &1))
@@ -200,7 +204,7 @@ defmodule Platform.Goals.GoalsTest do
     test "the scan can hit (positive control)" do
       assert hits("goal = Repo.get(Goal, id)") == ["Repo.get("]
 
-      for schema <- ~w(Goal Stop Entry Grant Reading) do
+      for schema <- ~w(Goal Stop Entry Grant Reading WakeUp GoalClock Ask TaskLink) do
         assert hits("Repo.all(#{schema})") == ["Repo.all(#{schema}"]
       end
     end
@@ -211,6 +215,30 @@ defmodule Platform.Goals.GoalsTest do
 
       found =
         for file <- files, hit <- hits(File.read!(file)), do: {Path.relative_to(file, @lib), hit}
+
+      assert found == []
+    end
+
+    defp actorless_goal_binding?(text) do
+      Regex.match?(~r/\b(?:from|join:?)\s*\(?\s*\w+\s+in\s+(?:Platform\.Goals\.)?Goal\b/, text)
+    end
+
+    test "goal binding scan catches a planted query" do
+      assert actorless_goal_binding?("from g in Goal, select: g.id")
+      assert actorless_goal_binding?("join: g in Platform.Goals.Goal, on: g.id == c.goal_id")
+      assert actorless_goal_binding?("join g in Platform.Goals.Goal, on: g.id == c.goal_id")
+      refute actorless_goal_binding?("from g in visible_goals(actor), select: g")
+    end
+
+    test "only the audited context, visibility and identifier clock query bind goals" do
+      allowed = ~w(platform/goals.ex platform/goals/visibility.ex platform/goals/clock.ex)
+
+      found =
+        for file <- Path.wildcard(Path.join(@lib, "**/*.ex")),
+            relative = Path.relative_to(file, @lib),
+            relative not in allowed,
+            actorless_goal_binding?(File.read!(file)),
+            do: relative
 
       assert found == []
     end
