@@ -153,6 +153,53 @@ defmodule Platform.Chat.GroupMentionDeliveryTest do
     assert Platform.Chat.GroupMentions.load(msg).group_mention_recipients == []
   end
 
+  for variant <- [:single, :batch] do
+    @variant variant
+    test "#{variant} existing-attachment sends capture the audience atomically", c do
+      {:ok, attachment} =
+        Chat.create_attachment(%{
+          space_id: c.space.id,
+          filename: "group.txt",
+          content_type: "text/plain",
+          byte_size: 5,
+          storage_key: "test/group.txt",
+          state: "ready"
+        })
+
+      content = GroupMentionToken.encode(c.group.id, c.group.name)
+
+      result =
+        case @variant do
+          :single ->
+            Chat.post_message_with_existing_attachment(attrs(c, content), attachment)
+
+          :batch ->
+            Chat.post_message_with_existing_attachments(attrs(c, content), [attachment.id])
+        end
+
+      assert {:ok, message, [linked]} = result
+      assert linked.message_id == message.id
+      assert Platform.Chat.GroupMentions.recipient?(c.target_p, message)
+      assert Platform.Chat.GroupMentions.recipient?(c.agent_p, message)
+    end
+  end
+
+  test "attachment failure rolls back message and its group audience", c do
+    before_messages = Repo.aggregate(Platform.Chat.Message, :count)
+    before_snapshots = Repo.aggregate(Platform.Chat.MessageGroupSnapshot, :count)
+    before_recipients = Repo.aggregate(Platform.Chat.MessageGroupRecipient, :count)
+
+    assert {:error, _} =
+             Chat.post_message_with_attachments(
+               attrs(c, GroupMentionToken.encode(c.group.id, c.group.name)),
+               [%{filename: "invalid"}]
+             )
+
+    assert Repo.aggregate(Platform.Chat.Message, :count) == before_messages
+    assert Repo.aggregate(Platform.Chat.MessageGroupSnapshot, :count) == before_snapshots
+    assert Repo.aggregate(Platform.Chat.MessageGroupRecipient, :count) == before_recipients
+  end
+
   test "skip scan prevents group routing and inbox creation", c do
     assert {:ok, msg} =
              Chat.post_message(
