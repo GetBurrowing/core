@@ -48,7 +48,7 @@ defmodule PlatformWeb.GoalsComponents do
       data-role="goal-privacy"
       data-shared={to_string(@privacy.shared?)}
       class={[
-        "chip-soft max-w-full truncate",
+        "chip-soft min-w-0 max-w-[12rem] truncate",
         if(@privacy.shared?, do: "chip-success", else: "chip-neutral")
       ]}
     >
