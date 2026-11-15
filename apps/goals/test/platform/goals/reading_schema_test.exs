@@ -28,7 +28,7 @@ defmodule Platform.Goals.ReadingSchemaTest do
       assert {:error, changeset} =
                reading(c) |> Reading.changeset(Map.put(attrs(), :value, value)) |> Repo.insert()
 
-      assert errors_on(changeset).value
+      assert Keyword.has_key?(changeset.errors, :value)
     end
 
     assert %{valid?: false} =
@@ -70,7 +70,7 @@ defmodule Platform.Goals.ReadingSchemaTest do
       # Bypass inclusion validation for origin, to prove the named database constraint.
       changeset = %{changeset | errors: [], valid?: true}
       assert {:error, rejected} = Repo.insert(changeset)
-      assert errors_on(rejected)[field]
+      assert Keyword.has_key?(rejected.errors, field)
     end
   end
 
