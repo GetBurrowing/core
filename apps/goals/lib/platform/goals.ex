@@ -110,7 +110,9 @@ defmodule Platform.Goals do
   def update_goal(actor, goal_id, attrs) when is_map(attrs) do
     with :ok <- check_enabled() do
       in_transaction(fn ->
-        with {:ok, goal} <- fetch_visible(actor, goal_id, true),
+        with {:ok, visible_goal} <- fetch_visible(actor, goal_id, false),
+             :ok <- lock_clock(actor, visible_goal),
+             {:ok, goal} <- fetch_visible(actor, goal_id, true),
              :ok <- check_can_edit(actor, goal),
              changeset = Goal.changeset(goal, editable_attrs(actor, goal, attrs)),
              :ok <- check_kind_change(changeset, goal) do
@@ -468,6 +470,492 @@ defmodule Platform.Goals do
         end
       end)
     end
+  end
+
+  @doc "Closes a check-in atomically as its coach, recording exactly one outcome."
+  def close_wake_up(actor, wake_up_id, outcome, attrs) do
+    with :ok <- check_enabled() do
+      result =
+        in_transaction(fn ->
+          with {:ok, wake, goal} <- editable_wake(actor, wake_up_id),
+               :ok <- lock_clock(actor, goal),
+               {:ok, wake, goal} <- editable_wake(actor, wake_up_id),
+               :ok <- check_open(wake),
+               :ok <- known_outcome(outcome),
+               :ok <- outcome_allowed(goal, outcome, attrs),
+               :ok <- prediction_required(outcome, attrs),
+               {:ok, entry_attrs} <- outcome_entry(outcome, attrs, wake),
+               {:ok, ask} <- maybe_ask(actor, goal, wake, outcome, attrs),
+               {:ok, task} <- maybe_task(actor, goal, outcome, attrs),
+               entry_attrs = link_entry_attrs(entry_attrs, ask, task),
+               {:ok, entry} <- add_entry(actor, goal.id, entry_attrs),
+               :ok <- attach_outcome(actor, goal, wake, entry, ask, task),
+               {:ok, closed} <- claim_close(wake, outcome, entry) do
+            {:ok,
+             %{wake_up: closed, entry: entry, ask: ask && %{ask | entry_id: entry.id}, task: task}}
+          end
+        end)
+
+      case result do
+        {:ok, %{task: task}} when not is_nil(task) ->
+          Platform.Tasks.maybe_start_planning_on_create(task)
+          result
+
+        _ ->
+          result
+      end
+    end
+  end
+
+  @doc "Lists the asks the actor may read, with their answer signals."
+  def list_asks(actor, goal_id, opts \\ []) do
+    with :ok <- check_enabled(), {:ok, goal} <- fetch_visible(actor, goal_id, false) do
+      q = children(actor, Platform.Goals.Ask, goal.id)
+      q = if owner?(actor, goal) or coach?(actor, goal), do: q, else: addressed(q, actor)
+
+      q =
+        case Keyword.get(opts, :status) do
+          nil -> q
+          status -> from(a in q, where: a.status == ^status)
+        end
+
+      limit = opts |> Keyword.get(:limit, 50) |> max(0) |> min(200)
+
+      {:ok,
+       Repo.all(
+         from(a in q,
+           order_by: [desc: a.inserted_at, desc: a.id],
+           limit: ^limit,
+           preload: [:answers]
+         )
+       )}
+    end
+  end
+
+  @doc "Returns the visible, addressed, unanswered asks for a brief reader."
+  def list_my_asks(actor, opts \\ []) do
+    with :ok <- check_enabled() do
+      case actor do
+        %User{id: id} ->
+          now = Platform.Goals.Clock.now()
+          limit = opts |> Keyword.get(:limit, 50) |> max(0) |> min(200)
+
+          q =
+            from(a in Platform.Goals.Ask,
+              join: g in subquery(Visibility.visible_goals(actor)),
+              on: g.id == a.goal_id,
+              left_join: answer in Platform.Goals.AskAnswer,
+              on: answer.ask_id == a.id and answer.user_id == ^id,
+              where:
+                ^id in a.addressed_user_ids and a.status == "open" and a.expires_at > ^now and
+                  is_nil(answer.id),
+              order_by: [desc: a.inserted_at, desc: a.id],
+              limit: ^limit,
+              preload: [:answers]
+            )
+
+          {:ok, Repo.all(q)}
+
+        _ ->
+          {:ok, []}
+      end
+    end
+  end
+
+  @doc "Records an addressed user's answer; ignored may become a final answer once."
+  def answer_ask(actor, ask_id, answer, details \\ %{}) do
+    with :ok <- check_enabled() do
+      in_transaction(fn ->
+        with %User{id: user_id} <- actor,
+             {:ok, id} <- cast_id(ask_id),
+             %Platform.Goals.Ask{} = ask <-
+               Repo.one(
+                 from(a in Platform.Goals.Ask,
+                   join: g in subquery(Visibility.visible_goals(actor)),
+                   on: g.id == a.goal_id,
+                   where: a.id == ^id and ^user_id in a.addressed_user_ids,
+                   lock: "FOR UPDATE OF g0"
+                 )
+               ),
+             old =
+               Repo.one(
+                 from(a in Platform.Goals.AskAnswer,
+                   where: a.ask_id == ^ask.id and a.user_id == ^user_id
+                 )
+               ),
+             :ok <- final_answer_check(old, answer),
+             {:ok, _} <-
+               Platform.Goals.AskAnswer.changeset(
+                 old || %Platform.Goals.AskAnswer{ask_id: ask.id, user_id: user_id},
+                 %{answer: answer, details: details, answered_at: Platform.Goals.Clock.now()}
+               )
+               |> Repo.insert_or_update() do
+          count =
+            Repo.aggregate(
+              from(a in Platform.Goals.AskAnswer, where: a.ask_id == ^ask.id),
+              :count
+            )
+
+          if count == length(ask.addressed_user_ids) do
+            ask
+            |> Ecto.Changeset.change(status: "closed", closed_at: Platform.Goals.Clock.now())
+            |> Repo.update()
+          else
+            {:ok, ask}
+          end
+        else
+          nil -> {:error, :not_found}
+          %Agent{} -> {:error, :not_found}
+          {:error, _} = error -> error
+          _ -> {:error, :not_found}
+        end
+      end)
+    end
+  end
+
+  @doc "Lists the core tasks tagged to a visible goal."
+  def list_goal_tasks(actor, goal_id, opts \\ []) do
+    with :ok <- check_enabled(), {:ok, goal} <- fetch_visible(actor, goal_id, false) do
+      closed = Platform.Goals.Sources.TaskCount.closed_statuses()
+      limit = opts |> Keyword.get(:limit, 50) |> max(0) |> min(200)
+
+      {:ok,
+       Repo.all(
+         from(l in children(actor, Platform.Goals.TaskLink, goal.id),
+           join: t in Platform.Tasks.Task,
+           on: t.id == l.task_id,
+           order_by: [desc: l.inserted_at, desc: l.id],
+           limit: ^limit,
+           select: %{
+             task_id: t.id,
+             title: t.title,
+             status: t.status,
+             open: is_nil(t.deleted_at) and t.status not in ^closed,
+             wake_up_id: l.wake_up_id,
+             linked_at: l.inserted_at
+           }
+         )
+       )}
+    end
+  end
+
+  @doc "Tags an existing core task as the goal's coach, enforcing mode and caps."
+  def link_task(actor, goal_id, task_id, attrs \\ %{}) do
+    with :ok <- check_enabled() do
+      in_transaction(fn ->
+        with {:ok, goal} <- fetch_visible(actor, goal_id, false),
+             :ok <- check_coach(actor, goal),
+             :ok <- lock_clock(actor, goal),
+             {:ok, goal} <- fetch_visible(actor, goal_id, false),
+             :ok <- check_coach(actor, goal),
+             :ok <- task_mode(goal),
+             :ok <- task_cap(actor, goal),
+             {:ok, id} <- project_task_id(task_id),
+             %Platform.Tasks.Task{} = task <-
+               Repo.one(from(t in Platform.Tasks.Task, where: t.id == ^id)),
+             {:ok, _} <- available_project(actor, goal, task.project_id),
+             :ok <- unlinked(task.id) do
+          insert_task_link(
+            actor,
+            goal,
+            task,
+            field_attr(attrs, :wake_up_id),
+            field_attr(attrs, :entry_id)
+          )
+        else
+          nil -> {:error, :project_not_available}
+          error -> error
+        end
+      end)
+    end
+  end
+
+  defp editable_wake(actor, raw_id) do
+    with {:ok, id} <- cast_id(raw_id),
+         %Platform.Goals.WakeUp{} = wake <-
+           Repo.one(from(w in Platform.Goals.Clock.visible_wakes(actor), where: w.id == ^id)),
+         {:ok, goal} <- fetch_visible(actor, wake.goal_id, false),
+         :ok <- check_coach(actor, goal) do
+      {:ok, wake, goal}
+    else
+      nil -> {:error, :not_found}
+      error -> error
+    end
+  end
+
+  defp check_coach(actor, goal), do: if(coach?(actor, goal), do: :ok, else: {:error, :forbidden})
+
+  defp lock_clock(actor, goal) do
+    Repo.one(
+      from(c in children(actor, Platform.Goals.GoalClock, goal.id), lock: "FOR UPDATE OF g0")
+    )
+
+    # A freshly created goal may not have been ticked yet. Locking the goal
+    # also serializes that case and coordinates add_entry/update_goal writers.
+    fetch_visible(actor, goal.id, true)
+    :ok
+  end
+
+  defp check_open(%{status: "open"}), do: :ok
+  defp check_open(_), do: {:error, :wake_up_closed}
+  defp known_outcome(outcome) when outcome in ~w(do ask wait), do: :ok
+  defp known_outcome(_), do: {:error, :unknown_outcome}
+  defp field_attr(attrs, key), do: Map.get(attrs, key, Map.get(attrs, Atom.to_string(key)))
+  defp nonblank?(s), do: is_binary(s) and String.trim(s) != ""
+  defp outcome_allowed(%{agent_mode: "advise"}, "do", _), do: {:error, :mode_forbids_do}
+
+  defp outcome_allowed(goal, "do", attrs) do
+    if field_attr(attrs, :task), do: task_mode(goal), else: :ok
+  end
+
+  defp outcome_allowed(%{outreach: "off"}, "ask", _), do: {:error, :outreach_off}
+  defp outcome_allowed(_, _, _), do: :ok
+  defp task_mode(%{agent_mode: "advise"}), do: {:error, :mode_forbids_do}
+  defp task_mode(%{agent_mode: "coach"}), do: {:error, :mode_forbids_task}
+  defp task_mode(_), do: :ok
+  defp prediction_required("wait", _), do: :ok
+
+  defp prediction_required(_, attrs) do
+    date = parse_date(field_attr(attrs, :predicted_by))
+
+    if nonblank?(field_attr(attrs, :prediction)) and match?(%Date{}, date) and
+         Date.compare(date, DateTime.to_date(Platform.Goals.Clock.now())) == :gt,
+       do: :ok,
+       else: {:error, :prediction_required}
+  end
+
+  defp parse_date(%Date{} = date), do: date
+
+  defp parse_date(value) when is_binary(value) do
+    case Date.from_iso8601(value) do
+      {:ok, date} -> date
+      _ -> nil
+    end
+  end
+
+  defp parse_date(_), do: nil
+
+  defp outcome_entry(outcome, attrs, wake) do
+    base =
+      Map.new([:title, :body, :prediction, :predicted_change, :predicted_by, :sources], fn key ->
+        {key, field_attr(attrs, key)}
+      end)
+      |> Enum.reject(fn {_k, v} -> is_nil(v) end)
+      |> Map.new()
+
+    details = %{"wake_up_id" => wake.id}
+
+    details =
+      if field_attr(attrs, :undo_note),
+        do: Map.put(details, "undo_note", field_attr(attrs, :undo_note)),
+        else: details
+
+    details =
+      if field_attr(attrs, :until),
+        do: Map.put(details, "until", date_scalar(field_attr(attrs, :until))),
+        else: details
+
+    base =
+      Map.merge(base, %{
+        kind: %{"do" => "action", "ask" => "ask", "wait" => "wait"}[outcome],
+        reading_id: wake.reading_id,
+        occurred_at: Platform.Goals.Clock.now(),
+        details: details
+      })
+
+    cond do
+      outcome == "wait" and not nonblank?(field_attr(attrs, :reason)) ->
+        {:error, :reason_required}
+
+      outcome == "wait" ->
+        {:ok, Map.put(base, :body, field_attr(attrs, :reason))}
+
+      not nonblank?(field_attr(attrs, :title)) ->
+        {:error,
+         Ecto.Changeset.add_error(Entry.changeset(%Entry{}, base), :title, "can't be blank")}
+
+      true ->
+        {:ok, base}
+    end
+  end
+
+  defp date_scalar(%Date{} = date), do: Date.to_iso8601(date)
+  defp date_scalar(value), do: value
+
+  defp addressed(q, %User{id: id}), do: from(a in q, where: ^id in a.addressed_user_ids)
+  defp addressed(q, _), do: from(a in q, where: false)
+  defp final_answer_check(nil, _), do: :ok
+  defp final_answer_check(%{answer: "ignored"}, answer) when answer in ~w(used declined), do: :ok
+  defp final_answer_check(_, _), do: {:error, :already_answered}
+
+  defp maybe_ask(actor, goal, wake, "ask", attrs) do
+    now = Platform.Goals.Clock.now()
+    cap = Platform.Goals.Limits.max_open_asks(goal.outreach)
+
+    count =
+      Repo.aggregate(
+        from(a in children(actor, Platform.Goals.Ask, goal.id),
+          where: a.status == "open" and a.expires_at > ^now
+        ),
+        :count
+      )
+
+    ids = field_attr(attrs, :addressed_user_ids) || [goal.owner_user_id]
+
+    with :ok <- if(count < cap, do: :ok, else: {:error, :ask_cap_reached}),
+         :ok <- addressees(actor, goal, ids) do
+      %Platform.Goals.Ask{
+        goal_id: goal.id,
+        wake_up_id: wake.id,
+        created_by_agent_id: actor.id,
+        addressed_user_ids: Enum.uniq(ids)
+      }
+      |> Platform.Goals.Ask.changeset(%{
+        kind: field_attr(attrs, :kind),
+        title: field_attr(attrs, :title),
+        body: field_attr(attrs, :body),
+        payload: field_attr(attrs, :payload) || %{},
+        expires_at: DateTime.add(now, Platform.Goals.Limits.ask_expiry_days() * 86400, :second)
+      })
+      |> Repo.insert()
+    end
+  end
+
+  defp maybe_ask(_, _, _, _, _), do: {:ok, nil}
+
+  defp addressees(_actor, goal, ids) do
+    valid =
+      is_list(ids) and length(ids) in 1..Platform.Goals.Limits.max_addressed() and
+        Enum.all?(ids, fn raw ->
+          case Ecto.UUID.cast(raw) do
+            {:ok, id} ->
+              user = Repo.one(from(u in User, where: u.id == ^id))
+              match?({:ok, _}, get_goal(user, goal.id))
+
+            _ ->
+              false
+          end
+        end)
+
+    if valid, do: :ok, else: {:error, :addressee_cannot_see_goal}
+  end
+
+  defp task_cap(actor, goal) do
+    closed = Platform.Goals.Sources.TaskCount.closed_statuses()
+
+    count =
+      Repo.aggregate(
+        from(l in children(actor, Platform.Goals.TaskLink, goal.id),
+          join: t in Platform.Tasks.Task,
+          on: t.id == l.task_id,
+          where: is_nil(t.deleted_at) and t.status not in ^closed
+        ),
+        :count
+      )
+
+    if count < Platform.Goals.Limits.max_open_tasks(), do: :ok, else: {:error, :task_cap_reached}
+  end
+
+  defp available_project(actor, goal, id) do
+    with {:ok, project} <- Platform.Goals.Sources.TaskCount.live_project(goal, id),
+         home = Platform.Experiments.Tools.home_org(actor),
+         true <- home == :root or home == {:tenant, project.org_id} do
+      {:ok, project}
+    else
+      _ -> {:error, :project_not_available}
+    end
+  end
+
+  defp project_task_id(id) do
+    case Platform.UUID.cast(id) do
+      {:ok, id} -> {:ok, id}
+      _ -> {:error, :project_not_available}
+    end
+  end
+
+  defp maybe_task(actor, goal, "do", attrs) do
+    case field_attr(attrs, :task) do
+      nil ->
+        {:ok, nil}
+
+      task_attrs when is_map(task_attrs) ->
+        with :ok <- task_cap(actor, goal),
+             {:ok, project} <- available_project(actor, goal, field_attr(task_attrs, :project_id)),
+             {:ok, task} <-
+               Platform.Tasks.create_task(%{
+                 project_id: project.id,
+                 title: field_attr(task_attrs, :title),
+                 description: field_attr(task_attrs, :description),
+                 kind: field_attr(task_attrs, :kind) || "chore",
+                 priority: field_attr(task_attrs, :priority) || "medium",
+                 metadata: %{"source" => "goals.wake_up"}
+               }) do
+          one = %{"assignee_type" => "agent", "assignee_id" => actor.id}
+
+          Platform.Tasks.set_phase_assignees(
+            task,
+            Map.new(~w(planning execution review), &{&1, one})
+          )
+        end
+
+      _ ->
+        {:error, :project_not_available}
+    end
+  end
+
+  defp maybe_task(_, _, _, _), do: {:ok, nil}
+
+  defp link_entry_attrs(attrs, ask, task) do
+    details = attrs.details
+    details = if ask, do: Map.put(details, "ask_id", ask.id), else: details
+    details = if task, do: Map.put(details, "task_id", task.id), else: details
+    %{attrs | details: details}
+  end
+
+  defp attach_outcome(actor, goal, wake, entry, ask, task) do
+    if ask, do: Repo.update!(Ecto.Changeset.change(ask, entry_id: entry.id))
+
+    if task do
+      case insert_task_link(actor, goal, task, wake.id, entry.id) do
+        {:ok, _} -> :ok
+        {:error, reason} -> Repo.rollback(reason)
+      end
+    end
+
+    :ok
+  end
+
+  defp unlinked(task_id) do
+    if Repo.exists?(from(l in Platform.Goals.TaskLink, where: l.task_id == ^task_id)),
+      do: {:error, :task_already_linked},
+      else: :ok
+  end
+
+  defp insert_task_link(actor, goal, task, wake_id, entry_id) do
+    %Platform.Goals.TaskLink{
+      goal_id: goal.id,
+      task_id: task.id,
+      created_by_agent_id: actor.id,
+      wake_up_id: wake_id,
+      entry_id: entry_id
+    }
+    |> Platform.Goals.TaskLink.changeset(%{})
+    |> Repo.insert()
+  end
+
+  defp claim_close(wake, outcome, entry) do
+    now = Platform.Goals.Clock.now()
+
+    {count, _} =
+      Repo.update_all(
+        from(w in Platform.Goals.WakeUp, where: w.id == ^wake.id and w.status == "open"),
+        set: [status: "closed", outcome: outcome, closed_at: now, entry_id: entry.id]
+      )
+
+    if count == 0,
+      do: {:error, :wake_up_closed},
+      else:
+        {:ok, %{wake | status: "closed", outcome: outcome, closed_at: now, entry_id: entry.id}}
   end
 
   defp logged_source(goal) do

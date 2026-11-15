@@ -42,17 +42,25 @@ defmodule Platform.Goals.Sources.TaskCount do
 
   defp scope(%{source_settings: settings} = goal) when is_map(settings) do
     if settings["count"] in ["open", "completed"] do
-      with {:ok, id} <- Platform.UUID.cast(settings["project_id"]),
-           %Project{archived_at: nil, deletion_scheduled_at: nil} = project <-
-             Tasks.get_project(id),
-           %Tenancy.Org{} = org <- Tenancy.get_org(goal.org_id),
-           true <- Tenancy.tier(org) == :root or project.org_id == goal.org_id do
-        {:ok, id, settings["count"]}
+      with {:ok, project} <- live_project(goal, settings["project_id"]) do
+        {:ok, project.id, settings["count"]}
       else
         _ -> {:cannot_measure, :unknown_project}
       end
     else
       {:cannot_measure, :bad_settings}
+    end
+  end
+
+  @doc "Resolves a canonical live project in the goal's permitted organization scope."
+  def live_project(goal, project_id) do
+    with {:ok, id} <- Platform.UUID.cast(project_id),
+         %Project{archived_at: nil, deletion_scheduled_at: nil} = project <- Tasks.get_project(id),
+         %Tenancy.Org{} = org <- Tenancy.get_org(goal.org_id),
+         true <- Tenancy.tier(org) == :root or project.org_id == goal.org_id do
+      {:ok, project}
+    else
+      _ -> :error
     end
   end
 

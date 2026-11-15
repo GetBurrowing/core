@@ -110,6 +110,9 @@ defmodule Platform.Goals.Clock do
            if DateTime.compare(clock.next_wake_at, now) == :gt or not is_nil(clock.stalled_at),
              do: Repo.rollback(:already_claimed)
 
+           # The same lock order as outcome/cap transactions: clock, goal, wake-up.
+           Repo.one(from(c in GoalClock, where: c.id == ^clock.id, lock: "FOR UPDATE"))
+
            current =
              Repo.one(
                from(g in Platform.Goals.Visibility.visible_goals(coach),
@@ -226,13 +229,15 @@ defmodule Platform.Goals.Clock do
       Repo.all(
         from(w in WakeUp,
           where: w.status == "open" and w.respond_by <= ^now,
-          select: {w.id, w.coach_agent_id}
+          select: {w.id, w.goal_id}
         )
       )
 
-    for {id, _coach_id} <- ids do
+    for {id, goal_id} <- ids do
       try do
         Repo.transaction(fn ->
+          Repo.one(from(c in GoalClock, where: c.goal_id == ^goal_id, lock: "FOR UPDATE"))
+
           case Repo.one(from(w in WakeUp, where: w.id == ^id, lock: "FOR UPDATE")) do
             %WakeUp{status: "open"} = wake -> unanswered(wake, now)
             _ -> :ok
