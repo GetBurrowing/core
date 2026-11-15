@@ -8,7 +8,35 @@ defmodule Platform.Chat.GroupMentionDeliveryTest do
   alias Platform.Inbox.Item
   alias Platform.Repo
 
+  defp route(message) do
+    router = Process.whereis(AttentionRouter) || start_supervised!({AttentionRouter, []})
+    Ecto.Adapters.SQL.Sandbox.allow(Repo, self(), router)
+
+    store =
+      Process.whereis(Platform.Chat.ActiveAgentStore) ||
+        start_supervised!({Platform.Chat.ActiveAgentStore, []})
+
+    Ecto.Adapters.SQL.Sandbox.allow(Repo, self(), store)
+    AttentionRouter.route(message)
+  end
+
   setup do
+    values = [
+      chat_agent_module: Platform.GroupMentionChatStub,
+      chat_agent_dispatch_mode: :sync,
+      group_mention_test_pid: self()
+    ]
+
+    previous = Enum.map(values, fn {key, _} -> {key, Application.get_env(:platform, key)} end)
+    Enum.each(values, fn {key, value} -> Application.put_env(:platform, key, value) end)
+
+    on_exit(fn ->
+      Enum.each(previous, fn
+        {key, nil} -> Application.delete_env(:platform, key)
+        {key, value} -> Application.put_env(:platform, key, value)
+      end)
+    end)
+
     org = Platform.Tenancy.get_org!(Platform.TenancyFixtures.tenant_org_id("group-delivery"))
     admin = create_user!()
     plain_member!(admin, org, "admin")
@@ -70,16 +98,29 @@ defmodule Platform.Chat.GroupMentionDeliveryTest do
              :count
            ) == 1
 
-    assert {:ok, decisions} = AttentionRouter.route(msg)
+    assert {:ok, decisions} = route(msg)
     assert Enum.count(decisions, &(&1.participant_id == c.agent_p.id)) == 1
     assert Enum.count(decisions, &(&1.participant_id == c.target_p.id)) == 1
+    assert_receive :group_chat_called
+    refute_receive :group_chat_called
   end
 
   test "attachment message variants snapshot their original audience", c do
     content = GroupMentionToken.encode(c.group.id, c.group.name)
+    Chat.PubSub.subscribe(c.space.id)
     assert {:ok, msg, []} = Chat.post_message_with_attachments(attrs(c, content), [])
-    assert {:ok, decisions} = AttentionRouter.route(msg)
+    assert {:ok, decisions} = route(msg)
     assert Enum.any?(decisions, &(&1.participant_id == c.agent_p.id))
+    agent_participant_id = c.agent_p.id
+    group_id = c.group.id
+
+    assert_receive {:attention_needed,
+                    %{
+                      participant_id: ^agent_participant_id,
+                      group_mention_only: true,
+                      group_mentions: [%{id: ^group_id}]
+                    }}
+
     assert length(Platform.Chat.GroupMentions.load(msg).group_mention_recipients) == 2
   end
 
@@ -120,7 +161,7 @@ defmodule Platform.Chat.GroupMentionDeliveryTest do
                })
              )
 
-    assert {:ok, decisions} = AttentionRouter.route(msg)
+    assert {:ok, decisions} = route(msg)
     refute Enum.any?(decisions, &(&1.participant_id == c.agent_p.id))
     refute Repo.exists?(from(i in Item, where: i.source_id == ^msg.id))
   end

@@ -50,6 +50,7 @@ defmodule PlatformWeb.MentionGroupsLiveTest do
 
     assert {:ok, [group]} = MentionGroups.list_groups(admin, org_id)
     assert group.name == "Design team"
+    assert group.members == [%{type: "user", id: target.id}]
     view |> element("#edit-group-#{group.id}") |> render_click()
 
     view
@@ -70,9 +71,11 @@ defmodule PlatformWeb.MentionGroupsLiveTest do
     assert {:ok, _view, html} = live(authed(admin), "/settings/mention-groups")
     assert html =~ "Mention groups"
 
-    for actor <- [user!("member", org_id), user!("admin", org_id, true)] do
-      assert {:error, {:redirect, _}} = live(authed(actor), "/settings/mention-groups")
-    end
+    member = user!("member", org_id)
+    assert {:error, {:redirect, _}} = live(authed(member), "/settings/mention-groups")
+    external = user!("admin", org_id, true)
+    denied = get(authed(external), "/settings/mention-groups")
+    assert denied.halted and denied.status == 403
   end
 
   test "a child-org admin can manage only that org and finds the page in Settings" do
@@ -126,7 +129,8 @@ defmodule PlatformWeb.MentionGroupsLiveTest do
       Platform.Chat.add_participant(space.id, %{
         participant_type: "user",
         participant_id: admin.id,
-        display_name: admin.name
+        display_name: admin.name,
+        joined_at: DateTime.utc_now()
       })
 
     {:ok, message} =

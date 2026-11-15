@@ -38,24 +38,34 @@ defmodule Platform.Chat.GroupMentions do
       groups =
         Repo.all(from(g in MessageMentionGroup, where: g.message_id == ^id, order_by: g.id))
 
-      recipients =
-        Repo.all(from(r in MessageGroupRecipient, where: r.message_id == ^id, order_by: r.id))
+      if groups == [] do
+        %{message | group_mentions: [], group_mention_recipients: []}
+      else
+        recipients =
+          Repo.all(from(r in MessageGroupRecipient, where: r.message_id == ^id, order_by: r.id))
 
-      space = Repo.get(Space, message.space_id)
+        participant_ids = Enum.map(recipients, & &1.participant_id)
 
-      recipients =
-        Enum.filter(recipients, fn row ->
-          case Repo.get(Participant, row.participant_id) do
-            %Participant{} = p ->
-              matches?(p, row) and MentionGroups.eligible_participant?(p, space) and
-                history_visible?(p, message)
+        participants =
+          Repo.all(from(p in Participant, where: p.id in ^participant_ids))
+          |> Map.new(&{&1.id, &1})
 
-            _ ->
-              false
-          end
-        end)
+        space = Repo.get(Space, message.space_id)
 
-      %{message | group_mentions: groups, group_mention_recipients: recipients}
+        recipients =
+          Enum.filter(recipients, fn row ->
+            case Map.get(participants, row.participant_id) do
+              %Participant{} = p ->
+                matches?(p, row) and MentionGroups.eligible_participant?(p, space) and
+                  history_visible?(p, message)
+
+              _ ->
+                false
+            end
+          end)
+
+        %{message | group_mentions: groups, group_mention_recipients: recipients}
+      end
     else
       %{message | group_mentions: [], group_mention_recipients: []}
     end
@@ -86,7 +96,8 @@ defmodule Platform.Chat.GroupMentions do
             join: m in Message,
             on: m.id == r.message_id,
             where:
-              m.space_id == ^space_id and r.participant_id == ^participant.id and
+              m.space_id == ^space_id and is_nil(m.deleted_at) and
+                r.participant_id == ^participant.id and
                 r.principal_type == ^participant.participant_type and
                 r.principal_id == ^participant.participant_id,
             select: {m.id, m.inserted_at}

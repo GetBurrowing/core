@@ -101,7 +101,10 @@ defmodule Platform.Chat.LinkTargets do
   def from_content(content, opts \\ [])
 
   def from_content(content, opts) when is_binary(content) and content != "" do
-    content |> Platform.Chat.ContentRenderer.sanitized_html() |> extract(opts)
+    content
+    |> Platform.Chat.GroupMentionToken.strip()
+    |> Platform.Chat.ContentRenderer.sanitized_html()
+    |> extract(opts)
   end
 
   def from_content(_content, _opts), do: []

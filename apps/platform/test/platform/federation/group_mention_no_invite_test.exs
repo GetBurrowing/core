@@ -7,6 +7,80 @@ defmodule Platform.Federation.GroupMentionNoInviteTest do
   alias Platform.Federation.AttentionDispatch
   alias Platform.Repo
 
+  test "the real responder uses existing-only transport for a persisted group audience", c do
+    presence =
+      Process.whereis(Platform.Federation.RuntimePresence) ||
+        start_supervised!({Platform.Federation.RuntimePresence, []})
+
+    Ecto.Adapters.SQL.Sandbox.allow(Repo, self(), presence)
+    admin = Platform.TenancyFixtures.root_admin!()
+
+    runtime =
+      Repo.insert!(%Platform.Agents.AgentRuntime{
+        owner_user_id: admin.id,
+        status: "active",
+        runtime_id: c.runtime,
+        display_name: "Group runtime"
+      })
+
+    agent =
+      Repo.update!(
+        Ecto.Changeset.change(c.agent, runtime_type: "external", runtime_id: runtime.id)
+      )
+
+    Platform.Federation.RuntimePresence.track(runtime.runtime_id)
+    on_exit(fn -> Platform.Federation.RuntimePresence.untrack(runtime.runtime_id) end)
+
+    {:ok, author} =
+      Chat.add_participant(c.space.id, %{
+        participant_type: "user",
+        participant_id: admin.id,
+        joined_at: DateTime.utc_now()
+      })
+
+    {:ok, group} =
+      Platform.Chat.MentionGroups.create_group(admin, c.space.org_id, %{
+        name: "Transport team",
+        members: [%{type: "agent", id: agent.id}]
+      })
+
+    {:ok, message} =
+      Chat.post_message(%{
+        space_id: c.space.id,
+        participant_id: author.id,
+        content_type: "text",
+        content: Platform.Chat.GroupMentionToken.encode(group.id, group.name)
+      })
+
+    handler = {__MODULE__, make_ref()}
+    parent = self()
+
+    :ok =
+      :telemetry.attach(
+        handler,
+        [:platform, :chat, :dispatch_auto_invite],
+        fn _, _, metadata, _ -> send(parent, {:group_auto_invite, metadata}) end,
+        nil
+      )
+
+    on_exit(fn -> :telemetry.detach(handler) end)
+
+    assert :ok =
+             Platform.Chat.AgentResponder.respond(%{
+               reason: :mention,
+               space_id: c.space.id,
+               participant_id: c.participant.id,
+               message_id: message.id,
+               group_mention_only: true,
+               group_mentions: [%{id: group.id, name: group.name}]
+             })
+
+    assert_receive %Phoenix.Socket.Broadcast{event: "attention", payload: payload}, 1_000
+    assert payload.signal.group_mentions == [%{id: group.id, name: group.name}]
+    refute_receive {:group_auto_invite, _}
+    assert Chat.get_agent_participant(c.space.id, agent.id).id == c.participant.id
+  end
+
   setup do
     org_id = Platform.TenancyFixtures.acme_org_id()
     space = channel!(%{org_id: org_id})

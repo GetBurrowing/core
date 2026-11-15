@@ -75,6 +75,7 @@ defmodule Platform.Chat.MentionGroups do
 
       eligible =
         participants
+        |> Enum.reject(&(&1.id == author.id))
         |> Enum.filter(&eligible_participant?(&1, space))
         |> MapSet.new(&{&1.participant_type, &1.participant_id})
 

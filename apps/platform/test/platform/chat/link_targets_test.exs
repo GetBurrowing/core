@@ -8,6 +8,11 @@ defmodule Platform.Chat.LinkTargetsTest do
   alias Platform.Chat.ContentRenderer
   alias Platform.Chat.LinkTargets
 
+  test "a URL in a group display label does not request a link preview" do
+    token = "@[group:12345678-1234-1234-1234-123456789abc|Design https://example.org]"
+    assert LinkTargets.from_content(token, base_url: "https://burrow.example") == []
+  end
+
   defp origin do
     uri = PlatformWeb.Endpoint.struct_url()
     "#{uri.scheme}://#{uri.host}:#{uri.port}"

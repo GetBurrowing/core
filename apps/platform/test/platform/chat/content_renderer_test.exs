@@ -19,6 +19,17 @@ defmodule Platform.Chat.ContentRendererTest do
     refute result =~ "@group:#{id}"
   end
 
+  test "group labels are escaped as text after Markdown parsing" do
+    result =
+      render(
+        ~s{@[group:12345678-1234-1234-1234-123456789abc|Design <img src=x onerror="alert(1)">]}
+      )
+
+    assert result =~ "@Design &lt;img"
+    refute result =~ "<img"
+    refute result =~ "@group:"
+  end
+
   describe "render_message/1" do
     test "returns empty for nil" do
       assert {:safe, ""} = ContentRenderer.render_message(nil)

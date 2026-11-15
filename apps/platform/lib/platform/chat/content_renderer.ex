@@ -38,6 +38,8 @@ defmodule Platform.Chat.ContentRenderer do
   def render_message("", _opts), do: raw("")
 
   def render_message(content, opts) when is_binary(content) do
+    {content, groups} = protect_group_tokens(content)
+
     content
     |> sanitized_html()
     |> relativize_path_links()
@@ -45,7 +47,54 @@ defmodule Platform.Chat.ContentRenderer do
     |> decorate_mentions()
     |> wrap_code_blocks()
     |> chip_links(Keyword.get(opts, :chips, %{}))
+    |> restore_group_tokens(groups)
     |> raw()
+  end
+
+  # Protect the complete token before Markdown can split its display label
+  # across HTML elements. Restoration escapes both the visible label and any
+  # occurrence inside an HTML attribute; request text never becomes markup.
+  defp protect_group_tokens(content) do
+    prefix = "BURROWGROUP" <> Base.encode16(:crypto.strong_rand_bytes(12))
+
+    Regex.scan(~r/@\[group:[^\[\]\r\n]+\]/u, content)
+    |> Enum.reduce({content, %{}}, fn [token], {text, groups} ->
+      case Platform.Chat.GroupMentionToken.parse(token) do
+        [%{id: id, name: name}] ->
+          marker = prefix <> Integer.to_string(map_size(groups)) <> "TOKEN"
+
+          {String.replace(text, token, marker, global: false),
+           Map.put(groups, marker, %{id: id, name: name, token: token})}
+
+        _ ->
+          {text, groups}
+      end
+    end)
+  end
+
+  defp restore_group_tokens(html, groups) when map_size(groups) == 0, do: html
+
+  defp restore_group_tokens(html, groups) do
+    html
+    |> String.split(~r/(<[^>]+>)/, include_captures: true)
+    |> Enum.map_join(fn part ->
+      Enum.reduce(groups, part, fn {marker, group}, text ->
+        replacement =
+          if String.starts_with?(part, "<") do
+            html_text(group.token)
+          else
+            group_span(group.id, html_text(group.name))
+          end
+
+        String.replace(text, marker, replacement)
+      end)
+    end)
+  end
+
+  defp html_text(text), do: text |> Phoenix.HTML.html_escape() |> Phoenix.HTML.safe_to_string()
+
+  defp group_span(id, escaped_label) do
+    ~s(<span data-mention-type="group" data-group-id="#{id}" class="rounded bg-primary/20 text-primary px-1 font-medium"><span class="hero-user-group inline-block size-3 mr-1" aria-hidden="true"></span>@#{escaped_label}</span>)
   end
 
   @doc """
@@ -313,7 +362,7 @@ defmodule Platform.Chat.ContentRenderer do
     Regex.replace(~r/@\[([^\[\]]+)\]/, text, fn _full, name ->
       case Platform.Chat.GroupMentionToken.parse("@[#{name}]") do
         [%{id: id, name: label}] ->
-          ~s(<span data-mention-type="group" data-group-id="#{id}" class="rounded bg-primary/20 text-primary px-1 font-medium"><span class="hero-user-group inline-block size-3 mr-1" aria-hidden="true"></span>@#{label}</span>)
+          group_span(id, label)
 
         _ ->
           mention_span(name) <> "@" <> name <> @mention_span_close
