@@ -268,6 +268,21 @@ defmodule PlatformWeb.GoalsBriefTest do
     Application.put_env(:goals, :enabled, true)
     other = member!(c.org)
     {:ok, _} = Goals.open_goal(c.owner, c.goal.id, {:user, other.id})
+
+    Platform.InsightFixtures.insight!(
+      addressee: other,
+      action_type: "question",
+      body: "Which host?"
+    )
+
+    build()
+
+    assert Repo.one(
+             from(b in Platform.Memory.Briefing,
+               where: b.user_id == ^other.id and b.digest_date == ^date()
+             )
+           )
+
     # Sharing alone is insufficient to receive an addressed item or the section.
     {:ok, _, html} = open(c.conn, other)
     refute html =~ "Your goals"
