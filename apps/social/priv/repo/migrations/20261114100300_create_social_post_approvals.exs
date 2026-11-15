@@ -13,6 +13,15 @@ defmodule Platform.Repo.Migrations.CreateSocialPostApprovals do
 
   use Ecto.Migration
 
+  # old-code-compatible: a new table the previous release never reads or writes; its partial
+  # unique index and NOT NULL columns apply only to rows Studio inserts. With
+  # receipts present, its restrict FKs would refuse old code deleting a receipted
+  # post, account or approving user.
+  # Safe for the previous release only while no Studio rows exist; once they do,
+  # rollback is barred by listing 20261114100000 in
+  # deployment/release/irreversible-migrations.txt (the updater refuses to roll
+  # back from the release that crossed it). This waiver depends on that listing.
+
   # create_social_post_approvals.
 
   def up do

@@ -14,6 +14,14 @@ defmodule Platform.Repo.Migrations.AddExternalRefToSocialClips do
 
   use Ecto.Migration
 
+  # old-code-compatible: additive: nullable columns the previous release never sets; the unique
+  # index is partial (external_ref IS NOT NULL) and the length CHECK passes NULL.
+  # With imported Studio clips present, old code would treat them as legacy clips.
+  # Safe for the previous release only while no Studio rows exist; once they do,
+  # rollback is barred by listing 20261114100000 in
+  # deployment/release/irreversible-migrations.txt (the updater refuses to roll
+  # back from the release that crossed it). This waiver depends on that listing.
+
   def change do
     alter table(:social_clips) do
       add(:external_ref, :text)

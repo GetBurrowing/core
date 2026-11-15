@@ -21,3 +21,8 @@
 # listed here to name an existing migration file.
 #
 # The file ships in both images at /app/release/irreversible-migrations.txt.
+
+# Social Studio flow marker: the previous release's send, retry, sweep and
+# webhook paths have no flow filter and would treat approved Studio posts as
+# legacy posts to publish.
+20261114100000
