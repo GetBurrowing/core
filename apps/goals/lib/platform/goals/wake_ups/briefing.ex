@@ -216,7 +216,11 @@ defmodule Platform.Goals.WakeUps.Briefing do
           else: ""
 
       choices =
-        Enum.map_join(details["choices"] || [], "; ", fn choice ->
+        case details["choices"] do
+          list when is_list(list) -> Enum.filter(list, &is_map/1)
+          _ -> []
+        end
+        |> Enum.map_join("; ", fn choice ->
           "#{choice["title"]}: #{choice["choice"]}"
         end)
 
