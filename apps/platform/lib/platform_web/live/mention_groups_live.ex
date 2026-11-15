@@ -82,7 +82,7 @@ defmodule PlatformWeb.MentionGroupsLive do
       {:error, _} ->
         socket =
           if editor,
-            do: assign(socket, :editor, %{editor | name: attrs.name, members: attrs.members}),
+            do: assign_editor(socket, %{editor | name: attrs.name, members: attrs.members}),
             else: socket
 
         {:noreply,
@@ -112,10 +112,14 @@ defmodule PlatformWeb.MentionGroupsLive do
 
     with true <- authorized?(user, socket.assigns.org_id),
          {:ok, candidates} <- MentionGroups.list_candidates(user, socket.assigns.org_id) do
-      {:noreply, assign(socket, editor: group, candidates: candidates)}
+      {:noreply, socket |> assign(candidates: candidates) |> assign_editor(group)}
     else
       _ -> {:noreply, put_flash(socket, :error, "Could not open this group.")}
     end
+  end
+
+  defp assign_editor(socket, group) do
+    assign(socket, editor: group, group_form: to_form(%{"name" => group.name}, as: :group))
   end
 
   defp actor(socket), do: Accounts.get_user(socket.assigns[:current_user_id])
@@ -146,7 +150,7 @@ defmodule PlatformWeb.MentionGroupsLive do
         []
       end
 
-    assign(socket, groups: groups)
+    assign(socket, groups: groups, org_form: to_form(%{"org_id" => socket.assigns.org_id}))
   end
 
   defp parse_members(values) when is_list(values) do
@@ -168,6 +172,7 @@ defmodule PlatformWeb.MentionGroupsLive do
   @impl true
   def render(assigns) do
     ~H"""
+    <Layouts.app flash={@flash} embedded={true}>
     <div class="mx-auto w-full max-w-3xl space-y-6 p-4 lg:p-8">
       <div class="flex items-center justify-between gap-4">
         <div>
@@ -181,35 +186,19 @@ defmodule PlatformWeb.MentionGroupsLive do
       <p class="text-sm text-subtle">
         Address existing participants together. Groups do not add anyone to a space or grant access.
       </p>
-      <.form :if={length(@orgs) > 1} for={%{}} phx-change="select_org" id="mention-group-org-form">
-        <label class="form-control">
-          <span class="label-text">Organization</span>
-          <select name="org_id" class="select select-bordered" aria-label="Organization">
-            <option :for={org <- @orgs} value={org.id} selected={org.id == @org_id}>
-              {org.name}
-            </option>
-          </select>
-        </label>
+      <.form :if={length(@orgs) > 1} for={@org_form} phx-change="select_org" id="mention-group-org-form">
+        <.input field={@org_form[:org_id]} type="select" label="Organization"
+          options={Enum.map(@orgs, &{&1.name, &1.id})} />
       </.form>
       <.form
         :if={@editor}
-        for={%{}}
+        for={@group_form}
         id="mention-group-form"
         phx-submit="save_group"
         class="space-y-4 rounded-box border border-edge bg-base-200 p-4"
       >
         <h2 class="text-lg font-semibold">{if @editor.id, do: "Edit group", else: "New group"}</h2>
-        <label class="form-control">
-          <span class="label-text">Group name</span>
-          <input
-            type="text"
-            name="group[name]"
-            value={@editor.name}
-            required
-            maxlength="80"
-            class="input input-bordered"
-          />
-        </label>
+        <.input field={@group_form[:name]} type="text" label="Group name" required maxlength="80" />
         <fieldset class="space-y-2">
           <legend class="mb-2 font-medium">Members</legend>
           <input type="hidden" name="group[members][]" value="" />
@@ -246,7 +235,7 @@ defmodule PlatformWeb.MentionGroupsLive do
           class="flex flex-wrap items-center justify-between gap-3 py-4"
         >
           <div class="flex items-center gap-3">
-            <span class="hero-user-group size-5" aria-hidden="true"></span>
+            <.icon name="hero-user-group" class="size-5" />
             <div>
               <p class="font-medium">{group.name}</p>
               <p class="text-sm text-subtle">{length(group.members)} members</p>
@@ -273,6 +262,7 @@ defmodule PlatformWeb.MentionGroupsLive do
         </li>
       </ul>
     </div>
+    </Layouts.app>
     """
   end
 end
