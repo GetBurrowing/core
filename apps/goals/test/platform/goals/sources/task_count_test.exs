@@ -1,6 +1,7 @@
 defmodule Platform.Goals.Sources.TaskCountTest do
   use Platform.DataCase, async: false
   import Platform.GoalsFixtures
+  import Platform.Goals.NumberAssertions
   alias Platform.Goals.{Goal, Sources.TaskCount}
   alias Platform.Tasks.{Project, Task}
 
@@ -108,13 +109,4 @@ defmodule Platform.Goals.Sources.TaskCountTest do
       deleted_at: deleted_at
     })
   end
-
-  defp number_free?(%Decimal{}), do: false
-  defp number_free?(%DateTime{}), do: false
-  defp number_free?(value) when is_number(value), do: false
-  defp number_free?(value) when is_binary(value), do: not Regex.match?(~r/[0-9]/, value)
-  defp number_free?(value) when is_tuple(value), do: value |> Tuple.to_list() |> number_free?()
-  defp number_free?(value) when is_list(value), do: Enum.all?(value, &number_free?/1)
-  defp number_free?(value) when is_map(value), do: value |> Map.to_list() |> number_free?()
-  defp number_free?(_), do: true
 end

@@ -191,7 +191,8 @@ defmodule Platform.Goals.GoalsTest do
       "Repo.all(Goal",
       "Repo.all(Stop",
       "Repo.all(Entry",
-      "Repo.all(Grant"
+      "Repo.all(Grant",
+      "Repo.all(Reading"
     ]
 
     defp hits(text), do: Enum.filter(@forbidden, &String.contains?(text, &1))
@@ -199,7 +200,7 @@ defmodule Platform.Goals.GoalsTest do
     test "the scan can hit (positive control)" do
       assert hits("goal = Repo.get(Goal, id)") == ["Repo.get("]
 
-      for schema <- ~w(Goal Stop Entry Grant) do
+      for schema <- ~w(Goal Stop Entry Grant Reading) do
         assert hits("Repo.all(#{schema})") == ["Repo.all(#{schema}"]
       end
     end

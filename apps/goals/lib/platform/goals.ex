@@ -24,7 +24,7 @@ defmodule Platform.Goals do
   alias Platform.Accounts.User
   alias Platform.Agents.Agent
   alias Platform.Chat.Participant
-  alias Platform.Goals.{Entry, Goal, Grant, Reading, Stop, Visibility}
+  alias Platform.Goals.{Entry, Goal, Grant, Reading, Sources, Stop, Visibility}
   alias Platform.Repo
   alias Platform.Tenancy.OrgMembership
 
@@ -330,6 +330,237 @@ defmodule Platform.Goals do
        Repo.all(from(e in query, order_by: [desc: e.occurred_at, desc: e.id], limit: ^limit))}
     end
   end
+
+  @doc "Logs a manual or practice value for a logged source; owner and coach only."
+  def log_reading(actor, goal_id, attrs) do
+    with :ok <- check_enabled() do
+      in_transaction(fn ->
+        with {:ok, goal} <- fetch_visible(actor, goal_id, true),
+             :ok <- check_can_edit(actor, goal),
+             {:ok, source} <- logged_source(goal),
+             {:ok, population} <- source_call(fn -> source.population(goal) end, :population) do
+          attrs = reading_attrs(attrs)
+
+          authored_reading(actor, goal, population)
+          |> Reading.changeset(attrs)
+          |> Ecto.Changeset.validate_inclusion(:origin, ~w(manual practice))
+          |> Repo.insert()
+        else
+          {:cannot_measure, _} -> {:error, :source_not_logged}
+          error -> error
+        end
+      end)
+    end
+  end
+
+  @doc "Measures and stores a fresh number, or reads a logged source; owner and coach only."
+  def measure_goal(actor, goal_id) do
+    with :ok <- check_enabled() do
+      in_transaction(fn ->
+        with {:ok, goal} <- fetch_visible(actor, goal_id, true),
+             :ok <- check_can_edit(actor, goal) do
+          with_source(goal, fn source, description, population ->
+            case description.kind do
+              :logged -> number_result(actor, goal, description, population, [])
+              :measured -> measure_reading(actor, goal, source, description, population)
+            end
+          end)
+        end
+      end)
+    end
+  end
+
+  @doc "Reads the current population's latest number, previous value and optional baseline."
+  def goal_number(actor, goal_id, opts \\ []) do
+    with :ok <- check_enabled(),
+         {:ok, goal} <- fetch_visible(actor, goal_id, false) do
+      with_source(goal, fn _source, description, population ->
+        number_result(actor, goal, description, population, opts)
+      end)
+    end
+  end
+
+  @doc "Reads history across populations, newest first (default 50, maximum 200)."
+  def list_readings(actor, goal_id, opts \\ []) do
+    with :ok <- check_enabled(),
+         {:ok, goal} <- fetch_visible(actor, goal_id, false) do
+      limit = opts |> Keyword.get(:limit, 50) |> max(0) |> min(200)
+      {:ok, Repo.all(from(r in ordered_readings(actor, goal), limit: ^limit))}
+    end
+  end
+
+  @doc "Describes registered sources while Goals is enabled."
+  def list_sources(_actor) do
+    with :ok <- check_enabled(), do: {:ok, Sources.describe()}
+  end
+
+  defp logged_source(goal) do
+    with {:ok, source} <- Sources.fetch(goal.source_key),
+         :logged <- source.kind() do
+      {:ok, source}
+    else
+      _ -> {:error, :source_not_logged}
+    end
+  rescue
+    _ -> {:error, :source_not_logged}
+  end
+
+  defp reading_attrs(attrs) when is_map(attrs) do
+    # Normalise only the supported attrs, so callers may use either key style.
+    for key <- [:value, :measured_at, :note, :origin, :details],
+        into: %{measured_at: DateTime.utc_now(), origin: "manual"} do
+      {key, Map.get(attrs, key, Map.get(attrs, Atom.to_string(key), reading_default(key)))}
+    end
+  end
+
+  defp reading_attrs(_), do: %{value: nil, measured_at: DateTime.utc_now(), origin: "manual"}
+  defp reading_default(:measured_at), do: DateTime.utc_now()
+  defp reading_default(:origin), do: "manual"
+  defp reading_default(:details), do: %{}
+  defp reading_default(_), do: nil
+
+  defp authored_reading(actor, goal, population) do
+    %Reading{
+      goal_id: goal.id,
+      source_key: goal.source_key,
+      population: population,
+      unit: goal.unit,
+      author_type: if(match?(%User{}, actor), do: "user", else: "agent"),
+      author_user_id: if(match?(%User{}, actor), do: actor.id),
+      author_agent_id: if(match?(%Agent{}, actor), do: actor.id)
+    }
+  end
+
+  defp with_source(%Goal{source_key: nil}, _fun), do: cannot_measure(:no_source, nil, nil)
+
+  defp with_source(goal, fun) do
+    case source_lookup(goal.source_key) do
+      {:cannot_measure, :source_failed} ->
+        cannot_measure(:source_failed, goal.source_key, nil)
+
+      :error ->
+        cannot_measure(:unknown_source, goal.source_key, nil)
+
+      {:ok, source} ->
+        case source_description(source) do
+          {:ok, description} ->
+            case source_call(fn -> source.population(goal) end, :population) do
+              {:ok, population} ->
+                fun.(source, description, population)
+
+              {:cannot_measure, reason} ->
+                cannot_measure(reason, goal.source_key, description.label)
+            end
+
+          :error ->
+            cannot_measure(:source_failed, goal.source_key, nil)
+        end
+    end
+  end
+
+  defp source_lookup(key) do
+    Sources.fetch(key)
+  rescue
+    _ -> {:cannot_measure, :source_failed}
+  end
+
+  defp source_description(source) do
+    description = %{key: source.key(), label: source.label(), kind: source.kind()}
+
+    if is_binary(description.key) and is_binary(description.label) and
+         description.kind in [:logged, :measured], do: {:ok, description}, else: :error
+  rescue
+    _ -> :error
+  end
+
+  # Rescue only the source boundary, never database writes or context queries.
+  defp source_call(fun, kind) do
+    case {kind, fun.()} do
+      {:population, {:ok, population}} when is_binary(population) ->
+        {:ok, population}
+
+      {:measure, {:ok, %{value: value, unit: unit, population: population} = result}}
+      when is_binary(population) and (is_binary(unit) or is_nil(unit)) and
+             (is_integer(value) or is_struct(value, Decimal)) ->
+        case Decimal.cast(value) do
+          {:ok, decimal} when is_integer(decimal.coef) -> {:ok, %{result | value: decimal}}
+          _ -> {:cannot_measure, :source_failed}
+        end
+
+      {_, {:cannot_measure, reason}} when is_atom(reason) ->
+        {:cannot_measure, reason}
+
+      _ ->
+        {:cannot_measure, :source_failed}
+    end
+  rescue
+    _ -> {:cannot_measure, :source_failed}
+  end
+
+  defp measure_reading(actor, goal, source, description, population) do
+    case source_call(fn -> source.measure(goal) end, :measure) do
+      {:ok, %{population: ^population} = result} ->
+        reading = %{authored_reading(actor, goal, population) | unit: result.unit}
+        attrs = %{value: result.value, origin: "measured", measured_at: DateTime.utc_now()}
+
+        with {:ok, _reading} <- reading |> Reading.changeset(attrs) |> Repo.insert() do
+          number_result(actor, goal, description, population, [])
+        end
+
+      {:ok, _different_population} ->
+        cannot_measure(:source_failed, goal.source_key, description.label)
+
+      {:cannot_measure, reason} ->
+        cannot_measure(reason, goal.source_key, description.label)
+    end
+  end
+
+  defp cannot_measure(reason, key, label),
+    do: {:ok, {:cannot_measure, %{reason: reason, source_key: key, source_label: label}}}
+
+  defp ordered_readings(actor, goal) do
+    from(r in children(actor, Reading, goal.id),
+      order_by: [desc: r.measured_at, desc: r.inserted_at, desc: r.id]
+    )
+  end
+
+  defp number_result(actor, goal, description, population, opts) do
+    query =
+      from(r in ordered_readings(actor, goal),
+        where: r.source_key == ^goal.source_key and r.population == ^population
+      )
+
+    case Repo.all(from(r in query, limit: 2)) do
+      [] ->
+        cannot_measure(:no_reading_yet, goal.source_key, description.label)
+
+      [latest | rest] ->
+        previous = List.first(rest)
+
+        baseline =
+          case Keyword.get(opts, :since) do
+            %DateTime{} = since ->
+              Repo.one(from(r in query, where: r.measured_at <= ^since, limit: 1))
+
+            _ ->
+              nil
+          end
+
+        {:ok,
+         {:reading,
+          %{
+            source: description,
+            latest: latest,
+            previous: previous,
+            delta: reading_difference(latest, previous),
+            baseline: baseline,
+            change_since: reading_difference(latest, baseline)
+          }}}
+    end
+  end
+
+  defp reading_difference(_latest, nil), do: nil
+  defp reading_difference(latest, earlier), do: Decimal.sub(latest.value, earlier.value)
 
   defp stop_attrs(attrs), do: Map.drop(attrs, [:position, "position"])
 
