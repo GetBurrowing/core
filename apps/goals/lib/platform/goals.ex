@@ -343,6 +343,7 @@ defmodule Platform.Goals do
 
           authored_reading(actor, goal, population)
           |> Reading.changeset(attrs)
+          |> Ecto.Changeset.validate_required([:origin, :details])
           |> Ecto.Changeset.validate_inclusion(:origin, ~w(manual practice))
           |> Repo.insert()
         else

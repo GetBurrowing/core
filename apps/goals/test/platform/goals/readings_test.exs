@@ -139,6 +139,8 @@ defmodule Platform.Goals.ReadingsTest do
           %{value: "abc"},
           %{value: %{}},
           %{value: nil},
+          %{value: 1, origin: nil},
+          %{value: 1, details: nil},
           %{value: 1, origin: "measured"},
           %{value: 1, measured_at: DateTime.add(DateTime.utc_now(), 60)},
           %{value: 1, origin: "wrong"}
