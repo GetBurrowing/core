@@ -154,6 +154,18 @@ defmodule Platform.Meetings.CompanionTokenTest do
                Meetings.companion_token_for_user(ctx.space.id, ext.id, "Outsider")
     end
 
+    test "a companion token is minted before the space is archived and refused after", ctx do
+      assert {:ok, %{token: token}} =
+               Meetings.companion_token_for_user(ctx.space.id, ctx.user.id, "Ada")
+
+      assert is_binary(token)
+
+      {:ok, _} = Platform.Chat.archive_space(Platform.Chat.get_space(ctx.space.id))
+
+      assert {:error, :join_not_permitted} =
+               Meetings.companion_token_for_user(ctx.space.id, ctx.user.id, "Ada")
+    end
+
     test "writes no roster row, no chat participant and broadcasts no join", ctx do
       {:ok, room} = Meetings.ensure_room(ctx.space.id)
       :ok = MeetingsPubSub.subscribe_room(room.id)
