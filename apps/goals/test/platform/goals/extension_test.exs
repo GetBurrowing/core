@@ -3,6 +3,7 @@ defmodule Platform.Goals.ExtensionTest do
   use ExUnit.Case, async: false
 
   alias Platform.Goals.Extension
+  alias PlatformWeb.Components.IconRail
 
   setup do
     previous = Application.fetch_env(:goals, :enabled)
@@ -36,6 +37,12 @@ defmodule Platform.Goals.ExtensionTest do
       refute Platform.Access.Registry.permission?("goals.use")
     end
 
+    test "core serves no Goals page and lists no Goals destination" do
+      assert Platform.Extensions.live_page_for("goals") == nil
+      refute Enum.any?(IconRail.destinations(root_user: true), &(&1.key == :goals))
+      refute Enum.any?(IconRail.destinations(), &(&1.key == :goals))
+    end
+
     test "validates" do
       assert Platform.Extensions.validate() == :ok
     end
@@ -46,20 +53,49 @@ defmodule Platform.Goals.ExtensionTest do
       set_enabled(true)
     end
 
-    test "registers goals.use" do
+    test "registers goals.use with its rail entry, and no bundle" do
       assert Platform.Goals.enabled?()
 
       assert Extension.permissions() == [
-               %{module: "goals", permissions: ["goals.use"], bundles: %{"goals" => "goals.use"}}
+               %{
+                 module: "goals",
+                 permissions: ["goals.use"],
+                 rail: [%{key: :goals, permission: "goals.use"}],
+                 bundles: %{"goals" => "goals.use"}
+               }
              ]
 
       assert Platform.Access.Registry.permission?("goals.use")
     end
 
-    test "registers the goals bundle and still no rail item, page or canvas kind" do
+    test "registers the Goals rail item and the /m/goals page" do
+      assert Extension.rail_items() == [
+               %{
+                 key: :goals,
+                 label: "Goals",
+                 path: "/m/goals",
+                 hero_icon: "hero-flag",
+                 cluster: :working,
+                 root_only?: false
+               }
+             ]
+
+      assert Extension.live_pages() == [
+               %{
+                 prefix: "goals",
+                 live_view: PlatformWeb.GoalsLive,
+                 title: "Goals",
+                 module: :goals,
+                 permission: "goals.use"
+               }
+             ]
+
+      assert %{live_view: PlatformWeb.GoalsLive} = Platform.Extensions.live_page_for("goals")
+      assert %{path: "/m/goals"} = Enum.find(IconRail.destinations(), &(&1.key == :goals))
+    end
+
+    test "registers the goals bundle and no canvas kind" do
       assert [%{name: "goals"}] = Extension.mcp_tool_bundles()
-      assert Extension.rail_items() == []
-      assert Extension.live_pages() == []
       assert Extension.canvas_kinds() == []
     end
 
@@ -77,6 +113,18 @@ defmodule Platform.Goals.ExtensionTest do
     assert off == on
     assert File.dir?(off), "#{off} does not exist"
     assert String.ends_with?(off, "priv/repo/migrations")
+  end
+
+  test "assets/0 is Tailwind sources only, the lib directory, whatever the flag" do
+    set_enabled(false)
+    off = Extension.assets()
+    set_enabled(true)
+
+    assert off == Extension.assets()
+    assert %{tailwind_sources: [lib]} = off
+    assert map_size(off) == 1
+    assert File.dir?(lib)
+    assert File.exists?(Path.join(lib, "platform_web/live/goals_live.ex"))
   end
 
   test "enabled?/0 is false when the app env is unset or not exactly true" do

@@ -1214,6 +1214,266 @@ defmodule Platform.Goals do
     end
   end
 
+  # ── pages (Goals 4/8, task 01a1dfc1) ─────────────────────────────────────
+
+  @typedoc """
+  What a page shows about who a goal belongs to and who sees it. `audience`
+  is the list for the owner and the coach and `:hidden` for every other
+  viewer. `current_stop` is the first stop by position not yet reached.
+  """
+  @type card :: %{
+          goal: Goal.t(),
+          role: :owner | :coach | :viewer,
+          owner_name: String.t(),
+          coach_name: String.t() | nil,
+          audience: [%{type: :user | :team | :space, id: binary(), name: String.t()}] | :hidden,
+          current_stop: Stop.t() | nil
+        }
+
+  @doc """
+  A card (`t:card/0`) for every goal `actor` sees, newest first. A fixed
+  number of queries whatever the number of goals; it never reads or
+  computes a goal's number (`goal_number/3` does).
+  """
+  @spec describe_goals(actor()) :: {:ok, [card()]} | {:error, :goals_disabled}
+  def describe_goals(actor) do
+    with :ok <- check_enabled() do
+      goals =
+        actor
+        |> Visibility.visible_goals()
+        |> order_by([g], desc: g.inserted_at, desc: g.id)
+        |> Repo.all()
+
+      {:ok, cards(actor, goals)}
+    end
+  end
+
+  @doc """
+  The card (`t:card/0`) for one goal `actor` sees. Unseen, missing and
+  malformed ids all answer `{:error, :not_found}`.
+  """
+  @spec describe_goal(actor(), term()) ::
+          {:ok, card()} | {:error, :not_found | :goals_disabled}
+  def describe_goal(actor, goal_id) do
+    with :ok <- check_enabled(),
+         {:ok, goal} <- fetch_visible(actor, goal_id, false) do
+      [card] = cards(actor, [goal])
+      {:ok, card}
+    end
+  end
+
+  @doc """
+  Who the owner may open `goal_id` to, each item
+  `%{id, name, detail, open?}`, sorted by name:
+
+    * `people`: non-external members of the orgs the owner holds a
+      non-external membership in, the owner excluded; `detail` is nil;
+    * `teams`: those orgs; `detail` is their non-external member count;
+    * `spaces`: non-archived `channel` spaces the owner has a participant
+      row in; `detail` is `:agents` for the space core's
+      `Platform.Chat.Sidebar.agents_rail_block/0` shows, nil otherwise.
+
+  `open?` says the goal is open to that audience now. Owner only: any other
+  viewer gets `{:error, :forbidden}`, an unseen goal `{:error, :not_found}`.
+  """
+  @spec list_audience_options(actor(), term()) ::
+          {:ok, %{people: [map()], teams: [map()], spaces: [map()]}} | {:error, term()}
+  def list_audience_options(actor, goal_id) do
+    with :ok <- check_enabled(),
+         {:ok, goal} <- fetch_visible(actor, goal_id, false),
+         :ok <- check_owner(actor, goal) do
+      open = open_audiences(actor, goal)
+      org_ids = owner_org_ids(goal.owner_user_id)
+
+      {:ok,
+       %{
+         people: people_options(goal.owner_user_id, org_ids, open),
+         teams: team_options(org_ids, open),
+         spaces: space_options(goal.owner_user_id, open)
+       }}
+    end
+  end
+
+  defp cards(_actor, []), do: []
+
+  defp cards(actor, goals) do
+    goal_ids = Enum.map(goals, & &1.id)
+    owners = names_by_id(User, goals |> Enum.map(& &1.owner_user_id) |> Enum.uniq())
+
+    coaches =
+      names_by_id(Agent, goals |> Enum.map(& &1.coach_agent_id) |> Enum.reject(&is_nil/1))
+
+    roles = Map.new(goals, &{&1.id, role(actor, &1)})
+    audiences = audiences(actor, for({id, role} <- roles, role != :viewer, do: id))
+    stops = current_stops(actor, goal_ids)
+
+    Enum.map(goals, fn goal ->
+      role = Map.fetch!(roles, goal.id)
+
+      %{
+        goal: goal,
+        role: role,
+        owner_name: Map.get(owners, goal.owner_user_id, ""),
+        coach_name: goal.coach_agent_id && Map.get(coaches, goal.coach_agent_id),
+        audience: if(role == :viewer, do: :hidden, else: Map.get(audiences, goal.id, [])),
+        current_stop: Map.get(stops, goal.id)
+      }
+    end)
+  end
+
+  defp role(actor, goal) do
+    cond do
+      owner?(actor, goal) -> :owner
+      coach?(actor, goal) -> :coach
+      true -> :viewer
+    end
+  end
+
+  # One query per schema; a user without a name shows their email.
+  defp names_by_id(_schema, []), do: %{}
+
+  defp names_by_id(User, ids) do
+    from(u in User, where: u.id in ^ids, select: {u.id, coalesce(u.name, u.email)})
+    |> Repo.all()
+    |> Map.new()
+  end
+
+  defp names_by_id(schema, ids) do
+    from(row in schema, where: row.id in ^ids, select: {row.id, row.name})
+    |> Repo.all()
+    |> Map.new()
+  end
+
+  # Grants of the given (visible) goals, resolved to names with one query
+  # per audience type.
+  defp audiences(_actor, []), do: %{}
+
+  defp audiences(actor, goal_ids) do
+    grants =
+      Repo.all(
+        from(gr in Grant,
+          join: g in subquery(Visibility.visible_goals(actor)),
+          on: g.id == gr.goal_id,
+          where: gr.goal_id in ^goal_ids,
+          order_by: [asc: gr.inserted_at, asc: gr.id]
+        )
+      )
+
+    ids = fn column -> grants |> Enum.map(&Map.get(&1, column)) |> Enum.reject(&is_nil/1) end
+
+    names = %{
+      user: names_by_id(User, ids.(:user_id)),
+      team: names_by_id(Platform.Tenancy.Org, ids.(:org_id)),
+      space: names_by_id(Platform.Chat.Space, ids.(:space_id))
+    }
+
+    grants
+    |> Enum.map(fn gr ->
+      {type, id} = grant_audience(gr)
+      {gr.goal_id, %{type: type, id: id, name: Map.get(names[type], id) || ""}}
+    end)
+    |> Enum.group_by(&elem(&1, 0), &elem(&1, 1))
+  end
+
+  defp grant_audience(%Grant{audience_type: "user", user_id: id}), do: {:user, id}
+  defp grant_audience(%Grant{audience_type: "team", org_id: id}), do: {:team, id}
+  defp grant_audience(%Grant{audience_type: "space", space_id: id}), do: {:space, id}
+
+  defp current_stops(actor, goal_ids) do
+    from(s in Stop,
+      join: g in subquery(Visibility.visible_goals(actor)),
+      on: g.id == s.goal_id,
+      where: s.goal_id in ^goal_ids and is_nil(s.reached_on),
+      distinct: s.goal_id,
+      order_by: [asc: s.goal_id, asc: s.position]
+    )
+    |> Repo.all()
+    |> Map.new(&{&1.goal_id, &1})
+  end
+
+  defp open_audiences(actor, goal) do
+    actor
+    |> audiences([goal.id])
+    |> Map.get(goal.id, [])
+    |> MapSet.new(&{&1.type, &1.id})
+  end
+
+  defp owner_org_ids(owner_id) do
+    Repo.all(
+      from(m in OrgMembership,
+        where: m.user_id == ^owner_id and m.external == false,
+        distinct: true,
+        select: m.org_id
+      )
+    )
+  end
+
+  defp people_options(_owner_id, [], _open), do: []
+
+  defp people_options(owner_id, org_ids, open) do
+    from(u in User,
+      where:
+        u.id != ^owner_id and
+          u.id in subquery(
+            from(m in OrgMembership,
+              where: m.org_id in ^org_ids and m.external == false,
+              select: m.user_id
+            )
+          ),
+      select: {u.id, coalesce(u.name, u.email)}
+    )
+    |> Repo.all()
+    |> options(:user, open, fn _id -> nil end)
+  end
+
+  defp team_options([], _open), do: []
+
+  defp team_options(org_ids, open) do
+    counts =
+      from(m in OrgMembership,
+        where: m.org_id in ^org_ids and m.external == false,
+        group_by: m.org_id,
+        select: {m.org_id, count(m.user_id, :distinct)}
+      )
+      |> Repo.all()
+      |> Map.new()
+
+    from(o in Platform.Tenancy.Org, where: o.id in ^org_ids, select: {o.id, o.name})
+    |> Repo.all()
+    |> options(:team, open, &Map.get(counts, &1, 0))
+  end
+
+  defp space_options(owner_id, open) do
+    agents_space_id = agents_space_id()
+
+    from(s in Platform.Chat.Space,
+      join: p in Participant,
+      on: p.space_id == s.id,
+      where:
+        s.kind == "channel" and is_nil(s.archived_at) and p.participant_type == "user" and
+          p.participant_id == ^owner_id,
+      distinct: true,
+      select: {s.id, s.name}
+    )
+    |> Repo.all()
+    |> options(:space, open, &if(&1 == agents_space_id, do: :agents))
+  end
+
+  defp agents_space_id do
+    case Platform.Chat.Sidebar.agents_rail_block() do
+      %{space: %{id: id}} -> id
+      _ -> nil
+    end
+  end
+
+  defp options(rows, type, open, detail) do
+    rows
+    |> Enum.map(fn {id, name} ->
+      %{id: id, name: name || "", detail: detail.(id), open?: MapSet.member?(open, {type, id})}
+    end)
+    |> Enum.sort_by(&{String.downcase(&1.name), &1.id})
+  end
+
   # ── internals ────────────────────────────────────────────────────────────
 
   defp check_enabled, do: if(enabled?(), do: :ok, else: {:error, :goals_disabled})

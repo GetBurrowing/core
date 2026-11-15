@@ -9,8 +9,12 @@ defmodule Platform.Goals.Extension do
   `GOALS_ENABLED` is set, the `goals.use` permission. Goals 3/8 (task
   01a1dfc1-05b0) adds, also only while it is set, the `goals` MCP tool
   bundle (`Platform.Goals.ToolDefinitions`), gated by `goals.use`: grantable
-  per runtime, never a default grant. Every other registry is empty on
-  purpose; later members add the rail item and the live pages.
+  per runtime, never a default grant. Goals 4/8 (task 01a1dfc1) adds, under
+  the same flag, the Goals rail item (a `:working` row, so core places it in
+  the desktop More group and the phone More sheet) and the `/m/goals` page
+  (`PlatformWeb.GoalsLive`), plus `assets/0` so a with-modules build's
+  Tailwind scans the Goals templates. Every other registry is empty on
+  purpose.
 
   No migration grants `goals.use` to the built-in roles: on an install that
   leaves the flag unset the permission is unregistered, and
@@ -46,7 +50,12 @@ defmodule Platform.Goals.Extension do
   def permissions do
     if Platform.Goals.enabled?(),
       do: [
-        %{module: "goals", permissions: ["goals.use"], bundles: %{"goals" => "goals.use"}}
+        %{
+          module: "goals",
+          permissions: ["goals.use"],
+          rail: [%{key: :goals, permission: "goals.use"}],
+          bundles: %{"goals" => "goals.use"}
+        }
       ],
       else: []
   end
@@ -77,9 +86,46 @@ defmodule Platform.Goals.Extension do
   @impl true
   def migrations_path, do: Application.app_dir(:goals, "priv/repo/migrations")
 
-  @impl true
-  def rail_items, do: []
+  # Build time only (a release host's `mix platform.extensions.assets`):
+  # the templates for Tailwind to scan. Unconditional, like the migrations
+  # path: the release is built without `GOALS_ENABLED`. No JS, no stylesheet.
+  @lib_root Path.expand("../..", __DIR__)
 
   @impl true
-  def live_pages, do: []
+  def assets, do: %{tailwind_sources: [@lib_root]}
+
+  # Goals 4/8: the Goals destination. `hero-flag` is the canvas row's icon.
+  @impl true
+  def rail_items do
+    if Platform.Goals.enabled?(),
+      do: [
+        %{
+          key: :goals,
+          label: "Goals",
+          path: "/m/goals",
+          hero_icon: "hero-flag",
+          cluster: :working,
+          root_only?: false
+        }
+      ],
+      else: []
+  end
+
+  # Goals 4/8: the Goals screen, nested by core's generic `/m/<prefix>`
+  # page. Core hands it only the user id and the URL's query;
+  # `PlatformWeb.GoalsLive` re-reads the user and reads through the context.
+  @impl true
+  def live_pages do
+    if Platform.Goals.enabled?(),
+      do: [
+        %{
+          prefix: "goals",
+          live_view: PlatformWeb.GoalsLive,
+          title: "Goals",
+          module: :goals,
+          permission: "goals.use"
+        }
+      ],
+      else: []
+  end
 end

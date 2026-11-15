@@ -29,6 +29,9 @@ defmodule Platform.Goals.GoalsTest do
       assert Goals.open_goal(owner, goal.id, {:team, org_id}) == disabled
       assert Goals.close_goal(owner, goal.id, {:team, org_id}) == disabled
       assert Goals.list_audience(owner, goal.id) == disabled
+      assert Goals.describe_goals(owner) == disabled
+      assert Goals.describe_goal(owner, goal.id) == disabled
+      assert Goals.list_audience_options(owner, goal.id) == disabled
     end
   end
 
@@ -241,6 +244,13 @@ defmodule Platform.Goals.GoalsTest do
             do: relative
 
       assert found == []
+    end
+
+    test "the scan reads the Goals 4/8 page reads too" do
+      source = File.read!(Path.join(@lib, "platform/goals.ex"))
+
+      for name <- ~w(describe_goals describe_goal list_audience_options),
+          do: assert(source =~ "def #{name}(", "#{name} is not in the scanned file")
     end
 
     test "Platform.Goals has no arity-0 function but enabled?/0" do
