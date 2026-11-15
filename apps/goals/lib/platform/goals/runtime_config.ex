@@ -20,13 +20,19 @@ defmodule Platform.Goals.RuntimeConfig do
   """
   @spec read(%{optional(String.t()) => String.t()}) :: keyword()
   def read(env) when is_map(env) do
-    [enabled: Map.get(env, "GOALS_ENABLED") in ["true", "1"]]
+    zone = Map.get(env, "GOALS_TIME_ZONE")
+
+    [
+      enabled: Map.get(env, "GOALS_ENABLED") in ["true", "1"],
+      default_time_zone:
+        if(Platform.Goals.Rhythm.valid_time_zone?(zone), do: zone, else: "Etc/UTC")
+    ]
   end
 
   @doc "Reads `env` and puts the result in the `:goals` app env."
   @spec apply(%{optional(String.t()) => String.t()}) :: :ok
   def apply(env) do
     settings = read(env)
-    Application.put_env(:goals, :enabled, Keyword.fetch!(settings, :enabled))
+    Enum.each(settings, fn {key, value} -> Application.put_env(:goals, key, value) end)
   end
 end

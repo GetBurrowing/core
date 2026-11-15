@@ -11,7 +11,7 @@ defmodule Platform.Goals.MigrationTest do
                   __DIR__
                 )
 
-  @tables ~w(goals goal_stops goal_grants goal_entries goal_readings)
+  @tables ~w(goals goal_stops goal_grants goal_entries goal_readings goal_clocks goal_wake_ups goal_asks goal_ask_answers goal_task_links)
 
   test "the four goal tables exist after the module's test alias migrates" do
     %{rows: rows} =
@@ -62,6 +62,21 @@ defmodule Platform.Goals.MigrationTest do
       )
 
     assert source =~ ~r/^  # old-code-compatible: creates the new goal_readings table/m
+    refute version in String.split(File.read!(@irreversible), "\n", trim: true)
+  end
+
+  test "clock migration is compatible and not irreversible" do
+    version = "20261115155529"
+
+    source =
+      File.read!(
+        Path.expand(
+          "../../../priv/repo/migrations/#{version}_create_goal_clock_tables.exs",
+          __DIR__
+        )
+      )
+
+    assert source =~ ~r/^  # old-code-compatible: creates five new goal tables only;/m
     refute version in String.split(File.read!(@irreversible), "\n", trim: true)
   end
 end
