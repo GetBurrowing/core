@@ -180,7 +180,11 @@ defmodule PlatformWeb.GoalsOpenUpTest do
       assert has_element?(owner, "[data-role='settings-sheet']", "#{coach.name}'s part")
 
       for {field, value} <- [{"rhythm", rhythm}, {"outreach", outreach}, {"agent_mode", mode}] do
-        event(owner, "settings_select", %{"field" => field, "value" => value})
+        owner
+        |> element(
+          "[data-role=settings-sheet] button[phx-value-field='#{field}'][value='#{value}']"
+        )
+        |> render_click()
       end
 
       if weekday,

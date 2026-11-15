@@ -74,6 +74,7 @@ defmodule PlatformWeb.GoalsSettings do
           phx-click="settings_select"
           phx-value-field={@field}
           phx-value-value={value}
+          value={value}
           aria-pressed={to_string(@selected == value)}
           class={GoalsOpenUp.chip_class(@selected == value)}
         >
