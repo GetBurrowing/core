@@ -39,6 +39,9 @@ defmodule Platform.Goals.Sources.TaskCountTest do
   test "invalid and foreign project scopes refuse without a number", c do
     foreign = project!(org_id!())
     task!(foreign, "backlog")
+    # Current core requires project orgs. Relax only this sandbox transaction to
+    # exercise the source's defensive handling of a legacy unscoped row.
+    Repo.query!("ALTER TABLE projects ALTER COLUMN org_id DROP NOT NULL")
     unscoped = project!(nil)
     archived = project!(c.org, %{archived_at: DateTime.utc_now()})
     deleting = project!(c.org, %{deletion_scheduled_at: DateTime.utc_now()})
