@@ -722,9 +722,11 @@ defmodule Platform.Goals.Brief do
 
   def refresh(_, _), do: :ok
 
-  defp cast_id(raw_id), do: case(Ecto.UUID.cast(raw_id)) do
-    {:ok, id} -> {:ok, id}
-    _ -> {:error, :not_found}
+  defp cast_id(raw_id) do
+    case Ecto.UUID.cast(raw_id) do
+      {:ok, id} -> {:ok, id}
+      _ -> {:error, :not_found}
+    end
   end
 
   defp nonblank?(value), do: is_binary(value) and String.trim(value) != ""
