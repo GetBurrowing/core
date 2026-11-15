@@ -123,7 +123,7 @@ defmodule PlatformWeb.GoalsShellTest do
       child = find_live_child(view, "ext-page-goals")
       assert has_element?(child, "[data-role='goal-view'][data-goal-id='#{goal.id}']")
       assert has_element?(child, "[data-role='goal-view'] h2", "Learn Spanish")
-      assert has_element?(child, "[data-role='goal-audience']", "Only you")
+      assert has_element?(child, "[data-role='goal-meta']", "'s goal")
     end
 
     test "a viewer sees the goal without its audience", %{conn: conn, user: user, org_id: org_id} do
@@ -133,8 +133,7 @@ defmodule PlatformWeb.GoalsShellTest do
 
       {:ok, view, _html} = live(login(conn, user), "/m/goals?goal=#{goal.id}")
       child = find_live_child(view, "ext-page-goals")
-      assert has_element?(child, "[data-role='goal-audience']", "Opened to you")
-      refute has_element?(child, "[data-role='goal-audience-item']")
+      assert has_element?(child, "[data-role='goal-meta']", "Shared by")
     end
 
     test "another user's private goal, a random id and a malformed id are the same 404",

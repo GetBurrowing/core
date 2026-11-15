@@ -1294,6 +1294,54 @@ defmodule Platform.Goals do
     end
   end
 
+  @doc """
+  Who wrote a visible goal's notebook, plus its coach, for the goal page
+  (Goals 4/8 stage 3): `{:ok, %{agents: %{id => %{name, slot, avatar_url}},
+  users: %{id => %{name}}}}`. `slot` is the agent's colour slot
+  (`Platform.Agents.ColorPalette.slot_for/1`). Two bounded queries plus
+  the goal read; unseen, missing and malformed ids answer
+  `{:error, :not_found}`.
+  """
+  @spec entry_authors(actor(), term()) :: {:ok, map()} | {:error, :not_found | :goals_disabled}
+  def entry_authors(actor, goal_id) do
+    with :ok <- check_enabled(),
+         {:ok, goal} <- fetch_visible(actor, goal_id, false) do
+      authors =
+        Repo.all(
+          from(e in children(actor, Entry, goal.id),
+            distinct: true,
+            select: {e.author_agent_id, e.author_user_id}
+          )
+        )
+
+      agent_ids =
+        [goal.coach_agent_id | Enum.map(authors, &elem(&1, 0))]
+        |> Enum.reject(&is_nil/1)
+        |> Enum.uniq()
+
+      user_ids = authors |> Enum.map(&elem(&1, 1)) |> Enum.reject(&is_nil/1) |> Enum.uniq()
+
+      agents =
+        from(a in Agent,
+          where: a.id in ^agent_ids,
+          select: {a.id, %{name: a.name, color: a.color, avatar_url: a.avatar_url}}
+        )
+        |> Repo.all()
+        |> Map.new(fn {id, a} ->
+          {id,
+           %{
+             name: a.name,
+             slot: Platform.Agents.ColorPalette.slot_for(a.color),
+             avatar_url: a.avatar_url
+           }}
+        end)
+
+      users = for {id, name} <- names_by_id(User, user_ids), into: %{}, do: {id, %{name: name}}
+
+      {:ok, %{agents: agents, users: users}}
+    end
+  end
+
   defp cards(_actor, []), do: []
 
   defp cards(actor, goals) do

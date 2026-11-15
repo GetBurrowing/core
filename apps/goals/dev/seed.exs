@@ -82,7 +82,16 @@ ok!.(Goals.update_goal(user, yt.id, %{coach_agent_id: coach.id}))
 
 ok!.(
   Goals.put_stops(user, yt.id, [
-    %{label: "First 1,000", target_value: 1000, due_on: ~D[2026-12-01]},
+    %{
+      label: "First 1,000",
+      target_value: 1000,
+      due_on: ~D[2026-12-01],
+      theme: "learning",
+      criteria: [
+        %{"text" => "Try 4 kinds of video", "needed" => 4, "found" => 4},
+        %{"text" => "Find 3 kinds that bring subscribers", "needed" => 3, "found" => 1}
+      ]
+    },
     %{label: "30,000", target_value: 30_000, due_on: ~D[2027-06-01]},
     %{label: "1 million", target_value: 1_000_000, caption: "the big one"}
   ])
@@ -90,6 +99,58 @@ ok!.(
 
 ok!.(Goals.log_reading(user, yt.id, %{value: 588, measured_at: DateTime.add(DateTime.utc_now(), -7, :day)}))
 ok!.(Goals.log_reading(user, yt.id, %{value: 640}))
+
+# Stage 3: the notebook behind the goal page (takeaways, actions, the rest).
+shorts =
+  ok!.(
+    Goals.add_entry(coach, yt.id, %{
+      kind: "takeaway",
+      title: "Short videos bring in new viewers",
+      body: "Small help channels that post shorts grow about twice as fast as those that only post long videos.",
+      sources: [%{"name" => "YouTube Creator Academy"}, %{"name" => "A 2025 survey of 1,200 small creators"}],
+      details: %{"doing" => "Two short fixes a week, under 6 minutes each."}
+    })
+  )
+
+questions =
+  ok!.(
+    Goals.add_entry(coach, yt.id, %{
+      kind: "takeaway",
+      title: "Viewers' own questions make the best topics",
+      body: "The most common comment is a question, and each one is a ready-made video.",
+      sources: [%{"name" => "Notes from 40 help channels' comment sections"}],
+      details: %{"doing" => "Turning the most-asked questions into shorts."}
+    })
+  )
+
+ok!.(
+  Goals.add_entry(coach, yt.id, %{
+    kind: "action",
+    title: "Short fixes under 6 minutes",
+    prediction: "2 shorts a week so far, aiming for 3. People who watch them subscribe more.",
+    body: "is editing \u201cClear your browser cache\u201d",
+    takeaway_id: shorts.id
+  })
+)
+
+ok!.(
+  Goals.add_entry(coach, yt.id, %{
+    kind: "action",
+    title: "Comment questions as videos",
+    prediction: "We'll know it works if these videos bring 2 or more subscribers per 100 views within 2 weeks.",
+    body: "is picking the first 3 questions",
+    takeaway_id: questions.id
+  })
+)
+
+for {kind, title, body} <- [
+      {"wake_up", "Morning check", "Looked at last night's numbers: 12 new subscribers."},
+      {"ask", "Which thumbnail style?", "Face or screen for the next video?"},
+      {"wait", "Waiting on the edit", "The cache video is with the editor until Thursday."},
+      {"retro", "October retro", "Shorts did most of the work this month."}
+    ] do
+  ok!.(Goals.add_entry(coach, yt.id, %{kind: kind, title: title, body: body}))
+end
 
 # 2. Spanish
 es =
@@ -106,6 +167,17 @@ es =
 
 ok!.(Goals.update_goal(user, es.id, %{coach_agent_id: coach.id}))
 ok!.(Goals.log_reading(user, es.id, %{value: 180}))
+ok!.(Goals.put_stops(user, es.id, [%{label: "300 words", target_value: 300, due_on: ~D[2027-06-01]}]))
+
+ok!.(
+  Goals.add_entry(coach, es.id, %{
+    kind: "takeaway",
+    title: "Spaced repetition beats cramming",
+    body: "Ten minutes a day keeps more words than an hour on Sunday.",
+    sources: [%{"name" => "A language-learning study"}],
+    details: %{"doing" => "Daily flash cards in your briefing."}
+  })
+)
 
 # 3. Redesign, opened to the org
 project =
@@ -127,6 +199,8 @@ rd =
     })
   )
 
+ok!.(Goals.update_goal(user, rd.id, %{coach_agent_id: coach.id, agent_mode: "do"}))
+ok!.(Goals.put_stops(user, rd.id, [%{label: "Half live", target_value: 12}, %{label: "All 24", target_value: 24}]))
 ok!.(Goals.open_goal(user, rd.id, {:team, org_id}))
 ok!.(Goals.measure_goal(user, rd.id))
 

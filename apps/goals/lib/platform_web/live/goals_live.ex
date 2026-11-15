@@ -41,9 +41,7 @@ defmodule PlatformWeb.GoalsLive do
        shows Inbox as the row above Goals.
     3. Where Social is also visible, Goals follows Social: core keeps
        extension rows in registration order.
-    4. Stage 1 only: the goal view is plain (title, whose goal, the coach,
-       the next stop, who it is open to). The prototype's journey, number
-       and Open up sheet come in stages 3 and 4.
+    4. Stage 1's plain goal view was replaced by the goal page in stage 3.
 
   Stage 2 (the list, `PlatformWeb.GoalsList`):
 
@@ -69,33 +67,110 @@ defmodule PlatformWeb.GoalsLive do
    11. Phone "Back to More" clicks the bottom bar's More tab, because the
        sheet's `open_more_sheet` event belongs to core's parent page and a
        nested LiveView cannot push to it.
+
+  Stage 3 (the goal page, `PlatformWeb.GoalsPage`, and the short read,
+  `PlatformWeb.GoalsRead`):
+
+   12. "If things go sideways" is not built: the schema has no field for
+       it, and no field is added here.
+   13. No pace sentence after the number ("We'd hoped for about ...") and
+       no status pill on trying cards: pacing and prediction verdicts
+       belong to Goals 8/8. No "Stopped {date}" state either: no stored
+       field says an action stopped.
+   14. No "See the numbers" link or chart, no "Up next" section, no brief
+       note ("You came here from today's briefing.") and no retro preview
+       footer: Goals 6/8 and 8/8.
+   15. The short read has no intro card (not stored) and drops the sample
+       suffix "(placeholder names)" and "· sources are placeholder names".
+       Its h2 is "What we've learned".
+   16. The meta line carries no rhythm word ("daily"); the source part is
+       the source's label as listed by `list_sources/1`, e.g.
+       "Self-reported", not "from YouTube".
+   17. The privacy chip and "Open up" are an empty
+       `data-goals-slot="privacy"` element: stage 4 builds them.
+   18. Built and not in the canvas: the Notebook section (wake-ups,
+       actions, asks, waits, retros, newest first) and the "Log a value"
+       form, which stands where the canvas has "Fix the count".
+   19. A goal with no stops still gets the number card (the sentence needs
+       a home); only the journey row inside it is absent.
+   20. A reached stop's circle is the hero check icon, not the "✓"
+       character (hero icons only). The "This stop is about" checklist
+       shows "(done)" or "({found} found)", never the canvas's live number
+       "(640)".
+   21. The learned card's intro sentence is shown only when the goal has a
+       coach (it names them).
   """
   use PlatformWeb, :live_view
 
   alias Platform.Goals
   alias PlatformWeb.ExtensionPageLive.NotFoundError
   alias PlatformWeb.GoalsList
+  alias PlatformWeb.GoalsPage
+  alias PlatformWeb.GoalsRead
 
   @impl true
   def mount(_params, session, socket) do
     user = Platform.Accounts.get_user(session["user_id"])
+    query = session["query"]
 
     socket =
       socket
       |> assign(:user, user)
       |> assign(:rows, GoalsList.rows(user, list_cards(user)))
+      |> assign(:read, read_param(query))
+      |> assign(:log_error, nil)
 
-    case goal_param(session["query"]) do
+    case goal_param(query) do
       nil ->
-        {:ok, assign(socket, :card, nil)}
+        {:ok, assign(socket, card: nil, page: nil)}
 
       goal_id ->
-        case Goals.describe_goal(user, goal_id) do
-          {:ok, card} -> {:ok, assign(socket, :card, card)}
+        with {:ok, card} <- Goals.describe_goal(user, goal_id),
+             {:ok, page} <- GoalsPage.load(user, card) do
+          {:ok, assign(socket, card: card, page: page)}
+        else
           _ -> raise NotFoundError
         end
     end
   end
+
+  # Log a value (stage 3). Re-reads the goal through the context and calls
+  # `Platform.Goals.log_reading/3` for EVERY submit, whoever sends it: the
+  # refusal (a viewer, a measured source) is the context's, not this page's.
+  @impl true
+  def handle_event("log_value", params, %{assigns: %{card: %{goal: goal}}} = socket) do
+    user = socket.assigns.user
+    value = params |> Map.get("value", "") |> to_string() |> String.trim()
+
+    with {:ok, card} <- Goals.describe_goal(user, goal.id) do
+      case Goals.log_reading(user, card.goal.id, %{value: value}) do
+        {:ok, _reading} -> {:noreply, refresh(socket, card)}
+        {:error, %Ecto.Changeset{}} -> {:noreply, assign(socket, :log_error, "Enter a number")}
+        {:error, _refused} -> {:noreply, socket}
+      end
+    else
+      _ -> {:noreply, socket}
+    end
+  end
+
+  def handle_event("log_value", _params, socket), do: {:noreply, socket}
+
+  defp refresh(socket, card) do
+    user = socket.assigns.user
+
+    case GoalsPage.load(user, card) do
+      {:ok, page} ->
+        socket
+        |> assign(card: card, page: page, log_error: nil)
+        |> assign(:rows, GoalsList.rows(user, list_cards(user)))
+
+      _ ->
+        socket
+    end
+  end
+
+  defp read_param(%{"read" => read}) when is_binary(read) and read != "", do: read
+  defp read_param(_query), do: nil
 
   defp goal_param(%{"goal" => id}) when is_binary(id), do: id
   defp goal_param(_query), do: nil
@@ -138,61 +213,10 @@ defmodule PlatformWeb.GoalsLive do
         >
           Select a goal
         </p>
-        <.goal_view :if={@card} card={@card} />
+        <GoalsRead.short_read :if={@page && @read} page={@page} focus={@read} />
+        <GoalsPage.goal_page :if={@page && is_nil(@read)} page={@page} log_error={@log_error} />
       </section>
     </div>
     """
   end
-
-  # Stage 1's plain goal view; stage 3 builds the canvas goal page.
-  attr :card, :map, required: true
-
-  defp goal_view(assigns) do
-    ~H"""
-    <div class="mx-auto max-w-3xl p-6" data-role="goal-view" data-goal-id={@card.goal.id}>
-      <.link navigate="/m/goals" class="text-sm text-primary lg:hidden" data-role="goal-back">
-        Goals
-      </.link>
-      <h2 class="mt-2 text-2xl font-semibold text-base-content">{@card.goal.title}</h2>
-      <p :if={@card.goal.why} class="mt-1 text-subtle">{@card.goal.why}</p>
-      <p class="mt-2 text-sm text-subtle" data-role="goal-byline">
-        {owner_line(@card)}<span :if={@card.coach_name}> · {@card.coach_name} {coach_verb(@card.goal)}</span>
-      </p>
-
-      <div class="mt-3 text-sm" data-role="goal-audience">
-        <%= cond do %>
-          <% @card.audience == :hidden -> %>
-            <span class="text-subtle">Opened to you</span>
-          <% @card.audience == [] -> %>
-            <span class="badge badge-ghost">Only you</span>
-          <% true -> %>
-            <span class="text-subtle">Open to</span>
-            <span
-              :for={item <- @card.audience}
-              class="badge badge-ghost ml-1"
-              data-role="goal-audience-item"
-            >
-              {item.name}
-            </span>
-        <% end %>
-      </div>
-
-      <div
-        :if={@card.current_stop}
-        class="mt-4 rounded-lg border border-edge bg-base-100 px-3 py-3"
-        data-role="goal-current-stop"
-      >
-        <span class="block text-xs uppercase tracking-wide text-subtle">Next stop</span>
-        <span class="block font-medium text-base-content">{@card.current_stop.label}</span>
-      </div>
-    </div>
-    """
-  end
-
-  defp owner_line(%{role: :owner}), do: "Your goal"
-  defp owner_line(%{owner_name: owner}), do: "#{owner}'s goal"
-
-  defp coach_verb(%{agent_mode: "do"}), do: "leads"
-  defp coach_verb(%{agent_mode: "coach"}), do: "coaches"
-  defp coach_verb(_goal), do: "advises"
 end
