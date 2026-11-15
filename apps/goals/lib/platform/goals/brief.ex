@@ -3,7 +3,7 @@ defmodule Platform.Goals.Brief do
   import Ecto.Query
   alias Platform.Accounts.User
   alias Platform.Goals
-  alias Platform.Goals.{Ask, AskAnswer, BriefItem, Clock, Entry, Goal, Limits, Visibility, WakeUp}
+  alias Platform.Goals.{Ask, AskAnswer, BriefItem, Clock, Entry, Limits, Visibility, WakeUp}
   alias Platform.Repo
 
   defp children(actor, schema) do
@@ -142,7 +142,7 @@ defmodule Platform.Goals.Brief do
     rows =
       Repo.all(
         from(i in reader_items(user),
-          join: g in Goal,
+          join: g in subquery(Visibility.visible_goals(user)),
           on: g.id == i.goal_id,
           left_join: a in Ask,
           on: a.id == i.ask_id,
