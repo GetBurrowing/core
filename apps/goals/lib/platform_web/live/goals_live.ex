@@ -24,8 +24,10 @@ defmodule PlatformWeb.GoalsLive do
   query. Any `handle_event/3` a later stage adds re-reads the goal through
   the context before acting and never trusts an id from the client.
 
-  Stage 1 renders a plain list and a plain goal view; stages 2 to 4 match
-  the agreed prototype (canvas 01a15ef6, Goals prototype v4).
+  The list (`PlatformWeb.GoalsList`, stage 2) matches the agreed prototype
+  (canvas 01a15ef6, Goals prototype v4): Inbox's two panes at `lg` and up,
+  the phone list below. The goal view is still stage 1's plain one; stages
+  3 and 4 build the goal page and Open up.
 
   ## Design deviations
 
@@ -39,14 +41,40 @@ defmodule PlatformWeb.GoalsLive do
        shows Inbox as the row above Goals.
     3. Where Social is also visible, Goals follows Social: core keeps
        extension rows in registration order.
-    4. Stage 1 only: the list and the goal view are plain (title, whose
-       goal, the coach, the next stop, who it is open to). The prototype's
-       cards, journey, number and Open up sheet come in stages 2 to 4.
+    4. Stage 1 only: the goal view is plain (title, whose goal, the coach,
+       the next stop, who it is open to). The prototype's journey, number
+       and Open up sheet come in stages 3 and 4.
+
+  Stage 2 (the list, `PlatformWeb.GoalsList`):
+
+    5. No status pill ("On track", "A little behind"): pacing belongs to
+       Goals 8/8.
+    6. No "New goal" button (desktop) or chip (phone): Goals 5/8 adds them.
+       An empty `data-goals-slot="new-goal"` element marks each place.
+    7. Row times read "Updated 3h ago" / "Added Oct 2" (core's
+       `InboxItem.relative_time/1`), not the canvas's clock time "7:00":
+       the nested page gets no viewer time zone from core.
+    8. Every row carries a privacy chip ("Only you", "Shared: {names}",
+       "Shared by {owner}"), which the canvas does not show: the ticket
+       requires a privacy badge on every row. On phone it sits on line 3
+       after the kind words.
+    9. Kind line precedence: someone else's goal reads "Shared by {owner}"
+       (not in the canvas); an opened goal of yours reads "Shared with
+       {names}" even when it has a coach; then "{coach} leads / coaches /
+       advises" ("advises" is not in the canvas); else your first name.
+   10. A goal with a target but no reading (no source, an unknown source,
+       a source that refuses, no reading yet) reads "Target: {target}
+       {unit}" (not in the canvas). An empty list shows core's minimal
+       empty state "No goals yet" (not in the canvas).
+   11. Phone "Back to More" clicks the bottom bar's More tab, because the
+       sheet's `open_more_sheet` event belongs to core's parent page and a
+       nested LiveView cannot push to it.
   """
   use PlatformWeb, :live_view
 
   alias Platform.Goals
   alias PlatformWeb.ExtensionPageLive.NotFoundError
+  alias PlatformWeb.GoalsList
 
   @impl true
   def mount(_params, session, socket) do
@@ -55,7 +83,7 @@ defmodule PlatformWeb.GoalsLive do
     socket =
       socket
       |> assign(:user, user)
-      |> assign(:cards, list_cards(user))
+      |> assign(:rows, GoalsList.rows(user, list_cards(user)))
 
     case goal_param(session["query"]) do
       nil ->
@@ -82,115 +110,84 @@ defmodule PlatformWeb.GoalsLive do
   @impl true
   def render(assigns) do
     ~H"""
-    <div class="flex h-full min-h-0 flex-col lg:flex-row" data-role="goals-page">
-      <section
-        class={[
-          "min-h-0 overflow-y-auto px-4 py-4 sm:px-6 lg:w-96 lg:shrink-0 lg:border-r lg:border-base-300",
-          @card && "hidden lg:block"
-        ]}
+    <div class="relative flex h-full min-h-0" data-role="goals-page">
+      <%!-- Below lg the phone list is the screen; with a goal open it steps
+           aside for the goal view (Inbox's breakpoints). --%>
+      <div :if={is_nil(@card)} class="min-w-0 flex-1 lg:hidden">
+        <GoalsList.phone_list rows={@rows} />
+      </div>
+      <%!-- Two panes at lg and up: the list as a 380px column. --%>
+      <div
+        class="h-full min-w-0 flex-1 overflow-y-auto clears-tab-bar max-lg:hidden lg:w-95 lg:flex-none lg:border-r lg:border-edge lg:bg-base-100"
         data-role="goals-list"
       >
-        <h1 class="text-xl font-semibold text-base-content">Goals</h1>
-        <p class="mt-1 text-sm text-base-content/70">
-          What you're working towards, and how it's going. Only you see your goals until you open them up.
-        </p>
-
+        <GoalsList.desktop_list rows={@rows} selected_id={@card && @card.goal.id} />
+      </div>
+      <section
+        class={[
+          "min-w-0 flex-1 overflow-auto bg-base-200",
+          is_nil(@card) && "max-lg:hidden"
+        ]}
+        data-role="goals-detail-pane"
+        aria-label="Goal"
+      >
         <p
-          :if={@cards == []}
-          class="mt-6 text-sm text-base-content/70"
-          data-role="goals-empty"
+          :if={is_nil(@card)}
+          class="flex h-full items-center justify-center p-6 text-sm text-subtle"
+          data-role="goals-detail-empty"
         >
-          No goals yet.
+          Select a goal
         </p>
-
-        <ul :if={@cards != []} class="mt-4 space-y-2">
-          <li :for={card <- @cards}>
-            <.link
-              navigate={"/m/goals?goal=" <> card.goal.id}
-              class={[
-                "flex items-start gap-3 rounded-lg border border-base-300 px-3 py-3 hover:bg-base-200",
-                @card && @card.goal.id == card.goal.id && "bg-base-200"
-              ]}
-              data-role="goals-row"
-              data-goal-id={card.goal.id}
-            >
-              <span class="hero-flag mt-0.5 size-5 shrink-0 text-base-content/70" aria-hidden="true">
-              </span>
-              <span class="min-w-0 flex-1">
-                <span class="block text-xs uppercase tracking-wide text-base-content/60">
-                  {byline(card)}
-                </span>
-                <span class="block truncate font-medium text-base-content">{card.goal.title}</span>
-                <span
-                  :if={card.current_stop}
-                  class="block text-sm text-base-content/70"
-                  data-role="goals-row-stop"
-                >
-                  Next stop: {card.current_stop.label}
-                </span>
-              </span>
-            </.link>
-          </li>
-        </ul>
-      </section>
-
-      <section
-        :if={@card}
-        class="min-h-0 flex-1 overflow-y-auto px-4 py-4 sm:px-6"
-        data-role="goal-view"
-        data-goal-id={@card.goal.id}
-      >
-        <.link navigate="/m/goals" class="text-sm text-primary lg:hidden" data-role="goal-back">
-          Goals
-        </.link>
-        <h2 class="mt-2 text-2xl font-semibold text-base-content">{@card.goal.title}</h2>
-        <p :if={@card.goal.why} class="mt-1 text-base-content/70">{@card.goal.why}</p>
-        <p class="mt-2 text-sm text-base-content/70" data-role="goal-byline">
-          {owner_line(@card)}<span :if={@card.coach_name}> · {@card.coach_name} {coach_verb(@card.goal)}</span>
-        </p>
-
-        <div class="mt-3 text-sm" data-role="goal-audience">
-          <%= cond do %>
-            <% @card.audience == :hidden -> %>
-              <span class="text-base-content/70">Opened to you</span>
-            <% @card.audience == [] -> %>
-              <span class="badge badge-ghost">Only you</span>
-            <% true -> %>
-              <span class="text-base-content/70">Open to</span>
-              <span
-                :for={item <- @card.audience}
-                class="badge badge-ghost ml-1"
-                data-role="goal-audience-item"
-              >
-                {item.name}
-              </span>
-          <% end %>
-        </div>
-
-        <div
-          :if={@card.current_stop}
-          class="mt-4 rounded-lg border border-base-300 px-3 py-3"
-          data-role="goal-current-stop"
-        >
-          <span class="block text-xs uppercase tracking-wide text-base-content/60">Next stop</span>
-          <span class="block font-medium text-base-content">{@card.current_stop.label}</span>
-        </div>
-      </section>
-
-      <section
-        :if={is_nil(@card)}
-        class="hidden min-h-0 flex-1 items-start justify-center px-4 py-8 text-sm text-base-content/60 lg:flex"
-      >
-        Select a goal
+        <.goal_view :if={@card} card={@card} />
       </section>
     </div>
     """
   end
 
-  defp byline(%{role: :owner, coach_name: nil}), do: "Goal · yours"
-  defp byline(%{role: :owner, coach_name: coach}), do: "Goal · #{coach} helps"
-  defp byline(%{role: :coach, owner_name: owner}), do: "Goal · you coach #{owner}"
-  defp byline(%{owner_name: owner}), do: "Goal · #{owner}"
+  # Stage 1's plain goal view; stage 3 builds the canvas goal page.
+  attr :card, :map, required: true
+
+  defp goal_view(assigns) do
+    ~H"""
+    <div class="mx-auto max-w-3xl p-6" data-role="goal-view" data-goal-id={@card.goal.id}>
+      <.link navigate="/m/goals" class="text-sm text-primary lg:hidden" data-role="goal-back">
+        Goals
+      </.link>
+      <h2 class="mt-2 text-2xl font-semibold text-base-content">{@card.goal.title}</h2>
+      <p :if={@card.goal.why} class="mt-1 text-subtle">{@card.goal.why}</p>
+      <p class="mt-2 text-sm text-subtle" data-role="goal-byline">
+        {owner_line(@card)}<span :if={@card.coach_name}> · {@card.coach_name} {coach_verb(@card.goal)}</span>
+      </p>
+
+      <div class="mt-3 text-sm" data-role="goal-audience">
+        <%= cond do %>
+          <% @card.audience == :hidden -> %>
+            <span class="text-subtle">Opened to you</span>
+          <% @card.audience == [] -> %>
+            <span class="badge badge-ghost">Only you</span>
+          <% true -> %>
+            <span class="text-subtle">Open to</span>
+            <span
+              :for={item <- @card.audience}
+              class="badge badge-ghost ml-1"
+              data-role="goal-audience-item"
+            >
+              {item.name}
+            </span>
+        <% end %>
+      </div>
+
+      <div
+        :if={@card.current_stop}
+        class="mt-4 rounded-lg border border-edge bg-base-100 px-3 py-3"
+        data-role="goal-current-stop"
+      >
+        <span class="block text-xs uppercase tracking-wide text-subtle">Next stop</span>
+        <span class="block font-medium text-base-content">{@card.current_stop.label}</span>
+      </div>
+    </div>
+    """
+  end
 
   defp owner_line(%{role: :owner}), do: "Your goal"
   defp owner_line(%{owner_name: owner}), do: "#{owner}'s goal"
