@@ -24,7 +24,7 @@ defmodule Platform.Goals do
   alias Platform.Accounts.User
   alias Platform.Agents.Agent
   alias Platform.Chat.Participant
-  alias Platform.Goals.{Goal, Grant, Visibility}
+  alias Platform.Goals.{Entry, Goal, Grant, Stop, Visibility}
   alias Platform.Repo
   alias Platform.Tenancy.OrgMembership
 
@@ -235,6 +235,148 @@ defmodule Platform.Goals do
         )
 
       {:ok, grants}
+    end
+  end
+
+  @doc "Replaces the ordered journey atomically. Positions come from list order."
+  def put_stops(actor, goal_id, stops) do
+    with :ok <- check_enabled() do
+      in_transaction(fn ->
+        with {:ok, goal} <- fetch_visible(actor, goal_id, true),
+             :ok <- check_can_edit(actor, goal) do
+          Repo.delete_all(from(s in Stop, where: s.goal_id == ^goal.id))
+
+          result =
+            stops
+            |> Enum.with_index(1)
+            |> Enum.reduce_while({:ok, []}, fn {attrs, position}, {:ok, acc} ->
+              changeset =
+                Stop.changeset(%Stop{goal_id: goal.id, position: position}, stop_attrs(attrs))
+
+              case Repo.insert(changeset) do
+                {:ok, stop} -> {:cont, {:ok, [stop | acc]}}
+                {:error, changeset} -> {:halt, {:error, changeset}}
+              end
+            end)
+
+          case result do
+            {:ok, stops} -> {:ok, Enum.reverse(stops)}
+            error -> error
+          end
+        end
+      end)
+    end
+  end
+
+  @doc "Changes an existing stop belonging to this visible goal."
+  def update_stop(actor, goal_id, stop_id, attrs) do
+    with :ok <- check_enabled() do
+      in_transaction(fn ->
+        with {:ok, goal} <- fetch_visible(actor, goal_id, true),
+             :ok <- check_can_edit(actor, goal),
+             {:ok, id} <- cast_id(stop_id),
+             %Stop{} = stop <-
+               Repo.one(from(s in children(actor, Stop, goal.id), where: s.id == ^id)) do
+          stop |> Stop.changeset(stop_attrs(attrs)) |> Repo.update()
+        else
+          nil -> {:error, :not_found}
+          error -> error
+        end
+      end)
+    end
+  end
+
+  @doc "Lists stops by position for anyone who sees the goal."
+  def list_stops(actor, goal_id) do
+    with :ok <- check_enabled(),
+         {:ok, goal} <- fetch_visible(actor, goal_id, false) do
+      {:ok, Repo.all(from(s in children(actor, Stop, goal.id), order_by: s.position))}
+    end
+  end
+
+  @doc "Appends a notebook entry, with its author taken from the actor."
+  def add_entry(actor, goal_id, attrs) do
+    with :ok <- check_enabled() do
+      in_transaction(fn ->
+        with {:ok, goal} <- fetch_visible(actor, goal_id, true),
+             :ok <- check_can_edit(actor, goal) do
+          actor
+          |> authored_entry(goal)
+          |> Entry.changeset(attrs)
+          |> validate_entry_link(actor, goal, :takeaway_id, Entry)
+          |> validate_entry_link(actor, goal, :stop_id, Stop)
+          |> Repo.insert()
+        end
+      end)
+    end
+  end
+
+  @doc "Lists newest notebook entries, optionally filtered by kind (limit 50, maximum 200)."
+  def list_entries(actor, goal_id, opts \\ []) do
+    with :ok <- check_enabled(),
+         {:ok, goal} <- fetch_visible(actor, goal_id, false) do
+      query = children(actor, Entry, goal.id)
+
+      query =
+        case Keyword.get(opts, :kind) do
+          nil -> query
+          kinds -> from(e in query, where: e.kind in ^List.wrap(kinds))
+        end
+
+      limit = opts |> Keyword.get(:limit, 50) |> max(0) |> min(200)
+
+      {:ok,
+       Repo.all(from(e in query, order_by: [desc: e.occurred_at, desc: e.id], limit: ^limit))}
+    end
+  end
+
+  defp stop_attrs(attrs), do: Map.drop(attrs, [:position, "position"])
+
+  defp children(actor, schema, goal_id) do
+    from(row in schema,
+      join: g in subquery(Visibility.visible_goals(actor)),
+      on: g.id == row.goal_id,
+      where: row.goal_id == ^goal_id
+    )
+  end
+
+  defp authored_entry(%User{id: id}, goal),
+    do: %Entry{
+      goal_id: goal.id,
+      author_type: "user",
+      author_user_id: id,
+      occurred_at: DateTime.utc_now()
+    }
+
+  defp authored_entry(%Agent{id: id}, goal),
+    do: %Entry{
+      goal_id: goal.id,
+      author_type: "agent",
+      author_agent_id: id,
+      occurred_at: DateTime.utc_now()
+    }
+
+  defp validate_entry_link(changeset, actor, goal, field, schema) do
+    case Ecto.Changeset.get_field(changeset, field) do
+      nil ->
+        changeset
+
+      id ->
+        query = from(row in children(actor, schema, goal.id), where: row.id == ^id)
+
+        query =
+          if field == :takeaway_id,
+            do: from(row in query, where: row.kind == "takeaway"),
+            else: query
+
+        if Repo.exists?(query),
+          do: changeset,
+          else:
+            Ecto.Changeset.add_error(
+              changeset,
+              field,
+              "must belong to this goal and have the required kind"
+            )
     end
   end
 

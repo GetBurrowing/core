@@ -184,13 +184,27 @@ defmodule Platform.Goals.GoalsTest do
 
   describe "source guard" do
     @lib Path.expand("../../../lib", __DIR__)
-    @forbidden ["Repo.get(", "Repo.get!(", "Repo.get_by(", "Repo.all(Goal"]
+    @forbidden [
+      "Repo.get(",
+      "Repo.get!(",
+      "Repo.get_by(",
+      "Repo.all(Goal",
+      "Repo.all(Stop",
+      "Repo.all(Entry",
+      "Repo.all(Grant"
+    ]
 
     defp hits(text), do: Enum.filter(@forbidden, &String.contains?(text, &1))
 
     test "the scan can hit (positive control)" do
       assert hits("goal = Repo.get(Goal, id)") == ["Repo.get("]
-      assert hits("Repo.all(Goal)") == ["Repo.all(Goal"]
+
+      assert hits("Repo.all(Goal)") == [
+               "Repo.all(Goal",
+               "Repo.all(Stop",
+               "Repo.all(Entry",
+               "Repo.all(Grant"
+             ]
     end
 
     test "apps/goals/lib has no unscoped read" do
