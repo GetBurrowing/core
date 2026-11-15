@@ -114,7 +114,10 @@ defmodule Platform.Goals do
              :ok <- check_can_edit(actor, goal),
              changeset = Goal.changeset(goal, editable_attrs(actor, goal, attrs)),
              :ok <- check_kind_change(changeset, goal) do
-          Repo.update(changeset)
+          with {:ok, updated} <- Repo.update(changeset) do
+            Platform.Goals.Clock.sync(goal, updated, Platform.Goals.Clock.now())
+            {:ok, updated}
+          end
         end
       end)
     end
@@ -393,6 +396,78 @@ defmodule Platform.Goals do
   @doc "Describes registered sources while Goals is enabled."
   def list_sources(_actor) do
     with :ok <- check_enabled(), do: {:ok, Sources.describe()}
+  end
+
+  @doc "Lists visible wake-ups; private briefing is restricted to owner and coach."
+  def list_wake_ups(actor, goal_id, opts \\ []) do
+    with :ok <- check_enabled(), {:ok, goal} <- fetch_visible(actor, goal_id, false) do
+      query = children(actor, Platform.Goals.WakeUp, goal.id)
+
+      query =
+        Enum.reduce([:kind, :status], query, fn key, q ->
+          case Keyword.get(opts, key) do
+            nil -> q
+            value -> from(w in q, where: field(w, ^key) == ^value)
+          end
+        end)
+
+      limit = opts |> Keyword.get(:limit, 20) |> max(0) |> min(100)
+      rows = Repo.all(from(w in query, order_by: [desc: w.due_at, desc: w.id], limit: ^limit))
+
+      {:ok,
+       if(owner?(actor, goal) or coach?(actor, goal),
+         do: rows,
+         else: Enum.map(rows, &%{&1 | briefing: %{}})
+       )}
+    end
+  end
+
+  @doc "Reads a private wake-up briefing as its owner or coach."
+  def get_wake_up(actor, wake_up_id) do
+    with :ok <- check_enabled(),
+         {:ok, id} <- cast_id(wake_up_id),
+         %Platform.Goals.WakeUp{} = wake <-
+           Repo.one(from(w in Platform.Goals.Clock.visible_wakes(actor), where: w.id == ^id)),
+         {:ok, goal} <- fetch_visible(actor, wake.goal_id, false),
+         :ok <- check_can_edit(actor, goal) do
+      {:ok,
+       %{
+         wake_up: wake,
+         briefing: wake.briefing,
+         text: Platform.Goals.WakeUps.Briefing.text(wake.briefing)
+       }}
+    else
+      nil -> {:error, :not_found}
+      error -> error
+    end
+  end
+
+  @doc "Reads the visible goal's clock."
+  def clock_status(actor, goal_id) do
+    with :ok <- check_enabled(), {:ok, goal} <- fetch_visible(actor, goal_id, false) do
+      row = Platform.Goals.Clock.visible_clock(actor, goal.id)
+
+      {:ok,
+       if(row,
+         do: Map.take(row, [:next_wake_at, :time_zone, :wake_hour, :last_woken_at, :stalled_at]),
+         else: nil
+       )}
+    end
+  end
+
+  @doc "Restarts a stalled clock at the next regular slot."
+  def restart_clock(actor, goal_id) do
+    with :ok <- check_enabled() do
+      in_transaction(fn ->
+        with {:ok, goal} <- fetch_visible(actor, goal_id, true),
+             :ok <- check_can_edit(actor, goal) do
+          case Platform.Goals.Clock.visible_clock(actor, goal.id) do
+            nil -> {:ok, nil}
+            clock -> Platform.Goals.Clock.reset(clock, goal, Platform.Goals.Clock.now())
+          end
+        end
+      end)
+    end
   end
 
   defp logged_source(goal) do

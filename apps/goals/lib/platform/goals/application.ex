@@ -21,7 +21,7 @@ defmodule Platform.Goals.Application do
   # Web-role classification (task 01a155a6), by child id, under the rule in
   # `Platform.Role`'s moduledoc. Empty: Goals starts no process yet.
   @web []
-  @background []
+  @background [Platform.Goals.Clock.Scheduler]
 
   @impl true
   def start(_type, _args) do
@@ -45,6 +45,6 @@ defmodule Platform.Goals.Application do
   """
   @spec children(Platform.Role.t()) :: list()
   def children(role) do
-    Platform.Role.select(@web ++ @background, role, @web)
+    Platform.Role.select(if(Platform.Goals.enabled?(), do: @background, else: []), role, @web)
   end
 end

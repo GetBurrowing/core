@@ -5,6 +5,8 @@ defmodule Platform.Goals.Sources.TaskCount do
   alias Platform.{Repo, Tasks, Tenancy}
   alias Platform.Tasks.{Project, Task}
 
+  def closed_statuses, do: ~w(done cancelled)
+
   @impl true
   def key, do: "task_count"
   @impl true
@@ -26,7 +28,7 @@ defmodule Platform.Goals.Sources.TaskCount do
 
       query =
         if count == "open",
-          do: where(query, [t], t.status not in ["done", "cancelled"]),
+          do: where(query, [t], t.status not in ^closed_statuses()),
           else: where(query, [t], t.status == "done")
 
       value = Repo.one(from(t in query, select: count(t.id)))
