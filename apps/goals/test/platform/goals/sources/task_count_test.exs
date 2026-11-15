@@ -26,7 +26,7 @@ defmodule Platform.Goals.Sources.TaskCountTest do
     assert population == "task_count:#{c.project.id}:open"
     assert TaskCount.population(c.goal) == {:ok, population}
     refute number_free?(TaskCount.measure(c.goal))
-    completed = put_in(c.goal.source_settings["count"], "completed")
+    completed = %{c.goal | source_settings: Map.put(c.goal.source_settings, "count", "completed")}
 
     assert {:ok, %{value: 2, unit: "tasks done", population: population}} =
              TaskCount.measure(completed)
