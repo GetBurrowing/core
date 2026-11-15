@@ -107,7 +107,7 @@ defmodule Platform.Social.Health do
     failures =
       Repo.all(
         from(p in Post,
-          where: p.account_id in ^ids and p.updated_at >= ^since,
+          where: p.account_id in ^ids and p.flow == "legacy" and p.updated_at >= ^since,
           where:
             (p.status == "failed" and
                (is_nil(p.error) or p.error != "cancelled before publishing")) or

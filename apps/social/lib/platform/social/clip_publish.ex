@@ -64,7 +64,7 @@ defmodule Platform.Social.ClipPublish do
   import Ecto.Query, only: [from: 2]
 
   alias Platform.Repo
-  alias Platform.Social.{Account, Post, Profile, Publishing}
+  alias Platform.Social.{Account, Clip, Post, Profile, Publishing}
 
   @default_window_ms 8_000
   @default_interval_ms 30_000
@@ -112,9 +112,12 @@ defmodule Platform.Social.ClipPublish do
         on: a.id == po.account_id,
         join: p in Profile,
         on: p.id == a.profile_id,
+        join: c in Clip,
+        on: c.id == po.clip_id,
         where:
-          not is_nil(po.clip_id) and po.status == "approved" and po.publish_after <= ^now and
-            is_nil(po.external_id),
+          po.flow == "legacy" and c.flow == "legacy" and not is_nil(po.clip_id) and
+            po.status == "approved" and
+            po.publish_after <= ^now and is_nil(po.external_id),
         order_by: [asc: po.publish_after, asc: po.id],
         select: {p.org_id, po.id}
       )
@@ -130,7 +133,11 @@ defmodule Platform.Social.ClipPublish do
     Repo.transaction(fn ->
       case Repo.update_all(
              from(po in Post,
-               where: po.id == ^post_id and po.publish_after <= ^now and po.status == "approved"
+               join: c in Clip,
+               on: c.id == po.clip_id,
+               where:
+                 po.id == ^post_id and po.flow == "legacy" and c.flow == "legacy" and
+                   po.publish_after <= ^now and po.status == "approved"
              ),
              set: [publish_after: nil]
            ) do
@@ -150,9 +157,11 @@ defmodule Platform.Social.ClipPublish do
   def next_due(%DateTime{} = now) do
     Repo.one(
       from(po in Post,
+        join: c in Clip,
+        on: c.id == po.clip_id,
         where:
-          not is_nil(po.clip_id) and po.status == "approved" and po.publish_after > ^now and
-            is_nil(po.external_id),
+          po.flow == "legacy" and c.flow == "legacy" and not is_nil(po.clip_id) and
+            po.status == "approved" and po.publish_after > ^now and is_nil(po.external_id),
         select: min(po.publish_after)
       )
     )

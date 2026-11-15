@@ -274,6 +274,7 @@ defmodule Platform.Social.AgentDrafts do
         locked = Repo.one(from(p in Post, where: p.id == ^post.id, lock: "FOR UPDATE"))
 
         with %Post{} <- locked || {:error, :not_found},
+             :ok <- refuse_studio(locked),
              :ok <- refuse_locked(locked),
              :ok <- refuse_transition(locked, attrs),
              profile = profile_of(locked),
@@ -328,6 +329,11 @@ defmodule Platform.Social.AgentDrafts do
     do: {:error, :status_not_allowed}
 
   defp refuse_status_value(_), do: :ok
+
+  # Social Studio slice A: until versioned Studio edits exist (slice B), an
+  # agent cannot write to a Studio post at all, in any status.
+  defp refuse_studio(%Post{flow: "studio"}), do: {:error, :studio_post}
+  defp refuse_studio(%Post{}), do: :ok
 
   defp refuse_locked(%Post{status: status}) when status in @editable_statuses, do: :ok
   defp refuse_locked(%Post{}), do: {:error, :post_locked}

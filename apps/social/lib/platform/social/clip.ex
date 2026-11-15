@@ -76,6 +76,9 @@ defmodule Platform.Social.Clip do
     field(:title, :string)
     field(:episode_code, :string)
     field(:origin, :string, default: "burrow")
+    # Social Studio slice A: `legacy` or `studio` (DB CHECK). In NO cast list;
+    # Studio intake sets it at insert. Never inferred from the profile toggle.
+    field(:flow, :string, default: "legacy")
     field(:source_label, :string)
     field(:review_status, :string)
     field(:review_note, :string)

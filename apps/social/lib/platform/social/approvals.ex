@@ -117,6 +117,8 @@ defmodule Platform.Social.Approvals do
   @spec request_approval(Post.t()) ::
           {:ok, %{card: ApprovalCard.t(), unreachable_approvers: [Ecto.UUID.t()]}}
           | {:error, term()}
+  def request_approval(%Post{flow: "studio"}), do: {:error, :studio_post}
+
   def request_approval(%Post{status: "needs_approval"} = post) do
     with {:ok, profile} <- Social.profile_of_post(post),
          {:ok, account} <- fetch_account(post),
@@ -654,6 +656,7 @@ defmodule Platform.Social.Approvals do
            :ok <- refuse_not_pending(card),
            :ok <- check_digest(card, live),
            {:ok, post} <- lock_post(card.post_id),
+           :ok <- Social.refuse_studio(post),
            :ok <- refuse_not_needs_approval(post),
            :ok <- check_fingerprint(post, shown_fingerprint),
            {:ok, account} <- fetch_account(post),
