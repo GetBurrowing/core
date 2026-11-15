@@ -132,8 +132,17 @@ if argv[:4] == ["compose", "up", "-d", "--no-deps"]:
         iid, _ = find(m.group(1))
         if not iid:
             out("", 1)
+        # A test can kill the updater (the parent) mid-switch, as a host crash
+        # or an OOM kill would: before the new image starts, or just after.
+        kill_at = world.pop("kill_updater_at", None)
+        if kill_at == "before_switch":
+            save()
+            os.kill(os.getppid(), 9)
+            sys.exit(1)
         world["running"] = iid
         save()
+        if kill_at == "after_switch":
+            os.kill(os.getppid(), 9)
     out("")
 if argv[:2] == ["image", "ls"]:
     repo = argv[-1]
@@ -290,7 +299,7 @@ class UpdaterCase(unittest.TestCase):
         with open(self.world_path) as h:
             return json.load(h)
 
-    def run_updater(self, mode="timer", now=1_000_000, extra_env=None, timeout=60):
+    def run_updater(self, mode="timer", now=1_000_000, extra_env=None, timeout=60, killed=False):
         env = {
             "PATH": os.environ.get("PATH", "/usr/bin:/bin"),
             "BURROW_UPDATE_ROOT": self.root,
@@ -306,7 +315,7 @@ class UpdaterCase(unittest.TestCase):
         proc = subprocess.run(
             argv, env=env, capture_output=True, text=True, timeout=timeout, check=False
         )
-        self.assertEqual(proc.returncode, 0, proc.stderr)
+        self.assertEqual(proc.returncode, -9 if killed else 0, proc.stderr)
         return self.status()
 
     def status(self):
@@ -855,6 +864,67 @@ class IrreversibleTest(UpdaterCase):
         self.assertEqual(status["last_result"], "failed_rollback_blocked")
         self.assertEqual(status["dump"], upd.DUMP)
         self.assertEqual(len(self.compose_ups()), 1)
+
+    def kill_updater_during_a_crossing(self, kill_at):
+        self.world["images"]["id-new"]["irreversible"] = ["20261101_b"]
+        self.world["kill_updater_at"] = kill_at
+        self.save_world()
+        self.pinned_first_run()
+        self.request("update")
+        self.run_updater(mode="path", killed=True)
+        self.assertEqual(len(self.calls(["exec", "core-postgres", "pg_dump"])), 1)
+        self.assertEqual(self.state("previous_digest"), OLD)
+
+    def test_an_updater_killed_after_the_new_image_starts_still_blocks_rollback(self):
+        # The new image is up and may already have migrated, but the run never
+        # reached save(). The crossing must be on disk before the switch.
+        self.kill_updater_during_a_crossing("after_switch")
+        self.assertEqual(self.load_world()["running"], "id-new")
+        self.request("rollback", request_id="r2")
+        status = self.run_updater(mode="path", now=1_000_100)
+        self.assertEqual(status["last_result"], "refused")
+        self.assertEqual(status["last_request"]["reason"], "rollback_blocked_irreversible")
+        self.assertEqual(self.load_world()["running"], "id-new")
+        self.assertEqual(self.override_image(), NEW)
+        self.assertEqual(len(self.compose_ups()), 1)
+
+    def test_an_updater_killed_before_the_new_image_starts_is_not_stuck(self):
+        # The crossing is recorded but the old image still runs. That record
+        # must not block anything while the old image runs, and the crossing
+        # can still be made.
+        self.kill_updater_during_a_crossing("before_switch")
+        self.assertEqual(self.load_world()["running"], "id-old")
+        self.request("rollback", request_id="r2")
+        status = self.run_updater(mode="path", now=1_000_100)
+        self.assertEqual(status["last_request"]["reason"], "already_on_previous")
+        self.assertEqual(self.load_world()["running"], "id-old")
+        # The timer still holds the crossing for an explicit Update now.
+        status = self.run_updater(now=1_000_200)
+        self.assertEqual(status["last_result"], "held_irreversible")
+        self.assertEqual(self.load_world()["running"], "id-old")
+        # Update now crosses, with a fresh dump, and rollback is then blocked.
+        self.request("update", request_id="r3")
+        status = self.run_updater(mode="path", now=1_000_300)
+        self.assertEqual(status["last_result"], "ok")
+        self.assertEqual(self.load_world()["running"], "id-new")
+        self.assertEqual(len(self.calls(["exec", "core-postgres", "pg_dump"])), 2)
+        self.request("rollback", request_id="r4")
+        status = self.run_updater(mode="path", now=1_000_400)
+        self.assertEqual(status["last_request"]["reason"], "rollback_blocked_irreversible")
+        self.assertEqual(self.load_world()["running"], "id-new")
+
+    def test_an_interrupted_switch_that_starts_later_still_blocks_rollback(self):
+        # Killed before compose ran, but the override already names the new
+        # image, so a reboot starts it without the updater. Same barrier.
+        self.kill_updater_during_a_crossing("before_switch")
+        self.assertEqual(self.override_image(), NEW)
+        self.world = self.load_world()
+        self.world["running"] = "id-new"
+        self.save_world()
+        self.request("rollback", request_id="r2")
+        status = self.run_updater(mode="path", now=1_000_100)
+        self.assertEqual(status["last_request"]["reason"], "rollback_blocked_irreversible")
+        self.assertEqual(self.load_world()["running"], "id-new")
 
     def test_a_failed_dump_does_not_cross(self):
         self.world["images"]["id-new"]["irreversible"] = ["20261101_b"]
