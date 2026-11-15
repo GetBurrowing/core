@@ -204,7 +204,7 @@ defmodule Platform.Goals.Brief do
 
     number =
       case Goals.goal_number(user, goal.id) do
-        {:ok, {:reading, %{latest: latest}}} -> latest.value
+        {:ok, {:reading, %{latest: latest}}} -> latest
         _ -> nil
       end
 
@@ -237,7 +237,7 @@ defmodule Platform.Goals.Brief do
 
     if number && stop.target_value && Decimal.compare(stop.target_value, 0) != :eq do
       percent =
-        number
+        number.value
         |> Decimal.div(stop.target_value)
         |> Decimal.mult(100)
         |> Decimal.round(0, :floor)
@@ -290,7 +290,12 @@ defmodule Platform.Goals.Brief do
       end)
 
     target = (stop && stop.target_value) || goal.target_value
-    value = if number && target, do: %{value: number, target: target, unit: goal.unit}, else: nil
+
+    value =
+      if number && target,
+        do: %{value: number.value, target: target, unit: number.unit},
+        else: nil
+
     {:ok, clock} = Goals.clock_status(user, goal.id)
 
     questions =
