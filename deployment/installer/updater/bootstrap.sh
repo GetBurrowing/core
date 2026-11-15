@@ -725,11 +725,14 @@ class Updater:
         self.status.update(fields)
         return value
 
+    def save_meta(self):
+        write_atomic(self.state_path("meta.json"), json.dumps(self.meta) + "\n", 0o600)
+
     def save(self):
         self.status["channel"] = self.cfg["channel"]
         self.status["auto_update"] = self.auto_update
         self.status["deferred_since"] = self.meta.get("deferred_since")
-        write_atomic(self.state_path("meta.json"), json.dumps(self.meta) + "\n", 0o600)
+        self.save_meta()
         write_atomic(self.state_path("status.json"), status_text(self.status), 0o600)
         write_atomic(P(STATUS), status_text(self.status), 0o644)
 
@@ -1018,6 +1021,13 @@ class Updater:
             return
         # previous_digest BEFORE the override changes (fsync in write_atomic).
         write_atomic(self.state_path("previous_digest"), current + "\n", 0o600)
+        if crossed:
+            # The crossing too: a run killed mid-switch never reaches save(),
+            # and a rollback asked for afterwards must still be refused. The
+            # marker only blocks while ``new`` is the running image, so one
+            # left by a switch that never happened blocks nothing.
+            self.meta["crossed_into"] = new
+            self.save_meta()
         if self.switch_to(new):
             self.meta["crossed_into"] = new if crossed else None
             self.result("ok", available=None, pending_irreversible=None, dump=None)
