@@ -44,12 +44,13 @@ defmodule Platform.Goals.Entry do
     field(:details, :map, default: %{})
     belongs_to(:takeaway, __MODULE__)
     belongs_to(:stop, Platform.Goals.Stop)
+    belongs_to(:reading, Platform.Goals.Reading)
 
     timestamps()
   end
 
   @editable ~w(kind title body occurred_at prediction predicted_change predicted_by sources details
-               takeaway_id stop_id)a
+               takeaway_id stop_id reading_id)a
 
   @doc "The allowed values of each checked column."
   def kinds, do: @kinds
@@ -82,5 +83,6 @@ defmodule Platform.Goals.Entry do
     |> foreign_key_constraint(:goal_id)
     |> foreign_key_constraint(:takeaway_id)
     |> foreign_key_constraint(:stop_id)
+    |> foreign_key_constraint(:reading_id)
   end
 end

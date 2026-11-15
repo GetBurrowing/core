@@ -11,7 +11,7 @@ defmodule Platform.Goals.MigrationTest do
                   __DIR__
                 )
 
-  @tables ~w(goals goal_stops goal_grants goal_entries)
+  @tables ~w(goals goal_stops goal_grants goal_entries goal_readings)
 
   test "the four goal tables exist after the module's test alias migrates" do
     %{rows: rows} =
@@ -51,5 +51,17 @@ defmodule Platform.Goals.MigrationTest do
       |> Enum.map(&String.trim/1)
 
     refute @version in listed
+  end
+
+  test "readings migration carries the waiver and is absent from the irreversible list" do
+    version = "20261115152816"
+
+    source =
+      File.read!(
+        Path.expand("../../../priv/repo/migrations/#{version}_create_goal_readings.exs", __DIR__)
+      )
+
+    assert source =~ ~r/^  # old-code-compatible: creates the new goal_readings table/m
+    refute version in String.split(File.read!(@irreversible), "\n", trim: true)
   end
 end

@@ -151,4 +151,35 @@ defmodule Platform.Goals.NotebookTest do
     assert {:ok, entries} = Goals.list_entries(c.owner, c.goal.id, limit: 999)
     assert length(entries) == 200
   end
+
+  test "reading links round-trip and reject foreign or malformed ids without writing", c do
+    make_reading = fn goal ->
+      Platform.Repo.insert!(%Platform.Goals.Reading{
+        goal_id: goal.id,
+        value: Decimal.new(1),
+        source_key: "self_reported",
+        population: "self_reported",
+        origin: "manual",
+        measured_at: DateTime.utc_now(),
+        author_type: "user",
+        author_user_id: c.owner.id
+      })
+    end
+
+    reading = make_reading.(c.goal)
+    foreign = make_reading.(goal!(c.owner, c.org))
+
+    assert {:ok, entry} =
+             Goals.add_entry(c.owner, c.goal.id, %{kind: "wait", reading_id: reading.id})
+
+    assert {:ok, [^entry]} = Goals.list_entries(c.owner, c.goal.id)
+    assert entry.reading_id == reading.id
+
+    for id <- [foreign.id, "not-a-uuid", Ecto.UUID.generate()] do
+      assert {:error, %Ecto.Changeset{}} =
+               Goals.add_entry(c.owner, c.goal.id, %{kind: "ask", reading_id: id})
+    end
+
+    assert {:ok, [^entry]} = Goals.list_entries(c.owner, c.goal.id)
+  end
 end

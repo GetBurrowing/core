@@ -24,7 +24,7 @@ defmodule Platform.Goals do
   alias Platform.Accounts.User
   alias Platform.Agents.Agent
   alias Platform.Chat.Participant
-  alias Platform.Goals.{Entry, Goal, Grant, Stop, Visibility}
+  alias Platform.Goals.{Entry, Goal, Grant, Reading, Stop, Visibility}
   alias Platform.Repo
   alias Platform.Tenancy.OrgMembership
 
@@ -305,6 +305,7 @@ defmodule Platform.Goals do
           |> Entry.changeset(attrs)
           |> validate_entry_link(actor, goal, :takeaway_id, Entry)
           |> validate_entry_link(actor, goal, :stop_id, Stop)
+          |> validate_entry_link(actor, goal, :reading_id, Reading)
           |> Repo.insert()
         end
       end)
