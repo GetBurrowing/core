@@ -29,9 +29,34 @@ defmodule PlatformWeb.SocialScope do
 
   @doc "The switcher's profiles, their needs-approval counts, and the top bar's status."
   def assign_profiles(socket, profiles) do
+    legacy_counts = Social.needs_approval_counts(Enum.map(profiles, & &1.id))
+
+    counts =
+      Enum.reduce(profiles, legacy_counts, fn profile, counts ->
+        user = socket.assigns[:user]
+
+        if (profile.studio_enabled and user) &&
+             Social.Studio.require_social_use(user.id, profile) == :ok do
+          case Social.Studio.list_posts(profile.org_id, profile.id) do
+            {:ok, posts} ->
+              Map.update!(
+                counts,
+                profile.id,
+                &(&1 + Enum.count(posts, fn post -> post.status == "needs_approval" end))
+              )
+
+            {:error, reason} when reason in [:studio_disabled, :not_found] ->
+              counts
+          end
+        else
+          counts
+        end
+      end)
+
     socket
     |> assign(:profiles, profiles)
-    |> assign(:counts, Social.needs_approval_counts(Enum.map(profiles, & &1.id)))
+    |> assign(:legacy_counts, legacy_counts)
+    |> assign(:counts, counts)
     |> SocialTopBar.assign_status()
   end
 

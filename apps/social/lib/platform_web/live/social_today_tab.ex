@@ -24,6 +24,7 @@ defmodule PlatformWeb.SocialTodayTab do
     |> assign(:studio_loaded_profile_ids, MapSet.new())
     |> assign(:studio_post_detail, nil)
     |> assign(:studio_post_error, nil)
+    |> assign(:studio_post_message, nil)
     |> assign(:studio_plan_time, "")
     |> assign(:studio_edit_text, "")
     |> assign(:studio_edit_account, nil)
@@ -57,7 +58,7 @@ defmodule PlatformWeb.SocialTodayTab do
         end
       end)
 
-    clips = Enum.flat_map(profiles, &clip_items(&1, socket.assigns.user))
+    clips = Enum.flat_map(profiles, &clip_items(&1, socket.assigns.user, posts))
 
     goals =
       Enum.flat_map(profiles, fn profile ->
@@ -81,6 +82,7 @@ defmodule PlatformWeb.SocialTodayTab do
       |> Enum.take(5)
 
     socket
+    |> SocialScope.assign_profiles(SocialScope.visible_profiles(socket))
     |> assign(:studio_today_posts, posts)
     |> assign(:studio_today_clips, clips)
     |> assign(
@@ -127,6 +129,7 @@ defmodule PlatformWeb.SocialTodayTab do
       end
 
     socket
+    |> SocialScope.assign_profiles(profiles)
     |> assign(:studio_today_posts, Enum.filter(socket.assigns.studio_today_posts, keep))
     |> assign(:studio_today_clips, Enum.filter(socket.assigns.studio_today_clips, keep))
     |> assign(:studio_goals, Enum.filter(socket.assigns.studio_goals, keep))
@@ -152,6 +155,7 @@ defmodule PlatformWeb.SocialTodayTab do
      |> assign(:studio_edit_text, if(detail, do: detail.post.body || "", else: ""))
      |> assign(:studio_edit_account, if(detail, do: detail.post.account_id, else: nil))
      |> assign(:studio_post_error, nil)
+     |> assign(:studio_post_message, nil)
      |> focus_detail(detail)}
   end
 
@@ -167,7 +171,12 @@ defmodule PlatformWeb.SocialTodayTab do
            }) do
       socket = load(socket)
       detail = detail(socket, updated.id)
-      {:noreply, socket |> assign(:studio_post_detail, detail) |> assign(:studio_post_error, nil)}
+
+      {:noreply,
+       socket
+       |> assign(:studio_post_detail, detail)
+       |> assign(:studio_post_error, nil)
+       |> assign(:studio_post_message, nil)}
     else
       _ ->
         socket =
@@ -202,7 +211,12 @@ defmodule PlatformWeb.SocialTodayTab do
            }) do
       socket = load(socket)
       detail = detail(socket, updated.id)
-      {:noreply, socket |> assign(:studio_post_detail, detail) |> assign(:studio_post_error, nil)}
+
+      {:noreply,
+       socket
+       |> assign(:studio_post_detail, detail)
+       |> assign(:studio_post_error, nil)
+       |> assign(:studio_post_message, nil)}
     else
       _ ->
         {:noreply,
@@ -289,7 +303,13 @@ defmodule PlatformWeb.SocialTodayTab do
 
   def handle_event("studio_save_post", %{"body" => body} = params, socket) do
     account_id = Map.get(params, "account_id")
-    socket = socket |> assign(:studio_edit_text, body) |> assign(:studio_edit_account, account_id)
+
+    socket =
+      socket
+      |> assign(:studio_edit_text, body)
+      |> assign(:studio_edit_account, account_id)
+      |> assign(:studio_post_message, nil)
+
     attrs = if account_id, do: %{body: body, account_id: account_id}, else: %{body: body}
 
     with %{post: post, profile: profile} <- socket.assigns.studio_post_detail,
@@ -302,6 +322,12 @@ defmodule PlatformWeb.SocialTodayTab do
            }) do
       {:noreply, show_updated(socket, updated)}
     else
+      {:error, :no_changes} ->
+        {:noreply,
+         socket
+         |> assign(:studio_post_error, nil)
+         |> assign(:studio_post_message, "No changes to save.")}
+
       _ ->
         {:noreply,
          failed_action(
@@ -365,6 +391,7 @@ defmodule PlatformWeb.SocialTodayTab do
        |> assign(:studio_edit_text, if(detail, do: detail.post.body || "", else: ""))
        |> assign(:studio_edit_account, if(detail, do: detail.post.account_id, else: nil))
        |> assign(:studio_post_error, nil)
+       |> assign(:studio_post_message, nil)
        |> focus_detail(detail)}
     else
       _ ->
@@ -403,6 +430,7 @@ defmodule PlatformWeb.SocialTodayTab do
     |> assign(:studio_edit_text, if(detail, do: detail.post.body || "", else: ""))
     |> assign(:studio_edit_account, if(detail, do: detail.post.account_id, else: nil))
     |> assign(:studio_post_error, nil)
+    |> assign(:studio_post_message, nil)
   end
 
   defp focus_detail(socket, nil), do: socket
@@ -457,6 +485,21 @@ defmodule PlatformWeb.SocialTodayTab do
         &(user && Social.post_approver_check(profile.org_id, profile, &1, user.id) == :ok)
       )
 
+    history = Platform.Social.PostEvents.list_for_post(post.id)
+
+    user_ids =
+      Enum.map(receipts, & &1.approved_by_user_id) ++
+        for(event <- history, event.actor_kind == "human", do: event.actor_id)
+
+    users = Platform.Accounts.get_users_map(user_ids, include_archived: true)
+    agents = Social.drafting_agent_options(profile.org_id) |> Map.new(&{&1.id, &1.name})
+
+    receipt_accounts =
+      Map.new(receipts, fn receipt ->
+        account = Social.get_account(profile.org_id, receipt.account_id)
+        {receipt.account_id, account_label(account)}
+      end)
+
     %{
       post: post,
       profile: profile,
@@ -465,12 +508,29 @@ defmodule PlatformWeb.SocialTodayTab do
       can_cancel?: can_cancel?,
       needs_refresh?: needs_refresh?,
       receipts: receipts,
-      history: Platform.Social.PostEvents.list_for_post(post.id),
+      history: history,
+      users: users,
+      agents: agents,
+      receipt_accounts: receipt_accounts,
       destinations: destinations
     }
   end
 
-  defp clip_items(profile, user) do
+  defp account_label(nil), do: "Former account"
+
+  defp account_label(account),
+    do: Enum.join(Enum.reject([account.platform, account.handle], &is_nil/1), " · ")
+
+  defp actor_label("human", id, detail), do: user_name(Map.get(detail.users, id))
+  defp actor_label("agent", id, detail), do: Map.get(detail.agents, id, "Agent")
+  defp actor_label(_, _, _), do: "System"
+
+  defp readable(value) when is_binary(value),
+    do: value |> String.replace("_", " ") |> String.capitalize()
+
+  defp readable(_), do: "Unknown"
+
+  defp clip_items(profile, user, posts) do
     accounts =
       Social.list_accounts(profile.org_id, profile_id: profile.id)
       |> Enum.filter(
@@ -483,7 +543,27 @@ defmodule PlatformWeb.SocialTodayTab do
     |> Enum.flat_map(fn clip ->
       case Social.ClipVersions.recent(profile.org_id, profile.id, clip.id) do
         {:ok, [_ | _] = renders} ->
-          [%{clip: clip, profile: profile, renders: renders, accounts: accounts}]
+          render = hd(renders)
+
+          prepared =
+            posts
+            |> Enum.filter(&(&1.profile.id == profile.id and &1.post.clip_render_id == render.id))
+            |> Enum.map(fn item ->
+              %{
+                post: item.post,
+                account: account_label(Social.get_account(profile.org_id, item.post.account_id))
+              }
+            end)
+
+          [
+            %{
+              clip: clip,
+              profile: profile,
+              renders: renders,
+              accounts: accounts,
+              prepared: prepared
+            }
+          ]
 
         _ ->
           []
@@ -507,6 +587,8 @@ defmodule PlatformWeb.SocialTodayTab do
   end
 
   defp failed_action(socket, key, message) do
+    socket = assign(socket, :studio_post_message, nil)
+
     case socket.assigns.studio_post_detail do
       %{profile: profile} ->
         if current_profile?(socket, profile.id),
@@ -556,7 +638,9 @@ defmodule PlatformWeb.SocialTodayTab do
             data-clip-id={item.clip.id}
             class="rounded-box border border-base-300 p-4 space-y-2"
           >
-            <h2 class="font-semibold">{item.clip.title || "Untitled clip"}</h2>
+            <h2 class="font-semibold">
+              {item.clip.title || item.clip.external_ref || "Imported clip"}
+            </h2>
             <video
               :if={hd(item.renders).file_id}
               controls
@@ -565,6 +649,17 @@ defmodule PlatformWeb.SocialTodayTab do
               class="max-h-96 w-full"
             >
             </video>
+            <p :for={prepared <- item.prepared}>
+              Post prepared for {prepared.account} ·
+              <button
+                type="button"
+                class="link"
+                phx-click="studio_open_post"
+                phx-value-id={prepared.post.id}
+              >
+                Open post
+              </button>
+            </p>
             <form id={"studio-clip-#{item.clip.id}"} phx-submit="studio_accept_clip" class="space-y-2">
               <input type="hidden" name="clip_id" value={item.clip.id} />
               <input type="hidden" name="render_id" value={hd(item.renders).id} />
@@ -578,7 +673,7 @@ defmodule PlatformWeb.SocialTodayTab do
                   </option>
                 </select>
               </label>
-              <button type="submit" class="btn btn-primary">Prepare post</button>
+              <button type="submit" class="btn btn-primary">Prepare or open post</button>
             </form>
           </section>
           <div :for={item <- @studio_today_posts} data-role="studio-post" data-post-id={item.post.id}>
@@ -588,7 +683,7 @@ defmodule PlatformWeb.SocialTodayTab do
               phx-value-id={item.post.id}
               data-role="studio-post-open"
               data-post-id={item.post.id}
-              class="link"
+              class="link text-left"
             >
               {item.post.body || "Untitled post"}
             </button>
@@ -645,13 +740,17 @@ defmodule PlatformWeb.SocialTodayTab do
               Version {@studio_post_detail.post.version} · {case @studio_post_detail.post.status do
                 "approved" -> "Approved"
                 "planned" -> "Planned in Burrow"
-                other -> other
+                other -> readable(other)
               end}
             </p>
             <details :if={@studio_post_detail.history != []}>
               <summary>History</summary>
               <p :for={event <- @studio_post_detail.history} data-role="studio-history">
-                {event.action} · {event.actor_kind} {event.actor_id} · version {event.post_version} · {Calendar.strftime(
+                {readable(event.action)} · {actor_label(
+                  event.actor_kind,
+                  event.actor_id,
+                  @studio_post_detail
+                )} · version {event.post_version} · {Calendar.strftime(
                   event.inserted_at,
                   "%Y-%m-%d %H:%M UTC"
                 )}
@@ -659,7 +758,9 @@ defmodule PlatformWeb.SocialTodayTab do
               </p>
             </details>
             <div :for={receipt <- @studio_post_detail.receipts} data-role="studio-receipt">
-              Approval for version {receipt.version} · {receipt.state} · approver {receipt.approved_by_user_id} · account {receipt.account_id} · {Calendar.strftime(
+              Approval for version {receipt.version} · {readable(receipt.state)} · {user_name(
+                Map.get(@studio_post_detail.users, receipt.approved_by_user_id)
+              )} · {Map.get(@studio_post_detail.receipt_accounts, receipt.account_id)} · {Calendar.strftime(
                 receipt.approved_at,
                 "%Y-%m-%d %H:%M UTC"
               )}
@@ -787,6 +888,7 @@ defmodule PlatformWeb.SocialTodayTab do
             >
               Cancel plan
             </button>
+            <p :if={@studio_post_message} role="status">{@studio_post_message}</p>
             <p :if={@studio_post_error} role="alert">{@studio_post_error}</p>
           </section>
         </div>

@@ -115,10 +115,92 @@ defmodule PlatformWeb.SocialStudioTodayTest do
     refute has_element?(view, "[data-role='studio-post-detail']")
   end
 
+  test "the header counts authorized Studio work alongside legacy work and updates after approval",
+       %{conn: conn} do
+    w = studio_world!()
+    post = studio_post!(w, w.tiktok, "needs_approval", %{body: "Needs a decision"})
+    view = open(conn, w.approver, "?profile=#{w.profile.id}")
+    assert has_element?(view, "[data-role='social-needs-approval']", "1 need approval")
+    assert has_element?(view, "[data-role='social-tab-button'][data-tab='queue']", "Queue (0)")
+    view |> element("[data-role='studio-post-open'][data-post-id='#{post.id}']") |> render_click()
+    view |> element("[data-role='studio-approve']") |> render_click()
+    assert has_element?(view, "[data-role='social-needs-approval']", "0 need approval")
+  end
+
+  test "a project-denied viewer does not see Studio approval counts", %{conn: conn} do
+    w = studio_world!()
+    studio_post!(w, w.tiktok, "needs_approval")
+
+    {:ok, _} =
+      Platform.Access.Grants.deny(%{
+        principal: {:user, w.approver.id},
+        permission: "social.use",
+        resource: {:project, w.project.id}
+      })
+
+    view = open(conn, w.approver, "?profile=#{w.profile.id}")
+    assert has_element?(view, "[data-role='social-needs-approval']", "0 need approval")
+  end
+
+  test "header combines legacy and Studio counts without adding Studio to Queue", %{conn: conn} do
+    w = studio_world!()
+    studio_post!(w, w.tiktok, "needs_approval", %{body: "Studio item"})
+
+    {:ok, _legacy} =
+      Social.create_post(w.org_id, w.x, %{body: "Legacy item", status: "needs_approval"})
+
+    view = open(conn, w.approver, "?profile=#{w.profile.id}")
+    assert has_element?(view, "[data-role='social-needs-approval']", "2 need approval")
+    assert has_element?(view, "[data-role='social-tab-button'][data-tab='queue']", "Queue (1)")
+    view |> element("[data-role='social-tab-button'][data-tab='queue']") |> render_click()
+    assert has_element?(view, "[data-role='social-queue']", "Legacy item")
+    refute has_element?(view, "[data-role='social-queue']", "Studio item")
+  end
+
+  test "disabling Studio removes its header count without changing legacy queue", %{conn: conn} do
+    w = studio_world!()
+    studio_post!(w, w.tiktok, "needs_approval")
+    view = open(conn, w.approver, "?profile=#{w.profile.id}")
+    assert has_element?(view, "[data-role='social-needs-approval']", "1 need approval")
+    view |> element("[data-role='social-tab-button'][data-tab='calendar']") |> render_click()
+    {:ok, _} = Social.Studio.set_enabled(w.org_id, w.profile.id, w.approver.id, false)
+    render_click(view, "week_this", %{})
+    assert has_element?(view, "[data-role='social-needs-approval']", "0 need approval")
+    assert has_element?(view, "[data-role='social-tab-button'][data-tab='queue']", "Queue (0)")
+  end
+
+  test "All brands counts only enabled, accessible Studio profiles", %{conn: conn} do
+    w = studio_world!()
+    studio_post!(w, w.tiktok, "needs_approval")
+
+    {:ok, second} =
+      Social.create_profile(w.org_id, %{
+        name: "Second",
+        project_id: w.project.id,
+        approver_user_ids: [w.approver.id]
+      })
+
+    {:ok, second} = Social.Studio.set_enabled(w.org_id, second.id, w.approver.id, true)
+    {:ok, account} = Social.create_account(w.org_id, second, %{platform: "youtube"})
+    studio_post!(%{w | profile: second}, account, "needs_approval")
+    view = open(conn, w.approver, "?profile=#{w.profile.id}")
+    view |> form("#social-profile-switcher", %{profile_id: "all"}) |> render_change()
+    assert has_element?(view, "[data-role='social-needs-approval']", "2 need approval")
+    view |> element("[data-role='social-tab-button'][data-tab='calendar']") |> render_click()
+    {:ok, _} = Social.Studio.set_enabled(w.org_id, second.id, w.approver.id, false)
+    render_click(view, "week_this", %{})
+    assert has_element?(view, "[data-role='social-needs-approval']", "1 need approval")
+  end
+
   test "an approver reviews and approves a post without planning or publishing", %{conn: conn} do
     w = studio_world!()
     post = studio_post!(w, w.tiktok, "needs_approval", %{body: "Ready to review"})
     view = open(conn, w.approver, "?profile=#{w.profile.id}")
+
+    assert has_element?(
+             view,
+             "[data-role='studio-post-open'][data-post-id='#{post.id}'].text-left"
+           )
 
     view |> element("[data-role='studio-post-open'][data-post-id='#{post.id}']") |> render_click()
     id = post.id
@@ -148,17 +230,32 @@ defmodule PlatformWeb.SocialStudioTodayTest do
     assert has_element?(view, "[data-role='social-tab-body'][class*='--bottom-nav-height']")
   end
 
+  test "approval details use readable statuses and people instead of raw IDs", %{conn: conn} do
+    w = studio_world!()
+    post = studio_post!(w, w.tiktok, "needs_approval", %{body: "Review text"})
+    view = open(conn, w.approver, "?profile=#{w.profile.id}")
+    view |> element("[data-role='studio-post-open'][data-post-id='#{post.id}']") |> render_click()
+    assert has_element?(view, "[data-role='studio-post-detail']", "Needs approval")
+    refute render(view) =~ "needs_approval"
+    view |> element("[data-role='studio-approve']") |> render_click()
+    assert has_element?(view, "[data-role='studio-receipt']", "Current")
+    assert has_element?(view, "[data-role='studio-receipt']", w.approver.name)
+    receipt = render(element(view, "[data-role='studio-receipt']"))
+    refute receipt =~ w.approver.id
+    refute receipt =~ w.tiktok.id
+  end
+
   test "an approver can revoke an approval and see its historical receipt", %{conn: conn} do
     w = studio_world!()
     post = studio_post!(w, w.tiktok, "needs_approval")
     view = open(conn, w.approver, "?profile=#{w.profile.id}")
     view |> element("[data-role='studio-post-open'][data-post-id='#{post.id}']") |> render_click()
     view |> element("[data-role='studio-approve']") |> render_click()
-    assert has_element?(view, "[data-role='studio-receipt']", "current")
+    assert has_element?(view, "[data-role='studio-receipt']", "Current")
     view |> element("[data-role='studio-revoke']") |> render_click()
     assert Social.get_post(w.org_id, post.id).status == "needs_approval"
-    assert has_element?(view, "[data-role='studio-receipt']", "revoked")
-    assert has_element?(view, "[data-role='studio-history']", "approval_revoked")
+    assert has_element?(view, "[data-role='studio-receipt']", "Revoked")
+    assert has_element?(view, "[data-role='studio-history']", "Approval revoked")
   end
 
   test "an out-of-date approval is refused and leaves the newer content unchanged", %{conn: conn} do
@@ -302,6 +399,37 @@ defmodule PlatformWeb.SocialStudioTodayTest do
     refute render(view) =~ "Restricted content"
   end
 
+  test "saving unchanged text reports no changes without altering the version", %{conn: conn} do
+    w = studio_world!()
+    post = studio_post!(w, w.tiktok, "draft", %{body: "Unchanged text"})
+    view = open(conn, w.approver, "?profile=#{w.profile.id}")
+    view |> element("[data-role='studio-post-open'][data-post-id='#{post.id}']") |> render_click()
+
+    view
+    |> form("#studio-edit-form", %{body: post.body, account_id: w.tiktok.id})
+    |> render_submit()
+
+    assert has_element?(view, "[data-role='studio-post-detail']", "No changes to save")
+    refute has_element?(view, "[role='alert']", "Refresh")
+    assert Social.get_post(w.org_id, post.id).version == post.version
+  end
+
+  test "an unchanged-looking save is still refused when the post changed elsewhere", %{conn: conn} do
+    w = studio_world!()
+    post = studio_post!(w, w.tiktok, "draft", %{body: "Original"})
+    view = open(conn, w.approver, "?profile=#{w.profile.id}")
+    view |> element("[data-role='studio-post-open'][data-post-id='#{post.id}']") |> render_click()
+    force!(post, %{body: "Changed elsewhere", version: post.version + 1})
+
+    view
+    |> form("#studio-edit-form", %{body: "Original", account_id: w.tiktok.id})
+    |> render_submit()
+
+    assert has_element?(view, "[role='alert']", "not saved")
+    refute has_element?(view, "[role='status']", "No changes to save")
+    assert Social.get_post(w.org_id, post.id).body == "Changed elsewhere"
+  end
+
   test "a stale edit is refused without losing the entered text", %{conn: conn} do
     w = studio_world!()
     post = studio_post!(w, w.tiktok, "needs_approval", %{body: "Original"})
@@ -351,6 +479,9 @@ defmodule PlatformWeb.SocialStudioTodayTest do
              "[data-role='studio-calendar-unscheduled'][data-post-id='#{approved.id}']",
              "Approved, needs a time"
            )
+
+    refute has_element?(view, "[data-role='social-empty']", "Nothing scheduled")
+    assert has_element?(view, "[data-role='social-empty']", "No other scheduled posts")
 
     view
     |> element("[data-role='studio-calendar-unscheduled'][data-post-id='#{approved.id}'] button")
@@ -545,5 +676,41 @@ defmodule PlatformWeb.SocialStudioTodayTest do
     assert_push_event(view, "studio:focus_detail", %{id: ^id})
     assert has_element?(view, "#studio-edit-body", "Agent caption")
     assert has_element?(view, "#studio-edit-body", "youtube.com/@clipshow")
+
+    assert has_element?(
+             view,
+             "[data-role='studio-clip'][data-clip-id='#{clip.id}']",
+             "Post prepared"
+           )
+
+    assert has_element?(view, "#studio-clip-#{clip.id} button", "Prepare or open post")
+
+    view
+    |> form("#studio-clip-#{clip.id}", %{render_id: render.id, account_id: w.tiktok.id})
+    |> render_submit()
+
+    assert {:ok, [same_post]} = Social.Studio.list_posts(w.org_id, w.profile.id)
+    assert same_post.id == post.id
+  end
+
+  test "a titleless imported clip shows its reference without changing its stored title", %{
+    conn: conn
+  } do
+    w = studio_world!()
+    clip = w |> pending_clip!() |> make_studio_clip!()
+
+    Platform.Repo.update_all(from(c in Social.Clip, where: c.id == ^clip.id),
+      set: [title: nil, external_ref: "episode/example"]
+    )
+
+    view = open(conn, w.approver, "?profile=#{w.profile.id}")
+
+    assert has_element?(
+             view,
+             "[data-role='studio-clip'][data-clip-id='#{clip.id}']",
+             "episode/example"
+           )
+
+    assert is_nil(Social.get_clip(w.org_id, clip.id).title)
   end
 end

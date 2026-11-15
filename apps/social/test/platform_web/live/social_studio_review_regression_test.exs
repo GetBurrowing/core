@@ -168,8 +168,8 @@ defmodule PlatformWeb.SocialStudioDReviewTest do
     assert updated.status == "approved"
     assert updated.version == post.version
     assert is_nil(updated.scheduled_at)
-    assert has_element?(view, "[data-role='studio-receipt']", "superseded")
-    assert has_element?(view, "[data-role='studio-receipt']", "current")
+    assert has_element?(view, "[data-role='studio-receipt']", "Superseded")
+    assert has_element?(view, "[data-role='studio-receipt']", "Current")
   end
 
   test "new owner sees the same-version approval refresh action before planning", %{conn: conn} do

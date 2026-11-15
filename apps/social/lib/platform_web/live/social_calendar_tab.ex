@@ -447,10 +447,14 @@ defmodule PlatformWeb.SocialCalendarTab do
       </div>
 
       <p :if={@calendar_empty?} class="text-base-content" data-role="social-empty">
-        <%= if @all? do %>
-          Nothing scheduled in any brand this week.
+        <%= if @studio_planned != [] do %>
+          No other scheduled posts this week.
         <% else %>
-          Nothing scheduled for {@profile.name} this week.
+          <%= if @all? do %>
+            Nothing scheduled in any brand this week.
+          <% else %>
+            Nothing scheduled for {@profile.name} this week.
+          <% end %>
         <% end %>
       </p>
 
