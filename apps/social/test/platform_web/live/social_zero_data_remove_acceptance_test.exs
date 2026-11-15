@@ -60,9 +60,9 @@ defmodule PlatformWeb.SocialZeroDataRemoveAcceptanceTest do
     user =
       %Platform.Accounts.User{}
       |> Platform.Accounts.User.changeset(%{
-        email: "zero-remove-#{n}@example.com",
+        email: "zero-remove-#{Platform.TenancyFixtures.run_token()}-#{n}@example.com",
         name: "Zero Remove #{n}",
-        oidc_sub: "zero-remove-#{n}"
+        oidc_sub: "zero-remove-#{Platform.TenancyFixtures.run_token()}-#{n}"
       })
       |> Repo.insert!()
 

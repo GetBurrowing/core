@@ -99,6 +99,38 @@ defmodule Platform.TenancyFixtures do
   end
 
   @doc """
+  A token generated once per BEAM start (64 random bits, hex) that fixtures
+  put in emails, subs and slugs next to their `System.unique_integer/1`
+  counter. The counter restarts at every BEAM start, so on a test database
+  that still holds rows from an earlier run the same counter value would
+  collide on a unique index; the token makes the pair unique across runs.
+  This prevents collisions only; it does not clean up leaked rows.
+  """
+  @spec run_token() :: String.t()
+  def run_token do
+    key = {__MODULE__, :run_token}
+
+    case :persistent_term.get(key, nil) do
+      nil ->
+        # Locked so concurrent first callers agree on one token.
+        :global.trans({key, self()}, fn ->
+          case :persistent_term.get(key, nil) do
+            nil ->
+              token = Base.encode16(:crypto.strong_rand_bytes(8), case: :lower)
+              :persistent_term.put(key, token)
+              token
+
+            token ->
+              token
+          end
+        end)
+
+      token ->
+        token
+    end
+  end
+
+  @doc """
   Insert a user with an internal `admin` membership in this install's root
   org: a root admin.
 
@@ -116,9 +148,9 @@ defmodule Platform.TenancyFixtures do
     user =
       %User{}
       |> User.changeset(%{
-        email: "tenancy-fixtures-admin-#{n}@example.com",
+        email: "tenancy-fixtures-admin-#{run_token()}-#{n}@example.com",
         name: "TenancyFixtures Admin #{n}",
-        oidc_sub: "tenancy-fixtures-admin-#{n}"
+        oidc_sub: "tenancy-fixtures-admin-#{run_token()}-#{n}"
       })
       |> Repo.insert!()
 
@@ -189,8 +221,8 @@ defmodule Platform.TenancyFixtures do
 
         child =
           Repo.insert!(%Org{
-            name: "parked-root-#{n}",
-            slug: "parked-root-#{n}",
+            name: "parked-root-#{run_token()}-#{n}",
+            slug: "parked-root-#{run_token()}-#{n}",
             parent_org_id: root.id
           })
 

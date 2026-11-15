@@ -31,7 +31,7 @@ defmodule PlatformWeb.SocialClipsReviewTest do
 
     octavius =
       Repo.insert!(%Platform.Agents.Agent{
-        slug: "octavius-#{unique()}",
+        slug: "octavius-#{Platform.TenancyFixtures.run_token()}-#{unique()}",
         name: "Octavius",
         metadata: %{"org_id" => w.org_id}
       })

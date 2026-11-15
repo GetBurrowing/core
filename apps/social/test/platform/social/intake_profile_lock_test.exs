@@ -31,7 +31,7 @@ defmodule Platform.Social.IntakeProfileLockTest do
         nil ->
           {Repo.insert!(%Platform.Tenancy.Org{
              name: "Intake root #{n}",
-             slug: "intake-root-#{n}"
+             slug: "intake-root-#{Platform.TenancyFixtures.run_token()}-#{n}"
            }), true}
 
         root ->
@@ -41,14 +41,14 @@ defmodule Platform.Social.IntakeProfileLockTest do
     org =
       Repo.insert!(%Platform.Tenancy.Org{
         name: "Intake lock #{n}",
-        slug: "intake-lock-#{n}",
+        slug: "intake-lock-#{Platform.TenancyFixtures.run_token()}-#{n}",
         parent_org_id: root.id
       })
 
     user =
       Repo.insert!(%Platform.Accounts.User{
-        email: "intake-lock-#{n}@example.com",
-        oidc_sub: "intake-lock-#{n}",
+        email: "intake-lock-#{Platform.TenancyFixtures.run_token()}-#{n}@example.com",
+        oidc_sub: "intake-lock-#{Platform.TenancyFixtures.run_token()}-#{n}",
         name: "Intake Lock #{n}"
       })
 

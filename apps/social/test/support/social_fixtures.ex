@@ -46,16 +46,20 @@ defmodule Platform.SocialFixtures do
   end
 
   @doc "A fresh tenant org id (one per call)."
-  def org_id!, do: Platform.TenancyFixtures.tenant_org_id("social-org-#{unique()}")
+  def org_id!,
+    do:
+      Platform.TenancyFixtures.tenant_org_id(
+        "social-org-#{Platform.TenancyFixtures.run_token()}-#{unique()}"
+      )
 
   def user! do
     n = unique()
 
     %Platform.Accounts.User{}
     |> Platform.Accounts.User.changeset(%{
-      email: "social-user-#{n}@example.com",
+      email: "social-user-#{Platform.TenancyFixtures.run_token()}-#{n}@example.com",
       name: "Social User #{n}",
-      oidc_sub: "social-user-#{n}"
+      oidc_sub: "social-user-#{Platform.TenancyFixtures.run_token()}-#{n}"
     })
     |> Repo.insert!()
   end
@@ -63,7 +67,11 @@ defmodule Platform.SocialFixtures do
   @doc "A real `agents` row, so a test proves agent-not-user, not merely id-not-found."
   def agent! do
     n = unique()
-    Repo.insert!(%Platform.Agents.Agent{slug: "social-agent-#{n}", name: "Social Agent #{n}"})
+
+    Repo.insert!(%Platform.Agents.Agent{
+      slug: "social-agent-#{Platform.TenancyFixtures.run_token()}-#{n}",
+      name: "Social Agent #{n}"
+    })
   end
 
   @doc "A real `agents` row pinned to `org_id` (core's home-org rule reads `metadata[\"org_id\"]`)."
@@ -71,7 +79,7 @@ defmodule Platform.SocialFixtures do
     n = unique()
 
     Repo.insert!(%Platform.Agents.Agent{
-      slug: "social-pinned-#{n}",
+      slug: "social-pinned-#{Platform.TenancyFixtures.run_token()}-#{n}",
       name: "Social Pinned #{n}",
       metadata: %{"org_id" => org_id}
     })
@@ -156,7 +164,7 @@ defmodule Platform.SocialFixtures do
 
     default = %{
       name: "Social chan #{n}",
-      slug: "social-chan-#{n}",
+      slug: "social-chan-#{Platform.TenancyFixtures.run_token()}-#{n}",
       kind: "channel",
       org_id: org_id
     }

@@ -664,7 +664,7 @@ defmodule Platform.Social.ComposerTest do
   defp running_experiment!(target, payload) do
     {:ok, experiment} =
       Experiments.create_experiment(%{
-        slug: "composer-#{unique()}",
+        slug: "composer-#{Platform.TenancyFixtures.run_token()}-#{unique()}",
         name: "Composer adaptation",
         surface_key: "social.composer.adaptation",
         surface_target: target

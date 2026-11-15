@@ -34,7 +34,10 @@ defmodule Platform.Social.StudioIntakeAcceptLocksTest do
     {root, own_root?} =
       case Repo.one(from(o in Platform.Tenancy.Org, where: is_nil(o.parent_org_id), limit: 1)) do
         nil ->
-          {Repo.insert!(%Platform.Tenancy.Org{name: "IA root #{n}", slug: "ia-root-#{n}"}), true}
+          {Repo.insert!(%Platform.Tenancy.Org{
+             name: "IA root #{n}",
+             slug: "ia-root-#{Platform.TenancyFixtures.run_token()}-#{n}"
+           }), true}
 
         root ->
           {root, false}
@@ -43,15 +46,15 @@ defmodule Platform.Social.StudioIntakeAcceptLocksTest do
     org =
       Repo.insert!(%Platform.Tenancy.Org{
         name: "IA #{n}",
-        slug: "ia-#{n}",
+        slug: "ia-#{Platform.TenancyFixtures.run_token()}-#{n}",
         parent_org_id: root.id
       })
 
     user = fn tag ->
       u =
         Repo.insert!(%Platform.Accounts.User{
-          email: "ia-#{tag}-#{n}@example.com",
-          oidc_sub: "ia-#{tag}-#{n}",
+          email: "ia-#{tag}-#{Platform.TenancyFixtures.run_token()}-#{n}@example.com",
+          oidc_sub: "ia-#{tag}-#{Platform.TenancyFixtures.run_token()}-#{n}",
           name: "IA #{tag} #{n}"
         })
 
@@ -76,35 +79,174 @@ defmodule Platform.Social.StudioIntakeAcceptLocksTest do
     {:ok, account} = Social.set_account_owner(org.id, account, u1.id)
     {:ok, profile} = Studio.set_enabled(org.id, profile.id, u1.id, true)
 
-    on_exit(fn ->
-      Sandbox.mode(Repo, :auto)
-      profile_ids = Repo.all(from(p in Profile, where: p.org_id == ^org.id, select: p.id))
+    profile_ids = fn ->
+      Repo.all(from(p in Profile, where: p.org_id == ^org.id, select: p.id))
+    end
 
-      post_ids =
-        Repo.all(
-          from(po in Post,
-            join: ac in Platform.Social.Account,
-            on: ac.id == po.account_id,
-            where: ac.profile_id in ^profile_ids,
-            select: po.id
-          )
+    post_ids = fn ->
+      Repo.all(
+        from(po in Post,
+          join: ac in Platform.Social.Account,
+          on: ac.id == po.account_id,
+          where: ac.profile_id in ^profile_ids.(),
+          select: po.id
         )
+      )
+    end
 
-      Repo.delete_all(from(r in Platform.Social.PostApproval, where: r.post_id in ^post_ids))
-      Repo.delete_all(from(e in Platform.Social.PostEvent, where: e.post_id in ^post_ids))
-      Repo.delete_all(from(po in Post, where: po.id in ^post_ids))
-      # Clips (and their renders and versions) and accounts go with the profile by FK.
-      Repo.delete_all(from(p in Profile, where: p.id in ^profile_ids))
-      Repo.delete_all(from(f in Platform.Files.File, where: f.project_id == ^project.id))
-      Repo.delete_all(from(p in Platform.Tasks.Project, where: p.id == ^project.id))
-      Repo.delete_all(from(m in Platform.Tenancy.OrgMembership, where: m.org_id == ^org.id))
-      Repo.delete_all(from(u in Platform.Accounts.User, where: u.id in ^[u1.id, u2.id]))
-      Repo.delete_all(from(o in Platform.Tenancy.Org, where: o.id == ^org.id))
-      if own_root?, do: Repo.delete_all(from(o in Platform.Tenancy.Org, where: o.id == ^root.id))
-      Sandbox.mode(Repo, :manual)
+    # Every step is attempted even if an earlier one raises; the Sandbox
+    # mode is restored last; then the test fails listing every failure.
+    on_exit(fn ->
+      cleanup_all!(
+        [
+          {"sandbox :auto", fn -> Sandbox.mode(Repo, :auto) end},
+          {"delete post approvals",
+           fn ->
+             ids = post_ids.()
+             Repo.delete_all(from(r in Platform.Social.PostApproval, where: r.post_id in ^ids))
+           end},
+          {"delete post events",
+           fn ->
+             ids = post_ids.()
+             Repo.delete_all(from(e in Platform.Social.PostEvent, where: e.post_id in ^ids))
+           end},
+          {"delete posts",
+           fn ->
+             ids = post_ids.()
+             Repo.delete_all(from(po in Post, where: po.id in ^ids))
+           end},
+          # Clips (and their renders and versions) and accounts go with the profile by FK.
+          {"delete profiles",
+           fn ->
+             ids = profile_ids.()
+             Repo.delete_all(from(p in Profile, where: p.id in ^ids))
+           end},
+          {"delete files",
+           fn ->
+             Repo.delete_all(from(f in Platform.Files.File, where: f.project_id == ^project.id))
+           end},
+          {"delete project",
+           fn ->
+             Repo.delete_all(from(p in Platform.Tasks.Project, where: p.id == ^project.id))
+           end},
+          {"delete memberships",
+           fn ->
+             Repo.delete_all(
+               from(m in Platform.Tenancy.OrgMembership, where: m.org_id == ^org.id)
+             )
+           end},
+          {"delete users",
+           fn ->
+             Repo.delete_all(from(u in Platform.Accounts.User, where: u.id in ^[u1.id, u2.id]))
+           end},
+          {"delete org",
+           fn -> Repo.delete_all(from(o in Platform.Tenancy.Org, where: o.id == ^org.id)) end},
+          {"delete own root",
+           fn ->
+             if own_root?,
+               do: Repo.delete_all(from(o in Platform.Tenancy.Org, where: o.id == ^root.id))
+           end}
+        ],
+        fn -> Sandbox.mode(Repo, :manual) end
+      )
     end)
 
     %{org: org, u1: u1, u2: u2, project: project, profile: profile, account: account}
+  end
+
+  @doc false
+  # Runs every cleanup step, collecting failures instead of stopping at the
+  # first; runs `restore` last whatever happened; then raises once listing
+  # every failure out of the number attempted.
+  def cleanup_all!(steps, restore) do
+    failures =
+      Enum.flat_map(steps ++ [{"restore", restore}], fn {label, fun} ->
+        try do
+          case fun.() do
+            :error ->
+              ["#{label}: :error"]
+
+            result when is_tuple(result) and elem(result, 0) == :error ->
+              ["#{label}: #{inspect(result)}"]
+
+            _ ->
+              []
+          end
+        catch
+          kind, reason -> ["#{label}: #{Exception.format(kind, reason, __STACKTRACE__)}"]
+        end
+      end)
+
+    if failures != [] do
+      raise "cleanup failed in #{length(failures)} of #{length(steps) + 1} steps:\n" <>
+              Enum.join(failures, "\n")
+    end
+
+    :ok
+  end
+
+  describe "cleanup_all!/2" do
+    test "attempts every step after a failure, restores last, and reports every failure" do
+      {:ok, log} = Agent.start_link(fn -> [] end)
+      note = fn x -> Agent.update(log, &[x | &1]) end
+
+      error =
+        assert_raise RuntimeError, fn ->
+          cleanup_all!(
+            [
+              {"one", fn -> raise "boom one" end},
+              {"two", fn -> note.(:two) end},
+              {"three", fn -> raise "boom three" end},
+              {"four", fn -> note.(:four) end}
+            ],
+            fn -> note.(:restore) end
+          )
+        end
+
+      assert Enum.reverse(Agent.get(log, & &1)) == [:two, :four, :restore]
+      assert error.message =~ "2 of 5 steps"
+      assert error.message =~ "one: "
+      assert error.message =~ "boom one"
+      assert error.message =~ "three: "
+      assert error.message =~ "boom three"
+    end
+
+    test "a failing restore is reported too, and a clean run returns :ok" do
+      assert :ok = cleanup_all!([{"a", fn -> :ok end}], fn -> :ok end)
+
+      error =
+        assert_raise RuntimeError, fn ->
+          cleanup_all!([{"a", fn -> :ok end}], fn -> raise "restore boom" end)
+        end
+
+      assert error.message =~ "restore: "
+      assert error.message =~ "restore boom"
+    end
+
+    test "a step that returns an error is a failure too; later steps and the restore still run" do
+      {:ok, log} = Agent.start_link(fn -> [] end)
+      note = fn x -> Agent.update(log, &[x | &1]) end
+
+      error =
+        assert_raise RuntimeError, fn ->
+          cleanup_all!(
+            [
+              {"returns error tuple", fn -> note.(:a) && {:error, :could_not_delete} end},
+              {"returns bare error", fn -> note.(:b) && :error end},
+              {"returns 1-tuple", fn -> note.(:c) && {:error} end},
+              {"fine", fn -> note.(:d) && {:ok, :done} end}
+            ],
+            fn -> note.(:restore) end
+          )
+        end
+
+      assert Enum.reverse(Agent.get(log, & &1)) == [:a, :b, :c, :d, :restore]
+      assert error.message =~ "3 of 5 steps"
+      assert error.message =~ "returns error tuple: {:error, :could_not_delete}"
+      assert error.message =~ "returns bare error: :error"
+      assert error.message =~ "returns 1-tuple: {:error}"
+      refute error.message =~ "fine:"
+    end
   end
 
   # Imports one clip through slice C and returns it with its render id.

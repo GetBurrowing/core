@@ -47,9 +47,11 @@ defmodule Platform.Social.TransportParityTest do
   setup do
     owner =
       Repo.insert!(%Platform.Accounts.User{
-        email: "social-parity-#{System.unique_integer([:positive])}@example.com",
+        email:
+          "social-parity-#{Platform.TenancyFixtures.run_token()}-#{System.unique_integer([:positive])}@example.com",
         name: "Social Parity Owner",
-        oidc_sub: "social-parity-#{System.unique_integer([:positive])}"
+        oidc_sub:
+          "social-parity-#{Platform.TenancyFixtures.run_token()}-#{System.unique_integer([:positive])}"
       })
 
     org = Platform.Tenancy.get_org_by_slug!("acme")
@@ -262,7 +264,8 @@ defmodule Platform.Social.TransportParityTest do
     {:ok, agent} =
       %Agent{}
       |> Agent.changeset(%{
-        slug: "social-parity-agent-#{System.unique_integer([:positive])}",
+        slug:
+          "social-parity-agent-#{Platform.TenancyFixtures.run_token()}-#{System.unique_integer([:positive])}",
         name: "Social Parity Agent",
         status: "active"
       })
@@ -271,7 +274,8 @@ defmodule Platform.Social.TransportParityTest do
     {:ok, runtime} =
       %AgentRuntime{}
       |> AgentRuntime.changeset(%{
-        runtime_id: "social-parity-rt-#{System.unique_integer([:positive])}",
+        runtime_id:
+          "social-parity-rt-#{Platform.TenancyFixtures.run_token()}-#{System.unique_integer([:positive])}",
         owner_user_id: ctx.owner.id,
         agent_id: agent.id,
         auth_token_hash: AgentRuntime.hash_token(raw_token),

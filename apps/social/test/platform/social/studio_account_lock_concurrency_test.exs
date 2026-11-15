@@ -24,8 +24,10 @@ defmodule Platform.Social.StudioAccountLockConcurrencyTest do
     {root, own_root?} =
       case Repo.one(from(o in Platform.Tenancy.Org, where: is_nil(o.parent_org_id), limit: 1)) do
         nil ->
-          {Repo.insert!(%Platform.Tenancy.Org{name: "Lock root #{n}", slug: "lock-root-#{n}"}),
-           true}
+          {Repo.insert!(%Platform.Tenancy.Org{
+             name: "Lock root #{n}",
+             slug: "lock-root-#{Platform.TenancyFixtures.run_token()}-#{n}"
+           }), true}
 
         root ->
           {root, false}
@@ -34,14 +36,14 @@ defmodule Platform.Social.StudioAccountLockConcurrencyTest do
     org =
       Repo.insert!(%Platform.Tenancy.Org{
         name: "Lock race #{n}",
-        slug: "lock-race-#{n}",
+        slug: "lock-race-#{Platform.TenancyFixtures.run_token()}-#{n}",
         parent_org_id: root.id
       })
 
     user =
       Repo.insert!(%Platform.Accounts.User{
-        email: "lock-race-#{n}@example.com",
-        oidc_sub: "lock-race-#{n}",
+        email: "lock-race-#{Platform.TenancyFixtures.run_token()}-#{n}@example.com",
+        oidc_sub: "lock-race-#{Platform.TenancyFixtures.run_token()}-#{n}",
         name: "Lock Race #{n}"
       })
 
@@ -83,8 +85,8 @@ defmodule Platform.Social.StudioAccountLockConcurrencyTest do
 
     other =
       Repo.insert!(%Platform.Accounts.User{
-        email: "acct-race-#{n}@example.com",
-        oidc_sub: "acct-race-#{n}",
+        email: "acct-race-#{Platform.TenancyFixtures.run_token()}-#{n}@example.com",
+        oidc_sub: "acct-race-#{Platform.TenancyFixtures.run_token()}-#{n}",
         name: "Acct Race #{n}"
       })
 

@@ -30,8 +30,10 @@ defmodule Platform.Social.StudioRacesTest do
     {root, own_root?} =
       case Repo.one(from(o in Platform.Tenancy.Org, where: is_nil(o.parent_org_id), limit: 1)) do
         nil ->
-          {Repo.insert!(%Platform.Tenancy.Org{name: "Race root #{n}", slug: "race-root-#{n}"}),
-           true}
+          {Repo.insert!(%Platform.Tenancy.Org{
+             name: "Race root #{n}",
+             slug: "race-root-#{Platform.TenancyFixtures.run_token()}-#{n}"
+           }), true}
 
         root ->
           {root, false}
@@ -40,15 +42,15 @@ defmodule Platform.Social.StudioRacesTest do
     org =
       Repo.insert!(%Platform.Tenancy.Org{
         name: "Race #{n}",
-        slug: "race-#{n}",
+        slug: "race-#{Platform.TenancyFixtures.run_token()}-#{n}",
         parent_org_id: root.id
       })
 
     user = fn tag ->
       u =
         Repo.insert!(%Platform.Accounts.User{
-          email: "race-#{tag}-#{n}@example.com",
-          oidc_sub: "race-#{tag}-#{n}",
+          email: "race-#{tag}-#{Platform.TenancyFixtures.run_token()}-#{n}@example.com",
+          oidc_sub: "race-#{tag}-#{Platform.TenancyFixtures.run_token()}-#{n}",
           name: "Race #{tag} #{n}"
         })
 
@@ -74,7 +76,7 @@ defmodule Platform.Social.StudioRacesTest do
 
     agent =
       Repo.insert!(%Platform.Agents.Agent{
-        slug: "race-agent-#{n}",
+        slug: "race-agent-#{Platform.TenancyFixtures.run_token()}-#{n}",
         name: "Race agent #{n}",
         metadata: %{"org_id" => org.id}
       })

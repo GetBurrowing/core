@@ -34,7 +34,10 @@ defmodule Platform.Social.StudioLockedDecisionsTest do
     {root, own_root?} =
       case Repo.one(from(o in Platform.Tenancy.Org, where: is_nil(o.parent_org_id), limit: 1)) do
         nil ->
-          {Repo.insert!(%Platform.Tenancy.Org{name: "LD root #{n}", slug: "ld-root-#{n}"}), true}
+          {Repo.insert!(%Platform.Tenancy.Org{
+             name: "LD root #{n}",
+             slug: "ld-root-#{Platform.TenancyFixtures.run_token()}-#{n}"
+           }), true}
 
         root ->
           {root, false}
@@ -43,15 +46,15 @@ defmodule Platform.Social.StudioLockedDecisionsTest do
     org =
       Repo.insert!(%Platform.Tenancy.Org{
         name: "LD #{n}",
-        slug: "ld-#{n}",
+        slug: "ld-#{Platform.TenancyFixtures.run_token()}-#{n}",
         parent_org_id: root.id
       })
 
     user = fn tag ->
       u =
         Repo.insert!(%Platform.Accounts.User{
-          email: "ld-#{tag}-#{n}@example.com",
-          oidc_sub: "ld-#{tag}-#{n}",
+          email: "ld-#{tag}-#{Platform.TenancyFixtures.run_token()}-#{n}@example.com",
+          oidc_sub: "ld-#{tag}-#{Platform.TenancyFixtures.run_token()}-#{n}",
           name: "LD #{tag} #{n}"
         })
 
@@ -64,7 +67,7 @@ defmodule Platform.Social.StudioLockedDecisionsTest do
 
     agent =
       Repo.insert!(%Platform.Agents.Agent{
-        slug: "ld-agent-#{n}",
+        slug: "ld-agent-#{Platform.TenancyFixtures.run_token()}-#{n}",
         name: "LD agent #{n}",
         metadata: %{"org_id" => org.id}
       })
