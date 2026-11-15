@@ -199,12 +199,9 @@ defmodule Platform.Goals.GoalsTest do
     test "the scan can hit (positive control)" do
       assert hits("goal = Repo.get(Goal, id)") == ["Repo.get("]
 
-      assert hits("Repo.all(Goal)") == [
-               "Repo.all(Goal",
-               "Repo.all(Stop",
-               "Repo.all(Entry",
-               "Repo.all(Grant"
-             ]
+      for schema <- ~w(Goal Stop Entry Grant) do
+        assert hits("Repo.all(#{schema})") == ["Repo.all(#{schema}"]
+      end
     end
 
     test "apps/goals/lib has no unscoped read" do
