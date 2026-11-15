@@ -13,16 +13,11 @@ defmodule Platform.Goals.DevBriefSeed do
       Enum.find(Platform.Accounts.list_users(query: email), &(&1.email == email)) ||
         raise("no active user with that email")
 
-    membership =
-      Enum.find(Platform.Tenancy.list_user_memberships(user), &(not &1.external)) ||
-        raise("the reader needs an internal org membership")
+    membership = internal_membership(user)
 
     now = DateTime.utc_now()
     zone = Disseminator.timezone()
     today = now |> DateTime.shift_zone!(zone) |> DateTime.to_date()
-    noon = DateTime.new!(today, ~T[12:00:00], zone) |> DateTime.shift_zone!("Etc/UTC")
-
-    seed_now = if DateTime.compare(noon, now) == :gt, do: noon, else: DateTime.add(now, 300)
 
     previous =
       for key <- [:clock_now, :default_time_zone], do: {key, Application.fetch_env(:goals, key)}
@@ -30,7 +25,7 @@ defmodule Platform.Goals.DevBriefSeed do
     Application.put_env(:goals, :default_time_zone, zone)
 
     try do
-      seed(user, membership.org_id, seed_now, today)
+      seed(user, membership.org_id, now, today)
     after
       for {key, value} <- previous do
         case value do
@@ -193,7 +188,7 @@ defmodule Platform.Goals.DevBriefSeed do
       payload: %{"cards" => cards}
     })
 
-    put_now(now)
+    put_now(DateTime.utc_now())
 
     for {title, details, takeaway_id} <- [
           {"Drafted three short video outlines",
@@ -207,12 +202,14 @@ defmodule Platform.Goals.DevBriefSeed do
           title: title,
           details: details,
           takeaway_id: takeaway_id,
-          occurred_at: DateTime.add(now, -1)
+          occurred_at: Clock.now()
         })
       )
     end
 
-    {:ok, result} = Disseminator.run(now: now)
+    delivery_now = DateTime.utc_now()
+    put_now(delivery_now)
+    {:ok, result} = Disseminator.run(now: delivery_now)
     {:ok, items} = Goals.brief_items(user, today)
     {:ok, streak} = Goals.practice_streak(user, practice.id, today: today)
 
@@ -221,6 +218,20 @@ defmodule Platform.Goals.DevBriefSeed do
     )
 
     IO.inspect(result, label: "Delivery")
+  end
+
+  defp internal_membership(user) do
+    case Enum.find(Platform.Tenancy.list_user_memberships(user), &(not &1.external)) do
+      nil ->
+        if Platform.Tenancy.external_user?(user),
+          do: raise("use an internal development reader")
+
+        root = Platform.Tenancy.get_root_org() || raise("seed the development root org first")
+        ok!(Platform.Tenancy.set_membership_role(user, root.slug, :member))
+
+      membership ->
+        membership
+    end
   end
 
   defp goal(user, org_id, coach, attrs) do
