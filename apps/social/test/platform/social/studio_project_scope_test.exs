@@ -166,6 +166,75 @@ defmodule Platform.Social.StudioProjectScopeTest do
     end
   end
 
+  defp break_project!(w, :missing), do: set_project!(w, nil)
+  defp break_project!(w, :foreign), do: set_project!(w, project!(w.other_org_id).id)
+
+  defp break_project!(w, :archived),
+    do: {:ok, _} = Platform.Tasks.update_project(w.project, %{archived_at: DateTime.utc_now()})
+
+  defp break_project!(w, :scheduled_for_deletion),
+    do:
+      {:ok, _} =
+        Platform.Tasks.update_project(w.project, %{deletion_scheduled_at: DateTime.utc_now()})
+
+  describe "agent writes need the live project too (every Studio write)" do
+    # The delegated path (`AgentDrafts.update_agent_draft/4` -> `Studio.save_version/5`)
+    # and the direct agent actor. Agents have no approver or `social.use` check
+    # (human-only); only the project, decided on the locked profile row.
+    setup %{w: w} do
+      %{post: studio_post!(w, w.x, "draft")}
+    end
+
+    defp agent_edit(w, post, body) do
+      Social.AgentDrafts.update_agent_draft(w.scope, post.id, %{body: body}, agent_id: w.agent.id)
+    end
+
+    defp body_of(post), do: Repo.get!(Post, post.id).body
+
+    test "control: a live project lets the agent edit", %{w: w, post: post} do
+      assert {:ok, %Post{body: "agent ok"}} = agent_edit(w, post, "agent ok")
+    end
+
+    for name <- [:missing, :foreign, :archived, :scheduled_for_deletion] do
+      test "a #{name} project refuses the delegated agent edit and the direct one, writing nothing",
+           %{w: w, post: post} do
+        break_project!(w, unquote(name))
+        original = body_of(post)
+        before = counts()
+
+        assert {:error, :studio_needs_project} = agent_edit(w, post, "after #{unquote(name)}")
+
+        assert {:error, :studio_needs_project} =
+                 Studio.save_version(
+                   w.org_id,
+                   post.id,
+                   {:agent, w.agent.id},
+                   %{body: "direct"},
+                   %{state_rev: post.state_rev, version: post.version}
+                 )
+
+        assert counts() == before
+        assert body_of(post) == original
+      end
+    end
+
+    test "an agent edit made while the project moves under it follows the locked row", %{
+      w: w,
+      post: post
+    } do
+      assert {:error, :studio_needs_project} =
+               with_project_moved_before_lock(w, nil, fn -> agent_edit(w, post, "raced") end)
+
+      assert body_of(post) == post.body
+    end
+
+    test "no human-only check is added: an agent edits while a project-level deny names someone else",
+         %{w: w, post: post} do
+      deny_on_project!(w.approver, w.profile.project_id)
+      assert {:ok, %Post{body: "agent ok"}} = agent_edit(w, post, "agent ok")
+    end
+  end
+
   describe "the module lock keeps its place" do
     test "with a missing project the module lock does not mask the project refusal", %{w: w} do
       :ok = set_project!(w, nil)

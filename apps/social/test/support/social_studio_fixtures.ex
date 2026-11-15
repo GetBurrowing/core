@@ -144,6 +144,73 @@ defmodule Platform.SocialStudioFixtures do
     Repo.get!(Clip, clip.id)
   end
 
+  # ── Slice B helpers (real transitions, not forged rows) ──────────────
+
+  @doc "The optimistic tokens a caller observed for `post`, plus `extra` keys."
+  def expect(%Post{} = post, extra \\ %{}),
+    do: Map.merge(%{state_rev: post.state_rev, version: post.version}, extra)
+
+  @doc "A `needs_approval` Studio post made through `Studio.create_post/4`."
+  def submitted_post!(w, account, attrs \\ %{}),
+    do: studio_post!(w, account, "needs_approval", attrs)
+
+  @doc "Approves `post` through `Studio.approve_version/4` as `user` (default the world's approver)."
+  def studio_approve!(w, %Post{} = post, user \\ nil) do
+    {:ok, %{post: approved}} =
+      Studio.approve_version(w.org_id, post.id, (user || w.approver).id, expect(post))
+
+    approved
+  end
+
+  @doc "Plans an approved `post` an hour from now through `Studio.plan_post/5`."
+  def studio_plan!(w, %Post{} = post, user \\ nil, at \\ nil) do
+    at = at || DateTime.add(DateTime.utc_now(), 3_600, :second)
+
+    {:ok, %{post: planned}} =
+      Studio.plan_post(w.org_id, post.id, (user || w.approver).id, expect(post), at)
+
+    planned
+  end
+
+  @doc "A new live approver of the world's profile (member of the org, on the list)."
+  def approver2!(w), do: make_approver!(w.org_id, w.profile, user!())
+
+  @doc "Event actions of a post, oldest first."
+  def actions(post_or_id) do
+    id = if is_struct(post_or_id), do: post_or_id.id, else: post_or_id
+    id |> Platform.Social.PostEvents.list_for_post() |> Enum.map(& &1.action)
+  end
+
+  @doc "Receipts of a post, oldest first."
+  def receipts(post_or_id) do
+    id = if is_struct(post_or_id), do: post_or_id.id, else: post_or_id
+
+    Repo.all(
+      from(a in PostApproval, where: a.post_id == ^id, order_by: [asc: a.approved_at, asc: a.id])
+    )
+  end
+
+  @doc "Row counts a refused call must leave alone: posts, events, receipts."
+  def write_counts do
+    {Repo.aggregate(Post, :count), Repo.aggregate(Platform.Social.PostEvent, :count),
+     Repo.aggregate(PostApproval, :count)}
+  end
+
+  @doc """
+  Makes every later insert of an `action` event fail (CHECK), for this test
+  only (the sandbox transaction rolls the DDL back).
+  """
+  def fail_event!(action) do
+    Repo.query!(
+      "ALTER TABLE social_post_events ADD CONSTRAINT boom_event CHECK (action <> '#{action}') NOT VALID"
+    )
+
+    :ok
+  end
+
+  @doc "Reads the row straight from the database."
+  def fresh(%Post{id: id}), do: Repo.get!(Post, id)
+
   @doc "Every Fake publisher call except the inbound signature check."
   def send_calls, do: Enum.reject(Fake.calls(), &match?({:verify_webhook, _, _}, &1))
 end

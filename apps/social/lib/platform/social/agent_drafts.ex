@@ -270,30 +270,86 @@ defmodule Platform.Social.AgentDrafts do
     with :ok <- refuse_forbidden(attrs),
          :ok <- refuse_status_value(attrs),
          {:ok, post} <- fetch_post(scope, post_id) do
-      Repo.transaction(fn ->
-        locked = Repo.one(from(p in Post, where: p.id == ^post.id, lock: "FOR UPDATE"))
-
-        with %Post{} <- locked || {:error, :not_found},
-             :ok <- refuse_studio(locked),
-             :ok <- refuse_locked(locked),
-             :ok <- refuse_transition(locked, attrs),
-             profile = profile_of(locked),
-             :ok <- refuse_banned(attrs, profile),
-             :ok <- check_task_profile(attrs, profile),
-             changeset = agent_changeset(locked, attrs, profile),
-             :ok <-
-               Social.require_channel(changeset, profile, Repo.get(Account, locked.account_id)),
-             {:ok, updated} <- Repo.update(changeset) do
-          log_update(locked, updated, changeset, actor)
-          updated
-        else
-          {:error, :banned_phrase, phrase} -> Repo.rollback({:banned_phrase, phrase})
-          {:error, reason} -> Repo.rollback(reason)
-        end
-      end)
-      |> unwrap_banned()
-      |> after_commit()
+      if Post.studio?(post),
+        do: update_studio_draft(post, attrs, actor),
+        else: update_legacy_draft(post, attrs, actor)
     end
+  end
+
+  # Social Studio slice B: a Studio post is versioned. The agent's edit is
+  # `Studio.save_version/5` with an agent actor (draft and needs_approval only;
+  # `:post_locked` past that), on the state the agent just read. Content keys
+  # only, and no approval card (Studio has none).
+  @studio_agent_keys ~w(body media_file_ids link_url cover_file_id cover_offset_ms)
+
+  defp update_studio_draft(%Post{} = post, attrs, {:agent, agent_id} = _actor) do
+    profile = profile_of(post)
+    attrs = drop_unchanged_status(attrs, post)
+
+    with :ok <- refuse_studio_keys(attrs),
+         :ok <- refuse_banned(attrs, profile),
+         :ok <- studio_changeset_valid(post, attrs, profile),
+         {:ok, %{post: updated}} <-
+           Platform.Social.Studio.save_version(
+             profile.org_id,
+             post.id,
+             {:agent, agent_id},
+             attrs,
+             %{state_rev: post.state_rev, version: post.version}
+           ) do
+      {:ok, updated}
+    else
+      {:error, :no_changes} -> {:ok, post}
+      {:error, :banned_phrase, phrase} -> {:error, :banned_phrase, phrase}
+      other -> other
+    end
+  end
+
+  defp drop_unchanged_status(%{"status" => status} = attrs, %Post{status: status}),
+    do: Map.delete(attrs, "status")
+
+  defp drop_unchanged_status(attrs, _post), do: attrs
+
+  defp refuse_studio_keys(%{"status" => _}), do: {:error, :status_not_allowed}
+
+  defp refuse_studio_keys(attrs) do
+    case Map.keys(attrs) -- @studio_agent_keys do
+      [] -> :ok
+      keys -> {:error, :field_not_allowed, Enum.sort(keys)}
+    end
+  end
+
+  # The agent's own validation (referenced task/meeting, media in the org, cover,
+  # length) against the post as read; the version save repeats none of it.
+  defp studio_changeset_valid(post, attrs, profile) do
+    changeset = agent_changeset(post, Map.put(attrs, "status", post.status), profile)
+    if changeset.valid?, do: :ok, else: {:error, changeset}
+  end
+
+  defp update_legacy_draft(%Post{} = post, attrs, actor) do
+    Repo.transaction(fn ->
+      locked = Repo.one(from(p in Post, where: p.id == ^post.id, lock: "FOR UPDATE"))
+
+      with %Post{} <- locked || {:error, :not_found},
+           :ok <- refuse_studio(locked),
+           :ok <- refuse_locked(locked),
+           :ok <- refuse_transition(locked, attrs),
+           profile = profile_of(locked),
+           :ok <- refuse_banned(attrs, profile),
+           :ok <- check_task_profile(attrs, profile),
+           changeset = agent_changeset(locked, attrs, profile),
+           :ok <-
+             Social.require_channel(changeset, profile, Repo.get(Account, locked.account_id)),
+           {:ok, updated} <- Repo.update(changeset) do
+        log_update(locked, updated, changeset, actor)
+        updated
+      else
+        {:error, :banned_phrase, phrase} -> Repo.rollback({:banned_phrase, phrase})
+        {:error, reason} -> Repo.rollback(reason)
+      end
+    end)
+    |> unwrap_banned()
+    |> after_commit()
   end
 
   # Social authoring 2/11: `edited` when anything but the status changed

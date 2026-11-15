@@ -199,6 +199,34 @@ defmodule Platform.Social.Post do
     |> db_constraints()
   end
 
+  @studio_content ~w(body media_file_ids link_url cover_file_id cover_offset_ms platform_options
+                     is_aigc ai_disclosure)a
+
+  @doc "The content fields `Platform.Social.Studio.save_version/5` accepts (plus `account_id`)."
+  @spec studio_content_fields() :: [atom()]
+  def studio_content_fields, do: @studio_content
+
+  @doc """
+  The changes a Studio version save would make to `post`: only the content
+  fields that really differ (an empty map means nothing to save). Validated
+  against a copy of the post in an editable status, because the legacy
+  cover rule locks past `needs_approval`, while a Studio edit of an approved
+  post is allowed and revokes the approval instead. Returns
+  `{:ok, changes}` or `{:error, changeset}`.
+  """
+  @spec studio_content_changes(t(), map(), Platform.Social.Cover.ctx()) ::
+          {:ok, map()} | {:error, Ecto.Changeset.t()}
+  def studio_content_changes(%__MODULE__{} = post, attrs, ctx) do
+    validated =
+      %{post | status: "draft"}
+      |> cast(attrs, @studio_content)
+      |> validate_required([:body])
+      |> validate_length(:body, max: @max_body)
+      |> Platform.Social.Cover.validate(attrs, ctx)
+
+    if validated.valid?, do: {:ok, validated.changes}, else: {:error, validated}
+  end
+
   @doc """
   Whether `changeset` failed on the one-Studio-post-per-render-and-destination
   index (`social_posts_studio_destination_key`); callers answer

@@ -490,6 +490,22 @@ defmodule Platform.Social.Approvals do
     |> binary_part(0, 32)
   end
 
+  @doc """
+  The content identity a Studio approval receipt stores: the
+  same fields as `fingerprint/1` WITHOUT `scheduled_at`, plus
+  `platform_options`, `is_aigc` and `ai_disclosure`, so planning never stales
+  an approval. `fingerprint/1` is unchanged for legacy cards.
+  """
+  @spec content_fingerprint(Post.t()) :: String.t()
+  def content_fingerprint(%Post{} = post) do
+    {post.account_id, post.body, post.link_url, post.media_file_ids || [], post.cover_file_id,
+     post.cover_offset_ms, post.platform_options || %{}, post.is_aigc == true, post.ai_disclosure}
+    |> :erlang.term_to_binary([:deterministic])
+    |> then(&:crypto.hash(:sha256, &1))
+    |> Base.encode16(case: :lower)
+    |> binary_part(0, 32)
+  end
+
   # The authoritative document: the canvas server's in-memory copy (the
   # database row is an async write-through sink).
   defp current_document(canvas_id) do
