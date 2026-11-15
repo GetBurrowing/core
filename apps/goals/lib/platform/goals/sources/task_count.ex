@@ -52,6 +52,8 @@ defmodule Platform.Goals.Sources.TaskCount do
     end
   end
 
+  defp scope(_), do: {:cannot_measure, :bad_settings}
+
   @doc "Resolves a canonical live project in the goal's permitted organization scope."
   def live_project(goal, project_id) do
     with {:ok, id} <- Platform.UUID.cast(project_id),
@@ -63,8 +65,6 @@ defmodule Platform.Goals.Sources.TaskCount do
       _ -> :error
     end
   end
-
-  defp scope(_), do: {:cannot_measure, :bad_settings}
 
   defp unit(unit, count) do
     if is_binary(unit) and String.trim(unit) != "",
