@@ -36,6 +36,7 @@ ARG GIT_SHA
 COPY apps/platform/mix.exs apps/platform/mix.lock platform/
 COPY apps/game_stream/mix.exs apps/game_stream/mix.lock game_stream/
 COPY apps/social/mix.exs apps/social/mix.lock social/
+COPY apps/goals/mix.exs apps/goals/mix.lock goals/
 COPY apps/burrow_release/mix.exs apps/burrow_release/mix.lock burrow_release/
 
 # tailwind and the precompiled NIFs (wasmex, vix) are GitHub release
@@ -62,6 +63,10 @@ COPY apps/social/config social/config
 COPY apps/social/assets social/assets
 COPY apps/social/priv social/priv
 COPY apps/social/lib social/lib
+# Goals has no assets directory.
+COPY apps/goals/config goals/config
+COPY apps/goals/priv goals/priv
+COPY apps/goals/lib goals/lib
 COPY apps/burrow_release/config burrow_release/config
 
 # The ADR corpus and the build commit go into CORE's priv/, where
