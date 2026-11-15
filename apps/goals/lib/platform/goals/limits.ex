@@ -1,6 +1,11 @@
 defmodule Platform.Goals.Limits do
   @moduledoc "Install-tunable coach limits, kept as data (task 01a1dfc1-05b0)."
   defp value(key, default), do: Map.get(Application.get_env(:goals, :limits, %{}), key, default)
+  def report_window_days, do: value(:report_window_days, 7)
+  def max_suggestions, do: value(:max_suggestions, 10)
+  def max_moved, do: value(:max_moved, 10)
+  def max_idea_steps, do: value(:max_idea_steps, 10)
+  def max_question_chars, do: value(:max_question_chars, 500)
   def tick_interval_ms, do: value(:tick_interval_ms, 60000)
   def tick_batch, do: value(:tick_batch, 50)
   def default_wake_hour, do: value(:default_wake_hour, 6)
@@ -23,3 +28,4 @@ defmodule Platform.Goals.Limits do
     Map.get(value(:max_open_asks, %{}), outreach, Map.fetch!(defaults, outreach))
   end
 end
+

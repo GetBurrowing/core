@@ -534,13 +534,18 @@ defmodule Platform.Goals do
     end
   end
 
-  @doc "Returns the visible, addressed, unanswered asks for a brief reader."
+  @doc "Returns visible, addressed, unanswered asks (default 50, maximum 200; :infinity is reserved for daily brief preparation)."
   def list_my_asks(actor, opts \\ []) do
     with :ok <- check_enabled() do
       case actor do
         %User{id: id} ->
           now = Platform.Goals.Clock.now()
-          limit = opts |> Keyword.get(:limit, 50) |> max(0) |> min(200)
+
+          limit =
+            case Keyword.get(opts, :limit, 50) do
+              :infinity -> nil
+              value -> value |> max(0) |> min(200)
+            end
 
           q =
             from(a in Platform.Goals.Ask,
@@ -552,10 +557,10 @@ defmodule Platform.Goals do
                 ^id in a.addressed_user_ids and a.status == "open" and a.expires_at > ^now and
                   is_nil(answer.id),
               order_by: [desc: a.inserted_at, desc: a.id],
-              limit: ^limit,
               preload: [:answers]
             )
 
+          q = if is_nil(limit), do: q, else: from(a in q, limit: ^limit)
           {:ok, Repo.all(q)}
 
         _ ->
@@ -614,6 +619,51 @@ defmodule Platform.Goals do
       end)
     end
   end
+
+  @doc "Prepares the reader's daily goal items, once per addressed ask and report window."
+  def prepare_brief(actor, date),
+    do: with(:ok <- check_enabled(), do: Platform.Goals.Brief.prepare(actor, date))
+
+  def brief_items(actor, date),
+    do: with(:ok <- check_enabled(), do: Platform.Goals.Brief.items(actor, date))
+
+  def brief_summary(actor, date),
+    do: with(:ok <- check_enabled(), do: Platform.Goals.Brief.summary(actor, date))
+
+  def set_report_noted(actor, id, noted?),
+    do: with(:ok <- check_enabled(), do: Platform.Goals.Brief.set_noted(actor, id, noted?))
+
+  def request_undo(actor, goal_id, entry_id, request \\ "undo"),
+    do:
+      with(
+        :ok <- check_enabled(),
+        do: Platform.Goals.Brief.request_undo(actor, goal_id, entry_id, request)
+      )
+
+  def ask_coach(actor, goal_id, text, opts \\ []),
+    do:
+      with(:ok <- check_enabled(), do: Platform.Goals.Brief.ask_coach(actor, goal_id, text, opts))
+
+  @doc "Withdraws a final offer/question answer before the coach sees it, extending the original final-answer rule."
+  def withdraw_answer(actor, ask_id),
+    do: with(:ok <- check_enabled(), do: Platform.Goals.Brief.withdraw_answer(actor, ask_id))
+
+  def record_practice(actor, ask_id, results),
+    do:
+      with(
+        :ok <- check_enabled(),
+        do: Platform.Goals.Brief.record_practice(actor, ask_id, results)
+      )
+
+  def practice_streak(actor, goal_id, opts \\ []),
+    do:
+      with(:ok <- check_enabled(), do: Platform.Goals.Brief.practice_streak(actor, goal_id, opts))
+
+  def get_ask(actor, ask_id),
+    do: with(:ok <- check_enabled(), do: Platform.Goals.Brief.get_ask(actor, ask_id))
+
+  def refresh_brief(actor, ask_id),
+    do: with(:ok <- check_enabled(), do: Platform.Goals.Brief.refresh(actor, ask_id))
 
   @doc "Lists the core tasks tagged to a visible goal."
   def list_goal_tasks(actor, goal_id, opts \\ []) do
@@ -1617,3 +1667,4 @@ defmodule Platform.Goals do
     end
   end
 end
+
