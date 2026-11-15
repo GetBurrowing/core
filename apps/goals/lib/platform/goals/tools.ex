@@ -17,7 +17,7 @@ defmodule Platform.Goals.Tools do
   suggestion}`.
   """
 
-  import Ecto.Query
+  import Ecto.Query, only: [from: 2]
 
   alias Platform.Agents.Agent
   alias Platform.Goals
@@ -114,8 +114,8 @@ defmodule Platform.Goals.Tools do
 
   defp run("goal_get", args, agent) do
     with {:ok, goal} <- coached_goal(agent, :goal, args["goal_id"]) do
-      entries_limit = limit(args["entries_limit"], 20, 50)
-      readings_limit = limit(args["readings_limit"], 10, 50)
+      entries_limit = bounded(args["entries_limit"], 20, 50)
+      readings_limit = bounded(args["readings_limit"], 10, 50)
 
       with {:ok, stops} <- Goals.list_stops(agent, goal.id),
            {:ok, entries} <- Goals.list_entries(agent, goal.id, limit: entries_limit),
@@ -189,16 +189,16 @@ defmodule Platform.Goals.Tools do
   defp keys("goal_ask"), do: @ask_keys
   defp keys("goal_wait"), do: @wait_keys
 
-  defp limit(value, _default, max) when is_integer(value), do: value |> max(0) |> min(max)
+  defp bounded(value, _default, cap) when is_integer(value), do: value |> max(0) |> min(cap)
 
-  defp limit(value, default, max) when is_binary(value) do
+  defp bounded(value, default, cap) when is_binary(value) do
     case Integer.parse(value) do
-      {n, ""} -> limit(n, default, max)
+      {n, ""} -> bounded(n, default, cap)
       _ -> default
     end
   end
 
-  defp limit(_value, default, _max), do: default
+  defp bounded(_value, default, _cap), do: default
 
   # ── allowed ──────────────────────────────────────────────────────────
 
