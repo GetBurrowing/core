@@ -302,6 +302,123 @@ defmodule Platform.Social.IntakeTest do
       assert length(renders(clip.id)) == 1
     end
 
+    test "an entry that states the file's hash and size imports when they still match", %{w: w} do
+      file = stored_file!(w.project, "media bytes #{unique()}", "m.mp4", "video/mp4")
+
+      e =
+        entry(w, "ep4/media", %{
+          "file_id" => file.id,
+          "sha256" => file.content_hash,
+          "size_bytes" => file.byte_size
+        })
+
+      assert statuses(import!(w, [e])) == [:created]
+      assert statuses(import!(w, [e])) == [:exists]
+    end
+
+    test "an entry whose stated hash or size no longer matches the file is :file_changed", %{w: w} do
+      file = stored_file!(w.project, "media bytes #{unique()}", "m.mp4", "video/mp4")
+
+      wrong_hash =
+        entry(w, "ep4/wrong-hash", %{
+          "file_id" => file.id,
+          "sha256" => String.duplicate("0", 64),
+          "size_bytes" => file.byte_size
+        })
+
+      wrong_size =
+        entry(w, "ep4/wrong-size", %{
+          "file_id" => file.id,
+          "sha256" => file.content_hash,
+          "size_bytes" => file.byte_size + 1
+        })
+
+      assert statuses(import!(w, [wrong_hash, wrong_size])) == [
+               {:error, :file_changed},
+               {:error, :file_changed}
+             ]
+
+      assert clips(w) == []
+    end
+
+    test "a replay that states the hash is checked against the file as it is now", %{w: w} do
+      file = stored_file!(w.project, "replay media #{unique()}", "m.mp4", "video/mp4")
+
+      e =
+        entry(w, "ep4/replay-media", %{
+          "file_id" => file.id,
+          "sha256" => file.content_hash,
+          "size_bytes" => file.byte_size
+        })
+
+      assert statuses(import!(w, [e])) == [:created]
+      [before] = clips(w)
+
+      Repo.update_all(from(f in Platform.Files.File, where: f.id == ^file.id),
+        set: [content_hash: String.duplicate("a", 64)]
+      )
+
+      assert statuses(import!(w, [e])) == [{:error, :file_changed}]
+      assert clips(w) == [before]
+      assert length(renders(before.id)) == 1
+
+      Repo.update_all(from(f in Platform.Files.File, where: f.id == ^file.id),
+        set: [content_hash: file.content_hash, deleted_at: DateTime.utc_now()]
+      )
+
+      assert statuses(import!(w, [e])) == [{:error, :file_not_in_project}]
+      assert clips(w) == [before]
+    end
+
+    test "a replay with no stated hash is :exists whatever happened to the file", %{w: w} do
+      file = stored_file!(w.project, "plain replay #{unique()}", "m.mp4", "video/mp4")
+      e = entry(w, "ep4/plain", %{"file_id" => file.id})
+      assert statuses(import!(w, [e])) == [:created]
+
+      Repo.update_all(from(f in Platform.Files.File, where: f.id == ^file.id),
+        set: [content_hash: String.duplicate("b", 64)]
+      )
+
+      assert statuses(import!(w, [e])) == [:exists]
+    end
+
+    test "a files.read deny on the project refuses the import while social.use still holds", %{
+      w: w
+    } do
+      e = entry(w, "ep4/no-read")
+
+      {:ok, _} =
+        Platform.Access.Grants.deny(%{
+          principal: {:user, w.approver.id},
+          permission: "files.read",
+          resource: {:project, w.profile.project_id}
+        })
+
+      assert :ok = Studio.authorize_studio_actor(w.profile, w.approver.id)
+
+      assert {:error, :no_file_access} =
+               Intake.import_manifest(w.scope, w.profile.id, manifest([e]), w.approver.id)
+
+      assert clips(w) == []
+    end
+
+    test "a hash without a size, or a size without a hash, is refused", %{w: w} do
+      file = stored_file!(w.project, "media bytes #{unique()}", "m.mp4", "video/mp4")
+
+      only_hash =
+        entry(w, "ep4/only-hash", %{"file_id" => file.id, "sha256" => file.content_hash})
+
+      only_size =
+        entry(w, "ep4/only-size", %{"file_id" => file.id, "size_bytes" => file.byte_size})
+
+      assert statuses(import!(w, [only_hash, only_size])) == [
+               {:error, :invalid_media_claim},
+               {:error, :invalid_media_claim}
+             ]
+
+      assert clips(w) == []
+    end
+
     test "the same ref in another profile is a separate clip", %{w: w} do
       {:ok, second} =
         Social.create_profile(w.org_id, %{

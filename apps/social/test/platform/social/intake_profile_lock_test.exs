@@ -402,6 +402,152 @@ defmodule Platform.Social.IntakeProfileLockTest do
     )
   end
 
+  test "files.read denied on the project while an import waits is refused", ctx do
+    w = world!(ctx)
+
+    waits_then_refused(
+      ctx,
+      w,
+      "ep4/read-denied",
+      fn ->
+        {:ok, _} =
+          Platform.Access.Grants.deny(%{
+            principal: {:user, ctx.user.id},
+            permission: "files.read",
+            resource: {:project, ctx.project.id}
+          })
+      end,
+      :no_file_access
+    )
+  end
+
+  # ── the chosen file's row ─────────────────────────────────────────────
+  # Lock order is profile row, then the per-ref lock, then the file row. `Files.delete_file/2`
+  # is one UPDATE of the file row and takes no other lock, so it cannot form a cycle with it.
+
+  defp file_id_of(manifest), do: manifest["clips"] |> hd() |> Map.fetch!("file_id")
+
+  defp xid!(), do: Repo.query!("SELECT txid_current()").rows |> hd() |> hd()
+
+  # Waits until a connection is blocked on the given transaction (a row lock it holds).
+  defp await_blocked_on!(xid, tries \\ 100) do
+    %{rows: [[waiting]]} =
+      Repo.query!(
+        """
+        SELECT count(*) FROM pg_locks
+        WHERE locktype = 'transactionid' AND NOT granted
+          AND transactionid::text::bigint = ($1::bigint & 4294967295)
+        """,
+        [xid]
+      )
+
+    cond do
+      waiting > 0 ->
+        :ok
+
+      tries == 0 ->
+        flunk("nothing ever blocked on the holder's transaction")
+
+      true ->
+        receive do
+        after
+          50 -> await_blocked_on!(xid, tries - 1)
+        end
+    end
+  end
+
+  defp mark_deleted!(file_id) do
+    Repo.update_all(from(f in Platform.Files.File, where: f.id == ^file_id),
+      set: [deleted_at: DateTime.utc_now()]
+    )
+  end
+
+  test "a file deleted while an import waits for it is refused, and no clip is written", ctx do
+    w = world!(ctx)
+    m = manifest(ctx, "ep4/file-deleted")
+    file_id = file_id_of(m)
+    parent = self()
+
+    # A deletion in flight: holds the file row FOR UPDATE and soft-deletes it on release.
+    deleter =
+      Task.async(fn ->
+        Repo.transaction(fn ->
+          Repo.one(
+            from(f in Platform.Files.File,
+              where: f.id == ^file_id,
+              select: f.id,
+              lock: "FOR UPDATE"
+            )
+          )
+
+          send(parent, {:held, xid!()})
+
+          receive do
+            :release -> mark_deleted!(file_id)
+          after
+            10_000 -> Repo.rollback(:timeout)
+          end
+        end)
+      end)
+
+    assert_receive {:held, xid}, 5_000
+    importer = Task.async(fn -> import!(ctx, w, m) end)
+    await_blocked_on!(xid)
+    assert Task.yield(importer, 0) == nil
+
+    send(deleter.pid, :release)
+    assert {:ok, _} = Task.await(deleter, 10_000)
+
+    assert {:ok, %{clips: [%{status: {:error, :file_not_in_project}, clip_id: nil}]}} =
+             Task.await(importer, 10_000)
+
+    assert clip_count(w.profile.id) == 0
+    assert render_count(w.profile.id) == 0
+  end
+
+  test "a file deletion waits for an import that holds the file, then proceeds", ctx do
+    w = world!(ctx)
+    ref = "ep4/file-held"
+    m = manifest(ctx, ref)
+    file_id = file_id_of(m)
+    parent = self()
+
+    # Stalls the importer's clip INSERT (which comes after it has locked the file) on the unique
+    # (profile, external_ref) index: an uncommitted clip with the same ref.
+    blocker =
+      Task.async(fn ->
+        Repo.transaction(fn ->
+          Repo.insert!(%Clip{
+            profile_id: w.profile.id,
+            external_ref: ref,
+            source_url: "https://example.com/blocker"
+          })
+
+          send(parent, {:held, xid!()})
+
+          receive do
+            :release -> Repo.rollback(:released)
+          after
+            10_000 -> Repo.rollback(:timeout)
+          end
+        end)
+      end)
+
+    assert_receive {:held, xid}, 5_000
+    importer = Task.async(fn -> import!(ctx, w, m) end)
+    await_blocked_on!(xid)
+
+    deleter = Task.async(fn -> mark_deleted!(file_id) end)
+    assert Task.yield(deleter, 400) == nil, "the deletion must wait for the import's file lock"
+
+    send(blocker.pid, :release)
+    assert {:error, :released} = Task.await(blocker, 10_000)
+
+    assert {:ok, %{clips: [%{status: :created}]}} = Task.await(importer, 10_000)
+    assert {1, _} = Task.await(deleter, 10_000)
+    assert clip_count(w.profile.id) == 1
+  end
+
   test "an import does not queue behind a shared lock held by a creator", ctx do
     w = world!(ctx)
     creator = holder(ctx, w, :share)
