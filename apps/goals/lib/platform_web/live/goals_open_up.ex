@@ -53,6 +53,10 @@ defmodule PlatformWeb.GoalsOpenUp do
     """
   end
 
+  def sheet_class,
+    do:
+      "max-md:[&_.sheet-panel]:top-auto max-md:[&_.sheet-panel]:max-h-[90dvh] max-md:[&_.sheet-panel]:w-full max-md:[&_.sheet-panel]:left-0 max-md:[&_.sheet-panel]:rounded-b-none max-md:[&_.sheet-panel]:rounded-t-xl"
+
   def chip_class(selected),
     do: [
       "focus-visible-ring inline-flex min-h-8 items-center rounded-full border px-3 text-sm",
@@ -88,7 +92,7 @@ defmodule PlatformWeb.GoalsOpenUp do
       open
       placement={:right}
       on_close="close_share"
-      class="share-sheet"
+      class={"share-sheet " <> sheet_class()}
       aria-label="Who can see this goal"
       data-role="share-sheet"
     >

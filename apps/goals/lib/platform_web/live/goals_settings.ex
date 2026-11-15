@@ -14,6 +14,7 @@ defmodule PlatformWeb.GoalsSettings do
       open
       placement={:right}
       on_close="close_settings"
+      class={GoalsOpenUp.sheet_class()}
       data-role="settings-sheet"
     >
       <:title>How we check in</:title>

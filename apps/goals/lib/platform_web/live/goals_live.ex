@@ -107,8 +107,11 @@ defmodule PlatformWeb.GoalsLive do
        is sample text and is not derived.
    23. No PubSub in this member: another user's open page changes on its
        next event or load.
-   24. Core's Sheet supplies its own responsive panel width, handle and
-       close button. The single toast also has a Dismiss control.
+   24. Core's right Sheet supplies its desktop width and close button. Its
+       right variant does not switch placement on phone, so scoped layout
+       utilities anchor its panel at the bottom, capped at 90dvh. The
+       single toast also has a Dismiss control; settings label weekdays
+       with a Day legend.
   """
   use PlatformWeb, :live_view
 
