@@ -18,7 +18,8 @@ defmodule Platform.Repo.Migrations.ExtendSocialPostEvents do
   # Safe for the previous release only while no Studio rows exist; once they do,
   # rollback is barred by listing 20261114100000 in
   # deployment/release/irreversible-migrations.txt (the updater refuses to roll
-  # back from the release that crossed it). This waiver depends on that listing.
+  # back from the release that crossed it, once the crossing run completes; an
+  # interrupted crossing run is not covered). This waiver depends on that listing.
 
   # extend_social_post_events.
 
