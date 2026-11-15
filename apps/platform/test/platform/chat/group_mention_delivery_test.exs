@@ -124,6 +124,74 @@ defmodule Platform.Chat.GroupMentionDeliveryTest do
     assert length(Platform.Chat.GroupMentions.load(msg).group_mention_recipients) == 2
   end
 
+  test "role revocation after selection preserves group origin and refuses runtime delivery", c do
+    presence =
+      Process.whereis(Platform.Federation.RuntimePresence) ||
+        start_supervised!({Platform.Federation.RuntimePresence, []})
+
+    runtime_id = "group-race-#{System.unique_integer([:positive])}"
+
+    runtime =
+      Repo.insert!(%Platform.Agents.AgentRuntime{
+        owner_user_id: c.admin.id,
+        runtime_id: runtime_id,
+        status: "active",
+        display_name: "Group race"
+      })
+
+    Repo.update!(Ecto.Changeset.change(c.agent, runtime_type: "external", runtime_id: runtime.id))
+    Platform.Federation.RuntimePresence.track(runtime_id)
+    on_exit(fn -> Platform.Federation.RuntimePresence.untrack(runtime_id) end)
+    PlatformWeb.Endpoint.subscribe(Platform.Federation.AttentionDispatch.topic(runtime_id))
+    Chat.PubSub.subscribe(c.space.id)
+
+    assert {:ok, message} =
+             Chat.post_message(attrs(c, GroupMentionToken.encode(c.group.id, c.group.name)))
+
+    assert Platform.Chat.GroupMentions.recipient?(c.agent_p, message)
+
+    parent = self()
+    handler = {__MODULE__, make_ref()}
+    target_ids = [c.target.id, Ecto.UUID.dump!(c.target.id)]
+    # Human notification preferences are read after route_agents selects its
+    # decisions, before signals get group provenance. Revoke synchronously at
+    # that existing query boundary, without a production test hook or sleeps.
+    :ok =
+      :telemetry.attach_many(
+        handler,
+        [[:platform, :repo, :query], [:platform, :chat, :dispatch_auto_invite]],
+        fn event, _, metadata, _ ->
+          case event do
+            [:platform, :repo, :query] ->
+              params = List.flatten(metadata[:params] || [])
+
+              if "notification_level" in params and Enum.any?(target_ids, &(&1 in params)) do
+                Repo.update!(Ecto.Changeset.change(c.agent_p, role: "observer"))
+                send(parent, :group_role_revoked_after_selection)
+              end
+
+            [:platform, :chat, :dispatch_auto_invite] ->
+              send(parent, {:group_race_auto_invite, metadata})
+          end
+        end,
+        nil
+      )
+
+    on_exit(fn -> :telemetry.detach(handler) end)
+
+    assert {:ok, decisions} = route(message)
+    assert Enum.any?(decisions, &(&1.participant_id == c.agent_p.id))
+    assert_receive :group_role_revoked_after_selection
+    agent_participant_id = c.agent_p.id
+
+    assert_receive {:attention_needed,
+                    %{participant_id: ^agent_participant_id, group_mention_only: true}}
+
+    refute_receive %Phoenix.Socket.Broadcast{event: "attention"}
+    refute_receive {:group_race_auto_invite, _}
+    assert Repo.get!(Participant, c.agent_p.id).role == "observer"
+  end
+
   test "group membership never summons an absent agent", c do
     sibling = channel!(%{org_id: c.org.id})
     n = System.unique_integer([:positive])
