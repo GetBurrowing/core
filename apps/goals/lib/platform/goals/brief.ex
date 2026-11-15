@@ -79,9 +79,34 @@ defmodule Platform.Goals.Brief do
       )
     )
     |> Enum.count(fn item ->
+      # Lock in the same goal-then-ask order as practice. Re-addressing an old
+      # item must not make answer_ask's nested rollback abort the entire brief.
+      goal =
+        Repo.one(
+          from(g in Visibility.visible_goals(user),
+            where: g.id == ^item.goal_id,
+            lock: "FOR UPDATE"
+          )
+        )
+
+      ask =
+        if goal,
+          do:
+            Repo.one(
+              from(a in children(user, Ask),
+                where: a.id == ^item.ask_id and ^user.id in a.addressed_user_ids,
+                lock: "FOR UPDATE OF g0"
+              )
+            ),
+          else: nil
+
       old = answer_for(user, item.ask_id)
-      written = is_nil(old) and match?({:ok, _}, Goals.answer_ask(user, item.ask_id, "ignored"))
-      item |> Ecto.Changeset.change(ignored_at: now) |> Repo.update!()
+
+      written =
+        not is_nil(ask) and is_nil(old) and
+          match?({:ok, _}, Goals.answer_ask(user, item.ask_id, "ignored"))
+
+      if goal, do: item |> Ecto.Changeset.change(ignored_at: now) |> Repo.update!()
       written
     end)
   end
