@@ -606,10 +606,19 @@ defmodule Platform.Chat.AttentionRouter do
     do: Enum.filter(recipients, &MapSet.member?(ids, &1.id))
 
   defp put_group_origin(signal, message, %Participant{} = participant) do
-    if GroupMentions.recipient?(participant, message) do
+    # Origin is the saved addressed identity, not current authorization. If
+    # access changes after selection, retain group-only provenance so the
+    # responder refuses delivery rather than falling back to invite transport.
+    recipients =
+      Enum.filter(message.group_mention_recipients || [], fn row ->
+        row.participant_id == participant.id and
+          row.principal_type == participant.participant_type and
+          row.principal_id == participant.participant_id
+      end)
+
+    if recipients != [] do
       group_ids =
-        message.group_mention_recipients
-        |> Enum.filter(&(&1.participant_id == participant.id))
+        recipients
         |> Enum.flat_map(& &1.group_ids)
         |> MapSet.new()
 
