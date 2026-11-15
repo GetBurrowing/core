@@ -3,7 +3,6 @@ defmodule PlatformWeb.GoalsBriefTest do
   import Phoenix.LiveViewTest
   import Ecto.Query
   import Platform.GoalsFixtures
-  import Platform.Goals.OutcomeFixtures
   import Platform.Goals.BriefFixtures
   alias Platform.Goals
   alias Platform.Goals.{AskAnswer, Clock, Entry}
