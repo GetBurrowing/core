@@ -154,4 +154,3 @@ defmodule Platform.Goals.GoalTasksTest do
     assert {:ok, _} = Goals.link_task(c.coach, c.goal.id, task.id)
   end
 end
-

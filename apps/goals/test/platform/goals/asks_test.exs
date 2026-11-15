@@ -154,4 +154,3 @@ defmodule Platform.Goals.AsksTest do
              )
   end
 end
-

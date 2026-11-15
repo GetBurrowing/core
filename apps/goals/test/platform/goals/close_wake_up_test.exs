@@ -155,4 +155,3 @@ defmodule Platform.Goals.CloseWakeUpTest do
     end
   end
 end
-

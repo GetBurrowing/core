@@ -110,4 +110,3 @@ defmodule Platform.Goals.CapsTest do
     assert Repo.aggregate(Goals.TaskLink, :count) == 5
   end
 end
-
