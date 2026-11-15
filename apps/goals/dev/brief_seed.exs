@@ -25,7 +25,7 @@ defmodule Platform.Goals.DevBriefSeed do
     Application.put_env(:goals, :default_time_zone, zone)
 
     try do
-      seed(user, membership.org_id, now, today)
+      seed(user, membership.org_id, today)
     after
       for {key, value} <- previous do
         case value do
@@ -36,7 +36,7 @@ defmodule Platform.Goals.DevBriefSeed do
     end
   end
 
-  defp seed(user, org_id, now, today) do
+  defp seed(user, org_id, today) do
     suffix = System.unique_integer([:positive])
 
     space =
@@ -76,7 +76,7 @@ defmodule Platform.Goals.DevBriefSeed do
         })
       )
 
-    put_now(DateTime.add(now, -7, :day))
+    put_now(historical_noon(today, -7))
 
     practice =
       goal(user, org_id, coach, %{
@@ -110,7 +110,7 @@ defmodule Platform.Goals.DevBriefSeed do
       ok!(Goals.record_practice(user, ask.id, results))
     end
 
-    put_now(DateTime.add(now, -2, :day))
+    put_now(historical_noon(today, -2))
 
     report =
       goal(user, org_id, coach, %{
@@ -158,7 +158,7 @@ defmodule Platform.Goals.DevBriefSeed do
       }
     })
 
-    put_now(DateTime.add(now, -1, :day))
+    put_now(historical_noon(today, -1))
 
     shared =
       goal(user, org_id, coach, %{
@@ -218,6 +218,13 @@ defmodule Platform.Goals.DevBriefSeed do
     )
 
     IO.inspect(result, label: "Delivery")
+  end
+
+  defp historical_noon(today, days) do
+    today
+    |> Date.add(days)
+    |> DateTime.new!(~T[12:00:00], Disseminator.timezone())
+    |> DateTime.shift_zone!("Etc/UTC")
   end
 
   defp internal_membership(user) do
