@@ -1,5 +1,9 @@
 defmodule Platform.Goals.WakeUps.Briefing do
-  @moduledoc "Private coach snapshots and content-free runtime signals."
+  @moduledoc """
+  Private coach snapshots and content-free runtime signals.
+  Task 01a1dfc1-abcc adds answer details and readable practice results and
+  suggestion choices so the coach can react to briefing signals.
+  """
   import Ecto.Query
   alias Platform.Goals
   alias Platform.Goals.{Ask, AskAnswer, GoalClock, Limits, Reading, TaskLink, Visibility, WakeUp}
@@ -170,10 +174,16 @@ defmodule Platform.Goals.WakeUps.Briefing do
         join: ans in AskAnswer,
         on: ans.ask_id == a.id,
         where: ans.answered_at >= ^since and ans.answered_at <= ^until,
-        select: %{ask_id: a.id, title: a.title, answer: ans.answer, user_id: ans.user_id}
+        select: %{
+          ask_id: a.id,
+          title: a.title,
+          answer: ans.answer,
+          user_id: ans.user_id,
+          details: ans.details
+        }
       )
     )
-    |> Enum.map(&fields(&1, [:ask_id, :title, :answer, :user_id]))
+    |> Enum.map(&fields(&1, [:ask_id, :title, :answer, :user_id, :details]))
   end
 
   defp asks(actor, goal, status, since, until) do
@@ -189,10 +199,30 @@ defmodule Platform.Goals.WakeUps.Briefing do
   end
 
   def text(%{"goal" => goal, "number" => number, "since_last" => since}) do
-    "## The goal\n#{goal["title"]}\n#{goal["why"]}\nTarget: #{goal["target_value"]} #{goal["unit"]}\nSettings: #{inspect(goal)}\n\n## The number\n#{number_text(number)}\n\n## Since the last check-in\n#{inspect(since)}\n\n## What you may do\nClose this check-in with exactly one of goal_do, goal_ask or goal_wait. Respect the goal's agent mode, stops and outreach settings."
+    "## The goal\n#{goal["title"]}\n#{goal["why"]}\nTarget: #{goal["target_value"]} #{goal["unit"]}\nSettings: #{inspect(goal)}\n\n## The number\n#{number_text(number)}\n\n## Since the last check-in\n#{inspect(since)}\n#{answer_text(since["answers"] || [])}\n\n## What you may do\nClose this check-in with exactly one of goal_do, goal_ask or goal_wait. Respect the goal's agent mode, stops and outreach settings."
   end
 
   def text(_), do: "The briefing for this check-in is not available."
+
+  # Practice results and suggestion choices must reach the coach as readable signals
+  # (task 01a1dfc1-abcc), beyond the persisted answer payload.
+  defp answer_text(answers) do
+    Enum.map_join(answers, "\n", fn answer ->
+      details = answer["details"] || %{}
+
+      practice =
+        if is_integer(details["got"]) and is_integer(details["missed"]),
+          do: "got #{details["got"]}, missed #{details["missed"]}",
+          else: ""
+
+      choices =
+        Enum.map_join(details["choices"] || [], "; ", fn choice ->
+          "#{choice["title"]}: #{choice["choice"]}"
+        end)
+
+      "#{answer["title"]}: #{practice} #{choices}"
+    end)
+  end
 
   defp number_text(%{"state" => "cannot_measure", "wording" => sentence}),
     do:

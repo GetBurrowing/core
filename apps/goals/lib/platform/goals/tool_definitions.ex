@@ -176,7 +176,10 @@ defmodule Platform.Goals.ToolDefinitions do
             payload: %{
               type: "object",
               required: false,
-              description: "Kind-specific payload (practice takes cards)."
+              description:
+                "Question: moved [{direction: up|flat|down, text}], suggestions [{title, why?, takeaway_id?}]. " <>
+                  "Offer: draft or url, optionally idea {why, measure, steps: [text], takeaway_id?}. " <>
+                  "Practice: cards [{front, back}]. Idea steps and practice cards must be nonempty."
             },
             addressed_user_ids: %{
               type: "array",

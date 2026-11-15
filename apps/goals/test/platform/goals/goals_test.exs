@@ -199,7 +199,8 @@ defmodule Platform.Goals.GoalsTest do
       "Repo.all(WakeUp",
       "Repo.all(GoalClock",
       "Repo.all(Ask",
-      "Repo.all(TaskLink"
+      "Repo.all(TaskLink",
+      "Repo.all(BriefItem"
     ]
 
     defp hits(text), do: Enum.filter(@forbidden, &String.contains?(text, &1))
@@ -207,7 +208,7 @@ defmodule Platform.Goals.GoalsTest do
     test "the scan can hit (positive control)" do
       assert hits("goal = Repo.get(Goal, id)") == ["Repo.get("]
 
-      for schema <- ~w(Goal Stop Entry Grant Reading WakeUp GoalClock Ask TaskLink) do
+      for schema <- ~w(Goal Stop Entry Grant Reading WakeUp GoalClock Ask TaskLink BriefItem) do
         assert "Repo.all(#{schema}" in hits("Repo.all(#{schema})")
       end
     end
