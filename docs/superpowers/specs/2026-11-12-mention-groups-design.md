@@ -1,6 +1,6 @@
 # Named mention groups — #158 design contract
 
-Status: proposed for Calcifer's requested scope review; no product implementation yet.
+Status: accepted by Calcifer; implementation in progress. Exact-org external human recipients are permitted only with current org membership, participation and read access; external actors cannot discover or invoke groups.
 
 Source baseline: private core-work main `ae7018c72982f6bf54c4043b89a6620ce046e897`. Integration branch: `feat/mention-groups`; checkout: `work/core-mention-groups`.
 

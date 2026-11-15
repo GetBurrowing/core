@@ -11,10 +11,24 @@ defmodule PlatformWeb.MentionGroupsLiveTest do
 
   defp user!(role, org_id, external \\ false) do
     n = System.unique_integer([:positive])
-    user = Repo.insert!(%User{name: "Group admin #{n}", email: "group-#{n}@example.com",
-      oidc_sub: "group-#{n}", preferences: %{"first_run_goal" => "existing"}})
-    Repo.insert!(OrgMembership.changeset(%OrgMembership{}, %{user_id: user.id,
-      org_id: org_id, role: role, external: external}))
+
+    user =
+      Repo.insert!(%User{
+        name: "Group admin #{n}",
+        email: "group-#{n}@example.com",
+        oidc_sub: "group-#{n}",
+        preferences: %{"first_run_goal" => "existing"}
+      })
+
+    Repo.insert!(
+      OrgMembership.changeset(%OrgMembership{}, %{
+        user_id: user.id,
+        org_id: org_id,
+        role: role,
+        external: external
+      })
+    )
+
     user
   end
 
@@ -27,13 +41,21 @@ defmodule PlatformWeb.MentionGroupsLiveTest do
     {:ok, view, html} = live(authed(admin), "/settings/mention-groups")
     assert html =~ "Mention groups"
     view |> element("#new-mention-group") |> render_click()
-    view |> form("#mention-group-form", %{"group" => %{"name" => "Design team",
-      "members" => ["user:#{target.id}"]}}) |> render_submit()
+
+    view
+    |> form("#mention-group-form", %{
+      "group" => %{"name" => "Design team", "members" => ["user:#{target.id}"]}
+    })
+    |> render_submit()
+
     assert {:ok, [group]} = MentionGroups.list_groups(admin, org_id)
     assert group.name == "Design team"
     view |> element("#edit-group-#{group.id}") |> render_click()
-    view |> form("#mention-group-form", %{"group" => %{"name" => "Review team", "members" => []}})
-      |> render_submit()
+
+    view
+    |> form("#mention-group-form", %{"group" => %{"name" => "Review team", "members" => []}})
+    |> render_submit()
+
     assert {:ok, renamed} = MentionGroups.get_group(admin, group.id)
     assert renamed.name == "Review team"
     assert renamed.members == []
@@ -43,6 +65,11 @@ defmodule PlatformWeb.MentionGroupsLiveTest do
 
   test "members and external actors cannot discover the management directory" do
     org_id = acme_org_id()
+    # Positive control: a missing route must never satisfy the denial assertions.
+    admin = user!("admin", org_id)
+    assert {:ok, _view, html} = live(authed(admin), "/settings/mention-groups")
+    assert html =~ "Mention groups"
+
     for actor <- [user!("member", org_id), user!("admin", org_id, true)] do
       assert {:error, {:redirect, _}} = live(authed(actor), "/settings/mention-groups")
     end
@@ -53,8 +80,11 @@ defmodule PlatformWeb.MentionGroupsLiveTest do
     admin = user!("admin", org_id)
     {:ok, view, _} = live(authed(admin), "/settings/mention-groups")
     view |> element("#new-mention-group") |> render_click()
-    view |> form("#mention-group-form", %{"group" => %{"name" => "Child team"}})
-      |> render_submit()
+
+    view
+    |> form("#mention-group-form", %{"group" => %{"name" => "Child team"}})
+    |> render_submit()
+
     assert {:ok, [group]} = MentionGroups.list_groups(admin, org_id)
     assert group.org_id == org_id
     render_click(view, "select_org", %{"org_id" => acme_org_id()})
@@ -71,8 +101,11 @@ defmodule PlatformWeb.MentionGroupsLiveTest do
     view |> element("#new-mention-group") |> render_click()
     membership = Repo.get_by!(OrgMembership, user_id: admin.id, org_id: org_id)
     membership |> Ecto.Changeset.change(role: "member") |> Repo.update!()
-    view |> form("#mention-group-form", %{"group" => %{"name" => "Forbidden"}})
-      |> render_submit()
+
+    view
+    |> form("#mention-group-form", %{"group" => %{"name" => "Forbidden"}})
+    |> render_submit()
+
     assert render(view) =~ "Could not save this group."
   end
 
@@ -80,15 +113,45 @@ defmodule PlatformWeb.MentionGroupsLiveTest do
     org_id = acme_org_id()
     admin = user!("admin", org_id)
     {:ok, group} = MentionGroups.create_group(admin, org_id, %{name: "Design Team"})
-    {:ok, space} = Platform.Chat.create_space(%{name: "Groups", slug: "groups-#{System.unique_integer([:positive])}", kind: "channel", org_id: org_id})
-    {:ok, participant} = Platform.Chat.add_participant(space.id, %{participant_type: "user", participant_id: admin.id, display_name: admin.name})
-    {:ok, message} = Platform.Chat.post_message(%{space_id: space.id, participant_id: participant.id, content_type: "text", content: "Thread parent"})
+
+    {:ok, space} =
+      Platform.Chat.create_space(%{
+        name: "Groups",
+        slug: "groups-#{System.unique_integer([:positive])}",
+        kind: "channel",
+        org_id: org_id
+      })
+
+    {:ok, participant} =
+      Platform.Chat.add_participant(space.id, %{
+        participant_type: "user",
+        participant_id: admin.id,
+        display_name: admin.name
+      })
+
+    {:ok, message} =
+      Platform.Chat.post_message(%{
+        space_id: space.id,
+        participant_id: participant.id,
+        content_type: "text",
+        content: "Thread parent"
+      })
+
     {:ok, view, _} = live(authed(admin), "/chat/#{space.slug}")
     render_hook(view, "mention_query", %{query: "Design", source: "compose-form"})
     assert has_element?(view, "#compose-mention-list [data-kind=group]", "Design Team")
     assert render(view) =~ "group:#{group.id}|Design Team"
     render_hook(view, "open_inline_thread", %{"message-id" => message.id})
-    render_hook(view, "mention_query", %{query: "Design", source: "inline-thread-compose-form-#{message.id}"})
-    assert has_element?(view, "#inline-thread-mention-list-#{message.id} [data-kind=group]", "Design Team")
+
+    render_hook(view, "mention_query", %{
+      query: "Design",
+      source: "inline-thread-compose-form-#{message.id}"
+    })
+
+    assert has_element?(
+             view,
+             "#inline-thread-mention-list-#{message.id} [data-kind=group]",
+             "Design Team"
+           )
   end
 end

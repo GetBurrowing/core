@@ -3,6 +3,12 @@ defmodule Platform.Chat.ContentRendererTest do
 
   alias Platform.Chat.ContentRenderer
 
+  test "group display labels remain readable when the name contains Markdown syntax" do
+    result = render("Ask @[group:12345678-1234-1234-1234-123456789abc|Design *Team*]")
+    assert result =~ "@Design *Team*</span>"
+    refute result =~ "@group:"
+  end
+
   test "renders a group token as a distinct friendly chip without displaying its UUID" do
     id = "12345678-1234-1234-1234-123456789abc"
     result = render("Ask @[group:#{id}|Design Team] and @[Design Lead]")

@@ -11,6 +11,7 @@ defmodule PlatformWeb.ModuleGate do
 
   @view_modules %{
     PlatformWeb.ChatLive => {:chat, nil},
+    PlatformWeb.MentionGroupsLive => {:chat, nil},
     # The first-run goal box (task 01a19554-fd07 stage 2) hands off into a
     # chat DM, so a member without chat could not use it either.
     PlatformWeb.FirstRunLive => {:chat, nil},
@@ -100,6 +101,13 @@ defmodule PlatformWeb.ModuleGate do
   pages (Settings' rows) ask this rather than restating the rules.
   """
   @spec mounts?(Platform.Access.Scope.t() | nil, module()) :: boolean()
+  def mounts?(%Platform.Access.Scope{actor: actor} = scope, PlatformWeb.MentionGroupsLive) do
+    Access.module_access?(scope, :chat, nil) and
+      PlatformWeb.MentionGroupsLive.managed_orgs(actor) != []
+  end
+
+  def mounts?(_scope, PlatformWeb.MentionGroupsLive), do: false
+
   def mounts?(scope, view) do
     case Map.fetch(@view_modules, view) do
       {:ok, {key, permission}} -> Access.module_access?(scope, key, permission)

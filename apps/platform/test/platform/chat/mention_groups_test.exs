@@ -14,7 +14,13 @@ defmodule Platform.Chat.MentionGroupsTest do
 
   test "exact-org admin manages groups; members can only discover", c do
     assert {:error, :forbidden} = MentionGroups.create_group(c.member, c.org.id, %{name: "Ops"})
-    assert {:ok, group} = MentionGroups.create_group(c.admin, c.org.id, %{name: " Ops ", members: [%{type: "user", id: c.member.id}]})
+
+    assert {:ok, group} =
+             MentionGroups.create_group(c.admin, c.org.id, %{
+               name: " Ops ",
+               members: [%{type: "user", id: c.member.id}]
+             })
+
     assert group.name == "Ops"
     assert [%{type: "user", id: id}] = group.members
     assert id == c.member.id
@@ -32,9 +38,16 @@ defmodule Platform.Chat.MentionGroupsTest do
     stranger = create_user!()
     assert {:error, :forbidden} = MentionGroups.list_groups(external, c.org.id)
     assert {:error, :forbidden} = MentionGroups.create_group(external, c.org.id, %{name: "Bad"})
-    for bad <- [%{type: "user", id: stranger.id}, %{type: "system", id: c.member.id}, %{type: "agent", id: "bad"}] do
-      assert {:error, _} = MentionGroups.create_group(c.admin, c.org.id, %{name: "Bad", members: [bad]})
+
+    for bad <- [
+          %{type: "user", id: stranger.id},
+          %{type: "system", id: c.member.id},
+          %{type: "agent", id: "bad"}
+        ] do
+      assert {:error, _} =
+               MentionGroups.create_group(c.admin, c.org.id, %{name: "Bad", members: [bad]})
     end
+
     assert {:ok, candidates} = MentionGroups.list_candidates(c.admin, c.org.id)
     refute Enum.any?(candidates, &(&1.id == stranger.id))
     assert {:error, _} = MentionGroups.create_group(c.admin, c.org.id, %{name: "[bad]"})
@@ -51,12 +64,43 @@ defmodule Platform.Chat.MentionGroupsTest do
 
   test "agent candidates require existing participation in an organization space", c do
     n = System.unique_integer([:positive])
-    agent = Platform.Repo.insert!(Platform.Agents.Agent.changeset(%Platform.Agents.Agent{}, %{name: "A", slug: "group-a-#{n}"}))
-    assert {:error, _} = MentionGroups.create_group(c.admin, c.org.id, %{name: "Agents", members: [%{type: "agent", id: agent.id}]})
+
+    agent =
+      Platform.Repo.insert!(
+        Platform.Agents.Agent.changeset(%Platform.Agents.Agent{}, %{
+          name: "A",
+          slug: "group-a-#{n}"
+        })
+      )
+
+    assert {:error, _} =
+             MentionGroups.create_group(c.admin, c.org.id, %{
+               name: "Agents",
+               members: [%{type: "agent", id: agent.id}]
+             })
+
     space = channel!(%{org_id: c.org.id})
     add_agent!(space.id, agent.id)
     assert {:ok, candidates} = MentionGroups.list_candidates(c.admin, c.org.id)
     assert Enum.any?(candidates, &(&1.type == "agent" and &1.id == agent.id))
-    assert {:ok, _} = MentionGroups.create_group(c.admin, c.org.id, %{name: "Agents", members: [%{type: "agent", id: agent.id}]})
+
+    assert {:ok, _} =
+             MentionGroups.create_group(c.admin, c.org.id, %{
+               name: "Agents",
+               members: [%{type: "agent", id: agent.id}]
+             })
+  end
+
+  test "composer recipient counts exclude the author", c do
+    space = channel!(%{org_id: c.org.id})
+    author = add_user!(space.id, c.admin.id)
+
+    {:ok, _} =
+      MentionGroups.create_group(c.admin, c.org.id, %{
+        name: "Only me",
+        members: [%{type: "user", id: c.admin.id}]
+      })
+
+    assert [%{eligible_count: 0}] = MentionGroups.groups_for_space(space, author)
   end
 end

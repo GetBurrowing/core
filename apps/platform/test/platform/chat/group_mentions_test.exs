@@ -13,14 +13,35 @@ defmodule Platform.Chat.GroupMentionsTest do
     space = channel!(%{org_id: org.id})
     author = add_user!(space.id, admin.id)
     recipient = add_user!(space.id, target.id)
-    {:ok, group} = MentionGroups.create_group(admin, org.id, %{name: "Team", members: [%{type: "user", id: target.id}]})
-    %{org: org, admin: admin, target: target, space: space, author: author, recipient: recipient, group: group}
+
+    {:ok, group} =
+      MentionGroups.create_group(admin, org.id, %{
+        name: "Team",
+        members: [%{type: "user", id: target.id}]
+      })
+
+    %{
+      org: org,
+      admin: admin,
+      target: target,
+      space: space,
+      author: author,
+      recipient: recipient,
+      group: group
+    }
   end
 
   defp capture(c, content, attrs \\ %{}) do
-    {:ok, message} = Repo.transaction(fn ->
-      %Message{} |> Message.changeset(Map.merge(%{space_id: c.space.id, participant_id: c.author.id, content: content}, attrs)) |> Repo.insert!() |> GroupMentions.capture!()
-    end)
+    {:ok, message} =
+      Repo.transaction(fn ->
+        %Message{}
+        |> Message.changeset(
+          Map.merge(%{space_id: c.space.id, participant_id: c.author.id, content: content}, attrs)
+        )
+        |> Repo.insert!()
+        |> GroupMentions.capture!()
+      end)
+
     message
   end
 
@@ -30,23 +51,41 @@ defmodule Platform.Chat.GroupMentionsTest do
     assert length(message.group_mentions) == 1
     assert length(message.group_mention_recipients) == 1
     assert GroupMentions.recipient?(c.recipient, message)
-    assert MapSet.member?(GroupMentions.in_context_message_ids(c.recipient, c.space.id), message.id)
+
+    assert MapSet.member?(
+             GroupMentions.in_context_message_ids(c.recipient, c.space.id),
+             message.id
+           )
+
     {:ok, _} = MentionGroups.update_group(c.admin, c.group.id, %{name: "Renamed", members: []})
     {:ok, _} = MentionGroups.archive_group(c.admin, c.group.id)
-    {:ok, again} = Repo.transaction(fn -> GroupMentions.capture!(%{message | content: "edited"}) end)
+
+    {:ok, again} =
+      Repo.transaction(fn -> GroupMentions.capture!(%{message | content: "edited"}) end)
+
     assert again.group_mentions == message.group_mentions
     assert GroupMentions.recipient?(c.recipient, GroupMentions.load(message))
   end
 
   test "metadata cannot forge recipients", c do
-    message = capture(c, "hello", %{metadata: %{"group_mention_recipients" => [%{"participant_id" => c.recipient.id}]}})
+    message =
+      capture(c, "hello", %{
+        metadata: %{"group_mention_recipients" => [%{"participant_id" => c.recipient.id}]}
+      })
+
     refute GroupMentions.recipient?(c.recipient, message)
     assert GroupMentions.load(message).group_mention_recipients == []
   end
 
   test "org revocation and participant replacement prevent old delivery", c do
     message = capture(c, GroupMentionToken.encode(c.group.id, "Team"))
-    Repo.delete_all(from m in Platform.Tenancy.OrgMembership, where: m.org_id == ^c.org.id and m.user_id == ^c.target.id)
+
+    Repo.delete_all(
+      from(m in Platform.Tenancy.OrgMembership,
+        where: m.org_id == ^c.org.id and m.user_id == ^c.target.id
+      )
+    )
+
     refute GroupMentions.recipient?(c.recipient, message)
     plain_member!(c.target, c.org)
     Repo.delete!(c.recipient)
@@ -59,27 +98,52 @@ defmodule Platform.Chat.GroupMentionsTest do
     message = capture(%{c | author: c.recipient}, GroupMentionToken.encode(c.group.id, "Team"))
     assert message.group_mentions == []
     assert message.group_mention_recipients == []
-    assert capture(c, GroupMentionToken.encode(Ecto.UUID.generate(), "Unknown")).group_mentions == []
+
+    assert capture(c, GroupMentionToken.encode(Ecto.UUID.generate(), "Unknown")).group_mentions ==
+             []
   end
 
   test "overlapping groups deduplicate and foreign or absent targets are excluded", c do
     absent = create_user!()
     plain_member!(absent, c.org)
-    {:ok, second} = MentionGroups.create_group(c.admin, c.org.id, %{name: "Other", members: [%{type: "user", id: c.target.id}, %{type: "user", id: absent.id}]})
-    message = capture(c, GroupMentionToken.encode(c.group.id, "Team") <> " " <> GroupMentionToken.encode(second.id, "Other"))
+
+    {:ok, second} =
+      MentionGroups.create_group(c.admin, c.org.id, %{
+        name: "Other",
+        members: [%{type: "user", id: c.target.id}, %{type: "user", id: absent.id}]
+      })
+
+    message =
+      capture(
+        c,
+        GroupMentionToken.encode(c.group.id, "Team") <>
+          " " <> GroupMentionToken.encode(second.id, "Other")
+      )
+
     assert length(message.group_mentions) == 2
     assert [row] = message.group_mention_recipients
     assert Enum.sort(row.group_ids) == Enum.sort([c.group.id, second.id])
-    foreign = Platform.Tenancy.get_org!(Platform.TenancyFixtures.tenant_org_id("snapshot-foreign"))
+
+    foreign =
+      Platform.Tenancy.get_org!(Platform.TenancyFixtures.tenant_org_id("snapshot-foreign"))
+
     foreign_admin = create_user!()
     plain_member!(foreign_admin, foreign, "admin")
-    {:ok, foreign_group} = MentionGroups.create_group(foreign_admin, foreign.id, %{name: "Secret"})
+
+    {:ok, foreign_group} =
+      MentionGroups.create_group(foreign_admin, foreign.id, %{name: "Secret"})
+
     assert capture(c, GroupMentionToken.encode(foreign_group.id, "Secret")).group_mentions == []
   end
 
   test "zero-group captures cannot expand later", c do
     message = capture(c, "original")
-    {:ok, replayed} = Repo.transaction(fn -> GroupMentions.capture!(%{message | content: GroupMentionToken.encode(c.group.id, "Team")}) end)
+
+    {:ok, replayed} =
+      Repo.transaction(fn ->
+        GroupMentions.capture!(%{message | content: GroupMentionToken.encode(c.group.id, "Team")})
+      end)
+
     assert replayed.group_mentions == []
     assert replayed.group_mention_recipients == []
   end
@@ -95,17 +159,92 @@ defmodule Platform.Chat.GroupMentionsTest do
 
   test "current read denial excludes snapshot and later delivery", c do
     message = capture(c, GroupMentionToken.encode(c.group.id, "Team"))
-    {:ok, _} = Platform.Access.Grants.deny(%{principal: {:user, c.target.id}, permission: "chat.read", resource: {:space, c.space.id}})
+
+    {:ok, _} =
+      Platform.Access.Grants.deny(%{
+        principal: {:user, c.target.id},
+        permission: "chat.read",
+        resource: {:space, c.space.id}
+      })
+
     refute GroupMentions.recipient?(c.recipient, message)
     assert capture(c, GroupMentionToken.encode(c.group.id, "Team")).group_mention_recipients == []
   end
 
   test "caller rollback removes audience and message atomically", c do
-    {:error, :rolled_back} = Repo.transaction(fn ->
-      message = %Message{} |> Message.changeset(%{space_id: c.space.id, participant_id: c.author.id, content: GroupMentionToken.encode(c.group.id, "Team")}) |> Repo.insert!() |> GroupMentions.capture!()
-      assert message.group_mention_recipients != []
-      Repo.rollback(:rolled_back)
-    end)
-    assert Repo.all(from m in Message, where: m.space_id == ^c.space.id) == []
+    {:error, :rolled_back} =
+      Repo.transaction(fn ->
+        message =
+          %Message{}
+          |> Message.changeset(%{
+            space_id: c.space.id,
+            participant_id: c.author.id,
+            content: GroupMentionToken.encode(c.group.id, "Team")
+          })
+          |> Repo.insert!()
+          |> GroupMentions.capture!()
+
+        assert message.group_mention_recipients != []
+        Repo.rollback(:rolled_back)
+      end)
+
+    assert Repo.all(from(m in Message, where: m.space_id == ^c.space.id)) == []
+  end
+
+  test "agent audiences obey current roster role, wake read grants, and removal", c do
+    n = System.unique_integer([:positive])
+
+    agent =
+      Repo.insert!(
+        Platform.Agents.Agent.changeset(%Platform.Agents.Agent{}, %{
+          name: "Agent",
+          slug: "snapshot-agent-#{n}"
+        })
+      )
+
+    participant = add_agent!(c.space.id, agent.id)
+
+    {:ok, group} =
+      MentionGroups.create_group(c.admin, c.org.id, %{
+        name: "Agents",
+        members: [%{type: "agent", id: agent.id}]
+      })
+
+    token = GroupMentionToken.encode(group.id, "Agents")
+    message = capture(c, token)
+    assert GroupMentions.recipient?(participant, message)
+    observer = Repo.update!(Ecto.Changeset.change(participant, role: "observer"))
+    refute GroupMentions.recipient?(participant, message)
+    assert capture(c, token).group_mention_recipients == []
+    Repo.update!(Ecto.Changeset.change(observer, role: "member"))
+
+    {:ok, grant} =
+      Platform.Access.Grants.deny(%{
+        principal: {:agent, agent.id},
+        permission: "chat.read",
+        resource: {:space, c.space.id}
+      })
+
+    refute GroupMentions.recipient?(participant, message)
+    assert capture(c, token).group_mention_recipients == []
+    Platform.Access.Grants.revoke(grant)
+    Repo.delete!(Repo.get!(Platform.Chat.Participant, participant.id))
+    refute GroupMentions.recipient?(participant, message)
+  end
+
+  test "deleted messages are excluded from historical context", c do
+    message = capture(c, GroupMentionToken.encode(c.group.id, "Team"))
+
+    assert MapSet.member?(
+             GroupMentions.in_context_message_ids(c.recipient, c.space.id),
+             message.id
+           )
+
+    Repo.update!(Ecto.Changeset.change(message, deleted_at: DateTime.utc_now()))
+
+    refute MapSet.member?(
+             GroupMentions.in_context_message_ids(c.recipient, c.space.id),
+             message.id
+           )
   end
 end

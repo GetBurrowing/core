@@ -62,6 +62,7 @@ defmodule Platform.Chat do
   alias Platform.Chat.ExternalScope
   alias Platform.Chat.Canvas.Versions, as: CanvasVersions
   alias Platform.Chat.MentionIdentity
+  alias Platform.Chat.GroupMentions
   alias Platform.Chat.MessageVersions
   alias Platform.Chat.PubSub, as: ChatPubSub
   alias Platform.Chat.SpaceAccess
@@ -2457,6 +2458,7 @@ defmodule Platform.Chat do
       Repo.transaction(fn ->
         case %Message{} |> Message.changeset(attrs) |> Repo.insert() do
           {:ok, msg} ->
+            msg = GroupMentions.capture!(msg)
             _v1 = MessageVersions.record_v1!(msg)
             msg
 
@@ -2593,6 +2595,9 @@ defmodule Platform.Chat do
     multi =
       Multi.new()
       |> Multi.insert(:message, Message.changeset(%Message{}, attrs))
+      |> Multi.run(:group_snapshot, fn _repo, %{message: message} ->
+        {:ok, GroupMentions.capture!(message)}
+      end)
       # v1 history baseline — see post_message/2 comment for rationale.
       # MessageVersions.record_v1!/1 raises on failure, which Multi.run
       # converts to {:error, …} and rolls back the whole multi (incl.
@@ -2615,7 +2620,7 @@ defmodule Platform.Chat do
 
     case Repo.transaction(multi) do
       {:ok, changes} ->
-        message = changes.message
+        message = GroupMentions.load(changes.message)
 
         attachments =
           changes
@@ -2794,6 +2799,9 @@ defmodule Platform.Chat do
 
       Multi.new()
       |> Multi.insert(:message, Message.changeset(%Message{}, attrs))
+      |> Multi.run(:group_snapshot, fn _repo, %{message: message} ->
+        {:ok, GroupMentions.capture!(message)}
+      end)
       |> Multi.run(:v1_version, fn _repo, %{message: message} ->
         {:ok, MessageVersions.record_v1!(message)}
       end)
@@ -2811,6 +2819,7 @@ defmodule Platform.Chat do
       |> Repo.transaction()
       |> case do
         {:ok, %{message: message, attachment: linked}} ->
+          message = GroupMentions.load(message)
           message |> reinvite_and_pin_mentioned() |> notify_refused_summons(message, opts)
           emit_inbox_for_mentions(message)
           publish_message_posted(message, opts)
@@ -2897,6 +2906,9 @@ defmodule Platform.Chat do
         resolve_existing_attachments(repo, ids, space_id, scope)
       end)
       |> Multi.insert(:message, Message.changeset(%Message{}, attrs))
+      |> Multi.run(:group_snapshot, fn _repo, %{message: message} ->
+        {:ok, GroupMentions.capture!(message)}
+      end)
       |> Multi.run(:v1_version, fn _repo, %{message: message} ->
         {:ok, MessageVersions.record_v1!(message)}
       end)
@@ -2906,6 +2918,7 @@ defmodule Platform.Chat do
       |> Repo.transaction()
       |> case do
         {:ok, %{message: message, attachments: linked}} ->
+          message = GroupMentions.load(message)
           message |> reinvite_and_pin_mentioned() |> notify_refused_summons(message, opts)
           emit_inbox_for_mentions(message)
           publish_message_posted(message, opts)
@@ -3736,11 +3749,12 @@ defmodule Platform.Chat do
   @spec eligible_edit_recipients_for_message(Message.t()) :: [binary()]
   def eligible_edit_recipients_for_message(%Message{space_id: space_id} = message)
       when is_binary(space_id) do
+    message = GroupMentions.load(message)
     participants = list_participants(space_id)
 
     mentioned_ids =
       participants
-      |> Enum.filter(&Platform.Chat.AttentionRouter.mentioned?(&1, message))
+      |> Enum.filter(&Platform.Chat.AttentionRouter.addressed?(&1, message))
       |> Enum.map(& &1.id)
 
     assignee_ids = task_assignee_participant_ids_for_space(space_id, participants)
@@ -4279,8 +4293,9 @@ defmodule Platform.Chat do
 
       %Participant{space_id: ^space_id} = participant ->
         mention_ids = mention_arm_message_ids(participant, space_id)
+        group_ids = GroupMentions.in_context_message_ids(participant, space_id)
         task_ids = task_arm_message_ids(participant, space_id)
-        MapSet.union(mention_ids, task_ids)
+        mention_ids |> MapSet.union(group_ids) |> MapSet.union(task_ids)
 
       %Participant{} ->
         # Participant exists but is in a different space — empty (no cross-space leakage).
@@ -5188,6 +5203,9 @@ defmodule Platform.Chat do
         |> Message.changeset(message_attrs)
         |> repo.insert()
       end)
+      |> Multi.run(:group_snapshot, fn _repo, %{message: message} ->
+        {:ok, GroupMentions.capture!(message)}
+      end)
       |> Multi.merge(fn %{canvas: canvas} ->
         version_revision = canvas_version_revision(canvas)
 
@@ -5215,6 +5233,8 @@ defmodule Platform.Chat do
 
     case Repo.transaction(multi) do
       {:ok, %{canvas: canvas, message: message}} ->
+        message = GroupMentions.load(message)
+        if message.group_mentions != [], do: emit_inbox_for_mentions(message)
         publish_canvas_created(canvas)
         publish_message_posted(message)
         {:ok, canvas, message}
@@ -6671,6 +6691,7 @@ defmodule Platform.Chat do
   # `Enum.filter/2` step above `Enum.each/2`.
   defp emit_inbox_for_mentions(%Message{space_id: space_id, content: content} = msg)
        when is_binary(content) do
+    msg = GroupMentions.load(msg)
     space = Repo.get(Space, space_id)
 
     # A Voice tab record in a DM is a transcript the user just heard: never
@@ -6679,7 +6700,7 @@ defmodule Platform.Chat do
       space_id
       |> list_participants()
       |> Enum.filter(&(&1.participant_type == "user"))
-      |> Enum.filter(&Platform.Chat.AttentionRouter.mentioned?(&1, msg))
+      |> Enum.filter(&Platform.Chat.AttentionRouter.addressed?(&1, msg))
       |> Enum.reject(&(&1.participant_id == msg.author_user_id))
       |> emit_chat_mention_inbox(
         msg,

@@ -16,8 +16,13 @@ defmodule PlatformWeb.ChatLive.Partials.MentionListTest do
   alias PlatformWeb.ChatLive.Partials.MentionList
 
   test "group rows show their kind and friendly label and dispatch stable wire identity" do
-    group = %{name: "Design Team", display_name: "Design Team", participant_type: "group",
-      token: "group:12345678-1234-1234-1234-123456789abc|Design Team"}
+    group = %{
+      name: "Design Team",
+      display_name: "Design Team",
+      participant_type: "group",
+      token: "group:12345678-1234-1234-1234-123456789abc|Design Team"
+    }
+
     doc = render_list([group])
     assert count(doc, "[data-kind=group]") == 1
     assert count(doc, ".hero-user-group") == 1
@@ -27,11 +32,18 @@ defmodule PlatformWeb.ChatLive.Partials.MentionListTest do
   end
 
   test "group rows are excluded from after-send attention and room-agent pick modes" do
-    assigns = %{group: %{name: "Design Team", participant_type: "group", token: "group:id|Design Team"}}
-    doc = ~H"""
-    <MentionList.mention_list id="attention" suggestions={[@group]} pick="message-id" />
-    <MentionList.mention_list id="room" suggestions={[@group]} on_pick="room_add_agent" />
-    """ |> rendered_to_string() |> LazyHTML.from_fragment()
+    assigns = %{
+      group: %{name: "Design Team", participant_type: "group", token: "group:id|Design Team"}
+    }
+
+    doc =
+      ~H"""
+      <MentionList.mention_list id="attention" suggestions={[@group]} pick="message-id" />
+      <MentionList.mention_list id="room" suggestions={[@group]} on_pick="room_add_agent" />
+      """
+      |> rendered_to_string()
+      |> LazyHTML.from_fragment()
+
     assert count(doc, "[data-kind=group]") == 0
   end
 

@@ -4,7 +4,10 @@ defmodule Platform.Chat.GroupMentionToken do
   @token ~r/@\[group:([0-9a-fA-F]{8}-[0-9a-fA-F]{4}-[0-9a-fA-F]{4}-[0-9a-fA-F]{4}-[0-9a-fA-F]{12})\|([^\[\]\r\n]+)\]/u
 
   def encode(id, name) do
-    if Regex.match?(~r/^[0-9a-fA-F]{8}-[0-9a-fA-F]{4}-[0-9a-fA-F]{4}-[0-9a-fA-F]{4}-[0-9a-fA-F]{12}$/, id) and
+    if Regex.match?(
+         ~r/^[0-9a-fA-F]{8}-[0-9a-fA-F]{4}-[0-9a-fA-F]{4}-[0-9a-fA-F]{4}-[0-9a-fA-F]{12}$/,
+         id
+       ) and
          is_binary(name) and String.trim(name) != "" and not Regex.match?(~r/[\[\]\r\n]/, name) do
       "@[group:#{String.downcase(id)}|#{name}]"
     else

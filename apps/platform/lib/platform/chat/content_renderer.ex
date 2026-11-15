@@ -311,7 +311,13 @@ defmodule Platform.Chat.ContentRenderer do
   # entities (e.g. `&lt;` → `&amp;lt;`).
   defp decorate_bracketed_mentions(text) do
     Regex.replace(~r/@\[([^\[\]]+)\]/, text, fn _full, name ->
-      mention_span(name) <> "@" <> name <> @mention_span_close
+      case Platform.Chat.GroupMentionToken.parse("@[#{name}]") do
+        [%{id: id, name: label}] ->
+          ~s(<span data-mention-type="group" data-group-id="#{id}" class="rounded bg-primary/20 text-primary px-1 font-medium"><span class="hero-user-group inline-block size-3 mr-1" aria-hidden="true"></span>@#{label}</span>)
+
+        _ ->
+          mention_span(name) <> "@" <> name <> @mention_span_close
+      end
     end)
   end
 

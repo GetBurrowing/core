@@ -21,6 +21,7 @@ defmodule Platform.Chat.AgentResponder do
   alias Platform.Agents.Agent
   alias Platform.Chat
   alias Platform.Chat.{ContextPlane, Message, Participant, ReplyContext, ReplyFailure}
+  alias Platform.Chat.GroupMentions
   alias Platform.Chat.PubSub, as: ChatPubSub
   alias Platform.ExternalAgents.Dispatcher, as: ExternalDispatcher
   alias Platform.Federation.{AttentionDispatch, DeadLetters, RuntimePresence, ToolSurface}
@@ -416,6 +417,12 @@ defmodule Platform.Chat.AgentResponder do
           case AttentionDispatch.broadcast(runtime.runtime_id, payload,
                  space_id: space_id,
                  agent_id: context.agent,
+                 participant_id: context.agent_participant.id,
+                 membership:
+                   if(Map.get(signal, :group_mention_only, false),
+                     do: :existing_only,
+                     else: :invite
+                   ),
                  source: :agent_responder
                ) do
             :ok ->
@@ -549,11 +556,15 @@ defmodule Platform.Chat.AgentResponder do
     with %Participant{participant_type: "agent"} = participant <-
            Chat.get_participant(participant_id),
          %Message{} = message <- Chat.get_message(message_id),
+         message <- GroupMentions.load(message),
          %Participant{} = author <- Chat.get_participant(message.participant_id),
          :ok <- check_agent_loop(author, participant_id, space_id),
          %Agent{} = agent <- Repo.get(Agent, participant.participant_id),
          %Participant{} = active_agent_participant <-
            Chat.get_agent_participant(space_id, agent),
+         true <-
+           not Map.get(signal, :group_mention_only, false) or
+             GroupMentions.recipient?(active_agent_participant, message),
          history <- build_history(space_id, message, active_agent_participant.id) do
       {:ok,
        %{
@@ -1321,6 +1332,7 @@ defmodule Platform.Chat.AgentResponder do
     # offer; without it a runtime must key on arrival time, so a reconnect
     # redelivery spawns a duplicate session for the same dispatch.
     |> maybe_put(:message_id, Map.get(signal, :message_id))
+    |> maybe_put(:group_mentions, Map.get(signal, :group_mentions))
     # "Get someone's attention" (task 01a1557a-a30a stage 1): the display name
     # of the member who asked this agent to look at an already-sent message.
     # Without it the agent sees a message that does not name it and a bare

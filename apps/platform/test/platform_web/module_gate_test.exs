@@ -16,8 +16,16 @@ defmodule PlatformWeb.ModuleGateTest do
     assert ModuleGate.view_modules()[PlatformWeb.MentionGroupsLive] == {:chat, nil}
     org_id = Platform.TenancyFixtures.tenant_org_id("mention-group-gate")
     user = user!()
-    membership = Repo.insert!(OrgMembership.changeset(%OrgMembership{}, %{user_id: user.id,
-      org_id: org_id, role: "admin"}))
+
+    membership =
+      Repo.insert!(
+        OrgMembership.changeset(%OrgMembership{}, %{
+          user_id: user.id,
+          org_id: org_id,
+          role: "admin"
+        })
+      )
+
     scope = fn -> Scope.for_user(Platform.Accounts.get_user(user.id)) end
     assert ModuleGate.mounts?(scope.(), PlatformWeb.MentionGroupsLive)
     membership |> Ecto.Changeset.change(external: true) |> Repo.update!()
