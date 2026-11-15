@@ -30,7 +30,6 @@ defmodule Platform.Goals.Ask do
       :title,
       :body,
       :payload,
-      :addressed_user_ids,
       :status,
       :expires_at,
       :closed_at

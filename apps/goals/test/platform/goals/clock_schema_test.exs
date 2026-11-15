@@ -85,11 +85,18 @@ defmodule Platform.Goals.ClockSchemaTest do
           goal_id: Ecto.UUID.generate(),
           coach_agent_id: Ecto.UUID.generate(),
           created_by_agent_id: Ecto.UUID.generate(),
-          user_id: Ecto.UUID.generate()
+          user_id: Ecto.UUID.generate(),
+          addressed_user_ids: [Ecto.UUID.generate()]
         })
         |> Ecto.Changeset.apply_changes()
 
-      for field <- [:goal_id, :coach_agent_id, :created_by_agent_id, :user_id],
+      for field <- [
+            :goal_id,
+            :coach_agent_id,
+            :created_by_agent_id,
+            :user_id,
+            :addressed_user_ids
+          ],
           Map.has_key?(row, field) do
         assert Map.get(changed, field) == Map.get(row, field)
       end
@@ -102,7 +109,7 @@ defmodule Platform.Goals.ClockSchemaTest do
     assert {:ok, _} = row |> Ask.changeset(attrs) |> Repo.insert()
 
     assert {:error, cs} =
-             row |> Ask.changeset(Map.put(attrs, :addressed_user_ids, nil)) |> Repo.insert()
+             %Ask{row | addressed_user_ids: nil} |> Ask.changeset(attrs) |> Repo.insert()
 
     assert Keyword.has_key?(cs.errors, :addressed_user_ids)
   end
