@@ -173,95 +173,104 @@ defmodule PlatformWeb.MentionGroupsLive do
   def render(assigns) do
     ~H"""
     <Layouts.app flash={@flash} embedded={true}>
-    <div class="mx-auto w-full max-w-3xl space-y-6 p-4 lg:p-8">
-      <div class="flex items-center justify-between gap-4">
-        <div>
-          <.link navigate="/settings" class="link text-sm">Settings</.link>
-          <h1 class="text-2xl font-semibold">Mention groups</h1>
+      <div class="mx-auto w-full max-w-3xl space-y-6 p-4 lg:p-8">
+        <div class="flex items-center justify-between gap-4">
+          <div>
+            <.link navigate="/settings" class="link text-sm">Settings</.link>
+            <h1 class="text-2xl font-semibold">Mention groups</h1>
+          </div>
+          <button id="new-mention-group" phx-click="new_group" class="btn btn-primary">
+            New group
+          </button>
         </div>
-        <button id="new-mention-group" phx-click="new_group" class="btn btn-primary">
-          New group
-        </button>
-      </div>
-      <p class="text-sm text-subtle">
-        Address existing participants together. Groups do not add anyone to a space or grant access.
-      </p>
-      <.form :if={length(@orgs) > 1} for={@org_form} phx-change="select_org" id="mention-group-org-form">
-        <.input field={@org_form[:org_id]} type="select" label="Organization"
-          options={Enum.map(@orgs, &{&1.name, &1.id})} />
-      </.form>
-      <.form
-        :if={@editor}
-        for={@group_form}
-        id="mention-group-form"
-        phx-submit="save_group"
-        class="space-y-4 rounded-box border border-edge bg-base-200 p-4"
-      >
-        <h2 class="text-lg font-semibold">{if @editor.id, do: "Edit group", else: "New group"}</h2>
-        <.input field={@group_form[:name]} type="text" label="Group name" required maxlength="80" />
-        <fieldset class="space-y-2">
-          <legend class="mb-2 font-medium">Members</legend>
-          <input type="hidden" name="group[members][]" value="" />
-          <label :for={candidate <- @candidates} class="flex min-h-11 items-center gap-3">
-            <input
-              type="checkbox"
-              name="group[members][]"
-              value={"#{candidate.type}:#{candidate.id}"}
-              checked={selected?(@editor, candidate)}
-              class="checkbox checkbox-sm"
-            />
-            <span>{candidate.name}</span>
-            <span class="badge badge-ghost badge-sm">
-              {if candidate.type == "agent", do: "agent", else: "person"}
-            </span>
-          </label>
-          <p :if={@candidates == []} class="text-sm text-subtle">
-            No eligible members in this organization.
-          </p>
-        </fieldset>
         <p class="text-sm text-subtle">
-          Group recipients are set when a message is sent. Send a new message to notify a new group.
+          Address existing participants together. Groups do not add anyone to a space or grant access.
         </p>
-        <div class="flex gap-2">
-          <button type="submit" class="btn btn-primary">Save group</button>
-          <button type="button" phx-click="cancel_group" class="btn btn-ghost">Cancel</button>
-        </div>
-      </.form>
-      <p :if={@groups == []} class="text-sm text-subtle">No mention groups yet.</p>
-      <ul class="divide-y divide-edge">
-        <li
-          :for={group <- @groups}
-          id={"mention-group-#{group.id}"}
-          class="flex flex-wrap items-center justify-between gap-3 py-4"
+        <.form
+          :if={length(@orgs) > 1}
+          for={@org_form}
+          phx-change="select_org"
+          id="mention-group-org-form"
         >
-          <div class="flex items-center gap-3">
-            <.icon name="hero-user-group" class="size-5" />
-            <div>
-              <p class="font-medium">{group.name}</p>
-              <p class="text-sm text-subtle">{length(group.members)} members</p>
-            </div>
-          </div>
+          <.input
+            field={@org_form[:org_id]}
+            type="select"
+            label="Organization"
+            options={Enum.map(@orgs, &{&1.name, &1.id})}
+          />
+        </.form>
+        <.form
+          :if={@editor}
+          for={@group_form}
+          id="mention-group-form"
+          phx-submit="save_group"
+          class="space-y-4 rounded-box border border-edge bg-base-200 p-4"
+        >
+          <h2 class="text-lg font-semibold">{if @editor.id, do: "Edit group", else: "New group"}</h2>
+          <.input field={@group_form[:name]} type="text" label="Group name" required maxlength="80" />
+          <fieldset class="space-y-2">
+            <legend class="mb-2 font-medium">Members</legend>
+            <input type="hidden" name="group[members][]" value="" />
+            <label :for={candidate <- @candidates} class="flex min-h-11 items-center gap-3">
+              <input
+                type="checkbox"
+                name="group[members][]"
+                value={"#{candidate.type}:#{candidate.id}"}
+                checked={selected?(@editor, candidate)}
+                class="checkbox checkbox-sm"
+              />
+              <span>{candidate.name}</span>
+              <span class="badge badge-ghost badge-sm">
+                {if candidate.type == "agent", do: "agent", else: "person"}
+              </span>
+            </label>
+            <p :if={@candidates == []} class="text-sm text-subtle">
+              No eligible members in this organization.
+            </p>
+          </fieldset>
+          <p class="text-sm text-subtle">
+            Group recipients are set when a message is sent. Send a new message to notify a new group.
+          </p>
           <div class="flex gap-2">
-            <button
-              id={"edit-group-#{group.id}"}
-              phx-click="edit_group"
-              phx-value-id={group.id}
-              class="btn btn-ghost btn-sm min-h-11"
-            >
-              Edit
-            </button>
-            <button
-              id={"archive-group-#{group.id}"}
-              phx-click="archive_group"
-              phx-value-id={group.id}
-              class="btn btn-ghost btn-sm min-h-11"
-            >
-              Archive
-            </button>
+            <button type="submit" class="btn btn-primary">Save group</button>
+            <button type="button" phx-click="cancel_group" class="btn btn-ghost">Cancel</button>
           </div>
-        </li>
-      </ul>
-    </div>
+        </.form>
+        <p :if={@groups == []} class="text-sm text-subtle">No mention groups yet.</p>
+        <ul class="divide-y divide-edge">
+          <li
+            :for={group <- @groups}
+            id={"mention-group-#{group.id}"}
+            class="flex flex-wrap items-center justify-between gap-3 py-4"
+          >
+            <div class="flex items-center gap-3">
+              <.icon name="hero-user-group" class="size-5" />
+              <div>
+                <p class="font-medium">{group.name}</p>
+                <p class="text-sm text-subtle">{length(group.members)} members</p>
+              </div>
+            </div>
+            <div class="flex gap-2">
+              <button
+                id={"edit-group-#{group.id}"}
+                phx-click="edit_group"
+                phx-value-id={group.id}
+                class="btn btn-ghost btn-sm min-h-11"
+              >
+                Edit
+              </button>
+              <button
+                id={"archive-group-#{group.id}"}
+                phx-click="archive_group"
+                phx-value-id={group.id}
+                class="btn btn-ghost btn-sm min-h-11"
+              >
+                Archive
+              </button>
+            </div>
+          </li>
+        </ul>
+      </div>
     </Layouts.app>
     """
   end
