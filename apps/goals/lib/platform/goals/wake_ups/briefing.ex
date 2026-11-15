@@ -192,6 +192,8 @@ defmodule Platform.Goals.WakeUps.Briefing do
     "## The goal\n#{goal["title"]}\n#{goal["why"]}\nTarget: #{goal["target_value"]} #{goal["unit"]}\nSettings: #{inspect(goal)}\n\n## The number\n#{number_text(number)}\n\n## Since the last check-in\n#{inspect(since)}\n\n## What you may do\nClose this check-in with exactly one of goal_do, goal_ask or goal_wait. Respect the goal's agent mode, stops and outreach settings."
   end
 
+  def text(_), do: "The briefing for this check-in is not available."
+
   defp number_text(%{"state" => "cannot_measure", "wording" => sentence}),
     do:
       "The number could not be measured for this check-in. #{sentence} Do not state or estimate a number for this goal in your outcome."

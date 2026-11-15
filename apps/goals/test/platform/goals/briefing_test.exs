@@ -95,6 +95,10 @@ defmodule Platform.Goals.BriefingTest do
     assert number["change_since"] == DateTime.to_iso8601(first_reading.measured_at)
   end
 
+  test "a committed wake-up remains readable if snapshot construction was interrupted" do
+    assert is_binary(Briefing.text(%{}))
+  end
+
   defp wake!(c, time) do
     %WakeUp{goal_id: c.goal.id, coach_agent_id: c.coach.id}
     |> WakeUp.changeset(%{due_at: time, fired_at: time, respond_by: DateTime.add(time, 43_200)})
