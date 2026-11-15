@@ -14,10 +14,10 @@ defmodule Platform.Goals.PracticeTest do
     assert Goals.record_practice(c.owner, ask.id, results([0], [])) == {:error, :incomplete}
 
     assert {:ok, %{got: 3, missed: 2, answer: answer, reading: reading}} =
-             Goals.record_practice(c.owner, ask.id, results([0, 1, 2], [3, 4]))
+             Goals.record_practice(c.owner, ask.id, results([2, 0, 1], [4, 3]))
 
     assert answer.answer == "used"
-    assert length(answer.details["cards"]) == 5
+    assert Enum.map(answer.details["cards"], & &1["index"]) == [2, 0, 1, 4, 3]
     assert Decimal.equal?(reading.value, 13)
     assert reading.origin == "practice"
     before = Repo.aggregate(Reading, :count)
