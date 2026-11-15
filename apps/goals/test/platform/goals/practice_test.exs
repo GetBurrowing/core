@@ -89,7 +89,8 @@ defmodule Platform.Goals.PracticeTest do
     assert {:ok, 7} = Goals.practice_streak(c.owner, goal.id, today: date())
     assert {:ok, 7} = Goals.practice_streak(c.owner, goal.id, today: Date.add(date(), 1))
     assert {:ok, 0} = Goals.practice_streak(c.owner, goal.id, today: Date.add(date(), 2))
-    advance(2)
+    skipped = fire(goal)
+    {:ok, _} = Goals.close_wake_up(c.coach, skipped.id, "wait", %{reason: "Rest day"})
     ask = queued(c, %{kind: "practice", payload: %{"cards" => cards(1)}})
     assert {:ok, %{streak: 1}} = Goals.record_practice(c.owner, ask.id, results([0], []))
   end
