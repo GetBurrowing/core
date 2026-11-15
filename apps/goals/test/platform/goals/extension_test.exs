@@ -48,14 +48,18 @@ defmodule Platform.Goals.ExtensionTest do
 
     test "registers goals.use" do
       assert Platform.Goals.enabled?()
-      assert Extension.permissions() == [%{module: "goals", permissions: ["goals.use"]}]
+
+      assert Extension.permissions() == [
+               %{module: "goals", permissions: ["goals.use"], bundles: %{"goals" => "goals.use"}}
+             ]
+
       assert Platform.Access.Registry.permission?("goals.use")
     end
 
-    test "still registers no rail item, page, bundle or canvas kind" do
+    test "registers the goals bundle and still no rail item, page or canvas kind" do
+      assert [%{name: "goals"}] = Extension.mcp_tool_bundles()
       assert Extension.rail_items() == []
       assert Extension.live_pages() == []
-      assert Extension.mcp_tool_bundles() == []
       assert Extension.canvas_kinds() == []
     end
 

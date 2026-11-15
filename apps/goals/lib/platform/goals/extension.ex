@@ -6,9 +6,11 @@ defmodule Platform.Goals.Extension do
   `apps/burrow_release/config/config.exs` for the with-modules image).
 
   Goals 1/8 contributes the module's migrations path and, only while
-  `GOALS_ENABLED` is set, the `goals.use` permission. Every other registry is
-  empty on purpose; later members add the rail item, the live pages and the
-  tool bundle.
+  `GOALS_ENABLED` is set, the `goals.use` permission. Goals 3/8 (task
+  01a1dfc1-05b0) adds, also only while it is set, the `goals` MCP tool
+  bundle (`Platform.Goals.ToolDefinitions`), gated by `goals.use`: grantable
+  per runtime, never a default grant. Every other registry is empty on
+  purpose; later members add the rail item and the live pages.
 
   No migration grants `goals.use` to the built-in roles: on an install that
   leaves the flag unset the permission is unregistered, and
@@ -21,13 +23,31 @@ defmodule Platform.Goals.Extension do
   @impl true
   def canvas_kinds, do: []
 
+  # Every `goal_*` name is Goals', listed or not, so an invented one gets
+  # Goals' unknown_tool answer, not core's.
   @impl true
-  def mcp_tool_bundles, do: []
+  def mcp_tool_bundles do
+    if Platform.Goals.enabled?() do
+      [
+        %{
+          name: "goals",
+          definitions: Platform.Goals.ToolDefinitions.definitions(),
+          tool_names: Platform.Goals.ToolDefinitions.names(),
+          execute: &Platform.Goals.Tools.execute/3,
+          owns_tool?: &String.starts_with?(&1, "goal_")
+        }
+      ]
+    else
+      []
+    end
+  end
 
   @impl true
   def permissions do
     if Platform.Goals.enabled?(),
-      do: [%{module: "goals", permissions: ["goals.use"]}],
+      do: [
+        %{module: "goals", permissions: ["goals.use"], bundles: %{"goals" => "goals.use"}}
+      ],
       else: []
   end
 
