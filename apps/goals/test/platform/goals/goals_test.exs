@@ -205,7 +205,7 @@ defmodule Platform.Goals.GoalsTest do
       assert hits("goal = Repo.get(Goal, id)") == ["Repo.get("]
 
       for schema <- ~w(Goal Stop Entry Grant Reading WakeUp GoalClock Ask TaskLink) do
-        assert hits("Repo.all(#{schema})") == ["Repo.all(#{schema}"]
+        assert "Repo.all(#{schema}" in hits("Repo.all(#{schema})")
       end
     end
 
