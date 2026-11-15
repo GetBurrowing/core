@@ -205,7 +205,7 @@ defmodule PlatformWeb.GoalsBriefTest do
     assert has_element?(view, card(item), "Undo asked for.")
     # Repeating the identical crafted event is idempotent.
     view
-    |> element("[data-role=goals-brief]")
+    |> with_target("[data-role=goals-brief]")
     |> render_hook("undo", %{item_id: item.id, entry_id: f.undoable.id, request: "undo"})
 
     assert Repo.aggregate(
@@ -227,7 +227,6 @@ defmodule PlatformWeb.GoalsBriefTest do
   end
 
   test "forged foreign item and ask events change no rows", c do
-    full(c)
     stranger = member!(c.org)
     grant!(stranger, c.org)
 
@@ -237,7 +236,7 @@ defmodule PlatformWeb.GoalsBriefTest do
     ask = queued(%{c | goal: foreign, owner: stranger}, %{kind: "offer"})
     {:ok, _} = Goals.prepare_brief(stranger, date())
     {:ok, [item]} = Goals.brief_items(stranger, date())
-    build()
+    full(c)
     {:ok, view, _} = open(c.conn, c.owner)
     counts = fn -> {Repo.aggregate(Entry, :count), Repo.aggregate(AskAnswer, :count)} end
     before = counts.()
@@ -250,7 +249,7 @@ defmodule PlatformWeb.GoalsBriefTest do
           {"withdraw", %{}}
         ] do
       view
-      |> element("[data-role=goals-brief]")
+      |> with_target("[data-role=goals-brief]")
       |> render_hook(event, Map.put(attrs, :item_id, item.id))
     end
 
