@@ -342,20 +342,22 @@ defmodule PlatformWeb.GoalsPage do
   attr :page, :map, required: true
 
   defp meta(assigns) do
+    card = assigns.page.card
+    owner = first_name(card.owner_name)
+    shared? = card.goal.kind == "shared"
+
     assigns =
       assign(assigns,
-        goal: assigns.page.card.goal,
-        owner: first_name(assigns.page.card.owner_name),
-        shared?: assigns.page.card.goal.kind == "shared"
+        lead: if(shared?, do: "Shared by #{owner}", else: "#{owner}'s goal"),
+        join: if(shared?, do: " and ", else: " · "),
+        tail: if(shared?, do: "", else: " " <> verb(card.goal.agent_mode))
       )
 
     ~H"""
-    <%= if @shared? do %>
-      Shared by {@owner}<span :if={@page.coach}> and <.agent_name agent={@page.coach} /></span>
-    <% else %>
-      {@owner}'s goal<span :if={@page.coach}> · <.agent_name agent={@page.coach} /> {verb(@goal.agent_mode)}</span>
-    <% end %>
-    <span :if={@page.source} data-role="goal-meta-source"> ·  {@page.source.label}</span>
+    <span>{@lead}</span><span :if={@page.coach}>{@join}<.agent_name agent={@page.coach} />{@tail}</span><span
+      :if={@page.source}
+      data-role="goal-meta-source"
+    >{" · " <> @page.source.label}</span>
     """
   end
 
