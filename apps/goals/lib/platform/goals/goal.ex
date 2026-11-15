@@ -82,7 +82,7 @@ defmodule Platform.Goals.Goal do
     |> validate_inclusion(:rhythm, @rhythms)
     |> validate_inclusion(:outreach, @outreaches)
     |> validate_number(:rhythm_weekday, greater_than_or_equal_to: 1, less_than_or_equal_to: 7)
-    |> constraints()
+    |> name_constraints()
   end
 
   @doc """
@@ -90,8 +90,8 @@ defmodule Platform.Goals.Goal do
   refuses comes back as a changeset error, not a raise. `changeset/2` pipes
   through it; a caller writing a raw `change/2` can too.
   """
-  @spec constraints(Ecto.Changeset.t()) :: Ecto.Changeset.t()
-  def constraints(changeset) do
+  @spec name_constraints(Ecto.Changeset.t()) :: Ecto.Changeset.t()
+  def name_constraints(changeset) do
     changeset
     |> check_constraint(:kind, name: :goals_kind_check)
     |> check_constraint(:status, name: :goals_status_check)

@@ -40,7 +40,7 @@ defmodule Platform.Goals.Stop do
     |> cast(attrs, @editable)
     |> validate_required([:goal_id, :position, :label, :criteria])
     |> validate_length(:label, min: 1, max: 255)
-    |> constraints()
+    |> name_constraints()
   end
 
   @doc """
@@ -48,8 +48,8 @@ defmodule Platform.Goals.Stop do
   refuses comes back as a changeset error, not a raise. `changeset/2` pipes
   through it; a caller writing a raw `change/2` can too.
   """
-  @spec constraints(Ecto.Changeset.t()) :: Ecto.Changeset.t()
-  def constraints(changeset) do
+  @spec name_constraints(Ecto.Changeset.t()) :: Ecto.Changeset.t()
+  def name_constraints(changeset) do
     changeset
     |> unique_constraint(:position, name: :goal_stops_goal_id_position_index)
     |> foreign_key_constraint(:goal_id)

@@ -47,7 +47,7 @@ defmodule Platform.Goals.Grant do
     |> validate_required([:goal_id, :audience_type])
     |> validate_inclusion(:audience_type, @audience_types)
     |> validate_one_audience()
-    |> constraints()
+    |> name_constraints()
   end
 
   defp validate_one_audience(changeset) do
@@ -69,8 +69,8 @@ defmodule Platform.Goals.Grant do
   refuses comes back as a changeset error, not a raise. `changeset/2` pipes
   through it; a caller writing a raw `change/2` can too.
   """
-  @spec constraints(Ecto.Changeset.t()) :: Ecto.Changeset.t()
-  def constraints(changeset) do
+  @spec name_constraints(Ecto.Changeset.t()) :: Ecto.Changeset.t()
+  def name_constraints(changeset) do
     changeset
     |> check_constraint(:audience_type, name: :goal_grants_audience_type_check)
     |> check_constraint(:audience_type, name: :goal_grants_one_audience)

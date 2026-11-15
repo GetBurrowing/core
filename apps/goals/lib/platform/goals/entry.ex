@@ -66,7 +66,7 @@ defmodule Platform.Goals.Entry do
     |> validate_required([:goal_id, :kind, :occurred_at, :author_type, :sources, :details])
     |> validate_inclusion(:kind, @kinds)
     |> validate_inclusion(:author_type, @author_types)
-    |> constraints()
+    |> name_constraints()
   end
 
   @doc """
@@ -74,8 +74,8 @@ defmodule Platform.Goals.Entry do
   refuses comes back as a changeset error, not a raise. `changeset/2` pipes
   through it; a caller writing a raw `change/2` can too.
   """
-  @spec constraints(Ecto.Changeset.t()) :: Ecto.Changeset.t()
-  def constraints(changeset) do
+  @spec name_constraints(Ecto.Changeset.t()) :: Ecto.Changeset.t()
+  def name_constraints(changeset) do
     changeset
     |> check_constraint(:kind, name: :goal_entries_kind_check)
     |> check_constraint(:author_type, name: :goal_entries_author_type_check)

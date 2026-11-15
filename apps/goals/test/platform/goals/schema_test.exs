@@ -63,7 +63,7 @@ defmodule Platform.Goals.SchemaTest do
   # validations, so the DATABASE's CHECK is what refuses the value.
   defp db_refuses(struct, schema, changes) do
     {:error, cs} =
-      struct |> Ecto.Changeset.change(changes) |> schema.constraints() |> Repo.insert()
+      struct |> Ecto.Changeset.change(changes) |> schema.name_constraints() |> Repo.insert()
 
     cs
   end
