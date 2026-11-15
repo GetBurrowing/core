@@ -190,6 +190,7 @@ defmodule PlatformWeb.GoalsPage do
   @doc "The goal page. `page` is `load/2`'s map; `log_error` the form's error."
   attr :page, :map, required: true
   attr :log_error, :string, default: nil
+  attr :audience_options, :map, default: %{people: [], teams: [], spaces: []}
 
   def goal_page(assigns) do
     assigns = assign(assigns, :goal, assigns.page.card.goal)
@@ -204,14 +205,19 @@ defmodule PlatformWeb.GoalsPage do
         ‹ Goals
       </.link>
       <header>
-        <h2 class="text-2xl font-bold text-base-content" data-role="goal-title">{@goal.title}</h2>
+        <h2 class="text-2xl font-bold text-base-content" data-role="goal-title">
+          {@goal.title}
+          <span :if={@goal.status != "active"} class="chip-soft chip-neutral" data-role="goal-status">
+            {String.capitalize(@goal.status)}
+          </span>
+        </h2>
         <p :if={present?(@goal.why)} class="mt-1 text-sm text-subtle" data-role="goal-why">
           {@goal.why}
         </p>
         <div class="mt-2.5 flex flex-wrap items-center gap-2 text-sm">
           <span class="text-subtle" data-role="goal-meta"><.meta page={@page} /></span>
           <span class="grow"></span>
-          <span data-goals-slot="privacy"></span>
+          <PlatformWeb.GoalsOpenUp.badge card={@page.card} options={@audience_options} />
         </div>
       </header>
 
@@ -298,7 +304,17 @@ defmodule PlatformWeb.GoalsPage do
       </section>
 
       <section data-role="goal-check-in">
-        <h3 class={sec_h()}>How we check in</h3>
+        <div class="flex items-baseline justify-between">
+          <h3 class={sec_h()}>How we check in</h3>
+          <button
+            :if={@page.card.role == :owner}
+            type="button"
+            phx-click="open_settings"
+            class={link_class()}
+          >
+            Edit
+          </button>
+        </div>
         <div class={card_class()}>
           <p class="text-sm text-base-content" data-role="goal-rhythm">
             {rhythm(@goal)} {nudges(@goal)}
@@ -331,6 +347,44 @@ defmodule PlatformWeb.GoalsPage do
           </li>
         </ul>
       </section>
+      <footer :if={@page.card.role == :owner} class="mt-6 flex gap-2" data-role="goal-status-controls">
+        <button
+          :if={@goal.status == "active"}
+          type="button"
+          phx-click="goal_status"
+          phx-value-status="paused"
+          class="btn btn-ghost"
+        >
+          Pause
+        </button>
+        <button
+          :if={@goal.status != "finished"}
+          type="button"
+          phx-click="goal_status"
+          phx-value-status="finished"
+          class="btn btn-ghost"
+        >
+          Finish
+        </button>
+        <button
+          :if={@goal.status == "paused"}
+          type="button"
+          phx-click="goal_status"
+          phx-value-status="active"
+          class="btn btn-ghost"
+        >
+          Resume
+        </button>
+        <button
+          :if={@goal.status == "finished"}
+          type="button"
+          phx-click="goal_status"
+          phx-value-status="active"
+          class="btn btn-ghost"
+        >
+          Reopen
+        </button>
+      </footer>
     </div>
     """
   end

@@ -86,8 +86,7 @@ defmodule PlatformWeb.GoalsLive do
    16. The meta line carries no rhythm word ("daily"); the source part is
        the source's label as listed by `list_sources/1`, e.g.
        "Self-reported", not "from YouTube".
-   17. The privacy chip and "Open up" are an empty
-       `data-goals-slot="privacy"` element: stage 4 builds them.
+   17. Stage 4 fills the privacy slot with the badge and owner controls.
    18. Built and not in the canvas: the Notebook section (wake-ups,
        actions, asks, waits, retros, newest first) and the "Log a value"
        form, which stands where the canvas has "Fix the count".
@@ -99,6 +98,17 @@ defmodule PlatformWeb.GoalsLive do
        "(640)".
    21. The learned card's intro sentence is shown only when the goal has a
        coach (it names them).
+
+  Stage 4 (privacy, settings and status):
+
+   22. The settings sheet, Pause and Finish controls, viewer badge and empty
+       audience tabs are new pieces absent from the canvas, built from the
+       Open up sheet's parts. The canvas's "Everyone in the org" sub-line
+       is sample text and is not derived.
+   23. No PubSub in this member: another user's open page changes on its
+       next event or load.
+   24. Core's Sheet supplies its own responsive panel width, handle and
+       close button. The single toast also has a Dismiss control.
   """
   use PlatformWeb, :live_view
 
@@ -107,6 +117,8 @@ defmodule PlatformWeb.GoalsLive do
   alias PlatformWeb.GoalsList
   alias PlatformWeb.GoalsPage
   alias PlatformWeb.GoalsRead
+  alias PlatformWeb.GoalsOpenUp
+  alias PlatformWeb.GoalsSettings
 
   @impl true
   def mount(_params, session, socket) do
@@ -119,6 +131,15 @@ defmodule PlatformWeb.GoalsLive do
       |> assign(:rows, GoalsList.rows(user, list_cards(user)))
       |> assign(:read, read_param(query))
       |> assign(:log_error, nil)
+      |> assign(
+        share_open: false,
+        settings_open: false,
+        share_tab: "people",
+        share_snapshot: [],
+        audience_options: %{people: [], teams: [], spaces: []},
+        settings: %{},
+        toast: nil
+      )
 
     case goal_param(query) do
       nil ->
@@ -127,7 +148,7 @@ defmodule PlatformWeb.GoalsLive do
       goal_id ->
         with {:ok, card} <- Goals.describe_goal(user, goal_id),
              {:ok, page} <- GoalsPage.load(user, card) do
-          {:ok, assign(socket, card: card, page: page)}
+          {:ok, socket |> assign(card: card, page: page) |> load_options(card)}
         else
           _ -> raise NotFoundError
         end
@@ -154,6 +175,201 @@ defmodule PlatformWeb.GoalsLive do
   end
 
   def handle_event("log_value", _params, socket), do: {:noreply, socket}
+
+  def handle_event("open_share", _params, socket) do
+    with {:ok, card} <- owner_card(socket),
+         {:ok, options} <- Goals.list_audience_options(socket.assigns.user, card.goal.id) do
+      {:noreply,
+       socket
+       |> refresh(card)
+       |> assign(
+         share_open: true,
+         share_tab: "people",
+         audience_options: options,
+         share_snapshot: audience_keys(card),
+         toast: nil
+       )}
+    else
+      _ -> {:noreply, socket}
+    end
+  end
+
+  def handle_event("share_tab", %{"tab" => tab}, socket)
+      when tab in ["people", "teams", "spaces"] do
+    with {:ok, card} <- owner_card(socket),
+         {:ok, options} <- Goals.list_audience_options(socket.assigns.user, card.goal.id) do
+      {:noreply, socket |> refresh(card) |> assign(share_tab: tab, audience_options: options)}
+    else
+      _ -> {:noreply, socket}
+    end
+  end
+
+  def handle_event("toggle_audience", %{"type" => type, "id" => id}, socket)
+      when type in ["user", "team", "space"] do
+    audience = {Map.fetch!(%{"user" => :user, "team" => :team, "space" => :space}, type), id}
+
+    with {:ok, card} <- Goals.describe_goal(socket.assigns.user, goal_id(socket)) do
+      fun = if audience in audience_keys(card), do: &Goals.close_goal/3, else: &Goals.open_goal/3
+
+      case fun.(socket.assigns.user, card.goal.id, audience) do
+        {:ok, _} ->
+          {:noreply, reload(socket)}
+
+        {:error, :audience_not_available} ->
+          {:noreply, assign(socket, toast: %{message: "That one can't be added", undo: nil})}
+
+        _ ->
+          {:noreply, socket}
+      end
+    else
+      _ -> {:noreply, socket}
+    end
+  end
+
+  def handle_event("share_done", _params, socket) do
+    with {:ok, card} <- owner_card(socket) do
+      changed = MapSet.new(audience_keys(card)) != MapSet.new(socket.assigns.share_snapshot)
+      socket = socket |> refresh(card) |> assign(:share_open, false)
+
+      toast =
+        if changed,
+          do: %{
+            message: audience_message(socket),
+            undo: {:audience, socket.assigns.share_snapshot}
+          },
+          else: nil
+
+      {:noreply, assign(socket, :toast, toast)}
+    else
+      _ -> {:noreply, socket}
+    end
+  end
+
+  def handle_event("close_share", _params, socket),
+    do: {:noreply, assign(socket, :share_open, false)}
+
+  def handle_event("close_settings", _params, socket),
+    do: {:noreply, assign(socket, :settings_open, false)}
+
+  def handle_event("dismiss_toast", _params, socket), do: {:noreply, assign(socket, :toast, nil)}
+
+  def handle_event("open_settings", _params, socket) do
+    with {:ok, card} <- owner_card(socket) do
+      settings =
+        Map.new(~w(rhythm rhythm_weekday outreach agent_mode), fn key ->
+          {key, Map.get(card.goal, String.to_existing_atom(key))}
+        end)
+
+      {:noreply, socket |> refresh(card) |> assign(settings_open: true, settings: settings)}
+    else
+      _ -> {:noreply, socket}
+    end
+  end
+
+  def handle_event("settings_select", %{"field" => field, "value" => value}, socket)
+      when field in ~w(rhythm rhythm_weekday outreach agent_mode) do
+    with {:ok, _card} <- owner_card(socket) do
+      {:noreply, assign(socket, :settings, Map.put(socket.assigns.settings, field, value))}
+    else
+      _ -> {:noreply, socket}
+    end
+  end
+
+  def handle_event("save_settings", _params, socket) do
+    with {:ok, card} <- owner_card(socket) do
+      attrs = socket.assigns.settings
+
+      attrs =
+        if attrs["rhythm"] in ["weekly", "biweekly"],
+          do: Map.put(attrs, "rhythm_weekday", attrs["rhythm_weekday"] || 1),
+          else: Map.delete(attrs, "rhythm_weekday")
+
+      case Goals.update_goal(socket.assigns.user, card.goal.id, attrs) do
+        {:ok, _} -> {:noreply, socket |> reload() |> assign(:settings_open, false)}
+        _ -> {:noreply, socket}
+      end
+    else
+      _ -> {:noreply, socket}
+    end
+  end
+
+  def handle_event("goal_status", %{"status" => status}, socket)
+      when status in ~w(active paused finished) do
+    with {:ok, card} <- owner_card(socket),
+         {:ok, _} <- Goals.update_goal(socket.assigns.user, card.goal.id, %{status: status}) do
+      message =
+        %{"active" => "Goal resumed", "paused" => "Goal paused", "finished" => "Goal finished"}[
+          status
+        ]
+
+      {:noreply,
+       socket
+       |> reload()
+       |> assign(:toast, %{message: message, undo: {:status, card.goal.status}})}
+    else
+      _ -> {:noreply, socket}
+    end
+  end
+
+  def handle_event("undo", _params, socket) do
+    with {:ok, card} <- owner_card(socket) do
+      case socket.assigns.toast do
+        %{undo: {:audience, snapshot}} ->
+          current = audience_keys(card)
+          Enum.each(current -- snapshot, &Goals.close_goal(socket.assigns.user, card.goal.id, &1))
+          Enum.each(snapshot -- current, &Goals.open_goal(socket.assigns.user, card.goal.id, &1))
+
+        %{undo: {:status, status}} ->
+          Goals.update_goal(socket.assigns.user, card.goal.id, %{status: status})
+
+        _ ->
+          :ok
+      end
+
+      {:noreply, socket |> reload() |> assign(:toast, nil)}
+    else
+      _ -> {:noreply, socket}
+    end
+  end
+
+  def handle_event(_event, _params, socket), do: {:noreply, socket}
+
+  defp goal_id(socket), do: socket.assigns.card && socket.assigns.card.goal.id
+
+  defp owner_card(socket) do
+    case Goals.describe_goal(socket.assigns.user, goal_id(socket)) do
+      {:ok, %{role: :owner} = card} -> {:ok, card}
+      _ -> {:error, :forbidden}
+    end
+  end
+
+  defp audience_keys(%{audience: audience}) when is_list(audience),
+    do: Enum.map(audience, &{&1.type, &1.id})
+
+  defp audience_keys(_card), do: []
+
+  defp load_options(socket, %{role: :owner} = card) do
+    case Goals.list_audience_options(socket.assigns.user, card.goal.id) do
+      {:ok, options} -> assign(socket, :audience_options, options)
+      _ -> socket
+    end
+  end
+
+  defp load_options(socket, _card), do: socket
+
+  defp reload(socket) do
+    case Goals.describe_goal(socket.assigns.user, goal_id(socket)) do
+      {:ok, card} -> socket |> refresh(card) |> load_options(card)
+      _ -> socket
+    end
+  end
+
+  defp audience_message(socket) do
+    case GoalsOpenUp.label(socket.assigns.card, socket.assigns.audience_options) do
+      "Only you" -> "Only you can see it now"
+      label -> label
+    end
+  end
 
   defp refresh(socket, card) do
     user = socket.assigns.user
@@ -214,8 +430,25 @@ defmodule PlatformWeb.GoalsLive do
           Select a goal
         </p>
         <GoalsRead.short_read :if={@page && @read} page={@page} focus={@read} />
-        <GoalsPage.goal_page :if={@page && is_nil(@read)} page={@page} log_error={@log_error} />
+        <GoalsPage.goal_page
+          :if={@page && is_nil(@read)}
+          page={@page}
+          log_error={@log_error}
+          audience_options={@audience_options}
+        />
       </section>
+      <GoalsOpenUp.audience_sheet
+        :if={@share_open && @card && @card.role == :owner}
+        card={@card}
+        options={@audience_options}
+        tab={@share_tab}
+      />
+      <GoalsSettings.settings_sheet
+        :if={@settings_open && @card && @card.role == :owner}
+        settings={@settings}
+        coach_name={@card.coach_name}
+      />
+      <GoalsOpenUp.toast :if={@toast} toast={@toast} />
     </div>
     """
   end

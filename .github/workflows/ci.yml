@@ -37,7 +37,7 @@ env:
   # The same crash detector for the `Test (with Goals)` job's module suite
   # (apps/goals' own `mix test`). Provisional: Goals 1/8 stage 4 sets it to
   # about three quarters of the final count.
-  MIN_GOALS_TEST_COUNT: 120
+  MIN_GOALS_TEST_COUNT: 165
 
 on:
   push:

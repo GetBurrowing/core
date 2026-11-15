@@ -59,6 +59,7 @@ defmodule PlatformWeb.GoalsList do
       id: goal.id,
       href: "/m/goals?goal=" <> goal.id,
       title: goal.title,
+      status: goal.status,
       numberless?: numberless?,
       kind: "Goal · " <> who(card),
       who: who(card),
@@ -205,6 +206,9 @@ defmodule PlatformWeb.GoalsList do
               {@row.time}
             </time>
             <GoalsComponents.privacy_chip privacy={@row.privacy} />
+            <span :if={@row.status != "active"} class="chip-soft chip-neutral" data-role="goal-status">
+              {String.capitalize(@row.status)}
+            </span>
           </span>
         </span>
       </.link>
@@ -280,6 +284,9 @@ defmodule PlatformWeb.GoalsList do
         <span class="mt-0.5 flex min-w-0 items-center gap-1.5 text-xs text-subtle">
           <span class="truncate">{@row.who}</span>
           <GoalsComponents.privacy_chip privacy={@row.privacy} />
+          <span :if={@row.status != "active"} class="chip-soft chip-neutral" data-role="goal-status">
+            {String.capitalize(@row.status)}
+          </span>
         </span>
       </span>
     </.link>
