@@ -109,5 +109,50 @@ defmodule Platform.Goals.CloseWakeUpTest do
     assert Goals.close_wake_up(c.owner, wake.id, "wait", %{reason: "x"}) == {:error, :forbidden}
     assert Goals.link_task(c.owner, c.goal.id, Ecto.UUID.generate()) == {:error, :forbidden}
   end
+
+  test "late invalid entry data rolls back an already-inserted ask or core task", c do
+    project = project(c.org)
+    wake = fire(c.goal)
+
+    for {outcome, attrs} <- [
+          {"ask", ask_attrs(%{predicted_change: "not-a-decimal"})},
+          {"do",
+           prediction(%{
+             predicted_change: "not-a-decimal",
+             task: %{
+               "project_id" => project.id,
+               "title" => "Work",
+               "description" => "Useful work"
+             }
+           })}
+        ] do
+      before = row_counts()
+      assert {:error, %Ecto.Changeset{}} = Goals.close_wake_up(c.coach, wake.id, outcome, attrs)
+      assert row_counts() == before
+      assert Repo.get!(WakeUp, wake.id).status == "open"
+    end
+
+    assert {:ok, result} =
+             Goals.close_wake_up(c.coach, wake.id, "wait", %{
+               reason: "Wait until ready",
+               until: ~D[2026-03-01]
+             })
+
+    assert result.entry.details["until"] == "2026-03-01"
+  end
+
+  test "a prediction must be dated after the injected current day", c do
+    wake = fire(c.goal)
+    today = DateTime.to_date(Clock.now())
+    before = row_counts()
+
+    for date <- [today, Date.add(today, -1)] do
+      assert Goals.close_wake_up(c.coach, wake.id, "do", prediction(%{predicted_by: date})) ==
+               {:error, :prediction_required}
+
+      assert row_counts() == before
+      assert Repo.get!(WakeUp, wake.id).status == "open"
+    end
+  end
 end
 

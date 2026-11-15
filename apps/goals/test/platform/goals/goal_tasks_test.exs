@@ -121,5 +121,37 @@ defmodule Platform.Goals.GoalTasksTest do
     assert {:ok, [listed]} = Goals.list_goal_tasks(c.owner, c.goal.id)
     refute listed.open
   end
+
+  test "task links cannot expose a wake-up or notebook entry belonging to another goal", c do
+    project = project(c.org)
+
+    task =
+      Repo.insert!(%Platform.Tasks.Task{
+        project_id: project.id,
+        title: "Existing",
+        status: "backlog"
+      })
+
+    private =
+      goal!(c.owner, c.org, %{coach_agent_id: c.coach.id, agent_mode: "do", rhythm: "daily"})
+
+    private_wake = fire(private)
+
+    assert {:ok, result} =
+             Goals.close_wake_up(c.coach, private_wake.id, "wait", %{reason: "Private reason"})
+
+    for attrs <- [
+          %{wake_up_id: private_wake.id},
+          %{entry_id: result.entry.id},
+          %{wake_up_id: "not-a-uuid"},
+          %{entry_id: Ecto.UUID.generate()}
+        ] do
+      before = row_counts()
+      assert Goals.link_task(c.coach, c.goal.id, task.id, attrs) == {:error, :not_found}
+      assert row_counts() == before
+    end
+
+    assert {:ok, _} = Goals.link_task(c.coach, c.goal.id, task.id)
+  end
 end
 

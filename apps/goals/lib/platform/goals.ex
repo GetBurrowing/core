@@ -461,7 +461,9 @@ defmodule Platform.Goals do
   def restart_clock(actor, goal_id) do
     with :ok <- check_enabled() do
       in_transaction(fn ->
-        with {:ok, goal} <- fetch_visible(actor, goal_id, true),
+        with {:ok, visible_goal} <- fetch_visible(actor, goal_id, false),
+             :ok <- lock_clock(actor, visible_goal),
+             {:ok, goal} <- fetch_visible(actor, goal_id, true),
              :ok <- check_can_edit(actor, goal) do
           case Platform.Goals.Clock.visible_clock(actor, goal.id) do
             nil -> {:ok, nil}
@@ -477,7 +479,7 @@ defmodule Platform.Goals do
     with :ok <- check_enabled() do
       result =
         in_transaction(fn ->
-          with {:ok, wake, goal} <- editable_wake(actor, wake_up_id),
+          with {:ok, _wake, goal} <- editable_wake(actor, wake_up_id),
                :ok <- lock_clock(actor, goal),
                {:ok, wake, goal} <- editable_wake(actor, wake_up_id),
                :ok <- check_open(wake),
@@ -764,6 +766,14 @@ defmodule Platform.Goals do
       })
 
     cond do
+      not is_nil(field_attr(attrs, :until)) and is_nil(parse_date(field_attr(attrs, :until))) ->
+        {:error,
+         Ecto.Changeset.add_error(
+           Entry.changeset(%Entry{}, base),
+           :details,
+           "until must be a date"
+         )}
+
       outcome == "wait" and not nonblank?(field_attr(attrs, :reason)) ->
         {:error, :reason_required}
 
@@ -932,15 +942,41 @@ defmodule Platform.Goals do
   end
 
   defp insert_task_link(actor, goal, task, wake_id, entry_id) do
-    %Platform.Goals.TaskLink{
-      goal_id: goal.id,
-      task_id: task.id,
-      created_by_agent_id: actor.id,
-      wake_up_id: wake_id,
-      entry_id: entry_id
-    }
-    |> Platform.Goals.TaskLink.changeset(%{})
-    |> Repo.insert()
+    with :ok <- same_goal_link(actor, goal, Platform.Goals.WakeUp, wake_id),
+         :ok <- same_goal_link(actor, goal, Entry, entry_id) do
+      changeset =
+        Platform.Goals.TaskLink.changeset(
+          %Platform.Goals.TaskLink{
+            goal_id: goal.id,
+            task_id: task.id,
+            created_by_agent_id: actor.id,
+            wake_up_id: wake_id,
+            entry_id: entry_id
+          },
+          %{}
+        )
+
+      case Repo.insert(changeset) do
+        {:error, changeset} = error ->
+          if Keyword.has_key?(changeset.errors, :task_id),
+            do: {:error, :task_already_linked},
+            else: error
+
+        ok ->
+          ok
+      end
+    end
+  end
+
+  defp same_goal_link(_actor, _goal, _schema, nil), do: :ok
+
+  defp same_goal_link(actor, goal, schema, raw_id) do
+    with {:ok, id} <- cast_id(raw_id),
+         true <- Repo.exists?(from(row in children(actor, schema, goal.id), where: row.id == ^id)) do
+      :ok
+    else
+      _ -> {:error, :not_found}
+    end
   end
 
   defp claim_close(wake, outcome, entry) do

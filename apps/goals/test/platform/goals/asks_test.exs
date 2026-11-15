@@ -121,5 +121,37 @@ defmodule Platform.Goals.AsksTest do
     assert {:ok, _} = Goals.answer_ask(reader, ask.id, "declined")
     assert Repo.get!(Ask, ask.id).status == "closed"
   end
+
+  test "ask length and addressee bounds refuse without consuming a wake-up", c do
+    wake = fire(c.goal)
+    before = row_counts()
+
+    for attrs <- [%{title: String.duplicate("x", 201)}, %{body: String.duplicate("x", 4001)}] do
+      assert {:error, %Ecto.Changeset{}} =
+               Goals.close_wake_up(c.coach, wake.id, "ask", ask_attrs(attrs))
+
+      assert row_counts() == before
+    end
+
+    readers =
+      for _ <- 1..21 do
+        reader = member!(c.org)
+        {:ok, _} = Goals.open_goal(c.owner, c.goal.id, {:user, reader.id})
+        reader.id
+      end
+
+    assert Goals.close_wake_up(c.coach, wake.id, "ask", ask_attrs(%{addressed_user_ids: readers})) ==
+             {:error, :addressee_cannot_see_goal}
+
+    assert row_counts() == before
+
+    assert {:ok, _} =
+             Goals.close_wake_up(
+               c.coach,
+               wake.id,
+               "ask",
+               ask_attrs(%{title: String.duplicate("x", 200), body: String.duplicate("x", 4000)})
+             )
+  end
 end
 

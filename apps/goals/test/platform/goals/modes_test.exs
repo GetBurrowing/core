@@ -59,4 +59,3 @@ defmodule Platform.Goals.ModesTest do
     end
   end
 end
-

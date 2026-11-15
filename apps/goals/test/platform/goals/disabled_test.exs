@@ -40,4 +40,3 @@ defmodule Platform.Goals.DisabledTest do
         &Repo.aggregate(&1, :count)
       )
 end
-

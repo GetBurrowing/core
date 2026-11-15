@@ -75,5 +75,39 @@ defmodule Platform.Goals.CapsTest do
     assert {:ok, %{task: task}} = Goals.close_wake_up(c.coach, wake.id, "do", attrs)
     assert task.id
   end
+
+  test "concurrent links competing for the last task slot admit only one", c do
+    project = project(c.org)
+
+    make_task = fn ->
+      Repo.insert!(%Platform.Tasks.Task{
+        project_id: project.id,
+        title: "Competing work",
+        status: "backlog"
+      })
+    end
+
+    for _ <- 1..4 do
+      task = make_task.()
+      assert {:ok, _} = Goals.link_task(c.coach, c.goal.id, task.id)
+    end
+
+    candidates = for _ <- 1..2, do: make_task.()
+    owner = self()
+
+    jobs =
+      Enum.map(candidates, fn task ->
+        Task.async(fn ->
+          Ecto.Adapters.SQL.Sandbox.allow(Repo, owner, self())
+          receive do: (:go -> Goals.link_task(c.coach, c.goal.id, task.id))
+        end)
+      end)
+
+    Enum.each(jobs, &send(&1.pid, :go))
+    results = Enum.map(jobs, &Task.await/1)
+    assert Enum.count(results, &match?({:ok, _}, &1)) == 1
+    assert Enum.count(results, &(&1 == {:error, :task_cap_reached})) == 1
+    assert Repo.aggregate(Goals.TaskLink, :count) == 5
+  end
 end
 

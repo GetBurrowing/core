@@ -76,4 +76,3 @@ defmodule Platform.Goals.OutcomeFixtures do
         )
       )
 end
-
