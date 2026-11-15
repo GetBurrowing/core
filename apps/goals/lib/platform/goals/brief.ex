@@ -525,6 +525,13 @@ defmodule Platform.Goals.Brief do
         with {:ok, ask} <- get_ask(user, ask_id),
              true <- ask.kind == "practice",
              true <- user.id in ask.addressed_user_ids do
+          Repo.one!(
+            from(g in Visibility.visible_goals(user),
+              where: g.id == ^ask.goal_id,
+              lock: "FOR UPDATE"
+            )
+          )
+
           ask =
             Repo.one!(
               from(a in children(user, Ask), where: a.id == ^ask.id, lock: "FOR UPDATE OF g0")
