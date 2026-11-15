@@ -3,14 +3,15 @@ defmodule Platform.Goals.TaskLink do
   use Ecto.Schema
   import Ecto.Changeset
   @primary_key {:id, :binary_id, autogenerate: true}
+  @foreign_key_type :binary_id
   @timestamps_opts [type: :utc_datetime_usec]
   schema "goal_task_links" do
-    field(:goal_id, :binary_id)
-    field(:task_id, :binary_id)
-    field(:wake_up_id, :binary_id)
-    field(:entry_id, :binary_id)
-    field(:created_by_agent_id, :binary_id)
-    field(:reported_wake_up_id, :binary_id)
+    belongs_to(:goal, Platform.Goals.Goal)
+    belongs_to(:task, Platform.Tasks.Task)
+    belongs_to(:wake_up, Platform.Goals.WakeUp)
+    belongs_to(:entry, Platform.Goals.Entry)
+    belongs_to(:created_by_agent, Platform.Agents.Agent)
+    belongs_to(:reported_wake_up, Platform.Goals.WakeUp)
     timestamps(updated_at: false)
   end
 

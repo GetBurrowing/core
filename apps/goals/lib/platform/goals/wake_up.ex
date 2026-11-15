@@ -3,22 +3,23 @@ defmodule Platform.Goals.WakeUp do
   use Ecto.Schema
   import Ecto.Changeset
   @primary_key {:id, :binary_id, autogenerate: true}
+  @foreign_key_type :binary_id
   @timestamps_opts [type: :utc_datetime_usec]
   schema "goal_wake_ups" do
-    field(:goal_id, :binary_id)
+    belongs_to(:goal, Platform.Goals.Goal)
     field(:kind, :string, default: "check_in")
     field(:due_at, :utc_datetime_usec)
     field(:fired_at, :utc_datetime_usec)
     field(:respond_by, :utc_datetime_usec)
-    field(:coach_agent_id, :binary_id)
+    belongs_to(:coach_agent, Platform.Agents.Agent)
     field(:status, :string, default: "open")
     field(:outcome, :string)
     field(:closed_at, :utc_datetime_usec)
     field(:catch_up, :boolean, default: false)
     field(:delivery, :string, default: "pending")
-    field(:reading_id, :binary_id)
+    belongs_to(:reading, Platform.Goals.Reading)
     field(:briefing, :map, default: %{})
-    field(:entry_id, :binary_id)
+    belongs_to(:entry, Platform.Goals.Entry)
     timestamps()
   end
 

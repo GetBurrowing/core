@@ -34,5 +34,15 @@ defmodule Platform.Goals.LimitsTest do
     Application.put_env(:goals, :limits, %{max_cards: 7})
     assert Limits.max_cards() == 7
     assert Limits.tick_batch() == 50
+
+    Application.put_env(:goals, :limits, %{
+      respond_within_hours: %{"daily" => 8},
+      max_open_asks: %{"pushy" => 2}
+    })
+
+    assert Limits.respond_within_hours("daily") == 8
+    assert Limits.respond_within_hours("weekly") == 48
+    assert Limits.max_open_asks("pushy") == 2
+    assert Limits.max_open_asks("gentle") == 1
   end
 end

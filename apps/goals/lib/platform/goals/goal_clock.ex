@@ -3,9 +3,10 @@ defmodule Platform.Goals.GoalClock do
   use Ecto.Schema
   import Ecto.Changeset
   @primary_key {:id, :binary_id, autogenerate: true}
+  @foreign_key_type :binary_id
   @timestamps_opts [type: :utc_datetime_usec]
   schema "goal_clocks" do
-    field(:goal_id, :binary_id)
+    belongs_to(:goal, Platform.Goals.Goal)
     field(:time_zone, :string)
     field(:wake_hour, :integer, default: 6)
     field(:next_wake_at, :utc_datetime_usec)

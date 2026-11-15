@@ -11,18 +11,15 @@ defmodule Platform.Goals.Limits do
   def max_addressed, do: value(:max_addressed, 20)
   def briefing_entries, do: value(:briefing_entries, 20)
 
-  def respond_within_hours(rhythm),
-    do:
-      Map.get(
-        value(:respond_within_hours, %{
-          "daily" => 12,
-          "weekdays" => 12,
-          "weekly" => 48,
-          "biweekly" => 48
-        }),
-        rhythm
-      )
+  @doc "Overrides accept a map keyed by rhythm string under :respond_within_hours."
+  def respond_within_hours(rhythm) when rhythm in ~w(daily weekdays weekly biweekly) do
+    defaults = %{"daily" => 12, "weekdays" => 12, "weekly" => 48, "biweekly" => 48}
+    Map.get(value(:respond_within_hours, %{}), rhythm, Map.fetch!(defaults, rhythm))
+  end
 
-  def max_open_asks(outreach),
-    do: Map.get(value(:max_open_asks, %{"off" => 0, "gentle" => 1, "pushy" => 3}), outreach)
+  @doc "Overrides accept a map keyed by outreach string under :max_open_asks."
+  def max_open_asks(outreach) when outreach in ~w(off gentle pushy) do
+    defaults = %{"off" => 0, "gentle" => 1, "pushy" => 3}
+    Map.get(value(:max_open_asks, %{}), outreach, Map.fetch!(defaults, outreach))
+  end
 end

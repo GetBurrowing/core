@@ -6,6 +6,11 @@ defmodule Platform.Goals.RuntimeConfig do
   a release runs core's `config/runtime.exs`, which never names a module
   (`docs/decisions/0055-extension-contract-and-build-time-modules.md § 8. Configuration that belongs to a module`).
 
+  ## `GOALS_TIME_ZONE`
+
+  A valid IANA zone sets the default clock zone. Unset, empty and unknown
+  zones fall back to `"Etc/UTC"`. This module alone reads either OS setting.
+
   ## `GOALS_ENABLED`
 
   `"true"` or `"1"` turns Goals on; anything else, including unset, leaves it
@@ -16,7 +21,7 @@ defmodule Platform.Goals.RuntimeConfig do
 
   @doc """
   The settings `env` (an OS-environment map, `System.get_env/0`'s shape)
-  describes, as `[enabled: boolean]`. Pure.
+  describes, as `[enabled: boolean, default_time_zone: IANA_name]`. Pure.
   """
   @spec read(%{optional(String.t()) => String.t()}) :: keyword()
   def read(env) when is_map(env) do

@@ -3,12 +3,13 @@ defmodule Platform.Goals.Ask do
   use Ecto.Schema
   import Ecto.Changeset
   @primary_key {:id, :binary_id, autogenerate: true}
+  @foreign_key_type :binary_id
   @timestamps_opts [type: :utc_datetime_usec]
   schema "goal_asks" do
-    field(:goal_id, :binary_id)
-    field(:wake_up_id, :binary_id)
-    field(:entry_id, :binary_id)
-    field(:created_by_agent_id, :binary_id)
+    belongs_to(:goal, Platform.Goals.Goal)
+    belongs_to(:wake_up, Platform.Goals.WakeUp)
+    belongs_to(:entry, Platform.Goals.Entry)
+    belongs_to(:created_by_agent, Platform.Agents.Agent)
     field(:kind, :string)
     field(:title, :string)
     field(:body, :string)

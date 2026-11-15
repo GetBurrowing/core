@@ -121,6 +121,9 @@ defmodule Platform.Goals.ClockSchemaTest do
                |> Repo.insert()
 
       assert Keyword.has_key?(cs.errors, :outcome)
+      probe = c.goal |> wake() |> Ecto.Changeset.apply_changes() |> WakeUp.changeset(attrs)
+      assert {:error, checked} = Repo.insert(%{probe | errors: [], valid?: true})
+      assert Keyword.has_key?(checked.errors, :outcome)
     end
   end
 
