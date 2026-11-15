@@ -19,7 +19,7 @@ defmodule Platform.Goals.AskAnswer do
     |> validate_required([:ask_id, :user_id, :answer, :details, :answered_at])
     |> validate_inclusion(:answer, ~w(used declined ignored))
     |> check_constraint(:answer, name: :goal_ask_answers_answer)
-    |> unique_constraint([:ask_id, :user_id])
+    |> unique_constraint([:ask_id, :user_id], name: :goal_ask_answers_ask_id_user_id_index)
     |> foreign_key_constraint(:ask_id)
     |> foreign_key_constraint(:user_id)
   end

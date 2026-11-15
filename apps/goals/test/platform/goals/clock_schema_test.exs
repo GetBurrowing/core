@@ -8,7 +8,15 @@ defmodule Platform.Goals.ClockSchemaTest do
     enable_goals!()
     org = org_id!()
     user = member!(org)
-    %{goal: goal!(user, org), other: goal!(user, org), user: user}
+
+    project =
+      Repo.insert!(%Platform.Tasks.Project{
+        org_id: org,
+        name: "Clock",
+        slug: "clock-#{unique()}"
+      })
+
+    %{goal: goal!(user, org), other: goal!(user, org), user: user, project: project}
   end
 
   defp now, do: ~U[2026-11-15 06:00:00.000000Z]
@@ -22,6 +30,11 @@ defmodule Platform.Goals.ClockSchemaTest do
       })
 
   test "all value CHECKs reject invalid values as changesets", c do
+    ask =
+      %Ask{goal_id: c.goal.id}
+      |> Ask.changeset(%{kind: "question", title: "Ask", expires_at: now()})
+      |> Repo.insert!()
+
     cases = [
       {GoalClock, %GoalClock{goal_id: c.goal.id},
        %{
@@ -44,13 +57,54 @@ defmodule Platform.Goals.ClockSchemaTest do
       {Ask, %Ask{goal_id: c.goal.id},
        %{kind: "question", status: "bad", title: "Ask", expires_at: now()}, :status},
       {AskAnswer, %AskAnswer{user_id: c.user.id},
-       %{ask_id: Ecto.UUID.generate(), answer: "bad", answered_at: now()}, :answer}
+       %{ask_id: ask.id, answer: "bad", answered_at: now()}, :answer}
     ]
 
     for {mod, row, attrs, field} <- cases do
       assert {:error, cs} = row |> mod.changeset(attrs) |> Repo.insert()
       assert Keyword.has_key?(cs.errors, field)
+      # Bypass application validation to exercise the named PostgreSQL CHECK too.
+      probe = mod.changeset(row, attrs)
+      assert {:error, checked} = Repo.insert(%{probe | errors: [], valid?: true})
+      assert Keyword.has_key?(checked.errors, field)
     end
+  end
+
+  test "schema identity attrs cannot replace context-set ids", c do
+    agent = agent!()
+
+    for {mod, row} <- [
+          {GoalClock, %GoalClock{goal_id: c.goal.id}},
+          {WakeUp, %WakeUp{goal_id: c.goal.id, coach_agent_id: agent.id}},
+          {Ask, %Ask{goal_id: c.goal.id, created_by_agent_id: agent.id}},
+          {AskAnswer, %AskAnswer{user_id: c.user.id}},
+          {TaskLink, %TaskLink{goal_id: c.goal.id, created_by_agent_id: agent.id}}
+        ] do
+      changed =
+        mod.changeset(row, %{
+          goal_id: Ecto.UUID.generate(),
+          coach_agent_id: Ecto.UUID.generate(),
+          created_by_agent_id: Ecto.UUID.generate(),
+          user_id: Ecto.UUID.generate()
+        })
+        |> Ecto.Changeset.apply_changes()
+
+      for field <- [:goal_id, :coach_agent_id, :created_by_agent_id, :user_id],
+          Map.has_key?(row, field) do
+        assert Map.get(changed, field) == Map.get(row, field)
+      end
+    end
+  end
+
+  test "an empty audience is accepted and null audience is a changeset error", c do
+    row = %Ask{goal_id: c.goal.id}
+    attrs = %{kind: "question", title: "Next?", expires_at: now()}
+    assert {:ok, _} = row |> Ask.changeset(attrs) |> Repo.insert()
+
+    assert {:error, cs} =
+             row |> Ask.changeset(Map.put(attrs, :addressed_user_ids, nil)) |> Repo.insert()
+
+    assert Keyword.has_key?(cs.errors, :addressed_user_ids)
   end
 
   test "wake-up outcome matches closed status", c do
@@ -91,7 +145,7 @@ defmodule Platform.Goals.ClockSchemaTest do
   end
 
   test "task links are unique and cascade when core task is deleted", c do
-    task = Repo.insert!(%Platform.Tasks.Task{title: "Goal work"})
+    task = Repo.insert!(%Platform.Tasks.Task{title: "Goal work", project_id: c.project.id})
 
     link =
       %TaskLink{goal_id: c.goal.id} |> TaskLink.changeset(%{task_id: task.id}) |> Repo.insert!()
@@ -133,7 +187,7 @@ defmodule Platform.Goals.ClockSchemaTest do
       |> AskAnswer.changeset(%{ask_id: ask.id, answer: "used", answered_at: now()})
       |> Repo.insert!()
 
-    task = Repo.insert!(%Platform.Tasks.Task{title: "Goal work"})
+    task = Repo.insert!(%Platform.Tasks.Task{title: "Goal work", project_id: c.project.id})
 
     link =
       %TaskLink{goal_id: c.goal.id} |> TaskLink.changeset(%{task_id: task.id}) |> Repo.insert!()

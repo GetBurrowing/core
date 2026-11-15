@@ -60,7 +60,9 @@ defmodule Platform.Goals.WakeUp do
     |> validate_outcome()
     |> check_constraint(:outcome, name: :goal_wake_ups_outcome_matches_status)
     |> unique_constraint([:goal_id, :kind], name: :goal_wake_ups_one_open)
-    |> unique_constraint([:goal_id, :kind, :due_at])
+    |> unique_constraint([:goal_id, :kind, :due_at],
+      name: :goal_wake_ups_goal_id_kind_due_at_index
+    )
     |> foreign_key_constraint(:goal_id)
     |> foreign_key_constraint(:coach_agent_id)
     |> foreign_key_constraint(:reading_id)

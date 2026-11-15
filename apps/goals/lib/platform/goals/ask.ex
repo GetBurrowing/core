@@ -35,9 +35,7 @@ defmodule Platform.Goals.Ask do
       :closed_at
     ])
     |> validate_required([:goal_id, :kind, :title, :payload, :status, :expires_at])
-    |> validate_change(:addressed_user_ids, fn :addressed_user_ids, value ->
-      if is_nil(value), do: [addressed_user_ids: "cannot be nil"], else: []
-    end)
+    |> validate_addressed()
     |> validate_inclusion(:kind, ~w(question offer practice))
     |> check_constraint(:kind, name: :goal_asks_kind)
     |> validate_inclusion(:status, ~w(open closed expired))
@@ -46,5 +44,11 @@ defmodule Platform.Goals.Ask do
     |> foreign_key_constraint(:wake_up_id)
     |> foreign_key_constraint(:entry_id)
     |> foreign_key_constraint(:created_by_agent_id)
+  end
+
+  defp validate_addressed(changeset) do
+    if is_nil(get_field(changeset, :addressed_user_ids)),
+      do: add_error(changeset, :addressed_user_ids, "cannot be nil"),
+      else: changeset
   end
 end

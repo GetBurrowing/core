@@ -18,7 +18,7 @@ defmodule Platform.Goals.TaskLink do
     row
     |> cast(attrs, [:task_id, :wake_up_id, :entry_id, :reported_wake_up_id])
     |> validate_required([:goal_id, :task_id])
-    |> unique_constraint([:task_id])
+    |> unique_constraint([:task_id], name: :goal_task_links_task_id_index)
     |> foreign_key_constraint(:goal_id)
     |> foreign_key_constraint(:task_id)
     |> foreign_key_constraint(:wake_up_id)
