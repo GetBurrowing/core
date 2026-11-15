@@ -113,6 +113,9 @@ defmodule Platform.Goals.ClockTickTest do
     assert {:ok, _} = Clock.claim(c.coach, c.goal, seen, seen.next_wake_at)
     assert :already_claimed = Clock.claim(c.coach, c.goal, seen, seen.next_wake_at)
     assert length(wakes(c.goal)) == 1
+    advanced = clock(c.goal)
+    assert :already_claimed = Clock.claim(c.coach, c.goal, advanced, seen.next_wake_at)
+    assert length(wakes(c.goal)) == 1
   end
 
   test "two concurrent ticks sharing the sandbox produce one wake-up", c do

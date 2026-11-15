@@ -106,14 +106,31 @@ defmodule Platform.Goals.Clock do
 
   @doc false
   def claim(coach, goal, clock, now) do
-    {:ok, next} = Rhythm.next_slot(now, settings(goal, clock))
-    {:ok, following} = Rhythm.next_slot(clock.next_wake_at, settings(goal, clock))
-
     case Repo.transaction(fn ->
+           if DateTime.compare(clock.next_wake_at, now) == :gt or not is_nil(clock.stalled_at),
+             do: Repo.rollback(:already_claimed)
+
+           current =
+             Repo.one(
+               from(g in Platform.Goals.Visibility.visible_goals(coach),
+                 where: g.id == ^goal.id,
+                 lock: "FOR UPDATE"
+               )
+             )
+
+           unless current && current.status == "active" && current.coach_agent_id == coach.id,
+             do: Repo.rollback(:already_claimed)
+
+           goal = current
+           {:ok, next} = Rhythm.next_slot(now, settings(goal, clock))
+           {:ok, following} = Rhythm.next_slot(clock.next_wake_at, settings(goal, clock))
+
            {count, _} =
              Repo.update_all(
                from(c in GoalClock,
-                 where: c.id == ^clock.id and c.next_wake_at == ^clock.next_wake_at
+                 where:
+                   c.id == ^clock.id and c.next_wake_at == ^clock.next_wake_at and
+                     is_nil(c.stalled_at)
                ),
                set: [next_wake_at: next, last_woken_at: now]
              )
@@ -159,10 +176,11 @@ defmodule Platform.Goals.Clock do
         _ -> nil
       end
 
-    snapshot = Briefing.snapshot(coach, goal, wake, result)
-
-    wake =
-      wake |> WakeUp.changeset(%{reading_id: reading_id, briefing: snapshot}) |> Repo.update!()
+    {:ok, wake} =
+      Repo.transaction(fn ->
+        snapshot = Briefing.snapshot(coach, goal, wake, result)
+        wake |> WakeUp.changeset(%{reading_id: reading_id, briefing: snapshot}) |> Repo.update!()
+      end)
 
     delivery = dispatch(coach, wake)
     wake |> WakeUp.changeset(%{delivery: delivery}) |> Repo.update!()
