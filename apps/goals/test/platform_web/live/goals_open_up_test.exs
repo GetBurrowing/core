@@ -279,4 +279,142 @@ defmodule PlatformWeb.GoalsOpenUpTest do
     event(owner, "share_done")
     assert has_element?(owner, "[role='status']", "Shown in ##{space.name}")
   end
+
+  defp private_snapshot(owner, goal) do
+    {
+      Goals.get_goal(owner, goal.id),
+      Goals.list_audience(owner, goal.id),
+      Goals.list_readings(owner, goal.id),
+      Goals.list_stops(owner, goal.id),
+      Goals.list_entries(owner, goal.id)
+    }
+  end
+
+  test "private detail is masked from a permitted peer and root admin, including crafted list events",
+       c do
+    root = enabled_user!(root_admin!(), c.org_id)
+
+    {:ok, goal} =
+      Goals.update_goal(c.owner, c.goal.id, %{
+        title: "Private launch plan",
+        source_key: "self_reported",
+        unit: "pages",
+        target_value: 5000
+      })
+
+    {:ok, _} = Goals.log_reading(c.owner, goal.id, %{value: 4711})
+
+    {:ok, _} =
+      Goals.put_stops(c.owner, goal.id, [%{label: "Private checkpoint", target_value: 5000}])
+
+    {:ok, _} =
+      Goals.add_entry(c.owner, goal.id, %{
+        kind: "action",
+        title: "Private notebook action",
+        body: "Private evidence"
+      })
+
+    before = private_snapshot(c.owner, goal)
+    assert has_element?(page(c.owner, goal), "[data-role='goal-number']", "4,711")
+
+    for actor <- [c.viewer, root] do
+      responses =
+        for query <- [
+              "goal=#{goal.id}",
+              "goal=#{goal.id}&read=all",
+              "goal=#{Ecto.UUID.generate()}",
+              "goal=malformed",
+              "goal=malformed&read=all"
+            ] do
+          {404, _, body} =
+            assert_error_sent(404, fn -> get(login(actor), "/m/goals?" <> query) end)
+
+          for secret <- [
+                goal.title,
+                "Private checkpoint",
+                "Private notebook action",
+                "4711",
+                "4,711"
+              ] do
+            refute body =~ secret
+          end
+
+          body
+        end
+
+      assert length(Enum.uniq(responses)) == 1
+      list = open(actor, "/m/goals")
+
+      for secret <- [
+            goal.title,
+            goal.id,
+            "Private checkpoint",
+            "Private notebook action",
+            "4711",
+            "4,711"
+          ] do
+        refute render(list) =~ secret
+      end
+
+      for {name, args} <- [
+            {"open_share", %{}},
+            {"toggle_audience", %{"type" => "user", "id" => actor.id}},
+            {"share_done", %{}},
+            {"close_share", %{}},
+            {"undo", %{}},
+            {"open_settings", %{}},
+            {"settings_select", %{"field" => "rhythm", "value" => "daily"}},
+            {"save_settings", %{"rhythm" => "daily", "outreach" => "off"}},
+            {"goal_status", %{"status" => "paused"}},
+            {"goal_status", %{"status" => "finished"}},
+            {"log_value", %{"value" => "999"}}
+          ] do
+        event(list, name, Map.merge(args, %{"goal_id" => goal.id, "goal" => goal.id}))
+        assert private_snapshot(c.owner, goal) == before
+      end
+    end
+  end
+
+  test "flag off masks list and detail and removes both rails even with goals.use", c do
+    Application.put_env(:goals, :enabled, false)
+
+    for actor <- [c.owner, c.viewer], path <- ["/m/goals", "/m/goals?goal=#{c.goal.id}"] do
+      assert_error_sent(404, fn -> get(login(actor), path) end)
+    end
+
+    scope = Platform.Access.Scope.for_user(c.owner)
+
+    for rows <- [
+          PlatformWeb.Components.IconRail.desktop_more_rows(scope, false),
+          PlatformWeb.Components.IconRail.more_sheet_rows(scope, false)
+        ] do
+      refute Enum.any?(rows, &(&1.key == :goals))
+    end
+  end
+
+  test "permission gate denies both addresses even for an org-shared goal, and rails follow the grant",
+       c do
+    denied = member!(c.org_id)
+    {:ok, _} = Goals.open_goal(c.owner, c.goal.id, {:team, c.org_id})
+    # The context grants visibility, while the app still requires its module capability.
+    assert {:ok, _} = Goals.get_goal(denied, c.goal.id)
+
+    for path <- ["/m/goals", "/m/goals?goal=#{c.goal.id}"] do
+      assert {:error, {:redirect, %{to: "/access-denied?module=goals"}}} =
+               live(login(denied), path)
+    end
+
+    for {actor, expected} <- [{denied, false}, {c.owner, true}] do
+      scope = Platform.Access.Scope.for_user(actor)
+
+      for rows <- [
+            PlatformWeb.Components.IconRail.desktop_more_rows(scope, false),
+            PlatformWeb.Components.IconRail.more_sheet_rows(scope, false)
+          ] do
+        assert Enum.any?(rows, &(&1.key == :goals)) == expected
+      end
+    end
+
+    assert has_element?(page(c.owner, c.goal), "[data-role='goal-title']")
+  end
 end

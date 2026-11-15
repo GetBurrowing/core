@@ -26,8 +26,8 @@ defmodule PlatformWeb.GoalsLive do
 
   The list (`PlatformWeb.GoalsList`, stage 2) matches the agreed prototype
   (canvas 01a15ef6, Goals prototype v4): Inbox's two panes at `lg` and up,
-  the phone list below. The goal view is still stage 1's plain one; stages
-  3 and 4 build the goal page and Open up.
+  the phone list below. The goal page, short read, privacy and owner
+  settings use the same component recipes in stages 3 and 4.
 
   ## Design deviations
 
