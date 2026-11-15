@@ -67,8 +67,8 @@ defmodule Platform.Goals.GoalTasksTest do
 
   test "unavailable projects refuse indistinguishably without creating any rows", c do
     foreign = project(org_id!())
-    archived = project(c.org, %{archived_at: DateTime.utc_now()})
-    deleting = project(c.org, %{deletion_scheduled_at: DateTime.utc_now()})
+    archived = project(c.org, %{archived_at: Goals.Clock.now()})
+    deleting = project(c.org, %{deletion_scheduled_at: Goals.Clock.now()})
     wake = fire(c.goal)
     before = row_counts()
 
@@ -117,7 +117,7 @@ defmodule Platform.Goals.GoalTasksTest do
     another = goal!(c.owner, c.org, %{coach_agent_id: c.coach.id, agent_mode: "do"})
     assert Goals.link_task(c.coach, another.id, task.id) == {:error, :task_already_linked}
     assert Goals.link_task(c.coach, c.goal.id, task.id) == {:error, :task_already_linked}
-    Repo.update!(Ecto.Changeset.change(task, deleted_at: DateTime.utc_now()))
+    Repo.update!(Ecto.Changeset.change(task, deleted_at: Goals.Clock.now()))
     assert {:ok, [listed]} = Goals.list_goal_tasks(c.owner, c.goal.id)
     refute listed.open
   end
