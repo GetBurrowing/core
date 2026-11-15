@@ -112,6 +112,28 @@ defmodule Platform.RepoLookupBoundaryTest do
 
   # {relative_path, call_kind, schema_alias, call_count, classification, reason}
   @inventory [
+    {"platform/chat/group_mentions.ex", :get, "MessageGroupSnapshot", 1, :safe_internal,
+     "capture!/1 reads stored.id from the persisted Message selected under FOR UPDATE in the creation transaction, never client metadata"},
+    {"platform/chat/group_mentions.ex", :get, "Participant", 1, :safe_internal,
+     "capture_rows!/1 reads Message.participant_id from the persisted Message selected under FOR UPDATE by capture!/1; it is a UUID foreign key"},
+    {"platform/chat/group_mentions.ex", :get, "Space", 4, :safe_internal,
+     "load/1, recipient?/2 and capture_rows!/1 read the persisted Message.space_id UUID foreign key; in_context_message_ids/2 guards its separate space_id argument with Platform.UUID.valid?/1"},
+    {"platform/chat/group_mentions.ex", :platform_uuid_guard, "-", 2, :must_cast,
+     "load/1 guards the message id before snapshot queries; in_context_message_ids/2 guards its space_id argument before Repo.get"},
+    {"platform/chat/mention_groups.ex", :get, "Agent", 1, :safe_internal,
+     "eligible_principal?/2 receives the current Participant row reloaded by eligible_participant?/2 and reads its persisted participant_id UUID column"},
+    {"platform/chat/mention_groups.ex", :get, "Participant", 1, :must_cast,
+     "eligible_participant?/2 checks Platform.UUID.valid?/1 on participant.id before reloading the exact participant row"},
+    {"platform/chat/mention_groups.ex", :get, "Space", 1, :must_cast,
+     "eligible_participant?/2 checks Platform.UUID.valid?/1 on space_id before reloading the current space"},
+    {"platform/chat/mention_groups.ex", :get, "User", 2, :must_cast,
+     "active_user?/1 guards the actor id with Platform.UUID.valid?/1; eligible_principal?/2 reads the UUID participant_id from the current persisted Participant row"},
+    {"platform/chat/mention_groups.ex", :platform_uuid_guard, "-", 7, :must_cast,
+     "guards participant and space ids, group lookup/mutation ids, org and actor ids and candidate member ids before UUID queries or membership writes"},
+    {"platform/federation/attention_dispatch.ex", :get, "Space", 1, :must_cast,
+     "broadcast_existing/3 validates all space, participant and agent ids with Platform.UUID.valid?/1 before entering the transaction and lookup"},
+    {"platform/federation/attention_dispatch.ex", :platform_uuid_guard, "-", 1, :must_cast,
+     "broadcast_existing/3 applies Platform.UUID.valid?/1 to all three caller-supplied ids before the locked participant query and Space lookup"},
     {"platform/sign_in/email_setup.ex", :platform_uuid_guard, "-", 1, :must_cast,
      "complete/2 checks the browser challenge id before the locked query; malformed ids are refused"},
     {"platform/instruction_packs/check.ex", :get, "Check", 1, :safe_internal,
@@ -1180,6 +1202,12 @@ defmodule Platform.RepoLookupBoundaryTest do
   # statically needs dataflow the scanner does not do. A count change
   # here is a prompt to triage the new call by hand.
   @repo_one_counts %{
+    # #158: mutate/3 and lookup_group/1 both guard group ids with
+    # Platform.UUID.valid?/1 before their id-pinned queries.
+    "platform/chat/mention_groups.ex" => 2,
+    # #158: broadcast_existing/3 validates space, participant and agent ids
+    # together before the exact-participant FOR SHARE query.
+    "platform/federation/attention_dispatch.ex" => 1,
     # Target lookups compare string slugs and lock existing skill/prompt rows.
     "platform/instruction_packs/targets.ex" => 2,
     # Publisher lookup pins the validated manifest pack_id string; no UUID input.

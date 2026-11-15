@@ -1,4 +1,9 @@
 defmodule Platform.Repo.Migrations.CreateMentionGroups do
+  @moduledoc """
+  Adds organization-owned mention groups and immutable message audience snapshots
+  for #158. Typed principal identities and original participant IDs preserve the
+  send-time audience without granting access or reviving removed participation.
+  """
   use Ecto.Migration
   # old-code-compatible: additive tables and server-owned snapshots only.
   def change do
