@@ -133,14 +133,16 @@ defmodule PlatformWeb.GoalsOpenUp do
           <span>
             <span class="block text-sm font-semibold text-base-content">
               {if @type == "space", do: "##{item.name}", else: item.name}
-            </span><span class="block text-xs text-subtle">{detail(@type, item)}</span>
+            </span>
+            <span class="block text-xs text-subtle">{detail(@type, item)}</span>
           </span>
         </button>
       </div>
       <:actions>
         <span class="mr-auto text-xs text-subtle" data-role="share-footer">
           {if @label == "Only you", do: "Only you can see it", else: @label}
-        </span><button type="button" phx-click="share_done" class="btn btn-primary">Done</button>
+        </span>
+        <button type="button" phx-click="share_done" class="btn btn-primary">Done</button>
       </:actions>
     </Sheet.sheet>
     """
