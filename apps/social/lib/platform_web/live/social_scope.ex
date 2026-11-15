@@ -54,6 +54,7 @@ defmodule PlatformWeb.SocialScope do
       |> assign(:scope, {:profile, profile})
       |> assign(:detail, nil)
       |> assign(:notice, nil)
+      |> assign_tabs(profile != nil and profile.studio_enabled == true)
 
     socket
     |> assign(:can_edit?, profile != nil and match?({:ok, _, _}, SocialHelpers.authorize(socket)))
@@ -65,13 +66,63 @@ defmodule PlatformWeb.SocialScope do
   the others keep their last brand's state, hidden behind "Pick a brand".
   """
   def select_all(socket) do
-    tabs = Enum.filter(socket.assigns.tabs, & &1.module.all_brands?())
+    studio_enabled? = Enum.any?(visible_profiles(socket), &(&1.studio_enabled == true))
 
     socket
     |> assign(:scope, :all)
     |> assign(:detail, nil)
     |> assign(:notice, nil)
-    |> then(&SocialTabs.reduce(tabs, &1, fn mod, acc -> mod.load(acc) end))
+    |> assign_tabs(studio_enabled?)
+    |> then(fn socket ->
+      tabs = Enum.filter(socket.assigns.tabs, & &1.module.all_brands?())
+      SocialTabs.reduce(tabs, socket, fn mod, acc -> mod.load(acc) end)
+    end)
+  end
+
+  @doc "Re-evaluate the Studio tab from freshly visible profiles without switching scope."
+  def refresh_studio_tabs(socket, profiles) do
+    enabled? =
+      case socket.assigns.scope do
+        :all -> Enum.any?(profiles, &(&1.studio_enabled == true))
+        {:profile, %{id: id}} -> Enum.any?(profiles, &(&1.id == id and &1.studio_enabled == true))
+        _ -> false
+      end
+
+    assign_tabs(socket, enabled?)
+  end
+
+  defp assign_tabs(socket, studio_enabled?) do
+    legacy_tabs = SocialTabs.tabs()
+
+    tabs =
+      if studio_enabled? do
+        [%{key: "today", label: "Today", module: PlatformWeb.SocialTodayTab} | legacy_tabs]
+      else
+        legacy_tabs
+      end
+
+    socket =
+      if studio_enabled? do
+        socket
+      else
+        socket
+        |> assign(:studio_today_posts, [])
+        |> assign(:studio_today_clips, [])
+        |> assign(:studio_results, [])
+        |> assign(:studio_goals, [])
+        |> assign(:studio_pitches, [])
+        |> assign(:studio_profile_accessible?, false)
+        |> assign(:studio_loaded_profile_ids, MapSet.new())
+        |> assign(:studio_post_detail, nil)
+      end
+
+    socket
+    |> assign(:tabs, tabs)
+    |> then(fn socket ->
+      if socket.assigns.tab == "today" and not studio_enabled?,
+        do: assign(socket, :tab, "queue"),
+        else: socket
+    end)
   end
 
   def all?(%{assigns: %{scope: :all}}), do: true
