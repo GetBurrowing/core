@@ -20,7 +20,7 @@ defmodule PlatformWeb.BriefWebLayerGuardTest do
 
   test "brief, practice, check-in and idea views use contexts and semantic colours" do
     files =
-      for family <- ~w(brief flash check idea),
+      for family <- ~w(brief flash check idea retro),
           file <- Path.wildcard(Path.join(@web, "**/goals_#{family}*.ex")),
           do: file
 

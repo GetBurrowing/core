@@ -117,6 +117,25 @@ defmodule PlatformWeb.GoalsLive do
    25. Core rejects external users before the extension mounts: they get
        the same 403 for existing and missing goal URLs. Internal viewers
        and root admins get the goal's uniform 404 when it is hidden.
+
+  Stage 5 (retro and the slower loop, Goals 8/8):
+
+   26. No Agree / Not this pills and no Start the next push or its note:
+       suggestions are chosen in the existing check-in answer path.
+   27. Read the last retro replaces Preview the retro: an unwritten retro
+       cannot be previewed. The footer describes the actual retro rhythm.
+   28. Predictions, stalled line, Change the goal?, journey and Notebook
+       retro links, slowed line, Retro settings and Not working are new
+       pieces required by the ticket, absent from the canvas.
+   29. The by-line drops the prototype-only suffix · example data.
+   30. Keep it replaces sample-specific second pills. Switch changes names
+       the settings actually written; sample quizzes are not stored settings.
+   31. The shared ask box replaces canned questions and an instant reply:
+       the coach answers at its next check-in. No Undo after a decision;
+       the owner can change settings on the goal page.
+   32. The pace sentence omits the sample 52 joined this week, and adds
+       an on-track form the canvas does not show. If things go sideways
+       remains absent because there is no stored field or owner.
   """
   use PlatformWeb, :live_view
 
@@ -128,6 +147,7 @@ defmodule PlatformWeb.GoalsLive do
   alias PlatformWeb.GoalsOpenUp
   alias PlatformWeb.GoalsCheckIn
   alias PlatformWeb.GoalsIdea
+  alias PlatformWeb.GoalsRetro
   alias PlatformWeb.GoalsSettings
 
   @impl true
@@ -151,13 +171,16 @@ defmodule PlatformWeb.GoalsLive do
         toast: nil,
         screen: nil,
         check_choices: %{},
+        retro_question_sent: false,
         from_brief: is_map(query) and query["from"] == "brief"
       )
 
     case goal_param(query) do
       nil ->
-        if is_map(query) and (Map.has_key?(query, "check") or Map.has_key?(query, "idea")),
-          do: raise(NotFoundError)
+        if is_map(query) and
+             (Map.has_key?(query, "check") or Map.has_key?(query, "idea") or
+                Map.has_key?(query, "retro")),
+           do: raise(NotFoundError)
 
         {:ok, assign(socket, card: nil, page: nil)}
 
@@ -174,6 +197,35 @@ defmodule PlatformWeb.GoalsLive do
 
   @impl true
   # New screens derive their ask from the validated route, never event identity.
+  def handle_event(event, params, socket) when event in ["retro_switch", "retro_keep"] do
+    with {:ok, socket} <- reload_retro(socket),
+         true <-
+           not Map.has_key?(params, "entry_id") or
+             params["entry_id"] == socket.assigns.screen.entry.id,
+         {:ok, _} <-
+           Goals.decide_retro_change(
+             socket.assigns.user,
+             goal_id(socket),
+             socket.assigns.screen.entry.id,
+             if(event == "retro_switch", do: "switch", else: "keep")
+           ),
+         {:ok, socket} <- reload_retro(socket) do
+      {:noreply, socket}
+    else
+      _ -> {:noreply, socket}
+    end
+  end
+
+  def handle_event("retro_question", params, socket) do
+    with {:ok, socket} <- reload_retro(socket),
+         true <- socket.assigns.card.role == :owner,
+         {:ok, _} <- Goals.ask_coach(socket.assigns.user, goal_id(socket), params["question"]) do
+      {:noreply, assign(socket, :retro_question_sent, true)}
+    else
+      _ -> {:noreply, socket}
+    end
+  end
+
   def handle_event("check_choice", params, socket) do
     with {:ok, socket} <- reload_screen(socket, :check),
          true <- matching_screen?(socket, params),
@@ -357,7 +409,7 @@ defmodule PlatformWeb.GoalsLive do
   def handle_event("open_settings", _params, socket) do
     with {:ok, card} <- owner_card(socket) do
       settings =
-        Map.new(~w(rhythm rhythm_weekday outreach agent_mode), fn key ->
+        Map.new(~w(rhythm rhythm_weekday outreach agent_mode retro_every), fn key ->
           {key, Map.get(card.goal, String.to_existing_atom(key))}
         end)
 
@@ -368,9 +420,18 @@ defmodule PlatformWeb.GoalsLive do
   end
 
   def handle_event("settings_select", %{"field" => field, "value" => value}, socket)
-      when field in ~w(rhythm rhythm_weekday outreach agent_mode) do
+      when field in ~w(rhythm rhythm_weekday outreach agent_mode retro_every) do
     with {:ok, _card} <- owner_card(socket) do
-      {:noreply, assign(socket, :settings, Map.put(socket.assigns.settings, field, value))}
+      {:noreply,
+       assign(
+         socket,
+         :settings,
+         Map.put(
+           socket.assigns.settings,
+           field,
+           if(field == "retro_every" and value == "", do: nil, else: value)
+         )
+       )}
     else
       _ -> {:noreply, socket}
     end
@@ -436,9 +497,10 @@ defmodule PlatformWeb.GoalsLive do
   def handle_event(_event, _params, socket), do: {:noreply, socket}
 
   defp open_screen(socket, query) when is_map(query) do
-    case {query["check"], query["idea"]} do
-      {id, _} when is_binary(id) -> mount_screen(socket, :check, id)
-      {_, id} when is_binary(id) -> mount_screen(socket, :idea, id)
+    case {query["check"], query["idea"], query["retro"]} do
+      {id, _, _} when is_binary(id) -> mount_screen(socket, :check, id)
+      {_, id, _} when is_binary(id) -> mount_screen(socket, :idea, id)
+      {_, _, id} when is_binary(id) -> mount_screen(socket, :retro, id)
       _ -> socket
     end
   end
@@ -452,6 +514,7 @@ defmodule PlatformWeb.GoalsLive do
     end
   end
 
+  defp screen_load(:retro, user, page, id), do: GoalsRetro.load(user, page, id)
   defp screen_load(:check, user, page, id), do: GoalsCheckIn.load(user, page, id)
   defp screen_load(:idea, user, page, id), do: GoalsIdea.load(user, page, id)
 
@@ -465,6 +528,17 @@ defmodule PlatformWeb.GoalsLive do
       _ -> {:error, :not_found}
     end
   end
+
+  defp reload_retro(%{assigns: %{screen: %{kind: :retro, entry: entry}}} = socket) do
+    with {:ok, user} <- screen_user(socket),
+         {:ok, card} <- Goals.describe_goal(user, goal_id(socket)),
+         {:ok, page} <- GoalsPage.load(user, card),
+         {:ok, screen} <- GoalsRetro.load(user, page, entry.id) do
+      {:ok, assign(socket, user: user, card: card, page: page, screen: screen)}
+    end
+  end
+
+  defp reload_retro(_), do: {:error, :not_found}
 
   defp reload_screen(%{assigns: %{screen: %{kind: kind, ask: ask}}} = socket, kind) do
     with {:ok, user} <- screen_user(socket),
@@ -595,6 +669,7 @@ defmodule PlatformWeb.GoalsLive do
           screen={@screen}
           choices={@check_choices}
         />
+        <GoalsRetro.screen :if={@screen && @screen.kind == :retro} screen={@screen} sent={@retro_question_sent} />
         <GoalsIdea.screen :if={@screen && @screen.kind == :idea} screen={@screen} />
         <GoalsRead.short_read :if={@page && @read && is_nil(@screen)} page={@page} focus={@read} />
         <GoalsPage.goal_page

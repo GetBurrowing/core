@@ -44,8 +44,17 @@ defmodule PlatformWeb.GoalsList do
   def rows(user, cards) do
     Enum.flat_map(cards, fn card ->
       case Goals.goal_number(user, card.goal.id) do
-        {:ok, number} -> [row(card, number)]
-        _ -> []
+        {:ok, number} ->
+          pace =
+            case Goals.expected_pace(user, card.goal.id) do
+              {:ok, pace} -> pace
+              _ -> nil
+            end
+
+          [Map.put(row(card, number), :pace, pace)]
+
+        _ ->
+          []
       end
     end)
   end
@@ -69,6 +78,14 @@ defmodule PlatformWeb.GoalsList do
       at: if(reading, do: reading.measured_at, else: goal.inserted_at),
       privacy: privacy(card)
     }
+  end
+
+  attr(:pace, :any, required: true)
+
+  defp pace_pill(assigns) do
+    ~H"""
+    <span :if={@pace} class={["inline-block rounded-full px-2 py-0.5 text-[11px] font-semibold text-base-content", if(@pace && @pace.state == :behind, do: "bg-warning-dim", else: "bg-success-dim")]} data-role="goal-pace-pill">{if @pace && @pace.state == :behind, do: "A little behind", else: "On track"}</span>
+    """
   end
 
   defp target(%{current_stop: %{target_value: %Decimal{} = t}}), do: t
@@ -130,8 +147,8 @@ defmodule PlatformWeb.GoalsList do
   # ── desktop ────────────────────────────────────────────────────────────
 
   @doc "The desktop list pane's content: header, rows or the empty state."
-  attr :rows, :list, required: true
-  attr :selected_id, :string, default: nil
+  attr(:rows, :list, required: true)
+  attr(:selected_id, :string, default: nil)
 
   def desktop_list(assigns) do
     ~H"""
@@ -155,8 +172,8 @@ defmodule PlatformWeb.GoalsList do
     """
   end
 
-  attr :row, :map, required: true
-  attr :selected?, :boolean, default: false
+  attr(:row, :map, required: true)
+  attr(:selected?, :boolean, default: false)
 
   defp desktop_row(assigns) do
     ~H"""
@@ -200,6 +217,7 @@ defmodule PlatformWeb.GoalsList do
           </span>
           <span class="mt-0.5 block text-sm tabular-nums text-subtle" data-role="goals-row-number">
             {@row.number_line}
+            <.pace_pill pace={@row.pace} />
           </span>
           <span class="mt-1 flex min-w-0 items-center gap-2 text-xs text-subtle">
             <time datetime={DateTime.to_iso8601(@row.at)} data-role="goals-row-time" class="shrink-0">
@@ -224,7 +242,7 @@ defmodule PlatformWeb.GoalsList do
   sheet's `open_more_sheet` event belongs to the parent page, which a
   nested LiveView cannot push to.
   """
-  attr :rows, :list, required: true
+  attr(:rows, :list, required: true)
 
   def phone_list(assigns) do
     ~H"""
@@ -254,7 +272,7 @@ defmodule PlatformWeb.GoalsList do
     """
   end
 
-  attr :row, :map, required: true
+  attr(:row, :map, required: true)
 
   defp phone_row(assigns) do
     ~H"""
@@ -280,7 +298,7 @@ defmodule PlatformWeb.GoalsList do
             {@row.short_time}
           </time>
         </span>
-        <span class="mt-0.5 block text-sm tabular-nums text-base-content">{@row.number_line}</span>
+        <span class="mt-0.5 block text-sm tabular-nums text-base-content">{@row.number_line} <.pace_pill pace={@row.pace} /></span>
         <span class="mt-0.5 flex min-w-0 items-center gap-1.5 text-xs text-subtle">
           <span class="truncate">{@row.who}</span>
           <GoalsComponents.privacy_chip privacy={@row.privacy} />

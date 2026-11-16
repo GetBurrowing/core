@@ -4,8 +4,8 @@ defmodule PlatformWeb.GoalsSettings do
   alias PlatformWeb.Components.Sheet
   alias PlatformWeb.GoalsOpenUp
 
-  attr :settings, :map, required: true
-  attr :coach_name, :string, default: nil
+  attr(:settings, :map, required: true)
+  attr(:coach_name, :string, default: nil)
 
   def settings_sheet(assigns) do
     ~H"""
@@ -52,6 +52,7 @@ defmodule PlatformWeb.GoalsSettings do
         selected={@settings["agent_mode"]}
         options={[{"do", "Does the work"}, {"advise", "Advises"}, {"coach", "Coaches"}]}
       />
+      <.group field="retro_every" title="Retro" selected={to_string(@settings["retro_every"] || "")} options={retro_options(@settings["rhythm"])} />
       <:actions>
         <button type="button" phx-click="save_settings" class="btn btn-primary">Save</button>
       </:actions>
@@ -59,10 +60,20 @@ defmodule PlatformWeb.GoalsSettings do
     """
   end
 
-  attr :field, :string, required: true
-  attr :title, :string, required: true
-  attr :selected, :string, required: true
-  attr :options, :list, required: true
+  def retro_options(rhythm) do
+    n = Platform.Goals.Retro.effective_every(%{rhythm: rhythm, retro_every: nil})
+
+    [
+      {"", "Usual (every #{n} check-ins)"},
+      {to_string(max(div(n, 2), 2)), "More often (every #{max(div(n, 2), 2)})"},
+      {to_string(n * 2), "Less often (every #{n * 2})"}
+    ]
+  end
+
+  attr(:field, :string, required: true)
+  attr(:title, :string, required: true)
+  attr(:selected, :string, required: true)
+  attr(:options, :list, required: true)
 
   defp group(assigns) do
     ~H"""

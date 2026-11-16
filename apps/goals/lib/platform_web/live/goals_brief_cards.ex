@@ -180,43 +180,7 @@ defmodule PlatformWeb.GoalsBriefCards do
         Ask {@item.goal.coach_name || "your coach"}
       </button>
     </div>
-    <form
-      :if={@ask_open}
-      phx-submit="ask-send"
-      phx-target={@target}
-      data-role="goals-brief-ask"
-      class="mt-3 space-y-2"
-    >
-      <input type="hidden" name="item_id" value={@item.id} />
-      <label class="sr-only" for={"goal-question-" <> @item.id}>
-        Ask {@item.goal.coach_name || "your coach"} about this
-      </label>
-      <input
-        id={"goal-question-" <> @item.id}
-        name="question"
-        type="text"
-        maxlength="500"
-        class={field()}
-        placeholder={
-          if @blank,
-            do: "Type a question first",
-            else: "Ask #{@item.goal.coach_name || "your coach"} about this"
-        }
-      />
-      <div class="flex gap-2">
-        <button type="submit" class={btn_primary()} data-action="ask-send">Send</button>
-        <button
-          type="button"
-          class={btn_ghost()}
-          phx-click="ask-cancel"
-          phx-target={@target}
-          phx-value-item_id={@item.id}
-          data-action="ask-cancel"
-        >
-          Cancel
-        </button>
-      </div>
-    </form>
+    <.question_box :if={@ask_open} id={@item.id} coach_name={@item.goal.coach_name || "your coach"} target={@target} blank={@blank} />
     <div
       :for={question <- @item.questions}
       class="mt-3 text-sm text-subtle"
@@ -225,6 +189,28 @@ defmodule PlatformWeb.GoalsBriefCards do
       <p>Sent. {@item.goal.coach_name || "Your coach"} answers at the next check-in.</p>
       <blockquote class="mt-1 border-l-2 border-edge pl-3">{question.title}</blockquote>
     </div>
+    """
+  end
+
+  attr(:id, :string, required: true)
+  attr(:coach_name, :string, required: true)
+  attr(:target, :any, default: nil)
+  attr(:blank, :boolean, default: false)
+  attr(:event, :string, default: "ask-send")
+  attr(:cancel, :boolean, default: true)
+
+  def question_box(assigns) do
+    ~H"""
+    <form phx-submit={@event} phx-target={@target} data-role="goals-brief-ask" class="mt-3 space-y-2">
+      <input type="hidden" name="item_id" value={@id} />
+      <label class="sr-only" for={"goal-question-" <> @id}>Ask {@coach_name} about this</label>
+      <input id={"goal-question-" <> @id} name="question" type="text" maxlength="500" class={field()}
+        placeholder={if @blank, do: "Type a question first", else: "Ask #{@coach_name} about this"} />
+      <div class="flex gap-2">
+        <button type="submit" class={btn_primary()} data-action="ask-send">Send</button>
+        <button :if={@cancel} type="button" class={btn_ghost()} phx-click="ask-cancel" phx-target={@target} phx-value-item_id={@id} data-action="ask-cancel">Cancel</button>
+      </div>
+    </form>
     """
   end
 
@@ -434,7 +420,7 @@ defmodule PlatformWeb.GoalsBriefCards do
   defp pace_clause(:on_track), do: " On the hoped-for pace."
   defp pace_clause(_), do: ""
 
-  defp paced_words(%{goal: %{rhythm: rhythm}, every: every}) do
+  def paced_words(%{goal: %{rhythm: rhythm}, every: every}) do
     case {rhythm, every} do
       {"daily", 7} -> "about once a week"
       {"weekdays", 5} -> "about once a week"

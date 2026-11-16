@@ -115,6 +115,9 @@ defmodule PlatformWeb.GoalsPage do
          {:ok, asks} <- Goals.list_asks(user, goal.id),
          {:ok, my_asks} <- Goals.list_my_asks(user, goal_id: goal.id),
          {:ok, clock} <- Goals.clock_status(user, goal.id),
+         {:ok, retros} <- Goals.list_retros(user, goal.id),
+         {:ok, prediction_states} <- Goals.prediction_states(user, goal.id),
+         {:ok, pace} <- Goals.expected_pace(user, goal.id),
          {:ok, streak} <- Goals.practice_streak(user, goal.id) do
       source = Enum.find(sources, &(&1.key == goal.source_key))
       current = Enum.find(stops, &is_nil(&1.reached_on))
@@ -125,6 +128,12 @@ defmodule PlatformWeb.GoalsPage do
       {:ok,
        %{
          card: card,
+         retros: retros,
+         prediction_states: prediction_states,
+         pace: pace,
+         paced_at: clock && clock.paced_at,
+         paced_every: clock && clock.paced_every,
+         retro_every: Platform.Goals.Retro.effective_every(goal),
          stops: stops,
          current: current,
          number: number_view(goal, number, reading, target, pct),
@@ -298,6 +307,7 @@ defmodule PlatformWeb.GoalsPage do
         </span>
         <p class="mt-2 text-sm text-base-content" data-role="goal-number">
           <.number_sentence number={@page.number} />
+          <span :if={@page.pace} class="text-subtle" data-role="goal-pace">{pace_sentence(@page.pace)}</span>
         </p>
         <.log_form :if={@page.can_log?} error={@log_error} />
       </div>
@@ -391,6 +401,10 @@ defmodule PlatformWeb.GoalsPage do
         </div>
       </section>
 
+      <p :if={@page.coach && @page.paced_at} class="mt-1 text-xs text-subtle" data-role="goal-slowed">{@page.coach.name} has slowed down until you answer: check-ins come {PlatformWeb.GoalsBriefCards.paced_words(%{goal: @goal, every: @page.paced_every})}.</p>
+      <p :if={@page.coach} class="mt-6 text-sm text-subtle" data-role="goal-retro-rhythm">{@page.coach.name} looks back every {@page.retro_every} check-ins.
+        <a :if={@page.retros != []} href={retro_href(@goal, hd(@page.retros).entry_id)} class={link_class()}>Read the last retro</a>
+      </p>
       <section :if={@page.notebook != []} data-role="goal-notebook">
         <h3 class={sec_h()}>
           Notebook
@@ -424,6 +438,7 @@ defmodule PlatformWeb.GoalsPage do
               >
                 {line}
               </p>
+              <a :if={entry.kind == "retro"} href={retro_href(@goal, entry.id)} class={[link_class(), "mt-2 inline-block text-sm"]}>Read the retro</a>
               <p class="mt-1.5 text-xs text-subtle">
                 <.author entry={entry} authors={@page.authors} /> ·
                 <time datetime={DateTime.to_iso8601(entry.occurred_at)}>
@@ -581,7 +596,10 @@ defmodule PlatformWeb.GoalsPage do
 
   attr(:page, :map, required: true)
 
-  defp journey(assigns) do
+  attr(:small, :boolean, default: false)
+  attr(:next_push, :boolean, default: false)
+
+  def journey(assigns) do
     stops = assigns.page.stops
     current_id = assigns.page.current && assigns.page.current.id
     last = length(stops) - 1
@@ -591,7 +609,7 @@ defmodule PlatformWeb.GoalsPage do
     <div class="mb-2 mt-1 flex items-start" data-role="goal-journey">
       <%= for {stop, i} <- @stops do %>
         <div
-          class="w-[76px] flex-none text-center lg:w-24"
+          class={["flex-none text-center", if(@small, do: "w-20", else: "w-[76px] lg:w-24")]}
           data-role="goal-stop"
           data-state={stop_state(stop, @current_id)}
         >
@@ -608,7 +626,8 @@ defmodule PlatformWeb.GoalsPage do
             <% end %>
           </div>
           <div class="text-sm font-semibold text-base-content">{stop.label}</div>
-          <div :if={sub_line(stop)} class="text-xs text-subtle">{sub_line(stop)}</div>
+          <div :if={sub_line(stop) || (@next_push and stop.id == @current_id)} class="text-xs text-subtle">{if @next_push and stop.id == @current_id, do: "next push", else: sub_line(stop)}</div>
+          <a :if={stop.reached_on && retro_for_stop(@page.retros, stop.id)} href={retro_href(@page.card.goal, retro_for_stop(@page.retros, stop.id).entry_id)} class={[link_class(), "inline-block text-xs"]}>Read the retro</a>
         </div>
         <div
           :if={i < @last}
@@ -728,7 +747,8 @@ defmodule PlatformWeb.GoalsPage do
 
     ~H"""
     <div class={card_class()} data-role="goal-trying-card" data-entry-id={@entry.id}>
-      <h4 class="text-base font-semibold text-base-content">{@entry.title}</h4>
+      <h4 class={["text-base font-semibold", if(match?({:stopped, _}, @page.prediction_states[@entry.id]), do: "text-subtle", else: "text-base-content")]}>{@entry.title}</h4>
+      <.prediction_pill state={@page.prediction_states[@entry.id]} />
       <p :if={present?(@sentence)} class="mt-1 text-sm text-subtle">{@sentence}</p>
       <.link
         :if={@from}
@@ -765,6 +785,33 @@ defmodule PlatformWeb.GoalsPage do
     <% end %>
     """
   end
+
+  attr(:state, :any, required: true)
+
+  def prediction_pill(assigns) do
+    {label, color} =
+      case assigns.state do
+        :just_started -> {"Just started", "bg-info-dim"}
+        :working -> {"Working", "bg-success-dim"}
+        :not_working -> {"Not working", "bg-warning-dim"}
+        :too_early -> {"Too early to tell", "bg-warning-dim"}
+        {:stopped, date} -> {"Stopped " <> Calendar.strftime(date, "%-d %b"), "bg-base-300"}
+        _ -> {nil, ""}
+      end
+
+    assigns = assign(assigns, label: label, color: color)
+
+    ~H"""
+    <span :if={@label} class={["inline-block rounded-full px-2 py-0.5 text-[11px] font-semibold text-base-content", @color]} data-role="goal-prediction-state">{@label}</span>
+    """
+  end
+
+  defp pace_sentence(pace),
+    do:
+      "We'd hoped for about #{GoalsComponents.format_number(pace.hoped)} by today, so we're #{if pace.state == :behind, do: "a little behind", else: "on track"}."
+
+  defp retro_for_stop(retros, stop_id), do: Enum.find(retros, &(&1.stop_id == stop_id))
+  def retro_href(goal, entry_id), do: "/m/goals?goal=#{goal.id}&retro=#{entry_id}"
 
   # ── copy ───────────────────────────────────────────────────────────────
 
