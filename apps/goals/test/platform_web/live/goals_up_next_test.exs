@@ -153,7 +153,9 @@ defmodule PlatformWeb.GoalsUpNextTest do
 
   test "the notebook shows real practice results and streak while another viewer sees only addressed answers",
        c do
-    {:ok, goal} = Goals.update_goal(c.owner, c.goal.id, %{agent_mode: "coach", unit: "words"})
+    {:ok, goal} =
+      Goals.update_goal(c.owner, c.goal.id, %{agent_mode: "coach", unit: "words", retro_every: 60})
+
     c = %{c | goal: goal}
 
     for _day <- 1..6 do

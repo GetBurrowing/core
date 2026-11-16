@@ -55,7 +55,9 @@ defmodule PlatformWeb.GoalsFlashCardsTest do
   end
 
   defp six_day_goal(c) do
-    {:ok, goal} = Goals.update_goal(c.owner, c.goal.id, %{agent_mode: "coach", unit: "words"})
+    {:ok, goal} =
+      Goals.update_goal(c.owner, c.goal.id, %{agent_mode: "coach", unit: "words", retro_every: 60})
+
     c = %{c | goal: goal}
 
     for _ <- 1..6 do
@@ -136,7 +138,7 @@ defmodule PlatformWeb.GoalsFlashCardsTest do
   end
 
   test "an addressed non-owner records results without changing the owner's number", c do
-    {:ok, goal} = Goals.update_goal(c.owner, c.goal.id, %{agent_mode: "coach"})
+    {:ok, goal} = Goals.update_goal(c.owner, c.goal.id, %{agent_mode: "coach", retro_every: 60})
     reader = member!(c.org)
     grant!(reader, c.org)
     {:ok, _} = Goals.open_goal(c.owner, goal.id, {:user, reader.id})

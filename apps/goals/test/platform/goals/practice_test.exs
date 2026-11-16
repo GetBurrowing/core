@@ -78,7 +78,7 @@ defmodule Platform.Goals.PracticeTest do
   end
 
   test "streaks count practice days, preserve yesterday and reset after a gap", c do
-    {:ok, goal} = Goals.update_goal(c.owner, c.goal.id, %{agent_mode: "coach"})
+    {:ok, goal} = Goals.update_goal(c.owner, c.goal.id, %{agent_mode: "coach", retro_every: 60})
     c = %{c | goal: goal}
 
     for _ <- 1..7 do
