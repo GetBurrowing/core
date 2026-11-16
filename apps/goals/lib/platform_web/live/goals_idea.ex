@@ -70,7 +70,8 @@ defmodule PlatformWeb.GoalsIdea do
       <div class={GoalsPage.card_class()}>
         <ul class="space-y-2 text-sm text-base-content">
           <li :for={step <- @idea["steps"]} class="flex gap-2">
-            <.icon name="hero-check-circle" class="mt-0.5 size-4 shrink-0 text-subtle" /><span>
+            <.icon name="hero-check-circle" class="mt-0.5 size-4 shrink-0 text-subtle" />
+            <span>
               {step}
             </span>
           </li>
