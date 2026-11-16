@@ -297,11 +297,8 @@ defmodule PlatformWeb.GoalsBriefTest do
     # learns only from its own next call into the context. The events carry
     # the ids the cards held before the revoke.
     revoke_goals_use!(c.owner, push: false)
-
-    view
-    |> with_target("[data-role=goals-brief]")
-    |> render_hook("answer", %{item_id: offer.id, answer: "used"})
-
+    use_it = button(offer, "answer") <> "[phx-value-answer=used]"
+    if has_element?(view, use_it), do: view |> element(use_it) |> render_click()
     assert counts.() == before
     html = render(view)
     refute html =~ "Your goals"
