@@ -320,11 +320,10 @@ defmodule Platform.Goals.Retro do
 
   defp rows(actor, schema, goal_id),
     do:
-      from(g in subquery(Visibility.visible_goals(actor)),
-        join: row in ^schema,
+      from(row in schema,
+        join: g in subquery(Visibility.visible_goals(actor)),
         on: row.goal_id == g.id,
-        where: g.id == ^goal_id,
-        select: row
+        where: g.id == ^goal_id
       )
 
   defp zone(actor, goal),
