@@ -151,6 +151,37 @@ defmodule Platform.SignInAdmin.PocketId do
     end
   end
 
+  @doc """
+  Does this install's pocket-id let an unauthenticated user email themselves a
+  login code? Reads the public `GET /api/application-configuration` list and
+  its `emailOneTimeAccessAsUnauthenticatedEnabled` entry (task 01a1e58b).
+
+  Verified against pocket-id v2.18.0, the image the installer deploys:
+  `backend/internal/appconfig/model.go:39` declares the key
+  (`json:"emailOneTimeAccessAsUnauthenticatedEnabled" ... type:"bool"
+  public:"true"`), `backend/internal/controller/app_config_controller.go:36`
+  serves the public list at `/api/application-configuration` as
+  `[%{"key", "type", "value"}]` with string values, and
+  `backend/internal/onetimeaccess/service.go:66` refuses the unauthenticated
+  email request unless the key is true.
+
+  Fails closed: any transport error, non-200, unexpected shape, missing key or
+  a value other than the string `"true"` answers `false`.
+  """
+  @spec email_login_code_enabled?() :: boolean()
+  def email_login_code_enabled? do
+    case request(:get, "/api/application-configuration") do
+      {:ok, 200, list} when is_list(list) ->
+        Enum.any?(list, fn
+          %{"key" => "emailOneTimeAccessAsUnauthenticatedEnabled", "value" => "true"} -> true
+          _ -> false
+        end)
+
+      _ ->
+        false
+    end
+  end
+
   @typedoc "A sign-in link lifetime: 30 minutes, or 7 days for a first invite."
   @type ttl() :: :short | :first_invite
 

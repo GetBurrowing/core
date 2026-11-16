@@ -1429,4 +1429,62 @@ defmodule PlatformWeb.SettingsLiveTest do
     {:ok, other, _} = live(authed(user), "/settings")
     refute has_element?(other, "[data-role=settings-passkeys]")
   end
+
+  # Task 01a1e58b stage 3: an email-code sign-in lands on
+  # /settings?passkey=add, which prompts for a passkey on this device.
+  describe "the add-a-passkey prompt" do
+    setup do
+      keys = [:sign_in_admin_enabled, :sign_in_admin_url, :sign_in_admin_api_key]
+      saved = for key <- keys, do: {key, Application.fetch_env(:platform, key)}
+
+      on_exit(fn ->
+        for {key, value} <- saved do
+          case value do
+            {:ok, v} -> Application.put_env(:platform, key, v)
+            :error -> Application.delete_env(:platform, key)
+          end
+        end
+      end)
+
+      Application.put_env(:platform, :sign_in_admin_enabled, true)
+      Application.put_env(:platform, :sign_in_admin_url, "http://pocket-id.test")
+      Application.put_env(:platform, :sign_in_admin_api_key, "test-key-not-secret")
+      %{user: member!()}
+    end
+
+    test "renders with passkey=add and a configured issuer", %{user: user} do
+      {:ok, view, html} = live(authed(user), "/settings?passkey=add")
+
+      assert has_element?(view, "#passkey-add-prompt[data-role=passkey-add-prompt]")
+
+      assert has_element?(
+               view,
+               "#passkey-add-prompt a.btn.btn-primary[href='https://issuer.example.com/settings/account'][target=_blank][rel=noopener]"
+             )
+
+      prompt = html |> query("#passkey-add-prompt") |> LazyHTML.text()
+      assert prompt =~ "Add a passkey for this device"
+      assert prompt =~ "You signed in with an email code. Add a passkey so next time is one tap."
+    end
+
+    test "plain /settings has no callout", %{user: user} do
+      {:ok, view, _html} = live(authed(user), "/settings")
+      refute has_element?(view, "#passkey-add-prompt")
+      assert has_element?(view, "[data-role=settings-passkeys]")
+    end
+
+    test "no callout without a configured issuer, even with passkey=add", %{user: user} do
+      Application.put_env(:platform, :sign_in_admin_enabled, false)
+      {:ok, view, _html} = live(authed(user), "/settings?passkey=add")
+      refute has_element?(view, "#passkey-add-prompt")
+    end
+
+    test "the callout uses semantic tokens only" do
+      source = File.read!(@settings_path)
+      [_, callout] = Regex.run(~r/id="passkey-add-prompt"(.*?)<\/div>/s, source)
+
+      refute callout =~
+               ~r/\b(?:bg|text|border)-(?:white|black|gray|slate|zinc|neutral|red|blue|green|amber|yellow|indigo)-?/
+    end
+  end
 end

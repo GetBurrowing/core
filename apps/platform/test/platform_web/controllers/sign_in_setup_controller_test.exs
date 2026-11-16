@@ -1,5 +1,6 @@
 defmodule PlatformWeb.SignInSetupControllerTest do
   use PlatformWeb.ConnCase, async: false
+  require Logger
   alias Platform.{Accounts, Repo}
   alias Platform.SignInAdmin.PocketId
   alias Platform.SignIn.EmailSetup
@@ -76,9 +77,26 @@ defmodule PlatformWeb.SignInSetupControllerTest do
             disabled: opts[:disabled] || false
           })
 
+        "/api/application-configuration" ->
+          case opts[:email_login] do
+            :error ->
+              conn |> Plug.Conn.put_status(503) |> Req.Test.json(%{error: "down"})
+
+            enabled ->
+              Req.Test.json(conn, [
+                %{key: "appName", type: "string", value: "Pocket ID"},
+                %{
+                  key: "emailOneTimeAccessAsUnauthenticatedEnabled",
+                  type: "bool",
+                  value: if(enabled == true, do: "true", else: "false")
+                }
+              ])
+          end
+
         path ->
           if String.ends_with?(path, "/webauthn-credentials") do
-            Req.Test.json(conn, if(opts[:enrolled], do: [%{id: "passkey"}], else: []))
+            passkeys = opts[:passkeys] || if(opts[:enrolled], do: 1, else: 0)
+            Req.Test.json(conn, List.duplicate(%{id: "passkey"}, passkeys))
           else
             send(pid, :provider_token_minted)
             Req.Test.json(conn, %{token: @code})
@@ -411,5 +429,172 @@ defmodule PlatformWeb.SignInSetupControllerTest do
     assert Enum.count(results, &(&1 == {:error, :invalid})) == 1
     assert_received :provider_token_minted
     refute_received :provider_token_minted
+  end
+
+  describe "a passkey-enrolled account on a device with no passkey (task 01a1e58b)" do
+    defp interaction_stub do
+      Req.Test.stub(Platform.OIDC, fn conn ->
+        conn
+        |> Plug.Conn.put_resp_header(
+          "location",
+          "/interaction?interaction=e8a7f28d-4e78-4f21-bec0-53dc068d471f"
+        )
+        |> Plug.Conn.send_resp(302, "")
+      end)
+    end
+
+    defp request_code(conn, user) do
+      sent = post(conn, "/auth/email/setup", %{email: user.email})
+      assert html_response(sent, 200) =~ "If an eligible account exists"
+      sent
+    end
+
+    defp refused?(sent) do
+      delivered(sent) == :skipped and
+        not match?({:mail_test_adapter, _, _}, receive_mail(300))
+    end
+
+    defp receive_mail(timeout) do
+      receive do
+        {:mail_test_adapter, _, _} = msg -> msg
+      after
+        timeout -> nil
+      end
+    end
+
+    test "with IdP email login on, the app flow signs in by code and keeps the PKCE challenge",
+         %{conn: conn, user: user} do
+      provider(user, passkeys: 2, email_login: true)
+      interaction_stub()
+      verifier = Base.url_encode64(:crypto.strong_rand_bytes(32), padding: false)
+      challenge = :crypto.hash(:sha256, verifier) |> Base.url_encode64(padding: false)
+      previous = Logger.level()
+      Logger.configure(level: :debug)
+      on_exit(fn -> Logger.configure(level: previous) end)
+
+      {{completed, code, binding}, log} =
+        ExUnit.CaptureLog.with_log([level: :debug], fn ->
+          login = get(conn, "/auth/login?app_challenge=" <> challenge)
+          assert redirected_to(login) == "/auth/sign-in"
+          page = login |> recycle() |> get("/auth/sign-in")
+          assert html_response(page, 200) =~ "Have a passkey on another device but not this one?"
+
+          sent = page |> recycle() |> request_code(user)
+          assert delivered(sent) == :sent
+          assert_receive {:mail_test_adapter, mail, _}, 2_000
+          assert mail.subject == "Your Burrow sign-in code"
+          code = mailed_code(mail)
+          binding = get_session(sent, :email_setup).binding
+
+          completed = sent |> recycle() |> post("/auth/email/complete", %{code: code})
+          {completed, code, binding}
+        end)
+
+      assert %URI{path: "/lc/" <> token, query: query} = URI.parse(redirected_to(completed))
+      assert token == @code
+      assert URI.decode_query(query)["redirect"]
+      assert get_session(completed, :app_challenge) == challenge
+      assert get_session(completed, :email_setup) == nil
+
+      # The notice: no link, no code, the time and who to tell.
+      assert_receive {:mail_test_adapter, notice, _}, 2_000
+      assert notice.subject == "New sign-in to your Burrow by email code"
+      assert notice.to == [{"", user.email}]
+      assert notice.text_body =~ "Time: "
+      assert notice.text_body =~ "tell your Burrow admin"
+      refute notice.text_body =~ "http"
+      refute notice.text_body =~ code
+      refute notice.text_body =~ @code
+
+      claims = %{"sub" => user.oidc_sub, "email" => user.email, "name" => user.name}
+
+      Application.put_env(
+        :platform,
+        :oidc_mock_response,
+        {:ok, %{user: claims, userinfo: claims, id_token: claims, token: %{"id_token" => "t"}}}
+      )
+
+      state = get_session(completed, :oidc_session_params).state
+
+      callback =
+        completed
+        |> recycle()
+        |> get("/auth/oidc/callback?" <> URI.encode_query(%{code: "provider-code", state: state}))
+
+      location = URI.parse(redirected_to(callback))
+      assert {location.scheme, location.host, location.path} == {"burrow", "auth", "/callback"}
+      %{"code" => exchange} = URI.decode_query(location.query)
+      assert {:ok, %{session: session}} = Platform.Mobile.exchange_code(exchange, verifier)
+      assert session.user_id == user.id
+
+      assert log =~ "/auth/email/complete", "the request log was not captured at all"
+      refute log =~ code
+      refute log =~ @code
+      refute log =~ binding
+    end
+
+    test "with IdP email login off, or its config unreadable, the enrolled account is refused alike",
+         %{user: user} do
+      for email_login <- [false, :error] do
+        :ets.delete_all_objects(:sign_in_email_setup_rate)
+        provider(user, passkeys: 2, email_login: email_login)
+        sent = request_code(build_conn(), user)
+        assert refused?(sent), "email_login #{inspect(email_login)} sent a code"
+        assert_received {:provider_request, "/api/application-configuration"}
+        refute_received :provider_token_minted
+      end
+    end
+
+    test "an enrolled root admin is refused even when the IdP allows email codes", %{user: user} do
+      {:ok, _} = Platform.Tenancy.promote_to_admin(user)
+      assert Platform.Tenancy.root_admin?(user)
+      provider(user, passkeys: 1, email_login: true)
+      sent = request_code(build_conn(), user)
+      assert refused?(sent)
+      refute_received {:provider_request, "/api/application-configuration"}
+    end
+
+    test "a root admin with no passkey keeps first-time setup", %{user: user} do
+      {:ok, _} = Platform.Tenancy.promote_to_admin(user)
+      provider(user)
+      sent = request_code(build_conn(), user)
+      assert delivered(sent) == :sent
+    end
+
+    test "a passkey-less account is unchanged: no IdP config call and no notice", %{
+      conn: conn,
+      user: user
+    } do
+      provider(user, email_login: false)
+      interaction_stub()
+      sent = request_code(conn, user)
+      assert delivered(sent) == :sent
+      assert_receive {:mail_test_adapter, mail, _}, 2_000
+      completed = sent |> recycle() |> post("/auth/email/complete", %{code: mailed_code(mail)})
+      assert redirected_to(completed) =~ "https://issuer.example.com/lc/" <> @code
+      refute_receive {:mail_test_adapter, _, _}, 300
+      refute_received {:provider_request, "/api/application-configuration"}
+    end
+
+    test "enrolled accounts hit the same per-email and per-IP request limits", %{user: user} do
+      provider(user, passkeys: 2, email_login: true)
+
+      for _ <- 1..3 do
+        sent = request_code(build_conn(), user)
+        assert delivered(sent) == :sent
+        assert_receive {:mail_test_adapter, _, _}, 2_000
+      end
+
+      request_code(build_conn(), user)
+      refute_receive {:mail_test_adapter, _, _}, 300
+
+      # Per IP: a fresh address from an IP already at its 120-request limit.
+      :ets.delete_all_objects(:sign_in_email_setup_rate)
+      window = div(System.system_time(:second), 1800)
+      :ets.insert(:sign_in_email_setup_rate, {{{:ip, {127, 0, 0, 1}}, window}, 120})
+      request_code(build_conn(), user)
+      refute_receive {:mail_test_adapter, _, _}, 300
+      refute_received {:setup_delivery, _, _}
+    end
   end
 end

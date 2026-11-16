@@ -192,6 +192,7 @@ defmodule PlatformWeb.SettingsLive do
        )
      )
      |> assign(:sheet, nil)
+     |> assign(:passkey_add?, false)
      |> assign(:time_zone, zone)
      |> assign(:mask_error, nil)
      |> assign(:level_error, nil)
@@ -217,6 +218,13 @@ defmodule PlatformWeb.SettingsLive do
      |> assign_switcher_keys()
      |> open_from_params(params)}
   end
+
+  # Task 01a1e58b stage 3: `?passkey=add` is where an email-code sign-in
+  # lands (`AuthController`), prompting the person to add a passkey for this
+  # device. The callout also needs `@passkey_settings_url`.
+  @impl true
+  def handle_params(params, _uri, socket),
+    do: {:noreply, assign(socket, :passkey_add?, params["passkey"] == "add")}
 
   # Task 01a1ccd4 stage 2: the badge keys other installs' switchers hold for
   # this one (`Platform.Switcher`). Minimal rows; stage 3 styles them.
@@ -532,6 +540,27 @@ defmodule PlatformWeb.SettingsLive do
           >
             {@email}
           </p>
+        </div>
+
+        <div
+          :if={@passkey_add? and @passkey_settings_url}
+          id="passkey-add-prompt"
+          data-role="passkey-add-prompt"
+          class="mx-4 mt-4 rounded-xl border border-edge bg-base-100 px-[18px] py-4 text-base-content"
+        >
+          <p class="text-[15px] font-semibold text-base-content">Add a passkey for this device</p>
+          <p class="mt-1 text-[13px] text-subtle">
+            You signed in with an email code. Add a passkey so next time is one tap.
+          </p>
+          <a
+            href={@passkey_settings_url}
+            target="_blank"
+            rel="noopener"
+            data-role="passkey-add-prompt-link"
+            class="btn btn-primary mt-3 w-full sm:w-auto"
+          >
+            Add a passkey <.icon name="hero-arrow-top-right-on-square" class="size-4" />
+          </a>
         </div>
 
         <p class={section_label_class()}>Appearance</p>

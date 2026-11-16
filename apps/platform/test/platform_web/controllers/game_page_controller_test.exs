@@ -284,6 +284,59 @@ defmodule PlatformWeb.GamePageControllerTest do
     assert get_session(conn, :game_login) == nil
   end
 
+  # Task 01a1e58b stage 3: a code sign-in (`/auth/sign-in`) lands on the
+  # add-a-passkey prompt, except when it began at a game login.
+  test "a code sign-in that began at a game login still lands on the game", %{conn: conn} do
+    keys = [:sign_in_admin_enabled, :sign_in_admin_url, :sign_in_admin_api_key]
+    saved = for key <- keys, do: {key, Application.fetch_env(:platform, key)}
+
+    on_exit(fn ->
+      for {key, old} <- saved do
+        case old do
+          {:ok, value} -> Application.put_env(:platform, key, value)
+          :error -> Application.delete_env(:platform, key)
+        end
+      end
+    end)
+
+    Application.put_env(:platform, :sign_in_admin_enabled, true)
+    Application.put_env(:platform, :sign_in_admin_url, "http://pocket-id.test")
+    Application.put_env(:platform, :sign_in_admin_api_key, "test-key-not-a-secret")
+    :ets.delete_all_objects(:sign_in_email_setup_rate)
+
+    Req.Test.stub(Platform.OIDC, fn conn ->
+      conn
+      |> Plug.Conn.put_resp_header("location", "/interaction?interaction=game-code-login")
+      |> Plug.Conn.send_resp(302, "")
+    end)
+
+    login = get(conn, "/auth/login?game=voltron")
+    assert redirected_to(login) == "/auth/sign-in"
+
+    started =
+      login
+      |> recycle()
+      |> post("/auth/invitation", %{setup_link: "https://issuer.example.com/lc/AbCd1234EfGh"})
+
+    assert get_session(started, :signed_in_with_email_code) == true
+    %{state: state} = get_session(started, :oidc_session_params)
+
+    claims = %{"sub" => "code-game-player", "email" => "code@example.net", "name" => "Code"}
+
+    Application.put_env(
+      :platform,
+      :oidc_mock_response,
+      {:ok, %{user: claims, userinfo: claims, id_token: claims, token: %{"id_token" => "test"}}}
+    )
+
+    callback =
+      started
+      |> recycle()
+      |> get("/auth/oidc/callback?" <> URI.encode_query(%{state: state, code: "test"}))
+
+    assert redirected_to(callback) == "/games/voltron"
+  end
+
   test "joining is explicit, idempotent, and limited to the tagged community", %{
     conn: conn,
     game: game,
