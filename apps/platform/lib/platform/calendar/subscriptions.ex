@@ -62,7 +62,7 @@ defmodule Platform.Calendar.Subscriptions do
             case ExternalFetch.fetch(current.url) do
               {:ok, body} ->
                 case ICal.parse(body) do
-                  {:ok, snapshot} ->
+                  {:ok, snapshot, _skipped} ->
                     [snapshot: snapshot, refreshed_at: now, attempted_at: now, error: nil]
 
                   {:error, _} ->

@@ -4,22 +4,40 @@ defmodule Platform.Calendar.ICal do
   floating date-times, DAILY/WEEKLY/MONTHLY rules supported by Recurrence and
   DATE EXDATEs.
 
+  `parse/1` returns `{:ok, rows, skipped}`, where `skipped` is the number of
+  VEVENT blocks left out, or `{:error, reason}`.
+
   Ignored without rejecting: any `X-` property at calendar or event level
   (RFC 5545 §3.8.8.2), descriptive metadata, repeated multi-valued metadata
   (ATTENDEE, CATEGORIES, COMMENT, CONTACT, RESOURCES), VTIMEZONE components
   (including nested STANDARD/DAYLIGHT) and VALARM inside VEVENT. VTIMEZONE is
   skipped, not interpreted: a TZID must still resolve as an IANA zone in the
-  time zone database, so a TZID that only a VTIMEZONE defines (for example
-  Outlook's "Eastern Standard Time") still rejects.
+  time zone database.
+
+  Event-level problems skip that one event and are counted in `skipped`; the
+  rest of the calendar is kept. These include overrides (RECURRENCE-ID), RDATE,
+  DURATION, complex or oversized rules, unsupported EXDATE, any other non-`X-`
+  event property, duplicate properties, a missing UID, a TZID that only a
+  VTIMEZONE defines (for example Outlook's "Eastern Standard Time"), mixed
+  DATE/date-time or floating/zoned bounds, an end not after the start, and a
+  recurring event whose start and end zones differ.
+
+  Feed-level problems reject the whole snapshot, preserving an explicit
+  unavailable state: not a VCALENDAR, invalid UTF-8, over the byte limit, more
+  than 2000 VEVENTs (skipped ones included), any other component anywhere, an
+  unterminated or unbalanced component, an unknown calendar-level line, and an
+  ambiguous duplicate UID among the readable events.
 
   Floating date-times (no `Z`, no TZID) are kept as wall-clock times with
   `"floating" => true` and are placed on the timeline only when read with an
   explicit time zone (the viewer's), as DATE values are; they never recur.
 
-  Overrides, RDATE, DURATION, complex rules, any other component and any other
-  non-`X-` property reject the complete snapshot, preserving an explicit
-  unavailable state. The existing icalendar test parser discards unsupported
-  recurrence semantics and is therefore unsuitable as the availability authority.
+  A non-recurring event whose start and end use different zones (a flight, for
+  example) is accepted: both bounds are converted to UTC instants and the row's
+  `time_zone` is the start zone.
+
+  The existing icalendar test parser discards unsupported recurrence semantics
+  and is therefore unsuitable as the availability authority.
   """
   alias Platform.Calendar.{Event, Recurrence}
   @max_bytes 1_048_576
@@ -32,8 +50,8 @@ defmodule Platform.Calendar.ICal do
            body |> String.replace(~r/\r?\n[ \t]/, "") |> String.split(~r/\r?\n/, trim: true),
          ["BEGIN:VCALENDAR" | _] <- lines,
          "END:VCALENDAR" <- List.last(lines),
-         {:ok, rows} <- collect(lines, nil, []),
-         true <- length(rows) <= 2000 do
+         {:ok, rows, skipped} <- collect(lines, nil, [], 0),
+         true <- length(rows) + skipped <= 2000 do
       rows
       |> Enum.reduce(%{}, fn row, acc ->
         Map.update(acc, row["uid"], row, fn old ->
@@ -47,7 +65,7 @@ defmodule Platform.Calendar.ICal do
       end)
       |> Map.values()
       |> Enum.reject(& &1["cancelled"])
-      |> then(&{:ok, &1})
+      |> then(&{:ok, &1, skipped})
     else
       _ -> {:error, :unsupported_or_malformed_feed}
     end
@@ -57,32 +75,39 @@ defmodule Platform.Calendar.ICal do
 
   def parse(_), do: {:error, :too_large}
 
-  defp collect([], nil, rows), do: {:ok, rows}
-  defp collect(["BEGIN:VEVENT" | rest], nil, rows), do: collect(rest, [], rows)
+  defp collect([], nil, rows, skipped), do: {:ok, rows, skipped}
 
-  defp collect(["END:VEVENT" | rest], props, rows) when is_list(props) do
-    with {:ok, row} <- event(Enum.reverse(props)), do: collect(rest, nil, [row | rows])
+  defp collect([], props, _rows, _skipped) when is_list(props),
+    do: {:error, :unterminated_component}
+
+  defp collect(["BEGIN:VEVENT" | rest], nil, rows, skipped), do: collect(rest, [], rows, skipped)
+
+  defp collect(["END:VEVENT" | rest], props, rows, skipped) when is_list(props) do
+    case read_event(props) do
+      {:ok, row} -> collect(rest, nil, [row | rows], skipped)
+      :skip -> collect(rest, nil, rows, skipped + 1)
+    end
   end
 
   # VTIMEZONE is skipped whole; TZIDs are resolved against the IANA database.
-  defp collect(["BEGIN:VTIMEZONE" | rest], nil, rows) do
-    with {:ok, rest} <- skip(rest, ["VTIMEZONE"]), do: collect(rest, nil, rows)
+  defp collect(["BEGIN:VTIMEZONE" | rest], nil, rows, skipped) do
+    with {:ok, rest} <- skip(rest, ["VTIMEZONE"]), do: collect(rest, nil, rows, skipped)
   end
 
-  defp collect(["BEGIN:VALARM" | rest], props, rows) when is_list(props) do
-    with {:ok, rest} <- skip(rest, ["VALARM"]), do: collect(rest, props, rows)
+  defp collect(["BEGIN:VALARM" | rest], props, rows, skipped) when is_list(props) do
+    with {:ok, rest} <- skip(rest, ["VALARM"]), do: collect(rest, props, rows, skipped)
   end
 
-  defp collect([line | rest], props, rows) do
+  defp collect([line | rest], props, rows, skipped) do
     cond do
       String.starts_with?(line, "BEGIN:") and line != "BEGIN:VCALENDAR" ->
         {:error, :unsupported_component}
 
       extension?(line) ->
-        collect(rest, props, rows)
+        collect(rest, props, rows, skipped)
 
       is_list(props) ->
-        collect(rest, [line | props], rows)
+        collect(rest, [line | props], rows, skipped)
 
       line in [
         "BEGIN:VCALENDAR",
@@ -91,11 +116,22 @@ defmodule Platform.Calendar.ICal do
         "CALSCALE:GREGORIAN",
         "METHOD:PUBLISH"
       ] or String.starts_with?(line, "PRODID:") ->
-        collect(rest, nil, rows)
+        collect(rest, nil, rows, skipped)
 
       true ->
         {:error, :unsupported_component}
     end
+  end
+
+  # One unreadable VEVENT is skipped and counted, never the whole feed: any
+  # event-level error or exception (a malformed line, a bad SEQUENCE) lands here.
+  defp read_event(props) do
+    case event(Enum.reverse(props)) do
+      {:ok, row} -> {:ok, row}
+      _ -> :skip
+    end
+  rescue
+    _ -> :skip
   end
 
   # Skips a component and the sub-components RFC 5545 allows inside it
@@ -145,9 +181,12 @@ defmodule Platform.Calendar.ICal do
       else
         with {:ok, first, zone, date} <- datetime(props["DTSTART"]),
              {:ok, last, end_zone, end_date} <- datetime(props["DTEND"]),
-             true <- zone == end_zone and is_nil(date) == is_nil(end_date),
+             true <- is_nil(date) == is_nil(end_date),
+             true <- (zone == :floating) == (end_zone == :floating),
              true <- DateTime.compare(first, last) == :lt,
              rule <- value(props["RRULE"]),
+             # supported_recurrence?/3 reads only the start zone.
+             true <- is_nil(rule) or zone == end_zone,
              true <- is_nil(rule) or byte_size(rule) <= 256,
              {:ok, recurrence} <- Recurrence.parse(rule),
              true <- supported_recurrence?(recurrence, zone, first),
