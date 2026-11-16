@@ -414,12 +414,16 @@
               </code>
             </p>
             <p class="text-subtle" data-role="slip-expiry">
-              Expires at {clock(@slip.expires_at, @time_zone)}
+              This link works once. It expires {expiry_when(@slip.expires_at, @time_zone)}.
             </p>
           </div>
+
+          <p class="text-sm text-subtle" data-role="slip-earlier-links">
+            Any earlier link for this person still works until it expires. To cancel them, disable the person.
+          </p>
         <% else %>
           <p class="text-sm text-base-content" data-role="slip-expired">
-            This link expired at {clock(@slip.expires_at, @time_zone)}.
+            This link expired {expiry_when(@slip.expires_at, @time_zone)}.
           </p>
           <button
             :if={@slip.user_id}

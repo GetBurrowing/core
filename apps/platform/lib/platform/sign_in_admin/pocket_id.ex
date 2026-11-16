@@ -30,11 +30,24 @@ defmodule Platform.SignInAdmin.PocketId do
 
   ## Sign-in link lifetime
 
-  `one_time_token/1` always asks for `ttl: "30m"`. pocket-id mints a
-  6-character code for a TTL of 15 minutes or less and a 12-character one
-  above it, and a 6-character code never auto-submits from `/lc/<code>` on
-  the default configuration, which is why the installer pins `LOGIN_TTL` to
-  30m as well (`deployment/installer/burrow_install/setup/pocketid.py`).
+  `one_time_token/2` takes a lifetime from a closed set, never a caller
+  string:
+
+    * `ttl: :short` (the default, and what `one_time_token/1` asks for) sends
+      `ttl: "30m"`. Every code that is used straight away is minted this way.
+    * `ttl: :first_invite` sends `ttl: "168h"` (7 days), for the Users page's
+      first sign-in link, which an admin hands on by hand. pocket-id parses
+      the value with Go's `time.ParseDuration`, which has no `d` unit, and
+      accepts any TTL up to 31 days.
+
+  `ttl_seconds/1` gives the same lifetime in seconds, so a caller stamping an
+  expiry cannot drift from the string sent.
+
+  Both lifetimes must stay above 15 minutes: pocket-id mints a 6-character
+  code for a TTL of 15 minutes or less and a 12-character one above it, and a
+  6-character code never auto-submits from `/lc/<code>` on the default
+  configuration, which is why the installer pins `LOGIN_TTL` to 30m as well
+  (`deployment/installer/burrow_install/setup/pocketid.py`).
   """
 
   require Logger
@@ -48,7 +61,6 @@ defmodule Platform.SignInAdmin.PocketId do
   @max_pages 1_000
   @max_username_attempts 20
   @username_max 50
-  @token_ttl "30m"
 
   defmodule User do
     @moduledoc "A pocket-id user, as returned by `GET /api/users/:id`."
@@ -139,13 +151,20 @@ defmodule Platform.SignInAdmin.PocketId do
     end
   end
 
+  @typedoc "A sign-in link lifetime: 30 minutes, or 7 days for a first invite."
+  @type ttl() :: :short | :first_invite
+
   @doc """
-  Mints a one-time access token (30 minute TTL) for the user and returns it
-  wrapped in a redacting `Token`.
+  Mints a one-time access token for the user and returns it wrapped in a
+  redacting `Token`. `opts` takes `ttl: :short` (30 minutes, the default) or
+  `ttl: :first_invite` (7 days). Both are above 15 minutes, so both mint a
+  12-character code that auto-submits from `/lc/<code>`.
   """
-  @spec one_time_token(String.t()) :: {:ok, Token.t()} | error()
-  def one_time_token(id) when is_binary(id) do
-    case request(:post, user_path(id) <> "/one-time-access-token", json: %{"ttl" => @token_ttl}) do
+  @spec one_time_token(String.t(), [{:ttl, ttl()}]) :: {:ok, Token.t()} | error()
+  def one_time_token(id, opts \\ [ttl: :short]) when is_binary(id) do
+    ttl = ttl_string(Keyword.fetch!(opts, :ttl))
+
+    case request(:post, user_path(id) <> "/one-time-access-token", json: %{"ttl" => ttl}) do
       {:ok, status, %{"token" => token}} when status in [200, 201] and is_binary(token) ->
         {:ok, %Token{value: token}}
 
@@ -159,6 +178,17 @@ defmodule Platform.SignInAdmin.PocketId do
         error
     end
   end
+
+  @doc """
+  The lifetime of a `t:ttl/0` in seconds: 1_800 for `:short`, 604_800 for
+  `:first_invite`. Matches the string `one_time_token/2` sends.
+  """
+  @spec ttl_seconds(ttl()) :: pos_integer()
+  def ttl_seconds(:short), do: 30 * 60
+  def ttl_seconds(:first_invite), do: 7 * 24 * 60 * 60
+
+  defp ttl_string(:short), do: "30m"
+  defp ttl_string(:first_invite), do: "168h"
 
   @doc """
   Disables or re-enables the user. `PUT /api/users/:id` takes the full user

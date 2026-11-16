@@ -277,6 +277,39 @@ defmodule Platform.SignInAdmin.PocketIdTest do
     end
   end
 
+  describe "one_time_token/2" do
+    test "ttl: :first_invite asks for 168h (Go durations have no `d` unit)" do
+      stub(fn conn, _ -> json(conn, 201, %{"token" => @token}) end)
+
+      assert {:ok, %Token{value: @token}} = PocketId.one_time_token("u1", ttl: :first_invite)
+
+      assert [req] = requests() |> assert_every_request_keyed()
+      assert req.path == "/api/users/u1/one-time-access-token"
+      assert req.body == %{"ttl" => "168h"}
+    end
+
+    test "ttl: :short asks for 30m" do
+      stub(fn conn, _ -> json(conn, 201, %{"token" => @token}) end)
+
+      assert {:ok, %Token{value: @token}} = PocketId.one_time_token("u1", ttl: :short)
+
+      assert [req] = requests() |> assert_every_request_keyed()
+      assert req.body == %{"ttl" => "30m"}
+    end
+
+    test "a ttl outside the closed set is refused before any request" do
+      stub(fn conn, _ -> json(conn, 201, %{"token" => @token}) end)
+
+      assert_raise FunctionClauseError, fn -> PocketId.one_time_token("u1", ttl: "7d") end
+      assert requests() == []
+    end
+
+    test "ttl_seconds/1 matches the string each ttl sends" do
+      assert PocketId.ttl_seconds(:short) == 30 * 60
+      assert PocketId.ttl_seconds(:first_invite) == 168 * 60 * 60
+    end
+  end
+
   describe "set_disabled/2" do
     test "reads the user, then PUTs the full DTO back with only `disabled` changed" do
       current =

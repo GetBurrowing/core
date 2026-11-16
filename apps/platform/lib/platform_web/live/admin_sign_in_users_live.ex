@@ -462,7 +462,7 @@ defmodule PlatformWeb.AdminSignInUsersLive do
         :disabled -> "#{name} is disabled. Enable them first."
         :archived -> "#{name} is archived. Enable them first."
         :user_not_found -> "User not found."
-        {:sign_in_link_live, until} -> link_live_message(name, until)
+        {:sign_in_link_live, until} -> link_live_message(name, until, socket.assigns.time_zone)
         _ -> "Can't check sign-in right now. Try again."
       end
 
@@ -470,8 +470,8 @@ defmodule PlatformWeb.AdminSignInUsersLive do
   end
 
   # Task 01a114c1: Enable waits until every link Burrow minted has expired.
-  defp link_live_message(name, until) do
-    "A sign-in link sent before #{name} was disabled is valid until #{Calendar.strftime(until, "%H:%M")} UTC. Enable them after that."
+  defp link_live_message(name, until, zone) do
+    "A sign-in link sent before #{name} was disabled is valid until #{expiry_when(until, zone)}. Enable them after that."
   end
 
   defp row_name(socket, id) do
@@ -551,12 +551,31 @@ defmodule PlatformWeb.AdminSignInUsersLive do
     end
   end
 
+  # A link can now live 7 days (task 01a1e561), so an expiry that is not
+  # today in the viewer's zone carries its weekday and date. The date is
+  # compared in the LOCAL zone: 23:30 in Chicago is tomorrow in UTC but
+  # still today for the reader.
+  @doc false
+  def expiry_when(%DateTime{} = dt, zone, now \\ DateTime.utc_now()) do
+    {at, today, suffix} =
+      case zone && DateTime.shift_zone(dt, zone) do
+        {:ok, local} ->
+          {local, now |> DateTime.shift_zone!(zone) |> DateTime.to_date(), ""}
+
+        _ ->
+          {dt, now |> DateTime.shift_zone!("Etc/UTC") |> DateTime.to_date(), " UTC"}
+      end
+
+    format = if DateTime.to_date(at) == today, do: "%H:%M", else: "%a %-d %b, %H:%M"
+    Calendar.strftime(at, format) <> suffix
+  end
+
   @doc false
   def expiry_line(expiries, row, zone) do
     case Map.get(expiries, row.id) do
       %DateTime{} = at when row.status in [:pending, :active, :loading] ->
         if DateTime.compare(at, DateTime.utc_now()) == :gt,
-          do: "Link expires #{clock(at, zone)}",
+          do: "Link expires #{expiry_when(at, zone)}",
           else: "Link expired"
 
       _ ->
