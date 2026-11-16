@@ -19,13 +19,7 @@ defmodule PlatformWeb.GoalsSpaceCardComponent do
 
     with {:ok, view} <- Goals.space_card(actor, socket.assigns.canvas_id),
          {:ok, page} <- GoalsPage.card_data(actor, view.card, view.number) do
-      badge =
-        case view.card.audience do
-          [%{type: :space, id: id}] when id == view.space.id -> "Shown in ##{view.space.name}"
-          audience -> "Shared: " <> Enum.map_join(audience, ", ", & &1.name)
-        end
-
-      assign(socket, view: view, page: page, badge: badge)
+      assign(socket, view: view, page: page, badge: view.badge)
     else
       _ -> assign(socket, view: nil, page: nil)
     end

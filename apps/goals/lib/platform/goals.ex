@@ -1778,7 +1778,18 @@ defmodule Platform.Goals do
 
   @doc "A visible space card, resolved through its grant's canvas id."
   def space_card(actor, canvas_id) do
-    with :ok <- check_enabled(), do: Platform.Goals.SpaceCards.view(actor, canvas_id)
+    with :ok <- check_enabled(),
+         {:ok, view} <- Platform.Goals.SpaceCards.view(actor, canvas_id) do
+      audience = Map.get(audiences(actor, [view.card.goal.id]), view.card.goal.id, [])
+
+      badge =
+        case audience do
+          [%{type: :space, id: id}] when id == view.space.id -> "Shown in ##{view.space.name}"
+          rows -> "Shared: " <> Enum.map_join(rows, ", ", & &1.name)
+        end
+
+      {:ok, Map.put(view, :badge, badge)}
+    end
   end
 
   # update_goal/3's lock order: clock, then goal.

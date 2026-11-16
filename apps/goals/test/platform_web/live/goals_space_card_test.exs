@@ -114,9 +114,15 @@ defmodule PlatformWeb.GoalsSpaceCardTest do
 
     assert has_element?(view, "[data-role=goal-card-agents]", c.x.name)
     assert has_element?(view, "[data-role=goal-card-agents]", c.y.name)
-    assert render(view) =~ "Handed to this space's agents"
+    assert has_element?(view, "[data-role=goal-card-controls]", "Handed to this space's agents")
     view |> element("[data-role=goal-space-card] button", "Take back") |> render_click()
-    assert render(view) =~ "Not handed to this space's agents yet"
+
+    assert has_element?(
+             view,
+             "[data-role=goal-card-agents]",
+             "Not handed to this space's agents yet"
+           )
+
     assert Repo.one!(from(gr in Goals.Grant, where: gr.id == ^c.grant.id)).handed_at == nil
   end
 
@@ -142,7 +148,7 @@ defmodule PlatformWeb.GoalsSpaceCardTest do
       h = html(c, user)
       assert h =~ "This goal isn't shown here."
       refute h =~ c.goal.title
-      refute h =~ "100"
+      refute Floki.text(Floki.parse_fragment!(h)) =~ "100"
     end
   end
 

@@ -160,6 +160,9 @@ defmodule PlatformWeb.GoalsLive do
        a grant revokes live visibility rather than rewriting history.
    40. The existing FlashCards kind remains registered alongside the new
        GoalSpaceCard kind, preserving Goals 6/8 practice cards.
+   41. The card view supplies its badge separately from describe_goal's
+       owner-only audience roster, so participants can read the required
+       space badge without changing the goal page's read-only card shape.
 
   """
   use PlatformWeb, :live_view
