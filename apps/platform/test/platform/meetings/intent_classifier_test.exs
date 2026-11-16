@@ -4182,4 +4182,308 @@ defmodule Platform.Meetings.IntentClassifierTest do
       assert candidate.target_role == "null"
     end
   end
+
+  # ── Task 01a1e5da stage 2 — the install model route ──────────────────────
+
+  # A native `meetings.intent_classify` assignee has no base_url and no
+  # model. Before this stage every chunk raised inside the Ollama adapter
+  # and logged its own "LLM call failed" line. These cases start the
+  # classifier WITHOUT `:provider_module` (production's shape, so
+  # `IntentModel.route/1` decides) and stub the hosted adapter through the
+  # stage-1 seam `:meetings_intent_provider`, which here is `StubProvider`
+  # so `plant_stub_fun/2` still works.
+  describe "install model route (task 01a1e5da)" do
+    @route_key_env "MEETINGS_INTENT_CLASSIFIER_TEST_KEY"
+    @route_app_keys [:meetings_intent_model, :meetings_intent_provider, :ollama_req_client]
+    @route_os_keys ["OLLAMA_BASE_URL", @route_key_env]
+
+    setup do
+      saved_app = Map.new(@route_app_keys, &{&1, Application.fetch_env(:platform, &1)})
+      saved_os = Map.new(@route_os_keys, &{&1, System.get_env(&1)})
+
+      Enum.each(@route_app_keys, &Application.delete_env(:platform, &1))
+      Enum.each(@route_os_keys, &System.delete_env/1)
+
+      on_exit(fn ->
+        Enum.each(saved_app, fn
+          {key, {:ok, value}} -> Application.put_env(:platform, key, value)
+          {key, :error} -> Application.delete_env(:platform, key)
+        end)
+
+        Enum.each(saved_os, fn
+          {name, nil} -> System.delete_env(name)
+          {name, value} -> System.put_env(name, value)
+        end)
+      end)
+
+      :ok
+    end
+
+    defp start_unpinned_classifier! do
+      name = :"intent_classifier_unpinned_#{System.unique_integer([:positive])}"
+      {:ok, pid} = start_supervised({IntentClassifier, name: name})
+      pid
+    end
+
+    defp native_assignee! do
+      agent =
+        create_agent!(%{
+          slug: "intent-native-#{System.unique_integer([:positive])}",
+          kind: "native",
+          base_url: nil,
+          model: nil
+        })
+
+      assign_intent_role!(agent)
+      agent
+    end
+
+    defp configure_hosted!(model) do
+      System.put_env(@route_key_env, "test-key-#{System.unique_integer([:positive])}")
+
+      Application.put_env(:platform, :meetings_intent_model, %{
+        provider: :anthropic,
+        model: model,
+        api_key_env: @route_key_env
+      })
+
+      Application.put_env(:platform, :meetings_intent_provider, StubProvider)
+    end
+
+    defp positive_reply(messages) do
+      Jason.encode!(%{
+        "intent" => "schedule_follow_up",
+        "target_role" => "scribe",
+        "confidence" => 0.9,
+        "evidence_quote" => echo_quote(messages)
+      })
+    end
+
+    defp role_of(message), do: Map.get(message, :role) || Map.get(message, "role")
+
+    test "native assignee + hosted provider: prompt in system:, no thinking opts, model attributed" do
+      _agent = native_assignee!()
+      model = "m-#{System.unique_integer([:positive])}"
+      configure_hosted!(model)
+      test_pid = self()
+      room = "room-hosted-#{System.unique_integer([:positive])}"
+      on_exit(fn -> drop_queue_for_room(room) end)
+
+      pid = start_unpinned_classifier!()
+
+      plant_stub_fun(pid, fn creds, messages, opts ->
+        send(test_pid, {:hosted_call, creds, messages, opts})
+        {:ok, %{content: positive_reply(messages)}}
+      end)
+
+      payload = broadcast_chunk(room)
+
+      assert_receive {:hosted_call, creds, messages, opts}, 1_000
+
+      assert %{api_key: "test-key-" <> _} = creds
+      assert is_binary(Keyword.get(opts, :system))
+      assert Keyword.get(opts, :system) =~ "intent"
+      assert Keyword.get(opts, :model) == model
+      assert Keyword.get(opts, :temperature) == 0.0
+      assert Keyword.get(opts, :max_tokens) == 1024
+      refute Keyword.has_key?(opts, :think)
+      refute Keyword.has_key?(opts, :chat_template_kwargs)
+      refute Keyword.has_key?(opts, :base_url)
+
+      assert [%{role: "user", content: chunk}] = messages
+      assert chunk == payload.segment.text
+      refute Enum.any?(messages, &(role_of(&1) == "system"))
+
+      assert_eventually(fn -> queued_for_room(room) != [] end)
+      assert [row] = queued_for_room(room)
+      assert row.classified_intent == "schedule_follow_up"
+      assert row.model_used == model
+    end
+
+    test "hosted provider with no configured model attributes the adapter's model" do
+      _agent = native_assignee!()
+      configure_hosted!(nil)
+      adapter_model = "adapter-default-#{System.unique_integer([:positive])}"
+      room = "room-hosted-nomodel-#{System.unique_integer([:positive])}"
+      on_exit(fn -> drop_queue_for_room(room) end)
+
+      pid = start_unpinned_classifier!()
+
+      plant_stub_fun(pid, fn _creds, messages, opts ->
+        refute Keyword.has_key?(opts, :model)
+        {:ok, %{content: positive_reply(messages), model: adapter_model}}
+      end)
+
+      _ = broadcast_chunk(room)
+
+      assert_eventually(fn -> queued_for_room(room) != [] end)
+      assert [row] = queued_for_room(room)
+      assert row.model_used == adapter_model
+    end
+
+    test "nothing configured: one warning per room, no provider call, :skipped on every chunk" do
+      _agent = native_assignee!()
+      # A call WOULD be recorded if anything reached a provider.
+      Application.put_env(:platform, :meetings_intent_provider, StubProvider)
+      _ = attach_recorder!(:skipped, :skipped)
+      test_pid = self()
+      room_a = "room-off-a-#{System.unique_integer([:positive])}"
+      room_b = "room-off-b-#{System.unique_integer([:positive])}"
+
+      pid = start_unpinned_classifier!()
+
+      plant_stub_fun(pid, fn _c, _m, _o ->
+        send(test_pid, :provider_called)
+        {:error, :should_not_be_called}
+      end)
+
+      log =
+        capture_log([level: :info], fn ->
+          for _ <- 1..3, do: broadcast_chunk(room_a)
+          _ = broadcast_chunk(room_b)
+          _ = :sys.get_state(pid)
+
+          for _ <- 1..3 do
+            assert_receive {:skipped, %{count: 1}, %{reason: :not_configured, room_id: ^room_a}},
+                           500
+          end
+
+          assert_receive {:skipped, %{count: 1}, %{reason: :not_configured, room_id: ^room_b}},
+                         500
+        end)
+
+      lines = Regex.scan(~r/meeting intent is off: no model configured/, log)
+      assert length(lines) == 2
+      assert log =~ "room=#{room_a}"
+      assert log =~ "room=#{room_b}"
+      assert log =~ "MEETINGS_INTENT_PROVIDER"
+      refute log =~ "LLM call failed"
+      refute_received :provider_called
+      assert queued_for_room(room_a) == []
+      assert queued_for_room(room_b) == []
+    end
+
+    test "external assignee with base_url + model wins over a configured hosted provider" do
+      model = "ext-model-#{System.unique_integer([:positive])}"
+
+      agent =
+        create_agent!(%{
+          slug: "intent-external-#{System.unique_integer([:positive])}",
+          kind: "external",
+          endpoint_kind: "openai_compat",
+          base_url: "http://intent-route.test:11434/v1",
+          model: model
+        })
+
+      assign_intent_role!(agent)
+      configure_hosted!("hosted-should-not-be-used")
+      test_pid = self()
+      room = "room-external-#{System.unique_integer([:positive])}"
+      on_exit(fn -> drop_queue_for_room(room) end)
+
+      # The REAL Ollama adapter (the unpinned default), fed by a plug that
+      # records the wire request.
+      Application.put_env(
+        :platform,
+        :ollama_req_client,
+        Req.new(
+          plug: fn conn ->
+            {:ok, raw, conn} = Plug.Conn.read_body(conn)
+            body = Jason.decode!(raw)
+            send(test_pid, {:ollama_request, conn.host, conn.request_path, body})
+
+            user =
+              Enum.find_value(body["messages"], "", fn m ->
+                if m["role"] == "user", do: m["content"]
+              end)
+
+            Req.Test.json(conn, %{
+              "model" => model,
+              "choices" => [
+                %{
+                  "index" => 0,
+                  "finish_reason" => "stop",
+                  "message" => %{
+                    "role" => "assistant",
+                    "content" => positive_reply([%{role: "user", content: user}])
+                  }
+                }
+              ]
+            })
+          end
+        )
+      )
+
+      pid = start_unpinned_classifier!()
+
+      plant_stub_fun(pid, fn _c, _m, _o ->
+        send(test_pid, :hosted_called)
+        {:error, :should_not_be_called}
+      end)
+
+      _ = broadcast_chunk(room)
+
+      assert_receive {:ollama_request, host, path, body}, 1_000
+      assert host == "intent-route.test"
+      assert path == "/v1/chat/completions"
+      assert body["model"] == model
+      assert body["chat_template_kwargs"] == %{"enable_thinking" => false}
+      assert body["think"] == false
+      assert [%{"role" => "system"} | _] = body["messages"]
+
+      assert_eventually(fn -> queued_for_room(room) != [] end)
+      assert [row] = queued_for_room(room)
+      assert row.model_used == model
+      refute_received :hosted_called
+    end
+
+    test "a fenced hosted reply classifies; the same fence on the assignee route is a parse_error" do
+      _agent = native_assignee!()
+      configure_hosted!("fence-model")
+      room = "room-fence-hosted-#{System.unique_integer([:positive])}"
+      on_exit(fn -> drop_queue_for_room(room) end)
+
+      fenced = fn messages -> "```json\n" <> positive_reply(messages) <> "\n```" end
+
+      pid = start_unpinned_classifier!()
+      plant_stub_fun(pid, fn _c, messages, _o -> {:ok, %{content: fenced.(messages)}} end)
+
+      _ = broadcast_chunk(room)
+
+      assert_eventually(fn -> queued_for_room(room) != [] end)
+      assert [row] = queued_for_room(room)
+      assert row.classified_intent == "schedule_follow_up"
+
+      # Assignee route (pinned `:provider_module`): parsing is unchanged,
+      # so the same fenced text is still a parse_error.
+      stop_supervised!(IntentClassifier)
+      _ = attach_recorder!(:parse_error, :parse_error)
+      pinned_room = "room-fence-pinned-#{System.unique_integer([:positive])}"
+      on_exit(fn -> drop_queue_for_room(pinned_room) end)
+      {pinned, _name} = start_classifier!()
+      plant_stub_fun(pinned, fn _c, messages, _o -> {:ok, %{content: fenced.(messages)}} end)
+
+      capture_log([level: :warning], fn ->
+        _ = broadcast_chunk(pinned_room)
+        assert_receive {:parse_error, %{count: 1}, %{room_id: ^pinned_room}}, 1_000
+      end)
+
+      assert queued_for_room(pinned_room) == []
+    end
+  end
+
+  describe "unfence/1" do
+    test "strips one surrounding fence, with or without a language tag" do
+      assert IntentClassifier.unfence("```json\n{\"a\":1}\n```") == "{\"a\":1}"
+      assert IntentClassifier.unfence("```\n{\"a\":1}\n```\n") == "{\"a\":1}"
+      assert IntentClassifier.unfence("  ```json\r\n{\"a\":1}\r\n```  ") == "{\"a\":1}"
+    end
+
+    test "leaves unfenced content untouched" do
+      assert IntentClassifier.unfence("{\"a\":1}") == "{\"a\":1}"
+
+      assert IntentClassifier.unfence("say ```json\n{}\n``` later") ==
+               "say ```json\n{}\n``` later"
+    end
+  end
 end
