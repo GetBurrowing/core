@@ -106,4 +106,3 @@ defmodule Platform.Goals.OwnerPaceTest do
     end)
   end
 end
-

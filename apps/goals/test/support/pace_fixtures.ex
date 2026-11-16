@@ -55,4 +55,3 @@ defmodule Platform.Goals.PaceFixtures do
     entry
   end
 end
-

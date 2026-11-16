@@ -48,4 +48,3 @@ defmodule Platform.Goals.OwnerPaceCountTest do
     assert OwnerPace.ignored_briefs(c.goal) == 0
   end
 end
-

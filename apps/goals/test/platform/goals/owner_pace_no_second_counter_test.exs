@@ -40,4 +40,3 @@ defmodule Platform.Goals.OwnerPaceNoSecondCounterTest do
     assert length(calls) == 2
   end
 end
-

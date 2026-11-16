@@ -134,7 +134,7 @@ defmodule Platform.Goals.Clock do
 
            goal = current
            {:ok, next} = next_slot_for(goal, clock, now)
-           {:ok, following} = next_slot_for(goal, clock, clock.next_wake_at)
+           {:ok, following} = Rhythm.next_slot(clock.next_wake_at, settings(goal, clock))
 
            {count, _} =
              Repo.update_all(
@@ -341,4 +341,3 @@ defmodule Platform.Goals.Clock do
     |> Repo.update()
   end
 end
-

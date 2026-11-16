@@ -322,4 +322,3 @@ defmodule Platform.Goals.WakeUps.Briefing do
   defp scalar(%Date{} = value), do: Date.to_iso8601(value)
   defp scalar(value), do: value
 end
-

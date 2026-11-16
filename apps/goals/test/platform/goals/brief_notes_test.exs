@@ -95,4 +95,3 @@ defmodule Platform.Goals.BriefNotesTest do
     end
   end
 end
-

@@ -268,7 +268,8 @@ defmodule Platform.Goals.Tools do
       {:ok, asks} ->
         open = Enum.count(asks, &(DateTime.compare(&1.expires_at, now) == :gt))
 
-        if open < Goals.Limits.max_open_asks(goal.outreach), do: true, else: :ask_cap_reached
+        clock = Goals.Clock.visible_clock(agent, goal.id)
+        if open < Goals.OwnerPace.ask_cap(goal, clock), do: true, else: :ask_cap_reached
 
       {:error, reason} ->
         reason

@@ -266,4 +266,3 @@ defmodule Platform.Goals.GoalsTest do
     end
   end
 end
-

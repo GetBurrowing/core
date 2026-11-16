@@ -1013,13 +1013,8 @@ defmodule Platform.Goals do
 
   defp maybe_ask(actor, goal, wake, "ask", attrs) do
     now = Platform.Goals.Clock.now()
-    cap = Platform.Goals.Limits.max_open_asks(goal.outreach)
     clock = Platform.Goals.Clock.visible_clock(actor, goal.id)
-
-    cap =
-      if clock && clock.paced_at,
-        do: min(cap, Platform.Goals.Limits.paced_max_open_asks()),
-        else: cap
+    cap = Platform.Goals.OwnerPace.ask_cap(goal, clock)
 
     count =
       Repo.aggregate(
@@ -1849,4 +1844,3 @@ defmodule Platform.Goals do
     end
   end
 end
-

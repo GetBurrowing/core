@@ -39,6 +39,12 @@ defmodule Platform.Goals.OwnerPace do
     )
   end
 
+  @doc false
+  def ask_cap(goal, clock) do
+    usual = Limits.max_open_asks(goal.outreach)
+    if clock && clock.paced_at, do: min(usual, Limits.paced_max_open_asks()), else: usual
+  end
+
   @doc "Refreshes an already-visible goal inside the caller's transaction (planner ruling)."
   def refresh(goal, now) do
     owner = %User{id: goal.owner_user_id}
@@ -91,4 +97,3 @@ defmodule Platform.Goals.OwnerPace do
     end
   end
 end
-

@@ -930,4 +930,3 @@ defmodule Platform.Goals.Brief do
 
   defp nonblank?(value), do: is_binary(value) and String.trim(value) != ""
 end
-
