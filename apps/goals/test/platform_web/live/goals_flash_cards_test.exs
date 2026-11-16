@@ -173,6 +173,13 @@ defmodule PlatformWeb.GoalsFlashCardsTest do
     revoke_goals_use!(c.owner, push: false)
     view |> element(flash_action(ask, "got")) |> render_click()
     refute has_element?(view, deck(ask))
+    # The first refused click also takes the practice card around the deck
+    # (its goal title and "made today's" line) off the page.
+    html = render(view)
+    refute has_element?(view, "[data-role=goals-brief-card]")
+    refute html =~ "made today's"
+    refute html =~ "Your goals"
+    refute html =~ c.goal.title
 
     for event <- ["flip", "got", "missed"],
         do: view |> with_target("[data-role=goals-flash-cards]") |> render_click(event, %{})

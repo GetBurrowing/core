@@ -105,10 +105,19 @@ defmodule PlatformWeb.GoalsFlashCardsComponent do
     socket = reload(socket)
     conflicting = Map.has_key?(params, "ask_id") and params["ask_id"] != socket.assigns.ask_id
 
-    if socket.assigns.ask && not conflicting do
-      event(event, params, socket)
-    else
-      {:noreply, socket}
+    cond do
+      socket.assigns.ask && not conflicting ->
+        event(event, params, socket)
+
+      is_nil(socket.assigns.ask) ->
+        # Refused (a revoked goals.use, a closed goal): the deck hides, and
+        # the brief around it reloads so no goal title or body stays on the
+        # page until the brief's own next event (task 01a1e229 stage 2).
+        if parent = socket.assigns[:parent], do: send_update(parent, %{})
+        {:noreply, socket}
+
+      true ->
+        {:noreply, socket}
     end
   end
 

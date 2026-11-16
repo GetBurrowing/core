@@ -334,6 +334,24 @@ defmodule PlatformWeb.GoalsBriefTest do
     assert [%{answer: "used"}] = Repo.all(AskAnswer)
   end
 
+  test "Goals 9: after a revoke the phone Inbox row's receipt line counts no goal items", c do
+    full(c)
+    conn = Plug.Test.init_test_session(c.conn, current_user_id: c.owner.id)
+    row_body = "[data-role=inbox-row][data-item-kind=briefing] [data-role=inbox-row-body]"
+
+    {:ok, view, _} = live(conn, "/inbox")
+    assert view |> element(row_body) |> render() =~ "4 items · 3 need your call"
+
+    # The row was written when the briefing was built, with the goal items
+    # counted. A fresh mount after the revoke must not show that count.
+    revoke_goals_use!(c.owner)
+    {:ok, view, _} = live(conn, "/inbox")
+    html = view |> element(row_body) |> render()
+    assert html =~ "All done · nothing waiting"
+    refute html =~ "need your call"
+    refute html =~ "items"
+  end
+
   test "Goals 9: core's access push takes the Goals section off a live briefing", c do
     full(c)
     {:ok, view, html} = open(c.conn, c.owner)

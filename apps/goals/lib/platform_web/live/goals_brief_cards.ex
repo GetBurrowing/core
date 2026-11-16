@@ -62,6 +62,7 @@ defmodule PlatformWeb.GoalsBriefCards do
         id={"brief-practice-" <> @item.id}
         ask_id={@item.ask.id}
         viewer={@viewer}
+        parent={@target}
       />
       <.footer item={@item} />
     </article>
