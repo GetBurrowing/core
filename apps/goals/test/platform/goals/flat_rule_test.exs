@@ -70,4 +70,3 @@ defmodule Platform.Goals.FlatRuleTest do
     assert retro.briefing["retro"]["flat_retros"] == 0
   end
 end
-

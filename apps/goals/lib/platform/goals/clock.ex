@@ -325,4 +325,3 @@ defmodule Platform.Goals.Clock do
     |> Repo.update()
   end
 end
-

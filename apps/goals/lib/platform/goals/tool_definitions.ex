@@ -289,4 +289,3 @@ defmodule Platform.Goals.ToolDefinitions do
     ]
   end
 end
-

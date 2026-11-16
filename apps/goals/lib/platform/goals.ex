@@ -1813,4 +1813,3 @@ defmodule Platform.Goals do
     end
   end
 end
-

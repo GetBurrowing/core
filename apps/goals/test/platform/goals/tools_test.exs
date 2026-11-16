@@ -369,4 +369,3 @@ defmodule Platform.Goals.ToolsTest do
     refute number_free?(measured.number)
   end
 end
-

@@ -79,4 +79,3 @@ defmodule Platform.Goals.RetroDecideTest do
     assert Repo.aggregate(Entry, :count) == count
   end
 end
-

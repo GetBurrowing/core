@@ -73,4 +73,3 @@ defmodule Platform.Goals.RetroFireTest do
     assert Repo.aggregate(WakeUp, :count) == count
   end
 end
-

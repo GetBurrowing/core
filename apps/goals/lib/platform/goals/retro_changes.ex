@@ -5,8 +5,8 @@ defmodule Platform.Goals.RetroChanges do
   alias Platform.Repo
 
   defp rows(actor, schema, goal_id) do
-    from(g in Visibility.visible_goals(actor),
-      join: r in ^schema,
+    from(r in schema,
+      join: g in subquery(Visibility.visible_goals(actor)),
       on: r.goal_id == g.id,
       where: g.id == ^goal_id,
       select: r
@@ -306,4 +306,3 @@ defmodule Platform.Goals.RetroChanges do
     {:ok, result}
   end
 end
-

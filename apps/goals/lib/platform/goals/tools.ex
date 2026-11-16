@@ -605,4 +605,3 @@ defmodule Platform.Goals.Tools do
   defp time(nil), do: nil
   defp time(%DateTime{} = t), do: DateTime.to_iso8601(t)
 end
-
