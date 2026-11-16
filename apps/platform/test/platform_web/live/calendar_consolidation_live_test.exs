@@ -614,7 +614,7 @@ defmodule PlatformWeb.CalendarConsolidationLiveTest do
   # ── v7 fidelity (task 01a1b8a5 stage 5 review rework) ──────────────────
 
   describe "v7 details, header and labels" do
-    defp preset!(ctx, preset, title) do
+    defp preset!(ctx, preset, title, extra \\ %{}) do
       day =
         DateTime.utc_now() |> DateTime.shift_zone!(@zone) |> DateTime.to_date() |> Date.add(2)
 
@@ -622,31 +622,60 @@ defmodule PlatformWeb.CalendarConsolidationLiveTest do
       scope = Scope.for_user(ctx.owner)
 
       {:ok, %{event: %Event{} = event}} =
-        Authoring.save(scope, Authoring.new_draft(scope, %{"preset" => preset}), %{
-          "title" => title,
-          "preset" => preset,
-          "call_enabled" => "false",
-          "starts_at" => DateTime.to_iso8601(start),
-          "ends_at" => DateTime.to_iso8601(DateTime.add(start, 7200)),
-          "time_zone" => @zone
-        })
+        Authoring.save(
+          scope,
+          Authoring.new_draft(scope, %{"preset" => preset}),
+          Map.merge(
+            %{
+              "title" => title,
+              "preset" => preset,
+              "call_enabled" => "false",
+              "starts_at" => DateTime.to_iso8601(start),
+              "ends_at" => DateTime.to_iso8601(DateTime.add(start, 7200)),
+              "time_zone" => @zone
+            },
+            extra
+          )
+        )
 
       {event, day}
     end
 
+    defp open_event(ctx, event, day) do
+      view = calendar(ctx.owner, "?date=#{Date.to_iso8601(day)}")
+      render_click(view, "select", %{"id" => event.id, "kind" => "event"})
+      view
+    end
+
+    # Byte offset of `needle` in `html`; flunks when absent.
+    defp offset!(html, needle) do
+      case :binary.match(html, needle) do
+        {at, _} -> at
+        :nomatch -> flunk("#{inspect(needle)} is not in the rendered details")
+      end
+    end
+
+    # Second review rework: v7 renderDetails renders exactly
+    # `<p class="panel">Out of office · blocks your availability.</p>`
+    # below the calendar row, and keeps the "Your event" pill.
     for {preset, label} <- [{"focus", "Focus time"}, {"ooo", "Out of office"}] do
-      test "a #{label} event's details say it blocks your availability", ctx do
+      test "a #{label} event's details carry v7's one-line panel, below the rows", ctx do
         {event, day} = preset!(ctx, unquote(preset), "Preset #{unquote(preset)}")
-        view = calendar(ctx.owner, "?date=#{Date.to_iso8601(day)}")
-        render_click(view, "select", %{"id" => event.id, "kind" => "event"})
+        view = open_event(ctx, event, day)
 
         assert has_element?(
                  view,
-                 "#{@details} [data-role=calendar-detail-blocks][data-preset=#{unquote(preset)}]",
-                 "#{unquote(label)} · blocks your availability"
+                 "#{@details} p.cal-panel[data-role=calendar-detail-blocks][data-preset=#{unquote(preset)}]",
+                 ~r/^#{unquote(label)} · blocks your availability\.$/
                )
 
-        assert has_element?(view, "#{@details} .cal-pill", unquote(label))
+        refute render(view) =~ "Booking-link guests can’t pick this time."
+        assert has_element?(view, "#{@details} .cal-pill", ~r/^\s*Your event\s*$/)
+        refute has_element?(view, "#{@details} .cal-pill", unquote(label))
+
+        details = view |> element(@details) |> render()
+        assert offset!(details, "Full details") < offset!(details, "calendar-detail-blocks")
+        assert offset!(details, ctx.owner.name) < offset!(details, "calendar-detail-blocks")
       end
     end
 
@@ -669,7 +698,14 @@ defmodule PlatformWeb.CalendarConsolidationLiveTest do
                "Burrow meeting in"
              )
 
-      assert has_element?(view, "#{@details} [data-role=calendar-detail-call]", "hosted by")
+      # v7 names the host, even to the owner.
+      assert has_element?(
+               view,
+               "#{@details} [data-role=calendar-detail-call]",
+               "hosted by #{ctx.owner.name}"
+             )
+
+      refute has_element?(view, "#{@details} [data-role=calendar-detail-call]", "hosted by you")
       assert has_element?(view, "#{@details} [data-role=calendar-detail-people]", "1 invited")
 
       assert has_element?(
@@ -690,10 +726,33 @@ defmodule PlatformWeb.CalendarConsolidationLiveTest do
       refute has_element?(view, "#{@details} [data-role=calendar-detail-people]")
     end
 
-    test "the owner's action reads Edit event", ctx do
+    # v7 app.js: kind native -> "Edit", a call -> "Edit event".
+    test "a call event's action reads Edit event", ctx do
       %{meeting: meeting} = linked!(ctx)
       view = calendar(ctx.owner, "?meeting=#{meeting.id}")
       assert has_element?(view, "#{@details} .cal-dfoot button", ~r/^\s*Edit event\s*$/)
+    end
+
+    for {name, preset, extra} <- [
+          {"plain", "event", %{}},
+          {"Focus time", "focus", %{}},
+          {"Out of office", "ooo", %{}},
+          {"busy-only", "event", %{"visibility" => "busy"}}
+        ] do
+      test "a #{name} event's action reads Edit, not Edit event", ctx do
+        {event, day} =
+          preset!(ctx, unquote(preset), "Edit #{unquote(name)}", unquote(Macro.escape(extra)))
+
+        view = open_event(ctx, event, day)
+
+        assert has_element?(
+                 view,
+                 "#{@details} .cal-dfoot button[phx-click=edit]",
+                 ~r/^\s*Edit\s*$/
+               )
+
+        refute has_element?(view, "#{@details} .cal-dfoot button", "Edit event")
+      end
     end
 
     test "the desktop header carries a Past events button", ctx do
@@ -704,6 +763,11 @@ defmodule PlatformWeb.CalendarConsolidationLiveTest do
                "[data-role=calendar-header] a[data-past-events]",
                "Past events"
              )
+
+      # v7 headHTML order: ... Week/Month | + New event | Past events.
+      header = view |> element("[data-role=calendar-header]") |> render()
+      assert offset!(header, "calendar-new-event") < offset!(header, "calendar-header-past")
+      assert offset!(header, "role=\"tablist\"") < offset!(header, "calendar-new-event")
 
       view |> element("[data-role=calendar-header] a[data-past-events]") |> render_click()
       assert has_element?(view, "[data-role=past-events]")

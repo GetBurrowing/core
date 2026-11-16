@@ -1021,7 +1021,7 @@ defmodule PlatformWeb.CalendarLive do
   defp linked_call(%{meetings_on: true, current_user_record: user}, %{meeting_id: id})
        when is_binary(id) do
     case Platform.Meetings.get_meeting_for_user(user, id) do
-      {:ok, meeting} -> meeting |> call_info(user) |> Map.merge(call_people(meeting))
+      {:ok, meeting} -> meeting |> call_info(user) |> Map.merge(call_people(meeting, user))
       {:error, _} -> nil
     end
   end
@@ -1033,15 +1033,32 @@ defmodule PlatformWeb.CalendarLive do
   # same way the call record's own details read them (`meeting_info/1`:
   # live `meeting_invites` rows, revoked excluded). The meeting's producer
   # agent row is not an invitee.
-  defp call_people(meeting) do
+  #
+  # v7 names the host ("hosted by <name>"), even to the owner. A scheduled
+  # call has no host participant until someone joins, so the organizer who
+  # created it stands in.
+  defp call_people(meeting, user) do
     info = meeting_info(meeting)
 
     %{
       space: info.space,
-      host: info.host,
+      host: info.host || organizer_name(meeting, user),
       invitees: info.invite_entries |> Enum.reject(& &1.agent) |> Enum.map(& &1.name)
     }
   end
+
+  defp organizer_name(%{created_by_user_id: id}, %{id: id, name: name}) when is_binary(id),
+    do: name
+
+  defp organizer_name(%{created_by_user_id: id}, _user) when is_binary(id) do
+    case Platform.Accounts.get_user(id) do
+      %{name: name} when is_binary(name) and name != "" -> name
+      %{email: email} -> email
+      nil -> nil
+    end
+  end
+
+  defp organizer_name(_meeting, _user), do: nil
 
   # What the details say about a call (task 01a1b8a5 stage 4): Join now
   # while it is live, Open call room otherwise, nothing to join once the
