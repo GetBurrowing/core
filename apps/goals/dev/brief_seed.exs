@@ -199,19 +199,15 @@ defmodule Platform.Goals.DevBriefSeed do
         })
       )
 
-    practice_canvas =
-      ok!(
-        Platform.Chat.create_canvas(%{
-          space_id: space.id,
-          created_by: participant.id,
-          title: "Your practice cards",
-          document: %{
-            version: 1,
-            revision: 1,
-            root: %{id: "practice-deck", type: "flash_cards", props: %{ask_id: practice_ask.id}}
-          }
-        })
-      )
+    {:ok, practice_canvas, _message} =
+      Platform.Chat.create_canvas_with_message(space.id, participant.id, %{
+        title: "Your practice cards",
+        document: %{
+          version: 1,
+          revision: 1,
+          root: %{id: "practice-deck", type: "flash_cards", props: %{ask_id: practice_ask.id}}
+        }
+      })
 
     put_now(DateTime.utc_now())
 
@@ -242,7 +238,10 @@ defmodule Platform.Goals.DevBriefSeed do
       "Brief ready: /inbox/briefing/#{today}; #{length(items)} goal items; practice streak #{streak}."
     )
 
-    IO.puts("Practice canvas: /canvases/#{practice_canvas.id}")
+    IO.puts(
+      "Practice canvas: /canvases/#{practice_canvas.id}; addressed chat renderer: /chat/#{space.id}"
+    )
+
     IO.inspect(result, label: "Delivery")
   end
 
