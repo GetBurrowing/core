@@ -14,9 +14,26 @@ defmodule Platform.Goals.SpaceCardTest do
     participant = join_space!(space.id, :user, owner.id)
     join_space!(space.id, :user, viewer.id)
     join_space!(space.id, :agent, coach.id)
-    goal = goal!(owner, org, %{coach_agent_id: coach.id, source_key: "self_reported", unit: "pieces", target_value: 300})
+
+    goal =
+      goal!(owner, org, %{
+        coach_agent_id: coach.id,
+        source_key: "self_reported",
+        unit: "pieces",
+        target_value: 300
+      })
+
     {:ok, _} = Goals.open_goal(owner, goal.id, {:space, space.id})
-    %{org: org, owner: owner, viewer: viewer, coach: coach, space: space, goal: goal, participant: participant}
+
+    %{
+      org: org,
+      owner: owner,
+      viewer: viewer,
+      coach: coach,
+      space: space,
+      goal: goal,
+      participant: participant
+    }
   end
 
   test "one canvas one owner message and one pin, idempotent with fixed copy", c do
@@ -56,7 +73,13 @@ defmodule Platform.Goals.SpaceCardTest do
     assert {:error, :not_found} = Goals.space_card(outsider, grant.card_canvas_id)
     other = space!(c.org)
     author = join_space!(other.id, :user, outsider.id)
-    {:ok, lookalike, _} = Chat.create_canvas_with_message(other.id, author.id, %{title: "Goal", document: Chat.get_canvas(grant.card_canvas_id).document})
+
+    {:ok, lookalike, _} =
+      Chat.create_canvas_with_message(other.id, author.id, %{
+        title: "Goal",
+        document: Chat.get_canvas(grant.card_canvas_id).document
+      })
+
     assert {:error, :not_found} = Goals.space_card(outsider, lookalike.id)
     {:ok, _} = Goals.close_goal(c.owner, c.goal.id, {:space, c.space.id})
     assert {:error, :not_found} = Goals.space_card(c.owner, grant.card_canvas_id)

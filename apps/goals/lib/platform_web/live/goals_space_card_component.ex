@@ -7,7 +7,8 @@ defmodule PlatformWeb.GoalsSpaceCardComponent do
   @impl true
   def mount(socket), do: {:ok, assign(socket, notice: nil, view: nil, page: nil)}
   @impl true
-  def update(assigns, socket), do: {:ok, socket |> assign(Map.take(assigns, [:id, :canvas_id, :viewer])) |> refresh()}
+  def update(assigns, socket),
+    do: {:ok, socket |> assign(Map.take(assigns, [:id, :canvas_id, :viewer])) |> refresh()}
 
   defp actor({:user, id}), do: Platform.Accounts.get_user(id)
   defp actor({:agent, id}), do: %Platform.Agents.Agent{id: id}
@@ -15,12 +16,15 @@ defmodule PlatformWeb.GoalsSpaceCardComponent do
 
   defp refresh(socket) do
     actor = actor(socket.assigns.viewer)
+
     with {:ok, view} <- Goals.space_card(actor, socket.assigns.canvas_id),
-         {:ok, page} <- GoalsPage.load(actor, view.card) do
-      badge = case view.card.audience do
-        [%{type: :space, id: id}] when id == view.space.id -> "Shown in ##{view.space.name}"
-        audience -> "Shared: " <> Enum.map_join(audience, ", ", & &1.name)
-      end
+         {:ok, page} <- GoalsPage.card_data(actor, view.card, view.number) do
+      badge =
+        case view.card.audience do
+          [%{type: :space, id: id}] when id == view.space.id -> "Shown in ##{view.space.name}"
+          audience -> "Shared: " <> Enum.map_join(audience, ", ", & &1.name)
+        end
+
       assign(socket, view: view, page: page, badge: badge)
     else
       _ -> assign(socket, view: nil, page: nil)
@@ -28,18 +32,25 @@ defmodule PlatformWeb.GoalsSpaceCardComponent do
   end
 
   @impl true
-  def handle_event(event, _params, socket) when event in ["goal_card_hand", "goal_card_take_back"] do
-    user = case socket.assigns.viewer do
-      {:user, id} -> Platform.Accounts.get_user(id)
-      _ -> nil
-    end
-    result = with %{} <- user,
-      {:ok, view} <- Goals.space_card(user, socket.assigns.canvas_id) do
-      if event == "goal_card_hand",
-        do: Goals.hand_goal_to_space(user, view.card.goal.id, view.space.id),
-        else: Goals.take_goal_back(user, view.card.goal.id, view.space.id)
-    end
-    notice = if match?({:ok, _}, result), do: nil, else: "You can't hand this goal to the agents here."
+  def handle_event(event, _params, socket)
+      when event in ["goal_card_hand", "goal_card_take_back"] do
+    user =
+      case socket.assigns.viewer do
+        {:user, id} -> Platform.Accounts.get_user(id)
+        _ -> nil
+      end
+
+    result =
+      with %{} <- user,
+           {:ok, view} <- Goals.space_card(user, socket.assigns.canvas_id) do
+        if event == "goal_card_hand",
+          do: Goals.hand_goal_to_space(user, view.card.goal.id, view.space.id),
+          else: Goals.take_goal_back(user, view.card.goal.id, view.space.id)
+      end
+
+    notice =
+      if match?({:ok, _}, result), do: nil, else: "You can't hand this goal to the agents here."
+
     {:noreply, socket |> assign(notice: notice) |> refresh()}
   end
 

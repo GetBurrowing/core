@@ -18,20 +18,51 @@ defmodule PlatformWeb.GoalsSpaceCardTest do
     space = space!(org)
     for user <- [owner, viewer], do: join_space!(space.id, :user, user.id)
     for agent <- [coach, x, y], do: join_space!(space.id, :agent, agent.id)
-    goal = goal!(owner, org, %{title: "Shared writing", coach_agent_id: coach.id, agent_mode: "do", source_key: "self_reported", unit: "words", target_value: 300})
+
+    goal =
+      goal!(owner, org, %{
+        title: "Shared writing",
+        coach_agent_id: coach.id,
+        agent_mode: "do",
+        source_key: "self_reported",
+        unit: "words",
+        target_value: 300
+      })
+
     {:ok, _} = Goals.log_reading(owner, goal.id, %{value: 100})
     {:ok, _} = Goals.open_goal(owner, goal.id, {:space, space.id})
     {:ok, grant} = Goals.ensure_space_card(owner, goal.id, space.id)
     message = Repo.one!(from(m in Chat.Message, where: m.canvas_id == ^grant.card_canvas_id))
-    %{org: org, owner: owner, viewer: viewer, coach: coach, x: x, y: y, space: space, goal: goal, grant: grant, message: message}
+
+    %{
+      org: org,
+      owner: owner,
+      viewer: viewer,
+      coach: coach,
+      x: x,
+      y: y,
+      space: space,
+      goal: goal,
+      grant: grant,
+      message: message
+    }
   end
-  defp html(c, user), do: render_component(PlatformWeb.GoalsSpaceCardComponent, id: "test-card", canvas_id: c.grant.card_canvas_id, viewer: {:user, user.id})
+
+  defp html(c, user),
+    do:
+      render_component(PlatformWeb.GoalsSpaceCardComponent,
+        id: "test-card",
+        canvas_id: c.grant.card_canvas_id,
+        viewer: {:user, user.id}
+      )
+
   defp open(c, user) do
     conn = Phoenix.ConnTest.build_conn() |> Plug.Test.init_test_session(current_user_id: user.id)
     {:ok, view, _} = live(conn, "/chat/#{c.space.id}", on_error: :warn)
     render_hook(view, "inline_canvas_mount", %{"message_id" => c.message.id})
     view
   end
+
   defp target(view) do
     card = view |> element("[data-role=goal-space-card]") |> render()
     [_, id] = Regex.run(~r/id="(goal-card-[^"]+)"/, card)
@@ -40,7 +71,24 @@ defmodule PlatformWeb.GoalsSpaceCardTest do
 
   test "shared pieces, number, progress, agents and goal link", c do
     h = html(c, c.owner)
-    for copy <- [c.goal.title, "Shared by", c.coach.name, "Self-reported", "Shown in ##{c.space.name}", "100", "300", "words", "Agents on this goal", "leads", "Not handed to this space's agents yet", "Hand to this space's agents", "Open goal"], do: assert(h =~ copy)
+
+    for copy <- [
+          c.goal.title,
+          "Shared by",
+          c.coach.name,
+          "Self-reported",
+          "Shown in ##{c.space.name}",
+          "100",
+          "300",
+          "words",
+          "Agents on this goal",
+          "leads",
+          "Not handed to this space's agents yet",
+          "Hand to this space's agents",
+          "Open goal"
+        ],
+        do: assert(h =~ copy)
+
     assert h =~ "width: 33%"
     assert h =~ ~s(href="/m/goals?goal=#{c.goal.id}")
     assert h =~ ~s(class="tabular-nums")
@@ -49,14 +97,21 @@ defmodule PlatformWeb.GoalsSpaceCardTest do
   test "non-admin sees no control and crafted event refuses without mutation", c do
     view = open(c, c.viewer)
     refute has_element?(view, "[data-role=goal-space-card] button", "Hand to this space's agents")
-    assert render_click(target(view), "goal_card_hand", %{}) =~ "You can't hand this goal to the agents here."
+
+    assert render_click(target(view), "goal_card_hand", %{}) =~
+             "You can't hand this goal to the agents here."
+
     assert has_element?(view, "[data-role=goal-card-notice][role=alert]")
     assert Repo.one!(from(gr in Goals.Grant, where: gr.id == ^c.grant.id)).handed_at == nil
   end
 
   test "admin hand lists two contributors and take back clears it", c do
     view = open(c, c.owner)
-    view |> element("[data-role=goal-space-card] button", "Hand to this space's agents") |> render_click()
+
+    view
+    |> element("[data-role=goal-space-card] button", "Hand to this space's agents")
+    |> render_click()
+
     assert has_element?(view, "[data-role=goal-card-agents]", c.x.name)
     assert has_element?(view, "[data-role=goal-card-agents]", c.y.name)
     assert render(view) =~ "Handed to this space's agents"
@@ -82,6 +137,7 @@ defmodule PlatformWeb.GoalsSpaceCardTest do
 
   test "closed and lookalike cards disclose no goal content", c do
     {:ok, _} = Goals.close_goal(c.owner, c.goal.id, {:space, c.space.id})
+
     for user <- [c.owner, c.viewer] do
       h = html(c, user)
       assert h =~ "This goal isn't shown here."
@@ -92,12 +148,21 @@ defmodule PlatformWeb.GoalsSpaceCardTest do
 
   test "kind restricts props and disabled document uses core fallback", c do
     assert :ok = GoalSpaceCard.validate_props(%{"goal_id" => c.goal.id})
-    for props <- [%{}, %{"goal_id" => "invalid"}, %{"goal_id" => c.goal.id, "title" => "bad"}], do: assert(match?({:error, _}, GoalSpaceCard.validate_props(props)))
+
+    for props <- [%{}, %{"goal_id" => "invalid"}, %{"goal_id" => c.goal.id, "title" => "bad"}],
+        do: assert(match?({:error, _}, GoalSpaceCard.validate_props(props)))
+
     refute GoalSpaceCard.inline_opens_canvas?()
     Application.put_env(:goals, :enabled, false)
     assert Goals.Extension.canvas_kinds() == []
     refute "goal_space_card" in Chat.Canvas.Kinds.names()
-    h = render_component(&PlatformWeb.Chat.CanvasRenderer.canvas_document/1, canvas: Chat.get_canvas(c.grant.card_canvas_id), viewer: {:user, c.owner.id})
+
+    h =
+      render_component(&PlatformWeb.Chat.CanvasRenderer.canvas_document/1,
+        canvas: Chat.get_canvas(c.grant.card_canvas_id),
+        viewer: {:user, c.owner.id}
+      )
+
     assert is_binary(h)
     refute h =~ c.goal.title
   end

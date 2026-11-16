@@ -3,8 +3,9 @@ defmodule PlatformWeb.GoalsWork do
   use Phoenix.Component
   alias PlatformWeb.AvatarComponents
 
-  attr :agent, :map, required: true
-  attr :verb, :string, default: nil
+  attr(:agent, :map, required: true)
+  attr(:verb, :string, default: nil)
+
   def agent(assigns) do
     ~H"""
     <span class="inline-flex items-center gap-2 text-sm" data-agent-slot={@agent.slot}>
@@ -22,7 +23,8 @@ defmodule PlatformWeb.GoalsWork do
   def status("cancelled"), do: "Cancelled"
   def status(_), do: "Open"
 
-  attr :page, :map, required: true
+  attr(:page, :map, required: true)
+
   def section(assigns) do
     ~H"""
     <section :if={@page.coach} data-role="goal-workers">

@@ -208,3 +208,16 @@ ok!.(Goals.measure_goal(user, rd.id))
 ok!.(Goals.create_goal(user, %{org_id: org_id, title: "Hire a second designer"}))
 
 IO.puts("goals seed: 4 goals for #{email} in org #{org_id}")
+
+# Goals 7/8 stage 5: a real channel card, initially shown but not handed.
+# Participants and agents are core dev fixtures; goal writes use the context.
+for {type, id} <- [{"user", user.id}, {"agent", coach.id}] do
+  ok!.(Platform.Chat.add_participant(space.id, %{participant_type: type, participant_id: id, joined_at: DateTime.utc_now()}))
+end
+for name <- ["Brosnan", "Saru"] do
+  agent = Platform.Repo.insert!(%Platform.Agents.Agent{slug: "goal-card-#{String.downcase(name)}-#{System.unique_integer([:positive])}", name: name})
+  ok!.(Platform.Chat.add_participant(space.id, %{participant_type: "agent", participant_id: agent.id, joined_at: DateTime.utc_now()}))
+end
+ok!.(Goals.open_goal(user, yt.id, {:space, space.id}))
+card_grant = ok!.(Goals.ensure_space_card(user, yt.id, space.id))
+IO.puts("goal card: /chat/#{space.id}; goal /m/goals?goal=#{yt.id}; canvas #{card_grant.card_canvas_id}")
