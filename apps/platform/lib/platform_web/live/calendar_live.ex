@@ -1007,6 +1007,7 @@ defmodule PlatformWeb.CalendarLive do
         |> Map.merge(meeting_cancel_info(entry.meeting, user))
         |> Map.put(:time_zone, zone)
         |> Map.put(:call, call_info(entry.meeting, user))
+        |> put_invitee_view(user)
 
       "external" ->
         Map.merge(base, %{
@@ -1046,6 +1047,23 @@ defmodule PlatformWeb.CalendarLive do
       invitees: info.invite_entries |> Enum.reject(& &1.agent) |> Enum.map(& &1.name)
     }
   end
+
+  # v7 renderDetails shows an INVITEE the call's people as one "N invited /
+  # names" row, the row the owner's own call event carries (stage 5 review,
+  # third pass). The live "Invited · N" list with Add people stays for
+  # anyone who is not a plain invitee: an organizer who can edit the call,
+  # and the org viewers task 01a19e7b gave that control to.
+  defp put_invitee_view(%{invite_entries: entries} = detail, %{id: user_id})
+       when is_binary(user_id) do
+    invitee? = Enum.any?(entries, &(&1.user_id == user_id))
+    people = entries |> Enum.reject(& &1.agent) |> Enum.map(& &1.name)
+
+    detail
+    |> Map.put(:invitee_view?, invitee? and detail[:can_edit] != true)
+    |> Map.put(:invitees, people)
+  end
+
+  defp put_invitee_view(detail, _user), do: Map.put(detail, :invitee_view?, false)
 
   defp organizer_name(%{created_by_user_id: id}, %{id: id, name: name}) when is_binary(id),
     do: name

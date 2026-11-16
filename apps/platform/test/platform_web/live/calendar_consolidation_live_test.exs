@@ -726,6 +726,43 @@ defmodule PlatformWeb.CalendarConsolidationLiveTest do
       refute has_element?(view, "#{@details} [data-role=calendar-detail-people]")
     end
 
+    # Third review pass: an invitee sees v7's "N invited / names" row, the
+    # same row the owner's own call event carries, not the hosts' live
+    # "Invited · N" list with its Add people control.
+    test "an invitee's call details show v7's N invited / names row", ctx do
+      %{meeting: meeting} = linked!(ctx)
+      view = calendar(ctx.invitee, "?meeting=#{meeting.id}")
+
+      assert has_element?(view, "#{@details}[data-kind=meeting]")
+
+      row =
+        view
+        |> element("#{@details} [data-role=calendar-detail-people]")
+        |> render()
+        |> Floki.parse_fragment!()
+        |> Floki.text(sep: " / ")
+        |> String.trim()
+
+      assert row == "1 invited / #{ctx.invitee.name}"
+      refute has_element?(view, "#{@details} [data-role=meeting-invite-list]")
+      refute has_element?(view, "#{@details} [data-role=meeting-invite-add-people]")
+    end
+
+    test "the owner's call details keep the same row (control)", ctx do
+      %{meeting: meeting} = linked!(ctx)
+      view = calendar(ctx.owner, "?meeting=#{meeting.id}")
+
+      row =
+        view
+        |> element("#{@details} [data-role=calendar-detail-people]")
+        |> render()
+        |> Floki.parse_fragment!()
+        |> Floki.text(sep: " / ")
+        |> String.trim()
+
+      assert row == "1 invited / #{ctx.invitee.name}"
+    end
+
     # v7 app.js: kind native -> "Edit", a call -> "Edit event".
     test "a call event's action reads Edit event", ctx do
       %{meeting: meeting} = linked!(ctx)

@@ -872,7 +872,10 @@ defmodule PlatformWeb.CalendarLiveTest do
     assert has_element?(view, "[data-role=calendar-details] .cal-pill-ok", "Live")
     copy = details_text(view)
     assert copy =~ "Burrow meeting in #design-"
-    assert has_element?(view, "#{@invite_header}", "Invited · 1")
+    # The viewer is an invitee here, so the details carry v7's "N invited /
+    # names" row rather than the hosts' live list (stage 5 review).
+    assert has_element?(view, "[data-role=calendar-detail-people]", "1 invited")
+    refute has_element?(view, "#{@invite_header}")
     assert copy =~ "Calendar user"
 
     assert has_element?(
