@@ -252,6 +252,16 @@ defmodule PlatformWeb.GoalsBriefTest do
       |> render_hook(event, Map.put(attrs, :item_id, item.id))
     end
 
+    own = Enum.find(items(c), &(&1.kind == :offer))
+
+    view
+    |> with_target("[data-role=goals-brief]")
+    |> render_hook("answer", %{item_id: own.id, ask_id: ask.id, answer: "used"})
+
+    view
+    |> with_target("[data-role=goals-brief]")
+    |> render_hook("answer", %{item_id: own.id, goal_id: foreign.id, answer: "used"})
+
     assert counts.() == before
   end
 
@@ -268,8 +278,13 @@ defmodule PlatformWeb.GoalsBriefTest do
     other = member!(c.org)
     {:ok, _} = Goals.open_goal(c.owner, c.goal.id, {:user, other.id})
 
+    Platform.InsightFixtures.dreaming_agent!()
+    Platform.InsightFixtures.enable_dissemination!()
+
     Platform.InsightFixtures.insight!(
       addressee: other,
+      org_id: c.org,
+      expires_at: DateTime.add(Clock.now(), 86_400, :second),
       action_type: "question",
       body: "Which host?"
     )

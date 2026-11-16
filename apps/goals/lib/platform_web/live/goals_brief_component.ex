@@ -72,11 +72,21 @@ defmodule PlatformWeb.GoalsBriefComponent do
     socket = reload(socket)
     item = Enum.find(socket.assigns.items, &(&1.id == params["item_id"]))
 
-    if item do
+    if item && identities_match?(params, item) do
       event(event, params, item, socket)
     else
       {:noreply, socket}
     end
+  end
+
+  defp identities_match?(params, item) do
+    goal_matches = not Map.has_key?(params, "goal_id") or params["goal_id"] == item.goal.id
+
+    ask_matches =
+      not Map.has_key?(params, "ask_id") or
+        params["ask_id"] == Map.get(Map.get(item, :ask) || %{}, :id)
+
+    goal_matches and ask_matches
   end
 
   defp event("ask-open", _, %{kind: :report} = item, socket),
