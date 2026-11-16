@@ -55,6 +55,9 @@ defmodule PlatformWeb.GoalsOpenUpTest do
     assert [%{card_canvas_id: id}] = Platform.Repo.all(Platform.Goals.Grant)
     assert id
     assert Platform.Chat.get_canvas(id)
+    {:ok, card} = Goals.space_card(c.owner, id)
+    assert card.badge == "Shown in ##{space.name}"
+    badge(view, card.badge)
     toggle(view, "space", space.id)
     assert {:error, :not_found} = Goals.space_card(c.owner, id)
   end

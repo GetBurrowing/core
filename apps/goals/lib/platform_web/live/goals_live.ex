@@ -166,9 +166,9 @@ defmodule PlatformWeb.GoalsLive do
 
    45. An unassigned task reads "Unassigned", because core tasks can have
        no assignee and a blank name would hide that state.
-   46. A single generic-space card reads "Shown in #space" as specified;
-       the unchanged goal-page badge still reads "Shared: {space}" outside
-       the agents channel, preserving the earlier Open up behavior.
+   46. A single-space owner badge now reads "Shown in #space" for generic
+       channels too, so the goal page agrees with its required space card;
+       the Open up sheet's option rows and linking behavior are unchanged.
 
   """
   use PlatformWeb, :live_view
