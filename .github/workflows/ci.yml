@@ -38,7 +38,7 @@ env:
   # (apps/goals' own `mix test`). Provisional: Goals 1/8 stage 4 sets it to
   # about three quarters of the final count; Goals 7/8 stage 4 raised it
   # to 306, three quarters of the 408 the module suite ran then.
-  MIN_GOALS_TEST_COUNT: 306
+  MIN_GOALS_TEST_COUNT: 316
 
 on:
   push:

@@ -72,11 +72,27 @@ defmodule PlatformWeb.GoalsPageTest do
     {:ok, _} = Goals.open_goal(c.owner, goal.id, {:space, space.id})
     {:ok, _} = Goals.hand_goal_to_space(manager, goal.id, space.id)
     project = Platform.Goals.OutcomeFixtures.project(c.org_id)
-    for {title, status, agent} <- [{"Outline", "backlog", x}, {"Draft", "blocked", y}, {"Review", "done", x}] do
+
+    for {title, status, agent} <- [
+          {"Outline", "backlog", x},
+          {"Draft", "blocked", y},
+          {"Review", "done", x}
+        ] do
       held = %{"assignee_type" => "agent", "assignee_id" => agent.id}
-      task = Platform.Repo.insert!(%Platform.Tasks.Task{project_id: project.id, title: title, status: status, assignee_type: "agent", assignee_id: agent.id, phase_assignees: %{"planning" => held, "execution" => held}})
+
+      task =
+        Platform.Repo.insert!(%Platform.Tasks.Task{
+          project_id: project.id,
+          title: title,
+          status: status,
+          assignee_type: "agent",
+          assignee_id: agent.id,
+          phase_assignees: %{"planning" => held, "execution" => held}
+        })
+
       {:ok, _} = Goals.link_task(coach, goal.id, task.id)
     end
+
     viewer = enabled_user_for_workers!(member!(c.org_id), c.org_id)
     join_space!(space.id, :user, viewer.id)
     child = page(c.conn, viewer, goal)
@@ -85,8 +101,18 @@ defmodule PlatformWeb.GoalsPageTest do
         do: assert(has_element?(child, "[data-role=goal-workers]", copy))
 
     refute has_element?(child, "[data-role=goal-workers] button")
-    for copy <- ["Outline", "Draft", "Review", "Open", "Blocked", "Done"], do: assert(has_element?(child, "[data-role=goal-workers]", copy))
-    [first, second, third] = child |> element("[data-role=goal-workers]") |> render() |> Floki.parse_fragment!() |> Floki.find("[data-role=goal-worker-task]") |> Enum.map(&Floki.text/1)
+
+    for copy <- ["Outline", "Draft", "Review", "Open", "Blocked", "Done"],
+        do: assert(has_element?(child, "[data-role=goal-workers]", copy))
+
+    [first, second, third] =
+      child
+      |> element("[data-role=goal-workers]")
+      |> render()
+      |> Floki.parse_fragment!()
+      |> Floki.find("[data-role=goal-worker-task]")
+      |> Enum.map(&Floki.text/1)
+
     assert first =~ "Draft"
     assert second =~ "Outline"
     assert third =~ "Review"

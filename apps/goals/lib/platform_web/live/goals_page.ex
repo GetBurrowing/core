@@ -165,10 +165,15 @@ defmodule PlatformWeb.GoalsPage do
       reading = reading(number)
       current = card.current_stop
       pct = percent(reading, target(current, card.goal))
-      {:ok, %{card: card, authors: authors,
-        coach: card.goal.coach_agent_id && Map.get(authors.agents, card.goal.coach_agent_id),
-        source: Enum.find(sources, &(&1.key == card.goal.source_key)),
-        number: number_view(card.goal, number, reading, current, pct)}}
+
+      {:ok,
+       %{
+         card: card,
+         authors: authors,
+         coach: card.goal.coach_agent_id && Map.get(authors.agents, card.goal.coach_agent_id),
+         source: Enum.find(sources, &(&1.key == card.goal.source_key)),
+         number: number_view(card.goal, number, reading, current, pct)
+       }}
     end
   end
 
