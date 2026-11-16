@@ -189,20 +189,21 @@ defmodule Platform.Goals.DevBriefSeed do
         payload: %{"cards" => cards}
       })
 
-    ok!(
-      Platform.Chat.add_participant(space.id, %{
-        participant_type: "user",
-        participant_id: user.id,
-        display_name: user.name,
-        joined_at: DateTime.utc_now()
-      })
-    )
+    participant =
+      ok!(
+        Platform.Chat.add_participant(space.id, %{
+          participant_type: "user",
+          participant_id: user.id,
+          display_name: user.name,
+          joined_at: DateTime.utc_now()
+        })
+      )
 
     practice_canvas =
       ok!(
         Platform.Chat.create_canvas(%{
           space_id: space.id,
-          created_by: user.id,
+          created_by: participant.id,
           title: "Your practice cards",
           document: %{
             version: 1,
