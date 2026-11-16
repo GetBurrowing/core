@@ -182,7 +182,8 @@ defmodule Platform.Calendar.ICal do
         with {:ok, first, zone, date} <- datetime(props["DTSTART"]),
              {:ok, last, end_zone, end_date} <- datetime(props["DTEND"]),
              true <- is_nil(date) == is_nil(end_date),
-             true <- (zone == :floating) == (end_zone == :floating),
+             # Floating on one bound only is unplaceable; both floating is fine.
+             true <- :floating not in [zone, end_zone] or zone == end_zone,
              true <- DateTime.compare(first, last) == :lt,
              rule <- value(props["RRULE"]),
              # supported_recurrence?/3 reads only the start zone.

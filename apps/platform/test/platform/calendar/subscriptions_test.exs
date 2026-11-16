@@ -310,8 +310,10 @@ defmodule Platform.Calendar.SubscriptionsTest do
         "\r\nEND:VEVENT\r\nBEGIN:VEVENT\r\n" <> old <> "\r\nEND:VEVENT\r\nEND:VCALENDAR\r\n"
 
     assert {:ok, [%{"title" => "Updated appointment"}], 0} = ICal.parse(multiple)
+
     assert {:error, :unsupported_or_malformed_feed} =
              ICal.parse(String.replace(multiple, "SEQUENCE:1", "SEQUENCE:2"))
+
     assert {:ok, [], 1} = ICal.parse(feed(event("\r\nUID:duplicate")))
   end
 
@@ -494,7 +496,8 @@ defmodule Platform.Calendar.SubscriptionsTest do
             invalid_utf8: feed(event("\r\nDESCRIPTION:invalid " <> <<0xFF>>)),
             not_vcalendar: "BEGIN:VEVENT\r\n" <> event() <> "\r\nEND:VEVENT\r\n",
             unterminated_vevent:
-              "BEGIN:VCALENDAR\r\nVERSION:2.0\r\nBEGIN:VEVENT\r\n" <> event() <> "\r\nEND:VCALENDAR\r\n",
+              "BEGIN:VCALENDAR\r\nVERSION:2.0\r\nBEGIN:VEVENT\r\n" <>
+                event() <> "\r\nEND:VCALENDAR\r\n",
             begin_unknown_inside_vevent: feed(event("\r\nBEGIN:VJOURNAL\r\nEND:VJOURNAL")),
             ambiguous_duplicate_uid: ambiguous,
             over_2000: over_2000
@@ -527,8 +530,7 @@ defmodule Platform.Calendar.SubscriptionsTest do
               feed("UID:f\r\nDTSTART:20261030T140000\r\nDTEND:20261030T150000Z"),
             recurrence_id: feed(event("\r\nRECURRENCE-ID:20261030T190000Z")),
             rdate: feed(event("\r\nRDATE:20261101T190000Z")),
-            duration:
-              feed("UID:d@example.invalid\r\nDTSTART:20261030T190000Z\r\nDURATION:PT1H"),
+            duration: feed("UID:d@example.invalid\r\nDTSTART:20261030T190000Z\r\nDURATION:PT1H"),
             colon_less_line: feed(event("\r\nNOT A PROPERTY")),
             byday_rule: feed(event("\r\nRRULE:FREQ=WEEKLY;BYDAY=MO")),
             date_with_tzid_end:
