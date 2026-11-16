@@ -324,8 +324,11 @@ defmodule PlatformWeb.GoalsBriefTest do
              from(e in Entry, where: fragment("?->>'undo_of'", e.details) == ^f.undoable.id)
            ) == []
 
-    # Positive control on the same live view: after a re-grant, Use it writes one answer.
+    # Positive control: after a re-grant (whose access push re-renders the
+    # briefing), the same event from the page writes one answer.
     grant_goals_use!(c.owner)
+    {:ok, view, _} = open(c.conn, c.owner)
+    assert has_element?(view, card(offer))
 
     view
     |> with_target("[data-role=goals-brief]")
