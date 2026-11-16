@@ -539,7 +539,8 @@ defmodule Platform.SignInAdminTest do
   end
 
   describe "invite/2" do
-    test "creates the pocket-id user and the Suite user, and mints a 30m link", %{admin: admin} do
+    test "creates the pocket-id user and the Suite user, and mints a 168h first-invite link",
+         %{admin: admin} do
       fake!(ids: ["pid-new"])
       before = DateTime.utc_now()
 
@@ -559,7 +560,7 @@ defmodule Platform.SignInAdminTest do
       assert link.code == @token
       assert link.url == "https://issuer.example.com/lc/#{@token}?redirect=%2Fsettings%2Faccount"
       diff = DateTime.diff(link.expires_at, before, :second)
-      assert diff >= 29 * 60 and diff <= 31 * 60
+      assert diff >= 7 * 24 * 3600 - 60 and diff <= 7 * 24 * 3600 + 60
 
       reqs = requests()
       assert Enum.all?(reqs, &(&1.key == [@key]))
@@ -567,7 +568,7 @@ defmodule Platform.SignInAdminTest do
       assert create.body["isAdmin"] == false
       assert create.body["emailVerified"] == true
       assert [token] = Enum.filter(reqs, &(&1.kind == :token))
-      assert token.body == %{"ttl" => "30m"}
+      assert token.body == %{"ttl" => "168h"}
       assert token.path == "/api/users/pid-new/one-time-access-token"
     end
 
@@ -841,6 +842,99 @@ defmodule Platform.SignInAdminTest do
     end
   end
 
+  # -- sign-in link lifetime (task 01a1e561) --------------------------------
+
+  describe "sign-in link lifetime: 7 days for a first sign-in, 30 minutes otherwise" do
+    test "(a) invite of a new user requests 168h and stamps a 7-day expiry", %{admin: admin} do
+      fake!(ids: ["pid-week"])
+
+      assert {:ok, %{user: user, link: link}} =
+               SignInAdmin.invite(admin, %{email: "week@example.test", role: :member})
+
+      reqs = requests()
+      assert [passkeys] = Enum.filter(reqs, &(&1.kind == :passkeys))
+      assert passkeys.path == "/api/users/pid-week/webauthn-credentials"
+      assert [token] = Enum.filter(reqs, &(&1.kind == :token))
+      assert token.body == %{"ttl" => "168h"}
+
+      week = DateTime.add(DateTime.utc_now(), 7 * 24 * 3600, :second)
+      assert abs(DateTime.diff(link.expires_at, week, :second)) <= 60
+      assert DateTime.compare(user.sign_in_link_expires_at, link.expires_at) in [:gt, :eq]
+    end
+
+    test "(b) Send link to a passkey holder requests 30m", %{admin: admin} do
+      holder = suite_user!("holder")
+
+      fake!(
+        users: [pid_user(holder.oidc_sub, holder.email)],
+        passkeys: %{holder.oidc_sub => 1}
+      )
+
+      assert {:ok, %Link{} = link} = SignInAdmin.resend_link(admin, holder.id)
+
+      assert [token] = Enum.filter(requests(), &(&1.kind == :token))
+      assert token.body == %{"ttl" => "30m"}
+
+      half_hour = DateTime.add(DateTime.utc_now(), 30 * 60, :second)
+      assert abs(DateTime.diff(link.expires_at, half_hour, :second)) <= 60
+    end
+
+    test "(c) Send link to a pending user requests 168h", %{admin: admin} do
+      pending = suite_user!("pending-week")
+      fake!(users: [pid_user(pending.oidc_sub, pending.email)])
+
+      assert {:ok, %Link{} = link} = SignInAdmin.resend_link(admin, pending.id)
+
+      assert [token] = Enum.filter(requests(), &(&1.kind == :token))
+      assert token.body == %{"ttl" => "168h"}
+
+      week = DateTime.add(DateTime.utc_now(), 7 * 24 * 3600, :second)
+      assert abs(DateTime.diff(link.expires_at, week, :second)) <= 60
+    end
+
+    test "(d) passkey count failure falls back to 30m", %{admin: admin} do
+      pending = suite_user!("count-fails")
+      agent = fake!(users: [pid_user(pending.oidc_sub, pending.email)])
+      fail!(agent, :passkeys, 500)
+
+      {result, log} = with_log(fn -> SignInAdmin.resend_link(admin, pending.id) end)
+
+      assert {:ok, %Link{} = link} = result
+      reqs = requests()
+      assert [_] = Enum.filter(reqs, &(&1.kind == :passkeys))
+      assert [token] = Enum.filter(reqs, &(&1.kind == :token))
+      assert token.body == %{"ttl" => "30m"}
+
+      half_hour = DateTime.add(DateTime.utc_now(), 30 * 60, :second)
+      assert abs(DateTime.diff(link.expires_at, half_hour, :second)) <= 60
+
+      assert log =~ "sign_in_admin.passkey_count_failed suite_user_id=#{pending.id}"
+      refute_secret(log, "the log")
+    end
+
+    test "(e) a 30m Send link after a 7-day invite does not shorten the recorded expiry",
+         %{admin: admin} do
+      agent = fake!(ids: ["pid-keep"])
+
+      assert {:ok, %{user: user, link: invite_link}} =
+               SignInAdmin.invite(admin, %{email: "keep@example.test", role: :member})
+
+      recorded = Repo.get!(Accounts.User, user.id).sign_in_link_expires_at
+      assert recorded == recorded_expiry(invite_link.expires_at)
+
+      # The invitee registers a passkey; the next Send link is the short one.
+      Agent.update(agent, &put_in(&1, [:passkeys, "pid-keep"], 1))
+      _ = requests()
+
+      assert {:ok, %Link{} = short} = SignInAdmin.resend_link(admin, user.id)
+      assert [token] = Enum.filter(requests(), &(&1.kind == :token))
+      assert token.body == %{"ttl" => "30m"}
+      assert DateTime.compare(short.expires_at, invite_link.expires_at) == :lt
+
+      assert Repo.get!(Accounts.User, user.id).sign_in_link_expires_at == recorded
+    end
+  end
+
   # -- enable while a Suite-minted link is live (task 01a114c1) -------------
 
   describe "enable/3 while a Suite-minted sign-in link is live" do
@@ -867,7 +961,7 @@ defmodule Platform.SignInAdminTest do
 
       # Behavioural floor, in addition to the equality: the clock was sampled
       # after `before`, so the recorded value covers ceil(before + TTL) + 5 s.
-      floor = recorded_expiry(DateTime.add(before, 30 * 60, :second))
+      floor = recorded_expiry(DateTime.add(before, 7 * 24 * 3600, :second))
       assert DateTime.compare(recorded, floor) in [:gt, :eq]
       assert {:ok, _} = SignInAdmin.disable(admin, user.id)
       _ = requests()

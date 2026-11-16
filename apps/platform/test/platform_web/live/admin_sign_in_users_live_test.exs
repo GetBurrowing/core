@@ -440,7 +440,7 @@ defmodule PlatformWeb.AdminSignInUsersLiveTest do
       assert html =~ "Shown once."
       assert html =~ "TOKE Na1b 2c3Z"
       assert html =~ "/lc/#{@token}"
-      assert html =~ "Expires at"
+      assert html =~ "This link works once. It expires"
 
       view |> element("[data-role=slip-done]") |> render_click()
       html = render_async(view)
@@ -516,8 +516,104 @@ defmodule PlatformWeb.AdminSignInUsersLiveTest do
       send(view.pid, {:slip_expired, ref})
 
       html = render(view)
-      assert html =~ "This link expired at"
+      assert html =~ "This link expired "
       refute html =~ @token
+    end
+  end
+
+  # -- dated, works-once expiry (task 01a1e561 stage 2) ---------------------
+
+  describe "expiry_when/2" do
+    alias PlatformWeb.AdminSignInUsersLive, as: Page
+
+    # 12:00 in Chicago (CST, UTC-6) on Mon 16 Nov 2026.
+    @now ~U[2026-11-16 18:00:00Z]
+
+    test "7 days out in a named zone gives the weekday, date and local time" do
+      assert Page.expiry_when(~U[2026-11-23 23:42:00Z], "America/Chicago", @now) ==
+               "Mon 23 Nov, 17:42"
+    end
+
+    test "later the same local day gives the time only" do
+      assert Page.expiry_when(~U[2026-11-16 18:30:00Z], "America/Chicago", @now) == "12:30"
+    end
+
+    test "with no zone it appends UTC, on either branch" do
+      assert Page.expiry_when(~U[2026-11-16 18:30:00Z], nil, @now) == "18:30 UTC"
+      assert Page.expiry_when(~U[2026-11-23 23:42:00Z], nil, @now) == "Mon 23 Nov, 23:42 UTC"
+    end
+
+    test "the date is compared in the local zone, not UTC" do
+      # 23:30 in Chicago tonight is already tomorrow in UTC: still today here.
+      assert Page.expiry_when(~U[2026-11-17 05:30:00Z], "America/Chicago", @now) == "23:30"
+
+      # 22:00 Chicago now, 00:30 Chicago expiry: same UTC date, tomorrow here.
+      assert Page.expiry_when(
+               ~U[2026-11-17 06:30:00Z],
+               "America/Chicago",
+               ~U[2026-11-17 04:00:00Z]
+             ) == "Tue 17 Nov, 00:30"
+    end
+  end
+
+  describe "the slip's dated, works-once expiry" do
+    test "a first invite shows works-once copy and the 7-day date in the viewer's zone",
+         %{conn: conn, admin: admin} do
+      zone = "America/Chicago"
+      fake!(users: [pid_user(admin.oidc_sub, admin.email)], passkeys: %{admin.oidc_sub => 1})
+
+      {:ok, view, _html} =
+        conn |> login(admin) |> put_connect_params(%{"timezone" => zone}) |> live(@path)
+
+      _ = render_async(view)
+
+      view |> element("[data-role=open-invite]") |> render_click()
+
+      view
+      |> form("#invite-user-form", %{
+        "invite" => %{"email" => "week@example.test", "name" => "Wren Week", "role" => "member"}
+      })
+      |> render_submit()
+
+      week =
+        DateTime.utc_now() |> DateTime.add(7 * 24 * 3600, :second) |> DateTime.shift_zone!(zone)
+
+      day = Calendar.strftime(week, "%a %-d %b, ")
+
+      expiry = view |> element("[data-role=slip-expiry]") |> render()
+      assert expiry =~ "This link works once. It expires #{day}"
+      refute expiry =~ "UTC"
+
+      assert view |> element("[data-role=slip-earlier-links]") |> render() =~
+               "Any earlier link for this person still works until it expires. To cancel them, disable the person."
+
+      view |> element("[data-role=slip-done]") |> render_click()
+      _ = render_async(view)
+      wren = Enum.find(Accounts.list_users(), &(&1.email == "week@example.test"))
+
+      assert view |> element("#table-user-#{wren.id} [data-role=link-expiry]") |> render() =~
+               "Link expires #{day}"
+    end
+
+    test "Send link for a passkey holder shows a time only, no weekday or date",
+         %{conn: conn, admin: admin} do
+      %{active: active} = people!(admin)
+      view = mount!(conn, admin)
+
+      clicked_at = DateTime.utc_now()
+      view |> element("#table-user-#{active.id} [data-role=resend-link]") |> render_click()
+
+      expiry = view |> element("[data-role=slip-expiry]") |> render()
+
+      # A 30-minute link minted in the last half hour of a UTC day expires
+      # tomorrow, and the date is then correct; pin time-only otherwise.
+      if Date.compare(
+           DateTime.to_date(clicked_at),
+           clicked_at |> DateTime.add(31 * 60, :second) |> DateTime.to_date()
+         ) == :eq do
+        assert expiry =~ ~r/This link works once\. It expires \d\d:\d\d UTC\./
+        refute expiry =~ ~r/(Mon|Tue|Wed|Thu|Fri|Sat|Sun) \d/
+      end
     end
   end
 
@@ -567,7 +663,7 @@ defmodule PlatformWeb.AdminSignInUsersLiveTest do
       view |> element("#table-user-#{disabled.id} [data-role=enable]") |> render_click()
 
       assert render(view) =~
-               "A sign-in link sent before #{disabled.name} was disabled is valid until 14:37 UTC. Enable them after that."
+               "A sign-in link sent before #{disabled.name} was disabled is valid until Thu 1 Jan, 14:37 UTC. Enable them after that."
 
       assert Enum.filter(requests(), &(&1.kind == :put)) == []
       assert has_element?(view, "#table-user-#{disabled.id} [data-role=enable]")

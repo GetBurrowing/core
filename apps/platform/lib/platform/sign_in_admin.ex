@@ -88,11 +88,11 @@ defmodule Platform.SignInAdmin do
 
   @passkey_concurrency 8
   @passkey_timeout 5_000
-  # Must stay above 15 minutes: pocket-id mints a 6-character code at 15m or
-  # less, and that code never auto-submits from `/lc/<code>`. The value sent
-  # to pocket-id lives in `PocketId.one_time_token/1`; this one only stamps
-  # `Link.expires_at`.
-  @link_ttl_seconds 30 * 60
+  # A sign-in link lives 7 days for a first sign-in (no passkey yet) and 30
+  # minutes otherwise. `link_lifetime/1` picks the `PocketId.ttl()` and takes
+  # its seconds from `PocketId.ttl_seconds/1`, so the TTL sent to pocket-id
+  # and `Link.expires_at` cannot disagree. Both stay above 15 minutes (see
+  # `PocketId`'s moduledoc).
   @link_redirect "?redirect=%2Fsettings%2Faccount"
   # How long after a Disable `enable(actor, id, undo: true)` may skip the
   # live-link check. The Users page's Undo banner lasts 8 seconds.
@@ -183,7 +183,8 @@ defmodule Platform.SignInAdmin do
 
   @doc """
   Invite a person: give them a pocket-id identity and a Burrow user, set their
-  Burrow role, and mint a 30-minute sign-in link.
+  Burrow role, and mint a sign-in link. The link lasts 7 days while the
+  person has no passkey (a first sign-in), and 30 minutes once they have one.
 
   `attrs` carries `:email` (required), `:name` (optional; falls back to the
   email's local part) and `:role` (`:member` or `:admin`, or the same as a
@@ -411,7 +412,9 @@ defmodule Platform.SignInAdmin do
   # -- resend / disable / enable / remove ------------------------------------
 
   @doc """
-  Mint a fresh 30-minute sign-in link for a user. Refused for a user whose
+  Mint a fresh sign-in link for a user: 7 days while they have no passkey
+  yet (still a first sign-in), 30 minutes once they have one, and 30 minutes
+  when the passkey count cannot be read. Refused for a user whose
   pocket-id identity is disabled (`:disabled`) or missing (`:no_identity`),
   and for an archived Burrow user (`:archived`), who could not complete a
   sign-in anyway.
@@ -574,10 +577,13 @@ defmodule Platform.SignInAdmin do
   # Fail closed: a link whose expiry could not be recorded is never returned,
   # because Enable could then not wait for it.
   defp mint_link(user, pocket_id_user_id) do
-    with {:ok, %PocketId.Token{value: token}} <- PocketId.one_time_token(pocket_id_user_id) do
+    {ttl, seconds} = link_lifetime(user, pocket_id_user_id)
+
+    with {:ok, %PocketId.Token{value: token}} <-
+           PocketId.one_time_token(pocket_id_user_id, ttl: ttl) do
       # Not truncated (task 01a11503): `note_sign_in_link_expiry/2` rounds
       # UP, which only works on the raw sub-second value.
-      expires_at = DateTime.add(DateTime.utc_now(), @link_ttl_seconds, :second)
+      expires_at = DateTime.add(DateTime.utc_now(), seconds, :second)
 
       case Accounts.note_sign_in_link_expiry(user, expires_at) do
         {:ok, user} ->
@@ -594,6 +600,25 @@ defmodule Platform.SignInAdmin do
           {:error, :link_failed}
       end
     end
+  end
+
+  # The one place the lifetime is chosen: the ttl atom and its seconds come
+  # back together. A failed count falls to the SHORTER link, never the longer.
+  defp link_lifetime(user, pocket_id_user_id) do
+    ttl =
+      case PocketId.passkey_count(pocket_id_user_id) do
+        {:ok, 0} ->
+          :first_invite
+
+        {:ok, count} when is_integer(count) and count > 0 ->
+          :short
+
+        {:error, _} ->
+          Logger.warning("sign_in_admin.passkey_count_failed suite_user_id=#{user.id}")
+          :short
+      end
+
+    {ttl, PocketId.ttl_seconds(ttl)}
   end
 
   defp reachable({:ok, _} = ok), do: ok
