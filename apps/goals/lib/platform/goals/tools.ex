@@ -435,6 +435,15 @@ defmodule Platform.Goals.Tools do
     |> Map.put(:messages, messages)
   end
 
+  defp context_error(reason) when is_map_key(@refusals, reason) do
+    {error, recoverable, suggestion} = Map.fetch!(@refusals, reason)
+    err(reason, error, recoverable, suggestion)
+  end
+
+  defp context_error(reason) do
+    err(:invalid, "Refused: #{inspect(reason)}", false, "goal_list shows the goals you coach.")
+  end
+
   defp propose_error(:proposal_closed, _agent, _proposal, _attrs) do
     err(
       :proposal_closed,
@@ -499,15 +508,6 @@ defmodule Platform.Goals.Tools do
       true,
       "Send sources: [%{name, url?}] naming where the finding comes from."
     )
-  end
-
-  defp context_error(reason) when is_map_key(@refusals, reason) do
-    {error, recoverable, suggestion} = Map.fetch!(@refusals, reason)
-    err(reason, error, recoverable, suggestion)
-  end
-
-  defp context_error(reason) do
-    err(:invalid, "Refused: #{inspect(reason)}", false, "goal_list shows the goals you coach.")
   end
 
   defp to_string_safe(value) when is_binary(value), do: value
