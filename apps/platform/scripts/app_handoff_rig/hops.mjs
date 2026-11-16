@@ -26,10 +26,10 @@
 //   that lands in shell history or a log. Mint it with POST /api/app/handoff
 //   (bearer) and keep the bearer out of anything that prints.
 //
-// RIG NOTE: the rock CDP Chrome cannot reach the moon LAN address directly
-// (net::ERR_ADDRESS_UNREACHABLE, printed as a FAILED hop). Tunnel the dev
-// server to loopback (ssh -f -N -L 127.0.0.1:<p>:<moon-ip>:<port>) and mint
-// the handoff against that loopback origin; close the tunnel by pid.
+// RIG NOTE: if the CDP Chrome cannot reach the dev server's LAN address
+// (net::ERR_ADDRESS_UNREACHABLE, printed as a FAILED hop), tunnel the dev
+// server to loopback (ssh -f -N -L 127.0.0.1:<p>:<dev-host-ip>:<port>) and
+// mint the handoff against that loopback origin; close the tunnel by pid.
 //
 // Requires Node 22+ (global fetch and WebSocket).
 
