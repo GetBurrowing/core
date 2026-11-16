@@ -47,6 +47,9 @@ defmodule PlatformWeb.GoalsBriefCards do
       </div>
       <h4 class="text-base font-semibold text-base-content">{@item.goal.title}</h4>
       <.report :if={@item.kind == :report} {assigns} />
+      <.retro_card :if={@item.kind == :retro} {assigns} />
+      <.retro_change_card :if={@item.kind == :retro_change} {assigns} />
+      <.notice_card :if={@item.kind == :notice} {assigns} />
       <.offer :if={@item.kind == :offer} {assigns} />
       <.linked_ask :if={@item.kind in [:idea, :question]} {assigns} />
       <p :if={@item.kind == :practice} class="mt-1 text-sm text-base-content">
@@ -119,7 +122,7 @@ defmodule PlatformWeb.GoalsBriefCards do
       </li>
     </ul>
     <p :if={@item.number} class="mt-3 text-sm text-base-content">
-      <b>Where we are:</b> {number(@item.number.value)} of {number(@item.number.target)} {@item.number.unit}.
+      <b>Where we are:</b> {number(@item.number.value)} of {number(@item.number.target)} {@item.number.unit}.{pace_clause(Map.get(@item, :pace))}
     </p>
     <div :if={@item.state == :open} class="mt-3 flex flex-wrap items-center gap-2">
       <button
@@ -290,6 +293,102 @@ defmodule PlatformWeb.GoalsBriefCards do
     """
   end
 
+  attr(:item, :map, required: true)
+  attr(:target, :any, required: true)
+
+  def retro_card(assigns) do
+    assigns =
+      assign(assigns, :scored, assigns.item.verdicts.came_true + assigns.item.verdicts.did_not)
+
+    ~H"""
+    <p class="mt-1 text-sm font-semibold text-base-content">{@item.entry.title}</p>
+    <p class="mt-1 text-sm text-base-content">{@item.entry.body}</p>
+    <p :if={@scored > 0} class="mt-2 text-sm text-base-content">
+      {@item.verdicts.came_true} of {@scored} predictions came true.
+    </p>
+    <p :if={@item.stalled} class="mt-2 text-sm font-bold text-base-content">
+      The number has not moved across {@item.flat_retros} retros.
+    </p>
+    <a href={"/m/goals?goal=#{@item.goal.id}&retro=#{@item.entry.id}"} class={[link(), "mt-2 inline-block text-sm"]}>
+      Read the retro
+    </a>
+    <div :if={@item.state == :open} class="mt-3">
+      <button type="button" class={btn_primary()} phx-click="retro_noted" phx-target={@target}
+        phx-value-item_id={@item.id} phx-value-noted="true" data-action="retro_noted">Looks good</button>
+    </div>
+    <div :if={@item.state == :done} class="mt-3 flex flex-wrap items-center gap-x-3 gap-y-1 text-sm text-subtle" data-role="goals-brief-receipt">
+      <b class="inline-flex items-center gap-1 text-success"><.icon name="hero-check" class="size-4" /> Noted</b>
+      <button type="button" class={link()} phx-click="retro_noted" phx-target={@target}
+        phx-value-item_id={@item.id} phx-value-noted="false" data-action="retro_noted">Undo</button>
+    </div>
+    """
+  end
+
+  attr(:item, :map, required: true)
+  attr(:target, :any, required: true)
+
+  def retro_change_card(assigns) do
+    assigns = assign(assigns, :goal_change?, assigns.item.change.kind == :goal)
+
+    ~H"""
+    <p class="mt-1 text-sm font-semibold text-base-content">
+      {if @goal_change?, do: "Change the goal?", else: "Change how we check in?"}
+    </p>
+    <p :if={@goal_change?} class="mt-2 text-sm font-bold text-base-content">
+      The number has not moved across {@item.flat_retros} retros.
+    </p>
+    <p class="mt-1 text-sm text-base-content">{@item.change.summary}</p>
+    <p :if={@item.change.state == :switched} class="mt-3 inline-flex items-center gap-1 text-sm font-bold text-success" data-role="goals-brief-receipt">
+      <.icon name="hero-check" class="size-4" /> {if @goal_change?, do: "Changed", else: "Switched"}
+    </p>
+    <div :if={@item.change.state != :kept} class="mt-2 text-sm text-subtle">
+      <p>{if @goal_change?, do: "This would:", else: "Switch changes:"}</p>
+      <p :for={line <- @item.change.lines}>{line}</p>
+    </div>
+    <div :if={@item.change.state == :open} class="mt-3 flex flex-wrap items-center gap-2">
+      <button type="button" class={btn_primary()} phx-click="retro_switch" phx-target={@target}
+        phx-value-item_id={@item.id} phx-value-entry_id={@item.entry_id} data-action="retro_switch">
+        {if @goal_change?, do: "Change the goal", else: "Switch"}
+      </button>
+      <button type="button" class={btn_ghost()} phx-click="retro_keep" phx-target={@target}
+        phx-value-item_id={@item.id} phx-value-entry_id={@item.entry_id} data-action="retro_keep">
+        {if @goal_change?, do: "Keep the goal", else: "Keep it"}
+      </button>
+    </div>
+    <p :if={@item.change.state == :open && !@goal_change?} class="mt-2 text-sm text-subtle">
+      The check-in stays as it is until you choose.
+    </p>
+    <p :if={@item.change.state == :kept} class="mt-3 text-sm text-subtle" data-role="goals-brief-receipt">
+      {if @goal_change?, do: "The goal stays as it is.", else: "The check-in stays as it is."}
+    </p>
+    """
+  end
+
+  attr(:item, :map, required: true)
+  attr(:target, :any, required: true)
+
+  def notice_card(assigns) do
+    ~H"""
+    <p class="mt-1 text-sm text-base-content">
+      <.coach item={@item} /> has slowed down on this goal. Nothing from the last {@item.ignored_briefs} briefs was answered, so check-ins now come {paced_words(@item)} and <.coach item={@item} /> keeps one thing waiting at most. Answer anything from <.coach item={@item} /> and the usual rhythm comes back.
+    </p>
+    """
+  end
+
+  defp pace_clause(:behind), do: " A little behind the hoped-for pace."
+  defp pace_clause(:on_track), do: " On the hoped-for pace."
+  defp pace_clause(_), do: ""
+
+  defp paced_words(%{goal: %{rhythm: rhythm}, every: every}) do
+    case {rhythm, every} do
+      {"daily", 7} -> "about once a week"
+      {"weekdays", 5} -> "about once a week"
+      {"weekly", 2} -> "every two weeks"
+      {"biweekly", 2} -> "every four weeks"
+      _ -> "less often"
+    end
+  end
+
   defp linked_ask(assigns) do
     ~H"""
     <p class="mt-1 text-sm font-semibold text-base-content">{@item.ask.title}</p>
@@ -352,6 +451,9 @@ defmodule PlatformWeb.GoalsBriefCards do
     """
   end
 
+  defp tag(:retro), do: %{label: "Goal · retro", class: "bg-base-300"}
+  defp tag(:retro_change), do: %{label: "Goal · retro", class: "bg-warning-dim"}
+  defp tag(:notice), do: %{label: "Goal · slowed down", class: "bg-base-300"}
   defp tag(:report), do: %{label: "Goal · progress report", class: "bg-info-dim"}
   defp tag(:offer), do: %{label: "Goal · offer", class: "bg-warning-dim"}
   defp tag(:idea), do: %{label: "Goal · idea", class: "bg-info-dim"}
@@ -389,3 +491,4 @@ defmodule PlatformWeb.GoalsBriefCards do
 
   defp safe_url(_), do: nil
 end
+

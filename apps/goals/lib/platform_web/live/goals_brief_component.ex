@@ -25,7 +25,14 @@ defmodule PlatformWeb.GoalsBriefComponent do
   - Not now has no toast: the card itself carries the receipt and Undo.
   - The section note sits at its foot, names "your coach" instead of a
     sample name, and has no Briefing settings link (no destination exists).
-  - The pace clause after Where we are belongs to Goals 8/8.
+  - Retro, change-the-goal and slow-down notice cards are added to the brief,
+    the one goal push surface; the canvas has no briefing versions of them.
+  - Keep it replaces the canvas's sample-specific second pill labels.
+  - Switch changes lists the exact settings written; the canvas's Sunday quiz
+    and report choices cannot be represented by these settings.
+  - Switch and Keep it have no Undo; settings can be changed on the goal page.
+  - The pace clause omits the sample weekly percentage and adds an on-track
+    form, which the canvas does not show.
   - One stop footer replaces the sample-specific "9 of 24" and "180 so far"
     variants; later stops say Next stop, and no stop leaves only the link.
   - Idea and check-in cards also appear in the brief, the one goal push
@@ -82,14 +89,29 @@ defmodule PlatformWeb.GoalsBriefComponent do
 
     items =
       Enum.map(items, fn item ->
-        slot =
-          with {:ok, goal} <- Goals.get_goal(user, item.goal.id),
-               {:ok, authors} <- Goals.entry_authors(user, goal.id),
-               %{slot: slot} <- authors.agents[goal.coach_agent_id],
-               do: slot,
-               else: (_ -> nil)
+        with {:ok, goal} <- Goals.get_goal(user, item.goal.id),
+             {:ok, authors} <- Goals.entry_authors(user, goal.id),
+             {:ok, stops} <- Goals.list_stops(user, goal.id) do
+          slot = get_in(authors, [:agents, goal.coach_agent_id, :slot])
+          coach = get_in(authors, [:agents, goal.coach_agent_id, :name])
 
-        Map.put(item, :coach_slot, slot)
+          item =
+            item
+            |> Map.put(:coach_slot, slot)
+            |> Map.put(:goal, Map.merge(item.goal, %{coach_name: coach, rhythm: goal.rhythm}))
+            |> Map.put_new(:stop, Enum.find(stops, &is_nil(&1.reached_on)))
+
+          if item.kind == :retro_change do
+            case Goals.get_retro(user, goal.id, item.entry_id) do
+              {:ok, retro} -> Map.put(item, :flat_retros, retro.flat_retros)
+              _ -> Map.put(item, :flat_retros, 0)
+            end
+          else
+            item
+          end
+        else
+          _ -> Map.put(item, :coach_slot, nil)
+        end
       end)
 
     assign(socket, reader: user, items: items)
@@ -98,7 +120,12 @@ defmodule PlatformWeb.GoalsBriefComponent do
   @impl true
   def handle_event(event, params, socket) do
     socket = reload(socket)
-    item = Enum.find(socket.assigns.items, &(&1.id == params["item_id"]))
+
+    item =
+      Enum.find(socket.assigns.items, fn item ->
+        item.id == params["item_id"] &&
+          (event not in ["retro_switch", "retro_keep"] || item.kind == :retro_change)
+      end)
 
     if item && identities_match?(params, item) do
       event(event, params, item, socket)
@@ -114,7 +141,11 @@ defmodule PlatformWeb.GoalsBriefComponent do
       not Map.has_key?(params, "ask_id") or
         params["ask_id"] == Map.get(Map.get(item, :ask) || %{}, :id)
 
-    goal_matches and ask_matches
+    entry_matches =
+      not Map.has_key?(params, "entry_id") or
+        item.kind not in [:retro, :retro_change] or params["entry_id"] == item.entry_id
+
+    goal_matches and ask_matches and entry_matches
   end
 
   defp event("ask-open", _, %{kind: :report} = item, socket),
@@ -147,6 +178,21 @@ defmodule PlatformWeb.GoalsBriefComponent do
         socket
       )
 
+  defp event("retro_noted", params, %{kind: :retro} = item, socket) do
+    result = Goals.set_report_noted(socket.assigns.reader, item.id, params["noted"] == "true")
+    retro_written(result, item, socket)
+  end
+
+  defp event(event, _, %{kind: :retro_change} = item, socket)
+       when event in ["retro_switch", "retro_keep"] do
+    decision = if event == "retro_switch", do: "switch", else: "keep"
+
+    result =
+      Goals.decide_retro_change(socket.assigns.reader, item.goal.id, item.entry_id, decision)
+
+    retro_written(result, item, socket)
+  end
+
   defp event("undo", params, %{kind: :report} = item, socket) do
     entry = Enum.find(item.entries, &(&1.id == params["entry_id"]))
 
@@ -171,6 +217,13 @@ defmodule PlatformWeb.GoalsBriefComponent do
     do: written(Goals.withdraw_answer(socket.assigns.reader, item.ask.id), socket)
 
   defp event(_, _, _, socket), do: {:noreply, socket}
+
+  defp retro_written({:ok, _}, item, socket) do
+    Goals.refresh_brief(socket.assigns.reader, {:entry, item.entry_id})
+    {:noreply, reload(socket)}
+  end
+
+  defp retro_written(_, _, socket), do: {:noreply, socket}
 
   defp written({:ok, _}, socket) do
     Platform.Memory.Insights.BriefingSections.changed(socket.assigns.user_id, socket.assigns.date)
@@ -209,3 +262,4 @@ defmodule PlatformWeb.GoalsBriefComponent do
     """
   end
 end
+
