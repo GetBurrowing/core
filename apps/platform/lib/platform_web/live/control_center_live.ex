@@ -307,6 +307,7 @@ defmodule PlatformWeb.ControlCenterLive do
     "clear_role_assignment" => :responsibility,
     "set_responsibility_override" => :responsibility,
     "clear_responsibility_override" => :responsibility,
+    "feedback_intake_retry" => :feedback_admin,
     "start_runtime" => :manage_selected,
     "stop_runtime" => :manage_selected,
     "refresh_runtime" => :manage_selected,
@@ -405,6 +406,11 @@ defmodule PlatformWeb.ControlCenterLive do
 
         :responsibility ->
           Platform.Access.Agents.may_federate?(scope)
+
+        # The override form's own check, on no particular agent: holders of
+        # agents.manage_all only (task 01a1e670 stage 3).
+        :feedback_admin ->
+          Platform.Access.Agents.may_release?(scope, nil)
 
         nil ->
           require Logger
@@ -584,6 +590,26 @@ defmodule PlatformWeb.ControlCenterLive do
            "Could not set override: #{changeset_error_summary(changeset)}"
          )}
     end
+  end
+
+  # Task 01a1e670 stage 3: re-arm feedback intake records that stopped
+  # retrying, then run one sweep off the LiveView process.
+  defp handle_control_event("feedback_intake_retry", _params, socket) do
+    rearmed = Platform.Feedback.Intake.reset_exhausted()
+
+    Task.Supervisor.start_child(Platform.TaskSupervisor, fn ->
+      try do
+        Platform.Feedback.Intake.retry_pending()
+      rescue
+        # A test's sandbox owner can be gone by the time this runs.
+        _ in DBConnection.OwnershipError -> :ok
+      end
+    end)
+
+    {:noreply,
+     socket
+     |> assign_roles_panel()
+     |> put_flash(:info, "Retrying #{rearmed} stopped feedback record(s).")}
   end
 
   defp handle_control_event("clear_responsibility_override", %{"key" => key}, socket) do
@@ -1292,6 +1318,7 @@ defmodule PlatformWeb.ControlCenterLive do
             role_assignments_by_key={@role_assignments_by_key}
             show_role_advanced={@show_role_advanced}
             responsibility_rows={@responsibility_rows}
+            role_bundle_health={@role_bundle_health}
             selectable_agents={@selectable_agents}
             access_scope={@access_scope}
             can_create_ownerless?={@can_create_ownerless?}
@@ -1386,6 +1413,7 @@ defmodule PlatformWeb.ControlCenterLive do
     |> assign(:role_bundles, AgentData.role_bundles())
     |> assign(:role_assignments_by_key, AgentData.role_assignments_by_key())
     |> assign(:responsibility_rows, AgentData.responsibility_rows())
+    |> assign(:role_bundle_health, AgentData.role_bundle_health())
     |> assign(
       :selectable_agents,
       Enum.filter(

@@ -29,6 +29,7 @@ defmodule PlatformWeb.ControlCenter.AgentData do
   alias Platform.Agents.NativeAgents
   alias Platform.Agents.AgentRuntime
   alias Platform.Chat.{ActiveAgentStore, Participant, Space}
+  alias Platform.Feedback.ClassifierRoute
   alias Platform.Federation
   alias Platform.Federation.{NodeContext, RuntimePresence}
   alias Platform.Repo
@@ -653,6 +654,7 @@ defmodule PlatformWeb.ControlCenter.AgentData do
   def responsibility_rows do
     overrides = responsibility_overrides_by_key()
     role_assigned = role_assignments_by_key()
+    health = role_bundle_health()
 
     Roles.list_roles()
     |> Enum.flat_map(fn role ->
@@ -665,10 +667,28 @@ defmodule PlatformWeb.ControlCenter.AgentData do
           role_key: role.key,
           role_name: role.name,
           assignee: override_agent || role_agent,
-          overridden?: not is_nil(override_agent)
+          role_holder: role_agent,
+          overridden?: not is_nil(override_agent),
+          health: Map.get(health, responsibility_key)
         }
       end)
     end)
+  end
+
+  # Responsibilities whose work can be silently stuck, and the bounded health
+  # map each one reports (task 01a1e670 stage 3). The maps carry a status, a
+  # reason, the agent's display name and counts, never an endpoint, model or
+  # credential.
+  @health_providers %{"feedback.intake" => &ClassifierRoute.health/0}
+
+  @doc """
+  `%{responsibility_key => health}` for every responsibility with a health
+  provider. `health.status` is `"ok"` or `"off"`; the role card's chips and
+  the advanced rows both read it.
+  """
+  @spec role_bundle_health() :: %{String.t() => map()}
+  def role_bundle_health do
+    Map.new(@health_providers, fn {key, provider} -> {key, provider.()} end)
   end
 
   @doc """
