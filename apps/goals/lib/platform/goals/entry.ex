@@ -67,8 +67,47 @@ defmodule Platform.Goals.Entry do
     |> validate_required([:goal_id, :kind, :occurred_at, :author_type, :sources, :details])
     |> validate_inclusion(:kind, @kinds)
     |> validate_inclusion(:author_type, @author_types)
+    |> validate_takeaway()
     |> name_constraints()
   end
+
+  # Goals 5/8 (task 01a1dfc1-7625): a takeaway is a finding, so it binds
+  # every writer, the owner included: a non-blank title and at least one
+  # source with a non-blank "name", at most `Limits.max_sources/0` sources.
+  defp validate_takeaway(changeset) do
+    if get_field(changeset, :kind) == "takeaway" do
+      changeset
+      |> validate_required([:title])
+      |> validate_takeaway_sources()
+    else
+      changeset
+    end
+  end
+
+  defp validate_takeaway_sources(changeset) do
+    sources = get_field(changeset, :sources) || []
+    max = Platform.Goals.Limits.max_sources()
+
+    cond do
+      not Enum.any?(sources, &named_source?/1) ->
+        add_error(changeset, :sources, "a takeaway needs at least one source with a name",
+          validation: :named_source
+        )
+
+      length(sources) > max ->
+        add_error(changeset, :sources, "at most %{count} sources", count: max)
+
+      true ->
+        changeset
+    end
+  end
+
+  defp named_source?(%{} = source) do
+    name = Map.get(source, "name", Map.get(source, :name))
+    is_binary(name) and String.trim(name) != ""
+  end
+
+  defp named_source?(_source), do: false
 
   @doc """
   Names every database constraint on the table, so a value the database

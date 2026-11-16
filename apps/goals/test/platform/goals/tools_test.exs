@@ -41,9 +41,12 @@ defmodule Platform.Goals.ToolsTest do
 
   defp wake_status(wake), do: Repo.one!(from(w in WakeUp, where: w.id == ^wake.id)).status
 
-  test "the bundle has exactly seven goal_ tools, each saying a wake-up takes one outcome" do
+  @wake_up_tools ~w(goal_list goal_get goal_wake_up_get goal_do goal_ask goal_wait goal_retro)
+  @all_tools @wake_up_tools ++ ~w(goal_proposal_get goal_propose goal_takeaway_add)
+
+  test "the bundle has exactly ten goal_ tools; the wake-up tools say a wake-up takes one outcome" do
     names = ToolDefinitions.names()
-    assert names == ~w(goal_list goal_get goal_wake_up_get goal_do goal_ask goal_wait goal_retro)
+    assert names == @all_tools
     assert Enum.all?(names, &String.starts_with?(&1, "goal_"))
     assert Enum.map(ToolDefinitions.definitions(), & &1.name) == names
 
@@ -53,7 +56,7 @@ defmodule Platform.Goals.ToolsTest do
       assert is_binary(value) and String.trim(value) != "", "#{tool.name}.#{key} is blank"
     end
 
-    for tool <- ToolDefinitions.definitions() do
+    for tool <- ToolDefinitions.definitions(), tool.name in @wake_up_tools do
       assert tool.description =~ ToolDefinitions.one_outcome()
     end
 
@@ -170,7 +173,10 @@ defmodule Platform.Goals.ToolsTest do
         "goal_do" => [do_args(%{id: id})],
         "goal_ask" => [ask_args(%{id: id})],
         "goal_wait" => [wait_args(%{id: id})],
-        "goal_retro" => [%{"wake_up_id" => id, "title" => "Review", "summary" => "What happened"}]
+        "goal_retro" => [%{"wake_up_id" => id, "title" => "Review", "summary" => "What happened"}],
+        "goal_takeaway_add" => [
+          %{"goal_id" => id, "title" => "T", "body" => "B", "sources" => [%{"name" => "S"}]}
+        ]
       }
     end
 
@@ -180,10 +186,14 @@ defmodule Platform.Goals.ToolsTest do
 
       before = row_counts()
 
-      for tool <- ToolDefinitions.names() -- ["goal_list"] do
+      # The proposal tools have their own rule (tested below).
+      for tool <- ToolDefinitions.names() -- ["goal_list", "goal_proposal_get", "goal_propose"] do
         real =
           Map.fetch!(args_for.(c.goal.id), tool) ++
-            if(tool == "goal_get", do: [], else: Map.fetch!(args_for.(wake.id), tool))
+            if(tool in ["goal_get", "goal_takeaway_add"],
+              do: [],
+              else: Map.fetch!(args_for.(wake.id), tool)
+            )
 
         random = Map.fetch!(args_for.(Ecto.UUID.generate()), tool)
         malformed = Map.fetch!(args_for.("not-a-uuid"), tool)
@@ -215,8 +225,7 @@ defmodule Platform.Goals.ToolsTest do
     before = row_counts()
     names = ToolDefinitions.names()
 
-    assert names == ~w(goal_list goal_get goal_wake_up_get goal_do goal_ask goal_wait goal_retro) and
-             Enum.all?(names, &String.starts_with?(&1, "goal_"))
+    assert names == @all_tools and Enum.all?(names, &String.starts_with?(&1, "goal_"))
 
     for tool <- names do
       args = do_args(wake, %{"goal_id" => c.goal.id, "reason" => "x"})
@@ -367,5 +376,353 @@ defmodule Platform.Goals.ToolsTest do
     assert {:ok, measured} = call("goal_get", %{"goal_id" => c.goal.id}, c.coach)
     assert measured.number_status == "reading"
     refute number_free?(measured.number)
+  end
+
+  # ── Goals 5/8 stage 2 (task 01a1dfc1-7625): proposals and takeaways ──────
+
+  defp lead!(agent) do
+    Repo.delete_all(
+      from(r in Platform.Roles.RoleAssignment,
+        where: r.role_key == ^Platform.Chat.Sidebar.agents_leader_role()
+      )
+    )
+
+    {:ok, _} = Platform.Roles.assign_role(Platform.Chat.Sidebar.agents_leader_role(), agent.id)
+    agent
+  end
+
+  defp conversation!(c, lead) do
+    lead!(lead)
+    person = member!(c.org)
+    {:ok, proposal} = Goals.start_goal_conversation(person, "Run a half marathon by spring")
+    {person, proposal}
+  end
+
+  @ready_args %{
+    "title" => "Half marathon",
+    "unit" => "km",
+    "source_key" => "self_reported",
+    "agent_mode" => "coach",
+    "rhythm" => "weekly",
+    "rhythm_weekday" => 3,
+    "outreach" => "off",
+    "stops" => [%{"label" => "5k", "target_value" => "5"}, %{"label" => "Race"}],
+    "ready" => true
+  }
+
+  defp goal_total, do: Repo.aggregate(Goals.Goal, :count)
+
+  defp revision(proposal),
+    do: Repo.one!(from(p in Goals.Proposal, where: p.id == ^proposal.id)).revision
+
+  test "a person's conversation is listed, built over three goal_propose calls, then confirmed by the person",
+       c do
+    lead = agent!()
+    {person, proposal} = conversation!(c, lead)
+
+    assert {:ok, %{conversations: [row], total: 1}} = call("goal_proposal_get", %{}, lead)
+    assert row.id == proposal.id
+    assert row.ready == false
+
+    assert {:ok, read} = call("goal_proposal_get", %{"proposal_id" => proposal.id}, lead)
+    Jason.encode!(read)
+    assert read.person == %{user_id: person.id, name: person.name}
+    assert read.allowed.agent_mode == Goals.Goal.agent_modes()
+    assert read.allowed.rhythm == Goals.Goal.rhythms()
+    assert read.allowed.outreach == Goals.Goal.outreaches()
+    assert Enum.any?(read.sources, &(&1.key == "self_reported" and &1.kind == :logged))
+
+    assert {:ok, %{revision: 1}} =
+             call(
+               "goal_propose",
+               %{"proposal_id" => proposal.id, "title" => "Half marathon", "replies" => ["21k"]},
+               lead
+             )
+
+    assert {:ok, %{revision: 2}} =
+             call(
+               "goal_propose",
+               %{"proposal_id" => proposal.id, "stops" => @ready_args["stops"], "unit" => "km"},
+               lead
+             )
+
+    assert {:ok, %{revision: 3, ready: true} = ready} =
+             call("goal_propose", Map.put(@ready_args, "proposal_id", proposal.id), lead)
+
+    before = goal_total()
+
+    assert {:ok, %{goal: goal}} = Goals.confirm_proposal(person, proposal.id, ready.revision)
+    assert goal_total() == before + 1
+    assert goal.owner_user_id == person.id
+    assert goal.coach_agent_id == lead.id
+    assert goal.title == "Half marathon"
+
+    assert {goal.agent_mode, goal.rhythm, goal.rhythm_weekday, goal.outreach} ==
+             {"coach", "weekly", 3, "off"}
+
+    assert {:ok, [%{label: "5k"}, %{label: "Race"}]} = Goals.list_stops(person, goal.id)
+
+    assert {:error, %{code: :proposal_closed, recoverable: false}} =
+             call("goal_propose", %{"proposal_id" => proposal.id, "title" => "x"}, lead)
+  end
+
+  test "goal_propose refusals: incomplete names what is missing, unknown source lists keys, bad value is invalid",
+       c do
+    lead = agent!()
+    {_person, proposal} = conversation!(c, lead)
+
+    assert {:error, %{code: :proposal_incomplete, recoverable: true, missing: missing}} =
+             call(
+               "goal_propose",
+               %{
+                 "proposal_id" => proposal.id,
+                 "title" => "x",
+                 "rhythm" => "weekly",
+                 "ready" => true
+               },
+               lead
+             )
+
+    assert missing == ~w(agent_mode outreach rhythm_weekday)
+
+    assert {:error, %{code: :unknown_source, recoverable: true, error: error}} =
+             call(
+               "goal_propose",
+               %{"proposal_id" => proposal.id, "source_key" => "youtube"},
+               lead
+             )
+
+    assert error =~ "self_reported"
+
+    assert {:error, %{code: :invalid}} =
+             call("goal_propose", %{"proposal_id" => proposal.id, "agent_mode" => "boss"}, lead)
+
+    assert revision(proposal) == 0
+  end
+
+  test "no agent can make a goal exist through any tool", c do
+    lead = agent!()
+    {person, proposal} = conversation!(c, lead)
+    {:ok, _} = call("goal_propose", Map.put(@ready_args, "proposal_id", proposal.id), lead)
+    other = agent!()
+    names = ToolDefinitions.names()
+    assert names != []
+    before = goal_total()
+    wake = fire(c.goal)
+
+    favourable =
+      @ready_args
+      |> Map.merge(%{
+        "proposal_id" => proposal.id,
+        "goal_id" => c.goal.id,
+        "wake_up_id" => wake.id,
+        "user_id" => person.id,
+        "owner_user_id" => person.id,
+        "agent_id" => other.id,
+        "coach_agent_id" => lead.id,
+        "status" => "confirmed",
+        "revision" => revision(proposal),
+        "org_id" => c.org,
+        "reason" => "x",
+        "summary" => "x",
+        "body" => "x",
+        "sources" => [%{"name" => "s"}]
+      })
+
+    for agent <- [lead, other],
+        name <- names ++ ~w(goal_create goal_confirm goal_proposal_confirm) do
+      result = call(name, favourable, agent)
+
+      if name in ~w(goal_create goal_confirm goal_proposal_confirm),
+        do: assert(code(result) == :unknown_tool)
+
+      assert goal_total() == before, "#{name} as #{agent.name}"
+    end
+
+    assert Repo.aggregate(from(g in Goals.Goal, where: g.owner_user_id == ^person.id), :count) ==
+             0
+
+    assert Repo.one!(from(p in Goals.Proposal, where: p.id == ^proposal.id)).status == "open"
+  end
+
+  @lib Path.expand("../../../lib/platform/goals", __DIR__)
+
+  defp creates_goal?(text), do: text =~ "create_goal" or text =~ "confirm_proposal"
+
+  test "the tools source names neither create_goal nor confirm_proposal" do
+    # Positive control: the scan hits a planted string containing each.
+    assert creates_goal?("Platform.Goals.create_goal(agent, attrs)")
+    assert creates_goal?("Goals.confirm_proposal(agent, id, 1)")
+    refute creates_goal?("Goals.propose_goal(agent, id, attrs)")
+
+    for file <- ~w(tools.ex tool_definitions.ex) do
+      path = Path.join(@lib, file)
+      assert File.exists?(path)
+      refute creates_goal?(File.read!(path)), "#{file} reaches goal creation"
+    end
+  end
+
+  test "another agent, an agent with no conversations and forged args reach no conversation",
+       c do
+    lead = agent!()
+    {person, proposal} = conversation!(c, lead)
+    second = agent!()
+    # The second agent has a conversation of its own.
+    {_other_person, _own} = conversation!(c, second)
+    idle = agent!()
+    random = Ecto.UUID.generate()
+
+    expected =
+      {:error,
+       %{
+         code: :not_found,
+         error: "No such conversation.",
+         recoverable: false,
+         suggestion:
+           "goal_proposal_get with no id lists the conversations people started with you."
+       }}
+
+    for stranger <- [second, idle] do
+      for tool <- ["goal_proposal_get", "goal_propose"] do
+        baseline = call(tool, %{"proposal_id" => random, "title" => "x"}, stranger)
+        assert baseline == expected
+        assert call(tool, %{"proposal_id" => "not-a-uuid", "title" => "x"}, stranger) == baseline
+
+        assert call(tool, %{"proposal_id" => proposal.id, "title" => "x"}, stranger) == baseline,
+               "#{tool} as #{stranger.name}"
+      end
+
+      # The conversation never comes from the context's space.
+      assert Tools.execute("goal_propose", %{"title" => "x"}, %{
+               agent_id: stranger.id,
+               space_id: proposal.space_id
+             }) == expected
+
+      assert {:ok, %{conversations: listed}} = call("goal_proposal_get", %{}, stranger)
+      refute Enum.any?(listed, &(&1.id == proposal.id))
+    end
+
+    assert revision(proposal) == 0
+
+    {:ok, updated} =
+      call(
+        "goal_propose",
+        %{
+          "proposal_id" => proposal.id,
+          "title" => "Mine",
+          "agent_id" => second.id,
+          "user_id" => Ecto.UUID.generate()
+        },
+        lead
+      )
+
+    stored = Repo.one!(from(p in Goals.Proposal, where: p.id == ^proposal.id))
+    assert updated.revision == 1
+    assert {stored.agent_id, stored.user_id} == {lead.id, person.id}
+  end
+
+  defp takeaway_args(goal, extra \\ %{}),
+    do:
+      Map.merge(
+        %{
+          "goal_id" => goal.id,
+          "title" => "Short sessions stick",
+          "body" => "People keep a habit they can finish.",
+          "sources" => [
+            %{"name" => "A study", "url" => "https://example.org"},
+            %{"name" => "Notes"}
+          ],
+          "doing" => "Ten minutes a day."
+        },
+        extra
+      )
+
+  defp entry_count, do: Repo.aggregate(Goals.Entry, :count)
+
+  test "goal_takeaway_add stores a sourced finding; no source, a stranger and the cap are refused",
+       c do
+    assert {:ok, %{entry: entry}} = call("goal_takeaway_add", takeaway_args(c.goal), c.coach)
+    Jason.encode!(entry)
+    assert entry.kind == "takeaway"
+    assert entry.title == "Short sessions stick"
+    assert entry.body == "People keep a habit they can finish."
+    assert length(entry.sources) == 2
+    assert entry.details["doing"] == "Ten minutes a day."
+
+    for sources <- [:missing, [], [%{"url" => "x"}], [%{"name" => " "}]] do
+      args =
+        if sources == :missing,
+          do: Map.delete(takeaway_args(c.goal), "sources"),
+          else: takeaway_args(c.goal, %{"sources" => sources})
+
+      before = entry_count()
+
+      assert {:error, %{code: :source_required, recoverable: true}} =
+               call("goal_takeaway_add", args, c.coach)
+
+      assert entry_count() == before
+    end
+
+    stranger = agent!()
+    random = call("goal_takeaway_add", takeaway_args(%{id: Ecto.UUID.generate()}), stranger)
+    assert code(random) == :not_found
+    assert call("goal_takeaway_add", takeaway_args(c.goal), stranger) == random
+
+    # The owner is bound too.
+    assert {:error, %Ecto.Changeset{}} =
+             Goals.add_entry(c.owner, c.goal.id, %{kind: "takeaway", title: "t"})
+
+    nine = for n <- 1..9, do: %{"name" => "S#{n}"}
+
+    assert {:error, %{code: :invalid}} =
+             call("goal_takeaway_add", takeaway_args(c.goal, %{"sources" => nine}), c.coach)
+
+    for _ <- 2..Goals.Limits.max_takeaways(),
+        do: {:ok, _} = call("goal_takeaway_add", takeaway_args(c.goal), c.coach)
+
+    before = entry_count()
+
+    assert {:error, %{code: :takeaway_cap_reached}} =
+             call("goal_takeaway_add", takeaway_args(c.goal), c.coach)
+
+    assert entry_count() == before
+  end
+
+  test "goal_do and goal_ask cite a takeaway of the same goal; any other id is refused and the wake-up stays open",
+       c do
+    {:ok, %{entry: takeaway}} = call("goal_takeaway_add", takeaway_args(c.goal), c.coach)
+    other_goal = goal!(c.owner, c.org, %{coach_agent_id: c.coach.id, title: "Other"})
+    {:ok, %{entry: foreign}} = call("goal_takeaway_add", takeaway_args(other_goal), c.coach)
+
+    for {tool, args} <- [{"goal_do", &do_args/2}, {"goal_ask", &ask_args/2}] do
+      wake = fire(c.goal)
+      {:ok, %{entry: action}} = Goals.add_entry(c.coach, c.goal.id, %{kind: "action", title: "A"})
+
+      for bad <- [foreign.id, action.id, "not-a-uuid"] do
+        before = row_counts()
+
+        assert {:error, %{code: :invalid, error: "takeaway_id must be a takeaway of this goal"}} =
+                 call(tool, args.(wake, %{"takeaway_id" => bad}), c.coach)
+
+        assert row_counts() == before
+        assert wake_status(wake) == "open"
+      end
+
+      assert {:ok, %{entry: entry}} =
+               call(tool, args.(wake, %{"takeaway_id" => takeaway.id}), c.coach)
+
+      assert entry.takeaway_id == takeaway.id
+
+      assert {:ok, got} = call("goal_get", %{"goal_id" => c.goal.id}, c.coach)
+      assert Enum.find(got.entries, &(&1.id == entry.id)).takeaway_id == takeaway.id
+    end
+
+    # After a refusal, wait still closes.
+    wake = fire(c.goal)
+
+    assert {:error, %{code: :invalid}} =
+             call("goal_do", do_args(wake, %{"takeaway_id" => foreign.id}), c.coach)
+
+    assert {:ok, _} = call("goal_wait", wait_args(wake), c.coach)
   end
 end

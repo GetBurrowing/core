@@ -54,6 +54,12 @@ defmodule Platform.Goals.SchemaTest do
     |> Repo.insert()
   end
 
+  # Goals 5/8: a takeaway needs a title and a named source.
+  defp kind_attrs("takeaway"),
+    do: %{kind: "takeaway", title: "A finding", sources: [%{"name" => "A source"}]}
+
+  defp kind_attrs(kind), do: %{kind: kind}
+
   defp entry_changeset(goal, attrs) do
     %Entry{goal_id: goal.id, author_type: "user"}
     |> Entry.changeset(Map.merge(%{kind: "action", occurred_at: DateTime.utc_now()}, attrs))
@@ -264,7 +270,7 @@ defmodule Platform.Goals.SchemaTest do
       goal = goal!()
 
       for kind <- ~w(wake_up action ask wait takeaway retro) do
-        assert {:ok, %Entry{}} = goal |> entry_changeset(%{kind: kind}) |> Repo.insert()
+        assert {:ok, %Entry{}} = goal |> entry_changeset(kind_attrs(kind)) |> Repo.insert()
       end
 
       agent = agent!()
@@ -339,7 +345,7 @@ defmodule Platform.Goals.SchemaTest do
       stop =
         %Stop{goal_id: goal.id} |> Stop.changeset(%{position: 1, label: "s"}) |> Repo.insert!()
 
-      takeaway = goal |> entry_changeset(%{kind: "takeaway"}) |> Repo.insert!()
+      takeaway = goal |> entry_changeset(kind_attrs("takeaway")) |> Repo.insert!()
 
       entry =
         goal

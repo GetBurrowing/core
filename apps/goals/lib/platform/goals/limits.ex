@@ -44,6 +44,8 @@ defmodule Platform.Goals.Limits do
   def max_reply_chars, do: value(:max_reply_chars, 40)
   def max_stops, do: value(:max_stops, 12)
   def max_opening_chars, do: value(:max_opening_chars, 2000)
+  def max_sources, do: value(:max_sources, 8)
+  def max_takeaways, do: value(:max_takeaways, 20)
 
   defp rhythm_value(key, rhythm, numbers) do
     defaults = Map.new(Enum.zip(~w(daily weekdays weekly biweekly), numbers))

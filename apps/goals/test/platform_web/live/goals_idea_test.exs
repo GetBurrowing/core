@@ -44,6 +44,7 @@ defmodule PlatformWeb.GoalsIdeaTest do
       Goals.add_entry(c.coach, c.goal.id, %{
         kind: "takeaway",
         title: "Use viewers' questions",
+        sources: [%{"name" => "Notes"}],
         occurred_at: Clock.now()
       })
 

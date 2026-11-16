@@ -97,7 +97,13 @@ defmodule Platform.Goals.NotebookTest do
     other = goal!(c.owner, c.org)
     {:ok, [stop]} = Goals.put_stops(c.owner, c.goal.id, [%{label: "Finish"}])
     {:ok, [foreign_stop]} = Goals.put_stops(c.owner, other.id, [%{label: "Other"}])
-    {:ok, takeaway} = Goals.add_entry(c.owner, c.goal.id, %{kind: "takeaway"})
+
+    {:ok, takeaway} =
+      Goals.add_entry(c.owner, c.goal.id, %{
+        kind: "takeaway",
+        title: "t",
+        sources: [%{"name" => "s"}]
+      })
 
     {:ok, action} =
       Goals.add_entry(c.owner, c.goal.id, %{kind: "action", takeaway_id: takeaway.id})
@@ -108,7 +114,13 @@ defmodule Platform.Goals.NotebookTest do
              Goals.add_entry(c.owner, c.goal.id, %{kind: "retro", stop_id: stop.id})
 
     assert id == stop.id
-    {:ok, foreign} = Goals.add_entry(c.owner, other.id, %{kind: "takeaway"})
+
+    {:ok, foreign} =
+      Goals.add_entry(c.owner, other.id, %{
+        kind: "takeaway",
+        title: "t",
+        sources: [%{"name" => "s"}]
+      })
 
     for attrs <- [
           %{takeaway_id: foreign.id},

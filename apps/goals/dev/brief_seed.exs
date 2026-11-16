@@ -130,6 +130,7 @@ defmodule Platform.Goals.DevBriefSeed do
           kind: "takeaway",
           title: "Short videos bring in new viewers",
           body: "A short, useful fix gives a new viewer a reason to subscribe.",
+          sources: [%{"name" => "YouTube Creator Academy"}],
           details: %{"doing" => "Try two short fixes each week."}
         })
       )
@@ -169,7 +170,8 @@ defmodule Platform.Goals.DevBriefSeed do
         Goals.add_entry(coach, check_goal.id, %{
           kind: "takeaway",
           title: "A clear weekly plan helps",
-          body: "Make time for one useful fix."
+          body: "Make time for one useful fix.",
+          sources: [%{"name" => "Notes from small channels"}]
         })
       )
 

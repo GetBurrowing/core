@@ -91,6 +91,7 @@ defmodule PlatformWeb.GoalsBriefTest do
       Goals.add_entry(c.coach, c.goal.id, %{
         kind: "takeaway",
         title: "Short videos bring viewers",
+        sources: [%{"name" => "Notes"}],
         occurred_at: Clock.now()
       })
 

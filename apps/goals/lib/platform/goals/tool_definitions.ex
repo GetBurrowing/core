@@ -5,9 +5,14 @@ defmodule Platform.Goals.ToolDefinitions do
   (`Platform.Social.ToolDefinitions` is the model). The behaviour lives in
   `Platform.Goals.Tools`.
 
-  Seven tools, every name starting `goal_`: three read (`goal_list`,
-  `goal_get`, `goal_wake_up_get`) and four close a wake-up (`goal_do`,
-  `goal_ask`, `goal_wait`, `goal_retro`). Every tool is for the goal's coach only.
+  Ten tools, every name starting `goal_`: three read (`goal_list`,
+  `goal_get`, `goal_wake_up_get`), four close a wake-up (`goal_do`,
+  `goal_ask`, `goal_wait`, `goal_retro`), and three added by Goals 5/8 (task
+  01a1dfc1-7625): `goal_takeaway_add` records a research finding, and
+  `goal_proposal_get` / `goal_propose` work a New goal conversation. The
+  goal-scoped tools are for the goal's coach only; the proposal tools are for
+  the agent a person started the conversation with. No tool creates a goal:
+  only the person's own click does.
 
   ## Grantable, not a default grant
 
@@ -15,11 +20,23 @@ defmodule Platform.Goals.ToolDefinitions do
   tool profile: an admin grants it per runtime, and `goals.use` gates it.
   """
 
+  @no_connected_source "No connected number source exists yet: offer a source from sources, normally \"self_reported\", where the person enters the number by hand."
+
+  @proposal_only "Only a conversation a person started with you; any other id, seen or not, answers not_found. You cannot start one or name the person."
+
   @one_outcome "A check-in takes exactly one of goal_do, goal_ask or goal_wait; a retro takes exactly goal_retro; a second close is refused."
 
   @coach_only "Only the goal's coach may use this: any other goal, seen or not, answers not_found."
 
-  @names ~w(goal_list goal_get goal_wake_up_get goal_do goal_ask goal_wait goal_retro)
+  @names ~w(goal_list goal_get goal_wake_up_get goal_do goal_ask goal_wait goal_retro
+             goal_proposal_get goal_propose goal_takeaway_add)
+
+  @takeaway_id %{
+    type: "string",
+    required: false,
+    description:
+      "The takeaway of this goal the suggestion came from (an entry of kind takeaway, from goal_get)."
+  }
 
   @doc "The sentence every description carries."
   @spec one_outcome() :: String.t()
@@ -144,6 +161,7 @@ defmodule Platform.Goals.ToolDefinitions do
               required: false,
               description: "How a person could undo the action."
             },
+            takeaway_id: @takeaway_id,
             task: %{
               type: "object",
               required: false,
@@ -186,7 +204,8 @@ defmodule Platform.Goals.ToolDefinitions do
               required: false,
               description: "People to ask (default: the goal's owner). Each must see the goal.",
               schema: %{type: "array", items: %{type: "string"}}
-            }
+            },
+            takeaway_id: @takeaway_id
           }),
         returns: @closed_result,
         limitations:
@@ -285,6 +304,138 @@ defmodule Platform.Goals.ToolDefinitions do
           @coach_only <>
             " Send at most one change proposal. When the stored retro requires a goal change, goal_change is required and check_in_change is refused. Verdicts and window cannot be supplied. Shape and rule refusals are recoverable; wake_up_closed and not_found are final.",
         when_to_use: "When goal_wake_up_get reports kind retro; this is its only closing tool."
+      },
+      %{
+        name: "goal_takeaway_add",
+        description:
+          "Record a research finding (a takeaway) on a goal you coach. It shows under \"What we've learned\" on the goal page, with its sources.",
+        parameters: %{
+          goal_id: %{type: "string", required: true, description: "A goal you coach."},
+          title: %{type: "string", required: true, description: "The finding, in one line."},
+          body: %{type: "string", required: true, description: "A short read: what was found."},
+          sources: %{
+            type: "array",
+            required: true,
+            description:
+              "Where it comes from: at least one and at most 8 objects, each with a non-blank name and an optional url.",
+            schema: %{type: "array", items: %{type: "object"}}
+          },
+          doing: %{
+            type: "string",
+            required: false,
+            description: "One sentence for \"What we're doing about it\"."
+          }
+        },
+        returns: "%{entry: %{id, kind, title, body, sources, details, occurred_at}}",
+        limitations:
+          @coach_only <>
+            " A finding without a named source is refused with code source_required; a goal holds at most 20 takeaways (takeaway_cap_reached).",
+        when_to_use:
+          "After a person confirms a new goal, and whenever research turns up something worth steering by. Cite it later with takeaway_id on goal_do or goal_ask."
+      },
+      %{
+        name: "goal_proposal_get",
+        description:
+          "Read the New goal conversations people started with you. Without proposal_id: the open ones. With proposal_id: what is settled so far, the person's name, the number sources and the allowed values. " <>
+            @no_connected_source,
+        parameters: %{
+          proposal_id: %{
+            type: "string",
+            required: false,
+            description: "A conversation id (from the start signal or the list)."
+          }
+        },
+        returns:
+          "Without id: %{conversations: [%{id, started_at, ready}], total}. With id: %{id, status, revision, draft, replies, settled, ready, expires_at, person: %{user_id, name}, sources: [%{key, label, kind}], allowed: %{agent_mode, rhythm, outreach, kind}}",
+        limitations: @proposal_only,
+        when_to_use:
+          "When a person starts a New goal conversation with you, and before each goal_propose."
+      },
+      %{
+        name: "goal_propose",
+        description:
+          "Record what you and the person have settled in a New goal conversation. This records a proposal the person sees; it creates nothing. The goal is created only when the person presses Create goal. " <>
+            "Settle each of the four settings (number source, your part, rhythm, nudges) by asking in the conversation and offering your suggested default as the first reply. " <>
+            "Never ask the person for a goal type. " <> @no_connected_source,
+        parameters: %{
+          proposal_id: %{type: "string", required: true, description: "The conversation id."},
+          title: %{type: "string", required: false, description: "The goal, in one line."},
+          why: %{type: "string", required: false, description: "Why it matters to them."},
+          unit: %{type: "string", required: false, description: "What the number counts."},
+          target_value: %{
+            type: "string",
+            required: false,
+            description: "The final target, as a decimal string."
+          },
+          stops: %{
+            type: "array",
+            required: false,
+            description:
+              "The journey, in order, at most 12: objects with label, target_value, due_on (YYYY-MM-DD), caption, theme, criteria. Replaces the whole list.",
+            schema: %{type: "array", items: %{type: "object"}}
+          },
+          source_key: %{
+            type: "string",
+            required: false,
+            description:
+              "A key from goal_proposal_get's sources, or null for no number yet. Normally self_reported."
+          },
+          source_settings: %{
+            type: "object",
+            required: false,
+            description: "Settings for the source, if it takes any."
+          },
+          agent_mode: %{
+            type: "string",
+            required: false,
+            description: "Your part: do, advise or coach.",
+            enum: Platform.Goals.Goal.agent_modes()
+          },
+          rhythm: %{
+            type: "string",
+            required: false,
+            description: "How often you check in.",
+            enum: Platform.Goals.Goal.rhythms()
+          },
+          rhythm_weekday: %{
+            type: "integer",
+            required: false,
+            description: "1 (Monday) to 7, for a weekly or biweekly rhythm."
+          },
+          outreach: %{
+            type: "string",
+            required: false,
+            description: "How much you nudge.",
+            enum: Platform.Goals.Goal.outreaches()
+          },
+          kind: %{
+            type: "string",
+            required: false,
+            description:
+              "Your suggestion only (default personal): a new goal is always created personal; shared only changes a line on the person's screen.",
+            enum: Platform.Goals.Goal.kinds()
+          },
+          replies: %{
+            type: "array",
+            required: false,
+            description:
+              "Up to four short answers (at most 40 characters each) the person can tap under your latest message. Replaces the list.",
+            schema: %{type: "array", items: %{type: "string"}}
+          },
+          ready: %{
+            type: "boolean",
+            required: false,
+            description:
+              "True when the summary is ready for the person: needs title, agent_mode, rhythm, outreach, and rhythm_weekday for weekly or biweekly."
+          }
+        },
+        returns:
+          "%{id, status, revision, draft, replies, settled, ready, expires_at}: revision rises by one on every call.",
+        limitations:
+          @proposal_only <>
+            " Absent keys are left alone. Refusals: proposal_closed (final), unknown_source, proposal_incomplete (names what is missing), invalid (with messages); nothing is written.",
+        when_to_use:
+          "Each time the conversation settles something, and with ready true when the summary is complete."
       }
     ]
   end

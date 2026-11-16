@@ -304,7 +304,8 @@ defmodule Platform.Goals do
     with :ok <- check_enabled() do
       in_transaction(fn ->
         with {:ok, goal} <- fetch_visible(actor, goal_id, true),
-             :ok <- check_can_edit(actor, goal) do
+             :ok <- check_can_edit(actor, goal),
+             :ok <- Platform.Goals.Takeaways.check_cap(actor, goal, attrs) do
           actor
           |> authored_entry(goal)
           |> Entry.changeset(attrs)
@@ -979,6 +980,7 @@ defmodule Platform.Goals do
       end)
       |> Enum.reject(fn {_k, v} -> is_nil(v) end)
       |> Map.new()
+      |> Platform.Goals.Takeaways.cite(outcome, field_attr(attrs, :takeaway_id))
 
     details = %{"wake_up_id" => wake.id}
 

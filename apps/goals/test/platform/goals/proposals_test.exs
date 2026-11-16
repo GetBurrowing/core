@@ -125,7 +125,9 @@ defmodule Platform.Goals.ProposalsTest do
           max_quick_replies: 4,
           max_reply_chars: 40,
           max_stops: 12,
-          max_opening_chars: 2000
+          max_opening_chars: 2000,
+          max_sources: 8,
+          max_takeaways: 20
         ],
         do: assert(apply(Limits, key, []) == expected)
 

@@ -43,7 +43,11 @@ defmodule PlatformWeb.GoalsRetroTest do
       ])
 
     {:ok, takeaway} =
-      Goals.add_entry(c.coach, c.goal.id, %{kind: "takeaway", title: "Make it small"})
+      Goals.add_entry(c.coach, c.goal.id, %{
+        kind: "takeaway",
+        title: "Make it small",
+        sources: [%{"name" => "Notes"}]
+      })
 
     {:ok, action} = Goals.add_entry(c.coach, c.goal.id, %{kind: "action", title: "Long sessions"})
 

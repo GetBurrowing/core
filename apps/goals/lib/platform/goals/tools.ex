@@ -11,6 +11,12 @@ defmodule Platform.Goals.Tools do
   the agent cannot see, and a goal the agent sees but does not coach all
   answer the same `not_found` envelope (`coached_goal/3`).
 
+  The proposal tools (Goals 5/8, task 01a1dfc1-7625) have the matching rule
+  in `own_proposal/2`: an agent reads and writes only a New goal conversation
+  a person started with it. A missing id, a malformed id and another agent's
+  conversation answer the same `not_found` envelope. The conversation is
+  never chosen from `context.space_id`. No tool here creates a goal.
+
   Checks run in one order for every tool: the switch, the agent (from the
   context, never from arguments), the tool name, the coach rule, then the
   context call. Refusals are envelopes `%{error, code, recoverable,
@@ -21,13 +27,17 @@ defmodule Platform.Goals.Tools do
 
   alias Platform.Agents.Agent
   alias Platform.Goals
-  alias Platform.Goals.ToolDefinitions
+  alias Platform.Goals.{Goal, ToolDefinitions}
   alias Platform.Repo
 
   @outcomes %{"goal_do" => "do", "goal_ask" => "ask", "goal_wait" => "wait"}
 
-  @do_keys ~w(title body prediction predicted_by predicted_change sources undo_note task)
-  @ask_keys ~w(kind title body payload prediction predicted_by predicted_change addressed_user_ids)
+  @do_keys ~w(title body prediction predicted_by predicted_change sources undo_note task
+              takeaway_id)
+  @ask_keys ~w(kind title body payload prediction predicted_by predicted_change addressed_user_ids
+               takeaway_id)
+  @propose_keys ~w(title why unit target_value stops source_key source_settings agent_mode rhythm
+                   rhythm_weekday outreach kind replies ready)
   @wait_keys ~w(reason until prediction predicted_by predicted_change)
   @retro_keys ~w(title summary worked didnt_work dropped learned next_push stop_id check_in_change goal_change)
 
@@ -96,7 +106,82 @@ defmodule Platform.Goals.Tools do
     end
   end
 
+  # ── The proposal rule ────────────────────────────────────────────────
+
+  # The ONE place the proposal rule lives: the row must be a conversation a
+  # person started with THIS agent. Missing, malformed and another agent's
+  # conversation all return the identical `not_found` envelope.
+  defp own_proposal(agent, proposal_id) do
+    agent_id = agent.id
+
+    case Goals.get_proposal(agent, proposal_id) do
+      {:ok, %{agent_id: ^agent_id} = proposal} -> {:ok, proposal}
+      {:error, :goals_disabled} -> {:error, disabled()}
+      _ -> {:error, proposal_not_found()}
+    end
+  end
+
   # ── Tools ────────────────────────────────────────────────────────────
+
+  defp run("goal_proposal_get", %{"proposal_id" => id}, agent) when not is_nil(id) do
+    with {:ok, proposal} <- own_proposal(agent, id),
+         {:ok, sources} <- Goals.list_sources(agent) do
+      {:ok, proposal_json(proposal, sources)}
+    else
+      {:error, %{code: _} = envelope} -> {:error, envelope}
+      {:error, reason} -> {:error, context_error(reason)}
+    end
+  end
+
+  defp run("goal_proposal_get", _args, agent) do
+    case Goals.list_proposals(agent) do
+      {:ok, proposals} ->
+        rows =
+          for p <- proposals,
+              do: %{id: p.id, started_at: time(p.inserted_at), ready: p.ready}
+
+        {:ok, %{conversations: rows, total: length(rows)}}
+
+      {:error, reason} ->
+        {:error, context_error(reason)}
+    end
+  end
+
+  defp run("goal_propose", args, agent) do
+    with {:ok, proposal} <- own_proposal(agent, args["proposal_id"]) do
+      attrs = Map.take(args, @propose_keys)
+
+      case Goals.propose_goal(agent, proposal.id, attrs) do
+        {:ok, updated} -> {:ok, proposal_json(updated)}
+        {:error, reason} -> {:error, propose_error(reason, agent, proposal, attrs)}
+      end
+    end
+  end
+
+  defp run("goal_takeaway_add", args, agent) do
+    with {:ok, goal} <- coached_goal(agent, :goal, args["goal_id"]) do
+      attrs = %{
+        kind: "takeaway",
+        title: args["title"],
+        body: args["body"],
+        sources: args["sources"],
+        details: if(is_binary(args["doing"]), do: %{"doing" => args["doing"]}, else: %{})
+      }
+
+      case Goals.add_entry(agent, goal.id, attrs) do
+        {:ok, entry} ->
+          {:ok, %{entry: entry_json(entry)}}
+
+        {:error, %Ecto.Changeset{} = changeset} ->
+          if source_missing?(changeset),
+            do: {:error, source_required()},
+            else: {:error, context_error(changeset)}
+
+        {:error, reason} ->
+          {:error, context_error(reason)}
+      end
+    end
+  end
 
   defp run("goal_list", _args, agent) do
     case Goals.list_goals(agent) do
@@ -323,7 +408,10 @@ defmodule Platform.Goals.Tools do
     reason_required: {"goal_wait needs a reason.", true, "Send reason: why nothing is due now."},
     task_already_linked:
       {"That task is already tagged to a goal.", true, "Create a new task instead."},
-    unknown_outcome: {"Unknown outcome.", false, "Use goal_do, goal_ask or goal_wait."}
+    unknown_outcome: {"Unknown outcome.", false, "Use goal_do, goal_ask or goal_wait."},
+    takeaway_cap_reached:
+      {"This goal already holds as many takeaways as allowed.", false,
+       "Cite an existing takeaway with takeaway_id instead."}
   }
 
   defp context_error(:goals_disabled), do: disabled()
@@ -338,13 +426,79 @@ defmodule Platform.Goals.Tools do
         end)
       end)
 
-    err(
-      :invalid,
-      "Invalid arguments: " <> inspect(messages),
-      true,
-      "Fix the named fields and call again; nothing was written."
-    )
+    error =
+      if Keyword.has_key?(changeset.errors, :takeaway_id),
+        do: "takeaway_id must be a takeaway of this goal",
+        else: "Invalid arguments: " <> inspect(messages)
+
+    err(:invalid, error, true, "Fix the named fields and call again; nothing was written.")
     |> Map.put(:messages, messages)
+  end
+
+  defp propose_error(:proposal_closed, _agent, _proposal, _attrs) do
+    err(
+      :proposal_closed,
+      "This conversation is closed; the person confirmed, cancelled or let it lapse.",
+      false,
+      "goal_proposal_get with no id lists the conversations people started with you."
+    )
+  end
+
+  defp propose_error(:unknown_source, agent, _proposal, _attrs) do
+    keys =
+      case Goals.list_sources(agent) do
+        {:ok, sources} -> Enum.map(sources, & &1.key)
+        _ -> []
+      end
+
+    err(
+      :unknown_source,
+      "Unknown number source. Known sources: #{Enum.join(keys, ", ")}.",
+      true,
+      "Send one of #{Enum.join(keys, ", ")}, or null for no number yet."
+    )
+  end
+
+  defp propose_error(:proposal_incomplete, _agent, proposal, attrs) do
+    missing = Goals.Proposals.missing_for_ready(Map.merge(proposal.draft, attrs))
+
+    err(
+      :proposal_incomplete,
+      "Not ready: missing #{Enum.join(missing, ", ")}.",
+      true,
+      "Settle #{Enum.join(missing, ", ")} in the conversation, then send ready true again."
+    )
+    |> Map.put(:missing, missing)
+  end
+
+  defp propose_error(reason, _agent, _proposal, _attrs) when reason in [:not_found, :forbidden],
+    do: proposal_not_found()
+
+  defp propose_error(reason, _agent, _proposal, _attrs), do: context_error(reason)
+
+  defp proposal_not_found do
+    err(
+      :not_found,
+      "No such conversation.",
+      false,
+      "goal_proposal_get with no id lists the conversations people started with you."
+    )
+  end
+
+  defp source_missing?(changeset) do
+    Enum.any?(changeset.errors, fn
+      {:sources, {_, opts}} -> opts[:validation] in [:required, :named_source]
+      _ -> false
+    end)
+  end
+
+  defp source_required do
+    err(
+      :source_required,
+      "A takeaway needs at least one source with a name.",
+      true,
+      "Send sources: [%{name, url?}] naming where the finding comes from."
+    )
   end
 
   defp context_error(reason) when is_map_key(@refusals, reason) do
@@ -469,9 +623,41 @@ defmodule Platform.Goals.Tools do
       predicted_by: date(entry.predicted_by),
       sources: entry.sources,
       details: entry.details,
-      reading_id: entry.reading_id
+      reading_id: entry.reading_id,
+      takeaway_id: entry.takeaway_id
     }
   end
+
+  defp proposal_json(proposal, sources \\ nil) do
+    base = %{
+      id: proposal.id,
+      status: proposal.status,
+      revision: proposal.revision,
+      draft: proposal.draft,
+      replies: proposal.replies,
+      settled: proposal.settled,
+      ready: proposal.ready,
+      expires_at: time(proposal.expires_at)
+    }
+
+    if sources do
+      Map.merge(base, %{
+        person: person_json(proposal),
+        sources: Enum.map(sources, &%{key: &1.key, label: &1.label, kind: &1.kind}),
+        allowed: %{
+          agent_mode: Goal.agent_modes(),
+          rhythm: Goal.rhythms(),
+          outreach: Goal.outreaches(),
+          kind: Goal.kinds()
+        }
+      })
+    else
+      base
+    end
+  end
+
+  defp person_json(%{user: %{id: id, name: name}}), do: %{user_id: id, name: name}
+  defp person_json(%{user_id: id}), do: %{user_id: id, name: nil}
 
   defp reading_json(nil), do: nil
 

@@ -78,7 +78,7 @@ defmodule Platform.Goals.Proposals do
   @doc "A proposal the actor sees (any status)."
   def get_proposal(actor, proposal_id) do
     with {:ok, id} <- cast_id(proposal_id) do
-      case Repo.one(from(p in visible_proposals(actor), where: p.id == ^id)) do
+      case Repo.one(from(p in visible_proposals(actor), where: p.id == ^id, preload: [:user])) do
         %Proposal{} = proposal -> {:ok, proposal}
         nil -> {:error, :not_found}
       end
@@ -559,13 +559,21 @@ defmodule Platform.Goals.Proposals do
   defp check_complete(false, _draft), do: :ok
 
   defp check_complete(true, draft) do
+    if missing_for_ready(draft) == [], do: :ok, else: {:error, :proposal_incomplete}
+  end
+
+  @doc """
+  The draft keys a ready proposal still lacks: title, agent_mode, rhythm,
+  outreach, and rhythm_weekday for a weekly or biweekly rhythm. The one copy
+  of the rule; `goal_propose` names them in its refusal.
+  """
+  @spec missing_for_ready(map()) :: [String.t()]
+  def missing_for_ready(draft) when is_map(draft) do
     needed =
       ~w(title agent_mode rhythm outreach) ++
         if(draft["rhythm"] in ~w(weekly biweekly), do: ["rhythm_weekday"], else: [])
 
-    if Enum.all?(needed, &present?(draft[&1])),
-      do: :ok,
-      else: {:error, :proposal_incomplete}
+    Enum.reject(needed, &present?(draft[&1]))
   end
 
   defp present?(value) when is_binary(value), do: String.trim(value) != ""
