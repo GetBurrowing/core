@@ -1003,7 +1003,7 @@ defmodule PlatformWeb.CalendarLive do
         # The viewer's zone rides along for the guest rows' expiry line
         # (task 01a19ea6 stage 2), the same zone `when` above is printed in.
         base
-        |> Map.merge(meeting_info(entry.meeting))
+        |> Map.merge(meeting_info(entry.meeting, user))
         |> Map.merge(meeting_cancel_info(entry.meeting, user))
         |> Map.put(:time_zone, zone)
         |> Map.put(:call, call_info(entry.meeting, user))
@@ -1034,16 +1034,12 @@ defmodule PlatformWeb.CalendarLive do
   # same way the call record's own details read them (`meeting_info/1`:
   # live `meeting_invites` rows, revoked excluded). The meeting's producer
   # agent row is not an invitee.
-  #
-  # v7 names the host ("hosted by <name>"), even to the owner. A scheduled
-  # call has no host participant until someone joins, so the organizer who
-  # created it stands in.
   defp call_people(meeting, user) do
-    info = meeting_info(meeting)
+    info = meeting_info(meeting, user)
 
     %{
       space: info.space,
-      host: info.host || organizer_name(meeting, user),
+      host: info.host,
       invitees: info.invite_entries |> Enum.reject(& &1.agent) |> Enum.map(& &1.name)
     }
   end
@@ -1137,7 +1133,13 @@ defmodule PlatformWeb.CalendarLive do
   # context keeps for it. Invitees come from `meeting_invites` (revoked rows
   # excluded), not chat participation: an invited member who has not joined
   # the space, and every guest, are invited all the same.
-  defp meeting_info(meeting) do
+  #
+  # v7 names the host ("hosted by <name>") to the owner and to an invitee
+  # alike. A scheduled call has no host participant until someone joins,
+  # so the organizer who created it stands in (`organizer_name/2`). Both
+  # detail paths, the owner's native event (`call_people/2`) and the call
+  # record (kind "meeting"), read the host from here.
+  defp meeting_info(meeting, user) do
     space = meeting.chat_space_id && Platform.Chat.get_space(meeting.chat_space_id)
 
     people =
@@ -1154,7 +1156,7 @@ defmodule PlatformWeb.CalendarLive do
       slug: meeting.slug,
       meeting_id: meeting.id,
       space: space && "#" <> space.name,
-      host: host && host.display_name,
+      host: (host && host.display_name) || organizer_name(meeting, user),
       # MeetingLive's own rows. No ring states: CalendarLive does not
       # subscribe to ring reports.
       invite_entries: PlatformWeb.MeetingLive.detail_invite_rows(meeting)

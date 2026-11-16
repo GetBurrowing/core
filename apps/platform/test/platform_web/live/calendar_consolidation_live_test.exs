@@ -495,7 +495,7 @@ defmodule PlatformWeb.CalendarConsolidationLiveTest do
   end
 
   describe "Past events" do
-    test "is reachable from the list pane and the phone section tabs", ctx do
+    test "is reachable from the list pane and the phone header", ctx do
       view = calendar(ctx.owner)
 
       assert has_element?(
@@ -506,7 +506,7 @@ defmodule PlatformWeb.CalendarConsolidationLiveTest do
 
       assert has_element?(
                view,
-               "[data-role=calendar-section-tabs] a[data-past-events]",
+               "[data-role=calendar-phone-header] a[data-past-events]",
                "Past events"
              )
 
@@ -746,6 +746,66 @@ defmodule PlatformWeb.CalendarConsolidationLiveTest do
       assert row == "1 invited / #{ctx.invitee.name}"
       refute has_element?(view, "#{@details} [data-role=meeting-invite-list]")
       refute has_element?(view, "#{@details} [data-role=meeting-invite-add-people]")
+    end
+
+    # Fourth review pass: a scheduled call has no host participant yet, so
+    # the invitee's call row names the organizer, exactly as the owner's
+    # own call event does.
+    test "an invitee's call row names the host, as the owner's does", ctx do
+      %{meeting: meeting} = linked!(ctx)
+
+      for viewer <- [ctx.invitee, ctx.owner] do
+        view = calendar(viewer, "?meeting=#{meeting.id}")
+
+        row =
+          view
+          |> element("#{@details} [data-role=calendar-detail-call]")
+          |> render()
+          |> Floki.parse_fragment!()
+          |> Floki.text(sep: " / ")
+          |> String.trim()
+
+        assert row =~ ~r/^Burrow meeting in #.+ \/ hosted by #{Regex.escape(ctx.owner.name)}$/
+      end
+    end
+
+    # v7 at 375: section tabs are exactly Calendar | Booking links |
+    # Settings, and Past events sits in the second header row after the
+    # range ("Today | <month> | Past events").
+    test "at phone width Past events is in the header row, not a section tab", ctx do
+      view = calendar(ctx.owner)
+
+      tabs =
+        view
+        |> element("[data-role=calendar-section-tabs]")
+        |> render()
+        |> Floki.parse_fragment!()
+        |> Floki.find("a")
+        |> Enum.map(&(&1 |> Floki.text() |> String.trim()))
+
+      assert tabs == ["Calendar", "Booking links", "Settings"]
+      refute has_element?(view, "[data-role=calendar-section-tabs] [data-past-events]")
+
+      row =
+        view
+        |> element("[data-role=calendar-phone-header] [data-role=calendar-phone-nav]")
+        |> render()
+        |> Floki.parse_fragment!()
+
+      labels =
+        row
+        |> Floki.find("button, a, span[data-role=calendar-phone-range]")
+        |> Enum.map(&(&1 |> Floki.text() |> String.trim()))
+        |> Enum.reject(&(&1 == ""))
+
+      assert ["Today", _range, "Past events"] = labels
+      assert [_] = Floki.find(row, "a[data-past-events]")
+
+      view
+      |> element("[data-role=calendar-phone-nav] a[data-past-events]")
+      |> render_click()
+
+      assert has_element?(view, "[data-role=past-events]")
     end
 
     test "the owner's call details keep the same row (control)", ctx do

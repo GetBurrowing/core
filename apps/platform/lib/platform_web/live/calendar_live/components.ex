@@ -526,11 +526,24 @@ defmodule PlatformWeb.CalendarLive.Components do
           <.icon name="hero-plus" class="size-[18px]" />
         </button>
       </div>
-      <div class="flex min-h-11 items-center gap-1.5 border-b border-edge px-3 py-1.5">
+      <div
+        class="flex min-h-11 items-center gap-1.5 border-b border-edge px-3 py-1.5"
+        data-role="calendar-phone-nav"
+      >
         <.date_nav step="day" />
-        <span class="whitespace-nowrap text-[13px] font-semibold">
+        <span class="whitespace-nowrap text-[13px] font-semibold" data-role="calendar-phone-range">
           {Cal.phone_range_label(@view, @cursor, @sel_day)}
         </span>
+        <span class="flex-1"></span>
+        <%!-- v7 phone header row 2: "Today | <month> | Past events" (stage 5
+             review, fourth pass); the section tabs no longer carry it. --%>
+        <.link
+          patch={~p"/calendar?#{%{view: @view, past: 1}}"}
+          class={ghost_btn()}
+          data-past-events="open"
+        >
+          Past events
+        </.link>
       </div>
     </div>
     """
@@ -606,13 +619,11 @@ defmodule PlatformWeb.CalendarLive.Components do
           {key, label, href} <- [
             {:calendar, "Calendar", ~p"/calendar"},
             {:booking, "Booking links", ~p"/calendar/booking"},
-            {:settings, "Settings", ~p"/calendar/settings"},
-            {:past, "Past events", ~p"/calendar?#{%{past: 1}}"}
+            {:settings, "Settings", ~p"/calendar/settings"}
           ]
         }
         patch={key != :booking && @section != :booking && href}
         navigate={(key == :booking or @section == :booking) && href}
-        data-past-events={key == :past && "open"}
         aria-current={@section == key && "page"}
         class={[
           "inline-flex h-8 shrink-0 items-center whitespace-nowrap rounded-full border px-3 text-xs",
@@ -1327,6 +1338,7 @@ defmodule PlatformWeb.CalendarLive.Components do
       icon="hero-video-camera"
       text={"Burrow meeting in #{@detail.space || "Meetings"}"}
       sub={@detail.host && "hosted by #{@detail.host}"}
+      data-role="calendar-detail-call"
     />
     <%!-- The same live invite surface as /meetings' detail panel (task
        01a19e7b). There is ONE aside for the lg column and the <lg sheet,
