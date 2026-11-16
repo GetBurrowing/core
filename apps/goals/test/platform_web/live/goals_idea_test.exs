@@ -2,7 +2,6 @@ defmodule PlatformWeb.GoalsIdeaTest do
   use PlatformWeb.ConnCase, async: false
   import Phoenix.LiveViewTest
   import Platform.GoalsFixtures
-  import Platform.Goals.OutcomeFixtures
   import Platform.Goals.BriefFixtures
   alias Platform.Goals
   alias Platform.Goals.Clock
