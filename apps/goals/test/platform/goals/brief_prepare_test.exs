@@ -88,7 +88,8 @@ defmodule Platform.Goals.BriefPrepareTest do
 
     Application.put_env(:goals, :limits, %{
       max_open_asks: %{"pushy" => 250},
-      ask_expiry_days: 1000
+      ask_expiry_days: 1000,
+      retro_every: %{"daily" => 1000}
     })
 
     on_exit(fn ->
@@ -98,6 +99,7 @@ defmodule Platform.Goals.BriefPrepareTest do
       end
     end)
 
+    {:ok, _} = Goals.update_goal(c.owner, c.goal.id, %{retro_every: nil})
     for i <- 1..201, do: queued(c, %{title: "Ask #{i}"})
     assert {:ok, default} = Goals.list_my_asks(c.owner)
     assert length(default) == 50

@@ -7,6 +7,33 @@ defmodule Platform.Goals.RetroFireTest do
   setup do: setup_outcome()
 
   test "weekly slots replace the fourth check-in with one retro", c do
+    runtime =
+      Repo.insert!(%Platform.Agents.AgentRuntime{
+        owner_user_id: c.owner.id,
+        runtime_id: "retro-dispatch-#{System.unique_integer([:positive])}",
+        display_name: "Retro",
+        status: "active"
+      })
+
+    c.coach
+    |> Ecto.Changeset.change(runtime_type: "external", runtime_id: runtime.id)
+    |> Repo.update!()
+
+    parent = self()
+    previous = Application.fetch_env(:goals, :wake_up_dispatcher)
+
+    Application.put_env(:goals, :wake_up_dispatcher, fn signal ->
+      send(parent, {:retro_dispatch, signal})
+      :ok
+    end)
+
+    on_exit(fn ->
+      case previous do
+        {:ok, value} -> Application.put_env(:goals, :wake_up_dispatcher, value)
+        :error -> Application.delete_env(:goals, :wake_up_dispatcher)
+      end
+    end)
+
     {:ok, goal} = Goals.update_goal(c.owner, c.goal.id, %{rhythm: "weekly", rhythm_weekday: 4})
 
     kinds =
@@ -22,6 +49,8 @@ defmodule Platform.Goals.RetroFireTest do
           else:
             assert({:ok, _} = Goals.close_wake_up(c.coach, wake.id, "wait", %{reason: "Wait"}))
 
+        assert_received {:retro_dispatch, _}
+        refute_received {:retro_dispatch, _}
         wake.kind
       end
 

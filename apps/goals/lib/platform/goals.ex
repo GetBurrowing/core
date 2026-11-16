@@ -553,6 +553,7 @@ defmodule Platform.Goals do
              {:ok, entry} <-
                add_entry(actor, goal.id, %{
                  kind: "ask",
+                 occurred_at: Platform.Goals.Clock.now(),
                  title:
                    if(decision == "switch", do: "Switched: ", else: "Kept as is: ") <>
                      String.slice(change["summary"], 0, 190),

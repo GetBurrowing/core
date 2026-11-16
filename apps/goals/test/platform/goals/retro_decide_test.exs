@@ -52,6 +52,8 @@ defmodule Platform.Goals.RetroDecideTest do
 
     {_, after_clock, _} = settings(c)
     refute before.next_wake_at == after_clock.next_wake_at
+    wake = fire(c.goal)
+    assert Enum.any?(wake.briefing["since_last"]["entries"], &(&1["title"] =~ "Switched:"))
 
     assert {:error, :already_decided} =
              Goals.decide_retro_change(c.owner, c.goal.id, entry.id, "keep")

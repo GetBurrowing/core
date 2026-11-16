@@ -217,6 +217,9 @@ defmodule Platform.Goals.GoalsTest do
       files = Path.wildcard(Path.join(@lib, "**/*.{ex,exs}"))
       assert Enum.any?(files, &String.ends_with?(&1, "platform/goals.ex")), "no lib files scanned"
 
+      assert Enum.any?(files, &String.ends_with?(&1, "platform/goals/retro_changes.ex")),
+             "retro reads must be scanned"
+
       found =
         for file <- files, hit <- hits(File.read!(file)), do: {Path.relative_to(file, @lib), hit}
 

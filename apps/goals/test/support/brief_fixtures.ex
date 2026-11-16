@@ -5,6 +5,9 @@ defmodule Platform.Goals.BriefFixtures do
 
   def setup_brief do
     c = setup_outcome()
+    # Brief/practice fixtures exercise check-in delivery separately from retros.
+    {:ok, goal} = Goals.update_goal(c.owner, c.goal.id, %{retro_every: 60})
+    c = %{c | goal: goal}
     put_now(DateTime.add(c.goal.inserted_at, 86_400, :second))
     c
   end

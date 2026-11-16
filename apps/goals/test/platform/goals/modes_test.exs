@@ -3,7 +3,12 @@ defmodule Platform.Goals.ModesTest do
   import Platform.Goals.OutcomeFixtures
   alias Platform.Goals
   alias Platform.Goals.WakeUp
-  setup do: setup_outcome()
+
+  setup do
+    c = setup_outcome()
+    {:ok, goal} = Goals.update_goal(c.owner, c.goal.id, %{retro_every: 60})
+    %{c | goal: goal}
+  end
 
   test "mode and outreach refusal matrix is atomic and leaves wait available", c do
     for {mode, outreach, outcome, with_task, refusal} <- [
