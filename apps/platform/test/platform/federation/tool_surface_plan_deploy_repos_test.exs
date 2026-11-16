@@ -169,7 +169,9 @@ defmodule Platform.Federation.ToolSurfacePlanDeployReposTest do
       created = for {:create_ref, repo, _ref} <- RecordingRunner.calls(), do: repo
       assert created == ["GetBurrowing/burrow-cloud"]
 
-      refute Enum.any?(RecordingRunner.calls(), fn call -> elem(call, 1) == "GetBurrowing/core" end)
+      refute Enum.any?(RecordingRunner.calls(), fn call ->
+               elem(call, 1) == "GetBurrowing/core"
+             end)
     end
   end
 
@@ -286,7 +288,9 @@ defmodule Platform.Federation.ToolSurfacePlanDeployReposTest do
 
       assert {:ok, _} =
                plan_create(task, [stage("Ship", "Work in GetBurrowing/burrow-cloud")], %{
-                 "deploy_repos" => [%{"repo_url" => "https://github.com/getburrowing/burrow-cloud"}]
+                 "deploy_repos" => [
+                   %{"repo_url" => "https://github.com/getburrowing/burrow-cloud"}
+                 ]
                })
 
       assert reload(task).deploy_strategy == human

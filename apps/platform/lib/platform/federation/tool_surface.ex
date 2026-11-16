@@ -7708,7 +7708,11 @@ defmodule Platform.Federation.ToolSurface do
 
                     :ok ->
                       # Task 01a1e4fa stage 1 — same guard as plan_create.
-                      case Platform.Tasks.PlanDeployRepos.prepare(plan.task_id, args, stages_input) do
+                      case Platform.Tasks.PlanDeployRepos.prepare(
+                             plan.task_id,
+                             args,
+                             stages_input
+                           ) do
                         {:error, envelope} ->
                           {:error, envelope}
 
@@ -10531,8 +10535,11 @@ defmodule Platform.Federation.ToolSurface do
                 # `PlanEngine.detect_undeclared_cross_repo/2`, same
                 # pre-transaction position. Body: Platform.Tasks.PlanDeployRepos.
                 case Platform.Tasks.PlanDeployRepos.prepare(task_id, args, raw_stages_input) do
-                  {:error, envelope} -> {:error, envelope}
-                  {:ok, deploy_strategy} -> do_plan_create(task_id, raw_stages_input, deploy_strategy)
+                  {:error, envelope} ->
+                    {:error, envelope}
+
+                  {:ok, deploy_strategy} ->
+                    do_plan_create(task_id, raw_stages_input, deploy_strategy)
                 end
             end
         end
