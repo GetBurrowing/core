@@ -5,6 +5,8 @@ defmodule Platform.Goals.NumberFormatting do
 
   def format(n) when is_binary(n), do: format(Decimal.new(n))
 
+  def format(n) when is_float(n), do: format(Decimal.from_float(n))
+
   def format(n) when is_integer(n), do: format(Decimal.new(n))
 
   def format(%Decimal{} = n) do

@@ -71,12 +71,12 @@ defmodule Platform.Goals.RetroDecideTest do
           "goal_change" => %{
             "kind" => "target",
             "summary" => "Make it reachable",
-            "set" => %{"target_value" => "1000.000"}
+            "set" => %{"target_value" => 1000.5}
           }
         }
       })
 
-    expected = ["Target: 1,234,567.5 -> 1,000 words"]
+    expected = ["Target: 1,234,567.5 -> 1,000.5 words"]
     assert {:ok, %{change: %{lines: ^expected}}} = Goals.get_retro(c.owner, c.goal.id, retro.id)
 
     assert {:ok, %{entry: decision}} =
