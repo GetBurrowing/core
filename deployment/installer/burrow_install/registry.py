@@ -952,6 +952,32 @@ def system_mail_env(m):
     return env
 
 
+def meetings_intent_env(m):
+    """core-platform's MEETINGS_INTENT_* lines (core task 01a1e5da stage 4).
+
+    Names match apps/platform/config/runtime.exs. Empty unless meetings are on
+    and ``[meetings] intent_provider`` is set, so every manifest without it
+    renders byte-unchanged. The API key is a ``{customer:REF}`` marker: it
+    lands in secrets.env (never compose.yaml) and is never printed.
+    """
+    meetings = m["meetings"]
+    provider = meetings["intent_provider"]
+    if not m["services"]["meetings"] or provider is None:
+        return {}
+    endpoint = next(
+        e for e in m["models"]["endpoints"] if e["name"] == meetings["intent_endpoint"]
+    )
+    env = {"MEETINGS_INTENT_PROVIDER": provider}
+    if meetings["intent_model"]:
+        env["MEETINGS_INTENT_MODEL"] = meetings["intent_model"]
+    if provider == "ollama":
+        # The anthropic and openai adapters call fixed API hosts and ignore it.
+        env["MEETINGS_INTENT_BASE_URL"] = endpoint["base_url"]
+    if endpoint["api_key_ref"]:
+        env["MEETINGS_INTENT_API_KEY"] = f"{{customer:{endpoint['api_key_ref']}}}"
+    return env
+
+
 def _core_env(ctx):
     env = {
         "PHX_SERVER": "true",
@@ -1001,6 +1027,7 @@ def _core_env(ctx):
     # Core task 01a1b678 stage 1: seeds the install's sharing switches once.
     env.update(sharing_env(ctx.m))
     env.update(system_mail_env(ctx.m))
+    env.update(meetings_intent_env(ctx.m))
     auth = ctx.m["auth"]
     if not ctx.bundled_auth:
         env["OIDC_ISSUER"] = auth["issuer"]

@@ -163,6 +163,8 @@ On `single-host` any `[access]` key is `field_not_applicable`.
 ## `[meetings]` (`services.meetings = true` only)
 
 Ignored while `services.meetings` is off, so flipping meetings back off is a one-field change.
+The exception is the `intent_*` keys: each is `field_not_applicable` while meetings are off, since
+an intent model there would read as configured and render nothing.
 
 | Key | Type | Default | Notes |
 |---|---|---|---|
@@ -172,6 +174,9 @@ Ignored while `services.meetings` is off, so flipping meetings back off is a one
 | `transcription` | bool | `false` | Adds `meeting-transcriber`. |
 | `stt_endpoint` | string | none | With `transcription`: the `name` of a `[[models.endpoints]]` entry speaking OpenAI-compatible `/audio/transcriptions` (`stt_endpoint_unknown` otherwise). Its `base_url` ends at `/v1`. |
 | `stt_model` | string | `whisper-1` | The transcriber's `STT_MODEL`. |
+| `intent_provider` | `anthropic` \| `openai` \| `ollama` | none | The install-level model for core's meeting intent classifier (core task 01a1e5da). Rendered into core-platform's env as `MEETINGS_INTENT_PROVIDER`. Unset renders none of the `MEETINGS_INTENT_*` variables: meeting intent is then off unless the `meetings.intent_classify` agent brings its own `base_url` and model, and the meeting top bar shows an "Intent off" chip saying so. Needs `intent_endpoint` (`intent_endpoint_required`). |
+| `intent_endpoint` | string | none | With `intent_provider`: the `name` of a `[[models.endpoints]]` entry (`intent_endpoint_unknown` otherwise; `field_not_applicable` without `intent_provider`). There is no default endpoint: an install has no model endpoint unless its owner declares one. Its `api_key_ref`, when set, is rendered as `MEETINGS_INTENT_API_KEY` into core-platform's `secrets.env` (never `compose.yaml`) and never printed. Its `base_url` is rendered as `MEETINGS_INTENT_BASE_URL` for `ollama` only: the `anthropic` and `openai` adapters call their fixed API hosts and ignore it. |
+| `intent_model` | string | adapter default | Optional, with `intent_provider` only. Rendered as `MEETINGS_INTENT_MODEL`; unset leaves the adapter's default model. |
 
 TURN/TLS on 443 is not rendered (it needs its own hostname, certificate and a direct inbound 443).
 On `single-host`, `livekit.yaml` says why TURN is off: direct UDP 7882 with ICE-TCP 7881 as the
@@ -328,6 +333,8 @@ A valid manifest prints `ok` and exits `0`.
 | `invalid_ssh_authorized_key` | `host.ssh_authorized_key` is not one `ssh-ed25519` / `ecdsa-sha2-nistp256` public key |
 | `vapid_requires_single_host` | `push.vapid = "generate-on-host"` with `target = "mac"` |
 | `stt_endpoint_unknown` | transcription on and `meetings.stt_endpoint` names no `[[models.endpoints]]` entry |
+| `intent_endpoint_unknown` | meetings on and `meetings.intent_endpoint` names no `[[models.endpoints]]` entry |
+| `intent_endpoint_required` | meetings on and `meetings.intent_provider` set without `meetings.intent_endpoint` |
 | `invalid_toml` | the file does not parse as TOML (loader) |
 | `unreadable_manifest` | the file cannot be read (loader) |
 
