@@ -443,8 +443,6 @@ defmodule PlatformWeb.GoalsLive do
     end
   end
 
-  defp open_screen(socket, _), do: socket
-
   defp mount_screen(socket, kind, id) do
     with {:ok, user} <- screen_user(socket),
          {:ok, screen} <- screen_load(kind, user, socket.assigns.page, id) do

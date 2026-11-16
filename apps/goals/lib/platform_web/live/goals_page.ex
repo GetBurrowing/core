@@ -137,6 +137,7 @@ defmodule PlatformWeb.GoalsPage do
          authors: authors,
          up_next: up_next(user, List.first(my_asks)),
          next_wake_at: clock && clock.next_wake_at,
+         clock_time_zone: (clock && clock.time_zone) || "Etc/UTC",
          answer_lines: answer_lines(asks),
          streak: if(goal.agent_mode == "coach", do: streak, else: 0),
          coach: goal.coach_agent_id && Map.get(authors.agents, goal.coach_agent_id)
@@ -518,7 +519,7 @@ defmodule PlatformWeb.GoalsPage do
         <div :if={is_nil(@page.up_next)}>
           <h4 class="text-base font-semibold text-base-content">You're all caught up</h4>
           <p class="mt-1 text-sm text-subtle">
-            <span :if={@page.next_wake_at}>The next check-in is ready on {PlatformWeb.GoalsCheckIn.weekday(@page.next_wake_at)}. </span>Your agents keep working on the plan in the meantime.
+            <span :if={@page.next_wake_at}>The next check-in is ready on {PlatformWeb.GoalsCheckIn.weekday(@page.next_wake_at, @page.clock_time_zone)}. </span>Your agents keep working on the plan in the meantime.
           </p>
         </div>
       </div>

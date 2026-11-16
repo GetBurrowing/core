@@ -76,6 +76,9 @@ defmodule PlatformWeb.GoalsCheckInTest do
 
   test "the full check-in records choices only on Finish, reloads done and reaches the coach",
        c do
+    assert PlatformWeb.GoalsCheckIn.weekday(~U[2026-11-16 01:00:00Z], "America/Los_Angeles") ==
+             "Sunday"
+
     {ask, takeaway} = fixture(c)
     child = open(c.conn, c.owner, c.goal, ask)
     assert has_element?(child, "[data-role=goals-check-in]")
@@ -129,6 +132,21 @@ defmodule PlatformWeb.GoalsCheckInTest do
     child
     |> element("[data-action=check-choice][phx-value-index='1'][phx-value-choice='not_now']")
     |> render_click()
+
+    assert has_element?(
+             child,
+             "[data-action=check-choice][phx-value-index='0'][aria-pressed=true]"
+           )
+
+    assert has_element?(
+             child,
+             "[data-action=check-choice][phx-value-index='1'][aria-pressed=true]"
+           )
+
+    assert has_element?(
+             child,
+             "[data-action=check-choice][phx-value-index='2'][aria-pressed=false]"
+           )
 
     assert answers(c, ask) == []
     child |> element("[data-action=check-finish]") |> render_click()

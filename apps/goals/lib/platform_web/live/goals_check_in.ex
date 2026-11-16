@@ -22,7 +22,8 @@ defmodule PlatformWeb.GoalsCheckIn do
          coach: page.coach,
          owner_first: first_name(owner && owner.name),
          takeaways: Map.new(page.takeaways, &{&1.id, &1.title}),
-         next_wake_at: clock && clock.next_wake_at
+         next_wake_at: clock && clock.next_wake_at,
+         time_zone: (clock && clock.time_zone) || "Etc/UTC"
        }}
     else
       _ -> {:error, :not_found}
@@ -90,7 +91,7 @@ defmodule PlatformWeb.GoalsCheckIn do
                     phx-value-index={index}
                     phx-value-choice={choice}
                     data-action="check-choice"
-                    aria-pressed={@choices[index] == choice}
+                    aria-pressed={if @choices[index] == choice, do: "true", else: "false"}
                     class={[
                       "focus-visible-ring min-h-11 rounded-full px-3 text-sm lg:min-h-8",
                       if(@choices[index] == choice,
@@ -134,7 +135,10 @@ defmodule PlatformWeb.GoalsCheckIn do
             </li>
           </ul>
           <p class="mt-3 text-sm text-subtle">
-            {coach_name(@screen.coach)} will report back {next_check_in(@screen.next_wake_at)}
+            {coach_name(@screen.coach)} will report back {next_check_in(
+              @screen.next_wake_at,
+              @screen.time_zone
+            )}
           </p>
         </div>
         <a href={goal_href(@screen.goal)} class={[primary_class(), "mt-4"]}>Back to the goal</a>
@@ -167,13 +171,13 @@ defmodule PlatformWeb.GoalsCheckIn do
         if c["index"] == index, do: c["choice"]
       end)
 
-  defp next_check_in(nil), do: "at the next check-in."
-  defp next_check_in(datetime), do: "at next " <> weekday(datetime) <> "'s check-in."
+  defp next_check_in(nil, _zone), do: "at the next check-in."
+  defp next_check_in(datetime, zone), do: "at next " <> weekday(datetime, zone) <> "'s check-in."
 
-  def weekday(datetime),
+  def weekday(datetime, zone),
     do:
       datetime
-      |> DateTime.shift_zone!(Platform.Memory.Insights.Disseminator.timezone())
+      |> DateTime.shift_zone!(zone)
       |> Calendar.strftime("%A")
 
   defp first_name(name) when is_binary(name), do: name |> String.split() |> List.first()
