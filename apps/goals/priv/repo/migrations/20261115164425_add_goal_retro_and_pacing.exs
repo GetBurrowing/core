@@ -49,6 +49,7 @@ defmodule Platform.Repo.Migrations.AddGoalRetroAndPacing do
   end
 
   def down do
+    execute("DELETE FROM goal_brief_items WHERE kind = 'note'")
     drop(index(:goal_brief_items, [:user_id, :entry_id]))
     drop(constraint(:goal_brief_items, :goal_brief_items_note_shape))
     drop(constraint(:goal_brief_items, :goal_brief_items_kind))
@@ -58,6 +59,7 @@ defmodule Platform.Repo.Migrations.AddGoalRetroAndPacing do
     )
 
     alter(table(:goal_brief_items), do: remove(:entry_id))
+    execute("DELETE FROM goal_wake_ups WHERE outcome = 'retro'")
     drop(constraint(:goal_wake_ups, :goal_wake_ups_retro_outcome))
     drop(constraint(:goal_wake_ups, :goal_wake_ups_outcome))
 
