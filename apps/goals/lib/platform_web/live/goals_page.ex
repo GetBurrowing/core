@@ -552,6 +552,7 @@ defmodule PlatformWeb.GoalsPage do
         </div>
         <div :if={is_nil(@page.up_next)}>
           <h4 class="text-base font-semibold text-base-content">You're all caught up</h4>
+          <a :if={@page.retros != []} href={retro_href(@page.card.goal, hd(@page.retros).entry_id)} class="btn btn-ghost">Read the last retro</a>
           <p class="mt-1 text-sm text-subtle">
             <span :if={@page.next_wake_at}>The next check-in is ready on {PlatformWeb.GoalsCheckIn.weekday(@page.next_wake_at, @page.clock_time_zone)}. </span>Your agents keep working on the plan in the meantime.
           </p>

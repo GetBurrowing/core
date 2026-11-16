@@ -9,6 +9,7 @@ defmodule PlatformWeb.GoalsPageRetroTest do
 
   setup do
     c = setup_brief()
+    Platform.Goals.OutcomeFixtures.put_now(~U[2026-02-10 12:00:00.000000Z])
 
     {:ok, _} =
       Platform.Access.Grants.grant(%{
@@ -84,7 +85,7 @@ defmodule PlatformWeb.GoalsPageRetroTest do
 
     view = page(c)
 
-    for text <- ["Working", "Not working", "Too early to tell", "Just started", "Stopped 4 Feb"],
+    for text <- ["Working", "Not working", "Too early to tell", "Just started", "Stopped 10 Feb"],
         do: assert(render(view) =~ text)
 
     refute has_element?(view, "[data-entry-id='#{none.id}'] [data-role=goal-prediction-state]")

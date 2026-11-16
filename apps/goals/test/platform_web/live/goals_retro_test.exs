@@ -8,6 +8,7 @@ defmodule PlatformWeb.GoalsRetroTest do
 
   setup do
     c = setup_brief()
+    Platform.Goals.OutcomeFixtures.put_now(~U[2026-02-10 12:00:00.000000Z])
     grant!(c.owner, c.org)
     c
   end
@@ -129,7 +130,7 @@ defmodule PlatformWeb.GoalsRetroTest do
           "Weekdays fit better",
           "The check-in stays as it is until you choose."
         ] do
-      assert render(view) =~ text
+      assert render(view) |> Floki.parse_fragment!() |> Floki.text() =~ text
     end
 
     assert has_element?(view, "[data-role=goal-journey]", "next push")
