@@ -62,7 +62,10 @@ defmodule PlatformWeb.GoalsPage do
       coach.
     * **Notebook**: `list_entries/3` for kinds wake_up, action, ask, wait,
       retro (default limit), newest first, authors from
-      `Platform.Goals.entry_authors/2`.
+      `Platform.Goals.entry_authors/2`. Goals 6/8 adds visible asks and their
+      answer receipts, the viewer's practice streak, and Up next from
+      `list_my_asks(user, goal_id: goal.id)` with `ask_brief_date/2` for the
+      reader's delivering brief. No read is performed by a template.
   """
   use Phoenix.Component
 
@@ -108,7 +111,11 @@ defmodule PlatformWeb.GoalsPage do
          {:ok, actions} <- Goals.list_entries(user, goal.id, kind: "action"),
          {:ok, takeaways} <- Goals.list_entries(user, goal.id, kind: "takeaway"),
          {:ok, notebook} <- Goals.list_entries(user, goal.id, kind: @notebook_kinds),
-         {:ok, authors} <- Goals.entry_authors(user, goal.id) do
+         {:ok, authors} <- Goals.entry_authors(user, goal.id),
+         {:ok, asks} <- Goals.list_asks(user, goal.id),
+         {:ok, my_asks} <- Goals.list_my_asks(user, goal_id: goal.id),
+         {:ok, clock} <- Goals.clock_status(user, goal.id),
+         {:ok, streak} <- Goals.practice_streak(user, goal.id) do
       source = Enum.find(sources, &(&1.key == goal.source_key))
       current = Enum.find(stops, &is_nil(&1.reached_on))
       target = target(current, goal)
@@ -128,9 +135,60 @@ defmodule PlatformWeb.GoalsPage do
          takeaway_titles: Map.new(takeaways, &{&1.id, &1.title}),
          notebook: notebook,
          authors: authors,
+         up_next: up_next(user, List.first(my_asks)),
+         next_wake_at: clock && clock.next_wake_at,
+         answer_lines: answer_lines(asks),
+         streak: if(goal.agent_mode == "coach", do: streak, else: 0),
          coach: goal.coach_agent_id && Map.get(authors.agents, goal.coach_agent_id)
        }}
     end
+  end
+
+  defp up_next(_user, nil), do: nil
+
+  defp up_next(user, ask) do
+    date =
+      case Goals.ask_brief_date(user, ask.id) do
+        {:ok, %Date{} = date} -> date
+        _ -> nil
+      end
+
+    kind = if ask.kind == "offer" and is_map(ask.payload["idea"]), do: :idea, else: ask.kind
+
+    %{
+      ask: ask,
+      kind: kind,
+      brief_href: if(date, do: "/inbox/briefing/" <> Date.to_iso8601(date), else: "/inbox")
+    }
+  end
+
+  defp answer_lines(asks) do
+    Map.new(asks, fn ask ->
+      lines =
+        Enum.map(ask.answers, fn answer ->
+          user = Platform.Accounts.get_user(answer.user_id)
+          name = if user, do: user.name, else: "Someone"
+
+          result =
+            cond do
+              ask.kind == "practice" and answer.answer == "used" ->
+                "#{answer.details["got"] || 0} of #{length(ask.payload["cards"] || [])} cards"
+
+              answer.answer == "used" ->
+                "Used"
+
+              answer.answer == "declined" ->
+                "Not now"
+
+              true ->
+                "No answer"
+            end
+
+          name <> ": " <> result
+        end)
+
+      {ask.id, lines}
+    end)
   end
 
   defp target(%{target_value: %Decimal{} = t}, _goal), do: t
@@ -188,15 +246,18 @@ defmodule PlatformWeb.GoalsPage do
   # ── page ───────────────────────────────────────────────────────────────
 
   @doc "The goal page. `page` is `load/2`'s map; `log_error` the form's error."
-  attr :page, :map, required: true
-  attr :log_error, :string, default: nil
-  attr :audience_options, :map, default: %{people: [], teams: [], spaces: []}
+  attr(:page, :map, required: true)
+  attr(:log_error, :string, default: nil)
+  attr(:audience_options, :map, default: %{people: [], teams: [], spaces: []})
+
+  attr(:from_brief, :boolean, default: false)
 
   def goal_page(assigns) do
     assigns = assign(assigns, :goal, assigns.page.card.goal)
 
     ~H"""
     <div class="mx-auto max-w-3xl p-6" data-role="goal-view" data-goal-id={@goal.id}>
+      <p :if={@from_brief} data-role="goal-brief-note" class="mb-3 text-xs text-subtle">You came here from today's briefing.</p>
       <.link
         navigate="/m/goals"
         class="-ml-2 mb-3 inline-flex min-h-11 items-center rounded px-2 font-semibold text-interactive focus-visible-ring lg:hidden"
@@ -237,6 +298,8 @@ defmodule PlatformWeb.GoalsPage do
         </p>
         <.log_form :if={@page.can_log?} error={@log_error} />
       </div>
+
+      <.up_next_card page={@page} />
 
       <section :if={@page.actions != []} data-role="goal-trying">
         <h3 class={sec_h()}>What we're trying · {length(@page.actions)}</h3>
@@ -326,10 +389,10 @@ defmodule PlatformWeb.GoalsPage do
       </section>
 
       <section :if={@page.notebook != []} data-role="goal-notebook">
-        <h3 class={sec_h()}>Notebook</h3>
+        <h3 class={sec_h()}>Notebook <span :if={@page.streak > 0} data-role="goal-notebook-streak" class="ml-2 rounded-full bg-warning-dim px-2 py-0.5 text-[11px] font-bold text-base-content">{@page.streak}-day streak</span></h3>
         <ul class="flex flex-col gap-3">
           <li :for={entry <- @page.notebook}>
-            <article class={card_class()} data-role="goal-notebook-entry" data-kind={entry.kind}>
+            <article class={card_class()} data-role="goal-notebook-entry" data-kind={entry.kind} data-ask-id={entry.details["ask_id"]}>
               <div class="mb-1.5 flex items-center gap-2">
                 <span class={tag_class()}>{Map.get(notebook_tags(), entry.kind, entry.kind)}</span>
               </div>
@@ -337,6 +400,7 @@ defmodule PlatformWeb.GoalsPage do
                 {entry.title}
               </h4>
               <p :if={present?(entry.body)} class="mt-1 text-sm text-base-content">{entry.body}</p>
+              <p :for={line <- Map.get(@page.answer_lines, entry.details["ask_id"], [])} data-role="goal-answer" class="mt-1 text-xs text-subtle">{line}</p>
               <p class="mt-1.5 text-xs text-subtle">
                 <.author entry={entry} authors={@page.authors} /> ·
                 <time datetime={DateTime.to_iso8601(entry.occurred_at)}>
@@ -389,11 +453,51 @@ defmodule PlatformWeb.GoalsPage do
     """
   end
 
+  attr(:page, :map, required: true)
+
+  defp up_next_card(assigns) do
+    ~H"""
+    <section data-role="goal-up-next" data-kind={if @page.up_next, do: @page.up_next.kind, else: "caught-up"}>
+      <h3 class={sec_h()}>Up next</h3>
+      <div class={card_class()}>
+        <div :if={@page.up_next}>
+          <span class={["rounded-md px-1.5 py-0.5 text-[11px] font-bold uppercase tracking-wide text-base-content", up_next_tag(@page.up_next.kind).class]}>{up_next_tag(@page.up_next.kind).label}</span>
+          <h4 class="mt-2 text-base font-semibold text-base-content">{if @page.up_next.kind == "practice", do: "Today's #{length(@page.up_next.ask.payload["cards"] || [])} cards are in your briefing", else: @page.up_next.ask.title}</h4>
+          <p :if={@page.up_next.kind == :idea} class="mt-1 text-sm text-base-content"><PlatformWeb.GoalsCheckIn.coach coach={@page.coach} /> has a new idea to try.</p>
+          <p :if={@page.up_next.kind == "question"} class="mt-1 text-sm text-base-content"><PlatformWeb.GoalsCheckIn.coach coach={@page.coach} /> drafted it. See what moved, and choose what to change.</p>
+          <p :if={@page.up_next.kind == "offer" && @page.up_next.ask.body} class="mt-1 whitespace-pre-line text-sm text-base-content">{@page.up_next.ask.body}</p>
+          <a href={up_next_href(@page)} class={[btn_primary(), "mt-3"]}>{up_next_label(@page.up_next.kind)}</a>
+        </div>
+        <div :if={is_nil(@page.up_next)}>
+          <h4 class="text-base font-semibold text-base-content">You're all caught up</h4>
+          <p class="mt-1 text-sm text-subtle"><span :if={@page.next_wake_at}>The next check-in is ready on {PlatformWeb.GoalsCheckIn.weekday(@page.next_wake_at)}. </span>Your agents keep working on the plan in the meantime.</p>
+        </div>
+      </div>
+    </section>
+    """
+  end
+
+  defp up_next_tag(:idea), do: %{label: "Idea", class: "bg-info-dim"}
+  defp up_next_tag("question"), do: %{label: "Check-in", class: "bg-warning-dim"}
+  defp up_next_tag("practice"), do: %{label: "Practice", class: "bg-success-dim"}
+  defp up_next_tag(_), do: %{label: "Offer", class: "bg-warning-dim"}
+
+  defp up_next_href(%{up_next: %{kind: :idea} = next, card: card}),
+    do: "/m/goals?goal=#{card.goal.id}&idea=#{next.ask.id}"
+
+  defp up_next_href(%{up_next: %{kind: "question"} = next, card: card}),
+    do: "/m/goals?goal=#{card.goal.id}&check=#{next.ask.id}"
+
+  defp up_next_href(%{up_next: next}), do: next.brief_href
+  defp up_next_label(:idea), do: "Look at the idea"
+  defp up_next_label("question"), do: "Open the check-in"
+  defp up_next_label(_), do: "Open your briefing"
+
   defp notebook_tags, do: @notebook_tags
 
   # The meta line. Personal: "{Owner}'s goal · {Coach} leads · {source}".
   # Shared: "Shared by {Owner} and {Coach} · {source}".
-  attr :page, :map, required: true
+  attr(:page, :map, required: true)
 
   defp meta(assigns) do
     card = assigns.page.card
@@ -415,7 +519,7 @@ defmodule PlatformWeb.GoalsPage do
     """
   end
 
-  attr :agent, :map, required: true
+  attr(:agent, :map, required: true)
 
   defp agent_name(assigns) do
     ~H"""
@@ -425,7 +529,7 @@ defmodule PlatformWeb.GoalsPage do
     """
   end
 
-  attr :page, :map, required: true
+  attr(:page, :map, required: true)
 
   defp journey(assigns) do
     stops = assigns.page.stops
@@ -505,7 +609,7 @@ defmodule PlatformWeb.GoalsPage do
   defp sub_line(%{caption: c}) when is_binary(c) and c != "", do: c
   defp sub_line(_stop), do: nil
 
-  attr :number, :map, required: true
+  attr(:number, :map, required: true)
 
   defp number_sentence(%{number: %{kind: :reading}} = assigns) do
     ~H"""
@@ -531,7 +635,7 @@ defmodule PlatformWeb.GoalsPage do
     """
   end
 
-  attr :error, :string, default: nil
+  attr(:error, :string, default: nil)
 
   defp log_form(assigns) do
     ~H"""
@@ -558,8 +662,8 @@ defmodule PlatformWeb.GoalsPage do
     """
   end
 
-  attr :entry, :map, required: true
-  attr :page, :map, required: true
+  attr(:entry, :map, required: true)
+  attr(:page, :map, required: true)
 
   defp trying(assigns) do
     entry = assigns.entry
@@ -596,8 +700,8 @@ defmodule PlatformWeb.GoalsPage do
     """
   end
 
-  attr :entry, :map, required: true
-  attr :authors, :map, required: true
+  attr(:entry, :map, required: true)
+  attr(:authors, :map, required: true)
 
   defp author(assigns) do
     ~H"""

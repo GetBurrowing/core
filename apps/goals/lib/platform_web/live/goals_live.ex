@@ -126,6 +126,8 @@ defmodule PlatformWeb.GoalsLive do
   alias PlatformWeb.GoalsPage
   alias PlatformWeb.GoalsRead
   alias PlatformWeb.GoalsOpenUp
+  alias PlatformWeb.GoalsCheckIn
+  alias PlatformWeb.GoalsIdea
   alias PlatformWeb.GoalsSettings
 
   @impl true
@@ -146,27 +148,118 @@ defmodule PlatformWeb.GoalsLive do
         share_snapshot: [],
         audience_options: %{people: [], teams: [], spaces: []},
         settings: %{},
-        toast: nil
+        toast: nil,
+        screen: nil,
+        check_choices: %{},
+        from_brief: is_map(query) and query["from"] == "brief"
       )
 
     case goal_param(query) do
       nil ->
+        if is_map(query) and (Map.has_key?(query, "check") or Map.has_key?(query, "idea")),
+          do: raise(NotFoundError)
+
         {:ok, assign(socket, card: nil, page: nil)}
 
       goal_id ->
         with {:ok, card} <- Goals.describe_goal(user, goal_id),
              {:ok, page} <- GoalsPage.load(user, card) do
-          {:ok, socket |> assign(card: card, page: page) |> load_options(card)}
+          {:ok,
+           socket |> assign(card: card, page: page) |> load_options(card) |> open_screen(query)}
         else
           _ -> raise NotFoundError
         end
     end
   end
 
+  @impl true
+  # New screens derive their ask from the validated route, never event identity.
+  def handle_event("check_choice", params, socket) do
+    with {:ok, socket} <- reload_screen(socket, :check),
+         true <- matching_screen?(socket, params),
+         {:ok, index} <- choice_index(params["index"]),
+         true <- index >= 0 and index < length(GoalsCheckIn.suggestions(socket.assigns.screen)),
+         choice when choice in ["do", "not_now"] <- params["choice"],
+         false <- GoalsCheckIn.final_answer?(socket.assigns.screen.answer) do
+      {:noreply,
+       assign(socket, :check_choices, Map.put(socket.assigns.check_choices, index, choice))}
+    else
+      _ -> {:noreply, socket}
+    end
+  end
+
+  def handle_event("check_finish", params, socket) do
+    with {:ok, socket} <- reload_screen(socket, :check),
+         true <- matching_screen?(socket, params) do
+      screen = socket.assigns.screen
+
+      choices =
+        screen
+        |> GoalsCheckIn.suggestions()
+        |> Enum.with_index()
+        |> Enum.map(fn {_, i} ->
+          %{"index" => i, "choice" => Map.get(socket.assigns.check_choices, i, "not_now")}
+        end)
+
+      answer =
+        if choices == [] or Enum.any?(choices, &(&1["choice"] == "do")),
+          do: "used",
+          else: "declined"
+
+      case Goals.answer_ask(socket.assigns.user, screen.ask.id, answer, %{"choices" => choices}) do
+        {:ok, _} ->
+          Goals.refresh_brief(socket.assigns.user, screen.ask.id)
+
+          case reload_screen(socket, :check) do
+            {:ok, socket} -> {:noreply, socket}
+            _ -> {:noreply, socket}
+          end
+
+        _ ->
+          {:noreply, socket}
+      end
+    else
+      _ -> {:noreply, socket}
+    end
+  end
+
+  def handle_event("idea_answer", params, socket) do
+    with {:ok, socket} <- reload_screen(socket, :idea),
+         true <- matching_screen?(socket, params),
+         answer when answer in ["used", "declined"] <- params["answer"],
+         {:ok, _} <- Goals.answer_ask(socket.assigns.user, socket.assigns.screen.ask.id, answer) do
+      screen = socket.assigns.screen
+      Goals.refresh_brief(socket.assigns.user, screen.ask.id)
+
+      message =
+        if answer == "used",
+          do: GoalsCheckIn.coach_name(screen.coach) <> " starts on it at the next check-in",
+          else: "Saved for later"
+
+      {:noreply,
+       socket
+       |> refresh(socket.assigns.card)
+       |> assign(screen: nil, toast: %{message: message, undo: {:ask, screen.ask.id}})}
+    else
+      _ -> {:noreply, socket}
+    end
+  end
+
+  def handle_event("undo", _, %{assigns: %{toast: %{undo: {:ask, ask_id}}}} = socket) do
+    with {:ok, user} <- screen_user(socket),
+         {:ok, ask} <- Goals.get_ask(user, ask_id),
+         true <- ask.goal_id == goal_id(socket) and user.id in ask.addressed_user_ids,
+         {:ok, _} <- Goals.withdraw_answer(user, ask.id) do
+      Goals.refresh_brief(user, ask.id)
+      {:noreply, socket |> assign(:user, user) |> reload() |> assign(screen: nil, toast: nil)}
+    else
+      _ -> {:noreply, socket}
+    end
+  end
+
   # Log a value (stage 3). Re-reads the goal through the context and calls
   # `Platform.Goals.log_reading/3` for EVERY submit, whoever sends it: the
   # refusal (a viewer, a measured source) is the context's, not this page's.
-  @impl true
   def handle_event("log_value", params, %{assigns: %{card: %{goal: goal}}} = socket) do
     user = socket.assigns.user
     value = params |> Map.get("value", "") |> to_string() |> String.trim()
@@ -342,6 +435,68 @@ defmodule PlatformWeb.GoalsLive do
 
   def handle_event(_event, _params, socket), do: {:noreply, socket}
 
+  defp open_screen(socket, query) when is_map(query) do
+    case {query["check"], query["idea"]} do
+      {id, _} when is_binary(id) -> mount_screen(socket, :check, id)
+      {_, id} when is_binary(id) -> mount_screen(socket, :idea, id)
+      _ -> socket
+    end
+  end
+
+  defp open_screen(socket, _), do: socket
+
+  defp mount_screen(socket, kind, id) do
+    with {:ok, user} <- screen_user(socket),
+         {:ok, screen} <- screen_load(kind, user, socket.assigns.page, id) do
+      assign(socket, user: user, screen: screen)
+    else
+      _ -> raise NotFoundError
+    end
+  end
+
+  defp screen_load(:check, user, page, id), do: GoalsCheckIn.load(user, page, id)
+  defp screen_load(:idea, user, page, id), do: GoalsIdea.load(user, page, id)
+
+  defp screen_user(socket) do
+    with %{id: id} <- socket.assigns.user,
+         %Platform.Accounts.User{} = user <- Platform.Accounts.get_user(id),
+         true <- Goals.enabled?(),
+         true <- Platform.Access.can?(Platform.Access.Scope.for_user(user), "goals.use") do
+      {:ok, user}
+    else
+      _ -> {:error, :not_found}
+    end
+  end
+
+  defp reload_screen(%{assigns: %{screen: %{kind: kind, ask: ask}}} = socket, kind) do
+    with {:ok, user} <- screen_user(socket),
+         {:ok, card} <- Goals.describe_goal(user, goal_id(socket)),
+         {:ok, page} <- GoalsPage.load(user, card),
+         {:ok, screen} <- screen_load(kind, user, page, ask.id) do
+      {:ok, assign(socket, user: user, card: card, page: page, screen: screen)}
+    else
+      _ -> {:error, :not_found}
+    end
+  end
+
+  defp reload_screen(_, _), do: {:error, :not_found}
+
+  defp matching_screen?(socket, params) do
+    (not Map.has_key?(params, "ask_id") or params["ask_id"] == socket.assigns.screen.ask.id) and
+      (not Map.has_key?(params, "goal_id") or params["goal_id"] == goal_id(socket))
+  end
+
+  defp choice_index(index) when is_integer(index), do: {:ok, index}
+
+  defp choice_index(index) when is_binary(index) do
+    case Integer.parse(index) do
+      {i, ""} -> {:ok, i}
+      _ -> :error
+    end
+  end
+
+  defp choice_index(_), do: :error
+
   defp goal_id(socket), do: socket.assigns.card && socket.assigns.card.goal.id
 
   defp owner_card(socket) do
@@ -437,10 +592,13 @@ defmodule PlatformWeb.GoalsLive do
         >
           Select a goal
         </p>
-        <GoalsRead.short_read :if={@page && @read} page={@page} focus={@read} />
+        <GoalsCheckIn.screen :if={@screen && @screen.kind == :check} screen={@screen} choices={@check_choices} />
+        <GoalsIdea.screen :if={@screen && @screen.kind == :idea} screen={@screen} />
+        <GoalsRead.short_read :if={@page && @read && is_nil(@screen)} page={@page} focus={@read} />
         <GoalsPage.goal_page
-          :if={@page && is_nil(@read)}
+          :if={@page && is_nil(@read) && is_nil(@screen)}
           page={@page}
+          from_brief={@from_brief}
           log_error={@log_error}
           audience_options={@audience_options}
         />

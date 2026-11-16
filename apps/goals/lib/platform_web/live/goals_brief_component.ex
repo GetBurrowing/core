@@ -37,6 +37,22 @@ defmodule PlatformWeb.GoalsBriefComponent do
     reader: the stage's declaration called this the first sentence, but its
     inventory and tests restrict the reading sentence.
   - Practice shares the one stop footer; the prototype's 180 so far is sample.
+  - Check-in choices start unselected; the prototype preselects sample
+    choices. Untouched suggestions are recorded as Not now on Finish.
+  - The done heading says Your choices are in: the page records choices,
+    and the coach updates the plan at the next wake-up. The Finish note
+    keeps the inventory's wording; it describes those queued choices.
+  - A check-in uses the coach's supplied title, summary, moved lines and
+    suggestions; with none, it has its title and Finish button.
+  - Idea acceptance says the coach starts at the next check-in. There is
+    no stop-it-any-time note or Just started action card: no work starts
+    until the coach records it.
+  - The nested goal view returns from an idea to the goal and its toast
+    without a route change; the idea URL is retained so a reload shows its
+    answered receipt. No new JavaScript or core navigation seam is added.
+  - The caught-up card has no retro preview, which belongs to Goals 8/8.
+  - Notebook answer lines and the practice streak pill are additions the
+    ticket requires; they are absent from the prototype.
   """
   use PlatformWeb, :live_component
   alias Platform.Goals
