@@ -63,7 +63,8 @@ defmodule Platform.Goals.BriefSignalsTest do
     for signal <- transitions, do: assert(signal.details["undo_request_id"] == first.id)
     assert original.inserted_at == original.updated_at
     {:ok, _} = Goals.prepare_brief(c.owner, date())
-    {:ok, [report]} = Goals.brief_items(c.owner, date())
+    {:ok, items} = Goals.brief_items(c.owner, date())
+    report = Enum.find(items, &(&1.kind == :report))
     assert Enum.find(report.entries, &(&1.id == entry.id)).undo == :available
 
     # Changes after the coach has seen the first cycle still append history.
