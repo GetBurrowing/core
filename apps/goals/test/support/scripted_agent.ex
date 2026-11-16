@@ -216,7 +216,8 @@ defmodule Platform.Goals.ScriptedAgent do
           %{"name" => "Cepeda et al., spacing effect review"},
           %{"name" => "Duolingo learning science notes"}
         ],
-        "doing" => "Your briefing carries a few flash cards every day, and misses come back sooner."
+        "doing" =>
+          "Your briefing carries a few flash cards every day, and misses come back sooner."
       },
       %{
         "title" => "The first 1,000 words cover most conversations",

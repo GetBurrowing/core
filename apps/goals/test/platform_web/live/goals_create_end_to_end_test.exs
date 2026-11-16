@@ -238,8 +238,8 @@ defmodule PlatformWeb.GoalsCreateEndToEndTest do
              takeaway.title
            )
 
-    assert length(read |> doc() |> Floki.find("[data-role='goal-read-card'][data-focused='true']")) ==
-             1
+    focused = read |> doc() |> Floki.find("[data-role='goal-read-card'][data-focused='true']")
+    assert length(focused) == 1
   end
 
   defp call(tool, args, agent), do: Tools.execute(tool, args, %{agent_id: agent.id})
