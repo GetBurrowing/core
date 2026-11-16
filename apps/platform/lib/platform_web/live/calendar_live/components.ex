@@ -1418,10 +1418,17 @@ defmodule PlatformWeb.CalendarLive.Components do
             {sub.name}
             <span class="cal-pill"><.icon name="hero-lock-closed" class="size-3" />Read-only</span>
             <small class="truncate cal-mono">{masked_url(sub)}</small>
-            <small :if={is_nil(sub.error)}>
+            <small :if={sub.error} class="!text-error">{sub.error}</small>
+            <small :if={is_nil(sub.error) and Platform.Calendar.Subscriptions.complete?(sub)}>
               Synced {synced(sub.refreshed_at)} · blocks availability
             </small>
-            <small :if={sub.error} class="!text-error">{sub.error}</small>
+            <small
+              :if={is_nil(sub.error) and not Platform.Calendar.Subscriptions.complete?(sub)}
+              class="!text-warning"
+              data-role="ext-skipped"
+            >
+              Synced {synced(sub.refreshed_at)} · {skipped_text(sub.skipped_count)} · availability unknown
+            </small>
           </span>
           <button
             type="button"
@@ -1604,6 +1611,10 @@ defmodule PlatformWeb.CalendarLive.Components do
   end
 
   defp masked_url(_), do: "••••••"
+
+  @doc "How many events a partial external calendar left out, in words."
+  def skipped_text(1), do: "1 event couldn't be read"
+  def skipped_text(n), do: "#{n} events couldn't be read"
 
   defp synced(nil), do: "not yet"
 

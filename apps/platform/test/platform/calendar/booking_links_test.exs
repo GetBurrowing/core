@@ -146,6 +146,33 @@ defmodule Platform.Calendar.BookingLinksTest do
              BookingLinks.slots(second_link.token, second_link.start_date)
   end
 
+  test "a fresh but partial external calendar makes slots unknown" do
+    owner = scope()
+    link = create(owner)
+
+    {:ok, snapshot, 0} =
+      Platform.Calendar.ICal.parse(
+        "BEGIN:VCALENDAR\r\nVERSION:2.0\r\nBEGIN:VEVENT\r\nUID:partial-1@example.invalid\r\n" <>
+          "DTSTART:20200101T100000Z\r\nDTEND:20200101T110000Z\r\nEND:VEVENT\r\nEND:VCALENDAR\r\n"
+      )
+
+    sub =
+      Repo.insert!(%Subscription{
+        owner_id: owner.actor.id,
+        name: "Partial",
+        url: "https://example.com/feed.ics",
+        snapshot: snapshot,
+        refreshed_at: DateTime.utc_now(),
+        error: nil,
+        skipped_count: 1
+      })
+
+    assert {:error, :external_coverage_unknown} = BookingLinks.slots(link.token, link.start_date)
+
+    Repo.update!(Ecto.Changeset.change(sub, skipped_count: 0))
+    assert {:ok, _} = BookingLinks.slots(link.token, link.start_date)
+  end
+
   test "DST gap and repeated wall times are omitted; actual duration is fixed" do
     owner = scope()
 
