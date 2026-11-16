@@ -262,6 +262,42 @@ defmodule Platform.Admin.ToolsTest do
     end
   end
 
+  describe "admin_health feedback_intake (task 01a1e670 stage 1)" do
+    test "reads the bounded ClassifierRoute health and no endpoint detail", %{ctx: ctx} do
+      n = System.unique_integer([:positive])
+
+      agent =
+        %Agent{}
+        |> Agent.changeset(%{
+          slug: "feedback-health-#{n}",
+          name: "Feedback Health #{n}",
+          status: "active",
+          kind: "external",
+          endpoint_kind: "openai_compat",
+          base_url: "http://feedback-health-#{n}.example:11434",
+          model: "feedback-health-model-#{n}",
+          vault_key: "feedback-health-key-#{n}"
+        })
+        |> Repo.insert!()
+
+      {:ok, _} = Platform.Roles.set_override("feedback.intake", agent.id)
+
+      assert {:ok, %{feedback_intake: health} = result} =
+               ToolSurface.execute("admin_health", %{}, ctx)
+
+      assert health |> Map.keys() |> Enum.sort() ==
+               Enum.sort([:status, :reason, :agent_name, :overridden?, :pending, :exhausted])
+
+      assert %{status: "ok", reason: nil, overridden?: true, exhausted: 0} = health
+      assert health.agent_name == agent.name
+
+      encoded = Jason.encode!(result)
+      refute encoded =~ agent.base_url
+      refute encoded =~ agent.model
+      refute encoded =~ agent.vault_key
+    end
+  end
+
   describe "an audit row per tool" do
     test "every tool writes one row with actor, tool, args, result and time", %{
       agent: agent,

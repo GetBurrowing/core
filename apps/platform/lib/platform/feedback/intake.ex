@@ -206,6 +206,14 @@ defmodule Platform.Feedback.Intake do
       {:ok, %{status: "unassigned"}} ->
         mark_pending(record, "unassigned")
 
+      {:ok, %{status: "no_endpoint"}} ->
+        Logger.warning(
+          "[Feedback.Intake] classifier has no model endpoint record=#{record.id} " <>
+            "reason=no_endpoint"
+        )
+
+        mark_pending(record, "no_endpoint")
+
       {:ok, %{status: "rejected_output"}} ->
         mark_pending(record, "rejected_output")
 

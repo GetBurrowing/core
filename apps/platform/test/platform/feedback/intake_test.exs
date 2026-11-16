@@ -356,6 +356,39 @@ defmodule Platform.Feedback.IntakeTest do
       assert [_one] = Stub.external_tasks(issue.repository, issue.issue_number)
     end
 
+    test "an assignee with no model endpoint leaves the record pending as no_endpoint" do
+      saved = System.get_env("OLLAMA_BASE_URL")
+      System.delete_env("OLLAMA_BASE_URL")
+      on_exit(fn -> if saved, do: System.put_env("OLLAMA_BASE_URL", saved) end)
+
+      native =
+        %Platform.Agents.Agent{}
+        |> Platform.Agents.Agent.changeset(%{
+          slug: "intake-native-#{System.unique_integer([:positive])}",
+          name: "Native holder",
+          status: "active"
+        })
+        |> Repo.insert!()
+
+      Platform.Roles.unassign_role("triage_officer")
+      {:ok, _} = Platform.Roles.assign_role("triage_officer", native.id)
+      issue = issue(%{title: "NO-ENDPOINT-TITLE-CANARY", body: "NO-ENDPOINT-BODY-CANARY"})
+
+      log =
+        capture_all_logs(fn ->
+          assert {:ok, %{outcome: :pending, note: "no_endpoint"}} = Intake.process(issue)
+        end)
+
+      assert [%IntakeRecord{status: "pending", note: "no_endpoint", verdict: nil} = record] =
+               records(issue.repository, issue.issue_number)
+
+      assert drain_classifier_calls() == 0
+      assert Stub.external_tasks(issue.repository, issue.issue_number) == []
+      assert log =~ "record=#{record.id} reason=no_endpoint"
+      refute log =~ "NO-ENDPOINT-TITLE-CANARY"
+      refute log =~ "NO-ENDPOINT-BODY-CANARY"
+    end
+
     test "a provider failure leaves the record pending" do
       Stub.reply!(fn _c, _m, _o -> {:error, :timeout} end)
       issue = issue()

@@ -18,7 +18,8 @@ defmodule Platform.Feedback.IntakeRecord do
   `status` is one of:
 
     * `"pending"` — no verdict yet. `note` names why with a bounded value
-      (`unassigned`, `provider_failed`, `rejected_output`, `no_project`). A
+      (`unassigned`, `no_endpoint`, `provider_failed`, `rejected_output`,
+      `no_project`). A
       later delivery of the same issue tries again.
     * `"decided"` — terminal. A verdict is recorded and is never revised by
       a redelivery; an accepted verdict carries `task_id`.
@@ -33,7 +34,7 @@ defmodule Platform.Feedback.IntakeRecord do
   @timestamps_opts [type: :utc_datetime_usec]
 
   @statuses ~w(pending decided)
-  @notes ~w(unassigned provider_failed rejected_output no_project)
+  @notes ~w(unassigned no_endpoint provider_failed rejected_output no_project)
   @disposition_statuses ~w(applied skipped failed)
 
   schema "feedback_intake_records" do

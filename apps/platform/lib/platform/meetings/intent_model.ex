@@ -4,17 +4,17 @@ defmodule Platform.Meetings.IntentModel do
 
   The classifier used to take `base_url` and `model` off the
   `meetings.intent_classify` assignee only. A native agent has neither, so on
-  an install without `OLLAMA_BASE_URL` every chunk raised inside the Ollama
+  an install without the Ollama env var every chunk raised inside the Ollama
   adapter and logged one "LLM call failed" warning. This module is the single
   place that decides the route; the classifier, the meeting top bar and
   `admin_health` all ask it rather than re-deriving the rule.
 
   `route/1` returns exactly one of:
 
-    * `{:assignee, %{base_url: b, model: m}}` when the agent has a non-blank
-      `model` AND a non-blank `base_url` (or `OLLAMA_BASE_URL` is non-blank,
-      in which case `b` is nil and the Ollama adapter reads the env var).
-      This is the path that already worked, unchanged.
+    * `{:assignee, %{base_url: b, model: m}}` when
+      `Platform.Agents.ModelRoute.endpoint/1` answers `{:ok, %{base_url: b,
+      model: m}}` for the agent. That module holds the one endpoint rule
+      (task 01a1e670); this is the path that already worked, unchanged.
     * `{:hosted, %{provider: p, module: mod, credentials: creds, model: m, base_url: b}}`
       when the assignee path is not usable and an install-level provider is
       configured under `config :platform, :meetings_intent_model`.
@@ -38,6 +38,7 @@ defmodule Platform.Meetings.IntentModel do
   replaces the built-in adapter module on the hosted route.
   """
 
+  alias Platform.Agents.ModelRoute
   alias Platform.Agents.Providers.Anthropic
   alias Platform.Agents.Providers.Ollama
   alias Platform.Agents.Providers.OpenAI
@@ -66,20 +67,9 @@ defmodule Platform.Meetings.IntentModel do
   @doc "Resolve the model route for the given intent classifier assignee."
   @spec route(map() | nil) :: route()
   def route(agent) do
-    model = agent_field(agent, :model)
-    base_url = agent_field(agent, :base_url)
-
-    cond do
-      present?(model) and present?(base_url) ->
-        {:assignee, %{base_url: base_url, model: model}}
-
-      # The Ollama adapter falls back to OLLAMA_BASE_URL only when :base_url
-      # is nil, so a blank agent base_url is passed on as nil.
-      present?(model) and present?(System.get_env("OLLAMA_BASE_URL")) ->
-        {:assignee, %{base_url: nil, model: model}}
-
-      true ->
-        hosted_route(config())
+    case ModelRoute.endpoint(agent) do
+      {:ok, endpoint} -> {:assignee, endpoint}
+      {:error, :no_endpoint} -> hosted_route(config())
     end
   end
 
@@ -157,11 +147,7 @@ defmodule Platform.Meetings.IntentModel do
 
   defp api_key_from_env(_), do: nil
 
-  defp agent_field(%{} = agent, key), do: Map.get(agent, key)
-  defp agent_field(_, _), do: nil
-
-  defp present?(value) when is_binary(value), do: String.trim(value) != ""
-  defp present?(_), do: false
+  defp present?(value), do: ModelRoute.present?(value)
 
   defp blank_to_nil(value), do: if(present?(value), do: value, else: nil)
 end

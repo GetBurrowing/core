@@ -67,6 +67,7 @@ defmodule Platform.Feedback.Classifier do
   """
 
   alias Platform.Agents.Agent
+  alias Platform.Agents.ModelRoute
   alias Platform.Agents.ToollessChat
   alias Platform.Orchestration.PromptTemplates
   alias Platform.Roles
@@ -207,28 +208,40 @@ defmodule Platform.Feedback.Classifier do
   defp classify_with_model(issue) do
     case safe_assignee() do
       %Agent{} = agent ->
-        case ToollessChat.call(provider_module(), agent, build_messages(issue),
-               temperature: 0.0,
-               max_tokens: @max_tokens,
-               log_tag: "[Feedback.Classifier]",
-               log_context: "repository=#{issue.repository} issue=#{issue.issue_number}"
-             ) do
-          {:ok, content} -> {:ok, parse(content, classifier_label(agent))}
-          :error -> {:error, :provider_failed}
+        # An assignee with no model endpoint (a native role holder) is not a
+        # provider failure: no call is made, and the record says why.
+        case ModelRoute.endpoint(agent) do
+          {:ok, _endpoint} -> call_model(agent, issue)
+          {:error, :no_endpoint} -> {:ok, undecided("no_endpoint")}
         end
 
       nil ->
-        {:ok,
-         %{
-           status: "unassigned",
-           verdict: nil,
-           reason_code: nil,
-           summary: nil,
-           confidence: nil,
-           duplicate_of: nil,
-           classifier: "unassigned"
-         }}
+        {:ok, undecided("unassigned")}
     end
+  end
+
+  defp call_model(agent, issue) do
+    case ToollessChat.call(provider_module(), agent, build_messages(issue),
+           temperature: 0.0,
+           max_tokens: @max_tokens,
+           log_tag: "[Feedback.Classifier]",
+           log_context: "repository=#{issue.repository} issue=#{issue.issue_number}"
+         ) do
+      {:ok, content} -> {:ok, parse(content, classifier_label(agent))}
+      :error -> {:error, :provider_failed}
+    end
+  end
+
+  defp undecided(status) do
+    %{
+      status: status,
+      verdict: nil,
+      reason_code: nil,
+      summary: nil,
+      confidence: nil,
+      duplicate_of: nil,
+      classifier: status
+    }
   end
 
   @doc """

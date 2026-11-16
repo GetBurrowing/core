@@ -79,7 +79,7 @@ defmodule Platform.Meetings.IntentClassifier do
        the enable signal — no env-var double-gate.
     2b. **No model configured** — `Platform.Meetings.IntentModel.route/1`
        answers `{:error, :not_configured}` for the assignee: it has no
-       usable `base_url` + `model` (and `OLLAMA_BASE_URL` is unset) and no
+       usable endpoint (`Platform.Agents.ModelRoute.endpoint/1`) and no
        install-level `:meetings_intent_model` provider is set (task
        01a1e5da). Log ONE `:warning` per room (keyed
        `{:not_configured, room_id}` in `state.seen_rooms`) naming the fix,
