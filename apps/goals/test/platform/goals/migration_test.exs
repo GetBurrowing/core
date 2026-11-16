@@ -1,5 +1,22 @@
 defmodule Platform.Goals.MigrationTest do
-  use Platform.DataCase, async: true
+  use Platform.DataCase, async: false
+
+  import Platform.Goals.OutcomeFixtures
+  alias Platform.Goals
+  @retro_version 20_261_115_164_425
+  @retro_migration Platform.Repo.Migrations.AddGoalRetroAndPacing
+  @opts [log: false, log_migrations_sql: false, migration_lock: false]
+
+  setup_all do
+    path =
+      Path.expand(
+        "../../../priv/repo/migrations/20261115164425_add_goal_retro_and_pacing.exs",
+        __DIR__
+      )
+
+    unless Code.ensure_loaded?(@retro_migration), do: Code.require_file(path)
+    :ok
+  end
 
   @version "20261115152203"
   @migration Path.expand(
@@ -93,5 +110,67 @@ defmodule Platform.Goals.MigrationTest do
 
     assert Regex.match?(~r/^\s*# old-code-compatible:/m, source)
     refute version in String.split(File.read!(@irreversible), "\n", trim: true)
+  end
+
+  for notes? <- [true, false] do
+    @notes? notes?
+    test "retro migration rolls down and up with closed retro rows (notes: #{notes?})" do
+      c = setup_outcome()
+      {:ok, goal} = Goals.update_goal(c.owner, c.goal.id, %{retro_every: 2})
+      check_in = fire(goal)
+      {:ok, _} = Goals.close_wake_up(c.coach, check_in.id, "wait", %{reason: "Wait"})
+      wake = fire(goal)
+
+      {:ok, %{entry: entry}} =
+        Goals.close_retro(c.coach, wake.id, %{
+          title: "Looking back",
+          summary: "Keep the useful work"
+        })
+
+      if @notes? do
+        assert {:ok, _} = Goals.prepare_brief(c.owner, DateTime.to_date(Goals.Clock.now()))
+
+        assert Repo.exists?(
+                 from(b in Goals.BriefItem, where: b.entry_id == ^entry.id and b.kind == "note")
+               )
+      end
+
+      # Every inbound wake-up FK nilifies rather than cascading into the notebook.
+      %{rows: fks} =
+        Repo.query!(
+          "SELECT conname, confdeltype::text FROM pg_constraint WHERE contype = 'f' AND confrelid = 'goal_wake_ups'::regclass ORDER BY conname"
+        )
+
+      assert length(fks) == 3
+      assert Enum.all?(fks, fn [_, action] -> action == "n" end)
+
+      assert :ok = Ecto.Migrator.down(Repo, @retro_version, @retro_migration, @opts)
+
+      assert %{rows: [[0]]} =
+               Repo.query!("SELECT count(*) FROM schema_migrations WHERE version = $1", [
+                 @retro_version
+               ])
+
+      assert %{rows: [[0]]} =
+               Repo.query!("SELECT count(*) FROM goal_brief_items WHERE kind = 'note'")
+
+      assert %{rows: [[0]]} =
+               Repo.query!("SELECT count(*) FROM goal_wake_ups WHERE outcome = 'retro'")
+
+      assert Repo.exists?(from(e in Goals.Entry, where: e.id == ^entry.id and e.kind == "retro"))
+
+      assert Repo.exists?(
+               from(w in Goals.WakeUp, where: w.id == ^check_in.id and w.outcome == "wait")
+             )
+
+      assert :ok = Ecto.Migrator.up(Repo, @retro_version, @retro_migration, @opts)
+
+      assert %{rows: [[@retro_version]]} =
+               Repo.query!("SELECT version FROM schema_migrations WHERE version = $1", [
+                 @retro_version
+               ])
+
+      assert Repo.exists?(from(e in Goals.Entry, where: e.id == ^entry.id and e.kind == "retro"))
+    end
   end
 end
