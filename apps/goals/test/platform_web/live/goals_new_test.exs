@@ -596,6 +596,35 @@ defmodule PlatformWeb.GoalsNewTest do
     assert length(again) == length(messages)
   end
 
+  test "core's system notices in the DM are not shown as the agent's words", %{
+    conn: conn,
+    user: user
+  } do
+    lead = lead!(user)
+    child = open(conn, user)
+    send_text(child, @yt)
+    turn!(lead, user, :yt)
+    proposal = proposal!(user)
+
+    {:ok, system} =
+      Platform.Orchestration.ExecutionSpace.ensure_system_participant(proposal.space_id)
+
+    {:ok, _} =
+      Chat.post_message(%{
+        space_id: proposal.space_id,
+        participant_id: system.id,
+        content_type: "system",
+        content: "SYSTEM-NOTICE-LINE couldn't reply to this message.",
+        metadata: %{"kind" => "reply_failure"}
+      })
+
+    assert render(child) =~ "Good one."
+    refute render(child) =~ "SYSTEM-NOTICE-LINE"
+    {:ok, messages} = Goals.conversation(user, proposal.id)
+    assert Enum.map(messages, & &1.from) == [:person, :agent]
+    assert has_element?(child, "[data-role='goals-new-reply']")
+  end
+
   test "no lead agent: the empty state and no box", %{conn: conn, user: user} do
     child = open(conn, user)
 

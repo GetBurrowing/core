@@ -92,7 +92,9 @@ defmodule Platform.Goals.Proposals do
 
   @doc """
   The opening message and the top-level messages after it in the DM, oldest
-  first, at most #{@conversation_limit}. The addressed user only.
+  first, at most #{@conversation_limit}; the person's and the agent's
+  messages only (core's system notices are left out). The addressed user
+  only.
   """
   def conversation(actor, proposal_id) do
     with {:ok, proposal} <- addressed(actor, proposal_id) do
@@ -112,9 +114,15 @@ defmodule Platform.Goals.Proposals do
           limit: @conversation_limit - length(first)
         )
 
-      {:ok, Enum.map(first ++ rest, &message_view/1)}
+      # Only the person's and the agent's words: core's system notices (a
+      # reply-failure line, authored by the space's system participant) are
+      # not the agent speaking.
+      {:ok, for(msg <- first ++ rest, said?(msg), do: message_view(msg))}
     end
   end
+
+  defp said?(msg),
+    do: msg.author_participant_type in ["user", "agent"] and msg.content_type != "system"
 
   defp message_view(msg) do
     %{
