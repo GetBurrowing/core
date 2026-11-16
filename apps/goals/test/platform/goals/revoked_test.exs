@@ -32,16 +32,19 @@ defmodule Platform.Goals.RevokedTest do
   setup do
     c = setup_brief()
 
-    practice_goal =
+    ask_goal = fn title, mode ->
       goal!(c.owner, c.org, %{
-        title: "Practise",
+        title: title,
         coach_agent_id: c.coach.id,
-        agent_mode: "coach",
+        agent_mode: mode,
         outreach: "pushy",
         rhythm: "daily"
       })
+    end
 
-    ask = queued(c, %{kind: "offer", payload: %{"draft" => "An outline"}})
+    offer_goal = ask_goal.("Write the outline", "advise")
+    practice_goal = ask_goal.("Practise", "coach")
+    ask = queued(%{c | goal: offer_goal}, %{kind: "offer", payload: %{"draft" => "An outline"}})
 
     practice =
       queued(%{c | goal: practice_goal}, %{kind: "practice", payload: %{"cards" => cards(1)}})
@@ -49,7 +52,7 @@ defmodule Platform.Goals.RevokedTest do
     {:ok, [stop]} =
       Goals.put_stops(c.owner, c.goal.id, [%{label: "First 100", target_value: 100}])
 
-    {:ok, reading} = Goals.log_reading(c.owner, c.goal.id, %{value: 12, measured_at: Clock.now()})
+    {:ok, reading} = Goals.log_reading(c.owner, c.goal.id, %{value: 12})
     entry = action(c, %{details: %{"undo_note" => "Delete the draft"}})
     day = date()
     {:ok, _} = Goals.prepare_brief(c.owner, day)
@@ -59,13 +62,14 @@ defmodule Platform.Goals.RevokedTest do
     assert Enum.any?(items, &(&1.kind == :practice)), "no practice brief item was seeded"
     space = space!(c.org)
     join_space!(space.id, :user, c.owner.id)
-    wake = Repo.one!(from(w in WakeUp, where: w.goal_id == ^c.goal.id))
+    wake = Repo.one!(from(w in WakeUp, where: w.goal_id == ^offer_goal.id))
 
     Map.merge(c, %{
       stop: stop,
       reading: reading,
       entry: entry,
       ask: ask,
+      offer_goal: offer_goal,
       practice: practice,
       report: report,
       space: space,
@@ -94,7 +98,7 @@ defmodule Platform.Goals.RevokedTest do
       list_stops: [u, g],
       add_entry: [u, g, %{kind: "note", title: "A note", occurred_at: Clock.now()}],
       list_entries: [u, g, []],
-      log_reading: [u, g, %{value: 40, measured_at: Clock.now()}],
+      log_reading: [u, g, %{value: 40}],
       measure_goal: [u, g],
       goal_number: [u, g, []],
       expected_pace: [u, g, []],
@@ -111,7 +115,7 @@ defmodule Platform.Goals.RevokedTest do
       confirm_proposal: [u, missing, 1],
       cancel_proposal: [u, missing],
       subscribe_proposal: [u, missing],
-      list_wake_ups: [u, g, []],
+      list_wake_ups: [u, c.offer_goal.id, []],
       get_wake_up: [u, c.wake.id],
       clock_status: [u, g],
       restart_clock: [u, g],
@@ -121,7 +125,7 @@ defmodule Platform.Goals.RevokedTest do
       get_retro: [u, g, c.entry.id],
       list_retros: [u, g, []],
       prediction_states: [u, g],
-      list_asks: [u, g, []],
+      list_asks: [u, c.offer_goal.id, []],
       list_my_asks: [u, []],
       answer_ask: [u, c.ask.id, "used", %{}],
       prepare_brief: [u, c.day],

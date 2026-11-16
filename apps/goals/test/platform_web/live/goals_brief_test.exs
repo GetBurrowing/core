@@ -293,9 +293,14 @@ defmodule PlatformWeb.GoalsBriefTest do
     counts = fn -> {Repo.aggregate(Entry, :count), Repo.aggregate(AskAnswer, :count)} end
     before = counts.()
 
-    # No remount and no navigation: the next click is the first to learn.
+    # No remount and no navigation. The events carry the ids the cards held
+    # before the revoke, sent straight to the live component.
     revoke_goals_use!(c.owner)
-    view |> element(button(offer, "answer") <> "[phx-value-answer=used]") |> render_click()
+
+    view
+    |> with_target("[data-role=goals-brief]")
+    |> render_hook("answer", %{item_id: offer.id, answer: "used"})
+
     assert counts.() == before
     html = render(view)
     refute html =~ "Your goals"
@@ -309,10 +314,14 @@ defmodule PlatformWeb.GoalsBriefTest do
 
     view
     |> with_target("[data-role=goals-brief]")
-    |> render_hook("answer", %{item_id: offer.id, answer: "used"})
+    |> render_hook("noted", %{item_id: report.id, noted: "true"})
 
     assert counts.() == before
     refute render(view) =~ "Drafted three videos"
+
+    assert Repo.all(
+             from(e in Entry, where: fragment("?->>'undo_of'", e.details) == ^f.undoable.id)
+           ) == []
 
     # Positive control on the same live view: after a re-grant, Use it writes one answer.
     grant_goals_use!(c.owner)

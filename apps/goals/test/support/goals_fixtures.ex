@@ -87,8 +87,8 @@ defmodule Platform.GoalsFixtures do
     user
   end
 
-  @doc "A root-org admin (core's fixture)."
-  def root_admin!, do: Platform.TenancyFixtures.root_admin!()
+  @doc "A root-org admin (core's fixture) who holds `goals.use`."
+  def root_admin!, do: Platform.TenancyFixtures.root_admin!() |> grant_goals_use!()
 
   @doc "A real `agents` row."
   def agent! do
