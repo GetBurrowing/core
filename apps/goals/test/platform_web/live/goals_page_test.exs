@@ -60,6 +60,72 @@ defmodule PlatformWeb.GoalsPageTest do
     rows
   end
 
+  test "workers section shows coach and contributors read-only, absent without coach", c do
+    coach = agent!()
+    x = agent!()
+    y = agent!()
+    manager = root_admin!()
+    space = space!(c.org_id)
+    for user <- [c.owner, manager], do: join_space!(space.id, :user, user.id)
+    for agent <- [coach, x, y], do: join_space!(space.id, :agent, agent.id)
+    goal = goal!(c.owner, c.org_id, %{coach_agent_id: coach.id, agent_mode: "do"})
+    {:ok, _} = Goals.open_goal(c.owner, goal.id, {:space, space.id})
+    {:ok, _} = Goals.hand_goal_to_space(manager, goal.id, space.id)
+    project = Platform.Goals.OutcomeFixtures.project(c.org_id)
+
+    for {title, status, agent} <- [
+          {"Outline", "backlog", x},
+          {"Draft", "blocked", y},
+          {"Review", "done", x}
+        ] do
+      held = %{"assignee_type" => "agent", "assignee_id" => agent.id}
+
+      task =
+        Platform.Repo.insert!(%Platform.Tasks.Task{
+          project_id: project.id,
+          title: title,
+          status: status,
+          assignee_type: "agent",
+          assignee_id: agent.id,
+          phase_assignees: %{"planning" => held, "execution" => held}
+        })
+
+      {:ok, _} = Goals.link_task(coach, goal.id, task.id)
+    end
+
+    viewer = enabled_user_for_workers!(member!(c.org_id), c.org_id)
+    join_space!(space.id, :user, viewer.id)
+    child = page(c.conn, viewer, goal)
+
+    for copy <- ["Who's working on it", coach.name, "leads", x.name, y.name],
+        do: assert(has_element?(child, "[data-role=goal-workers]", copy))
+
+    refute has_element?(child, "[data-role=goal-workers] button")
+
+    for copy <- ["Outline", "Draft", "Review", "Open", "Blocked", "Done"],
+        do: assert(has_element?(child, "[data-role=goal-workers]", copy))
+
+    [first, second, third] =
+      child
+      |> element("[data-role=goal-workers]")
+      |> render()
+      |> Floki.parse_fragment!()
+      |> Floki.find("[data-role=goal-worker-task]")
+      |> Enum.map(&Floki.text/1)
+
+    assert first =~ "Draft"
+    assert second =~ "Outline"
+    assert third =~ "Review"
+    plain = goal!(c.owner, c.org_id)
+    refute has_element?(page(c.conn, c.owner, plain), "[data-role=goal-workers]")
+    assert PlatformWeb.GoalsWork.status("blocked") == "Blocked"
+    assert PlatformWeb.GoalsWork.status("done") == "Done"
+    assert PlatformWeb.GoalsWork.status("cancelled") == "Cancelled"
+    assert PlatformWeb.GoalsWork.status("in_progress") == "Open"
+  end
+
+  defp enabled_user_for_workers!(user, org), do: grant_goals_use!(user, org)
+
   defp first(name), do: name |> String.split() |> hd()
 
   # The full fixture: three stops (one reached), two actions (one linked to

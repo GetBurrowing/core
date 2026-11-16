@@ -9,6 +9,13 @@ defmodule Platform.Goals.Grant do
   `goal_grants_one_audience`; the same audience twice on one goal is refused
   by a partial unique index per column. `goal_id` and `granted_by_user_id`
   are set by the context from the goal and the actor, never cast.
+
+  The hand-off columns (task 01a1dfc1-dffb, Goals 7/8) are set only by the
+  context, never cast from attrs: `handed_at` and `handed_by_user_id` say the
+  space's agents were given the goal (`Platform.Goals.Handoff`), and the
+  CHECK `goal_grants_handoff_only_space` keeps them on space grants;
+  `card_canvas_id` and the `last_update_*` columns record the card and the
+  last progress update placed in that space.
   """
   use Ecto.Schema
   import Ecto.Changeset
@@ -29,6 +36,12 @@ defmodule Platform.Goals.Grant do
     belongs_to(:org, Platform.Tenancy.Org)
     belongs_to(:space, Platform.Chat.Space)
     belongs_to(:granted_by_user, Platform.Accounts.User)
+    field(:handed_at, :utc_datetime_usec)
+    belongs_to(:handed_by_user, Platform.Accounts.User)
+    field(:card_canvas_id, :binary_id)
+    belongs_to(:last_update_wake_up, Platform.Goals.WakeUp)
+    field(:last_update_at, :utc_datetime_usec)
+    field(:last_update_number, :string)
 
     timestamps()
   end
@@ -74,6 +87,7 @@ defmodule Platform.Goals.Grant do
     changeset
     |> check_constraint(:audience_type, name: :goal_grants_audience_type_check)
     |> check_constraint(:audience_type, name: :goal_grants_one_audience)
+    |> check_constraint(:handed_at, name: :goal_grants_handoff_only_space)
     |> unique_constraint(:user_id, name: :goal_grants_goal_id_user_id_index)
     |> unique_constraint(:org_id, name: :goal_grants_goal_id_org_id_index)
     |> unique_constraint(:space_id, name: :goal_grants_goal_id_space_id_index)
@@ -81,5 +95,8 @@ defmodule Platform.Goals.Grant do
     |> foreign_key_constraint(:user_id)
     |> foreign_key_constraint(:org_id)
     |> foreign_key_constraint(:space_id)
+    |> foreign_key_constraint(:handed_by_user_id)
+    |> foreign_key_constraint(:card_canvas_id)
+    |> foreign_key_constraint(:last_update_wake_up_id)
   end
 end

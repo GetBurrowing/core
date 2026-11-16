@@ -149,6 +149,27 @@ defmodule Platform.Goals.MigrationTest do
     assert index =~ "'open'"
   end
 
+  test "hand-off migration carries the waiver and is absent from the irreversible list" do
+    version = "20261115210000"
+    dir = Path.expand("../../../priv/repo/migrations", __DIR__)
+    source = File.read!(Path.join(dir, "#{version}_add_goal_grant_handoff.exs"))
+
+    assert source =~
+             ~r/^[ \t]*# old-code-compatible: adds nullable columns and one check to goal_grants, a Goals table; no core table changes and the previous release reads none of them$/m
+
+    refute version in String.split(File.read!(@irreversible), "\n", trim: true)
+
+    %{rows: rows} =
+      Platform.Repo.query!(
+        "SELECT column_name FROM information_schema.columns " <>
+          "WHERE table_schema = current_schema() AND table_name = 'goal_grants'"
+      )
+
+    for column <-
+          ~w(handed_at handed_by_user_id card_canvas_id last_update_wake_up_id last_update_at last_update_number),
+        do: assert([column] in rows, "goal_grants.#{column} is missing")
+  end
+
   for notes? <- [true, false] do
     @notes? notes?
     test "retro migration rolls down and up with closed retro rows (notes: #{notes?})" do
@@ -178,7 +199,8 @@ defmodule Platform.Goals.MigrationTest do
           "SELECT conname, confdeltype::text FROM pg_constraint WHERE contype = 'f' AND confrelid = 'goal_wake_ups'::regclass ORDER BY conname"
         )
 
-      assert length(fks) == 3
+      # Goals 7/8 adds the fourth: goal_grants.last_update_wake_up_id.
+      assert length(fks) == 4
       assert Enum.all?(fks, fn [_, action] -> action == "n" end)
 
       assert :ok = Ecto.Migrator.down(Repo, @retro_version, @retro_migration, @opts)

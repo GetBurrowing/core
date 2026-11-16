@@ -9,12 +9,10 @@ defmodule PlatformWeb.GoalsOpenUp do
 
   def label(%{audience: []}, _options), do: "Only you"
 
-  def label(%{audience: audience}, options) do
+  def label(%{audience: audience}, _options) do
     case audience do
-      [%{type: :space, id: id, name: name}] ->
-        if Enum.any?(options.spaces, &(&1.id == id and &1.detail == :agents)),
-          do: "Shown in ##{name}",
-          else: "Shared: #{name}"
+      [%{type: :space, name: name}] ->
+        "Shown in ##{name}"
 
       _ ->
         "Shared: " <> (audience |> Enum.sort_by(&rank(&1.type)) |> Enum.map_join(", ", & &1.name))

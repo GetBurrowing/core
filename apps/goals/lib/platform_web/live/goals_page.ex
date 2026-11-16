@@ -112,6 +112,8 @@ defmodule PlatformWeb.GoalsPage do
          {:ok, takeaways} <- Goals.list_entries(user, goal.id, kind: "takeaway"),
          {:ok, notebook} <- Goals.list_entries(user, goal.id, kind: @notebook_kinds),
          {:ok, authors} <- Goals.entry_authors(user, goal.id),
+         {:ok, contributors} <- Goals.list_contributors(user, goal.id),
+         {:ok, tasks} <- Goals.list_goal_tasks(user, goal.id),
          {:ok, asks} <- Goals.list_asks(user, goal.id),
          {:ok, my_asks} <- Goals.list_my_asks(user, goal_id: goal.id),
          {:ok, clock} <- Goals.clock_status(user, goal.id),
@@ -136,7 +138,7 @@ defmodule PlatformWeb.GoalsPage do
          retro_every: Platform.Goals.Retro.effective_every(goal),
          stops: stops,
          current: current,
-         number: number_view(goal, number, reading, target, pct),
+         number: number_view(goal, number, reading, current, pct),
          source: source,
          can_log?: card.role in [:owner, :coach] and match?(%{kind: :logged}, source),
          actions: actions,
@@ -144,12 +146,33 @@ defmodule PlatformWeb.GoalsPage do
          takeaway_titles: Map.new(takeaways, &{&1.id, &1.title}),
          notebook: notebook,
          authors: authors,
+         contributors: contributors,
+         tasks: Enum.sort_by(tasks, &{!&1.open, &1.title}),
          up_next: up_next(user, List.first(my_asks)),
          next_wake_at: clock && clock.next_wake_at,
          clock_time_zone: (clock && clock.time_zone) || "Etc/UTC",
          answer_lines: answer_lines(asks),
          streak: if(goal.agent_mode == "coach", do: streak, else: 0),
          coach: goal.coach_agent_id && Map.get(authors.agents, goal.coach_agent_id)
+       }}
+    end
+  end
+
+  @doc "The shared card pieces, without the goal page's private briefing reads."
+  def card_data(actor, card, number) do
+    with {:ok, sources} <- Goals.list_sources(actor),
+         {:ok, authors} <- Goals.entry_authors(actor, card.goal.id) do
+      reading = reading(number)
+      current = card.current_stop
+      pct = percent(reading, target(current, card.goal))
+
+      {:ok,
+       %{
+         card: card,
+         authors: authors,
+         coach: card.goal.coach_agent_id && Map.get(authors.agents, card.goal.coach_agent_id),
+         source: Enum.find(sources, &(&1.key == card.goal.source_key)),
+         number: number_view(card.goal, number, reading, current, pct)
        }}
     end
   end
@@ -224,32 +247,20 @@ defmodule PlatformWeb.GoalsPage do
 
   defp percent(_reading, _target), do: nil
 
-  defp number_view(goal, number, reading, target, pct) do
-    unit = goal.unit
+  # The pieces come from `Platform.Goals.NumberText`, the one number sentence
+  # the list and the space update also use; the page adds the source and the
+  # percentage.
+  defp number_view(goal, number, reading, current, pct) do
+    case Platform.Goals.NumberText.parts(goal, current, number) do
+      %{kind: :reading} = parts ->
+        Map.merge(parts, %{source_label: reading.source_label, pct: pct})
 
-    cond do
-      is_nil(target) or is_nil(unit) or String.trim(unit) == "" ->
-        %{kind: :none}
-
-      reading ->
-        %{
-          kind: :reading,
-          value: GoalsComponents.format_number(reading.value),
-          target: GoalsComponents.format_number(target),
-          unit: unit,
-          source_label: reading.source_label,
-          pct: pct
-        }
-
-      true ->
+      %{kind: :target} = parts ->
         {:cannot_measure, m} = number
+        Map.put(parts, :source_label, m.source_label)
 
-        %{
-          kind: :target,
-          target: GoalsComponents.format_number(target),
-          unit: unit,
-          source_label: m.source_label
-        }
+      none ->
+        none
     end
   end
 
@@ -314,6 +325,7 @@ defmodule PlatformWeb.GoalsPage do
         <.log_form :if={@page.can_log?} error={@log_error} />
       </div>
 
+      <PlatformWeb.GoalsWork.section page={@page} />
       <.up_next_card page={@page} />
 
       <section :if={@page.actions != []} data-role="goal-trying">
@@ -590,7 +602,7 @@ defmodule PlatformWeb.GoalsPage do
   # Shared: "Shared by {Owner} and {Coach} · {source}".
   attr(:page, :map, required: true)
 
-  defp meta(assigns) do
+  def meta(assigns) do
     card = assigns.page.card
     owner = first_name(card.owner_name)
     shared? = card.goal.kind == "shared"
@@ -717,7 +729,7 @@ defmodule PlatformWeb.GoalsPage do
 
   attr(:number, :map, required: true)
 
-  defp number_sentence(%{number: %{kind: :reading}} = assigns) do
+  def number_sentence(%{number: %{kind: :reading}} = assigns) do
     ~H"""
     <b class="tabular-nums">{@number.value}</b>
     of {@number.target} {@number.unit}.
@@ -725,7 +737,7 @@ defmodule PlatformWeb.GoalsPage do
     """
   end
 
-  defp number_sentence(%{number: %{kind: :target}} = assigns) do
+  def number_sentence(%{number: %{kind: :target}} = assigns) do
     ~H"""
     Target: {@number.target} {@number.unit}.<span
       :if={@number.source_label}
@@ -735,7 +747,7 @@ defmodule PlatformWeb.GoalsPage do
     """
   end
 
-  defp number_sentence(assigns) do
+  def number_sentence(assigns) do
     ~H"""
     No number to follow yet
     """

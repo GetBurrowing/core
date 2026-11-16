@@ -71,9 +71,9 @@ defmodule Platform.Goals.ToolDefinitions do
     description: "The wake-up to close (from the wake-up prompt or goal_wake_up_get)."
   }
 
-  @closed_result "%{wake_up: %{id, goal_id, status, outcome, closed_at, entry_id}, entry: %{id, kind, title, body, prediction, predicted_by, predicted_change, reading_id, details}, ask: ask or null, task: %{id, title, status} or null}"
+  @closed_result "%{wake_up: %{id, goal_id, status, outcome, closed_at, entry_id}, entry: %{id, kind, title, body, prediction, predicted_by, predicted_change, reading_id, details}, ask: ask or null, task: %{id, title, status, assignee_agent_id} or null (the first task), tasks: [%{id, title, status, assignee_agent_id}]}"
 
-  @refusals "Refusals carry a code: wake_up_closed (already closed or marked unanswered), mode_forbids_do, mode_forbids_task, outreach_off, ask_cap_reached, task_cap_reached, project_not_available, addressee_cannot_see_goal, prediction_required, reason_required, invalid (with messages), not_found."
+  @refusals "Refusals carry a code: wake_up_closed (already closed or marked unanswered), mode_forbids_do, mode_forbids_task, outreach_off, ask_cap_reached, task_cap_reached, too_many_tasks, project_not_available, assignee_not_available, addressee_cannot_see_goal, prediction_required, reason_required, invalid (with messages), not_found."
 
   @doc "The tool definitions, in the ToolSurface rubric shape."
   @spec definitions() :: [map()]
@@ -94,7 +94,7 @@ defmodule Platform.Goals.ToolDefinitions do
       %{
         name: "goal_get",
         description:
-          "Read one goal you coach: settings, stops, notebook entries, readings, the number, open asks with their answers, tagged tasks and the clock. " <>
+          "Read one goal you coach: settings, stops, notebook entries, readings, the number, open asks with their answers, tagged tasks with their assignees, the contributor agents you may give tasks to, and the clock. " <>
             @one_outcome,
         parameters: %{
           goal_id: %{type: "string", required: true, description: "The goal id."},
@@ -110,7 +110,7 @@ defmodule Platform.Goals.ToolDefinitions do
           }
         },
         returns:
-          "%{goal, stops, entries, readings, number_status (reading or cannot_measure), number (for cannot_measure only %{reason, source_key, source_label}, never a value), asks, tasks, clock}",
+          "%{goal, stops, entries, readings, number_status (reading or cannot_measure), number (for cannot_measure only %{reason, source_key, source_label}, never a value), asks, tasks (each with assignee_agent_id and assignee_name), contributors: [%{agent_id, name, space_id, space_name}], clock}",
         limitations:
           @coach_only <>
             " When the number cannot be measured no value is returned; do not state or estimate one.",
@@ -134,7 +134,7 @@ defmodule Platform.Goals.ToolDefinitions do
           }
         },
         returns:
-          "%{wake_up: %{id, goal_id, kind, status, outcome, due_at, respond_by, closed_at}, briefing, text, allowed: %{do, do_with_task, ask, wait, retro} each true or the refusal code that applies now}",
+          "%{wake_up: %{id, goal_id, kind, status, outcome, due_at, respond_by, closed_at}, briefing, text, allowed: %{do, do_with_task, assign, ask, wait, retro} each true or the refusal code that applies now (assign: mode_forbids_do, mode_forbids_task, no_contributors or task_cap_reached)}",
         limitations:
           @coach_only <>
             " With goal_id and no open wake-up, answers no_open_wake_up.",
@@ -143,7 +143,7 @@ defmodule Platform.Goals.ToolDefinitions do
       %{
         name: "goal_do",
         description:
-          "Close a wake-up by recording an action you took or started, optionally creating one task tagged to the goal. " <>
+          "Close a wake-up by recording an action you took or started, optionally creating up to #{Platform.Goals.Limits.max_tasks_per_wake_up()} tasks tagged to the goal, each for you or a contributor agent. " <>
             @one_outcome,
         parameters:
           Map.merge(@prediction, %{
@@ -165,8 +165,19 @@ defmodule Platform.Goals.ToolDefinitions do
             task: %{
               type: "object",
               required: false,
+              schema: %{
+                oneOf: [
+                  %{type: "object"},
+                  %{
+                    type: "array",
+                    items: %{type: "object"},
+                    minItems: 1,
+                    maxItems: Platform.Goals.Limits.max_tasks_per_wake_up()
+                  }
+                ]
+              },
               description:
-                "One task to create, tagged to the goal: %{project_id, title, description, kind?, priority?}. Not allowed for advise or coach goals."
+                "One task, or an array of 1 to #{Platform.Goals.Limits.max_tasks_per_wake_up()} tasks, to create tagged to the goal: %{project_id, title, description, kind?, priority?, assignee_agent_id?}; assignee_agent_id is a contributor goal_wake_up_get lists, and absent means you. Not allowed for advise or coach goals."
             }
           }),
         returns: @closed_result,

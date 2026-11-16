@@ -16,7 +16,9 @@ defmodule PlatformWeb.GoalsList do
 
   `rows/2` turns `Platform.Goals.describe_goals/1` cards into rows. The
   number line is read through `Platform.Goals.goal_number/2`, once per row
-  (Goals 2/8 offers no batch read). The target is the current stop's
+  (Goals 2/8 offers no batch read) and worded by
+  `Platform.Goals.NumberText.sentence/3`, the one sentence the goal page and
+  the space update also use. The target is the current stop's
   `target_value`, else the goal's; the unit is the goal's.
 
     * a reading and a target: "{latest} of {target} {unit}";
@@ -72,7 +74,7 @@ defmodule PlatformWeb.GoalsList do
       numberless?: numberless?,
       kind: "Goal · " <> who(card),
       who: who(card),
-      number_line: number_line(numberless?, reading, target, goal.unit),
+      number_line: Platform.Goals.NumberText.sentence(goal, Map.get(card, :current_stop), number),
       time: time(reading, goal),
       short_time: short_time(reading, goal),
       at: if(reading, do: reading.measured_at, else: goal.inserted_at),
@@ -103,15 +105,6 @@ defmodule PlatformWeb.GoalsList do
 
   defp reading({:reading, %{latest: latest}}), do: latest
   defp reading(_cannot_measure), do: nil
-
-  defp number_line(true, _reading, _target, _unit), do: "No number to follow yet"
-
-  defp number_line(false, nil, target, unit),
-    do: "Target: #{GoalsComponents.format_number(target)} #{unit}"
-
-  defp number_line(false, reading, target, unit),
-    do:
-      "#{GoalsComponents.format_number(reading.value)} of #{GoalsComponents.format_number(target)} #{unit}"
 
   # Kind line, without its "Goal · " prefix (the phone row's third line).
   defp who(%{role: :viewer, owner_name: owner}), do: "Shared by #{owner}"

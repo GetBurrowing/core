@@ -209,6 +209,7 @@ defmodule Platform.Goals.Tools do
            {:ok, number} <- Goals.goal_number(agent, goal.id),
            {:ok, asks} <- Goals.list_asks(agent, goal.id, status: "open"),
            {:ok, tasks} <- Goals.list_goal_tasks(agent, goal.id),
+           {:ok, contributors} <- Goals.list_contributors(agent, goal.id),
            {:ok, clock} <- Goals.clock_status(agent, goal.id) do
         {status, number_json} = number_json(number)
 
@@ -222,6 +223,7 @@ defmodule Platform.Goals.Tools do
            number: number_json,
            asks: Enum.map(asks, &ask_json/1),
            tasks: Enum.map(tasks, &task_link_json/1),
+           contributors: Enum.map(contributors, &contributor_json/1),
            clock: clock_json(clock)
          }}
       else
@@ -306,16 +308,17 @@ defmodule Platform.Goals.Tools do
   defp allowed(agent, goal, wake) do
     cond do
       wake.status != "open" ->
-        Map.new(~w(do do_with_task ask wait retro), &{&1, :wake_up_closed})
+        Map.new(~w(do do_with_task assign ask wait retro), &{&1, :wake_up_closed})
 
       wake.kind == "retro" ->
-        Map.new(~w(do do_with_task ask wait), &{&1, :retro_wake_up})
+        Map.new(~w(do do_with_task assign ask wait), &{&1, :retro_wake_up})
         |> Map.put("retro", true)
 
       true ->
         %{
           "do" => if(goal.agent_mode == "advise", do: :mode_forbids_do, else: true),
           "do_with_task" => do_with_task(agent, goal),
+          "assign" => assign(agent, goal),
           "ask" => ask_allowed(agent, goal),
           "wait" => true,
           "retro" => :not_a_retro
@@ -340,6 +343,24 @@ defmodule Platform.Goals.Tools do
 
           {:error, reason} ->
             reason
+        end
+    end
+  end
+
+  # Goals 7/8: whether goal_do may give a task to a contributor now.
+  defp assign(agent, goal) do
+    case goal.agent_mode do
+      "advise" ->
+        :mode_forbids_do
+
+      "coach" ->
+        :mode_forbids_task
+
+      _ ->
+        case Goals.list_contributors(agent, goal.id) do
+          {:ok, []} -> :no_contributors
+          {:ok, _} -> do_with_task(agent, goal)
+          {:error, reason} -> reason
         end
     end
   end
@@ -396,6 +417,12 @@ defmodule Platform.Goals.Tools do
     task_cap_reached:
       {"This goal already has as many open tagged tasks as allowed.", true,
        "Call goal_do without task, or close with goal_wait until a task closes."},
+    assignee_not_available:
+      {"That agent cannot take a task for this goal. goal_wake_up_get lists the agents who can.",
+       true, "Give the task to an agent goal_wake_up_get lists, or to yourself."},
+    too_many_tasks:
+      {"Too many tasks for one goal_do; the briefing says how many one goal_do may create.", true,
+       "Send fewer tasks; the rest can wait for the next check-in."},
     project_not_available:
       {"That project is not available for this goal's tasks.", true,
        "Pick a live project in the goal's org, or call goal_do without task."},
@@ -731,8 +758,14 @@ defmodule Platform.Goals.Tools do
       status: link.status,
       open: link.open,
       wake_up_id: link.wake_up_id,
-      linked_at: time(link.linked_at)
+      linked_at: time(link.linked_at),
+      assignee_agent_id: link.assignee_agent_id,
+      assignee_name: link.assignee_name
     }
+  end
+
+  defp contributor_json(row) do
+    %{agent_id: row.agent_id, name: row.name, space_id: row.space_id, space_name: row.space_name}
   end
 
   defp clock_json(nil), do: nil
@@ -773,12 +806,24 @@ defmodule Platform.Goals.Tools do
     }
   end
 
-  defp closed_json(%{wake_up: wake, entry: entry, ask: ask, task: task}) do
+  defp closed_json(%{wake_up: wake, entry: entry, ask: ask, task: task} = result) do
     %{
       wake_up: wake_up_json(wake),
       entry: entry_json(entry),
       ask: ask_json(ask),
-      task: task && %{id: task.id, title: task.title, status: task.status}
+      task: task && created_task_json(task),
+      tasks: Enum.map(Map.get(result, :tasks, []), &created_task_json/1)
+    }
+  end
+
+  defp created_task_json(task) do
+    execution = (task.phase_assignees || %{})["execution"] || %{}
+
+    %{
+      id: task.id,
+      title: task.title,
+      status: task.status,
+      assignee_agent_id: execution["assignee_id"]
     }
   end
 

@@ -35,7 +35,12 @@ defmodule Platform.Goals.FlashCardsKindTest do
 
   test "the enabled extension registers the kind and the disabled extension contributes none" do
     assert Platform.Chat.Canvas.Kinds.get("flash_cards") == FlashCards
-    assert Goals.Extension.canvas_kinds() == [FlashCards]
+
+    assert Goals.Extension.canvas_kinds() == [
+             FlashCards,
+             Platform.Goals.CanvasKinds.GoalSpaceCard
+           ]
+
     assert Platform.Extensions.validate() == :ok
     refute FlashCards.inline_opens_canvas?()
 

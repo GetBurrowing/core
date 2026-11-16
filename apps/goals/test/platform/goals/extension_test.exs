@@ -96,7 +96,11 @@ defmodule Platform.Goals.ExtensionTest do
 
     test "registers the goals bundle and practice canvas kind" do
       assert [%{name: "goals"}] = Extension.mcp_tool_bundles()
-      assert Extension.canvas_kinds() == [Platform.Goals.CanvasKinds.FlashCards]
+
+      assert Extension.canvas_kinds() == [
+               Platform.Goals.CanvasKinds.FlashCards,
+               Platform.Goals.CanvasKinds.GoalSpaceCard
+             ]
     end
 
     test "validates" do

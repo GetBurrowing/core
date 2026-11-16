@@ -99,7 +99,10 @@ defmodule PlatformWeb.GoalsWebLayerGuardTest do
   test "apps/goals/lib/platform_web touches no data layer" do
     {files, found} = scan(@web, @data_patterns)
     assert Enum.any?(files, &String.ends_with?(&1, "live/goals_live.ex")), "nothing scanned"
-    assert found == []
+    assert Enum.any?(files, &String.ends_with?(&1, "goals_space_card_component.ex"))
+    {kind_files, kind_found} = scan(Path.join(@lib, "platform/chat/canvas/kinds"), @data_patterns)
+    assert Enum.any?(kind_files, &String.ends_with?(&1, "goal_space_card.ex"))
+    assert found ++ kind_found == []
   end
 
   test "apps/goals/lib has no colour literal" do

@@ -137,44 +137,78 @@ defmodule PlatformWeb.GoalsLive do
        an on-track form the canvas does not show. If things go sideways
        remains absent because there is no stored field or owner.
 
+  Goals 7/8 stage 5 (canvas 01a15ef6-65da-7000-8f21-1f8a41cd2ba9 node p):
+
+   33. The card's agents line is added using the page's avatar recipes;
+       the prototype has no card in a space.
+   34. Hand, handed, take-back and coach-blocker controls are added using
+       briefing button recipes; the prototype has no hand-off controls.
+   35. An Open goal link is added so a space card reaches the goal page;
+       the prototype has no space-card navigation.
+   36. The not-shown state hides all goal content, because a closed grant,
+       unseen goal and lookalike canvas must disclose the same thing.
+   37. A refusal notice appears on the card, following Social's notice
+       recipe; the prototype has no refused-click state.
+   38. Who's working on it adds coach, contributors and task status rows;
+       the goal-rd prototype has no task list.
+   39. Linking starts on the goal page's Open up sheet because core has no
+       module entry point inside a space until a module canvas is there.
+   40. Core's old space-header goal line keeps its old text while Goals
+       drives the space; changing core chat screens is outside this task.
+   41. Closing and reopening a grant creates a new card because closing
+       deletes its grant and revokes the old card's content.
+   42. Posted goal updates remain in the space's history because closing
+       a grant revokes live visibility rather than rewriting history.
+   43. The existing FlashCards kind remains registered alongside the new
+       GoalSpaceCard kind, preserving Goals 6/8 practice cards.
+   44. The card view supplies its badge separately from describe_goal's
+       owner-only audience roster, so participants can read the required
+       space badge without changing the goal page's read-only card shape.
+
+   45. An unassigned task reads "Unassigned", because core tasks can have
+       no assignee and a blank name would hide that state.
+   46. A single-space owner badge now reads "Shown in #space" for generic
+       channels too, so the goal page agrees with its required space card;
+       the Open up sheet's option rows and linking behavior are unchanged.
+
   Goals 5/8 stage 3 (the New goal screen, `PlatformWeb.GoalsNew`, at
   `/m/goals?new=1`):
 
-   33. The box stays under the stream for the whole conversation (the
+   47. The box stays under the stream for the whole conversation (the
        canvas hides it after the first send; a real person has to be able
        to type).
-   34. The greeting is screen copy shown in the agent's message style; the
+   48. The greeting is screen copy shown in the agent's message style; the
        agent did not post it.
-   35. The journey card, the summary card and Create goal are drawn by the
+   49. The journey card, the summary card and Create goal are drawn by the
        page in the stream, not inside an agent message. The journey card
        sits at the time the stops were settled, so it comes just before the
        agent's message about them (the agent records, then speaks).
-   36. The settled lines use general wording; the canvas lines carry sample
+   50. The settled lines use general wording; the canvas lines carry sample
        detail ("You film.", "from your flash cards").
-   37. No "Sign in to YouTube" reply exists because no connected source is
+   51. No "Sign in to YouTube" reply exists because no connected source is
        built; the agent offers the sources the install has.
-   38. "What would you try first?", the tick list and "Looks right, open
+   52. "What would you try first?", the tick list and "Looks right, open
        the goal" are not built: suggestions are recorded at check-ins
        (member 3). "Open the goal" replaces the last chip. The toast after
        opening the goal is not built.
-   39. The conversation is the person's ordinary direct conversation with
+   53. The conversation is the person's ordinary direct conversation with
        the lead agent, so it also appears in Chat, and anything else the
        person or the agent says in that DM after the opening message shows
        here too. Core's system notices in the DM (a reply-failure line) are
        left out: they are not the agent speaking.
-   40. The canvas screen `idea` (accept or decline a suggestion) belongs to
+   54. The canvas screen `idea` (accept or decline a suggestion) belongs to
        Goals 6/8.
-   41. Built and not in the canvas: the "Open the goal" chip, "Start over",
+   55. Built and not in the canvas: the "Open the goal" chip, "Start over",
        the no-lead-agent empty state, the offline line, the
        changed-proposal toast, the shared-suggestion privacy line, and the
        disabled Send and Create goal while a click is in flight.
-   42. The stream's journey card is member 4's journey component unchanged:
+   56. The stream's journey card is member 4's journey component unchanged:
        its sub-line is "by {day month}" or the caption, without the
        canvas's " · {theme}".
-   43. The desktop New goal button and the phone chip are links (they
+   57. The desktop New goal button and the phone chip are links (they
        navigate to `/m/goals?new=1`), styled as the canvas's button and
        chip.
-   44. If the lead role moves to another agent mid-conversation, the screen
+   58. If the lead role moves to another agent mid-conversation, the screen
        names the conversation's agent from its DM participant row, in the
        default colour slot.
   """
@@ -415,6 +449,9 @@ defmodule PlatformWeb.GoalsLive do
 
       case fun.(socket.assigns.user, card.goal.id, audience) do
         {:ok, _} ->
+          if type == "space" and audience not in audience_keys(card),
+            do: Goals.ensure_space_card(socket.assigns.user, card.goal.id, id)
+
           {:noreply, reload(socket)}
 
         {:error, :audience_not_available} ->
