@@ -354,6 +354,74 @@ defmodule PlatformWeb.CalendarLiveTest do
     assert render(view) =~ "My external calendar removed"
   end
 
+  test "external calendars: a partial calendar says how many events were skipped", %{
+    conn: conn,
+    user: user
+  } do
+    insert = fn name, extra ->
+      Repo.insert!(
+        struct(
+          %Calendar.Subscription{
+            owner_id: user.id,
+            name: name,
+            url: "https://calendar.example/feed",
+            refreshed_at: DateTime.utc_now(),
+            error: nil
+          },
+          extra
+        )
+      )
+    end
+
+    two = insert.("Work", skipped_count: 2)
+    one = insert.("Team", skipped_count: 1)
+    complete = insert.("Home", skipped_count: 0)
+
+    failed =
+      insert.("Broken",
+        skipped_count: 1,
+        error: "Unsupported or malformed calendar; availability unknown"
+      )
+
+    {:ok, view, _} = live(conn, "/calendar/settings")
+
+    row = fn sub -> view |> element("#external-calendar-#{sub.id}") |> render() end
+
+    assert has_element?(
+             view,
+             "#external-calendar-#{two.id} [data-role=ext-skipped]",
+             "2 events couldn't be read"
+           )
+
+    assert has_element?(
+             view,
+             "#external-calendar-#{two.id} [data-role=ext-skipped]",
+             "availability unknown"
+           )
+
+    refute row.(two) =~ "blocks availability"
+
+    assert has_element?(
+             view,
+             "#external-calendar-#{one.id} [data-role=ext-skipped]",
+             "1 event couldn't be read"
+           )
+
+    refute row.(one) =~ "events couldn't be read"
+    refute row.(one) =~ "blocks availability"
+
+    assert row.(complete) =~ "blocks availability"
+    refute has_element?(view, "#external-calendar-#{complete.id} [data-role=ext-skipped]")
+
+    assert row.(failed) =~ "Unsupported or malformed calendar; availability unknown"
+    refute has_element?(view, "#external-calendar-#{failed.id} [data-role=ext-skipped]")
+    refute row.(failed) =~ "blocks availability"
+    refute row.(failed) =~ "couldn't be read"
+
+    {:ok, _list, html} = live(conn, "/calendar")
+    assert html =~ "read-only · iCal · 2 events couldn&#39;t be read"
+  end
+
   # ── Calendar v4 shell, list pane and grids (task 01a18d9f stage 1) ──────
 
   # A fixed-offset zone where it is midday now, so chips placed today at
