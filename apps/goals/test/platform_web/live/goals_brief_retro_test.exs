@@ -266,4 +266,3 @@ defmodule PlatformWeb.GoalsBriefRetroTest do
     Enum.find(items, &(&1.kind == :retro && &1.entry_id == entry.id)).id
   end
 end
-

@@ -262,4 +262,3 @@ defmodule PlatformWeb.GoalsBriefComponent do
     """
   end
 end
-

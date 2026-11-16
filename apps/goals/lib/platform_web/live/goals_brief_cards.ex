@@ -491,4 +491,3 @@ defmodule PlatformWeb.GoalsBriefCards do
 
   defp safe_url(_), do: nil
 end
-
