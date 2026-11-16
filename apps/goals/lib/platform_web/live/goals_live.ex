@@ -158,8 +158,10 @@ defmodule PlatformWeb.GoalsLive do
        (member 3). "Open the goal" replaces the last chip. The toast after
        opening the goal is not built.
    39. The conversation is the person's ordinary direct conversation with
-       the lead agent, so it also appears in Chat, and anything else said
-       in that DM after the opening message shows here too.
+       the lead agent, so it also appears in Chat, and anything else the
+       person or the agent says in that DM after the opening message shows
+       here too. Core's system notices in the DM (a reply-failure line) are
+       left out: they are not the agent speaking.
    40. The canvas screen `idea` (accept or decline a suggestion) belongs to
        Goals 6/8.
    41. Built and not in the canvas: the "Open the goal" chip, "Start over",
