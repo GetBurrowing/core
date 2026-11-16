@@ -1482,7 +1482,9 @@ defmodule PlatformWeb.SettingsLiveTest do
     test "the callout uses semantic tokens only" do
       source = File.read!(@settings_path)
       [_, callout] = Regex.run(~r/id="passkey-add-prompt"(.*?)<\/div>/s, source)
-      refute callout =~ ~r/\b(?:bg|text|border)-(?:white|black|gray|slate|zinc|neutral|red|blue|green|amber|yellow|indigo)-?/
+
+      refute callout =~
+               ~r/\b(?:bg|text|border)-(?:white|black|gray|slate|zinc|neutral|red|blue|green|amber|yellow|indigo)-?/
     end
   end
 end

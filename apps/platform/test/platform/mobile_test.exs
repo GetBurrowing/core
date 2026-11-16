@@ -176,6 +176,7 @@ defmodule Platform.MobileTest do
       end
 
       {:ok, code} = Mobile.issue_exchange_code(user, challenge, landing: "/settings?passkey=add")
+
       assert Repo.get_by!(AppLoginCode, code_hash: Mobile.hash(code)).landing ==
                "/settings?passkey=add"
     end
