@@ -659,7 +659,7 @@ defmodule PlatformWeb.GoalsPage do
             {if @next_push and stop.id == @current_id, do: "next push", else: sub_line(stop)}
           </div>
           <a
-            :if={stop.reached_on && retro_for_stop(@page.retros, stop.id)}
+            :if={!@small && stop.reached_on && retro_for_stop(@page.retros, stop.id)}
             href={retro_href(@page.card.goal, retro_for_stop(@page.retros, stop.id).entry_id)}
             class={[link_class(), "inline-block text-xs"]}
           >

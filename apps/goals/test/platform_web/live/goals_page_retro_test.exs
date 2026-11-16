@@ -146,4 +146,18 @@ defmodule PlatformWeb.GoalsPageRetroTest do
       assert goal.retro_every == expected
     end
   end
+
+  test "slowed line appears only until the owner answers", c do
+    refute has_element?(page(c), "[data-role=goal-slowed]")
+    asks = for _ <- 1..3, do: ignore_brief(c)
+
+    assert has_element?(
+             page(c),
+             "[data-role=goal-slowed]",
+             "has slowed down until you answer: check-ins come about once a week."
+           )
+
+    {:ok, _} = Goals.answer_ask(c.owner, hd(asks).id, "declined")
+    refute has_element?(page(c), "[data-role=goal-slowed]")
+  end
 end
