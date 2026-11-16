@@ -112,6 +112,8 @@ defmodule PlatformWeb.GoalsPage do
          {:ok, takeaways} <- Goals.list_entries(user, goal.id, kind: "takeaway"),
          {:ok, notebook} <- Goals.list_entries(user, goal.id, kind: @notebook_kinds),
          {:ok, authors} <- Goals.entry_authors(user, goal.id),
+         {:ok, contributors} <- Goals.list_contributors(user, goal.id),
+         {:ok, tasks} <- Goals.list_goal_tasks(user, goal.id),
          {:ok, asks} <- Goals.list_asks(user, goal.id),
          {:ok, my_asks} <- Goals.list_my_asks(user, goal_id: goal.id),
          {:ok, clock} <- Goals.clock_status(user, goal.id),
@@ -144,6 +146,8 @@ defmodule PlatformWeb.GoalsPage do
          takeaway_titles: Map.new(takeaways, &{&1.id, &1.title}),
          notebook: notebook,
          authors: authors,
+         contributors: contributors,
+         tasks: Enum.sort_by(tasks, &{!&1.open, &1.title}),
          up_next: up_next(user, List.first(my_asks)),
          next_wake_at: clock && clock.next_wake_at,
          clock_time_zone: (clock && clock.time_zone) || "Etc/UTC",
@@ -302,6 +306,7 @@ defmodule PlatformWeb.GoalsPage do
         <.log_form :if={@page.can_log?} error={@log_error} />
       </div>
 
+      <PlatformWeb.GoalsWork.section page={@page} />
       <.up_next_card page={@page} />
 
       <section :if={@page.actions != []} data-role="goal-trying">
@@ -578,7 +583,7 @@ defmodule PlatformWeb.GoalsPage do
   # Shared: "Shared by {Owner} and {Coach} · {source}".
   attr(:page, :map, required: true)
 
-  defp meta(assigns) do
+  def meta(assigns) do
     card = assigns.page.card
     owner = first_name(card.owner_name)
     shared? = card.goal.kind == "shared"
@@ -705,7 +710,7 @@ defmodule PlatformWeb.GoalsPage do
 
   attr(:number, :map, required: true)
 
-  defp number_sentence(%{number: %{kind: :reading}} = assigns) do
+  def number_sentence(%{number: %{kind: :reading}} = assigns) do
     ~H"""
     <b class="tabular-nums">{@number.value}</b>
     of {@number.target} {@number.unit}.
@@ -713,7 +718,7 @@ defmodule PlatformWeb.GoalsPage do
     """
   end
 
-  defp number_sentence(%{number: %{kind: :target}} = assigns) do
+  def number_sentence(%{number: %{kind: :target}} = assigns) do
     ~H"""
     Target: {@number.target} {@number.unit}.<span
       :if={@number.source_label}
@@ -723,7 +728,7 @@ defmodule PlatformWeb.GoalsPage do
     """
   end
 
-  defp number_sentence(assigns) do
+  def number_sentence(assigns) do
     ~H"""
     No number to follow yet
     """

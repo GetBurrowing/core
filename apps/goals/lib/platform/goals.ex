@@ -1518,7 +1518,8 @@ defmodule Platform.Goals do
         )
 
       agent_ids =
-        [goal.coach_agent_id | Enum.map(authors, &elem(&1, 0))]
+        ([goal.coach_agent_id | Enum.map(authors, &elem(&1, 0))] ++
+          Enum.map(Platform.Goals.Handoff.contributors(actor, goal), & &1.agent_id))
         |> Enum.reject(&is_nil/1)
         |> Enum.uniq()
 
@@ -1762,6 +1763,22 @@ defmodule Platform.Goals do
     with :ok <- check_enabled(),
          {:ok, goal} <- fetch_visible(actor, goal_id, false),
          do: {:ok, Platform.Goals.Handoff.contributors(actor, goal)}
+  end
+
+  @doc "Creates the owner's idempotent pinned card for an existing space grant."
+  def ensure_space_card(actor, goal_id, space_id) do
+    with :ok <- check_enabled() do
+      in_transaction(fn ->
+        with {:ok, goal} <- locked_goal(actor, goal_id),
+             :ok <- check_owner(actor, goal),
+             do: Platform.Goals.SpaceCards.ensure(actor, goal, space_id)
+      end)
+    end
+  end
+
+  @doc "A visible space card, resolved through its grant's canvas id."
+  def space_card(actor, canvas_id) do
+    with :ok <- check_enabled(), do: Platform.Goals.SpaceCards.view(actor, canvas_id)
   end
 
   # update_goal/3's lock order: clock, then goal.

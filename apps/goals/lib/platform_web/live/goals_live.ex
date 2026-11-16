@@ -136,6 +136,31 @@ defmodule PlatformWeb.GoalsLive do
    32. The pace sentence omits the sample 52 joined this week, and adds
        an on-track form the canvas does not show. If things go sideways
        remains absent because there is no stored field or owner.
+  Goals 7/8 stage 5 (canvas 01a15ef6-65da-7000-8f21-1f8a41cd2ba9 node p):
+
+   30. The card's agents line is added using the page's avatar recipes;
+       the prototype has no card in a space.
+   31. Hand, handed, take-back and coach-blocker controls are added using
+       briefing button recipes; the prototype has no hand-off controls.
+   32. An Open goal link is added so a space card reaches the goal page;
+       the prototype has no space-card navigation.
+   33. The not-shown state hides all goal content, because a closed grant,
+       unseen goal and lookalike canvas must disclose the same thing.
+   34. A refusal notice appears on the card, following Social's notice
+       recipe; the prototype has no refused-click state.
+   35. Who's working on it adds coach, contributors and task status rows;
+       the goal-rd prototype has no task list.
+   36. Linking starts on the goal page's Open up sheet because core has no
+       module entry point inside a space until a module canvas is there.
+   37. Core's old space-header goal line keeps its old text while Goals
+       drives the space; changing core chat screens is outside this task.
+   38. Closing and reopening a grant creates a new card because closing
+       deletes its grant and revokes the old card's content.
+   39. Posted goal updates remain in the space's history because closing
+       a grant revokes live visibility rather than rewriting history.
+   40. The existing FlashCards kind remains registered alongside the new
+       GoalSpaceCard kind, preserving Goals 6/8 practice cards.
+
   """
   use PlatformWeb, :live_view
 
@@ -366,6 +391,8 @@ defmodule PlatformWeb.GoalsLive do
 
       case fun.(socket.assigns.user, card.goal.id, audience) do
         {:ok, _} ->
+          if type == "space" and audience not in audience_keys(card),
+            do: Goals.ensure_space_card(socket.assigns.user, card.goal.id, id)
           {:noreply, reload(socket)}
 
         {:error, :audience_not_available} ->

@@ -46,6 +46,19 @@ defmodule PlatformWeb.GoalsOpenUpTest do
     refute has_element?(open(user, "/m/goals"), row(goal))
   end
 
+  test "space tick creates a card, a second tick closes it", c do
+    space = space!(c.org_id)
+    join_space!(space.id, :user, c.owner.id)
+    view = page(c.owner, c.goal)
+    event(view, "open_share")
+    toggle(view, "space", space.id)
+    assert [%{card_canvas_id: id}] = Platform.Repo.all(Platform.Goals.Grant)
+    assert id
+    assert Platform.Chat.get_canvas(id)
+    toggle(view, "space", space.id)
+    assert {:error, :not_found} = Goals.space_card(c.owner, id)
+  end
+
   test "person sharing opens access, hides owner controls, and closing revokes access", c do
     hidden(c.viewer, c.goal)
     owner = page(c.owner, c.goal)
@@ -55,6 +68,7 @@ defmodule PlatformWeb.GoalsOpenUpTest do
     assert has_element?(owner, "[data-role='share-sheet']", "Only you can change the goal.")
     for tab <- ["People", "Team", "Space"], do: assert(has_element?(owner, "button", tab))
     toggle(owner, "user", c.viewer.id)
+    assert Platform.Repo.aggregate(Platform.Chat.Canvas, :count) == 0
     badge(owner, "Shared: #{c.viewer.name}")
     assert has_element?(owner, "[data-role='share-sheet']", "Shared: #{c.viewer.name}")
     owner |> element("button", "Done") |> render_click()
