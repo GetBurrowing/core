@@ -347,6 +347,7 @@ defmodule Platform.Application do
     |> maybe_add_canvas_search_backfill(flag)
     |> maybe_add_burrow_docs_seed(flag)
     |> maybe_add_default_space_seed(flag)
+    |> maybe_add_pocket_id_email_login_code(flag)
     |> ensure_task_router_watcher_after_endpoint()
     |> maybe_add_web_boot_gate(role)
     |> maybe_add_web_peer_link(role)
@@ -568,6 +569,26 @@ defmodule Platform.Application do
           Supervisor.child_spec(
             {Task, fn -> Platform.Chat.DefaultSpace.run_at_boot() end},
             id: :default_space_seed,
+            restart: :transient
+          )
+        ]
+    else
+      children
+    end
+  end
+
+  # Turns on pocket-id's email login code on an existing install, once per
+  # install (task 01a1e65e stage 2). A one-shot `Task`, `restart: :transient`,
+  # like the seeds above; it starts asynchronously, so boot never waits on
+  # pocket-id, and `run_at_boot/0` never raises. Disabled in config/test.exs;
+  # tests call `EmailLoginCodeBoot.run_at_boot/1` directly.
+  defp maybe_add_pocket_id_email_login_code(children, flag) do
+    if flag.(:platform, :start_pocket_id_email_login_code, true) do
+      children ++
+        [
+          Supervisor.child_spec(
+            {Task, fn -> Platform.SignInAdmin.EmailLoginCodeBoot.run_at_boot() end},
+            id: :pocket_id_email_login_code,
             restart: :transient
           )
         ]
