@@ -189,6 +189,7 @@ defmodule Platform.SignIn.EmailSetup do
     device in Settings.
     If it wasn't you, tell your Burrow admin straight away.
     """
+
   defp digest(value), do: :crypto.hash(:sha256, value)
   defp code_hash(binding, code), do: :crypto.mac(:hmac, :sha256, binding, code)
 
