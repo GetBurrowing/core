@@ -14,6 +14,11 @@ defmodule Platform.Goals.SpaceUpdatesTest do
   alias Platform.Goals
   alias Platform.Goals.{Clock, Entry, Grant, SpaceUpdates, WakeUp}
 
+  defmodule StubAgentChat do
+    @moduledoc false
+    def chat(_message, _opts), do: {:ok, %{content: "Noted.", model: "stub", usage: %{}}}
+  end
+
   defmodule FailingPoster do
     @moduledoc false
     def post(_attrs), do: {:error, :refused_by_test}
@@ -78,6 +83,29 @@ defmodule Platform.Goals.SpaceUpdatesTest do
   end
 
   defp at_bracket, do: "@" <> "["
+
+  # Core's own router tests start the router and the mutex store the same
+  # way: the test app does not run them by default.
+  defp start_router! do
+    for {key, value} <- [chat_agent_module: StubAgentChat, chat_agent_dispatch_mode: :sync] do
+      previous = Application.fetch_env(:platform, key)
+      Application.put_env(:platform, key, value)
+
+      on_exit(fn ->
+        case previous do
+          {:ok, old} -> Application.put_env(:platform, key, old)
+          :error -> Application.delete_env(:platform, key)
+        end
+      end)
+    end
+
+    for server <- [AttentionRouter, ActiveAgentStore] do
+      pid = Process.whereis(server) || start_supervised!({server, []})
+      Ecto.Adapters.SQL.Sandbox.allow(Repo, self(), pid)
+    end
+
+    :ok
+  end
 
   # ── the stream ───────────────────────────────────────────────────────
 
@@ -241,6 +269,7 @@ defmodule Platform.Goals.SpaceUpdatesTest do
   # ── mentions and routing ─────────────────────────────────────────────
 
   test "a mention in the title or entry is inert, while the same text unescaped is not", c do
+    start_router!()
     named = agent!()
     named_p = join_space!(c.space.id, :agent, named.id)
     {:ok, _} = Chat.add_space_agent(c.space.id, named.id, role: "member")
@@ -279,6 +308,7 @@ defmodule Platform.Goals.SpaceUpdatesTest do
   end
 
   test "the post reaches at most the one other agent holding the mutex", c do
+    start_router!()
     other = agent!()
     other_p = join_space!(c.space.id, :agent, other.id)
 
