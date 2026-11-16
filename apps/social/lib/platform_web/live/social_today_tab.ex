@@ -20,6 +20,12 @@ defmodule PlatformWeb.SocialTodayTab do
     |> assign(:studio_results, [])
     |> assign(:studio_goals, [])
     |> assign(:studio_pitches, [])
+    |> assign(:studio_trends, %{current: nil, previous: nil})
+    |> assign(:studio_trend_source_status, nil)
+    |> assign(:studio_trend_message, nil)
+    |> assign(:studio_saved_trends, MapSet.new())
+    |> assign(:studio_trend_filter, "all")
+    |> assign(:studio_trend_configuration, trend_configuration())
     |> assign(:studio_profile_accessible?, false)
     |> assign(:studio_loaded_profile_ids, MapSet.new())
     |> assign(:studio_post_detail, nil)
@@ -34,7 +40,7 @@ defmodule PlatformWeb.SocialTodayTab do
   @impl true
   def events,
     do:
-      ~w(studio_open_post studio_approve_post studio_revoke_post studio_submit_post studio_plan_post studio_cancel_plan studio_save_post studio_request_changes studio_accept_clip)
+      ~w(studio_open_post studio_approve_post studio_revoke_post studio_submit_post studio_plan_post studio_cancel_plan studio_save_post studio_request_changes studio_accept_clip studio_trend_to_idea studio_trend_filter studio_trends_refresh)
 
   @impl true
   def load(socket) do
@@ -95,6 +101,19 @@ defmodule PlatformWeb.SocialTodayTab do
     )
     |> assign(:studio_goals, goals)
     |> assign(:studio_pitches, pitches)
+    |> assign(:studio_trend_configuration, trend_configuration())
+    |> assign(:studio_saved_trends, saved_trends(socket, profiles))
+    |> assign(
+      :studio_trends,
+      if(profiles == [],
+        do: %{current: nil, previous: nil},
+        else: Social.Trends.latest("wikimedia_pageviews")
+      )
+    )
+    |> assign(
+      :studio_trend_source_status,
+      if(profiles == [], do: nil, else: Social.Trends.source_status("wikimedia_pageviews"))
+    )
     |> assign(:studio_profile_accessible?, profiles != [])
     |> assign(:studio_loaded_profile_ids, MapSet.new(profiles, & &1.id))
     |> assign(:studio_post_detail, nil)
@@ -130,6 +149,7 @@ defmodule PlatformWeb.SocialTodayTab do
 
     socket
     |> SocialScope.assign_profiles(profiles)
+    |> assign(:studio_trend_configuration, trend_configuration())
     |> assign(:studio_today_posts, Enum.filter(socket.assigns.studio_today_posts, keep))
     |> assign(:studio_today_clips, Enum.filter(socket.assigns.studio_today_clips, keep))
     |> assign(:studio_goals, Enum.filter(socket.assigns.studio_goals, keep))
@@ -140,10 +160,86 @@ defmodule PlatformWeb.SocialTodayTab do
     )
     |> assign(:studio_post_detail, if(detail && keep.(detail), do: detail, else: nil))
     |> assign(:studio_profile_accessible?, MapSet.size(allowed) > 0)
+    |> assign(
+      :studio_trends,
+      if(MapSet.size(allowed) == 0,
+        do: %{current: nil, previous: nil},
+        else: socket.assigns.studio_trends
+      )
+    )
+    |> assign(
+      :studio_trend_source_status,
+      if(MapSet.size(allowed) == 0, do: nil, else: socket.assigns.studio_trend_source_status)
+    )
     |> assign(:studio_loaded_profile_ids, allowed)
   end
 
   @impl true
+  def handle_event("studio_trend_filter", %{"filter" => filter}, socket)
+      when filter in ["all", "ai"] do
+    {:noreply, socket |> refresh_authorization() |> assign(:studio_trend_filter, filter)}
+  end
+
+  def handle_event("studio_trends_refresh", _, socket) do
+    socket = refresh_authorization(socket)
+
+    if socket.assigns.studio_profile_accessible? do
+      profiles = SocialScope.visible_profiles(socket) |> Enum.filter(&accessible?(socket, &1))
+
+      {:noreply,
+       socket
+       |> assign(:studio_trends, Social.Trends.latest("wikimedia_pageviews"))
+       |> assign(:studio_trend_source_status, Social.Trends.source_status("wikimedia_pageviews"))
+       |> assign(:studio_saved_trends, saved_trends(socket, profiles))}
+    else
+      {:noreply, socket}
+    end
+  end
+
+  def handle_event(
+        "studio_trend_to_idea",
+        %{"id" => id, "snapshot_id" => snapshot_id, "profile_id" => rendered_profile_id},
+        socket
+      ) do
+    socket = refresh_authorization(socket)
+
+    case {socket.assigns.scope, socket.assigns.user} do
+      {{:profile, %{id: ^rendered_profile_id} = profile}, %{id: user_id}} ->
+        case Social.Trends.turn_into_idea(
+               profile.org_id,
+               profile.id,
+               "wikimedia_pageviews",
+               id,
+               user_id,
+               snapshot_id
+             ) do
+          {:ok, _idea} ->
+            {:noreply,
+             socket
+             |> assign(:studio_trend_message, "Idea saved.")
+             |> assign(:studio_saved_trends, MapSet.put(socket.assigns.studio_saved_trends, id))}
+
+          {:error, _} ->
+            {:noreply,
+             assign(
+               socket,
+               :studio_trend_message,
+               "Could not save this idea. Refresh and try again."
+             )}
+        end
+
+      _ ->
+        {:noreply, assign(socket, :studio_trend_message, "Choose a brand to save an idea.")}
+    end
+  end
+
+  def handle_event("studio_trend_to_idea", _, socket),
+    do:
+      {:noreply,
+       socket
+       |> refresh_authorization()
+       |> assign(:studio_trend_message, "Choose a brand to save an idea.")}
+
   def handle_event("studio_open_post", %{"id" => id}, socket) do
     socket = load(socket)
     detail = detail(socket, id)
@@ -901,9 +997,134 @@ defmodule PlatformWeb.SocialTodayTab do
               Open Ideas
             </button>
           </section>
-          <section data-role="studio-trends" class="rounded-box border border-base-300 p-4">
-            <h2 class="text-lg font-semibold">Trends</h2>
-            <p>No trend data available.</p>
+          <section data-role="studio-trends" class="rounded-box border border-base-300 p-4 space-y-3">
+            <h2 class="text-lg font-semibold">What's moving</h2>
+            <p>Most viewed on Wikipedia · English edition</p>
+            <p :if={@studio_trend_configuration == :disabled}>
+              Trend updates are switched off.
+              <span :if={@studio_trends.current}>Stored data is shown.</span>
+            </p>
+            <p :if={@studio_trend_configuration == :unconfigured}>
+              Trend source is not configured.
+            </p>
+            <p :if={
+              @studio_trend_source_status && @studio_trend_source_status.status == "not_yet_available"
+            }>
+              Next daily dataset is unavailable.
+            </p>
+            <p :if={
+              @studio_trend_source_status &&
+                @studio_trend_source_status.status in ["throttled", "unavailable"]
+            }>
+              The source is currently unavailable.
+              <span :if={@studio_trends.current}>The last successful data is shown.</span>
+            </p>
+            <p :if={is_nil(@studio_trends.current)}>No trend data available.</p>
+            <button
+              type="button"
+              phx-click="studio_trends_refresh"
+              data-role="trends-refresh"
+              class="btn btn-ghost min-h-[44px]"
+            >
+              Refresh list
+            </button>
+            <div :if={@studio_trends.current} class="space-y-3">
+              <p class="text-sm opacity-70">
+                Reporting date {@studio_trends.current.reporting_date} · observed {Calendar.strftime(
+                  @studio_trends.current.observed_at,
+                  "%b %d, %Y at %H:%M UTC"
+                )}
+              </p>
+              <p :if={stale_trends?(@studio_trends.current)}>
+                Observation is stale.
+              </p>
+              <button
+                type="button"
+                phx-click="studio_trend_filter"
+                phx-value-filter="all"
+                aria-pressed={to_string(@studio_trend_filter == "all")}
+                class={[
+                  "btn btn-sm min-h-[44px]",
+                  if(@studio_trend_filter == "all", do: "btn-primary", else: "btn-ghost")
+                ]}
+              >
+                All stories
+              </button>
+              <button
+                type="button"
+                phx-click="studio_trend_filter"
+                phx-value-filter="ai"
+                data-role="trends-ai-filter"
+                aria-pressed={to_string(@studio_trend_filter == "ai")}
+                class={[
+                  "btn btn-sm min-h-[44px]",
+                  if(@studio_trend_filter == "ai", do: "btn-primary", else: "btn-ghost")
+                ]}
+              >
+                AI keywords
+              </button>
+              <p :if={@studio_trend_filter == "ai"}>
+                Matches AI, artificial intelligence, machine learning or LLM in the title.
+              </p>
+              <p :if={
+                Enum.all?(
+                  @studio_trends.current.items,
+                  &(not trend_matches?(&1, @studio_trend_filter))
+                )
+              }>
+                No matching article titles.
+              </p>
+              <div
+                :for={item <- @studio_trends.current.items}
+                :if={trend_matches?(item, @studio_trend_filter)}
+                class="border-t border-base-300 py-3 space-y-2"
+              >
+                <a
+                  href={item.url}
+                  target="_blank"
+                  rel="noopener noreferrer"
+                  class="link link-primary font-medium break-words inline-flex min-h-[44px] items-center"
+                >
+                  {item.title}
+                </a>
+                <p class="text-sm opacity-70">
+                  Rank {item.rank} · {trend_movement(@studio_trends, item.id)} · {format_pageviews(
+                    item.pageviews
+                  )} pageviews
+                </p>
+                <button
+                  :if={@scope != :all and @studio_profile_accessible?}
+                  type="button"
+                  phx-click="studio_trend_to_idea"
+                  phx-value-id={item.id}
+                  phx-value-snapshot_id={@studio_trends.current.id}
+                  phx-value-profile_id={@profile.id}
+                  data-role="trend-to-idea"
+                  data-story-id={item.id}
+                  class="btn btn-outline btn-sm min-h-[44px]"
+                >
+                  {if MapSet.member?(@studio_saved_trends, item.id),
+                    do: "Already saved",
+                    else: "Turn into an idea"}
+                </button>
+              </div>
+              <div
+                :for={item <- absent_trends(@studio_trends)}
+                :if={trend_matches?(item, @studio_trend_filter)}
+                class="border-t border-base-300 py-3 space-y-2"
+              >
+                <a
+                  href={item.url}
+                  target="_blank"
+                  rel="noopener noreferrer"
+                  class="link link-primary break-words inline-flex min-h-[44px] items-center"
+                >
+                  {item.title}
+                </a>
+                <p>Not in latest observed list</p>
+              </div>
+            </div>
+            <p :if={@studio_trend_message} role="status">{@studio_trend_message}</p>
           </section>
           <.live_component
             :if={(@scope != :all and @profile) && @studio_profile_accessible?}
@@ -916,5 +1137,90 @@ defmodule PlatformWeb.SocialTodayTab do
       </div>
     </section>
     """
+  end
+
+  defp trend_movement(trends, id) do
+    case Social.Trends.Comparison.movement(trends.previous, trends.current)[id] do
+      {:up, amount} ->
+        "Up #{amount}"
+
+      {:down, amount} ->
+        "Down #{amount}"
+
+      :unchanged ->
+        "Unchanged"
+
+      :new_in_sample ->
+        "New in observed list"
+
+      _ ->
+        if trends.previous && trends.previous.reporting_date && trends.current.reporting_date &&
+             Date.diff(trends.current.reporting_date, trends.previous.reporting_date) != 1,
+           do: "No consecutive-day comparison",
+           else: "No previous comparison"
+    end
+  end
+
+  defp saved_trends(socket, profiles) do
+    case {socket.assigns.scope, socket.assigns.user} do
+      {{:profile, %{id: id}}, %{id: user_id}} ->
+        case Enum.find(profiles, &(&1.id == id)) do
+          nil -> MapSet.new()
+          profile -> Social.Trends.saved_story_ids(profile.org_id, profile.id, user_id)
+        end
+
+      _ ->
+        MapSet.new()
+    end
+  end
+
+  defp format_pageviews(value),
+    do: value |> Integer.to_string() |> String.replace(~r/\B(?=(\d{3})+(?!\d))/, ",")
+
+  defp trend_matches?(_item, "all"), do: true
+
+  defp trend_matches?(item, "ai") do
+    Regex.match?(~r/\b(ai|artificial intelligence|machine learning|llms?)\b/iu, item.title)
+  end
+
+  defp absent_trends(%{previous: nil}), do: []
+
+  defp absent_trends(%{previous: previous, current: current}) do
+    movement = Social.Trends.Comparison.movement(previous, current)
+    Enum.filter(previous.items, &(movement[&1.id] == :absent_from_sample))
+  end
+
+  defp stale_trends?(snapshot) do
+    config = Application.get_env(:social, :trends, [])
+
+    hours =
+      case Keyword.get(config, :stale_after_hours, 48) do
+        n when is_integer(n) and n in 1..720 -> n
+        _ -> 48
+      end
+
+    end_of_period =
+      snapshot.reporting_date |> Date.add(1) |> DateTime.new!(~T[00:00:00], "Etc/UTC")
+
+    DateTime.diff(DateTime.utc_now(), end_of_period, :second) > hours * 3600
+  end
+
+  defp trend_source_configured? do
+    config = Application.get_env(:social, :trends, [])
+    contact = Application.get_env(:social, :trends_wikimedia, []) |> Keyword.get(:contact)
+
+    Keyword.get(config, :source) == "wikimedia_pageviews" and is_binary(contact) and
+      String.valid?(contact) and String.trim(contact) != "" and byte_size(contact) <= 300 and
+      not String.contains?(contact, ["\r", "\n", <<0>>])
+  end
+
+  defp trend_configuration do
+    config = Application.get_env(:social, :trends, [])
+
+    cond do
+      Keyword.get(config, :enabled, false) != true -> :disabled
+      not trend_source_configured?() -> :unconfigured
+      true -> :enabled
+    end
   end
 end

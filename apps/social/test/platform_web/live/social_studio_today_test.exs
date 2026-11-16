@@ -62,6 +62,422 @@ defmodule PlatformWeb.SocialStudioTodayTest do
     assert has_element?(view, "[data-role='studio-trends']", "No trend data")
   end
 
+  test "displays Wikipedia reporting date and pageviews rather than unrelated metrics", %{
+    conn: conn
+  } do
+    w = studio_world!()
+
+    assert {:ok, _} =
+             Social.Trends.record_snapshot(%{
+               source: "wikimedia_pageviews",
+               limit: 1,
+               complete: true,
+               reporting_date: ~D[2026-11-13],
+               observed_at: ~U[2026-11-15 10:00:00Z],
+               items: [
+                 %{
+                   id: "Example",
+                   rank: 3,
+                   title: "Example",
+                   url: "https://en.wikipedia.org/wiki/Example",
+                   pageviews: 123
+                 }
+               ]
+             })
+
+    view = open(conn, w.approver, "?profile=#{w.profile.id}")
+    assert has_element?(view, "[data-role='studio-trends']", "Most viewed on Wikipedia")
+    assert has_element?(view, "[data-role='studio-trends']", "2026-11-13")
+    assert has_element?(view, "[data-role='studio-trends']", "123 pageviews")
+    refute has_element?(view, "[data-role='studio-trends']", "points")
+  end
+
+  test "old reporting data stays stale even when observed just now", %{conn: conn} do
+    w = studio_world!()
+
+    assert {:ok, _} =
+             Social.Trends.record_snapshot(%{
+               source: "wikimedia_pageviews",
+               limit: 1,
+               complete: true,
+               reporting_date: Date.add(Date.utc_today(), -7),
+               observed_at: DateTime.utc_now(),
+               items: [
+                 %{
+                   id: "Example",
+                   rank: 1,
+                   title: "Example",
+                   url: "https://en.wikipedia.org/wiki/Example",
+                   pageviews: 123
+                 }
+               ]
+             })
+
+    view = open(conn, w.approver, "?profile=#{w.profile.id}")
+    assert has_element?(view, "[data-role='studio-trends']", "stale")
+  end
+
+  test "an empty topic filter explains that no titles matched", %{conn: conn} do
+    w = studio_world!()
+
+    assert {:ok, _} =
+             Social.Trends.record_snapshot(%{
+               source: "wikimedia_pageviews",
+               limit: 1,
+               complete: true,
+               reporting_date: Date.add(Date.utc_today(), -1),
+               observed_at: DateTime.utc_now(),
+               items: [
+                 %{
+                   id: "Example",
+                   rank: 1,
+                   title: "A bicycle story",
+                   url: "https://en.wikipedia.org/wiki/Example",
+                   pageviews: 123
+                 }
+               ]
+             })
+
+    view = open(conn, w.approver, "?profile=#{w.profile.id}")
+    view |> element("[data-role='trends-ai-filter']") |> render_click()
+    assert has_element?(view, "[data-role='studio-trends']", "No matching article titles")
+  end
+
+  test "cached data says when automatic source updates are switched off", %{conn: conn} do
+    old = Application.get_env(:social, :trends)
+
+    on_exit(fn ->
+      if is_nil(old),
+        do: Application.delete_env(:social, :trends),
+        else: Application.put_env(:social, :trends, old)
+    end)
+
+    Application.put_env(:social, :trends, enabled: false)
+    w = studio_world!()
+
+    assert {:ok, _} =
+             Social.Trends.record_snapshot(%{
+               source: "wikimedia_pageviews",
+               limit: 1,
+               complete: true,
+               reporting_date: Date.add(Date.utc_today(), -1),
+               observed_at: DateTime.utc_now(),
+               items: [
+                 %{
+                   id: "Example",
+                   rank: 1,
+                   title: "Example",
+                   url: "https://en.wikipedia.org/wiki/Example",
+                   pageviews: 123
+                 }
+               ]
+             })
+
+    view = open(conn, w.approver, "?profile=#{w.profile.id}")
+    assert has_element?(view, "[data-role='studio-trends']", "Trend updates are switched off")
+    assert has_element?(view, "[data-role='studio-trends']", "Example")
+    Application.put_env(:social, :trends, enabled: true, source: nil)
+    view |> element("[data-role='trends-ai-filter']") |> render_click()
+    assert has_element?(view, "[data-role='studio-trends']", "Trend source is not configured")
+  end
+
+  test "shows that the next Wikipedia dataset has not arrived while keeping the last one", %{
+    conn: conn
+  } do
+    w = studio_world!()
+
+    assert {:ok, _} =
+             Social.Trends.record_snapshot(%{
+               source: "wikimedia_pageviews",
+               limit: 1,
+               complete: true,
+               reporting_date: Date.add(Date.utc_today(), -1),
+               observed_at: DateTime.utc_now(),
+               items: [
+                 %{
+                   id: "Example",
+                   rank: 1,
+                   title: "Example",
+                   url: "https://en.wikipedia.org/wiki/Example",
+                   pageviews: 123
+                 }
+               ]
+             })
+
+    Platform.Repo.insert!(%Social.Trends.SourceState{
+      source: "wikimedia_pageviews",
+      status: "not_yet_available",
+      last_attempt_at: DateTime.utc_now()
+    })
+
+    view = open(conn, w.approver, "?profile=#{w.profile.id}")
+    assert has_element?(view, "[data-role='studio-trends']", "Example")
+
+    assert has_element?(
+             view,
+             "[data-role='studio-trends']",
+             "Next daily dataset is unavailable"
+           )
+  end
+
+  test "a source failure before the first dataset does not claim old data is shown", %{conn: conn} do
+    w = studio_world!()
+
+    Platform.Repo.insert!(%Social.Trends.SourceState{
+      source: "wikimedia_pageviews",
+      status: "unavailable",
+      last_attempt_at: DateTime.utc_now()
+    })
+
+    view = open(conn, w.approver, "?profile=#{w.profile.id}")
+
+    assert has_element?(
+             view,
+             "[data-role='studio-trends']",
+             "The source is currently unavailable"
+           )
+
+    refute has_element?(view, "[data-role='studio-trends']", "last successful data is shown")
+  end
+
+  test "shows observed Wikipedia ranks and creates one idea on replay", %{conn: conn} do
+    w = studio_world!()
+
+    assert {:ok, _} =
+             Social.Trends.record_snapshot(%{
+               source: "wikimedia_pageviews",
+               limit: 20,
+               complete: true,
+               observed_at: ~U[2026-11-15 10:00:00Z],
+               reporting_date: ~D[2026-11-13],
+               items: [
+                 %{
+                   id: "7",
+                   rank: 2,
+                   title: "Synthetic story",
+                   url: "https://example.com/story",
+                   pageviews: 20
+                 }
+               ]
+             })
+
+    assert {:ok, _} =
+             Social.Trends.record_snapshot(%{
+               source: "wikimedia_pageviews",
+               limit: 20,
+               complete: true,
+               observed_at: ~U[2026-11-15 11:00:00Z],
+               reporting_date: ~D[2026-11-14],
+               items: [
+                 %{
+                   id: "7",
+                   rank: 1,
+                   title: "Synthetic story",
+                   url: "https://example.com/story",
+                   pageviews: 21
+                 }
+               ]
+             })
+
+    view = open(conn, w.approver, "?profile=#{w.profile.id}")
+    assert has_element?(view, "[data-role='studio-trends']", "Wikipedia")
+    assert has_element?(view, "[data-role='studio-trends']", "Synthetic story")
+    assert has_element?(view, "[data-role='studio-trends']", "Up 1")
+    assert has_element?(view, "[data-role='studio-trends']", "Stored data")
+    assert has_element?(view, "[data-role='trends-refresh']", "Refresh list")
+    view |> element("[data-role='trend-to-idea'][data-story-id='7']") |> render_click()
+    assert has_element?(view, "[data-role='trend-to-idea'][data-story-id='7']", "Already saved")
+    view |> element("[data-role='trend-to-idea'][data-story-id='7']") |> render_click()
+
+    view = open(conn, w.approver, "?profile=#{w.profile.id}")
+    assert has_element?(view, "[data-role='trend-to-idea'][data-story-id='7']", "Already saved")
+
+    assert Platform.Repo.aggregate(
+             from(i in Social.Idea, where: i.profile_id == ^w.profile.id),
+             :count
+           ) == 1
+  end
+
+  test "filters the watchlist without changing source rank and requires a brand to save", %{
+    conn: conn
+  } do
+    w = studio_world!()
+
+    assert {:ok, _} =
+             Social.Trends.record_snapshot(%{
+               source: "wikimedia_pageviews",
+               limit: 20,
+               complete: true,
+               observed_at: ~U[2026-11-15 10:00:00Z],
+               reporting_date: ~D[2026-11-13],
+               items: [
+                 %{
+                   id: "a",
+                   rank: 1,
+                   title: "AI research",
+                   url: "https://example.com/a",
+                   pageviews: 4
+                 },
+                 %{
+                   id: "b",
+                   rank: 2,
+                   title: "A bicycle story",
+                   url: "https://example.com/b",
+                   pageviews: 2
+                 }
+               ]
+             })
+
+    view = open(conn, w.approver, "?profile=#{w.profile.id}")
+    view |> element("[data-role='trends-ai-filter']") |> render_click()
+    assert has_element?(view, "[data-role='studio-trends']", "AI research")
+    refute has_element?(view, "[data-role='studio-trends']", "A bicycle story")
+    assert has_element?(view, "[data-role='studio-trends']", "Rank 1")
+    view |> form("#social-profile-switcher", %{profile_id: "all"}) |> render_change()
+    refute has_element?(view, "[data-role='trend-to-idea']")
+
+    render_click(view, "studio_trend_to_idea", %{
+      "id" => "a",
+      "snapshot_id" => Social.Trends.latest("wikimedia_pageviews").current.id
+    })
+
+    assert Platform.Repo.aggregate(
+             from(i in Social.Idea, where: i.profile_id == ^w.profile.id),
+             :count
+           ) == 0
+  end
+
+  test "labels stories missing from the next comparable observed list", %{conn: conn} do
+    w = studio_world!()
+
+    old = %{
+      source: "wikimedia_pageviews",
+      limit: 20,
+      complete: true,
+      observed_at: ~U[2026-11-15 10:00:00Z],
+      reporting_date: ~D[2026-11-13],
+      items: [
+        %{
+          id: "a",
+          rank: 1,
+          title: "Previous story",
+          url: "https://example.com/a",
+          pageviews: 4
+        }
+      ]
+    }
+
+    new = %{
+      old
+      | observed_at: ~U[2026-11-15 11:00:00Z],
+        reporting_date: ~D[2026-11-14],
+        items: [
+          %{
+            id: "b",
+            rank: 1,
+            title: "New story",
+            url: "https://example.com/b",
+            pageviews: 2
+          }
+        ]
+    }
+
+    assert {:ok, _} = Social.Trends.record_snapshot(old)
+    assert {:ok, _} = Social.Trends.record_snapshot(new)
+    view = open(conn, w.approver, "?profile=#{w.profile.id}")
+    assert has_element?(view, "[data-role='studio-trends']", "New in observed list")
+    assert has_element?(view, "[data-role='studio-trends']", "Previous story")
+    assert has_element?(view, "[data-role='studio-trends']", "Not in latest observed list")
+  end
+
+  test "disabling Studio refuses a direct trend event from an already-open page", %{conn: conn} do
+    w = studio_world!()
+
+    assert {:ok, _} =
+             Social.Trends.record_snapshot(%{
+               source: "wikimedia_pageviews",
+               limit: 20,
+               complete: true,
+               observed_at: ~U[2026-11-15 10:00:00Z],
+               reporting_date: ~D[2026-11-13],
+               items: [
+                 %{
+                   id: "x",
+                   rank: 1,
+                   title: "Synthetic",
+                   url: "https://example.com",
+                   pageviews: 1
+                 }
+               ]
+             })
+
+    view = open(conn, w.approver, "?profile=#{w.profile.id}")
+    assert has_element?(view, "[data-role='trend-to-idea']")
+    assert {:ok, _} = Social.Studio.set_enabled(w.org_id, w.profile.id, w.approver.id, false)
+
+    render_click(view, "studio_trend_to_idea", %{
+      "id" => "x",
+      "snapshot_id" => Social.Trends.latest("wikimedia_pageviews").current.id
+    })
+
+    assert Platform.Repo.aggregate(
+             from(i in Social.Idea, where: i.profile_id == ^w.profile.id),
+             :count
+           ) == 0
+
+    refute has_element?(view, "[data-role='studio-trends']", "Synthetic")
+  end
+
+  test "a refresh between viewing and clicking refuses to save a different observation", %{
+    conn: conn
+  } do
+    w = studio_world!()
+
+    first = %{
+      source: "wikimedia_pageviews",
+      limit: 20,
+      complete: true,
+      observed_at: ~U[2026-11-15 10:00:00Z],
+      reporting_date: ~D[2026-11-13],
+      items: [
+        %{
+          id: "x",
+          rank: 1,
+          title: "Shown title",
+          url: "https://example.com",
+          pageviews: 1
+        }
+      ]
+    }
+
+    assert {:ok, _} = Social.Trends.record_snapshot(first)
+    view = open(conn, w.approver, "?profile=#{w.profile.id}")
+
+    changed = %{
+      first
+      | observed_at: ~U[2026-11-15 11:00:00Z],
+        reporting_date: ~D[2026-11-14],
+        items: [
+          %{
+            id: "x",
+            rank: 1,
+            title: "Changed title",
+            url: "https://example.com",
+            pageviews: 2
+          }
+        ]
+    }
+
+    assert {:ok, _} = Social.Trends.record_snapshot(changed)
+    view |> element("[data-role='trend-to-idea']") |> render_click()
+    assert has_element?(view, "[data-role='studio-trends']", "Could not save this idea")
+
+    assert Platform.Repo.aggregate(
+             from(i in Social.Idea, where: i.profile_id == ^w.profile.id),
+             :count
+           ) == 0
+  end
+
   test "Today only shows agent ideas for enabled visible profiles", %{conn: conn} do
     w = studio_world!()
     other = studio_world!()
