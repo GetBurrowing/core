@@ -193,24 +193,81 @@ defmodule PlatformWeb.GoalsFlashCardsComponent do
     ~H"""
     <div id={@id} data-role="goals-flash-cards" data-ask-id={@ask && @ask.id} phx-target={@myself}>
       <div :if={@ask} class="mt-3">
-        <button :if={!@done && @card} type="button" data-role="flash-card" aria-label="Turn the card over" phx-click="flip" phx-keydown="flip-key" phx-target={@myself} class="focus-visible-ring flex min-h-32 w-full flex-col items-center justify-center rounded-xl border border-edge bg-base-200 px-4 py-6 text-center">
-          <span class="text-2xl font-bold text-base-content">{if @flipped, do: @card.back, else: @card.front}</span>
-          <span class="mt-2 text-xs text-subtle">{if @flipped, do: @card.front, else: "Tap to turn it over"}</span>
+        <button
+          :if={!@done && @card}
+          type="button"
+          data-role="flash-card"
+          aria-label="Turn the card over"
+          phx-click="flip"
+          phx-keydown="flip-key"
+          phx-target={@myself}
+          class="focus-visible-ring flex min-h-32 w-full flex-col items-center justify-center rounded-xl border border-edge bg-base-200 px-4 py-6 text-center"
+        >
+          <span class="text-2xl font-bold text-base-content">
+            {if @flipped, do: @card.back, else: @card.front}
+          </span>
+          <span class="mt-2 text-xs text-subtle">
+            {if @flipped, do: @card.front, else: "Tap to turn it over"}
+          </span>
         </button>
         <div :if={!@done} class="mt-3 flex flex-wrap items-center justify-between gap-2">
           <span class="text-xs text-subtle">Card {@cursor + 1} of {length(@deck)}</span>
-          <button :if={!@flipped} type="button" class="btn btn-sm min-h-11 focus-visible-ring btn-primary lg:min-h-0" phx-click="flip" phx-target={@myself} data-action="flip">Turn it over</button>
+          <button
+            :if={!@flipped}
+            type="button"
+            class="btn btn-sm min-h-11 focus-visible-ring btn-primary lg:min-h-0"
+            phx-click="flip"
+            phx-target={@myself}
+            data-action="flip"
+          >
+            Turn it over
+          </button>
           <div :if={@flipped} class="flex gap-2">
-            <button type="button" class="btn btn-sm min-h-11 focus-visible-ring border-edge bg-base-300 text-base-content lg:min-h-0" phx-click="missed" phx-target={@myself} data-action="missed">Missed it</button>
-            <button type="button" class="btn btn-sm min-h-11 focus-visible-ring btn-primary lg:min-h-0" phx-click="got" phx-target={@myself} data-action="got">Got it</button>
+            <button
+              type="button"
+              class="btn btn-sm min-h-11 focus-visible-ring border-edge bg-base-300 text-base-content lg:min-h-0"
+              phx-click="missed"
+              phx-target={@myself}
+              data-action="missed"
+            >
+              Missed it
+            </button>
+            <button
+              type="button"
+              class="btn btn-sm min-h-11 focus-visible-ring btn-primary lg:min-h-0"
+              phx-click="got"
+              phx-target={@myself}
+              data-action="got"
+            >
+              Got it
+            </button>
           </div>
         </div>
-        <div :if={@done} data-role="flash-card-done" class="flex min-h-32 flex-col items-center justify-center rounded-xl border border-edge bg-base-200 px-4 py-6 text-center">
-          <p class="text-base font-semibold text-base-content">Done for today: {@got} of {length(cards(@ask))}</p>
-          <p :if={@reading} class="mt-2 text-sm text-subtle">That makes {number(@reading.value)} {@reading.unit}.</p>
-          <p :if={@coach_mode && @streak > 0} class="mt-1 text-sm text-subtle">{@streak} {if @streak == 1, do: "day", else: "days"} in a row.</p>
+        <div
+          :if={@done}
+          data-role="flash-card-done"
+          class="flex min-h-32 flex-col items-center justify-center rounded-xl border border-edge bg-base-200 px-4 py-6 text-center"
+        >
+          <p class="text-base font-semibold text-base-content">
+            Done for today: {@got} of {length(cards(@ask))}
+          </p>
+          <p :if={@reading} class="mt-2 text-sm text-subtle">
+            That makes {number(@reading.value)} {@reading.unit}.
+          </p>
+          <p :if={@coach_mode && @streak > 0} class="mt-1 text-sm text-subtle">
+            {@streak} {if @streak == 1, do: "day", else: "days"} in a row.
+          </p>
         </div>
-        <button :if={@done && @missed > 0} type="button" class="btn btn-sm min-h-11 focus-visible-ring mt-3 border-edge bg-base-300 text-base-content lg:min-h-0" phx-click="retry" phx-target={@myself} data-action="retry">Practise the {@missed} you missed</button>
+        <button
+          :if={@done && @missed > 0}
+          type="button"
+          class="btn btn-sm min-h-11 focus-visible-ring mt-3 border-edge bg-base-300 text-base-content lg:min-h-0"
+          phx-click="retry"
+          phx-target={@myself}
+          data-action="retry"
+        >
+          Practise the {@missed} you missed
+        </button>
       </div>
     </div>
     """

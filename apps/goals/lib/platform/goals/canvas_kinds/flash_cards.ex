@@ -40,7 +40,12 @@ defmodule Platform.Goals.CanvasKinds.FlashCards do
       |> assign_new(:viewer, fn -> nil end)
 
     ~H"""
-    <.live_component module={PlatformWeb.GoalsFlashCardsComponent} id={@component_id} ask_id={@ask_id} viewer={@viewer} />
+    <.live_component
+      module={PlatformWeb.GoalsFlashCardsComponent}
+      id={@component_id}
+      ask_id={@ask_id}
+      viewer={@viewer}
+    />
     """
   end
 end
