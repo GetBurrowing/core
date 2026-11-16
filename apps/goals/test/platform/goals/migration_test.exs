@@ -162,7 +162,8 @@ defmodule Platform.Goals.MigrationTest do
           "SELECT conname, confdeltype::text FROM pg_constraint WHERE contype = 'f' AND confrelid = 'goal_wake_ups'::regclass ORDER BY conname"
         )
 
-      assert length(fks) == 3
+      # Goals 7/8 adds the fourth: goal_grants.last_update_wake_up_id.
+      assert length(fks) == 4
       assert Enum.all?(fks, fn [_, action] -> action == "n" end)
 
       assert :ok = Ecto.Migrator.down(Repo, @retro_version, @retro_migration, @opts)

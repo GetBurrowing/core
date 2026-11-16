@@ -206,7 +206,9 @@ defmodule Platform.Goals.HandoffTest do
        c do
     admin_owner = root_admin!()
     join_space!(c.space.id, :user, admin_owner.id)
-    goal = goal!(admin_owner, c.org, %{coach_agent_id: c.coach.id, agent_mode: "do"})
+
+    goal =
+      goal!(admin_owner, c.org, %{coach_agent_id: c.coach.id, agent_mode: "do", rhythm: "daily"})
 
     # A clock row exists (the first tick creates it), then the coach is removed.
     :ok = Clock.tick(@t0)
