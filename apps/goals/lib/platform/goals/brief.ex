@@ -490,6 +490,18 @@ defmodule Platform.Goals.Brief do
     end
   end
 
+  def ask_brief_date(%User{id: id} = user, ask_id) do
+    with {:ok, ask} <- get_ask(user, ask_id),
+         true <- id in ask.addressed_user_ids do
+      {:ok,
+       Repo.one(from(i in reader_items(user), where: i.ask_id == ^ask.id, select: i.digest_date))}
+    else
+      _ -> {:error, :not_found}
+    end
+  end
+
+  def ask_brief_date(_, _), do: {:error, :not_found}
+
   defp allowed_ask?(%User{id: id}, goal, ask),
     do: goal.owner_user_id == id or id in ask.addressed_user_ids
 

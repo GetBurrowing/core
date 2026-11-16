@@ -35,9 +35,17 @@ defmodule Platform.Goals.CanvasKinds.FlashCards do
 
     viewer =
       case assigns[:viewer] do
-        %Platform.Accounts.User{} = user -> user
-        {:user, id} -> Platform.Accounts.get_user(id)
-        _ -> nil
+        %Platform.Accounts.User{} = user ->
+          user
+
+        {:user, raw_id} ->
+          case Ecto.UUID.cast(raw_id) do
+            {:ok, id} -> Platform.Accounts.get_user(id)
+            _ -> nil
+          end
+
+        _ ->
+          nil
       end
 
     assigns =

@@ -534,7 +534,11 @@ defmodule Platform.Goals do
     end
   end
 
-  @doc "Returns visible, addressed, unanswered asks (default 50, maximum 200; :infinity is reserved for daily brief preparation)."
+  @doc """
+  Returns visible, addressed, unanswered asks (default 50, maximum 200).
+  The optional goal_id filter is applied before the limit, for the goal page's
+  Up next card. The :infinity limit is reserved for daily brief preparation.
+  """
   def list_my_asks(actor, opts \\ []) do
     with :ok <- check_enabled() do
       case actor do
@@ -559,6 +563,18 @@ defmodule Platform.Goals do
               order_by: [desc: a.inserted_at, desc: a.id],
               preload: [:answers]
             )
+
+          q =
+            case Keyword.fetch(opts, :goal_id) do
+              :error ->
+                q
+
+              {:ok, raw_id} ->
+                case Ecto.UUID.cast(raw_id) do
+                  {:ok, goal_id} -> from(a in q, where: a.goal_id == ^goal_id)
+                  _ -> from(a in q, where: false)
+                end
+            end
 
           q = if is_nil(limit), do: q, else: from(a in q, limit: ^limit)
           {:ok, Repo.all(q)}
@@ -626,6 +642,10 @@ defmodule Platform.Goals do
 
   def brief_items(actor, date),
     do: with(:ok <- check_enabled(), do: Platform.Goals.Brief.items(actor, date))
+
+  @doc "Returns the date this reader received an addressed ask, or nil before delivery."
+  def ask_brief_date(actor, ask_id),
+    do: with(:ok <- check_enabled(), do: Platform.Goals.Brief.ask_brief_date(actor, ask_id))
 
   def brief_summary(actor, date),
     do: with(:ok <- check_enabled(), do: Platform.Goals.Brief.summary(actor, date))

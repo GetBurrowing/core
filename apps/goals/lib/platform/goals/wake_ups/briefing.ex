@@ -179,11 +179,12 @@ defmodule Platform.Goals.WakeUps.Briefing do
           title: a.title,
           answer: ans.answer,
           user_id: ans.user_id,
-          details: ans.details
+          details: ans.details,
+          payload: a.payload
         }
       )
     )
-    |> Enum.map(&fields(&1, [:ask_id, :title, :answer, :user_id, :details]))
+    |> Enum.map(&fields(&1, [:ask_id, :title, :answer, :user_id, :details, :payload]))
   end
 
   defp asks(actor, goal, status, since, until) do
@@ -221,7 +222,13 @@ defmodule Platform.Goals.WakeUps.Briefing do
           _ -> []
         end
         |> Enum.map_join("; ", fn choice ->
-          "#{choice["title"]}: #{choice["choice"]}"
+          suggestions = get_in(answer, ["payload", "suggestions"]) || []
+
+          suggestion =
+            if is_integer(choice["index"]), do: Enum.at(suggestions, choice["index"]), else: nil
+
+          title = choice["title"] || (suggestion && suggestion["title"]) || "Suggestion"
+          "#{title}: #{choice["choice"]}"
         end)
 
       "#{answer["title"]}: #{practice} #{choices}"

@@ -112,6 +112,7 @@ defmodule Platform.Goals.FlashCardsKindTest do
           {c.owner.id, "tuple"},
           {nil, "user"},
           {Ecto.UUID.generate(), "tuple"},
+          {"not-a-uuid", "tuple"},
           {addressee.id, "map"}
         ] do
       {:ok, view, html} =

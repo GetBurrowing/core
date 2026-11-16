@@ -134,29 +134,82 @@ defmodule Platform.Goals.DevBriefSeed do
         })
       )
 
-    queue(coach, report, %{
-      kind: "offer",
-      title: "Try a weekly question video",
-      payload: %{
-        "idea" => %{
-          "why" => "Viewers already tell us what they need help with.",
-          "measure" => "Two subscribers per hundred views within two weeks.",
-          "steps" => ["Pick the three most asked questions", "Draft one short answer"],
-          "takeaway_id" => takeaway.id
+    idea_ask =
+      queue(coach, report, %{
+        kind: "offer",
+        title: "Try a weekly question video",
+        payload: %{
+          "idea" => %{
+            "why" => "Viewers already tell us what they need help with.",
+            "measure" => "Two subscribers per hundred views within two weeks.",
+            "steps" => [
+              "Pick the three most asked questions",
+              "Draft one short answer",
+              "Review it together"
+            ],
+            "takeaway_id" => takeaway.id
+          }
         }
-      }
-    })
+      })
 
-    queue(coach, report, %{
-      kind: "question",
-      title: "Choose what to change this week",
-      payload: %{
-        "moved" => [%{"direction" => "up", "text" => "Short fixes brought new subscribers."}],
-        "suggestions" => [
-          %{"title" => "Try one more short fix", "why" => "Keep learning what viewers need."}
-        ]
-      }
-    })
+    put_now(historical_noon(today, -2))
+
+    check_goal =
+      goal(user, org_id, coach, %{
+        title: "Keep a steady publishing rhythm",
+        agent_mode: "advise",
+        unit: "videos",
+        target_value: 12
+      })
+
+    :ok = Clock.tick(Clock.now())
+
+    check_takeaway =
+      ok!(
+        Goals.add_entry(coach, check_goal.id, %{
+          kind: "takeaway",
+          title: "A clear weekly plan helps",
+          body: "Make time for one useful fix."
+        })
+      )
+
+    check_ask =
+      queue(coach, check_goal, %{
+        kind: "question",
+        title: "Choose what to change this week",
+        body: "The short fixes are helping. Here are three ways to keep that going.",
+        payload: %{
+          "moved" => [
+            %{"direction" => "up", "text" => "Short fixes brought new subscribers."},
+            %{"direction" => "flat", "text" => "The weekly schedule stayed steady."},
+            %{"direction" => "down", "text" => "Long tutorials took more time."}
+          ],
+          "suggestions" => [
+            %{
+              "title" => "Try one more short fix",
+              "why" => "Keep learning what viewers need.",
+              "takeaway_id" => check_takeaway.id
+            },
+            %{
+              "title" => "Save the long tutorial for later",
+              "why" => "Make room for useful answers."
+            },
+            %{
+              "title" => "Ask viewers what to cover",
+              "why" => "Let their questions shape the next video."
+            }
+          ]
+        }
+      })
+
+    caught_up =
+      goal(user, org_id, coach, %{
+        title: "Make room for a weekly walk",
+        agent_mode: "advise",
+        unit: "walks"
+      })
+
+    :ok = Clock.tick(Clock.now())
 
     put_now(historical_noon(today, -1))
 
@@ -240,6 +293,19 @@ defmodule Platform.Goals.DevBriefSeed do
 
     IO.puts(
       "Practice canvas: /canvases/#{practice_canvas.id}; addressed chat renderer: /chat/#{space.id}"
+    )
+
+    IO.inspect(
+      %{
+        report: report.id,
+        idea: idea_ask.id,
+        check_goal: check_goal.id,
+        check: check_ask.id,
+        practice: practice.id,
+        offer_goal: shared.id,
+        caught_up: caught_up.id
+      },
+      label: "Review routes"
     )
 
     IO.inspect(result, label: "Delivery")
