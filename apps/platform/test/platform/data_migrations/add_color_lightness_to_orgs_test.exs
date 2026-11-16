@@ -74,8 +74,10 @@ defmodule Platform.DataMigrations.AddColorLightnessToOrgsTest do
   # that have it, so it is not in a fresh test database either.
   @seeded ~w(initech vandelay_ind globex hooli)
 
+  # `test_helper.exs` or the test database's own migration run may already have
+  # loaded the module; requiring the file again would redefine it (a warning).
   setup_all do
-    Code.require_file(@migration_path)
+    unless Code.ensure_loaded?(migration()), do: Code.require_file(@migration_path)
     :ok
   end
 

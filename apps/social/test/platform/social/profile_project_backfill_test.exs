@@ -8,7 +8,6 @@ defmodule Platform.Social.ProfileProjectBackfillTest do
   use Platform.DataCase, async: false
 
   import Platform.SocialFixtures
-  require Ecto.Query
 
   alias Platform.Repo
   alias Platform.Social
