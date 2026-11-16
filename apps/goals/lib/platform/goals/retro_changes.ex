@@ -145,9 +145,18 @@ defmodule Platform.Goals.RetroChanges do
       cs = Goal.changeset(goal, set)
 
       cond do
-        not cs.valid? -> {:error, cs}
-        map_size(cs.changes) == 0 -> error("change must differ from current settings")
-        true -> :ok
+        not cs.valid? ->
+          {:error, cs}
+
+        type == :goal and change["kind"] == "target" and
+            is_nil(Ecto.Changeset.get_field(cs, :target_value)) ->
+          error("target must be a number")
+
+        map_size(cs.changes) == 0 ->
+          error("change must differ from current settings")
+
+        true ->
+          :ok
       end
     else
       error("invalid proposed change")
