@@ -82,7 +82,7 @@ defmodule PlatformWeb.GoalsBriefComponent do
     items =
       with true <- Goals.enabled?(),
            %Platform.Accounts.User{} <- user,
-           true <- Platform.Access.can?(Platform.Access.Scope.for_user(user), "goals.use"),
+           true <- Platform.Goals.Visibility.may_use?(user),
            {:ok, items} <- Goals.brief_items(user, socket.assigns.date),
            do: items,
            else: (_ -> [])

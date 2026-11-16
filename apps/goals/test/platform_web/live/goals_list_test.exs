@@ -17,14 +17,6 @@ defmodule PlatformWeb.GoalsListTest do
     enable_goals!()
     org_id = org_id!()
     user = member!(org_id)
-    space = space!(org_id)
-
-    {:ok, _} =
-      Platform.Access.Grants.grant(%{
-        principal: user,
-        permission: "goals.use",
-        resource: {:space, space.id}
-      })
 
     {:ok, org_id: org_id, user: user}
   end

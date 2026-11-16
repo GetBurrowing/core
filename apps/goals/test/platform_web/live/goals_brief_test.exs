@@ -18,19 +18,7 @@ defmodule PlatformWeb.GoalsBriefTest do
 
   setup do
     c = setup_brief()
-    grant!(c.owner, c.org)
     c
-  end
-
-  defp grant!(user, org) do
-    space = space!(org)
-
-    {:ok, _} =
-      Platform.Access.Grants.grant(%{
-        principal: user,
-        permission: "goals.use",
-        resource: {:space, space.id}
-      })
   end
 
   defp build do
@@ -257,7 +245,6 @@ defmodule PlatformWeb.GoalsBriefTest do
 
   test "forged foreign item and ask events change no rows", c do
     stranger = member!(c.org)
-    grant!(stranger, c.org)
 
     foreign =
       goal!(stranger, c.org, %{coach_agent_id: c.coach.id, outreach: "pushy", rhythm: "daily"})
@@ -295,6 +282,48 @@ defmodule PlatformWeb.GoalsBriefTest do
     assert counts.() == before
   end
 
+  test "Goals 9: revoking goals.use without a remount refuses Use it and Undo and hides the goals",
+       c do
+    f = full(c)
+    offer = Enum.find(items(c), &(&1.kind == :offer))
+    report = Enum.find(items(c), &(&1.kind == :report))
+    {:ok, view, html} = open(c.conn, c.owner)
+    assert html =~ "Your goals"
+    assert html =~ "Write the outline"
+    counts = fn -> {Repo.aggregate(Entry, :count), Repo.aggregate(AskAnswer, :count)} end
+    before = counts.()
+
+    # No remount and no navigation: the next click is the first to learn.
+    revoke_goals_use!(c.owner)
+    view |> element(button(offer, "answer") <> "[phx-value-answer=used]") |> render_click()
+    assert counts.() == before
+    html = render(view)
+    refute html =~ "Your goals"
+    refute html =~ "Write the outline"
+    refute html =~ "Drafted three videos"
+    refute has_element?(view, "[data-role=goals-brief-card]")
+
+    view
+    |> with_target("[data-role=goals-brief]")
+    |> render_hook("undo", %{item_id: report.id, entry_id: f.undoable.id, request: "undo"})
+
+    view
+    |> with_target("[data-role=goals-brief]")
+    |> render_hook("answer", %{item_id: offer.id, answer: "used"})
+
+    assert counts.() == before
+    refute render(view) =~ "Drafted three videos"
+
+    # Positive control on the same live view: after a re-grant, Use it writes one answer.
+    grant_goals_use!(c.owner)
+
+    view
+    |> with_target("[data-role=goals-brief]")
+    |> render_hook("answer", %{item_id: offer.id, answer: "used"})
+
+    assert [%{answer: "used"}] = Repo.all(AskAnswer)
+  end
+
   test "empty, disabled and unpermitted readers receive no Goals heading", c do
     build()
     assert Repo.aggregate(Platform.Memory.Briefing, :count) == 0
@@ -305,7 +334,7 @@ defmodule PlatformWeb.GoalsBriefTest do
     {:ok, _, html} = open(c.conn, c.owner)
     refute html =~ "Your goals"
     Application.put_env(:goals, :enabled, true)
-    other = member!(c.org)
+    other = user_without_goals_use!() |> join_org!(c.org)
     {:ok, _} = Goals.open_goal(c.owner, c.goal.id, {:user, other.id})
 
     Platform.InsightFixtures.dreaming_agent!()

@@ -17,19 +17,7 @@ defmodule PlatformWeb.GoalsFlashCardsTest do
 
   setup do
     c = setup_outcome()
-    grant!(c.owner, c.org)
     c
-  end
-
-  defp grant!(user, org) do
-    space = space!(org)
-
-    {:ok, _} =
-      Platform.Access.Grants.grant(%{
-        principal: user,
-        permission: "goals.use",
-        resource: {:space, space.id}
-      })
   end
 
   defp build do
@@ -140,7 +128,6 @@ defmodule PlatformWeb.GoalsFlashCardsTest do
   test "an addressed non-owner records results without changing the owner's number", c do
     {:ok, goal} = Goals.update_goal(c.owner, c.goal.id, %{agent_mode: "coach", retro_every: 60})
     reader = member!(c.org)
-    grant!(reader, c.org)
     {:ok, _} = Goals.open_goal(c.owner, goal.id, {:user, reader.id})
     ask = practice(%{c | goal: goal}, 1, %{addressed_user_ids: [reader.id]})
     build()
@@ -174,9 +161,30 @@ defmodule PlatformWeb.GoalsFlashCardsTest do
     refute has_element?(view, "[data-role=goals-brief-card]", "streak")
   end
 
+  test "Goals 9: revoking goals.use in the middle of a pass refuses the mark without a remount",
+       c do
+    ask = practice(c, 2)
+    build()
+    {:ok, view, _} = open(c.conn, c.owner)
+    view |> element(flash_action(ask, "flip")) |> render_click()
+    assert has_element?(view, deck(ask), "Front 0")
+    revoke_goals_use!(c.owner)
+    view |> element(flash_action(ask, "got")) |> render_click()
+    refute has_element?(view, deck(ask))
+    refute render(view) =~ "Front 0"
+    refute render(view) =~ "Back 0"
+
+    for event <- ["flip", "got", "missed"] do
+      view |> with_target("[data-role=goals-flash-cards]") |> render_click(event, %{})
+    end
+
+    assert Repo.aggregate(AskAnswer, :count) == 0
+    assert Repo.aggregate(Reading, :count) == 0
+    refute render(view) =~ "Front 1"
+  end
+
   test "revoked visibility in the middle of a pass hides the deck and refuses the last mark", c do
     reader = member!(c.org)
-    grant!(reader, c.org)
     {:ok, _} = Goals.open_goal(c.owner, c.goal.id, {:user, reader.id})
     ask = practice(c, 1, %{addressed_user_ids: [reader.id]})
     build()

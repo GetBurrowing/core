@@ -14,8 +14,44 @@ defmodule Platform.GoalsFixtures do
   @doc "A fresh tenant org id (one per call)."
   def org_id!, do: Platform.TenancyFixtures.tenant_org_id("goals-org-#{unique()}")
 
-  @doc "A user with no membership."
-  def user! do
+  @doc """
+  A user with no membership who holds `goals.use` (task 01a1e229): the one
+  fixture every Goals test builds its people on. Goals checks the permission
+  inside the context, so a person without it sees nothing; use
+  `user_without_goals_use!/0` for that person.
+  """
+  def user!, do: user_without_goals_use!() |> grant_goals_use!()
+
+  @doc """
+  Grants `user` `goals.use` the way the component tests always have: an
+  allow on a space of a fresh org, recorded by core's `Platform.Access.Grants`.
+  Returns the user.
+  """
+  def grant_goals_use!(user) do
+    space = space!(org_id!())
+
+    {:ok, _} =
+      Platform.Access.Grants.grant(%{
+        principal: user,
+        permission: "goals.use",
+        resource: {:space, space.id}
+      })
+
+    user
+  end
+
+  @doc "Revokes every `goals.use` grant `user` holds, through core. Returns the user."
+  def revoke_goals_use!(user) do
+    for grant <- Platform.Access.Grants.list_for_principals([{:user, user.id}]),
+        grant.permission == "goals.use" do
+      {:ok, _} = Platform.Access.Grants.revoke(grant)
+    end
+
+    user
+  end
+
+  @doc "A user with no membership and no `goals.use`."
+  def user_without_goals_use! do
     n = unique()
 
     %User{}

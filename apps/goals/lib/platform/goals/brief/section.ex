@@ -25,7 +25,7 @@ defmodule Platform.Goals.Brief.Section do
     with true <- Goals.enabled?(),
          {:ok, id} <- Ecto.UUID.cast(user_id),
          %Platform.Accounts.User{} = user <- Platform.Accounts.get_user(id),
-         true <- Platform.Access.can?(Platform.Access.Scope.for_user(user), "goals.use"),
+         true <- Platform.Goals.Visibility.may_use?(user),
          do: {:ok, user},
          else: (_ -> {:error, :not_found})
   end

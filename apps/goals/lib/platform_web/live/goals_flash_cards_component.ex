@@ -32,7 +32,7 @@ defmodule PlatformWeb.GoalsFlashCardsComponent do
       with %Platform.Accounts.User{} <- viewer,
            %Platform.Accounts.User{} = user <- Platform.Accounts.get_user(viewer.id),
            true <- Goals.enabled?(),
-           true <- Platform.Access.can?(Platform.Access.Scope.for_user(user), "goals.use"),
+           true <- Platform.Goals.Visibility.may_use?(user),
            {:ok, ask} <- Goals.get_ask(user, socket.assigns.ask_id),
            true <- ask.kind == "practice" and user.id in ask.addressed_user_ids,
            {:ok, goal} <- Goals.get_goal(user, ask.goal_id),

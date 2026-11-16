@@ -64,17 +64,7 @@ defmodule PlatformWeb.GoalsCreateEndToEndTest do
   # ── helpers ───────────────────────────────────────────────────────────────
 
   defp person!(org_id, name) do
-    user = member!(org_id) |> Ecto.Changeset.change(name: name) |> Repo.update!()
-    space = space!(org_id)
-
-    {:ok, _} =
-      Platform.Access.Grants.grant(%{
-        principal: user,
-        permission: "goals.use",
-        resource: {:space, space.id}
-      })
-
-    user
+    member!(org_id) |> Ecto.Changeset.change(name: name) |> Repo.update!()
   end
 
   defp lead!(owner) do

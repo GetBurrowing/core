@@ -25,26 +25,11 @@ defmodule PlatformWeb.GoalsShellTest do
     end)
 
     org_id = org_id!()
-    {:ok, org_id: org_id, user: member!(org_id)}
+    {:ok, org_id: org_id, user: user_without_goals_use!() |> join_org!(org_id)}
   end
 
   defp set_enabled(value), do: Application.put_env(:goals, :enabled, value)
   defp login(conn, user), do: Plug.Test.init_test_session(conn, current_user_id: user.id)
-
-  # No role carries goals.use: an explicit allow grant on any resource
-  # makes `Platform.Access.holds_anywhere?/2` true.
-  defp grant_goals_use!(user, org_id) do
-    space = space!(org_id)
-
-    {:ok, _} =
-      Platform.Access.Grants.grant(%{
-        principal: user,
-        permission: "goals.use",
-        resource: {:space, space.id}
-      })
-
-    user
-  end
 
   defp keys(rows), do: Enum.map(rows, & &1.key)
 
@@ -82,9 +67,9 @@ defmodule PlatformWeb.GoalsShellTest do
   end
 
   describe "with GOALS_ENABLED on and goals.use" do
-    setup %{user: user, org_id: org_id} do
+    setup %{user: user} do
       set_enabled(true)
-      %{user: grant_goals_use!(user, org_id)}
+      %{user: grant_goals_use!(user)}
     end
 
     test "the page mounts and the desktop sidebar links to it", %{conn: conn, user: user} do

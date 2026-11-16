@@ -9,22 +9,9 @@ defmodule PlatformWeb.GoalsOpenUpTest do
   setup do
     enable_goals!()
     org_id = org_id!()
-    owner = enabled_user!(member!(org_id), org_id)
-    viewer = enabled_user!(member!(org_id), org_id)
+    owner = member!(org_id)
+    viewer = member!(org_id)
     %{org_id: org_id, owner: owner, viewer: viewer, goal: goal!(owner, org_id)}
-  end
-
-  defp enabled_user!(user, org_id) do
-    space = space!(org_id)
-
-    {:ok, _} =
-      Platform.Access.Grants.grant(%{
-        principal: user,
-        permission: "goals.use",
-        resource: {:space, space.id}
-      })
-
-    user
   end
 
   defp login(user),
@@ -93,9 +80,9 @@ defmodule PlatformWeb.GoalsOpenUpTest do
   end
 
   test "team sharing admits internal members only and can be revoked", c do
-    external = enabled_user!(external_member!(c.org_id), c.org_id)
+    external = external_member!(c.org_id)
     other_org = org_id!()
-    other = enabled_user!(member!(other_org), other_org)
+    other = member!(other_org)
     owner = page(c.owner, c.goal)
     event(owner, "open_share")
     event(owner, "share_tab", %{"tab" => "teams"})
@@ -321,7 +308,7 @@ defmodule PlatformWeb.GoalsOpenUpTest do
 
   test "private detail is masked from a permitted peer and root admin, including crafted list events",
        c do
-    root = enabled_user!(root_admin!(), c.org_id)
+    root = root_admin!()
 
     {:ok, goal} =
       Goals.update_goal(c.owner, c.goal.id, %{
@@ -423,10 +410,12 @@ defmodule PlatformWeb.GoalsOpenUpTest do
 
   test "permission gate denies both addresses even for an org-shared goal, and rails follow the grant",
        c do
-    denied = member!(c.org_id)
+    denied = user_without_goals_use!() |> join_org!(c.org_id)
     {:ok, _} = Goals.open_goal(c.owner, c.goal.id, {:team, c.org_id})
-    # The context grants visibility, while the app still requires its module capability.
-    assert {:ok, _} = Goals.get_goal(denied, c.goal.id)
+    # Goals 9 (01a1e229): the team grant no longer stands in for the module
+    # permission. The context itself refuses, with the answer a missing goal gets.
+    assert Goals.get_goal(denied, c.goal.id) == {:error, :not_found}
+    assert Goals.get_goal(denied, c.goal.id) == Goals.get_goal(denied, Ecto.UUID.generate())
 
     for path <- ["/m/goals", "/m/goals?goal=#{c.goal.id}"] do
       assert {:error, {:redirect, %{to: "/access-denied?module=goals"}}} =

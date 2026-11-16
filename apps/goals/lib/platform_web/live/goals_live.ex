@@ -622,7 +622,7 @@ defmodule PlatformWeb.GoalsLive do
     with %{id: id} <- socket.assigns.user,
          %Platform.Accounts.User{} = user <- Platform.Accounts.get_user(id),
          true <- Goals.enabled?(),
-         true <- Platform.Access.can?(Platform.Access.Scope.for_user(user), "goals.use") do
+         true <- Platform.Goals.Visibility.may_use?(user) do
       {:ok, user}
     else
       _ -> {:error, :not_found}

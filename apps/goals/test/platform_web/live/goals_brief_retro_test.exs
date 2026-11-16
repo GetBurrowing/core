@@ -17,17 +17,7 @@ defmodule PlatformWeb.GoalsBriefRetroTest do
 
   setup do
     c = setup_brief()
-    grant!(c.owner, c.org)
     c
-  end
-
-  defp grant!(user, org) do
-    {:ok, _} =
-      Platform.Access.Grants.grant(%{
-        principal: user,
-        permission: "goals.use",
-        resource: {:space, space!(org).id}
-      })
   end
 
   defp build, do: Disseminator.run(now: Clock.now(), notifications_module: Recorder)
@@ -287,7 +277,6 @@ defmodule PlatformWeb.GoalsBriefRetroTest do
   test "flag, permission and ownership gates hide the cards with a granted-owner control", c do
     retro(c)
     viewer = member!(c.org)
-    grant!(viewer, c.org)
     Goals.open_goal(c.owner, c.goal.id, {:user, viewer.id})
     build()
     {:ok, view, _} = open(c.conn, c.owner)
@@ -306,6 +295,8 @@ defmodule PlatformWeb.GoalsBriefRetroTest do
     ungranted = member!(c.org)
     goal = goal!(ungranted, c.org, %{coach_agent_id: c.coach.id})
     retro(%{c | owner: ungranted, goal: goal})
+    # Goals 9 (01a1e229): the retro is seeded while the owner held goals.use.
+    revoke_goals_use!(ungranted)
     build()
     {:ok, view, _} = open(c.conn, ungranted)
     refute has_element?(view, card(:retro))

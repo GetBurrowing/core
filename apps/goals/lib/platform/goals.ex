@@ -10,7 +10,10 @@ defmodule Platform.Goals do
 
   Privacy is decided in the query (`Platform.Goals.Visibility`): a goal the
   actor cannot see and a goal that does not exist both answer
-  `{:error, :not_found}`. Of those who can see a goal, the owner and the
+  `{:error, :not_found}`. A user without the `goals.use` permission sees no
+  goal (`Visibility.may_use?/1`, read on every call), and the functions that
+  act without loading a goal (`create_goal/2`, `list_sources/1` and the
+  proposal functions) answer `{:error, :forbidden}` for them. Of those who can see a goal, the owner and the
   coach agent may change its settings and status, only the owner may open
   or close it, and everyone else only reads.
 
@@ -45,7 +48,7 @@ defmodule Platform.Goals do
   """
   @spec create_goal(actor(), map()) :: {:ok, Goal.t()} | {:error, term()}
   def create_goal(actor, attrs) when is_map(attrs) do
-    with :ok <- check_enabled() do
+    with :ok <- check_enabled(), :ok <- check_use(actor) do
       do_create_goal(actor, attrs)
     end
   end
@@ -405,8 +408,8 @@ defmodule Platform.Goals do
   end
 
   @doc "Describes registered sources while Goals is enabled."
-  def list_sources(_actor) do
-    with :ok <- check_enabled(), do: {:ok, Sources.describe()}
+  def list_sources(actor) do
+    with :ok <- check_enabled(), :ok <- check_use(actor), do: {:ok, Sources.describe()}
   end
 
   # Goals 5/8 (task 01a1dfc1-7625): the New goal conversation. Thin delegates;
@@ -427,8 +430,15 @@ defmodule Platform.Goals do
   def cancel_proposal(user, id), do: proposals(:cancel_proposal, [user, id])
   def subscribe_proposal(user, id), do: proposals(:subscribe_proposal, [user, id])
 
-  defp proposals(fun, args),
-    do: with(:ok <- check_enabled(), do: apply(Platform.Goals.Proposals, fun, args))
+  # A proposal is not a goal, so `visible_goals/1` does not gate it: the
+  # actor (the first argument) is checked here (task 01a1e229).
+  defp proposals(fun, [actor | _] = args),
+    do:
+      with(
+        :ok <- check_enabled(),
+        :ok <- check_use(actor),
+        do: apply(Platform.Goals.Proposals, fun, args)
+      )
 
   @doc "Lists visible wake-ups; private briefing is restricted to owner and coach."
   def list_wake_ups(actor, goal_id, opts \\ []) do
@@ -1825,6 +1835,15 @@ defmodule Platform.Goals do
   # ── internals ────────────────────────────────────────────────────────────
 
   defp check_enabled, do: if(enabled?(), do: :ok, else: {:error, :goals_disabled})
+
+  # `goals.use` for the functions that act without loading a goal through
+  # `Visibility.visible_goals/1` (task 01a1e229). Every other function is
+  # closed by `visible_goals/1` itself, answering `:not_found` as for a goal
+  # that does not exist. Read on every call, never cached.
+  defp check_use(%User{} = user),
+    do: if(Visibility.may_use?(user), do: :ok, else: {:error, :forbidden})
+
+  defp check_use(_actor), do: :ok
 
   defp fetch_visible(actor, goal_id, lock?) do
     with {:ok, id} <- cast_id(goal_id) do

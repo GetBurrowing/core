@@ -11,13 +11,6 @@ defmodule PlatformWeb.GoalsPageRetroTest do
     c = setup_brief()
     Platform.Goals.OutcomeFixtures.put_now(~U[2026-02-10 12:00:00.000000Z])
 
-    {:ok, _} =
-      Platform.Access.Grants.grant(%{
-        principal: c.owner,
-        permission: "goals.use",
-        resource: {:space, space!(c.org).id}
-      })
-
     c
   end
 

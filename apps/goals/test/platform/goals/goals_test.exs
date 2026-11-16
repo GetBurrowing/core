@@ -292,6 +292,37 @@ defmodule Platform.Goals.GoalsTest do
       assert actorless_goal_binding?(claim)
     end
 
+    # Goals 9 (task 01a1e229): `goals.use` is compared against a person in
+    # exactly one place, `Platform.Goals.Visibility.may_use?/1`; extension.ex
+    # declares the permission. Moduledoc prose names it without quotes.
+    defp permission_literal?(text), do: String.contains?(text, ~s("goals.use"))
+
+    test "the permission scan can hit (positive control)" do
+      assert permission_literal?(~S|Platform.Access.can?(scope, "goals.use")|)
+      assert permission_literal?(~S|rail: [%{key: :goals, permission: "goals.use"}]|)
+      refute permission_literal?("A user without `goals.use` sees no goal.")
+      refute permission_literal?("Visibility.may_use?(user)")
+    end
+
+    test "the goals.use string appears only in visibility.ex and extension.ex" do
+      files = Path.wildcard(Path.join(@lib, "**/*.{ex,exs,heex}"))
+      assert Enum.any?(files, &String.ends_with?(&1, "platform_web/live/goals_live.ex"))
+
+      found =
+        for file <- files,
+            permission_literal?(File.read!(file)),
+            do: Path.relative_to(file, @lib)
+
+      assert Enum.sort(found) == ["platform/goals/extension.ex", "platform/goals/visibility.ex"]
+
+      visibility = File.read!(Path.join(@lib, "platform/goals/visibility.ex"))
+
+      assert length(String.split(visibility, ~s("goals.use"))) == 2,
+             "visibility.ex must compare the permission exactly once"
+
+      assert visibility =~ ~S|def may_use?(%User{|
+    end
+
     test "Platform.Goals has no arity-0 function but enabled?/0" do
       zero = for {name, 0} <- Platform.Goals.__info__(:functions), do: name
       assert zero == [:enabled?]

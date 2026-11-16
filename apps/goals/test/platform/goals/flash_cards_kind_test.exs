@@ -73,16 +73,6 @@ defmodule Platform.Goals.FlashCardsKindTest do
   test "the kind loads cards for its addressee but hides them from an unaddressed owner and nil viewer",
        %{conn: conn} = c do
     addressee = member!(c.org)
-    space = space!(c.org)
-
-    for user <- [c.owner, addressee] do
-      {:ok, _} =
-        Platform.Access.Grants.grant(%{
-          principal: user,
-          permission: "goals.use",
-          resource: {:space, space.id}
-        })
-    end
 
     {:ok, _} = Goals.open_goal(c.owner, c.goal.id, {:user, addressee.id})
 

@@ -9,17 +9,7 @@ defmodule PlatformWeb.GoalsUpNextTest do
 
   setup do
     c = setup_outcome()
-    grant!(c.owner, c.org)
     c
-  end
-
-  defp grant!(user, org) do
-    {:ok, _} =
-      Platform.Access.Grants.grant(%{
-        principal: user,
-        permission: "goals.use",
-        resource: {:space, space!(org).id}
-      })
   end
 
   defp open(conn, user, goal, suffix \\ "") do
@@ -192,7 +182,6 @@ defmodule PlatformWeb.GoalsUpNextTest do
     assert {:ok, 7} = Goals.practice_streak(c.owner, goal.id, today: date())
 
     viewer = member!(c.org)
-    grant!(viewer, c.org)
     {:ok, _} = Goals.open_goal(c.owner, goal.id, {:user, viewer.id})
     assert {:ok, []} = Goals.list_asks(viewer, goal.id)
     child = open(c.conn, viewer, goal)

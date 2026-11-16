@@ -9,20 +9,14 @@ defmodule Platform.Goals.BriefSectionTest do
   test "adapter is quiet for unknown, disabled or unauthorized readers and returns context counts",
        c do
     queued(c)
+    revoke_goals_use!(c.owner)
     day = date()
     missing = Ecto.UUID.generate()
     assert Section.prepare(missing, day) == 0
     assert Section.summary(missing, day) == nil
     assert Section.prepare(c.owner.id, day) == 0
     assert Section.summary(c.owner.id, day) == nil
-    space = space!(c.org)
-
-    {:ok, _} =
-      Platform.Access.Grants.grant(%{
-        principal: c.owner,
-        permission: "goals.use",
-        resource: {:space, space.id}
-      })
+    grant_goals_use!(c.owner)
 
     Application.put_env(:goals, :enabled, false)
     assert Section.prepare(c.owner.id, day) == 0

@@ -9,17 +9,7 @@ defmodule PlatformWeb.GoalsRetroTest do
   setup do
     c = setup_brief()
     Platform.Goals.OutcomeFixtures.put_now(~U[2026-02-10 12:00:00.000000Z])
-    grant!(c.owner, c.org)
     c
-  end
-
-  defp grant!(user, org) do
-    {:ok, _} =
-      Platform.Access.Grants.grant(%{
-        principal: user,
-        permission: "goals.use",
-        resource: {:space, space!(org).id}
-      })
   end
 
   defp open(conn, user, goal, entry) do
@@ -224,7 +214,6 @@ defmodule PlatformWeb.GoalsRetroTest do
   test "viewers read without decision pills or ask box and stalled proposals name the goal change",
        c do
     viewer = member!(c.org)
-    grant!(viewer, c.org)
     {:ok, _} = Goals.open_goal(c.owner, c.goal.id, {:user, viewer.id})
 
     entry =

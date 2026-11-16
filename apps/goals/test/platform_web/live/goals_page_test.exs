@@ -18,21 +18,7 @@ defmodule PlatformWeb.GoalsPageTest do
     enable_goals!()
     org_id = org_id!()
     owner = member!(org_id)
-    grant_goals_use!(owner, org_id)
     {:ok, org_id: org_id, owner: owner}
-  end
-
-  defp grant_goals_use!(user, org_id) do
-    space = space!(org_id)
-
-    {:ok, _} =
-      Platform.Access.Grants.grant(%{
-        principal: user,
-        permission: "goals.use",
-        resource: {:space, space.id}
-      })
-
-    user
   end
 
   defp open(conn, user, query) do
@@ -93,7 +79,7 @@ defmodule PlatformWeb.GoalsPageTest do
       {:ok, _} = Goals.link_task(coach, goal.id, task.id)
     end
 
-    viewer = enabled_user_for_workers!(member!(c.org_id), c.org_id)
+    viewer = member!(c.org_id)
     join_space!(space.id, :user, viewer.id)
     child = page(c.conn, viewer, goal)
 
@@ -123,8 +109,6 @@ defmodule PlatformWeb.GoalsPageTest do
     assert PlatformWeb.GoalsWork.status("cancelled") == "Cancelled"
     assert PlatformWeb.GoalsWork.status("in_progress") == "Open"
   end
-
-  defp enabled_user_for_workers!(user, org), do: grant_goals_use!(user, org)
 
   defp first(name), do: name |> String.split() |> hd()
 
@@ -456,7 +440,7 @@ defmodule PlatformWeb.GoalsPageTest do
       org_id: org_id,
       goal: goal
     } do
-      viewer = grant_goals_use!(member!(org_id), org_id)
+      viewer = member!(org_id)
       {:ok, _} = Goals.open_goal(owner, goal.id, {:user, viewer.id})
       {:ok, _} = Goals.log_reading(owner, goal.id, %{value: 180})
 

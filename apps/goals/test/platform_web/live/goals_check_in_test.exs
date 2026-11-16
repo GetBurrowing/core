@@ -14,13 +14,6 @@ defmodule PlatformWeb.GoalsCheckInTest do
   setup do
     c = setup_brief()
 
-    {:ok, _} =
-      Platform.Access.Grants.grant(%{
-        principal: c.owner,
-        permission: "goals.use",
-        resource: {:space, space!(c.org).id}
-      })
-
     c
   end
 
