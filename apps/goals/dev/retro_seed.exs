@@ -28,7 +28,7 @@ defmodule Platform.Goals.DevRetroSeed do
         g = goal(user, org, coach, %{title: title, retro_every: 60})
         ok!(Goals.log_reading(user, g.id, %{value: 500, measured_at: Clock.now()}))
         ok!(Goals.put_stops(user, g.id, [%{label: "First 1,000", target_value: 1000, due_on: if(due, do: Date.add(day, 60), else: nil)}]))
-        now(at(day, 0))
+        now(actual)
         ok!(Goals.log_reading(user, g.id, %{value: value, measured_at: DateTime.add(Clock.now(), -60)}))
         ok!(Goals.add_entry(coach, g.id, %{kind: "action", title: "Prepared the next draft", occurred_at: Clock.now()}))
       end
@@ -80,7 +80,9 @@ defmodule Platform.Goals.DevRetroSeed do
       ok!(Goals.close_wake_up(coach, wake.id, "ask", %{kind: "question", title: "Which small step fits today?", prediction: "One step will help", predicted_by: Date.add(DateTime.to_date(Clock.now()), 1)}))
       d = Clock.now() |> DateTime.shift_zone!(Disseminator.timezone()) |> DateTime.to_date()
       ok!(Goals.prepare_brief(user, d))
-      now(DateTime.add(Clock.now(), 1, :day))
+      next = DateTime.add(Clock.now(), 1, :day)
+      real = DateTime.utc_now()
+      now(if DateTime.compare(next, real) == :gt, do: real, else: next)
       ok!(Goals.prepare_brief(user, Date.add(d, 1)))
     end
     g

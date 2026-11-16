@@ -2,7 +2,6 @@ defmodule PlatformWeb.GoalsBriefRetroTest do
   use PlatformWeb.ConnCase, async: false
   import Phoenix.LiveViewTest
   import Platform.GoalsFixtures
-  import Platform.Goals.OutcomeFixtures
   import Platform.Goals.BriefFixtures
   import Platform.Goals.PaceFixtures
   alias Platform.Goals
@@ -101,7 +100,7 @@ defmodule PlatformWeb.GoalsBriefRetroTest do
     entry = change(c)
     build()
     {:ok, view, html} = open(c.conn, c.owner)
-    assert html =~ "1 need your call"
+    assert html =~ "1 needs your call"
     assert has_element?(view, card(:retro_change), "Change how we check in?")
     assert has_element?(view, card(:retro_change), "Switch changes:")
 
@@ -115,9 +114,13 @@ defmodule PlatformWeb.GoalsBriefRetroTest do
     assert {:ok, goal} = Goals.get_goal(c.owner, c.goal.id)
     assert goal.rhythm == "weekdays"
     assert has_element?(view, card(:retro_change), "Switched")
-    refute render(view) =~ "1 need your call"
+    refute render(view) =~ "1 needs your call"
     {:ok, before} = Goals.list_entries(c.owner, c.goal.id)
-    render_click(view, "retro_switch", %{item_id: note_id(c, entry), entry_id: entry.id})
+
+    view
+    |> with_target("[data-role=goals-brief]")
+    |> render_hook("retro_switch", %{item_id: note_id(c, entry), entry_id: entry.id})
+
     assert {:ok, ^before} = Goals.list_entries(c.owner, c.goal.id)
   end
 
@@ -130,7 +133,11 @@ defmodule PlatformWeb.GoalsBriefRetroTest do
     {:ok, view, _} = open(c.conn, c.owner)
     {:ok, before} = Goals.get_goal(c.owner, c.goal.id)
     {:ok, foreign_before} = Goals.get_goal(other, foreign_goal.id)
-    render_click(view, "retro_switch", %{item_id: note_id(c, entry), entry_id: foreign.id})
+
+    view
+    |> with_target("[data-role=goals-brief]")
+    |> render_hook("retro_switch", %{item_id: note_id(c, entry), entry_id: foreign.id})
+
     assert {:ok, ^before} = Goals.get_goal(c.owner, c.goal.id)
     assert {:ok, ^foreign_before} = Goals.get_goal(other, foreign_goal.id)
     view |> element(action_button(:retro_change, "retro_keep"), "Keep it") |> render_click()
@@ -138,7 +145,11 @@ defmodule PlatformWeb.GoalsBriefRetroTest do
     assert has_element?(view, card(:retro_change), "The check-in stays as it is.")
     refute has_element?(view, action_button(:retro_change, "retro_switch"))
     {:ok, before_entries} = Goals.list_entries(c.owner, c.goal.id)
-    render_click(view, "retro_keep", %{item_id: note_id(c, entry), entry_id: entry.id})
+
+    view
+    |> with_target("[data-role=goals-brief]")
+    |> render_hook("retro_keep", %{item_id: note_id(c, entry), entry_id: entry.id})
+
     assert {:ok, ^before_entries} = Goals.list_entries(c.owner, c.goal.id)
   end
 
@@ -171,7 +182,13 @@ defmodule PlatformWeb.GoalsBriefRetroTest do
   end
 
   test "slowdown notice has no button and arrives only in its original brief", c do
-    for _ <- 1..3, do: ignore_brief(c)
+    for _ <- 1..3 do
+      queued(c)
+      build()
+      advance()
+      build()
+    end
+
     day = date()
     build()
     {:ok, view, html} = open(c.conn, c.owner)
@@ -225,14 +242,20 @@ defmodule PlatformWeb.GoalsBriefRetroTest do
     {:ok, _} =
       Goals.log_reading(c.owner, c.goal.id, %{
         value: 699,
-        measured_at: DateTime.add(Clock.now(), -1, :day)
+        measured_at: DateTime.add(Clock.now(), -3, :day)
       })
 
     action(c)
     build()
     {:ok, view, _} = open(c.conn, c.owner)
     assert has_element?(view, card(:report), "A little behind the hoped-for pace.")
-    {:ok, _} = Goals.log_reading(c.owner, c.goal.id, %{value: 700, measured_at: Clock.now()})
+
+    {:ok, _} =
+      Goals.log_reading(c.owner, c.goal.id, %{
+        value: 700,
+        measured_at: DateTime.add(Clock.now(), -2, :day)
+      })
+
     {:ok, view, _} = open(c.conn, c.owner)
     assert has_element?(view, card(:report), "On the hoped-for pace.")
     Goals.update_stop(c.owner, c.goal.id, stop.id, %{due_on: nil})
