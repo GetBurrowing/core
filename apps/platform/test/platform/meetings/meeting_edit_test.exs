@@ -350,6 +350,47 @@ defmodule Platform.Meetings.MeetingEditTest do
       refute_receive {:meeting_updated, _, _}
     end
 
+    # Review rework (task 01a1b8a5 stage 5): removing someone, saving, then
+    # adding them back answered "Event saved" while their row stayed
+    # revoked. `invite_user/3` returned the revoked row as if it were live.
+    test "re-adding a removed member reinstates their invite and sends one invitation",
+         ctx do
+      invite!(ctx.meeting, ctx.member, ctx.host)
+      removed = invite!(ctx.meeting, ctx.other, ctx.host)
+
+      {:ok, _} =
+        Meetings.update_meeting_for_user(
+          ctx.meeting.id,
+          %{remove_invite_ids: [removed.id]},
+          ctx.host
+        )
+
+      notify_edit!()
+      assert %DateTime{} = Repo.get!(Invite, removed.id).revoked_at
+      invitations_before = Enum.count(recipients(:invitation), &(&1 == ctx.other.email))
+
+      attrs = %{add_invitees: [%{kind: :user, user_id: ctx.other.id}]}
+      meeting = Repo.get!(Meeting, ctx.meeting.id)
+      preview = Meetings.preview_meeting_edit(meeting, attrs)
+      assert Enum.map(preview.invite_recipients, & &1.email) == [ctx.other.email]
+
+      assert {:ok, %{added: [added], failed: []}} =
+               Meetings.update_meeting_for_user(ctx.meeting.id, attrs, ctx.host)
+
+      notify_edit!()
+
+      # The one row the unique index allows, live again.
+      assert added.id == removed.id
+      assert Repo.get!(Invite, removed.id).revoked_at == nil
+
+      assert ctx.other.id in Enum.map(Meetings.list_invites(ctx.meeting.id), & &1.user_id)
+      assert Meetings.invited_to_slug?(ctx.meeting.slug, ctx.other)
+
+      # Delivered as the preview promised: exactly one new invitation.
+      assert Enum.count(recipients(:invitation), &(&1 == ctx.other.email)) ==
+               invitations_before + 1
+    end
+
     test "an invite id from another meeting is ignored, never revoked", ctx do
       invite!(ctx.meeting, ctx.member, ctx.host)
 

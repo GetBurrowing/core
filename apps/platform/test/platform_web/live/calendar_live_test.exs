@@ -715,7 +715,7 @@ defmodule PlatformWeb.CalendarLiveTest do
     assert has_element?(
              view,
              "button[data-calendar-key=meetings]",
-             "Burrow meetings you are invited to"
+             "Events with a Burrow call"
            )
 
     assert has_element?(view, "[data-legend=meeting]")

@@ -113,9 +113,6 @@ defmodule Platform.RepoLookupBoundaryTest do
   # {relative_path, call_kind, schema_alias, call_count, classification, reason}
   @inventory [
     # Calendar consent task 01a16991: principal and persisted intent UUID sources.
-    # Calendar v4 details (task 01a18d9f stage 2): Approve/Revert on a hold.
-    {"platform_web/live/calendar_live.ex", :get, "Platform.Memory.Briefing", 1, :safe_internal,
-     "handle_consent/3 reads Consent.briefing_id, a non-null UUID foreign key written by AgentAccess.propose/6, from the Consent row it just loaded; no client value reaches it"},
     {"platform/calendar/agent_access.ex", :get, "AgentRuntime", 1, :safe_internal,
      "authority/3 reads Scope.actor.id from the authenticated AgentRuntime row; CalendarTools resolves the runtime string to that persisted UUIDv7 primary key before building Scope"},
     {"platform/calendar/agent_access.ex", :get, "Platform.Agents.Agent", 1, :safe_internal,
@@ -549,6 +546,8 @@ defmodule Platform.RepoLookupBoundaryTest do
      "019fb955 stage 4 — `ensure_delivery_invitee/2`'s get-or-insert guard ahead of `Chat.add_participant/2`, which has no such branch of its own and would hit `chat_participants_unique` on a re-delivery. `space_id` is `%Chat.Space{}.id` off the row `Chat.get_space/1` or `Chat.create_space/1` just returned in the same function. `participant_id` is `invite.user_id`, a `meeting_invites.user_id` FK column, and is checked with Platform.UUID.valid?/1 anyway before the lookup — because `deliver/2` accepts a STRUCT rather than an id, so a hand-built %Invite{} can carry anything, and because `Repo.get_by(_, participant_id: nil)` raises ArgumentError rather than returning nil (the nil case has its own head returning {:error, :no_invitee_user})"},
     {"platform/meetings.ex", :get_by, "Room", 4, :safe_internal,
      "keyed `livekit_room_name:` (string) and `space_id:`; the `space_id` callers pass a `%Space{}` id already resolved by `Chat.get_space/1`. The fourth (01a18d0a stage 4) is `adopt_concurrent_room/2` re-reading the SAME `space_id` `ensure_room/1` just looked up and inserted with, after a unique-index loss"},
+    {"platform/meetings.ex", :get!, "Invite", 1, :safe_internal,
+     "task 01a1b8a5 stage 5 review: `reinstate_user_invite/2`'s lost-race branch re-reads `revoked.id`, the meeting_invites.id primary key of the row `upsert_user_invite/3` just loaded with `Repo.get_by/2` (keyed by a user_id that `invite_user/3` already checked with Platform.UUID.valid?/1); no client value reaches it"},
     {"platform/meetings.ex", :get!, "Meeting", 1, :safe_internal,
      "task 01a1b281 stage 2 — `soft_delete/2`'s lost-race branch re-reads `meeting.id`, the meetings.id primary key of the row `load_meeting_for_viewer/3` already loaded behind Platform.UUID.valid?/1 in the same call"},
     {"platform/meetings.ex", :get_by, "User", 2, :safe_internal,
@@ -1154,10 +1153,6 @@ defmodule Platform.RepoLookupBoundaryTest do
     # persisted Briefing.id and User.id; transaction/2 receives either
     # authority/3's UUID-validated owner id or Scope.actor User.id.
     "platform/calendar/agent_access.ex" => 3,
-    # handle_consent/3 pins Consent.hold_id to the selected entry's Event.id (a
-    # UUIDv7 primary key from list_entries; select_entry/4 only keeps ids it
-    # found in the loaded entries) and owner_id to current_user_record.id.
-    "platform_web/live/calendar_live.ex" => 1,
     # get_event/2 validates the boundary event UUID before its visible-query read.
     "platform/calendar.ex" => 1,
     # linked_event/1 checks the meeting id with Platform.UUID.valid?/1 first.

@@ -2833,6 +2833,11 @@ defmodule Platform.Meetings do
   attempted and its constraint error still handled, so two concurrent callers
   race to the same row instead of one of them blowing up.
 
+  A REVOKED row is the exception: re-inviting someone who was removed
+  reinstates that row (clears `revoked_at` and its delivery receipt) and
+  delivers the invitation again, rather than answering `{:ok, revoked_row}`
+  for an invite that does not admit them (task 01a1b8a5 stage 5 review).
+
   Options: `:display_name`, `:email` — both optional, both pass-through. The
   user's own record is authoritative for their name, so these are only useful
   when the host wants to record what they typed.
@@ -2907,6 +2912,9 @@ defmodule Platform.Meetings do
 
   defp upsert_user_invite(%Meeting{} = meeting, user_id, attrs) do
     case Repo.get_by(Invite, meeting_id: meeting.id, user_id: user_id) do
+      %Invite{revoked_at: %DateTime{}} = revoked ->
+        reinstate_user_invite(revoked, attrs)
+
       %Invite{} = existing ->
         {:ok, existing}
 
@@ -2927,6 +2935,42 @@ defmodule Platform.Meetings do
               nil -> {:error, changeset}
             end
         end
+    end
+  end
+
+  # Re-inviting a member whose invite was revoked (task 01a1b8a5 stage 5
+  # review). The partial unique index on `[meeting_id, user_id]` allows one
+  # row per member, so the explicit re-invite reinstates THAT row rather
+  # than inserting a second: `revoked_at` is cleared, and so is the delivery
+  # receipt, because the revoked row's `delivered_at` would make
+  # `InviteDelivery`'s claim answer `:already_delivered` and the person
+  # would be invited on paper and never told. `delivery_space_id` is kept:
+  # an external invitee's delivery space is reused, not re-minted. Before this, the revoked row
+  # came back as `{:ok, invite}` and the caller reported success for an
+  # invite that stayed revoked. Guarded on `revoked_at IS NOT NULL`, so two
+  # racing re-invites reinstate once and both answer the live row.
+  defp reinstate_user_invite(%Invite{} = revoked, attrs) do
+    now = DateTime.utc_now()
+
+    set =
+      [
+        revoked_at: nil,
+        delivered_at: nil,
+        delivery_carrier: nil,
+        mail_delivery_id: nil,
+        mail_error: nil,
+        updated_at: now
+      ] ++
+        Enum.reject(
+          [display_name: attrs[:display_name], email: attrs[:email]],
+          fn {_key, value} -> is_nil(value) end
+        )
+
+    from(i in Invite, where: i.id == ^revoked.id and not is_nil(i.revoked_at), select: i)
+    |> Repo.update_all(set: set)
+    |> case do
+      {1, [invite]} -> {:ok, invite}
+      {0, _} -> {:ok, Repo.get!(Invite, revoked.id)}
     end
   end
 
@@ -3709,9 +3753,13 @@ defmodule Platform.Meetings do
   # writes a row carrying BOTH a user_id and this address, and that row is
   # a different invite with a different owner.
   defp upsert_external_invite(%Meeting{} = meeting, address, opts) do
+    # A revoked row is not an invite (task 01a1b8a5 stage 5 review): it
+    # stays as evidence and a re-invite writes a live row beside it. No
+    # unique index covers these rows, so nothing forces reinstatement.
     result =
       Invite
       |> where([i], i.meeting_id == ^meeting.id and i.email == ^address and is_nil(i.user_id))
+      |> exclude_revoked()
       |> order_by([i], asc: i.inserted_at)
       |> limit(1)
       |> Repo.one()

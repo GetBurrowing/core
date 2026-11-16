@@ -4,7 +4,7 @@ defmodule PlatformWeb.Components.Meetings.EditMeeting do
   Calendar's ONE event editor kept (task 01a1b8a5 stages 2 and 4; design
   direction canvas `01a1b282-37bc-7000-899c-692ba01d0293`):
 
-    * `edit_button/1` — the text "Edit" action in the Calendar details
+    * `edit_button/1` — the text "Edit event" action (v7) in the Calendar details
       footer for a call record. Renders NOTHING unless `can_edit` is true;
       callers compute that with `Platform.Meetings.can_edit_meeting?/2`.
     * `invitees/1` — the staged-people block (`InviteeStaging`).
@@ -50,7 +50,7 @@ defmodule PlatformWeb.Components.Meetings.EditMeeting do
       phx-click="meeting_edit_open"
       data-role="meeting-edit-open"
     >
-      Edit
+      Edit event
     </button>
     """
   end

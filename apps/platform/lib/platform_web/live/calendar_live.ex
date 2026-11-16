@@ -986,6 +986,9 @@ defmodule PlatformWeb.CalendarLive do
         Map.merge(base, %{
           owner?: owner?,
           busy?: event.visibility == "busy",
+          # Focus time / Out of office (v7 `renderDetails`): the details say
+          # the preset blocks availability (stage 5 review).
+          preset: event.preset,
           notes: event.description,
           recurrence: recurrence_label(event),
           calendar: if(owner?, do: (user && user.name) || "You"),
@@ -1018,12 +1021,27 @@ defmodule PlatformWeb.CalendarLive do
   defp linked_call(%{meetings_on: true, current_user_record: user}, %{meeting_id: id})
        when is_binary(id) do
     case Platform.Meetings.get_meeting_for_user(user, id) do
-      {:ok, meeting} -> call_info(meeting, user)
+      {:ok, meeting} -> meeting |> call_info(user) |> Map.merge(call_people(meeting))
       {:error, _} -> nil
     end
   end
 
   defp linked_call(_assigns, _event), do: nil
+
+  # v7's call row and invitee list on the owner's native event (stage 5
+  # review): the call's space and host, and the people it invites, read the
+  # same way the call record's own details read them (`meeting_info/1`:
+  # live `meeting_invites` rows, revoked excluded). The meeting's producer
+  # agent row is not an invitee.
+  defp call_people(meeting) do
+    info = meeting_info(meeting)
+
+    %{
+      space: info.space,
+      host: info.host,
+      invitees: info.invite_entries |> Enum.reject(& &1.agent) |> Enum.map(& &1.name)
+    }
+  end
 
   # What the details say about a call (task 01a1b8a5 stage 4): Join now
   # while it is live, Open call room otherwise, nothing to join once the
@@ -1333,7 +1351,7 @@ defmodule PlatformWeb.CalendarLive do
   defp hold_agents(_, _), do: %{}
 
   @doc """
-  The list pane's Calendars rows (native, Meetings when on, one per external
+  The list pane's Calendars rows (native, Calls when on, one per external
   subscription). Shared with `BookingSettingsLive`, whose list pane is the
   same (task 01a18d9f stage 3). `assigns` needs `current_user_record` and
   `meetings_on`.
@@ -1346,10 +1364,12 @@ defmodule PlatformWeb.CalendarLive do
       kind: "native"
     }
 
+    # v7 names this filter "Calls" (stage 5 review); the key stays
+    # "meetings" so saved filter state keeps working.
     meetings = %{
       key: "meetings",
-      label: "Meetings",
-      note: "Burrow meetings you are invited to",
+      label: "Calls",
+      note: "Events with a Burrow call",
       kind: "meeting"
     }
 

@@ -610,4 +610,113 @@ defmodule PlatformWeb.CalendarConsolidationLiveTest do
       refute has_element?(view, "[data-role=past-events]")
     end
   end
+
+  # ── v7 fidelity (task 01a1b8a5 stage 5 review rework) ──────────────────
+
+  describe "v7 details, header and labels" do
+    defp preset!(ctx, preset, title) do
+      day =
+        DateTime.utc_now() |> DateTime.shift_zone!(@zone) |> DateTime.to_date() |> Date.add(2)
+
+      start = DateTime.new!(day, ~T[09:00:00], @zone)
+      scope = Scope.for_user(ctx.owner)
+
+      {:ok, %{event: %Event{} = event}} =
+        Authoring.save(scope, Authoring.new_draft(scope, %{"preset" => preset}), %{
+          "title" => title,
+          "preset" => preset,
+          "call_enabled" => "false",
+          "starts_at" => DateTime.to_iso8601(start),
+          "ends_at" => DateTime.to_iso8601(DateTime.add(start, 7200)),
+          "time_zone" => @zone
+        })
+
+      {event, day}
+    end
+
+    for {preset, label} <- [{"focus", "Focus time"}, {"ooo", "Out of office"}] do
+      test "a #{label} event's details say it blocks your availability", ctx do
+        {event, day} = preset!(ctx, unquote(preset), "Preset #{unquote(preset)}")
+        view = calendar(ctx.owner, "?date=#{Date.to_iso8601(day)}")
+        render_click(view, "select", %{"id" => event.id, "kind" => "event"})
+
+        assert has_element?(
+                 view,
+                 "#{@details} [data-role=calendar-detail-blocks][data-preset=#{unquote(preset)}]",
+                 "#{unquote(label)} · blocks your availability"
+               )
+
+        assert has_element?(view, "#{@details} .cal-pill", unquote(label))
+      end
+    end
+
+    test "an ordinary event has no preset panel (control)", ctx do
+      {event, day} = preset!(ctx, "event", "Plain event")
+      view = calendar(ctx.owner, "?date=#{Date.to_iso8601(day)}")
+      render_click(view, "select", %{"id" => event.id, "kind" => "event"})
+
+      assert has_element?(view, "#{@details}", "Plain event")
+      refute has_element?(view, "[data-role=calendar-detail-blocks]")
+    end
+
+    test "the owner's call event shows the call row and who is invited", ctx do
+      %{meeting: meeting} = linked!(ctx)
+      view = calendar(ctx.owner, "?meeting=#{meeting.id}")
+
+      assert has_element?(
+               view,
+               "#{@details} [data-role=calendar-detail-call]",
+               "Burrow meeting in"
+             )
+
+      assert has_element?(view, "#{@details} [data-role=calendar-detail-call]", "hosted by")
+      assert has_element?(view, "#{@details} [data-role=calendar-detail-people]", "1 invited")
+
+      assert has_element?(
+               view,
+               "#{@details} [data-role=calendar-detail-people]",
+               ctx.invitee.name
+             )
+    end
+
+    test "a removed invitee leaves the owner's invited list", ctx do
+      %{meeting: meeting} = linked!(ctx, %{"add_invitees" => []})
+      {:ok, _} = Meetings.invite_user(meeting, ctx.invitee.id)
+      [invite] = Meetings.list_invites(meeting.id)
+      {:ok, _} = Meetings.revoke_invite(invite)
+
+      view = calendar(ctx.owner, "?meeting=#{meeting.id}")
+      assert has_element?(view, "#{@details} [data-role=calendar-detail-call]")
+      refute has_element?(view, "#{@details} [data-role=calendar-detail-people]")
+    end
+
+    test "the owner's action reads Edit event", ctx do
+      %{meeting: meeting} = linked!(ctx)
+      view = calendar(ctx.owner, "?meeting=#{meeting.id}")
+      assert has_element?(view, "#{@details} .cal-dfoot button", ~r/^\s*Edit event\s*$/)
+    end
+
+    test "the desktop header carries a Past events button", ctx do
+      view = calendar(ctx.owner)
+
+      assert has_element?(
+               view,
+               "[data-role=calendar-header] a[data-past-events]",
+               "Past events"
+             )
+
+      view |> element("[data-role=calendar-header] a[data-past-events]") |> render_click()
+      assert has_element?(view, "[data-role=past-events]")
+    end
+
+    test "the call filter and legend say Calls, not Meetings", ctx do
+      view = calendar(ctx.owner)
+
+      assert has_element?(view, "button[data-calendar-key=meetings]", "Calls")
+      assert has_element?(view, "button[data-calendar-key=meetings]", "Events with a Burrow call")
+      refute has_element?(view, "button[data-calendar-key=meetings]", "Meetings")
+      assert has_element?(view, "[data-legend=meeting]", "Calls")
+      refute has_element?(view, "[data-legend=meeting]", "Meetings")
+    end
+  end
 end

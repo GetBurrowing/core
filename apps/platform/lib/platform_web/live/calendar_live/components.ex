@@ -497,6 +497,15 @@ defmodule PlatformWeb.CalendarLive.Components do
         {@zone}
       </span>
       <span class="flex-1"></span>
+      <%!-- v7 headHTML `[data-past-events]` (stage 5 review). --%>
+      <.link
+        patch={~p"/calendar?#{%{view: @view, past: 1}}"}
+        class={ghost_btn()}
+        data-past-events="open"
+        data-role="calendar-header-past"
+      >
+        <.icon name="hero-archive-box" class="size-3.5" /> Past events
+      </.link>
       <.view_switch view={@view} />
       <button type="button" class={primary_btn()} phx-click="new" id="calendar-new-event">
         + New event
@@ -632,7 +641,7 @@ defmodule PlatformWeb.CalendarLive.Components do
         <i class="cal-sw cal-k-native"></i>Your events
       </span>
       <span :if={@meetings_on} class="inline-flex items-center gap-1.5" data-legend="meeting">
-        <i class="cal-sw cal-k-meeting"></i>Meetings
+        <i class="cal-sw cal-k-meeting"></i>Calls
       </span>
       <span class="inline-flex items-center gap-1.5">
         <i class="cal-sw cal-k-external"></i>External · read-only, blocks availability
@@ -1245,6 +1254,12 @@ defmodule PlatformWeb.CalendarLive.Components do
     """
   end
 
+  defp detail_pill(%{detail: %{preset: preset}} = assigns) when preset in ["focus", "ooo"] do
+    ~H"""
+    <span class="cal-pill cal-pill-info">{preset_label(@detail.preset)}</span>
+    """
+  end
+
   defp detail_pill(%{detail: %{owner?: true}} = assigns) do
     ~H"""
     <span class="cal-pill cal-pill-info">Your event</span>
@@ -1264,6 +1279,32 @@ defmodule PlatformWeb.CalendarLive.Components do
 
   defp detail_body(%{detail: %{kind: kind}} = assigns) when kind in ["native", "tentative"] do
     ~H"""
+    <%!-- v7 renderDetails: a Focus time / Out of office event says what
+         it does to availability (stage 5 review). --%>
+    <div
+      :if={@detail[:preset] in ["focus", "ooo"]}
+      class="cal-panel"
+      data-role="calendar-detail-blocks"
+      data-preset={@detail.preset}
+    >
+      <h3>{preset_label(@detail.preset)} · blocks your availability</h3>
+      <p>{preset_blocks_note(@detail.preset)}</p>
+    </div>
+    <%!-- v7 `.dl` call row and invitees on the owner's own call event. --%>
+    <.detail_row
+      :if={@detail[:call]}
+      icon="hero-video-camera"
+      text={"Burrow meeting in #{@detail.call.space || "its call space"}"}
+      sub={"hosted by #{@detail.call.host || if(@detail.owner?, do: "you", else: "the organizer")}"}
+      data-role="calendar-detail-call"
+    />
+    <.detail_row
+      :if={@detail[:call] && @detail.call.invitees != []}
+      icon="hero-user-group"
+      text={"#{length(@detail.call.invitees)} invited"}
+      sub={Enum.join(@detail.call.invitees, ", ")}
+      data-role="calendar-detail-people"
+    />
     <.detail_row
       icon="hero-eye-slash"
       text={if @detail.busy?, do: "Busy only", else: "Full details"}
@@ -1342,10 +1383,11 @@ defmodule PlatformWeb.CalendarLive.Components do
   attr(:text, :string, required: true)
   attr(:sub, :string, default: nil)
   attr(:class, :string, default: nil)
+  attr(:rest, :global)
 
   defp detail_row(assigns) do
     ~H"""
-    <div class="cal-dl">
+    <div class="cal-dl" {@rest}>
       <.icon name={@icon} class="size-3.5" />
       <span class={["min-w-0", @class]}>
         {@text}<small :if={@sub}>{@sub}</small>
@@ -1364,7 +1406,7 @@ defmodule PlatformWeb.CalendarLive.Components do
       class={if call_offered?(@detail[:call]), do: ghost_btn(), else: primary_btn()}
       phx-click="edit"
     >
-      Edit
+      Edit event
     </button>
     <button type="button" class={[ghost_btn(), "cal-danger-btn"]} phx-click="delete">Delete</button>
     """
@@ -1945,6 +1987,16 @@ defmodule PlatformWeb.CalendarLive.Components do
     </div>
     """
   end
+
+  defp preset_label("focus"), do: "Focus time"
+  defp preset_label("ooo"), do: "Out of office"
+
+  defp preset_blocks_note("focus"),
+    do: "Booking-link guests can’t pick this time. Focus time has no call."
+
+  defp preset_blocks_note("ooo"),
+    do:
+      "Booking-link guests can’t pick this time. Existing events are kept; no invitations are declined automatically."
 
   @doc "The v7 `#type-help` line for a preset, verbatim."
   def type_help("focus"), do: "Focus time · blocks bookings, with no call."

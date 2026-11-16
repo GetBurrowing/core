@@ -229,6 +229,31 @@ defmodule Platform.Meetings.ExternalInvitesTest do
       # A repeat append must not grow the list.
       assert space_ids(Repo.one!(PendingExternalGrant)) == [meeting.chat_space_id]
     end
+
+    # Review rework (task 01a1b8a5 stage 5): the dedupe lookup returned a
+    # REVOKED row, so re-inviting a removed address answered {:ok, _} and
+    # left them uninvited. The revoked row stays as evidence; a new live
+    # row is written beside it.
+    test "re-inviting a revoked address writes a live invite and keeps the revoked row" do
+      org = org!()
+      meeting = meeting!(org)
+      addr = "removed@partner.example"
+
+      assert {:ok, first} = Meetings.invite_external_user(meeting, addr)
+      assert {:ok, %Invite{revoked_at: %DateTime{} = revoked_at}} = Meetings.revoke_invite(first)
+
+      assert {:ok, again} = Meetings.invite_external_user(meeting, addr)
+
+      assert again.id != first.id
+      assert again.revoked_at == nil
+      assert Repo.get!(Invite, first.id).revoked_at == revoked_at
+      assert [live] = Meetings.list_invites(meeting.id)
+      assert live.id == again.id
+
+      # And a further re-invite is idempotent against the LIVE row.
+      assert {:ok, third} = Meetings.invite_external_user(meeting, addr)
+      assert third.id == again.id
+    end
   end
 
   # ── invite_external_user/3: branch 2, the second meeting ────────────────
