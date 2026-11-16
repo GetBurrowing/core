@@ -220,6 +220,9 @@ defmodule Platform.Goals.GoalsTest do
       assert Enum.any?(files, &String.ends_with?(&1, "platform/goals/retro_changes.ex")),
              "retro reads must be scanned"
 
+      assert Enum.any?(files, &String.ends_with?(&1, "platform/goals/owner_pace.ex")),
+             "pacing reads must be scanned"
+
       found =
         for file <- files, hit <- hits(File.read!(file)), do: {Path.relative_to(file, @lib), hit}
 
@@ -263,3 +266,4 @@ defmodule Platform.Goals.GoalsTest do
     end
   end
 end
+

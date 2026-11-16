@@ -42,6 +42,12 @@ defmodule Platform.Goals.Brief do
       Repo.query!("SELECT pg_advisory_xact_lock(hashtext($1))", ["goals:brief:" <> id])
       now = Clock.now()
       ignored = ignore_old(user, date, now)
+
+      ignored
+      |> Enum.filter(&(&1.owner_user_id == id))
+      |> Enum.uniq_by(& &1.id)
+      |> Enum.each(&Platform.Goals.OwnerPace.refresh(&1, now))
+
       {:ok, asks} = Goals.list_my_asks(user, limit: :infinity)
 
       new_asks =
@@ -66,7 +72,8 @@ defmodule Platform.Goals.Brief do
         )
 
       reports = Enum.count(goals, &prepare_report(user, &1, date, now))
-      {:ok, %{new: new_asks + reports, ignored: ignored}}
+      notes = prepare_notes(user, date, now)
+      {:ok, %{new: new_asks + reports + notes, ignored: length(ignored)}}
     end)
   end
 
@@ -78,7 +85,7 @@ defmodule Platform.Goals.Brief do
         where: i.kind == "ask" and i.digest_date < ^date and is_nil(i.ignored_at)
       )
     )
-    |> Enum.count(fn item ->
+    |> Enum.flat_map(fn item ->
       # Lock in the same goal-then-ask order as practice. Re-addressing an old
       # item must not make answer_ask's nested rollback abort the entire brief.
       goal =
@@ -107,7 +114,7 @@ defmodule Platform.Goals.Brief do
           match?({:ok, _}, Goals.answer_ask(user, item.ask_id, "ignored"))
 
       if goal, do: item |> Ecto.Changeset.change(ignored_at: now) |> Repo.update!()
-      written
+      if written, do: [goal], else: []
     end)
   end
 
@@ -161,6 +168,38 @@ defmodule Platform.Goals.Brief do
     end
   end
 
+  defp prepare_notes(user, date, now) do
+    cutoff = DateTime.add(now, -Limits.report_window_days(), :day)
+
+    entries =
+      Repo.all(
+        from(e in children(user, Entry),
+          join: g in subquery(Visibility.visible_goals(user)),
+          on: g.id == e.goal_id,
+          where:
+            g.owner_user_id == ^user.id and e.occurred_at >= ^cutoff and e.occurred_at <= ^now,
+          where:
+            e.kind == "retro" or
+              (e.kind == "wait" and fragment("?->>'pace'", e.details) == "slowed"),
+          where:
+            not exists(
+              from(i in BriefItem,
+                where: i.entry_id == parent_as(:entry).id and i.user_id == ^user.id
+              )
+            ),
+          as: :entry
+        )
+      )
+
+    Enum.each(entries, fn entry ->
+      %BriefItem{user_id: user.id, goal_id: entry.goal_id, entry_id: entry.id}
+      |> BriefItem.changeset(%{kind: "note", digest_date: date})
+      |> Repo.insert!()
+    end)
+
+    length(entries)
+  end
+
   defp later(a, b), do: if(DateTime.compare(a, b) == :gt, do: a, else: b)
 
   def items(%User{id: user_id} = user, %Date{} = date) do
@@ -172,19 +211,34 @@ defmodule Platform.Goals.Brief do
           left_join: a in Ask,
           on: a.id == i.ask_id,
           where:
-            i.digest_date == ^date and (i.kind == "report" or ^user_id in a.addressed_user_ids),
+            i.digest_date == ^date and
+              (i.kind in ["report", "note"] or ^user_id in a.addressed_user_ids),
           select: {i, g, a}
         )
       )
 
-    result = Enum.map(rows, fn {item, goal, ask} -> item_map(user, item, goal, ask) end)
-    {:ok, Enum.sort_by(result, &{order(&1.kind), String.downcase(&1.goal.title), &1.id})}
+    result =
+      Enum.flat_map(rows, fn {item, goal, ask} ->
+        if item.kind == "note",
+          do: note_maps(user, item, goal),
+          else: [item_map(user, item, goal, ask)]
+      end)
+
+    {:ok,
+     Enum.sort_by(
+       result,
+       &{if(&1.kind == :retro_change, do: 2, else: order(&1.kind)),
+        String.downcase(&1.goal.title), &1.id, order(&1.kind)}
+     )}
   end
 
   def items(_, _), do: {:ok, []}
   defp order(:report), do: 0
-  defp order(:practice), do: 2
-  defp order(_), do: 1
+  defp order(:notice), do: 1
+  defp order(:retro), do: 2
+  defp order(:retro_change), do: 3
+  defp order(:practice), do: 5
+  defp order(_), do: 4
 
   def summary(user, date) do
     {:ok, items} = items(user, date)
@@ -194,8 +248,61 @@ defmodule Platform.Goals.Brief do
      %{
        total: length(items),
        open: length(open),
-       calls: Enum.count(open, &(&1.kind in [:offer, :idea, :question]))
+       calls: Enum.count(open, &(&1.kind in [:offer, :idea, :question, :retro_change]))
      }}
+  end
+
+  defp note_maps(user, item, goal) do
+    entry = Repo.one!(from(e in children(user, Entry), where: e.id == ^item.entry_id))
+
+    base = %{
+      id: item.id,
+      digest_date: item.digest_date,
+      goal: %{id: goal.id, title: goal.title, agent_mode: goal.agent_mode},
+      entry: Map.take(entry, [:id, :title, :body]),
+      entry_id: entry.id
+    }
+
+    if entry.kind == "wait" do
+      [
+        Map.merge(base, %{
+          kind: :notice,
+          state: :done,
+          ignored_briefs: entry.details["ignored_briefs"],
+          every: entry.details["every"]
+        })
+      ]
+    else
+      {:ok, retro} = Goals.get_retro(user, goal.id, entry.id)
+
+      verdicts =
+        Map.new([:came_true, :did_not, :too_early], fn verdict ->
+          {verdict, Enum.count(retro.verdicts, &(&1["verdict"] == Atom.to_string(verdict)))}
+        end)
+
+      row =
+        Map.merge(base, %{
+          kind: :retro,
+          state: if(item.noted_at, do: :done, else: :open),
+          verdicts: verdicts,
+          stalled: retro.stalled,
+          flat_retros: retro.flat_retros,
+          noted_at: item.noted_at
+        })
+
+      if retro.change do
+        [
+          row,
+          Map.merge(base, %{
+            kind: :retro_change,
+            change: retro.change,
+            state: if(retro.change.state == :open, do: :open, else: :done)
+          })
+        ]
+      else
+        [row]
+      end
+    end
   end
 
   defp item_map(user, item, goal, ask) do
@@ -316,10 +423,18 @@ defmodule Platform.Goals.Brief do
       entries: entries,
       since_at: item.since_at,
       number: value,
+      pace: if(value, do: report_pace(user, goal.id), else: nil),
       noted_at: item.noted_at,
       next_wake_at: clock && clock.next_wake_at,
       questions: questions
     })
+  end
+
+  defp report_pace(user, goal_id) do
+    case Goals.expected_pace(user, goal_id) do
+      {:ok, %{state: state}} -> state
+      _ -> nil
+    end
   end
 
   defp ask_map(user, ask, goal, base) do
@@ -373,7 +488,20 @@ defmodule Platform.Goals.Brief do
   def set_noted(%User{} = user, raw_id, noted?) when is_boolean(noted?) do
     with {:ok, id} <- cast_id(raw_id),
          %BriefItem{} = item <-
-           Repo.one(from(i in reader_items(user), where: i.id == ^id and i.kind == "report")) do
+           Repo.one(
+             from(i in reader_items(user),
+               where:
+                 i.id == ^id and
+                   (i.kind == "report" or
+                      (i.kind == "note" and
+                         exists(
+                           from(e in Entry,
+                             where: e.id == parent_as(:item).entry_id and e.kind == "retro"
+                           )
+                         ))),
+               as: :item
+             )
+           ) do
       item
       |> BriefItem.changeset(%{noted_at: if(noted?, do: Clock.now(), else: nil)})
       |> Repo.update()
@@ -760,6 +888,15 @@ defmodule Platform.Goals.Brief do
         else: count
       )
 
+  def refresh(%User{} = user, {:entry, raw_id}) do
+    with {:ok, id} <- cast_id(raw_id) do
+      Repo.all(from(i in reader_items(user), where: i.entry_id == ^id))
+      |> Enum.each(&Platform.Memory.Insights.BriefingSections.changed(user.id, &1.digest_date))
+    end
+
+    :ok
+  end
+
   def refresh(%User{} = user, raw_id) do
     with {:ok, id} <- cast_id(raw_id) do
       Repo.all(from(i in reader_items(user), where: i.ask_id == ^id))
@@ -780,3 +917,4 @@ defmodule Platform.Goals.Brief do
 
   defp nonblank?(value), do: is_binary(value) and String.trim(value) != ""
 end
+

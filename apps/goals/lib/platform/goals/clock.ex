@@ -73,15 +73,23 @@ defmodule Platform.Goals.Clock do
         Map.take(clock, [:wake_hour, :time_zone, :anchor_on])
       )
 
-  defp schedule(goal, hour, zone, now, anchor) do
+  defp next_slot_for(goal, clock, after_time) do
+    times = if clock.paced_at, do: Limits.paced_every(goal.rhythm), else: 1
+
+    Enum.reduce_while(1..times, {:ok, after_time}, fn _, {:ok, previous} ->
+      case Rhythm.next_slot(previous, settings(goal, clock)) do
+        {:ok, next} -> {:cont, {:ok, next}}
+        error -> {:halt, error}
+      end
+    end)
+  end
+
+  defp schedule(goal, hour, zone, now, anchor, paced_at \\ nil) do
     {:ok, slot} =
-      Rhythm.next_slot(
-        now,
-        Map.merge(Map.take(goal, [:rhythm, :rhythm_weekday]), %{
-          wake_hour: hour,
-          time_zone: zone,
-          anchor_on: anchor
-        })
+      next_slot_for(
+        goal,
+        %{wake_hour: hour, time_zone: zone, anchor_on: anchor, paced_at: paced_at},
+        now
       )
 
     %{
@@ -125,8 +133,8 @@ defmodule Platform.Goals.Clock do
              do: Repo.rollback(:already_claimed)
 
            goal = current
-           {:ok, next} = Rhythm.next_slot(now, settings(goal, clock))
-           {:ok, following} = Rhythm.next_slot(clock.next_wake_at, settings(goal, clock))
+           {:ok, next} = next_slot_for(goal, clock, now)
+           {:ok, following} = next_slot_for(goal, clock, clock.next_wake_at)
 
            {count, _} =
              Repo.update_all(
@@ -319,9 +327,18 @@ defmodule Platform.Goals.Clock do
     :ok
   end
 
+  @doc false
+  def repace(clock, goal, now) do
+    {:ok, next} = next_slot_for(goal, clock, now)
+    clock |> Ecto.Changeset.change(next_wake_at: next) |> Repo.update()
+  end
+
   def reset(clock, goal, now) do
     clock
-    |> GoalClock.changeset(schedule(goal, clock.wake_hour, clock.time_zone, now, nil))
+    |> GoalClock.changeset(
+      schedule(goal, clock.wake_hour, clock.time_zone, now, nil, clock.paced_at)
+    )
     |> Repo.update()
   end
 end
+

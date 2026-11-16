@@ -39,6 +39,11 @@ defmodule Platform.Goals.WakeUps.Briefing do
     {:ok, entries} = Goals.list_entries(actor, goal.id, limit: Limits.briefing_entries())
 
     snapshot = %{
+      "pace" => %{
+        "state" => if(clock && clock.paced_at, do: "slowed", else: "usual"),
+        "since" => scalar(clock && clock.paced_at),
+        "ignored_briefs" => Goals.OwnerPace.ignored_briefs(goal)
+      },
       "goal" =>
         goal
         |> fields(~w(id title why kind status agent_mode rhythm rhythm_weekday outreach unit)a)
@@ -255,11 +260,18 @@ defmodule Platform.Goals.WakeUps.Briefing do
       "\n" <> change <> "\n\n## What you may do\nClose this retro with goal_retro." <> requirement
   end
 
-  def text(%{"goal" => goal, "number" => number, "since_last" => since}) do
-    "## The goal\n#{goal["title"]}\n#{goal["why"]}\nTarget: #{goal["target_value"]} #{goal["unit"]}\nSettings: #{inspect(goal)}\n\n## The number\n#{number_text(number)}\n\n## Since the last check-in\n#{inspect(since)}\n#{answer_text(since["answers"] || [])}\n\n## What you may do\nClose this check-in with exactly one of goal_do, goal_ask or goal_wait. Respect the goal's agent mode, stops and outreach settings."
+  def text(%{"goal" => goal, "number" => number, "since_last" => since} = snapshot) do
+    pace_text(snapshot["pace"]) <>
+      "## The goal\n#{goal["title"]}\n#{goal["why"]}\nTarget: #{goal["target_value"]} #{goal["unit"]}\nSettings: #{inspect(goal)}\n\n## The number\n#{number_text(number)}\n\n## Since the last check-in\n#{inspect(since)}\n#{answer_text(since["answers"] || [])}\n\n## What you may do\nClose this check-in with exactly one of goal_do, goal_ask or goal_wait. Respect the goal's agent mode, stops and outreach settings."
   end
 
   def text(_), do: "The briefing for this check-in is not available."
+
+  defp pace_text(%{"state" => "slowed", "ignored_briefs" => n}),
+    do:
+      "The owner has not answered the last #{n} briefs. You are checking in less often and may hold one open ask. An answer restores the usual rhythm.\n\n"
+
+  defp pace_text(_), do: ""
 
   # Practice results and suggestion choices must reach the coach as readable signals
   # (task 01a1dfc1-abcc), beyond the persisted answer payload.
@@ -310,3 +322,4 @@ defmodule Platform.Goals.WakeUps.Briefing do
   defp scalar(%Date{} = value), do: Date.to_iso8601(value)
   defp scalar(value), do: value
 end
+

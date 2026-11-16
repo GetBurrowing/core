@@ -459,7 +459,20 @@ defmodule Platform.Goals do
 
       {:ok,
        if(row,
-         do: Map.take(row, [:next_wake_at, :time_zone, :wake_hour, :last_woken_at, :stalled_at]),
+         do:
+           row
+           |> Map.take([
+             :next_wake_at,
+             :time_zone,
+             :wake_hour,
+             :last_woken_at,
+             :stalled_at,
+             :paced_at
+           ])
+           |> Map.put(
+             :paced_every,
+             if(row.paced_at, do: Platform.Goals.Limits.paced_every(goal.rhythm), else: nil)
+           ),
          else: nil
        )}
     end
@@ -540,38 +553,43 @@ defmodule Platform.Goals do
   @doc "The owner accepts or keeps a retro's proposed change, once."
   def decide_retro_change(actor, goal_id, entry_id, decision) do
     with :ok <- check_enabled() do
-      in_transaction(fn ->
-        with {:ok, goal} <- fetch_visible(actor, goal_id, false),
-             :ok <- lock_clock(actor, goal),
-             {:ok, goal} <- fetch_visible(actor, goal_id, true),
-             true <- owner?(actor, goal) || {:error, :forbidden},
-             true <- decision in ["switch", "keep"] || {:error, :unknown_decision},
-             {:ok, retro} <- Platform.Goals.RetroChanges.retro(actor, goal.id, entry_id),
-             {kind, change} when not is_nil(change) <- Platform.Goals.RetroChanges.proposal(retro),
-             nil <- Platform.Goals.RetroChanges.decision(actor, goal.id, retro.id),
-             {:ok, updated} <- apply_retro_decision(actor, goal, change["set"], decision),
-             {:ok, entry} <-
-               add_entry(actor, goal.id, %{
-                 kind: "ask",
-                 occurred_at: Platform.Goals.Clock.now(),
-                 title:
-                   if(decision == "switch", do: "Switched: ", else: "Kept as is: ") <>
-                     String.slice(change["summary"], 0, 190),
-                 details: %{
-                   "request" => "retro_change",
-                   "decision" => decision,
-                   "retro_entry_id" => retro.id,
-                   "change" => kind,
-                   "set" => change["set"]
-                 }
-               }) do
-          {:ok, %{decision: decision, goal: updated, entry: entry}}
-        else
-          {_, nil} -> {:error, :nothing_to_decide}
-          %Entry{} -> {:error, :already_decided}
-          error -> error
-        end
-      end)
+      result =
+        in_transaction(fn ->
+          with {:ok, goal} <- fetch_visible(actor, goal_id, false),
+               :ok <- lock_clock(actor, goal),
+               {:ok, goal} <- fetch_visible(actor, goal_id, true),
+               true <- owner?(actor, goal) || {:error, :forbidden},
+               true <- decision in ["switch", "keep"] || {:error, :unknown_decision},
+               {:ok, retro} <- Platform.Goals.RetroChanges.retro(actor, goal.id, entry_id),
+               {kind, change} when not is_nil(change) <-
+                 Platform.Goals.RetroChanges.proposal(retro),
+               nil <- Platform.Goals.RetroChanges.decision(actor, goal.id, retro.id),
+               {:ok, updated} <- apply_retro_decision(actor, goal, change["set"], decision),
+               {:ok, entry} <-
+                 add_entry(actor, goal.id, %{
+                   kind: "ask",
+                   occurred_at: Platform.Goals.Clock.now(),
+                   title:
+                     if(decision == "switch", do: "Switched: ", else: "Kept as is: ") <>
+                       String.slice(change["summary"], 0, 190),
+                   details: %{
+                     "request" => "retro_change",
+                     "decision" => decision,
+                     "retro_entry_id" => retro.id,
+                     "change" => kind,
+                     "set" => change["set"]
+                   }
+                 }) do
+            {:ok, %{decision: decision, goal: updated, entry: entry}}
+          else
+            {_, nil} -> {:error, :nothing_to_decide}
+            %Entry{} -> {:error, :already_decided}
+            error -> error
+          end
+        end)
+
+      if match?({:ok, _}, result), do: refresh_brief(actor, {:entry, entry_id})
+      result
     end
   end
 
@@ -722,6 +740,11 @@ defmodule Platform.Goals do
                  %{answer: answer, details: details, answered_at: Platform.Goals.Clock.now()}
                )
                |> Repo.insert_or_update() do
+          {:ok, goal} = fetch_visible(actor, ask.goal_id, false)
+
+          if goal.owner_user_id == user_id and answer in ["used", "declined"],
+            do: Platform.Goals.OwnerPace.refresh(goal, Platform.Goals.Clock.now())
+
           count =
             Repo.aggregate(
               from(a in Platform.Goals.AskAnswer, where: a.ask_id == ^ask.id),
@@ -985,6 +1008,12 @@ defmodule Platform.Goals do
   defp maybe_ask(actor, goal, wake, "ask", attrs) do
     now = Platform.Goals.Clock.now()
     cap = Platform.Goals.Limits.max_open_asks(goal.outreach)
+    clock = Platform.Goals.Clock.visible_clock(actor, goal.id)
+
+    cap =
+      if clock && clock.paced_at,
+        do: min(cap, Platform.Goals.Limits.paced_max_open_asks()),
+        else: cap
 
     count =
       Repo.aggregate(
@@ -1814,3 +1843,4 @@ defmodule Platform.Goals do
     end
   end
 end
+

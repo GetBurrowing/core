@@ -16,6 +16,9 @@ defmodule Platform.Goals.DisabledTest do
         do: assert(f in functions, "#{inspect(f)} is not exported")
 
     for f <- [
+          clock_status: 2,
+          refresh_brief: 2,
+          set_report_noted: 3,
           close_retro: 3,
           decide_retro_change: 4,
           get_retro: 3,
@@ -73,3 +76,4 @@ defmodule Platform.Goals.DisabledTest do
         &Repo.aggregate(&1, :count)
       )
 end
+
