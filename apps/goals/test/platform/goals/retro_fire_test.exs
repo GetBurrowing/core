@@ -101,4 +101,26 @@ defmodule Platform.Goals.RetroFireTest do
     Clock.tick(DateTime.add(Clock.now(), 86400 * 50))
     assert Repo.aggregate(WakeUp, :count) == count
   end
+
+  test "an undated prediction is described without a deadline or expected number", c do
+    {:ok, goal} = Goals.update_goal(c.owner, c.goal.id, %{retro_every: 2})
+
+    {:ok, _} =
+      Goals.add_entry(c.coach, goal.id, %{
+        kind: "wait",
+        prediction: "Wait for a signal",
+        predicted_change: 12345,
+        occurred_at: Clock.now()
+      })
+
+    wake = fire(goal)
+    {:ok, _} = Goals.close_wake_up(c.coach, wake.id, "wait", %{reason: "Wait"})
+    retro = fire(goal)
+    text = Briefing.text(retro.briefing)
+    assert text =~ "Wait for a signal: not scored"
+    refute text =~ "expected 12345"
+
+    assert [%{"predicted_by" => nil, "actual_change" => nil}] =
+             retro.briefing["retro"]["predictions"]
+  end
 end
