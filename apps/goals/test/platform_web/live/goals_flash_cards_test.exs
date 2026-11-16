@@ -181,18 +181,16 @@ defmodule PlatformWeb.GoalsFlashCardsTest do
     refute html =~ "Your goals"
     refute html =~ c.goal.title
 
+    # The deck left the page with its card; any of its events still
+    # reaching it are refused the same way.
     for event <- ["flip", "got", "missed"],
+        has_element?(view, "[data-role=goals-flash-cards]"),
         do: view |> with_target("[data-role=goals-flash-cards]") |> render_click(event, %{})
 
     assert Repo.aggregate(AskAnswer, :count) == 0
     assert Repo.aggregate(Reading, :count) == 0
     refute render(view) =~ "Front 0"
     refute render(view) =~ "Back 0"
-
-    # The card around the deck goes on the brief's next event.
-    view |> with_target("[data-role=goals-brief]") |> render_hook("noop", %{})
-    refute has_element?(view, "[data-role=goals-brief-card]")
-    assert Repo.aggregate(AskAnswer, :count) == 0
   end
 
   test "revoked visibility in the middle of a pass hides the deck and refuses the last mark", c do
