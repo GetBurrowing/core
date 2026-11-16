@@ -3689,6 +3689,8 @@ defmodule Platform.Federation.ToolSurface do
   # so the two tool registrations must not be able to drift apart.
   @plan_stages_param_description "Array of IMPLEMENTATION stage objects: {name, description, position, e2e_host?, validations: [{kind, evaluation_payload?}]}. Valid validation kinds for planner-authored stages: lint_pass, type_check, test_pass, manual_approval, e2e_behavior. Do NOT include a deploy stage — the system auto-injects one (with ci_passed / pr_merged / etc. validations) at deploying time from the project's resolved deploy strategy. The e2e_behavior kind requires an evaluation_payload map with keys setup/actions/expected (the planner authors an adversarial test plan the review agent will execute — include 2-5 e2e_behavior validations covering happy path, edges, and regression-prone scenarios; do NOT pre-write failure_feedback, the review agent observes failures at review time). e2e HOST RULE: when the plan carries any e2e_behavior validations, they are all lifted onto ONE host stage. By default the engine synthesizes a task-level review stage at the end. A stage whose name CONTAINS \"review\" or \"validation\" (case-insensitive, anywhere in the name — e.g. \"task_plan_review\") would silently be adopted as that host instead, so such a plan is REFUSED with a recoverable error: rename the stage, or set the optional per-stage boolean \"e2e_host\": true on the stage that should genuinely host them, which is honoured over any name match. Stage names beginning \"deploy:\" are exempt and never adopted. manual_approval RULE: a manual_approval validation means \"here is the UI, does it fit the brief\" — nothing else. It REQUIRES an evaluation_payload map carrying a non-blank \"ui_surface\" string naming the screen or component the human will look at (e.g. \"ui_surface\": \"the task detail page's stage timeline at 375px\"); a manual_approval without it is REFUSED with a recoverable error and nothing is persisted. Test summaries, caveats, and run reports do NOT belong in a review item — those are what lint_pass / test_pass / e2e_behavior are for. If the stage has no rendered surface to show, drop the gate rather than naming one: a manual_approval that shows a human anything but UI is a notification, not a gate."
 
+  @plan_deploy_repos_param_description "Optional. The repositories this task's work lands in, when that is not (only) the project's own repository: a non-empty array of {repo_url, ci?} objects, e.g. [{\"repo_url\": \"https://github.com/<owner>/<name>\", \"ci\": \"required\"}] (ci is \"required\", \"none\" or \"unenforced\"; default required). The task branch is created in, and the deploy gate watches, exactly these repositories, so list the project repository too if any work also lands there. Written onto the task's deploy strategy in the same transaction as the plan. Refused (nothing written) on a stack member, when the effective deploy strategy is not pr_merge, when a human already set a different repository set, or when invalid. A plan whose stage text names another repository (a github.com/<owner>/<name> URL, or <Owner>/<name> with the project's owner) WITHOUT deploy_repos is refused with code undeclared_cross_repo."
+
   defp plan_tools do
     [
       %{
@@ -3701,6 +3703,11 @@ defmodule Platform.Federation.ToolSurface do
             type: "array",
             required: true,
             description: @plan_stages_param_description
+          },
+          deploy_repos: %{
+            type: "array",
+            required: false,
+            description: @plan_deploy_repos_param_description
           }
         },
         returns: "The created plan with stages and validations preloaded",
@@ -3727,6 +3734,11 @@ defmodule Platform.Federation.ToolSurface do
             type: "array",
             required: true,
             description: @plan_stages_param_description
+          },
+          deploy_repos: %{
+            type: "array",
+            required: false,
+            description: @plan_deploy_repos_param_description
           }
         },
         returns:
@@ -7491,10 +7503,10 @@ defmodule Platform.Federation.ToolSurface do
         {:error, quarantine_refusal_envelope(details)}
 
       {:error, :task_not_found} ->
-        do_guarded_plan_create(task_id, raw_stages_input)
+        do_guarded_plan_create(task_id, raw_stages_input, args)
 
       :ok ->
-        do_guarded_plan_create(task_id, raw_stages_input)
+        do_guarded_plan_create(task_id, raw_stages_input, args)
     end
   end
 
@@ -7695,7 +7707,14 @@ defmodule Platform.Federation.ToolSurface do
                       {:error, unnamed_manual_gate_envelope(info)}
 
                     :ok ->
-                      do_plan_update(plan, stages_input, args, context)
+                      # Task 01a1e4fa stage 1 — same guard as plan_create.
+                      case Platform.Tasks.PlanDeployRepos.prepare(plan.task_id, args, stages_input) do
+                        {:error, envelope} ->
+                          {:error, envelope}
+
+                        {:ok, deploy_strategy} ->
+                          do_plan_update(plan, stages_input, args, context, deploy_strategy)
+                      end
                   end
               end
           end
@@ -9135,7 +9154,7 @@ defmodule Platform.Federation.ToolSurface do
   defp plan_reject_suggestion(_status),
     do: "the plan is immutable to this tool"
 
-  defp do_plan_update(plan, raw_stages_input, args, context) do
+  defp do_plan_update(plan, raw_stages_input, args, context, deploy_strategy) do
     # BEFORE summary from the tree as it stands — this is the audit trail's
     # "who changed what": what the draft looked like before the rewrite.
     before_summary = plan_update_summary(Repo.preload(plan, stages: :validations))
@@ -9152,7 +9171,7 @@ defmodule Platform.Federation.ToolSurface do
       |> Platform.Tasks.PlanEngine.check_manual_approval_heuristic()
       |> Platform.Tasks.PlanEngine.check_zero_validation_stages()
 
-    case Tasks.replace_plan_stages(plan, stages_input) do
+    case Tasks.replace_plan_stages(plan, stages_input, deploy_strategy: deploy_strategy) do
       {:ok, updated} ->
         {updated_by, actor_type} = plan_update_actor(args, context)
         emit_plan_updated(updated, updated_by, actor_type, before_summary)
@@ -10469,7 +10488,7 @@ defmodule Platform.Federation.ToolSurface do
     end
   end
 
-  defp do_guarded_plan_create(task_id, raw_stages_input) do
+  defp do_guarded_plan_create(task_id, raw_stages_input, args) do
     # Task 01a006d1 stage 3 — the gate runs BEFORE the rewrite pipe and before
     # the transaction opens, so a refused plan writes nothing at all. Rejecting
     # after a draft row exists would leave the author unable to retry
@@ -10508,7 +10527,13 @@ defmodule Platform.Federation.ToolSurface do
                 {:error, unnamed_manual_gate_envelope(info)}
 
               :ok ->
-                do_plan_create(task_id, raw_stages_input)
+                # Task 01a1e4fa stage 1 — deploy_repos refusals and
+                # `PlanEngine.detect_undeclared_cross_repo/2`, same
+                # pre-transaction position. Body: Platform.Tasks.PlanDeployRepos.
+                case Platform.Tasks.PlanDeployRepos.prepare(task_id, args, raw_stages_input) do
+                  {:error, envelope} -> {:error, envelope}
+                  {:ok, deploy_strategy} -> do_plan_create(task_id, raw_stages_input, deploy_strategy)
+                end
             end
         end
     end
@@ -12557,7 +12582,7 @@ defmodule Platform.Federation.ToolSurface do
   defp maybe_put_boolean(attrs, key, value) when is_boolean(value), do: Map.put(attrs, key, value)
   defp maybe_put_boolean(attrs, _key, _value), do: attrs
 
-  defp do_plan_create(task_id, raw_stages_input) do
+  defp do_plan_create(task_id, raw_stages_input, deploy_strategy) do
     # Pre-persistence rewrites:
     # 1. Lift any e2e_behavior validations into a single task-level review stage.
     # 2. Log advisory warnings about manual_approval scoping (planner authority wins).
@@ -12616,6 +12641,10 @@ defmodule Platform.Federation.ToolSurface do
                   Repo.rollback(reason)
               end
             end)
+
+          # Task 01a1e4fa stage 1 — the plan's deploy_repos declaration
+          # commits with the plan or not at all.
+          :ok = Platform.Tasks.PlanDeployRepos.write_in_transaction(task_id, deploy_strategy)
 
           Map.put(plan, :stages, stages)
 

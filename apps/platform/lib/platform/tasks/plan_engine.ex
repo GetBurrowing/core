@@ -53,6 +53,7 @@ defmodule Platform.Tasks.PlanEngine do
   alias Platform.Tasks.MemberReviewEntry
   alias Platform.Tasks.PlanCompletion
   alias Platform.Tasks.PostCommit
+  alias Platform.Tasks.RepoRef
   alias Platform.Tasks.ReviewDisposition
   alias Platform.Orchestration.ExecutionSpace
 
@@ -1095,6 +1096,93 @@ defmodule Platform.Tasks.PlanEngine do
   end
 
   def detect_unnamed_manual_gate(_other), do: :ok
+
+  # A full GitHub reference: `github.com/<owner>/<name>` (https, ssh `:` form).
+  @cross_repo_url ~r{github\.com[/:]([A-Za-z0-9][A-Za-z0-9-]*)/([A-Za-z0-9][A-Za-z0-9._-]*)}i
+  # A bare `<Owner>/<name>` token NOT preceded by a path, host or word
+  # character, so `apps/platform`'s `apps` matches only as an owner — and is
+  # then discarded below because it is not the project's owner.
+  @cross_repo_bare ~r{(?<![A-Za-z0-9._/@:\-])([A-Za-z0-9][A-Za-z0-9-]*)/([A-Za-z0-9][A-Za-z0-9._-]*)}
+
+  @doc """
+  Refuse a plan whose stage text names a repository other than the project's
+  own when the plan declared no `deploy_repos` (task 01a1e4fa stage 1).
+
+  Without a declaration, `Tasks.resolve_deploy_strategy_with_repos/1` falls
+  back to the PROJECT repo, so `BranchProvisioner.ensure_branches/2` cuts the
+  task branch there and the deploy gate watches it. A plan whose work lands
+  in another repository therefore ships a gate on the wrong one (task
+  01a1e4aa: all work in GetBurrowing/burrow-cloud, gate and stray branch on
+  GetBurrowing/core).
+
+  Scans each stage's `name` and `description` for:
+
+    * full `github.com/<owner>/<name>` references, any owner;
+    * bare `<Owner>/<name>` tokens whose owner case-insensitively equals the
+      OWNER of `project_repo_url`'s slug.
+
+  The project's own slug is excluded. Narrow on purpose: a path such as
+  `apps/platform/lib/...` has owner `apps`, which is not the project owner,
+  so it never matches. When `project_repo_url` does not normalize there is no
+  owner, and only full GitHub references are considered.
+
+  Pure: no Repo. Returns `:ok` or `{:error, %{slugs: [...], project_slug:
+  slug | nil, reason: :undeclared_cross_repo}}`, slugs in first-seen order,
+  de-duplicated case-insensitively.
+  """
+  @spec detect_undeclared_cross_repo([map()], String.t() | nil) :: :ok | {:error, map()}
+  def detect_undeclared_cross_repo(stages_input, project_repo_url) when is_list(stages_input) do
+    project_slug = RepoRef.slug(project_repo_url)
+    project_owner = project_slug && project_slug |> String.split("/") |> hd() |> String.downcase()
+
+    slugs =
+      stages_input
+      |> Enum.filter(&is_map/1)
+      |> Enum.flat_map(fn stage ->
+        [stage_field(stage, "name"), stage_field(stage, "description")]
+        |> Enum.filter(&is_binary/1)
+      end)
+      |> Enum.flat_map(&cross_repo_candidates(&1, project_owner))
+      |> Enum.reject(&(project_slug && String.downcase(&1) == String.downcase(project_slug)))
+      |> Enum.uniq_by(&String.downcase/1)
+
+    case slugs do
+      [] -> :ok
+      _ -> {:error, %{slugs: slugs, project_slug: project_slug, reason: :undeclared_cross_repo}}
+    end
+  end
+
+  def detect_undeclared_cross_repo(_other, _project_repo_url), do: :ok
+
+  defp cross_repo_candidates(text, project_owner) do
+    urls =
+      @cross_repo_url
+      |> Regex.scan(text, capture: :all_but_first)
+      |> Enum.map(fn [owner, name] -> {owner, name} end)
+
+    bare =
+      if project_owner do
+        @cross_repo_bare
+        |> Regex.scan(text, capture: :all_but_first)
+        |> Enum.map(fn [owner, name] -> {owner, name} end)
+        |> Enum.filter(fn {owner, _} -> String.downcase(owner) == project_owner end)
+      else
+        []
+      end
+
+    (urls ++ bare)
+    |> Enum.map(fn {owner, name} -> owner <> "/" <> trim_repo_name(name) end)
+    |> Enum.map(&RepoRef.slug/1)
+    |> Enum.reject(&is_nil/1)
+  end
+
+  # Prose punctuation and a `.git` suffix are not part of a repository name.
+  defp trim_repo_name(name) do
+    name
+    |> String.trim_trailing(".")
+    |> String.replace_suffix(".git", "")
+    |> String.trim_trailing(".")
+  end
 
   defp manual_approval_validation?(v) when is_map(v) do
     (Map.get(v, "kind") || Map.get(v, :kind)) == "manual_approval"

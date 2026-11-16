@@ -2873,10 +2873,14 @@ defmodule Platform.Tasks do
   `pending_review` between the caller's read and this write cannot be
   rewritten: a submitted plan is immutable to agents (the Plan-State Lock),
   and the caller's stale struct cannot reopen it.
+
+  Option `:deploy_strategy` (task 01a1e4fa): a strategy map from
+  `Platform.Tasks.PlanDeployRepos.prepare/3`, written onto the task inside
+  the same transaction; `nil` (the default) writes nothing.
   """
   def replace_plan_stages(plan, stages_input, opts \\ [])
 
-  def replace_plan_stages(%Plan{status: "draft"} = plan, stages_input, _opts)
+  def replace_plan_stages(%Plan{status: "draft"} = plan, stages_input, opts)
       when is_list(stages_input) do
     Repo.transaction(fn ->
       # Status re-check INSIDE the transaction, against the persisted row —
@@ -2966,6 +2970,14 @@ defmodule Platform.Tasks do
       # list is assembled in creation order at all: an edit that re-preloads,
       # appends a synthesized stage, or reuses existing stage rows silently
       # ends that. The tiebreak costs one tuple and removes both.
+      # Task 01a1e4fa stage 1 — a plan's `deploy_repos` declaration (already
+      # checked by `PlanDeployRepos.prepare/3`) commits with the stage tree.
+      :ok =
+        Platform.Tasks.PlanDeployRepos.write_in_transaction(
+          fresh.task_id,
+          Keyword.get(opts, :deploy_strategy)
+        )
+
       Map.put(fresh, :stages, Enum.sort_by(stages, &{&1.position, &1.id}))
     end)
   end
