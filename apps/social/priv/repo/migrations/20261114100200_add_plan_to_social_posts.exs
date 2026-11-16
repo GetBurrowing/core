@@ -24,6 +24,17 @@ defmodule Platform.Repo.Migrations.AddPlanToSocialPosts do
 
   use Ecto.Migration
 
+  # old-code-compatible: additive and widening: two nullable columns, an index, a status CHECK
+  # and approver CHECK that are supersets of the old ones, and two CHECKs that
+  # constrain only flow = 'studio' rows, which the previous release never writes.
+  # With Studio rows present, old code could meet status 'planned' and the
+  # boundary CHECK would refuse its send-side writes only after an external send.
+  # Safe for the previous release only while no Studio rows exist; once they do,
+  # rollback is barred by listing 20261114100000 in
+  # deployment/release/irreversible-migrations.txt (the updater refuses to roll
+  # back from the release that crossed it, once the crossing run completes; an
+  # interrupted crossing run is not covered). This waiver depends on that listing.
+
   # planned_by_user_id, planned_set_at, planned status, boundary CHECKs.
 
   def up do

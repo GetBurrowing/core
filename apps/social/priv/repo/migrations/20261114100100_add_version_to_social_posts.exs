@@ -12,6 +12,15 @@ defmodule Platform.Repo.Migrations.AddVersionToSocialPosts do
 
   use Ecto.Migration
 
+  # old-code-compatible: additive: version (default 1) and state_rev (default 0) are NOT NULL with
+  # defaults, and their CHECKs hold for every default; the previous release never
+  # reads or writes either column.
+  # Safe for the previous release only while no Studio rows exist; once they do,
+  # rollback is barred by listing 20261114100000 in
+  # deployment/release/irreversible-migrations.txt (the updater refuses to roll
+  # back from the release that crossed it, once the crossing run completes; an
+  # interrupted crossing run is not covered). This waiver depends on that listing.
+
   # version, plus state_rev (the optimistic counter).
 
   def up do
