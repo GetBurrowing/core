@@ -11,7 +11,7 @@ import ComposeInput from "../../js/hooks/compose_input.js"
  * phone), iOS 26.3, Mobile Safari = real WebKit, software keyboard and its
  * accessory bar up (hardware keyboard disconnected), keys tapped through the
  * simulator's HID. The page was a dev server at origin/main 538b19071 with a
- * moon-only probe that sampled visualViewport, window and rects on every
+ * rig-only, uncommitted probe that sampled visualViewport, window and rects on every
  * visualViewport resize/scroll, window scroll, focus, input and list
  * mutation. Raw traces: execution space of task 01a1c863, stage 1 canvas.
  *
