@@ -225,6 +225,35 @@ defmodule PlatformWeb.GoalsBriefTest do
     assert has_element?(view, card(item), "What comes next?")
   end
 
+  test "Undo and Cancel cycles retain one titled request and leave the action unchanged", c do
+    f = full(c)
+    item = Enum.find(items(c), &(&1.kind == :report))
+    original = Repo.get!(Entry, f.undoable.id)
+    {:ok, view, _} = open(c.conn, c.owner)
+    selector = button(item, "undo") <> "[phx-value-entry_id='#{f.undoable.id}']"
+
+    for requested? <- [true, false, true, false] do
+      view |> element(selector) |> render_click()
+
+      if requested?,
+        do: assert(has_element?(view, card(item), "Undo asked for.")),
+        else: refute(has_element?(view, card(item), "Undo asked for."))
+    end
+
+    signals =
+      Repo.all(
+        from(e in Entry,
+          where:
+            e.author_user_id == ^c.owner.id and
+              fragment("?->>'undo_of'", e.details) == ^f.undoable.id
+        )
+      )
+
+    assert length(signals) == 4
+    assert Repo.get!(Entry, f.undoable.id) == original
+    assert Enum.count(signals, &String.starts_with?(&1.title, "Undo: ")) == 1
+  end
+
   test "forged foreign item and ask events change no rows", c do
     stranger = member!(c.org)
     grant!(stranger, c.org)

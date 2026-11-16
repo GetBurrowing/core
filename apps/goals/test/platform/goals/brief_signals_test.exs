@@ -26,6 +26,32 @@ defmodule Platform.Goals.BriefSignalsTest do
     assert Repo.aggregate(from(e in Entry, where: e.kind == "ask"), :count) == 2
   end
 
+  test "undo cancellation cycles keep one request identity and retain every coach signal", c do
+    entry = action(c, %{details: %{"undo_note" => "Delete the draft"}})
+    original = Repo.get!(Entry, entry.id)
+
+    signals =
+      for request <- ["undo", "keep", "undo", "keep"] do
+        put_now(DateTime.add(Clock.now(), 1, :second))
+        assert {:ok, signal} = Goals.request_undo(c.owner, c.goal.id, entry.id, request)
+        assert {:ok, same} = Goals.request_undo(c.owner, c.goal.id, entry.id, request)
+        assert same.id == signal.id
+        signal
+      end
+
+    assert length(Enum.uniq_by(signals, & &1.id)) == 4
+    assert Enum.map(signals, & &1.details["request"]) == ["undo", "keep", "undo", "keep"]
+    assert Repo.get!(Entry, entry.id) == original
+    wake = fire(c.goal)
+
+    snapshot =
+      Enum.filter(wake.briefing["since_last"]["entries"], &(&1["details"]["undo_of"] == entry.id))
+
+    assert Enum.sort(Enum.map(snapshot, & &1["id"])) == Enum.sort(Enum.map(signals, & &1.id))
+    for signal <- signals, do: assert(Repo.get!(Entry, signal.id) == signal)
+    assert Enum.count(signals, &String.starts_with?(&1.title, "Undo: ")) == 1
+  end
+
   test "questions are bounded and report linkage cannot point at someone else's item", c do
     action(c)
     {:ok, _} = Goals.prepare_brief(c.owner, date())
