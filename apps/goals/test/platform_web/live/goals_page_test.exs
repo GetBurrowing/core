@@ -181,8 +181,12 @@ defmodule PlatformWeb.GoalsPageTest do
       assert has_element?(child, "[data-role='goal-path'].border-solid")
       assert has_element?(child, "[data-role='goal-path'].border-dashed")
 
-      assert text(child, "[data-role='goal-number']") ==
+      assert String.starts_with?(
+               text(child, "[data-role='goal-number']"),
                "640 of 1,000 subscribers. Self-reported."
+             )
+
+      assert has_element?(child, "[data-role='goal-pace']", "We'd hoped for about")
 
       assert has_element?(child, "[data-role='goal-progress'] i[style*='width: 64%']")
 
