@@ -454,6 +454,18 @@ defmodule Platform.Meetings.RingingTest do
     assert voip_user_ids() == []
   end
 
+  test "an invite to a live meeting in an archived space rings nobody", ctx do
+    inviter = user!("Ines")
+    a = user!("Invitee A")
+    meeting = ctx.project |> meeting!(%{name: "Retro"}) |> live!()
+    {:ok, _} = Platform.Chat.archive_space(Platform.Chat.get_space(meeting.chat_space_id))
+
+    {:ok, _} = Meetings.invite_user(meeting, a.id, inviter_user_id: inviter.id)
+
+    assert voip_user_ids() == []
+    assert ring_count(meeting) == 0
+  end
+
   test "the live check reads the database, not the caller's struct", ctx do
     inviter = user!("Inviter")
     a = user!("Invitee A")

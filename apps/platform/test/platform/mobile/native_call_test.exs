@@ -105,6 +105,17 @@ defmodule Platform.Mobile.NativeCallTest do
       assert Repo.get!(Meeting, ctx.meeting.id).started_by_user_id == starter.id
     end
 
+    test "an ARCHIVED space is refused and the scheduled meeting is not started", ctx do
+      {:ok, _} = Platform.Chat.archive_space(Platform.Chat.get_space(ctx.meeting.chat_space_id))
+
+      assert {:error, :join_not_permitted} = NativeCall.join(ctx.user, ctx.meeting.id)
+
+      stored = Repo.get!(Meeting, ctx.meeting.id)
+      assert stored.status == "scheduled"
+      assert stored.started_by_user_id == nil
+      assert live_rows(ctx.meeting.chat_space_id) == []
+    end
+
     test "an ended meeting is refused and nothing is written", ctx do
       {:ok, live} = Meetings.start_meeting(ctx.meeting)
       {:ok, _ended} = live |> Meeting.status_changeset("ended") |> Repo.update()
