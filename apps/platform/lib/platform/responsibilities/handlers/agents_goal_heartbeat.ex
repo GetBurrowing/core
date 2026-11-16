@@ -299,6 +299,27 @@ defmodule Platform.Responsibilities.Handlers.AgentsGoalHeartbeat do
   hour on every install with no goal. `:no_measurement` is therefore
   matched on its own, not added to that list.
 
+  ## A claimed space is skipped
+
+  Task `01a1dfc1-dffb`, stage 3. A build-time module may claim a chat
+  space's goal through the optional `claims_space_goal?/1` callback, read by
+  `Platform.Extensions.space_goal_claimed?/1`. When the space
+  `agents_space/0` picks is claimed, `do_gather_context/1` returns a slot of
+  `%{missing?: true, reason: "a module has claimed this space's goal"}`
+  with NO `kind`, so `build_prompt/1` refuses with `:no_measurement` and the
+  Router skips the hand-off exactly as for a missing goal above: no signal,
+  no paid turn, `{:ok, :no_measurement}`. Core does not learn which module
+  claimed the space, or why.
+
+  That branch calls neither `record_measurement/2` nor
+  `put_dispatch_space/2`: the baseline and the beat stamp stay as the last
+  unclaimed beat left them, so when the claim ends the next beat reads a
+  true delta, not one taken across the claimed stretch. `measure/2`,
+  `agents_space/0` and the header strip are untouched, so the space's goal
+  line keeps rendering as it does today. With no module registered, or every
+  module answering anything but `true`, or a module that raises, the
+  heartbeat behaves exactly as it did before the seam existed.
+
   ## Assignment IS the enable signal
 
   `metadata["role"] => "agents_leader"`. The Router resolves the assignee
@@ -556,6 +577,26 @@ defmodule Platform.Responsibilities.Handlers.AgentsGoalHeartbeat do
   defp do_gather_context(_ctx) do
     space = agents_space()
 
+    # A CLAIMED SPACE (task `01a1dfc1-dffb`): a module drives this space's
+    # goal, so the beat stands down. No `kind` on the slot, no baseline
+    # write and no dispatch space. See "A claimed space is skipped" in the
+    # moduledoc.
+    if claimed_space?(space),
+      do: claimed_space_context(space),
+      else: gather_unclaimed_context(space)
+  end
+
+  defp claimed_space?(%Space{id: id}), do: Platform.Extensions.space_goal_claimed?(id)
+  defp claimed_space?(_space), do: false
+
+  defp claimed_space_context(%Space{} = space) do
+    %{
+      goal: space.goal,
+      measurement: %{missing?: true, reason: "a module has claimed this space's goal"}
+    }
+  end
+
+  defp gather_unclaimed_context(space) do
     # THE PREVIOUS BEAT'S TIMESTAMP, taken from the snapshot loaded above
     # and therefore BEFORE `record_measurement/2` below overwrites it. It
     # is the lower bound of the window the leader's reply is read from;

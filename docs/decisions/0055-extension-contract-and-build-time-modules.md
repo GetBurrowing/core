@@ -197,6 +197,15 @@ as a positive control, the same way stage 2 builds `rail_items` for Social. Unti
 exists, implementing one of these callbacks has no effect. A test states that, so nobody
 mistakes it for a working seam.
 
+**`claims_space_goal?/1`, optional, with a reader (task 01a1dfc1-dffb).** A module that drives
+the goal of a chat space answers `true` for that space's id, and core's `agents.goal_heartbeat`
+then does not fire for it: its gather returns a missing slot with no `kind`, writes no baseline
+and names no dispatch space, so the Router skips the hand-off with `{:ok, :no_measurement}`. The
+reader is `Platform.Extensions.space_goal_claimed?/1`, read per call. Only an exact `true`
+counts, a non-binary id is `false`, and a module that raises is logged at warning and counts as
+`false`, so a broken module fails towards core's behaviour with no module at all. Core does not
+learn which module claimed the space, or why.
+
 ### 3. Supervision is the module's own
 
 A module's supervision tree is started by its own `Application.start/2`

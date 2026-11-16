@@ -174,6 +174,41 @@ defmodule Platform.Extensions do
     if implements?(ext, :briefing_sections, 0), do: ext.briefing_sections(), else: []
   end
 
+  @doc """
+  Whether any extension claims the goal of the chat space `space_id`
+  (`claims_space_goal?/1` is optional), read per call.
+
+  Only an exact `true` counts. A non-binary id is `false`. An extension that
+  raises or exits is logged at warning and counts as `false`, so a broken
+  module fails towards core's behaviour with no module at all.
+  """
+  @spec space_goal_claimed?(term()) :: boolean()
+  def space_goal_claimed?(space_id) when is_binary(space_id) do
+    Enum.any?(list(), &ext_claims_space_goal?(&1, space_id))
+  end
+
+  def space_goal_claimed?(_space_id), do: false
+
+  defp ext_claims_space_goal?(ext, space_id) do
+    implements?(ext, :claims_space_goal?, 1) and ext.claims_space_goal?(space_id) == true
+  rescue
+    error ->
+      Logger.warning(
+        "[Extensions] #{inspect(ext)}.claims_space_goal?(#{space_id}) raised: " <>
+          Exception.message(error)
+      )
+
+      false
+  catch
+    kind, reason ->
+      Logger.warning(
+        "[Extensions] #{inspect(ext)}.claims_space_goal?(#{space_id}) #{kind}: " <>
+          inspect(reason)
+      )
+
+      false
+  end
+
   @doc "The registered extension's inbox kind spec for `kind`, or nil."
   @spec inbox_kind(term()) :: Platform.Extension.inbox_kind() | nil
   def inbox_kind(kind) when is_binary(kind), do: Enum.find(inbox_kinds(), &(&1.kind == kind))
@@ -242,6 +277,8 @@ defmodule Platform.Extensions do
   names, experiment surface keys, experiment metric slugs, HTTP route
   prefixes, live page prefixes, inbox kinds, inbox source types and briefing section keys. A route
   prefix and a live page prefix must also each be one lowercase path segment.
+  `claims_space_goal?/1` contributes no name, so it has nothing to clash on
+  and is not checked.
 
   Core's tool names include its hidden legacy aliases
   (`Platform.Federation.ToolAliases`), and tool names are also compared

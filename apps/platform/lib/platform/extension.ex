@@ -53,6 +53,16 @@ defmodule Platform.Extension do
   as with live_pages/0. After writing it calls
   Platform.Memory.Insights.BriefingSections.changed/2.
 
+  ## claims_space_goal?/1 has a reader
+
+  A module that drives the goal of a chat space answers `true` for that
+  space's id, and core's own goal heartbeat then does not fire for it. Core
+  does not learn which module claimed the space, or why. The module must
+  answer without raising when its own processes are not running. Its reader
+  is `Platform.Extensions.space_goal_claimed?/1`, which counts only an exact
+  `true` and treats a raise as `false`, so a broken module leaves core's
+  behaviour as it is with no module at all.
+
   ## routes/0 has a reader: runtime dispatch under /api/ext
 
   `routes/0` returns `[%{prefix: String.t(), plug: module(), opts: term()}]`,
@@ -277,7 +287,15 @@ defmodule Platform.Extension do
   """
   @callback briefing_sections() :: [briefing_section()]
 
+  @doc """
+  Whether this module drives the goal of the chat space `space_id`. `true`
+  makes core's goal heartbeat skip that space. Must not raise. Read by
+  `Platform.Extensions.space_goal_claimed?/1`.
+  """
+  @callback claims_space_goal?(space_id :: String.t()) :: boolean()
+
   @optional_callbacks briefing_sections: 0,
+                      claims_space_goal?: 1,
                       rail_items: 0,
                       permissions: 0,
                       assets: 0,
