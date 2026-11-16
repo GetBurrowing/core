@@ -381,6 +381,7 @@ defmodule PlatformWeb.GoalsNewTest do
            )
 
     refute has_element?(child, "[data-role='goals-new-create']")
+    assert has_element?(child, "[data-role='goals-row'][data-goal-id='#{card.goal.id}']")
     assert type_controls(render(child)) == []
 
     render_click(child, "new_create", %{"revision" => proposal.revision})

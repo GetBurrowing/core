@@ -226,7 +226,8 @@ defmodule PlatformWeb.GoalsNew do
           {:noreply,
            socket
            |> put_new(created: %{goal_id: goal.id, proposal_id: confirmed.id})
-           |> refresh()}
+           |> refresh()
+           |> refresh_rows()}
 
         {:error, :proposal_changed} ->
           {:noreply, socket |> refresh() |> toast(@changed_toast)}
@@ -251,6 +252,19 @@ defmodule PlatformWeb.GoalsNew do
   end
 
   def handle_event(_event, _params, socket), do: {:noreply, socket}
+
+  # The list beside the screen gains the new goal.
+  defp refresh_rows(socket) do
+    user = socket.assigns.new.user
+
+    case Goals.describe_goals(user) do
+      {:ok, cards} ->
+        Phoenix.Component.assign(socket, :rows, PlatformWeb.GoalsList.rows(user, cards))
+
+      _ ->
+        socket
+    end
+  end
 
   defp send_text(socket, text) do
     user = socket.assigns.new.user
