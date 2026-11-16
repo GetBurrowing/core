@@ -309,13 +309,16 @@ defmodule PlatformWeb.GoalsBriefTest do
     refute html =~ "Drafted three videos"
     refute has_element?(view, "[data-role=goals-brief-card]")
 
-    view
-    |> with_target("[data-role=goals-brief]")
-    |> render_hook("undo", %{item_id: report.id, entry_id: f.undoable.id, request: "undo"})
-
-    view
-    |> with_target("[data-role=goals-brief]")
-    |> render_hook("noted", %{item_id: report.id, noted: "true"})
+    # The briefing may drop the emptied section on its next refresh; while
+    # the component is still mounted it gets the remaining events too.
+    for {event, attrs} <- [
+          {"undo", %{item_id: report.id, entry_id: f.undoable.id, request: "undo"}},
+          {"noted", %{item_id: report.id, noted: "true"}},
+          {"answer", %{item_id: offer.id, answer: "used"}}
+        ],
+        has_element?(view, "[data-role=goals-brief]") do
+      view |> with_target("[data-role=goals-brief]") |> render_hook(event, attrs)
+    end
 
     assert counts.() == before
     refute render(view) =~ "Drafted three videos"
@@ -329,10 +332,7 @@ defmodule PlatformWeb.GoalsBriefTest do
     grant_goals_use!(c.owner)
     {:ok, view, _} = open(c.conn, c.owner)
     assert has_element?(view, card(offer))
-
-    view
-    |> with_target("[data-role=goals-brief]")
-    |> render_hook("answer", %{item_id: offer.id, answer: "used"})
+    view |> element(button(offer, "answer") <> "[phx-value-answer=used]") |> render_click()
 
     assert [%{answer: "used"}] = Repo.all(AskAnswer)
   end
