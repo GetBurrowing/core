@@ -526,8 +526,10 @@ defmodule Platform.Goals do
           end
         end)
 
-      with {:ok, %{tasks: tasks}} <- result,
-           do: Enum.each(tasks, &Platform.Tasks.maybe_start_planning_on_create/1)
+      with {:ok, %{wake_up: wake, entry: entry, tasks: tasks}} <- result do
+        Enum.each(tasks, &Platform.Tasks.maybe_start_planning_on_create/1)
+        Platform.Goals.SpaceUpdates.publish(actor, wake.goal_id, wake, entry, tasks)
+      end
 
       result
     end

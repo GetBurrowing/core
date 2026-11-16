@@ -136,7 +136,7 @@ defmodule PlatformWeb.GoalsPage do
          retro_every: Platform.Goals.Retro.effective_every(goal),
          stops: stops,
          current: current,
-         number: number_view(goal, number, reading, target, pct),
+         number: number_view(goal, number, reading, current, pct),
          source: source,
          can_log?: card.role in [:owner, :coach] and match?(%{kind: :logged}, source),
          actions: actions,
@@ -224,32 +224,20 @@ defmodule PlatformWeb.GoalsPage do
 
   defp percent(_reading, _target), do: nil
 
-  defp number_view(goal, number, reading, target, pct) do
-    unit = goal.unit
+  # The pieces come from `Platform.Goals.NumberText`, the one number sentence
+  # the list and the space update also use; the page adds the source and the
+  # percentage.
+  defp number_view(goal, number, reading, current, pct) do
+    case Platform.Goals.NumberText.parts(goal, current, number) do
+      %{kind: :reading} = parts ->
+        Map.merge(parts, %{source_label: reading.source_label, pct: pct})
 
-    cond do
-      is_nil(target) or is_nil(unit) or String.trim(unit) == "" ->
-        %{kind: :none}
-
-      reading ->
-        %{
-          kind: :reading,
-          value: GoalsComponents.format_number(reading.value),
-          target: GoalsComponents.format_number(target),
-          unit: unit,
-          source_label: reading.source_label,
-          pct: pct
-        }
-
-      true ->
+      %{kind: :target} = parts ->
         {:cannot_measure, m} = number
+        Map.put(parts, :source_label, m.source_label)
 
-        %{
-          kind: :target,
-          target: GoalsComponents.format_number(target),
-          unit: unit,
-          source_label: m.source_label
-        }
+      none ->
+        none
     end
   end
 

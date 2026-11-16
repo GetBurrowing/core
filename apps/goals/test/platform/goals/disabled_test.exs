@@ -79,4 +79,26 @@ defmodule Platform.Goals.DisabledTest do
         ],
         &Repo.aggregate(&1, :count)
       )
+
+  test "Goals 7/8: with the switch off no space is claimed and no update is posted" do
+    enable_goals!()
+    org = org_id!()
+    owner = member!(org)
+    coach = agent!()
+    goal = goal!(owner, org, %{coach_agent_id: coach.id})
+    space = space!(org)
+    join_space!(space.id, :user, owner.id)
+    join_space!(space.id, :agent, coach.id)
+    {:ok, _} = Goals.open_goal(owner, goal.id, {:space, space.id})
+    assert Platform.Goals.SpaceClaim.claimed?(space.id)
+
+    Application.put_env(:goals, :enabled, false)
+    refute Platform.Goals.SpaceClaim.claimed?(space.id)
+    refute Platform.Goals.Extension.claims_space_goal?(space.id)
+    before = Repo.aggregate(Platform.Chat.Message, :count)
+
+    wake = %WakeUp{id: Ecto.UUID.generate(), goal_id: goal.id, outcome: "do", reading_id: nil}
+    assert Platform.Goals.SpaceUpdates.publish(coach, goal.id, wake, nil, []) == []
+    assert Repo.aggregate(Platform.Chat.Message, :count) == before
+  end
 end

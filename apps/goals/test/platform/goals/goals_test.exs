@@ -240,8 +240,11 @@ defmodule Platform.Goals.GoalsTest do
       refute actorless_goal_binding?("from g in visible_goals(actor), select: g")
     end
 
-    test "only the audited context, visibility and identifier clock query bind goals" do
-      allowed = ~w(platform/goals.ex platform/goals/visibility.ex platform/goals/clock.ex)
+    test "only the audited context, visibility, the clock and the space claim bind goals" do
+      # The two actor-less queries are Clock.due/2 and SpaceClaim.claimed?/1
+      # (Goals 7/8 stage 4), which returns a boolean and nothing else.
+      allowed =
+        ~w(platform/goals.ex platform/goals/visibility.ex platform/goals/clock.ex platform/goals/space_claim.ex)
 
       found =
         for file <- Path.wildcard(Path.join(@lib, "**/*.ex")),
@@ -271,6 +274,17 @@ defmodule Platform.Goals.GoalsTest do
       assert hits(handoff) == []
       refute actorless_goal_binding?(handoff)
       assert handoff =~ "Visibility.visible_goals(actor)"
+    end
+
+    test "the space update module reads through the coach's visible goals" do
+      updates = File.read!(Path.join(@lib, "platform/goals/space_updates.ex"))
+      assert hits(updates) == []
+      refute actorless_goal_binding?(updates)
+      assert updates =~ "Visibility.visible_goals(coach)"
+
+      claim = File.read!(Path.join(@lib, "platform/goals/space_claim.ex"))
+      assert hits(claim) == []
+      assert actorless_goal_binding?(claim)
     end
 
     test "Platform.Goals has no arity-0 function but enabled?/0" do

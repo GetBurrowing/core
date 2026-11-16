@@ -13,8 +13,9 @@ defmodule Platform.Goals.Extension do
   the same flag, the Goals rail item (a `:working` row, so core places it in
   the desktop More group and the phone More sheet) and the `/m/goals` page
   (`PlatformWeb.GoalsLive`), plus `assets/0` so a with-modules build's
-  Tailwind scans the Goals templates. Every other registry is empty on
-  purpose.
+  Tailwind scans the Goals templates. Goals 7/8 (task 01a1dfc1-dffb) answers
+  core's optional `claims_space_goal?/1` through `Platform.Goals.SpaceClaim`,
+  false whenever the flag is off. Every other registry is empty on purpose.
 
   No migration grants `goals.use` to the built-in roles: on an install that
   leaves the flag unset the permission is unregistered, and
@@ -76,6 +77,10 @@ defmodule Platform.Goals.Extension do
       ],
       else: []
   end
+
+  @doc "Goals drives the goal of a space an active goal is opened to (Goals 7/8)."
+  @impl true
+  def claims_space_goal?(space_id), do: Platform.Goals.SpaceClaim.claimed?(space_id)
 
   @impl true
   def runtime_channel_events, do: []
