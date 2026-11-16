@@ -12,6 +12,8 @@ defmodule Platform.Calendar.Subscription do
     field(:refreshed_at, :utc_datetime_usec)
     field(:attempted_at, :utc_datetime_usec)
     field(:error, :string)
+    # Written by Subscriptions.refresh_row/1 only; never cast from user attrs.
+    field(:skipped_count, :integer, default: 0)
     timestamps(type: :utc_datetime_usec)
   end
 
