@@ -1,5 +1,4 @@
 defmodule Platform.Goals.PaceFixtures do
-  import Platform.Goals.OutcomeFixtures
   import Platform.Goals.BriefFixtures
   alias Platform.Goals
   alias Platform.Goals.{Clock, Entry}

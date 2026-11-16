@@ -13,6 +13,15 @@ defmodule Platform.Goals.Brief do
     )
   end
 
+  defp lock_clock(user, goal_id) do
+    Repo.one(
+      from(c in children(user, Platform.Goals.GoalClock),
+        where: c.goal_id == ^goal_id,
+        lock: "FOR UPDATE OF g0"
+      )
+    )
+  end
+
   defp answers(actor) do
     from(answer in AskAnswer,
       join: ask in Ask,
@@ -86,7 +95,9 @@ defmodule Platform.Goals.Brief do
       )
     )
     |> Enum.flat_map(fn item ->
-      # Lock in the same goal-then-ask order as practice. Re-addressing an old
+      lock_clock(user, item.goal_id)
+
+      # Lock after the per-goal clock, matching coach close and owner answers. Re-addressing an old
       # item must not make answer_ask's nested rollback abort the entire brief.
       goal =
         Repo.one(
@@ -732,6 +743,8 @@ defmodule Platform.Goals.Brief do
         with {:ok, ask} <- get_ask(user, ask_id),
              true <- ask.kind == "practice",
              true <- user.id in ask.addressed_user_ids do
+          lock_clock(user, ask.goal_id)
+
           Repo.one!(
             from(g in Visibility.visible_goals(user),
               where: g.id == ^ask.goal_id,

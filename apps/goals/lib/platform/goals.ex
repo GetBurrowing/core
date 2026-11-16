@@ -723,7 +723,15 @@ defmodule Platform.Goals do
                  from(a in Platform.Goals.Ask,
                    join: g in subquery(Visibility.visible_goals(actor)),
                    on: g.id == a.goal_id,
-                   where: a.id == ^id and ^user_id in a.addressed_user_ids,
+                   where: a.id == ^id and ^user_id in a.addressed_user_ids
+                 )
+               ),
+             {:ok, goal} <- fetch_visible(actor, ask.goal_id, false),
+             :ok <- lock_clock(actor, goal),
+             ask =
+               Repo.one(
+                 from(a in children(actor, Platform.Goals.Ask, goal.id),
+                   where: a.id == ^id,
                    lock: "FOR UPDATE OF g0"
                  )
                ),
@@ -740,8 +748,6 @@ defmodule Platform.Goals do
                  %{answer: answer, details: details, answered_at: Platform.Goals.Clock.now()}
                )
                |> Repo.insert_or_update() do
-          {:ok, goal} = fetch_visible(actor, ask.goal_id, false)
-
           if goal.owner_user_id == user_id and answer in ["used", "declined"],
             do: Platform.Goals.OwnerPace.refresh(goal, Platform.Goals.Clock.now())
 
