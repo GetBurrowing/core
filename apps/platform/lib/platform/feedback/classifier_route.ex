@@ -45,7 +45,8 @@ defmodule Platform.Feedback.ClassifierRoute do
   `%{status, reason, agent_name, overridden?, pending, exhausted}`.
 
   `status` is `"ok"` or `"off"`; `reason` is nil, `"no_assignee"` or
-  `"no_endpoint"`. `exhausted` reads 0 until records carry an attempt count.
+  `"no_endpoint"`. `pending` counts pending records; `exhausted` counts the
+  pending records whose `attempts` reached `Intake.max_attempts/0`.
   """
   @spec health() :: map()
   def health do
@@ -63,13 +64,23 @@ defmodule Platform.Feedback.ClassifierRoute do
       agent_name: agent && agent.name,
       overridden?: overridden?(),
       pending: pending_count(),
-      exhausted: 0
+      exhausted: exhausted_count()
     }
   end
 
   defp overridden? do
     Repo.exists?(
       from(o in ResponsibilityOverride, where: o.responsibility_key == ^@responsibility_key)
+    )
+  end
+
+  # Pending records the retry sweep has stopped retrying.
+  defp exhausted_count do
+    max = Platform.Feedback.Intake.max_attempts()
+
+    Repo.aggregate(
+      from(r in IntakeRecord, where: r.status == "pending" and r.attempts >= ^max),
+      :count
     )
   end
 

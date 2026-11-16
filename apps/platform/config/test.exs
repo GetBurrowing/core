@@ -471,6 +471,12 @@ config :platform, :start_summarizer_sweeper, false
 # 30-second wait — or start their own named instance.
 config :platform, :start_candidate_sweeper, false
 
+# Feedback IntakeSweeper (task 01a1e670 stage 2). Off in test: an ambient
+# instance would claim other suites' pending intake records from outside
+# their DataCase sandbox. Tests call `Intake.retry_pending/1` directly or
+# start their own named instance.
+config :platform, :start_feedback_intake_sweeper, false
+
 # StallRegistry (task 019f2566 stage 6): tests start their own per-case
 # instance so registry state is isolated per test — otherwise a callback
 # registered by one test leaks into a sibling case's sweep tick.

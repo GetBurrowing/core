@@ -330,6 +330,7 @@ defmodule Platform.Application do
     |> maybe_add_lifecycle_step_registry(flag)
     |> maybe_add_summarizer_sweeper(flag)
     |> maybe_add_candidate_sweeper(flag)
+    |> maybe_add_feedback_intake_sweeper(flag)
     |> maybe_add_meeting_completion_sweeper(flag)
     |> maybe_add_security_sweeper(flag)
     |> maybe_add_space_purger(flag)
@@ -902,6 +903,20 @@ defmodule Platform.Application do
     if flag.(:platform, :start_summarizer_sweeper, true) do
       idx = Enum.find_index(children, &(&1 == PlatformWeb.Endpoint)) || length(children)
       List.insert_at(children, idx, Platform.Meetings.SummarizerSweeper)
+    else
+      children
+    end
+  end
+
+  # Feedback IntakeSweeper (task 01a1e670 stage 2): every 5 minutes it
+  # re-fetches and re-classifies a bounded batch of pending feedback intake
+  # records. Repo-backed and idle while the feedback policy is off or the
+  # classifier has no model. Disabled in test env; tests start their own
+  # per-case instance or call `retry_pending/1` directly.
+  defp maybe_add_feedback_intake_sweeper(children, flag) do
+    if flag.(:platform, :start_feedback_intake_sweeper, true) do
+      idx = Enum.find_index(children, &(&1 == PlatformWeb.Endpoint)) || length(children)
+      List.insert_at(children, idx, Platform.Feedback.IntakeSweeper)
     else
       children
     end

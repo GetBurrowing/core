@@ -171,9 +171,10 @@ defmodule Platform.Feedback.IntakeTest do
                Intake.scope(String.upcase(slug))
     end
 
-    test "the capability set is exactly read, classify, file, dispose" do
+    test "the capability set is exactly read, fetch, classify, file, dispose" do
+      # fetch_in_scope_issue: task 01a1e670 stage 2, the retry sweep.
       assert Intake.capabilities() ==
-               ~w(read_in_scope_issue classify file_accepted_task apply_canned_disposition)
+               ~w(read_in_scope_issue fetch_in_scope_issue classify file_accepted_task apply_canned_disposition)
     end
   end
 

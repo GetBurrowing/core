@@ -484,5 +484,98 @@ defmodule Platform.Feedback.GithubPublisherTest do
       assert q =~ "repo:GetBurrowing/core"
       assert q =~ @fp
     end
+
+    # ── fetch_issue/2 (task 01a1e670 stage 2) ────────────────────────────
+
+    defp fetch_stub(test_pid, token, issue_status, issue_body) do
+      Req.Test.stub(GithubApp, fn conn ->
+        {:ok, raw, conn} = Plug.Conn.read_body(conn)
+        auth = conn |> Plug.Conn.get_req_header("authorization") |> List.first()
+        send(test_pid, {:github, conn.method, conn.request_path, auth, raw})
+
+        case {conn.method, conn.request_path} do
+          {"POST", "/app/installations/9001/access_tokens"} ->
+            Req.Test.json(Plug.Conn.put_status(conn, 201), %{"token" => token})
+
+          {"GET", "/repos/GetBurrowing/core/issues/" <> _} ->
+            Req.Test.json(Plug.Conn.put_status(conn, issue_status), issue_body)
+        end
+      end)
+    end
+
+    test "fetch_issue mints an issues:read token on one repository and reads the issue", ctx do
+      fetch_stub(self(), ctx.token, 200, %{"number" => 77, "title" => "T", "body" => "B"})
+
+      log =
+        capture_log(fn ->
+          assert {:ok, %{"number" => 77, "title" => "T", "body" => "B"}} =
+                   GithubApp.fetch_issue("GetBurrowing/core", 77)
+        end)
+
+      assert_received {:github, "POST", "/app/installations/9001/access_tokens", _jwt, mint_raw}
+
+      assert Jason.decode!(mint_raw) == %{
+               "repositories" => ["core"],
+               "permissions" => %{"issues" => "read"}
+             }
+
+      assert_received {:github, "GET", "/repos/GetBurrowing/core/issues/77", auth, _}
+      assert auth == "Bearer " <> ctx.token
+      refute log =~ ctx.token
+    end
+
+    test "create_issue still mints issues:write after the token was generalised", ctx do
+      github_stub(self(), ctx.token)
+      capture_log(fn -> assert {:ok, _} = publish(issue()) end)
+
+      assert_received {:github, "POST", "/app/installations/9001/access_tokens", _jwt, mint_raw}
+      assert Jason.decode!(mint_raw)["permissions"] == %{"issues" => "write"}
+    end
+
+    test "fetch_issue maps a 404 to :issue_not_found", ctx do
+      fetch_stub(self(), ctx.token, 404, %{"message" => "Not Found"})
+
+      capture_log(fn ->
+        assert {:error, :issue_not_found} = GithubApp.fetch_issue("GetBurrowing/core", 5)
+      end)
+    end
+
+    test "fetch_issue refuses a pull request", ctx do
+      fetch_stub(self(), ctx.token, 200, %{"number" => 6, "pull_request" => %{"url" => "x"}})
+
+      capture_log(fn ->
+        assert {:error, :pull_request} = GithubApp.fetch_issue("GetBurrowing/core", 6)
+      end)
+    end
+
+    test "fetch_issue refuses another repository and sends nothing" do
+      test_pid = self()
+      Req.Test.stub(GithubApp, fn conn -> send(test_pid, :called) && Req.Test.json(conn, %{}) end)
+
+      assert {:error, :fetch_unavailable} = GithubApp.fetch_issue("acme/other", 1)
+      refute_received :called
+    end
+
+    test "fetch_issue without App credentials is fetch_unavailable and sends nothing" do
+      test_pid = self()
+      Req.Test.stub(GithubApp, fn conn -> send(test_pid, :called) && Req.Test.json(conn, %{}) end)
+      System.delete_env("FEEDBACK_GITHUB_APP_PRIVATE_KEY")
+
+      assert {:error, :fetch_unavailable} = GithubApp.fetch_issue("GetBurrowing/core", 1)
+      refute_received :called
+    end
+
+    test "IssueSource.GithubApp normalizes and bounds the fetched issue like a webhook", ctx do
+      long = String.duplicate("a", 250_000)
+      fetch_stub(self(), ctx.token, 200, %{"number" => 78, "title" => "T", "body" => long})
+
+      capture_log(fn ->
+        assert {:ok, issue} =
+                 Platform.Feedback.IssueSource.GithubApp.fetch("GetBurrowing/core", 78)
+
+        assert %{repository: "GetBurrowing/core", issue_number: 78, title: "T"} = issue
+        assert byte_size(issue.body) == 200_000
+      end)
+    end
   end
 end
