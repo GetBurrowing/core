@@ -36,8 +36,9 @@ env:
   MIN_SOCIAL_TEST_COUNT: 35
   # The same crash detector for the `Test (with Goals)` job's module suite
   # (apps/goals' own `mix test`). Provisional: Goals 1/8 stage 4 sets it to
-  # about three quarters of the final count.
-  MIN_GOALS_TEST_COUNT: 263
+  # about three quarters of the final count; Goals 7/8 stage 4 raised it
+  # to 306, three quarters of the 408 the module suite ran then.
+  MIN_GOALS_TEST_COUNT: 306
 
 on:
   push:
