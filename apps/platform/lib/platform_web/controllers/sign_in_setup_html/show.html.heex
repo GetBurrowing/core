@@ -41,7 +41,7 @@
           <button class="btn btn-outline w-full" type="submit">Continue with invitation</button>
         </.form>
         <div :if={@mail?}>
-          <p>Or get a setup code at your account’s email address. No QR scan needed.</p>
+          <p>Or get a sign-in code at your account’s email address. No QR scan needed.</p>
           <.form
             for={@form}
             action="/auth/email/setup"
@@ -59,7 +59,7 @@
               required
               class="input w-full placeholder:text-subtle"
             />
-            <button class="btn btn-outline w-full" type="submit">Email me a setup code</button>
+            <button class="btn btn-outline w-full" type="submit">Email me a sign-in code</button>
           </.form>
         </div>
         <p :if={!@mail?} id="email-setup-unavailable">
@@ -104,7 +104,10 @@
           <button class="btn btn-primary w-full" type="submit">Sign in with a passkey</button>
         </.form>
       </section>
-      <p class="text-sm">
+      <p :if={@mail? and !@sent?} id="email-code-passkey-elsewhere" class="text-sm">
+        Have a passkey on another device but not this one? Email yourself a sign-in code above.
+      </p>
+      <p :if={!@mail?} class="text-sm">
         Already set up a passkey but cannot use it? Ask your admin for a recovery link.
       </p>
     </main>

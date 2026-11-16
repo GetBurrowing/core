@@ -263,6 +263,51 @@ defmodule Platform.SignInAdmin.PocketIdTest do
     end
   end
 
+  describe "email_login_code_enabled?/0 (task 01a1e58b)" do
+    # The shape pocket-id v2.18.0 serves at GET /api/application-configuration:
+    # a list of public {key, type, value} entries, values as strings.
+    defp app_config(value) do
+      [
+        %{"key" => "appName", "type" => "string", "value" => "Pocket ID"},
+        %{
+          "key" => "emailOneTimeAccessAsUnauthenticatedEnabled",
+          "type" => "bool",
+          "value" => value
+        },
+        %{"key" => "emailOneTimeAccessAsAdminEnabled", "type" => "bool", "value" => "true"}
+      ]
+    end
+
+    test "is true only when the IdP's unauthenticated email login code is on" do
+      stub(fn conn, _ -> json(conn, 200, app_config("true")) end)
+      assert PocketId.email_login_code_enabled?() == true
+
+      assert [%{method: "GET", path: "/api/application-configuration"}] =
+               requests() |> assert_every_request_keyed()
+
+      stub(fn conn, _ -> json(conn, 200, app_config("false")) end)
+      assert PocketId.email_login_code_enabled?() == false
+    end
+
+    test "fails closed on errors, odd shapes, a missing key or a non-\"true\" value" do
+      for responder <- [
+            fn conn, _ -> json(conn, 503, %{"error" => "down"}) end,
+            fn conn, _ -> json(conn, 404, %{"error" => "missing"}) end,
+            fn conn, _ -> json(conn, 200, %{"unexpected" => true}) end,
+            fn conn, _ -> json(conn, 200, [%{"key" => "appName", "value" => "x"}]) end,
+            fn conn, _ -> json(conn, 200, app_config(true)) end,
+            fn conn, _ -> json(conn, 200, app_config("TRUE ")) end,
+            fn conn, _ -> Req.Test.transport_error(conn, :econnrefused) end
+          ] do
+        stub(responder)
+        assert PocketId.email_login_code_enabled?() == false
+      end
+
+      Application.delete_env(:platform, :sign_in_admin_url)
+      assert PocketId.email_login_code_enabled?() == false
+    end
+  end
+
   describe "one_time_token/1" do
     test "asks for a 30m TTL (a 12-character code) and returns the token redacted" do
       stub(fn conn, _ -> json(conn, 201, %{"token" => @token}) end)
