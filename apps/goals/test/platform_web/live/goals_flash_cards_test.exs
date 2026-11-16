@@ -41,12 +41,12 @@ defmodule PlatformWeb.GoalsFlashCardsTest do
   end
 
   defp deck(ask), do: "[data-role=goals-flash-cards][data-ask-id='#{ask.id}']"
-  defp action(ask, name), do: deck(ask) <> " [data-action='#{name}']"
+  defp flash_action(ask, name), do: deck(ask) <> " [data-action='#{name}']"
 
   defp play(view, ask, marks) do
     for mark <- marks do
-      view |> element(action(ask, "flip")) |> render_click()
-      view |> element(action(ask, mark)) |> render_click()
+      view |> element(flash_action(ask, "flip")) |> render_click()
+      view |> element(flash_action(ask, mark)) |> render_click()
     end
   end
 
@@ -76,17 +76,17 @@ defmodule PlatformWeb.GoalsFlashCardsTest do
     assert has_element?(view, deck(ask), "Card 1 of 5")
     assert has_element?(view, deck(ask), "Front 0")
     refute has_element?(view, deck(ask), "Back 0")
-    view |> element(action(ask, "flip")) |> render_click()
+    view |> element(flash_action(ask, "flip")) |> render_click()
     assert has_element?(view, deck(ask), "Back 0")
-    assert has_element?(view, action(ask, "missed"), "Missed it")
-    assert has_element?(view, action(ask, "got"), "Got it")
-    view |> element(action(ask, "got")) |> render_click()
+    assert has_element?(view, flash_action(ask, "missed"), "Missed it")
+    assert has_element?(view, flash_action(ask, "got"), "Got it")
+    view |> element(flash_action(ask, "got")) |> render_click()
     play(view, ask, ["got", "missed", "got", "missed"])
     assert has_element?(view, deck(ask), "Done for today: 3 of 5")
     assert has_element?(view, deck(ask), "That makes 183 words.")
     assert has_element?(view, deck(ask), "7 days in a row.")
     assert has_element?(view, "[data-role=goals-brief-card]", "7-day streak")
-    assert has_element?(view, action(ask, "retry"), "Practise the 2 you missed")
+    assert has_element?(view, flash_action(ask, "retry"), "Practise the 2 you missed")
     assert render(view) =~ "1 of 1 handled"
     {:ok, asks} = Goals.list_asks(c.owner, c.goal.id)
     stored = Enum.find(asks, &(&1.id == ask.id))
@@ -105,13 +105,13 @@ defmodule PlatformWeb.GoalsFlashCardsTest do
     assert latest.origin == "practice"
     assert {:ok, 7} = Goals.practice_streak(c.owner, c.goal.id, today: date())
     before = Repo.aggregate(Reading, :count)
-    view |> element(action(ask, "retry")) |> render_click()
+    view |> element(flash_action(ask, "retry")) |> render_click()
     assert has_element?(view, deck(ask), "Front 2")
     assert has_element?(view, deck(ask), "Card 1 of 2")
     play(view, ask, ["got", "got"])
     assert has_element?(view, deck(ask), "Done for today: 5 of 5")
     assert has_element?(view, deck(ask), "That makes 185 words.")
-    refute has_element?(view, action(ask, "retry"))
+    refute has_element?(view, flash_action(ask, "retry"))
     assert Repo.aggregate(Reading, :count) == before + 1
     {:ok, {:reading, %{latest: latest}}} = Goals.goal_number(c.owner, c.goal.id)
     assert Decimal.equal?(latest.value, 185)
@@ -131,7 +131,7 @@ defmodule PlatformWeb.GoalsFlashCardsTest do
     {:ok, reloaded, _} = open(c.conn, c.owner)
     assert has_element?(reloaded, deck(ask), "Front 0")
     assert has_element?(reloaded, deck(ask), "Card 1 of 2")
-    refute has_element?(reloaded, action(ask, "got"))
+    refute has_element?(reloaded, flash_action(ask, "got"))
   end
 
   test "an addressed non-owner records results without changing the owner's number", c do
@@ -178,9 +178,9 @@ defmodule PlatformWeb.GoalsFlashCardsTest do
     ask = practice(c, 1, %{addressed_user_ids: [reader.id]})
     build()
     {:ok, view, _} = open(c.conn, reader)
-    view |> element(action(ask, "flip")) |> render_click()
+    view |> element(flash_action(ask, "flip")) |> render_click()
     {:ok, _} = Goals.close_goal(c.owner, c.goal.id, {:user, reader.id})
-    view |> element(action(ask, "got")) |> render_click()
+    view |> element(flash_action(ask, "got")) |> render_click()
     assert Repo.aggregate(AskAnswer, :count) == 0
     assert Repo.aggregate(Reading, :count) == 0
     refute has_element?(view, deck(ask), "Front 0")
