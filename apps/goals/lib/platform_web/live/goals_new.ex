@@ -36,7 +36,10 @@ defmodule PlatformWeb.GoalsNew do
 
   After Create the proposal is no longer open, so the page keeps the id of
   the proposal IT confirmed (a server value) and re-reads it with
-  `Platform.Goals.get_proposal/2`.
+  `Platform.Goals.get_proposal/2`. It also keeps the id of the last message
+  it showed before the click: messages after it (the coach's researching
+  message, stage 4) are drawn after "Goal created · only you can see it",
+  where the canvas puts them, as they arrive on the DM.
   """
   use Phoenix.Component
 
@@ -219,13 +222,15 @@ defmodule PlatformWeb.GoalsNew do
   def handle_event("new_create", params, socket) do
     user = socket.assigns.new.user
 
+    seen = socket.assigns.new.messages |> List.last() |> then(&(&1 && &1.id))
+
     with {:ok, %{} = proposal} <- Goals.current_proposal(user),
          {:ok, revision} <- parse_int(params["revision"]) do
       case Goals.confirm_proposal(user, proposal.id, revision) do
         {:ok, %{goal: goal, proposal: confirmed}} ->
           {:noreply,
            socket
-           |> put_new(created: %{goal_id: goal.id, proposal_id: confirmed.id})
+           |> put_new(created: %{goal_id: goal.id, proposal_id: confirmed.id, seen: seen})
            |> refresh()
            |> refresh_rows()}
 
@@ -359,6 +364,17 @@ defmodule PlatformWeb.GoalsNew do
     |> Enum.sort_by(fn {{at, _}, i} -> {DateTime.to_unix(at, :microsecond), i} end)
     |> Enum.map(fn {{_, item}, _} -> item end)
   end
+
+  # Messages the page had when its person pressed Create goal stay above the
+  # "Goal created" line; later ones (the agent's researching message) follow it.
+  defp split_at_created(messages, %{seen: seen}) when is_binary(seen) do
+    case Enum.find_index(messages, &(&1.id == seen)) do
+      nil -> {messages, []}
+      i -> Enum.split(messages, i + 1)
+    end
+  end
+
+  defp split_at_created(messages, _created), do: {messages, []}
 
   defp time(stamp) do
     case DateTime.from_iso8601(stamp) do
@@ -496,20 +512,23 @@ defmodule PlatformWeb.GoalsNew do
     new = assigns.new
     proposal = new.proposal
     open? = match?(%{status: "open"}, proposal)
+    created = if(match?(%{status: "confirmed"}, proposal), do: new.created)
+    {earlier, later} = split_at_created(Map.get(new, :messages, []), created)
 
     assigns =
       assign(assigns,
         agent: new.agent,
         proposal: proposal,
         open?: open?,
-        stream: stream_items(new),
+        stream: stream_items(Map.put(new, :messages, earlier)),
+        later: later,
         replies:
           if(open? and replies_open?(new.messages),
             do: Enum.with_index(proposal.replies),
             else: []
           ),
         ready?: open? and proposal.ready,
-        created: if(match?(%{status: "confirmed"}, proposal), do: new.created),
+        created: created,
         offline?: match?(%{delivery: d} when d in ["offline", "no_runtime"], proposal),
         examples: @examples,
         settings: @settings
@@ -660,8 +679,20 @@ defmodule PlatformWeb.GoalsNew do
             </button>
           </div>
 
-          <div :if={@created} class="flex flex-col gap-2">
+          <div :if={@created} class="flex flex-col gap-2" data-role="goals-new-created">
             <.settled_line setting="created" line="Goal created · only you can see it" />
+            <%= for m <- @later do %>
+              <.agent_message
+                :if={m.from == :agent}
+                agent={@agent}
+                id={"goals-new-msg-#{m.id}"}
+                at={m.at}
+                role="goals-new-message"
+              >
+                {Platform.Chat.ContentRenderer.render_message(m.content)}
+              </.agent_message>
+              <.person_message :if={m.from != :agent} user={@new.user} message={m} />
+            <% end %>
             <div class="flex flex-wrap gap-2 pl-[52px]">
               <.link
                 navigate={"/m/goals?goal=" <> @created.goal_id}

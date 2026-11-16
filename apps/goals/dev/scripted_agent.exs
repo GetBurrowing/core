@@ -15,6 +15,17 @@
 #
 # With `lead` as the second argument it gives the first agent the
 # `agents_leader` role when nobody holds it (core's public Roles context).
+#
+# Stage 4, after the person pressed Create goal:
+#
+#     GOALS_ENABLED=true mix run dev/scripted_agent.exs you@example.com yt research
+#     GOALS_ENABLED=true mix run dev/scripted_agent.exs you@example.com yt cite
+#
+# `research` plays the coach's answer to the confirmed signal on the
+# person's latest confirmed conversation: the researching message in the DM
+# and three takeaways through `goal_takeaway_add`. `cite` runs the goal's
+# clock to its first slot and closes that wake-up with `goal_do` (yt) or a
+# practice `goal_ask` (es) citing the first takeaway.
 Code.require_file("../test/support/scripted_agent.ex", __DIR__)
 
 alias Platform.Goals
@@ -45,6 +56,80 @@ case System.argv() do
         IO.puts("agents_leader already held by #{id}")
     end
 
+  [email, example, action] when example in ["yt", "es"] and action in ["research", "cite"] ->
+    import Ecto.Query, only: [from: 2]
+    user = user_for.(email)
+    {:ok, lead} = Goals.lead_agent(user)
+    example = String.to_existing_atom(example)
+
+    proposal =
+      Platform.Repo.one(
+        from(p in Platform.Goals.Proposal,
+          where: p.user_id == ^user.id and p.status == "confirmed",
+          order_by: [desc: p.confirmed_at],
+          limit: 1
+        )
+      ) || raise "#{email} has not created a goal from a New goal conversation"
+
+    goal_id = proposal.goal_id
+    agent = %{agent_id: lead.id}
+
+    case action do
+      "research" ->
+        {:ok, entries} = Platform.Goals.ScriptedAgent.research(lead, proposal.id, goal_id, example)
+        IO.puts("posted the researching message and #{length(entries)} takeaways")
+
+      "cite" ->
+        alias Platform.Goals.{Clock, GoalClock, WakeUp}
+
+        takeaway =
+          Platform.Repo.one(
+            from(e in Platform.Goals.Entry,
+              where: e.goal_id == ^goal_id and e.kind == "takeaway",
+              order_by: [asc: e.occurred_at, asc: e.id],
+              limit: 1
+            )
+          ) || raise "run research first"
+
+        clock_for = fn -> Platform.Repo.one(from(c in GoalClock, where: c.goal_id == ^goal_id)) end
+        if is_nil(clock_for.()), do: :ok = Clock.tick(DateTime.utc_now())
+        :ok = Clock.tick(clock_for.().next_wake_at)
+
+        wake =
+          Platform.Repo.one!(
+            from(w in WakeUp, where: w.goal_id == ^goal_id and w.status == "open", limit: 1)
+          )
+
+        base = %{
+          "wake_up_id" => wake.id,
+          "takeaway_id" => takeaway.id,
+          "prediction" => "This will help",
+          "predicted_by" => Date.to_iso8601(Date.add(Date.utc_today(), 7))
+        }
+
+        {tool, args} =
+          case example do
+            :yt ->
+              {"goal_do", Map.put(base, "title", "Scheduled Monday's video")}
+
+            :es ->
+              {"goal_ask",
+               Map.merge(base, %{
+                 "kind" => "practice",
+                 "title" => "Five new words",
+                 "payload" => %{
+                   "cards" => [
+                     %{"front" => "la playa", "back" => "the beach"},
+                     %{"front" => "el tren", "back" => "the train"}
+                   ]
+                 }
+               })}
+          end
+
+        {:ok, _} = Platform.Goals.Tools.execute(tool, args, agent)
+        IO.puts("#{tool} closed the first check-in citing #{inspect(takeaway.title)}")
+    end
+
   [email, example | rest] when example in ["yt", "es"] ->
     user = user_for.(email)
     {:ok, lead} = Goals.lead_agent(user)
@@ -63,5 +148,5 @@ case System.argv() do
     end
 
   _ ->
-    raise "usage: mix run dev/scripted_agent.exs <email> yt|es [start <text>] | <email> lead"
+    raise "usage: mix run dev/scripted_agent.exs <email> yt|es [start <text> | research | cite] | <email> lead"
 end

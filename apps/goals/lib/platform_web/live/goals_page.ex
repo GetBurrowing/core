@@ -65,7 +65,8 @@ defmodule PlatformWeb.GoalsPage do
       `Platform.Goals.entry_authors/2`. Goals 6/8 adds visible asks and their
       answer receipts, the viewer's practice streak, and Up next from
       `list_my_asks(user, goal_id: goal.id)` with `ask_brief_date/2` for the
-      reader's delivering brief. No read is performed by a template.
+      reader's delivering brief. A row citing a takeaway carries the trying
+      card's `PlatformWeb.GoalsFromLink` (5/8). No read is in a template.
   """
   use Phoenix.Component
 
@@ -75,6 +76,7 @@ defmodule PlatformWeb.GoalsPage do
   alias PlatformWeb.AvatarComponents
   alias PlatformWeb.Components.InboxItem
   alias PlatformWeb.GoalsComponents
+  alias PlatformWeb.GoalsFromLink
 
   @card "rounded-xl border border-edge bg-base-100 px-4 py-3.5"
   @sec_h "mb-2 mt-6 text-xs font-bold uppercase tracking-wider text-subtle"
@@ -456,6 +458,7 @@ defmodule PlatformWeb.GoalsPage do
                 {entry.title}
               </h4>
               <p :if={present?(entry.body)} class="mt-1 text-sm text-base-content">{entry.body}</p>
+              <GoalsFromLink.from_link page={@page} entry={entry} role="goal-notebook-from" />
               <p
                 :for={line <- Map.get(@page.answer_lines, entry.details["ask_id"], [])}
                 data-role="goal-answer"
@@ -790,7 +793,6 @@ defmodule PlatformWeb.GoalsPage do
     assigns =
       assign(assigns,
         sentence: if(present?(entry.prediction), do: entry.prediction, else: entry.body),
-        from: entry.takeaway_id && Map.get(assigns.page.takeaway_titles, entry.takeaway_id),
         doing: agent && present?(entry.prediction) && present?(entry.body) && agent
       )
 
@@ -807,14 +809,7 @@ defmodule PlatformWeb.GoalsPage do
       </h4>
       <.prediction_pill state={@page.prediction_states[@entry.id]} />
       <p :if={present?(@sentence)} class="mt-1 text-sm text-subtle">{@sentence}</p>
-      <.link
-        :if={@from}
-        navigate={read_href(@page.card.goal, @entry.takeaway_id)}
-        class={[link_class(), "mt-1 inline-block text-sm"]}
-        data-role="goal-trying-from"
-      >
-        From: {@from}
-      </.link>
+      <GoalsFromLink.from_link page={@page} entry={@entry} role="goal-trying-from" />
       <div :if={@doing} class="mt-2 flex items-center gap-2 text-sm" data-role="goal-trying-doing">
         <span data-agent-slot={@doing.slot}>
           <AvatarComponents.agent_avatar name={@doing.name} avatar_url={@doing.avatar_url} size="xs" />

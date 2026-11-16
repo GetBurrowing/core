@@ -211,6 +211,13 @@ defmodule PlatformWeb.GoalsLive do
    58. If the lead role moves to another agent mid-conversation, the screen
        names the conversation's agent from its DM participant row, in the
        default colour slot.
+
+  Goals 5/8 stage 4 (research takeaways and cited suggestions):
+
+   59. The Notebook is not in the canvas. A Notebook row that cites a
+       takeaway carries the trying card's "From: {takeaway title}" link,
+       standing in for the canvas idea screen's link. (Goals 6/8's idea
+       screen is already on the rollup and shows its own "From:" line.)
   """
   use PlatformWeb, :live_view
 

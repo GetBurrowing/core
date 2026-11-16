@@ -8,7 +8,8 @@ defmodule Platform.Goals.ScriptedAgent do
   (screen `create`): `:yt` (How to Computer) and `:es` (Spanish). It can do
   nothing a real agent could not: it records the proposal through
   `Platform.Goals.Tools.execute("goal_propose", ...)` with the agent's id in
-  the context, reads the DM with `Platform.Chat.list_messages/2`, and posts
+  the context, reads the DM with `Platform.Chat.list_messages/2` (after
+  Create it finds the DM with `Platform.Chat.find_or_create_dm/3`), and posts
   as the agent's participant with `Platform.Chat.post_message/1`. It calls
   no other `Platform.Goals` function.
 
@@ -18,6 +19,12 @@ defmodule Platform.Goals.ScriptedAgent do
   label is the default) plus the next quick replies, then posts the
   agent's sentence. Returns `{:ok, turn}` or `:done` once the goal is
   ready.
+
+  `research/2` (stage 4) is what the agent does on the confirmed signal: it
+  reads the conversation and goal ids from the signal's prompt (as a real
+  agent would), posts the researching message in the DM, then records
+  three takeaways with `goal_takeaway_add`. `research/3` takes the ids
+  directly for the dev script.
   """
 
   alias Platform.Chat
@@ -155,12 +162,127 @@ defmodule Platform.Goals.ScriptedAgent do
     end
   end
 
+  @researching_start "I'm researching how people reach goals like this one."
+  @researching_end "I'll put a short read in tomorrow's briefing, and every suggestion I make will say which finding it came from."
+  @researching_middle %{
+    yt: "For How to Computer, that means what made small help channels grow.",
+    es: "For Spanish, that means how adults learn a language in their spare time."
+  }
+
+  @doc "The researching message the agent posts after Create goal."
+  def researching(example),
+    do: Enum.join([@researching_start, @researching_middle[example], @researching_end], " ")
+
+  @doc "The example's three takeaways: `goal_takeaway_add` arguments, minus the goal id."
+  def takeaways(:yt) do
+    [
+      %{
+        "title" => "Small help channels grow from search, not the feed",
+        "body" =>
+          "Channels that answer one exact question per video get found for years through search. Their first 1,000 subscribers mostly arrive from a handful of evergreen answers.",
+        "sources" => [
+          %{"name" => "YouTube Creator Academy", "url" => "https://www.youtube.com/creators/"},
+          %{"name" => "Think Media, small channel growth"}
+        ],
+        "doing" => "Each week I pick one question from your comments and draft the answer video."
+      },
+      %{
+        "title" => "A steady schedule beats a burst",
+        "body" =>
+          "Channels that kept one upload a week for six months grew more than ones that posted daily and then stopped.",
+        "sources" => [%{"name" => "vidIQ upload frequency study"}],
+        "doing" => "I schedule one video a week and warn you two days before a gap."
+      },
+      %{
+        "title" => "Titles that name the problem get clicked",
+        "body" =>
+          "Help videos titled with the viewer's own words (\"printer says offline\") outperform clever titles.",
+        "sources" => [
+          %{"name" => "TubeBuddy title tests"},
+          %{"name" => "Paddy Galloway, packaging notes"}
+        ],
+        "doing" => "I draft three titles per video from the words people use in comments."
+      }
+    ]
+  end
+
+  def takeaways(:es) do
+    [
+      %{
+        "title" => "Ten minutes a day beats an hour on Sunday",
+        "body" =>
+          "Adults who study in short daily sessions remember more words a month later than those who study the same total once a week.",
+        "sources" => [
+          %{"name" => "Cepeda et al., spacing effect review"},
+          %{"name" => "Duolingo learning science notes"}
+        ],
+        "doing" => "Your briefing carries a few flash cards every day, and misses come back sooner."
+      },
+      %{
+        "title" => "The first 1,000 words cover most conversations",
+        "body" =>
+          "The most frequent thousand words account for most of what is said in everyday talk, so they come first.",
+        "sources" => [%{"name" => "Davies, A Frequency Dictionary of Spanish"}],
+        "doing" => "I build your cards from the most frequent words first."
+      },
+      %{
+        "title" => "Listening early makes speaking easier",
+        "body" =>
+          "Learners who listen to slow, simple Spanish from the start understand real speech sooner.",
+        "sources" => [
+          %{"name" => "Krashen, comprehensible input"},
+          %{"name" => "Coffee Break Spanish"}
+        ],
+        "doing" => "I add one short thing to listen to in your briefing each week."
+      }
+    ]
+  end
+
+  @doc """
+  Plays the agent's response to the confirmed signal `prompt` (the
+  `goals.research` prompt). Returns `{:ok, [takeaway entry]}`.
+  """
+  def research(agent, prompt, example) when is_binary(prompt) and example in [:yt, :es] do
+    [_, proposal_id] = Regex.run(~r/conversation ([0-9a-f-]{36})/, prompt)
+    [_, goal_id] = Regex.run(~r/Goal id: ([0-9a-f-]{36})/, prompt)
+    research(agent, proposal_id, goal_id, example)
+  end
+
+  @doc "Posts the researching message, then adds the example's takeaways."
+  def research(agent, proposal_id, goal_id, example) do
+    {:ok, %{person: %{user_id: user_id}}} =
+      Tools.execute("goal_proposal_get", %{"proposal_id" => proposal_id}, %{agent_id: agent.id})
+
+    # The agent's direct conversation with the person (core's public DM lookup).
+    {:ok, dm} = Chat.find_or_create_dm(user_id, "agent", agent.id)
+    {:ok, _} = post(agent, dm.id, researching(example))
+
+    entries =
+      for args <- takeaways(example) do
+        {:ok, %{entry: entry}} = add_takeaway(agent, goal_id, args)
+        entry
+      end
+
+    {:ok, entries}
+  end
+
+  @doc "Calls `goal_takeaway_add` for `goal_id` with `args` as the agent."
+  def add_takeaway(agent, goal_id, args),
+    do:
+      Tools.execute(
+        "goal_takeaway_add",
+        Map.put(args, "goal_id", goal_id),
+        %{agent_id: agent.id}
+      )
+
   @doc "Posts `text` in the proposal's DM as the agent's participant."
-  def say(agent, proposal, text) do
-    participant = Chat.get_agent_participant(proposal.space_id, agent.id)
+  def say(agent, proposal, text), do: post(agent, proposal.space_id, text)
+
+  defp post(agent, space_id, text) do
+    participant = Chat.get_agent_participant(space_id, agent.id)
 
     Chat.post_message(%{
-      space_id: proposal.space_id,
+      space_id: space_id,
       participant_id: participant.id,
       content_type: "text",
       content: text
