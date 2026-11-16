@@ -1,5 +1,6 @@
 defmodule PlatformWeb.SignInSetupControllerTest do
   use PlatformWeb.ConnCase, async: false
+  require Logger
   alias Platform.{Accounts, Repo}
   alias Platform.SignInAdmin.PocketId
   alias Platform.SignIn.EmailSetup
@@ -467,6 +468,9 @@ defmodule PlatformWeb.SignInSetupControllerTest do
       interaction_stub()
       verifier = Base.url_encode64(:crypto.strong_rand_bytes(32), padding: false)
       challenge = :crypto.hash(:sha256, verifier) |> Base.url_encode64(padding: false)
+      previous = Logger.level()
+      Logger.configure(level: :debug)
+      on_exit(fn -> Logger.configure(level: previous) end)
 
       {{completed, code, binding}, log} =
         ExUnit.CaptureLog.with_log([level: :debug], fn ->
