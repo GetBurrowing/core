@@ -4437,6 +4437,61 @@ defmodule Platform.Meetings.IntentClassifierTest do
       refute_received :hosted_called
     end
 
+    # Task 01a1e670 (Moore's audit): the assignee route used to send the
+    # agent's vault_key SLUG as the bearer. It now sends the secret the slug
+    # resolves to, and nothing when there is no vault_key.
+    for {label, vaulted?} <- [{"a resolving vault_key", true}, {"a nil vault_key", false}] do
+      test "assignee route with #{label} sends the right Authorization header" do
+        vaulted? = unquote(vaulted?)
+        n = System.unique_integer([:positive])
+        slug = "intent-bearer-slug-#{n}"
+        secret = "intent-bearer-secret-#{n}"
+
+        agent =
+          create_agent!(%{
+            slug: "intent-bearer-#{n}",
+            kind: "external",
+            endpoint_kind: "openai_compat",
+            base_url: "http://intent-bearer.test:11434/v1",
+            model: "bearer-model",
+            vault_key: if(vaulted?, do: slug)
+          })
+
+        if vaulted?,
+          do: {:ok, _} = Platform.Vault.put(slug, :api_key, secret, scope: {:agent, agent.id})
+
+        assign_intent_role!(agent)
+        test_pid = self()
+        room = "room-bearer-#{n}"
+        on_exit(fn -> drop_queue_for_room(room) end)
+
+        Application.put_env(
+          :platform,
+          :ollama_req_client,
+          Req.new(
+            plug: fn conn ->
+              send(test_pid, {:ollama_auth, Plug.Conn.get_req_header(conn, "authorization")})
+              Req.Test.json(conn, %{"model" => "bearer-model", "choices" => []})
+            end
+          )
+        )
+
+        _pid = start_unpinned_classifier!()
+
+        capture_log(fn ->
+          _ = broadcast_chunk(room)
+          assert_receive {:ollama_auth, headers}, 1_000
+
+          if vaulted? do
+            assert headers == ["Bearer " <> secret]
+            refute Enum.any?(headers, &(&1 =~ slug))
+          else
+            assert headers == []
+          end
+        end)
+      end
+    end
+
     test "a fenced hosted reply classifies; the same fence on the assignee route is a parse_error" do
       _agent = native_assignee!()
       configure_hosted!("fence-model")
