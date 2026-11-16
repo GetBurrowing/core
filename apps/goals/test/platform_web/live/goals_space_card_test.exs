@@ -98,8 +98,13 @@ defmodule PlatformWeb.GoalsSpaceCardTest do
     view = open(c, c.viewer)
     refute has_element?(view, "[data-role=goal-space-card] button", "Hand to this space's agents")
 
-    assert render_click(target(view), "goal_card_hand", %{}) =~
+    render_click(target(view), "goal_card_hand", %{})
+
+    assert has_element?(
+             view,
+             "[data-role=goal-card-notice]",
              "You can't hand this goal to the agents here."
+           )
 
     assert has_element?(view, "[data-role=goal-card-notice][role=alert]")
     assert Repo.one!(from(gr in Goals.Grant, where: gr.id == ^c.grant.id)).handed_at == nil
