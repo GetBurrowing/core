@@ -349,7 +349,10 @@ defmodule Platform.Goals.ContributorTasksTest do
 
   test "the tools show assign, contributors and assignees; the bundle keeps its names", c do
     names = ToolDefinitions.names()
-    assert names == ~w(goal_list goal_get goal_wake_up_get goal_do goal_ask goal_wait goal_retro)
+    # Goals 5/8 adds the takeaway and proposal tools after 8/8's goal_retro.
+    assert names ==
+             ~w(goal_list goal_get goal_wake_up_get goal_do goal_ask goal_wait goal_retro) ++
+               ~w(goal_takeaway_add goal_proposal_get goal_propose)
 
     {:ok, _} = Goals.take_goal_back(c.owner, c.goal.id, c.space.id)
     wake = fire(c.goal)
