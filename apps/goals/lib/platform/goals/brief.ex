@@ -174,6 +174,7 @@ defmodule Platform.Goals.Brief do
     entries =
       Repo.all(
         from(e in children(user, Entry),
+          as: :entry,
           join: g in subquery(Visibility.visible_goals(user)),
           on: g.id == e.goal_id,
           where:
@@ -186,8 +187,7 @@ defmodule Platform.Goals.Brief do
               from(i in BriefItem,
                 where: i.entry_id == parent_as(:entry).id and i.user_id == ^user.id
               )
-            ),
-          as: :entry
+            )
         )
       )
 
@@ -490,6 +490,7 @@ defmodule Platform.Goals.Brief do
          %BriefItem{} = item <-
            Repo.one(
              from(i in reader_items(user),
+               as: :item,
                where:
                  i.id == ^id and
                    (i.kind == "report" or
@@ -498,8 +499,7 @@ defmodule Platform.Goals.Brief do
                            from(e in Entry,
                              where: e.id == parent_as(:item).entry_id and e.kind == "retro"
                            )
-                         ))),
-               as: :item
+                         )))
              )
            ) do
       item
