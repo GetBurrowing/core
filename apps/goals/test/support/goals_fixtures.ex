@@ -24,27 +24,49 @@ defmodule Platform.GoalsFixtures do
 
   @doc """
   Grants `user` `goals.use` the way the component tests always have: an
-  allow on a space of a fresh org, recorded by core's `Platform.Access.Grants`.
-  Returns the user.
+  allow on a space, recorded by core's `Platform.Access.Grants`. One space
+  per test process carries every such grant, so creating people adds no
+  space after the first. Returns the user.
   """
   def grant_goals_use!(user) do
-    space = space!(org_id!())
-
     {:ok, _} =
       Platform.Access.Grants.grant(%{
         principal: user,
         permission: "goals.use",
-        resource: {:space, space.id}
+        resource: {:space, goals_use_space_id()}
       })
 
     user
   end
 
-  @doc "Revokes every `goals.use` grant `user` holds, through core. Returns the user."
-  def revoke_goals_use!(user) do
-    for grant <- Platform.Access.Grants.list_for_principals([{:user, user.id}]),
-        grant.permission == "goals.use" do
-      {:ok, _} = Platform.Access.Grants.revoke(grant)
+  defp goals_use_space_id do
+    case Process.get({__MODULE__, :goals_use_space_id}) do
+      nil ->
+        id = space!(org_id!()).id
+        Process.put({__MODULE__, :goals_use_space_id}, id)
+        id
+
+      id ->
+        id
+    end
+  end
+
+  @doc """
+  Revokes every `goals.use` grant `user` holds, through core, which pushes
+  the change to the person's connected live views. `push: false` deletes
+  the rows without that push, for a live view that must find out from its
+  own next call (a socket the push did not reach). Returns the user.
+  """
+  def revoke_goals_use!(user, opts \\ []) do
+    grants =
+      for grant <- Platform.Access.Grants.list_for_principals([{:user, user.id}]),
+          grant.permission == "goals.use",
+          do: grant
+
+    if Keyword.get(opts, :push, true) do
+      for grant <- grants, do: {:ok, _} = Platform.Access.Grants.revoke(grant)
+    else
+      for grant <- grants, do: Repo.delete!(grant)
     end
 
     user

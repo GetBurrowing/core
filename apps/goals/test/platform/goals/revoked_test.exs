@@ -62,7 +62,7 @@ defmodule Platform.Goals.RevokedTest do
     assert Enum.any?(items, &(&1.kind == :practice)), "no practice brief item was seeded"
     space = space!(c.org)
     join_space!(space.id, :user, c.owner.id)
-    wake = Repo.one!(from(w in WakeUp, where: w.goal_id == ^offer_goal.id))
+    wake = Repo.one!(from(w in WakeUp, where: w.id == ^ask.wake_up_id))
 
     Map.merge(c, %{
       stop: stop,

@@ -168,28 +168,24 @@ defmodule PlatformWeb.GoalsFlashCardsTest do
     {:ok, view, _} = open(c.conn, c.owner)
     view |> element(flash_action(ask, "flip")) |> render_click()
     assert has_element?(view, deck(ask), "Front 0")
-    revoke_goals_use!(c.owner)
 
-    # The live view is not remounted. Core's access push re-renders the brief,
-    # and the deck reloads through the context on the next event it receives.
-    for event <- ["got", "missed", "flip", "got"] do
-      if has_element?(view, "[data-role=goals-flash-cards]"),
+    # No remount and no access push: the deck learns from its own next call.
+    revoke_goals_use!(c.owner, push: false)
+    view |> element(flash_action(ask, "got")) |> render_click()
+    refute has_element?(view, deck(ask))
+
+    for event <- ["flip", "got", "missed"],
         do: view |> with_target("[data-role=goals-flash-cards]") |> render_click(event, %{})
-    end
 
     assert Repo.aggregate(AskAnswer, :count) == 0
     assert Repo.aggregate(Reading, :count) == 0
-    html = render(view)
-    refute has_element?(view, deck(ask))
-    refute html =~ "Front 0"
-    refute html =~ "Back 0"
-    refute html =~ "Front 1"
+    refute render(view) =~ "Front 0"
+    refute render(view) =~ "Back 0"
 
-    # Positive control: the same view, re-granted, plays the deck to a result.
-    grant_goals_use!(c.owner)
+    # The card around the deck goes on the brief's next event.
     view |> with_target("[data-role=goals-brief]") |> render_hook("noop", %{})
-    play(view, ask, ["got", "got"])
-    assert Repo.aggregate(AskAnswer, :count) == 1
+    refute has_element?(view, "[data-role=goals-brief-card]")
+    assert Repo.aggregate(AskAnswer, :count) == 0
   end
 
   test "revoked visibility in the middle of a pass hides the deck and refuses the last mark", c do

@@ -293,9 +293,10 @@ defmodule PlatformWeb.GoalsBriefTest do
     counts = fn -> {Repo.aggregate(Entry, :count), Repo.aggregate(AskAnswer, :count)} end
     before = counts.()
 
-    # No remount and no navigation. The events carry the ids the cards held
-    # before the revoke, sent straight to the live component.
-    revoke_goals_use!(c.owner)
+    # No remount and no navigation, and no access push either: the component
+    # learns only from its own next call into the context. The events carry
+    # the ids the cards held before the revoke.
+    revoke_goals_use!(c.owner, push: false)
 
     view
     |> with_target("[data-role=goals-brief]")
@@ -331,6 +332,17 @@ defmodule PlatformWeb.GoalsBriefTest do
     |> render_hook("answer", %{item_id: offer.id, answer: "used"})
 
     assert [%{answer: "used"}] = Repo.all(AskAnswer)
+  end
+
+  test "Goals 9: core's access push takes the Goals section off a live briefing", c do
+    full(c)
+    {:ok, view, html} = open(c.conn, c.owner)
+    assert html =~ "Write the outline"
+    revoke_goals_use!(c.owner)
+    html = render(view)
+    refute html =~ "Your goals"
+    refute html =~ "Write the outline"
+    refute has_element?(view, "[data-role=goals-brief-card]")
   end
 
   test "empty, disabled and unpermitted readers receive no Goals heading", c do
