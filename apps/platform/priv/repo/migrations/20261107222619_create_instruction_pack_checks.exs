@@ -1,3 +1,4 @@
+# old-code-compatible: Creates only the new instruction_pack_checks table and its singleton constraint; previous code never reads or writes it.
 defmodule Platform.Repo.Migrations.CreateInstructionPackChecks do
   use Ecto.Migration
 

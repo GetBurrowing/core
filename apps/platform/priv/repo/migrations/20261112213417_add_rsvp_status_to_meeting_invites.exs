@@ -1,3 +1,4 @@
+# old-code-compatible: rsvp_status is new here and defaults to 'invited', which the check allows; previous code never wrote rsvp_status, so its inserts take the default.
 defmodule Platform.Repo.Migrations.AddRsvpStatusToMeetingInvites do
   @moduledoc """
   PR #175 (calendar attendee status in iCal). An invitee's answer to a meeting invite: `invited` (no answer yet),
