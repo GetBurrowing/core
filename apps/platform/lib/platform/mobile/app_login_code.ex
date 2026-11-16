@@ -8,6 +8,10 @@ defmodule Platform.Mobile.AppLoginCode do
     * `purpose: "handoff"`: minted by that exchange, redeemed by
       `GET /auth/app/handoff?code=...` to sign the app's web view in.
 
+  `landing` (task 01a1e58b stage 3) is where an exchange code's web view
+  lands: a local path already checked by `Platform.Mobile.safe_return_path/1`,
+  or nil for `/`. An email-code sign-in stores `/settings?passkey=add`.
+
   Only `code_hash` (SHA-256 of the raw code) is stored, `redact: true`.
   """
   use Ecto.Schema
@@ -25,6 +29,7 @@ defmodule Platform.Mobile.AppLoginCode do
     field(:purpose, :string)
     field(:expires_at, :utc_datetime_usec)
     field(:consumed_at, :utc_datetime_usec)
+    field(:landing, :string)
 
     timestamps(type: :utc_datetime_usec, updated_at: false)
   end
@@ -35,7 +40,7 @@ defmodule Platform.Mobile.AppLoginCode do
 
   def changeset(code, attrs) do
     code
-    |> cast(attrs, [:user_id, :code_hash, :code_challenge, :purpose, :expires_at])
+    |> cast(attrs, [:user_id, :code_hash, :code_challenge, :purpose, :expires_at, :landing])
     |> validate_required([:user_id, :code_hash, :purpose, :expires_at])
     |> validate_inclusion(:purpose, @purposes)
     |> unique_constraint(:code_hash)

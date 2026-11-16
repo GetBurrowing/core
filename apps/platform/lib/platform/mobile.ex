@@ -72,12 +72,24 @@ defmodule Platform.Mobile do
   @doc """
   Mint the single-use exchange code for `user`, bound to `challenge`.
   Returns the raw code; only its hash is stored.
+
+  `opts[:landing]` (task 01a1e58b stage 3) is where the app's web view lands
+  once the code is exchanged, for example `/settings?passkey=add` after an
+  email-code sign-in. It is stored through `safe_return_path/1`, and `/` (or
+  anything that function refuses) is stored as nil: the ordinary landing.
   """
-  @spec issue_exchange_code(User.t(), String.t()) ::
+  @spec issue_exchange_code(User.t(), String.t(), keyword()) ::
           {:ok, String.t()} | {:error, :invalid_challenge | Ecto.Changeset.t()}
-  def issue_exchange_code(%User{id: user_id}, challenge) do
+  def issue_exchange_code(%User{id: user_id}, challenge, opts \\ []) do
     with {:ok, challenge} <- begin_app_login(challenge) do
-      insert_code(user_id, "exchange", challenge)
+      insert_code(user_id, "exchange", challenge, stored_landing(opts[:landing]))
+    end
+  end
+
+  defp stored_landing(landing) do
+    case safe_return_path(landing) do
+      "/" -> nil
+      path -> path
     end
   end
 
@@ -87,10 +99,17 @@ defmodule Platform.Mobile do
   The code is consumed atomically BEFORE the verifier is checked, so a wrong
   verifier burns the code: an intercepted code cannot be retried. On success,
   returns the raw bearer token (this is the only time it exists outside the
-  app), the new session, and a raw one-time handoff code for the web view.
+  app), the new session, a raw one-time handoff code for the web view, and
+  the `landing` the exchange code was minted with (nil for `/`).
   """
   @spec exchange_code(term(), term(), map()) ::
-          {:ok, %{token: String.t(), session: AppSession.t(), handoff_code: String.t()}}
+          {:ok,
+           %{
+             token: String.t(),
+             session: AppSession.t(),
+             handoff_code: String.t(),
+             landing: String.t() | nil
+           }}
           | {:error, :invalid_code}
   def exchange_code(code, verifier, attrs \\ %{})
 
@@ -99,7 +118,7 @@ defmodule Platform.Mobile do
          true <- verifier_matches?(verifier, login_code.code_challenge),
          %User{archived_at: nil} = user <- Accounts.get_user(login_code.user_id),
          {:ok, result} <- create_session(user, attrs) do
-      {:ok, result}
+      {:ok, Map.put(result, :landing, login_code.landing)}
     else
       _ -> {:error, :invalid_code}
     end
@@ -644,7 +663,7 @@ defmodule Platform.Mobile do
     end
   end
 
-  defp insert_code(user_id, purpose, challenge) do
+  defp insert_code(user_id, purpose, challenge, landing \\ nil) do
     code = random_secret()
 
     %AppLoginCode{}
@@ -653,6 +672,7 @@ defmodule Platform.Mobile do
       code_hash: hash(code),
       code_challenge: challenge,
       purpose: purpose,
+      landing: landing,
       expires_at: DateTime.add(DateTime.utc_now(), @code_ttl_seconds, :second)
     })
     |> Repo.insert()
