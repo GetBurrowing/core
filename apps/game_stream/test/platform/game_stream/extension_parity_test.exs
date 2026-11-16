@@ -599,7 +599,17 @@ defmodule Platform.GameStream.ExtensionParityTest do
                {"calendar_propose", "context_read"}
              ]
 
-      prior
+      # Task 01a1e4fa stage 1 adds an optional `deploy_repos` to plan_create and
+      # plan_update. Pin it and strip it, so every digest below still checks
+      # every other byte of both tools unchanged.
+      Enum.map(prior, fn
+        %{name: name} = tool when name in ["plan_create", "plan_update"] ->
+          assert %{type: "array", required: false} = tool.parameters.deploy_repos
+          %{tool | parameters: Map.delete(tool.parameters, :deploy_repos)}
+
+        tool ->
+          tool
+      end)
     end
 
     test "flag off: tool_definitions/0 is main's, name for name and byte for byte" do

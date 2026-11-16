@@ -1205,6 +1205,22 @@ defmodule Platform.ExtensionsTest do
             tool
         end)
 
+      # Task 01a1e4fa stage 1 adds an optional `deploy_repos` to plan_create and
+      # plan_update. Pin it here and strip it so the frozen oracle still covers
+      # every other byte of both tools.
+      defs =
+        Enum.map(defs, fn
+          %{name: name} = tool when name in ["plan_create", "plan_update"] ->
+            assert %{type: "array", required: false, description: description} =
+                     tool.parameters.deploy_repos
+
+            assert description =~ "undeclared_cross_repo"
+            %{tool | parameters: Map.delete(tool.parameters, :deploy_repos)}
+
+          tool ->
+            tool
+        end)
+
       # Task 01a17f00 stage 2 adds authenticated completion tools. Pin these
       # explicitly while preserving the frozen byte oracle for existing tools.
       {completion, defs} =
