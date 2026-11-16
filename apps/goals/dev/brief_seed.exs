@@ -182,11 +182,35 @@ defmodule Platform.Goals.DevBriefSeed do
       }
     })
 
-    queue(coach, practice, %{
-      kind: "practice",
-      title: "Five everyday words",
-      payload: %{"cards" => cards}
-    })
+    practice_ask =
+      queue(coach, practice, %{
+        kind: "practice",
+        title: "Five everyday words",
+        payload: %{"cards" => cards}
+      })
+
+    ok!(
+      Platform.Chat.add_participant(space.id, %{
+        participant_type: "user",
+        participant_id: user.id,
+        display_name: user.name,
+        joined_at: DateTime.utc_now()
+      })
+    )
+
+    practice_canvas =
+      ok!(
+        Platform.Chat.create_canvas(%{
+          space_id: space.id,
+          created_by: user.id,
+          title: "Your practice cards",
+          document: %{
+            version: 1,
+            revision: 1,
+            root: %{id: "practice-deck", type: "flash_cards", props: %{ask_id: practice_ask.id}}
+          }
+        })
+      )
 
     put_now(DateTime.utc_now())
 
@@ -217,6 +241,7 @@ defmodule Platform.Goals.DevBriefSeed do
       "Brief ready: /inbox/briefing/#{today}; #{length(items)} goal items; practice streak #{streak}."
     )
 
+    IO.puts("Practice canvas: /canvases/#{practice_canvas.id}")
     IO.inspect(result, label: "Delivery")
   end
 
