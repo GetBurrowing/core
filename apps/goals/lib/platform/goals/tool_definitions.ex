@@ -29,7 +29,7 @@ defmodule Platform.Goals.ToolDefinitions do
   @coach_only "Only the goal's coach may use this: any other goal, seen or not, answers not_found."
 
   @names ~w(goal_list goal_get goal_wake_up_get goal_do goal_ask goal_wait goal_retro
-             goal_proposal_get goal_propose goal_takeaway_add)
+             goal_takeaway_add goal_proposal_get goal_propose)
 
   @takeaway_id %{
     type: "string",

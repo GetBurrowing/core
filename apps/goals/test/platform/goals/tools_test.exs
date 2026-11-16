@@ -42,7 +42,7 @@ defmodule Platform.Goals.ToolsTest do
   defp wake_status(wake), do: Repo.one!(from(w in WakeUp, where: w.id == ^wake.id)).status
 
   @wake_up_tools ~w(goal_list goal_get goal_wake_up_get goal_do goal_ask goal_wait goal_retro)
-  @all_tools @wake_up_tools ++ ~w(goal_proposal_get goal_propose goal_takeaway_add)
+  @all_tools @wake_up_tools ++ ~w(goal_takeaway_add goal_proposal_get goal_propose)
 
   test "the bundle has exactly ten goal_ tools; the wake-up tools say a wake-up takes one outcome" do
     names = ToolDefinitions.names()
@@ -696,7 +696,7 @@ defmodule Platform.Goals.ToolsTest do
 
     for {tool, args} <- [{"goal_do", &do_args/2}, {"goal_ask", &ask_args/2}] do
       wake = fire(c.goal)
-      {:ok, %{entry: action}} = Goals.add_entry(c.coach, c.goal.id, %{kind: "action", title: "A"})
+      {:ok, action} = Goals.add_entry(c.coach, c.goal.id, %{kind: "action", title: "A"})
 
       for bad <- [foreign.id, action.id, "not-a-uuid"] do
         before = row_counts()
