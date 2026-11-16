@@ -592,7 +592,11 @@ defmodule PlatformWeb.GoalsLive do
         >
           Select a goal
         </p>
-        <GoalsCheckIn.screen :if={@screen && @screen.kind == :check} screen={@screen} choices={@check_choices} />
+        <GoalsCheckIn.screen
+          :if={@screen && @screen.kind == :check}
+          screen={@screen}
+          choices={@check_choices}
+        />
         <GoalsIdea.screen :if={@screen && @screen.kind == :idea} screen={@screen} />
         <GoalsRead.short_read :if={@page && @read && is_nil(@screen)} page={@page} focus={@read} />
         <GoalsPage.goal_page

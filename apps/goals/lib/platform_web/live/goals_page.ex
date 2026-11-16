@@ -257,7 +257,9 @@ defmodule PlatformWeb.GoalsPage do
 
     ~H"""
     <div class="mx-auto max-w-3xl p-6" data-role="goal-view" data-goal-id={@goal.id}>
-      <p :if={@from_brief} data-role="goal-brief-note" class="mb-3 text-xs text-subtle">You came here from today's briefing.</p>
+      <p :if={@from_brief} data-role="goal-brief-note" class="mb-3 text-xs text-subtle">
+        You came here from today's briefing.
+      </p>
       <.link
         navigate="/m/goals"
         class="-ml-2 mb-3 inline-flex min-h-11 items-center rounded px-2 font-semibold text-interactive focus-visible-ring lg:hidden"
@@ -389,10 +391,24 @@ defmodule PlatformWeb.GoalsPage do
       </section>
 
       <section :if={@page.notebook != []} data-role="goal-notebook">
-        <h3 class={sec_h()}>Notebook <span :if={@page.streak > 0} data-role="goal-notebook-streak" class="ml-2 rounded-full bg-warning-dim px-2 py-0.5 text-[11px] font-bold text-base-content">{@page.streak}-day streak</span></h3>
+        <h3 class={sec_h()}>
+          Notebook
+          <span
+            :if={@page.streak > 0}
+            data-role="goal-notebook-streak"
+            class="ml-2 rounded-full bg-warning-dim px-2 py-0.5 text-[11px] font-bold text-base-content"
+          >
+            {@page.streak}-day streak
+          </span>
+        </h3>
         <ul class="flex flex-col gap-3">
           <li :for={entry <- @page.notebook}>
-            <article class={card_class()} data-role="goal-notebook-entry" data-kind={entry.kind} data-ask-id={entry.details["ask_id"]}>
+            <article
+              class={card_class()}
+              data-role="goal-notebook-entry"
+              data-kind={entry.kind}
+              data-ask-id={entry.details["ask_id"]}
+            >
               <div class="mb-1.5 flex items-center gap-2">
                 <span class={tag_class()}>{Map.get(notebook_tags(), entry.kind, entry.kind)}</span>
               </div>
@@ -400,7 +416,13 @@ defmodule PlatformWeb.GoalsPage do
                 {entry.title}
               </h4>
               <p :if={present?(entry.body)} class="mt-1 text-sm text-base-content">{entry.body}</p>
-              <p :for={line <- Map.get(@page.answer_lines, entry.details["ask_id"], [])} data-role="goal-answer" class="mt-1 text-xs text-subtle">{line}</p>
+              <p
+                :for={line <- Map.get(@page.answer_lines, entry.details["ask_id"], [])}
+                data-role="goal-answer"
+                class="mt-1 text-xs text-subtle"
+              >
+                {line}
+              </p>
               <p class="mt-1.5 text-xs text-subtle">
                 <.author entry={entry} authors={@page.authors} /> ·
                 <time datetime={DateTime.to_iso8601(entry.occurred_at)}>
@@ -457,20 +479,47 @@ defmodule PlatformWeb.GoalsPage do
 
   defp up_next_card(assigns) do
     ~H"""
-    <section data-role="goal-up-next" data-kind={if @page.up_next, do: @page.up_next.kind, else: "caught-up"}>
+    <section
+      data-role="goal-up-next"
+      data-kind={if @page.up_next, do: @page.up_next.kind, else: "caught-up"}
+    >
       <h3 class={sec_h()}>Up next</h3>
       <div class={card_class()}>
         <div :if={@page.up_next}>
-          <span class={["rounded-md px-1.5 py-0.5 text-[11px] font-bold uppercase tracking-wide text-base-content", up_next_tag(@page.up_next.kind).class]}>{up_next_tag(@page.up_next.kind).label}</span>
-          <h4 class="mt-2 text-base font-semibold text-base-content">{if @page.up_next.kind == "practice", do: "Today's #{length(@page.up_next.ask.payload["cards"] || [])} cards are in your briefing", else: @page.up_next.ask.title}</h4>
-          <p :if={@page.up_next.kind == :idea} class="mt-1 text-sm text-base-content"><PlatformWeb.GoalsCheckIn.coach coach={@page.coach} /> has a new idea to try.</p>
-          <p :if={@page.up_next.kind == "question"} class="mt-1 text-sm text-base-content"><PlatformWeb.GoalsCheckIn.coach coach={@page.coach} /> drafted it. See what moved, and choose what to change.</p>
-          <p :if={@page.up_next.kind == "offer" && @page.up_next.ask.body} class="mt-1 whitespace-pre-line text-sm text-base-content">{@page.up_next.ask.body}</p>
-          <a href={up_next_href(@page)} class={[btn_primary(), "mt-3"]}>{up_next_label(@page.up_next.kind)}</a>
+          <span class={[
+            "rounded-md px-1.5 py-0.5 text-[11px] font-bold uppercase tracking-wide text-base-content",
+            up_next_tag(@page.up_next.kind).class
+          ]}>
+            {up_next_tag(@page.up_next.kind).label}
+          </span>
+          <h4 class="mt-2 text-base font-semibold text-base-content">
+            {if @page.up_next.kind == "practice",
+              do:
+                "Today's #{length(@page.up_next.ask.payload["cards"] || [])} cards are in your briefing",
+              else: @page.up_next.ask.title}
+          </h4>
+          <p :if={@page.up_next.kind == :idea} class="mt-1 text-sm text-base-content">
+            <PlatformWeb.GoalsCheckIn.coach coach={@page.coach} /> has a new idea to try.
+          </p>
+          <p :if={@page.up_next.kind == "question"} class="mt-1 text-sm text-base-content">
+            <PlatformWeb.GoalsCheckIn.coach coach={@page.coach} />
+            drafted it. See what moved, and choose what to change.
+          </p>
+          <p
+            :if={@page.up_next.kind == "offer" && @page.up_next.ask.body}
+            class="mt-1 whitespace-pre-line text-sm text-base-content"
+          >
+            {@page.up_next.ask.body}
+          </p>
+          <a href={up_next_href(@page)} class={[btn_primary(), "mt-3"]}>
+            {up_next_label(@page.up_next.kind)}
+          </a>
         </div>
         <div :if={is_nil(@page.up_next)}>
           <h4 class="text-base font-semibold text-base-content">You're all caught up</h4>
-          <p class="mt-1 text-sm text-subtle"><span :if={@page.next_wake_at}>The next check-in is ready on {PlatformWeb.GoalsCheckIn.weekday(@page.next_wake_at)}. </span>Your agents keep working on the plan in the meantime.</p>
+          <p class="mt-1 text-sm text-subtle">
+            <span :if={@page.next_wake_at}>The next check-in is ready on {PlatformWeb.GoalsCheckIn.weekday(@page.next_wake_at)}. </span>Your agents keep working on the plan in the meantime.
+          </p>
         </div>
       </div>
     </section>
