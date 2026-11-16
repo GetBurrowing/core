@@ -405,6 +405,20 @@ defmodule Platform.Goals.Brief do
     )
   end
 
+  defp undo_request_id(user, goal_id, entry_id) do
+    Repo.one(
+      from(e in children(user, Entry),
+        where:
+          e.goal_id == ^goal_id and e.author_user_id == ^user.id and
+            fragment("?->>'undo_of'", e.details) == ^entry_id and
+            fragment("?->>'request'", e.details) == "undo",
+        order_by: [asc: e.occurred_at, asc: e.inserted_at, asc: e.id],
+        select: e.id,
+        limit: 1
+      )
+    )
+  end
+
   def request_undo(user, goal_id, raw_entry_id, request) do
     with {:ok, goal} <- owned(user, goal_id), {:ok, entry_id} <- cast_id(raw_entry_id) do
       tx(fn ->
@@ -435,12 +449,35 @@ defmodule Platform.Goals.Brief do
             {:error, :not_undoable}
 
           true ->
+            # One immutable request identity; preference changes are separate,
+            # append-only signals. The coach retains the complete chronology.
+            anchor =
+              previous &&
+                (previous.details["undo_request_id"] || undo_request_id(user, goal.id, entry.id))
+
+            prefix =
+              cond do
+                is_nil(previous) -> "Undo: "
+                request == "keep" -> "Keep: "
+                true -> "Resume undo: "
+              end
+
+            body =
+              cond do
+                is_nil(previous) -> entry.details["undo_note"]
+                request == "keep" -> "Cancel the undo request; keep this action."
+                true -> "Ask the coach to resume the original undo request."
+              end
+
+            details = %{"request" => request, "undo_of" => entry.id}
+            details = if anchor, do: Map.put(details, "undo_request_id", anchor), else: details
+
             Goals.add_entry(user, goal.id, %{
               kind: "ask",
-              title: String.slice("Undo: " <> (entry.title || ""), 0, 200),
-              body: entry.details["undo_note"],
+              title: String.slice(prefix <> (entry.title || ""), 0, 200),
+              body: body,
               occurred_at: Clock.now(),
-              details: %{"request" => request, "undo_of" => entry.id}
+              details: details
             })
         end
       end)

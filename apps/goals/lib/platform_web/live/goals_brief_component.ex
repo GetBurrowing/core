@@ -12,6 +12,9 @@ defmodule PlatformWeb.GoalsBriefComponent do
   - The canvas kind resolves the renderer’s user tuple through Accounts; the
     shared deck still receives only a User. Nil viewers render no card text.
 
+  - One immutable Undo notebook entry identifies each action's request. Keep
+    and Resume undo entries preserve later preference changes, linked to that
+    original request; no notebook history or original action is rewritten.
   - Undo is a request for the next check-in, because the coach must perform
     the reversal; Cancel undo cancels that request.
   - The ask box sends a written question for the next check-in; there is no

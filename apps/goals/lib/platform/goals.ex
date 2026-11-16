@@ -653,6 +653,11 @@ defmodule Platform.Goals do
   def set_report_noted(actor, id, noted?),
     do: with(:ok <- check_enabled(), do: Platform.Goals.Brief.set_noted(actor, id, noted?))
 
+  @doc """
+  Records one immutable Undo request for an action. Later Keep/Resume preferences
+  append linked signals; repeating the current preference writes nothing. The
+  coach receives the full history, and the action itself is never changed.
+  """
   def request_undo(actor, goal_id, entry_id, request \\ "undo"),
     do:
       with(

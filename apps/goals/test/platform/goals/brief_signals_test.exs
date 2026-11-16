@@ -51,10 +51,38 @@ defmodule Platform.Goals.BriefSignalsTest do
     assert Enum.map(snapshot, & &1["id"]) == Enum.reverse(ids)
     for signal <- signals, do: assert(Repo.get!(Entry, signal.id) == signal)
     assert Enum.count(signals, &String.starts_with?(&1.title, "Undo: ")) == 1
+    [first | transitions] = signals
+
+    assert Enum.map(signals, & &1.title) == [
+             "Undo: Drafted the outline",
+             "Keep: Drafted the outline",
+             "Resume undo: Drafted the outline",
+             "Keep: Drafted the outline"
+           ]
+
+    for signal <- transitions, do: assert(signal.details["undo_request_id"] == first.id)
     assert original.inserted_at == original.updated_at
     {:ok, _} = Goals.prepare_brief(c.owner, date())
     {:ok, [report]} = Goals.brief_items(c.owner, date())
     assert Enum.find(report.entries, &(&1.id == entry.id)).undo == :available
+
+    # Changes after the coach has seen the first cycle still append history.
+    {:ok, _} = Goals.close_wake_up(c.coach, wake.id, "wait", %{reason: "Read the preferences"})
+
+    later =
+      for request <- ["undo", "keep"] do
+        put_now(DateTime.add(Clock.now(), 1, :second))
+        {:ok, signal} = Goals.request_undo(c.owner, c.goal.id, entry.id, request)
+        assert signal.details["undo_request_id"] == first.id
+        signal
+      end
+
+    next_wake = fire(c.goal)
+    all_ids = Enum.map(signals ++ later, & &1.id)
+    seen = Enum.filter(next_wake.briefing["since_last"]["entries"], &(&1["id"] in all_ids))
+    assert Enum.map(seen, & &1["id"]) == Enum.reverse(Enum.map(later, & &1.id))
+    for signal <- signals ++ later, do: assert(Repo.get!(Entry, signal.id) == signal)
+    assert Repo.get!(Entry, entry.id) == original
   end
 
   test "questions are bounded and report linkage cannot point at someone else's item", c do
