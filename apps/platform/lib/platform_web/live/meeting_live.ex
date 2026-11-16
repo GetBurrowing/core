@@ -269,6 +269,7 @@ defmodule PlatformWeb.MeetingLive do
   alias Platform.Meetings.Countdown
   alias Platform.Meetings.IntentCorrection
   alias Platform.Meetings.IntentCorrections
+  alias Platform.Meetings.IntentModel
   alias Platform.Meetings.AgentActivity
   alias Platform.Meetings.IntentQueue
   alias Platform.Meetings.Invite
@@ -717,6 +718,8 @@ defmodule PlatformWeb.MeetingLive do
     # it here so a guest who joins a meeting that is ALREADY muted sees the
     # badge on first paint rather than only after the next toggle.
     |> assign(:intent_muted?, Meetings.intent_muted?(meeting.id))
+    # Install-level "meeting intent is off" chip (task 01a1e5da stage 3).
+    |> assign(:intent_model_off?, intent_model_off?())
     |> assign(:participants, participants)
     |> assign(:removing_agent_ids, MapSet.new())
     |> assign(:agent_removal_errors, %{})
@@ -850,6 +853,11 @@ defmodule PlatformWeb.MeetingLive do
   # way there.
   defp seed_calendar_now(socket), do: assign(socket, :calendar_now, DateTime.utc_now())
 
+  # True only when the `meetings.intent_classify` assignee exists but no
+  # model route resolves (task 01a1e5da). `{:off, :no_assignee}` is the
+  # deliberate off state and renders nothing.
+  defp intent_model_off?, do: IntentModel.status() == {:off, :not_configured}
+
   # Defaults for the intents-collapse bar. `:intents_visible?` is false
   # here on purpose: absent-until-proven-assigned is the safe direction
   # for a role gate, and `handle_params/3` resolves the real answer.
@@ -871,6 +879,9 @@ defmodule PlatformWeb.MeetingLive do
     # renders in the top bar, which the `:index` action and the guest
     # surface also reach.
     |> assign(:intent_muted?, false)
+    # Same pre-resolution default for the install-level intent-off chip
+    # (task 01a1e5da stage 3); the guest mount and `handle_params/3` read it.
+    |> assign(:intent_model_off?, false)
     # The armed-candidate rail (task 01a03fba stage 4). Seeded EMPTY and
     # ungated: unlike `:intents_visible?` this rail has no role gate, so
     # the only reason it is empty here is that no meeting is resolved
@@ -1239,6 +1250,10 @@ defmodule PlatformWeb.MeetingLive do
           # inherited from the seed: a viewer joining a meeting that was
           # muted before they arrived must see it muted on first paint.
           |> assign(:intent_muted?, Meetings.intent_muted?(meeting.id))
+          # The classifier has an assignee but no model to talk to (task
+          # 01a1e5da stage 3). Read here, not seeded, so it is true on
+          # first paint.
+          |> assign(:intent_model_off?, intent_model_off?())
           # Armed candidates, resolved from the rows rather than left at
           # the seed's `[]`: a participant joining a meeting whose cards
           # were already counting down must be able to stop them on

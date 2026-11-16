@@ -1352,6 +1352,24 @@
               <span class="sr-only sm:not-sr-only">Agents muted</span>
             </.chip>
 
+            <%!-- Meeting intent is off install-wide (task 01a1e5da stage 3):
+             the classifier has an assignee but no model route, so nothing
+             said in this meeting will become an intent. Same rules as the
+             mute chip above: never hidden by viewport width, and the
+             bolt-slash glyph carries it without colour. An unassigned
+             `meetings.intent_classify` is the deliberate off state and
+             renders nothing. --%>
+            <.chip
+              :if={@intent_model_off?}
+              tone="warning"
+              class="gap-1 font-mono text-[10px]"
+              data-role="meeting-intent-off-badge"
+              title="Meeting intent is off: no model configured"
+            >
+              <span class="hero-bolt-slash size-3.5" aria-hidden="true"></span>
+              <span class="sr-only sm:not-sr-only">Intent off</span>
+            </.chip>
+
             <%!-- Mic / Camera / Share / Leave USED to sit here. Task
              01a05b14 stage 2 moved `<CallShell.call_controls>` out of
              this bar and into a centred 46px row at the BOTTOM of the
