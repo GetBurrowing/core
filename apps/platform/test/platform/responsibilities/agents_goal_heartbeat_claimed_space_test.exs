@@ -148,7 +148,12 @@ defmodule Platform.Responsibilities.AgentsGoalHeartbeatClaimedSpaceTest do
   # role path production walks, not an override.
   defp wire_leader! do
     Repo.insert!(
-      %Role{key: @role_key, name: "Agents Leader", description: "test fixture", icon: "hero-bolt"},
+      %Role{
+        key: @role_key,
+        name: "Agents Leader",
+        description: "test fixture",
+        icon: "hero-bolt"
+      },
       on_conflict: :nothing,
       conflict_target: :key
     )
