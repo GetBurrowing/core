@@ -46,6 +46,7 @@ defmodule Platform.Goals.Goal do
     field(:agent_mode, :string, default: "advise")
     field(:rhythm, :string, default: "weekly")
     field(:rhythm_weekday, :integer)
+    field(:retro_every, :integer)
     field(:outreach, :string, default: "gentle")
 
     has_many(:stops, Platform.Goals.Stop)
@@ -56,7 +57,7 @@ defmodule Platform.Goals.Goal do
   end
 
   @editable ~w(coach_agent_id title why kind status unit target_value source_key source_settings
-               agent_mode rhythm rhythm_weekday outreach)a
+               agent_mode rhythm rhythm_weekday outreach retro_every)a
 
   @doc "The allowed values of each checked column."
   def kinds, do: @kinds
@@ -82,6 +83,7 @@ defmodule Platform.Goals.Goal do
     |> validate_inclusion(:rhythm, @rhythms)
     |> validate_inclusion(:outreach, @outreaches)
     |> validate_number(:rhythm_weekday, greater_than_or_equal_to: 1, less_than_or_equal_to: 7)
+    |> validate_number(:retro_every, greater_than_or_equal_to: 2, less_than_or_equal_to: 60)
     |> name_constraints()
   end
 
@@ -93,6 +95,7 @@ defmodule Platform.Goals.Goal do
   @spec name_constraints(Ecto.Changeset.t()) :: Ecto.Changeset.t()
   def name_constraints(changeset) do
     changeset
+    |> check_constraint(:retro_every, name: :goals_retro_every)
     |> check_constraint(:kind, name: :goals_kind_check)
     |> check_constraint(:status, name: :goals_status_check)
     |> check_constraint(:agent_mode, name: :goals_agent_mode_check)

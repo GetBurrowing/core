@@ -79,4 +79,19 @@ defmodule Platform.Goals.MigrationTest do
     assert source =~ ~r/^  # old-code-compatible: creates five new goal tables only;/m
     refute version in String.split(File.read!(@irreversible), "\n", trim: true)
   end
+
+  test "retro migration carries waiver and is absent from irreversible list" do
+    version = "20261115164425"
+
+    source =
+      File.read!(
+        Path.expand(
+          "../../../priv/repo/migrations/#{version}_add_goal_retro_and_pacing.exs",
+          __DIR__
+        )
+      )
+
+    assert Regex.match?(~r/^\s*# old-code-compatible:/m, source)
+    refute version in String.split(File.read!(@irreversible), "\n", trim: true)
+  end
 end

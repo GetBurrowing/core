@@ -9,13 +9,15 @@ defmodule Platform.Goals.DisabledTest do
     Application.put_env(:goals, :enabled, false)
     before = counts()
     functions = Goals.__info__(:functions) |> Enum.reject(fn {name, _} -> name == :enabled? end)
-    assert length(functions) >= 55
+    assert length(functions) >= 57
 
     # Goals 4/8: the page reads are in the iterated set.
     for f <- [describe_goals: 1, describe_goal: 2, list_audience_options: 2],
         do: assert(f in functions, "#{inspect(f)} is not exported")
 
     for f <- [
+          expected_pace: 2,
+          expected_pace: 3,
           prepare_brief: 2,
           brief_items: 2,
           brief_summary: 2,

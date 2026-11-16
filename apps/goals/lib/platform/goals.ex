@@ -376,13 +376,21 @@ defmodule Platform.Goals do
     end
   end
 
-  @doc "Reads the current population's latest number, previous value and optional baseline."
+  @doc "Extends Goals 2/8: the same reader includes first and accepts as_of to bound every reading by measured_at."
   def goal_number(actor, goal_id, opts \\ []) do
     with :ok <- check_enabled(),
          {:ok, goal} <- fetch_visible(actor, goal_id, false) do
       with_source(goal, fn _source, description, population ->
         number_result(actor, goal, description, population, opts)
       end)
+    end
+  end
+
+  @doc "Reads the hoped-for line using the shared number reader; never writes."
+  def expected_pace(actor, goal_id, opts \\ []) do
+    with :ok <- check_enabled(),
+         {:ok, goal} <- fetch_visible(actor, goal_id, false) do
+      Platform.Goals.Retro.expected_pace(actor, goal, opts)
     end
   end
 
@@ -1205,6 +1213,12 @@ defmodule Platform.Goals do
         where: r.source_key == ^goal.source_key and r.population == ^population
       )
 
+    query =
+      case Keyword.get(opts, :as_of) do
+        %DateTime{} = cutoff -> from(r in query, where: r.measured_at <= ^cutoff)
+        _ -> query
+      end
+
     case Repo.all(from(r in query, limit: 2)) do
       [] ->
         cannot_measure(:no_reading_yet, goal.source_key, description.label)
@@ -1225,6 +1239,13 @@ defmodule Platform.Goals do
          {:reading,
           %{
             source: description,
+            first:
+              Repo.one(
+                from(r in exclude(query, :order_by),
+                  order_by: [asc: r.measured_at, asc: r.inserted_at, asc: r.id],
+                  limit: 1
+                )
+              ),
             latest: latest,
             previous: previous,
             delta: reading_difference(latest, previous),

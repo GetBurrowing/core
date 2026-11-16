@@ -9,6 +9,7 @@ defmodule Platform.Goals.BriefItem do
     belongs_to(:user, Platform.Accounts.User)
     belongs_to(:goal, Platform.Goals.Goal)
     belongs_to(:ask, Platform.Goals.Ask)
+    belongs_to(:entry, Platform.Goals.Entry)
     field(:digest_date, :date)
     field(:kind, :string)
     field(:entry_ids, {:array, :binary_id}, default: [])
@@ -31,8 +32,11 @@ defmodule Platform.Goals.BriefItem do
       :ignored_at
     ])
     |> validate_required([:user_id, :goal_id, :digest_date, :kind, :entry_ids])
-    |> validate_inclusion(:kind, ~w(report ask))
+    |> validate_inclusion(:kind, ~w(report ask note))
     |> check_constraint(:kind, name: :goal_brief_items_kind)
+    |> check_constraint(:entry_id, name: :goal_brief_items_note_shape)
+    |> unique_constraint([:user_id, :entry_id], name: :goal_brief_items_user_id_entry_id_index)
+    |> foreign_key_constraint(:entry_id)
     |> check_constraint(:ask_id, name: :goal_brief_items_shape)
     |> unique_constraint([:user_id, :ask_id], name: :goal_brief_items_user_id_ask_id_index)
     |> unique_constraint([:user_id, :goal_id, :digest_date],

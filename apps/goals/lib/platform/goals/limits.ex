@@ -27,4 +27,19 @@ defmodule Platform.Goals.Limits do
     defaults = %{"off" => 0, "gentle" => 1, "pushy" => 3}
     Map.get(value(:max_open_asks, %{}), outreach, Map.fetch!(defaults, outreach))
   end
+
+  def retro_every(rhythm), do: rhythm_value(:retro_every, rhythm, [7, 5, 4, 2])
+  def pace_after_ignored_briefs, do: value(:pace_after_ignored_briefs, 3)
+  def paced_every(rhythm), do: rhythm_value(:paced_every, rhythm, [7, 5, 2, 2])
+  def paced_max_open_asks, do: value(:paced_max_open_asks, 1)
+  def flat_retros_before_goal_change, do: value(:flat_retros_before_goal_change, 3)
+  def flat_within, do: value(:flat_within, Decimal.new(0))
+  def on_track_tolerance_percent, do: value(:on_track_tolerance_percent, 0)
+  def max_retro_rows, do: value(:max_retro_rows, 10)
+  def max_retro_predictions, do: value(:max_retro_predictions, 50)
+
+  defp rhythm_value(key, rhythm, numbers) do
+    defaults = Map.new(Enum.zip(~w(daily weekdays weekly biweekly), numbers))
+    Map.get(value(key, %{}), rhythm, Map.fetch!(defaults, rhythm))
+  end
 end

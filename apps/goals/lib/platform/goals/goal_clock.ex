@@ -14,6 +14,7 @@ defmodule Platform.Goals.GoalClock do
     field(:schedule_key, :string)
     field(:last_woken_at, :utc_datetime_usec)
     field(:stalled_at, :utc_datetime_usec)
+    field(:paced_at, :utc_datetime_usec)
     timestamps()
   end
 
