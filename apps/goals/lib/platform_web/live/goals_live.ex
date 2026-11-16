@@ -136,6 +136,45 @@ defmodule PlatformWeb.GoalsLive do
    32. The pace sentence omits the sample 52 joined this week, and adds
        an on-track form the canvas does not show. If things go sideways
        remains absent because there is no stored field or owner.
+
+  Goals 5/8 stage 3 (the New goal screen, `PlatformWeb.GoalsNew`, at
+  `/m/goals?new=1`):
+
+   33. The box stays under the stream for the whole conversation (the
+       canvas hides it after the first send; a real person has to be able
+       to type).
+   34. The greeting is screen copy shown in the agent's message style; the
+       agent did not post it.
+   35. The journey card, the summary card and Create goal are drawn by the
+       page in the stream, not inside an agent message. The journey card
+       sits at the time the stops were settled, so it comes just before the
+       agent's message about them (the agent records, then speaks).
+   36. The settled lines use general wording; the canvas lines carry sample
+       detail ("You film.", "from your flash cards").
+   37. No "Sign in to YouTube" reply exists because no connected source is
+       built; the agent offers the sources the install has.
+   38. "What would you try first?", the tick list and "Looks right, open
+       the goal" are not built: suggestions are recorded at check-ins
+       (member 3). "Open the goal" replaces the last chip. The toast after
+       opening the goal is not built.
+   39. The conversation is the person's ordinary direct conversation with
+       the lead agent, so it also appears in Chat, and anything else said
+       in that DM after the opening message shows here too.
+   40. The canvas screen `idea` (accept or decline a suggestion) belongs to
+       Goals 6/8.
+   41. Built and not in the canvas: the "Open the goal" chip, "Start over",
+       the no-lead-agent empty state, the offline line, the
+       changed-proposal toast, the shared-suggestion privacy line, and the
+       disabled Send and Create goal while a click is in flight.
+   42. The stream's journey card is member 4's journey component unchanged:
+       its sub-line is "by {day month}" or the caption, without the
+       canvas's " · {theme}".
+   43. The desktop New goal button and the phone chip are links (they
+       navigate to `/m/goals?new=1`), styled as the canvas's button and
+       chip.
+   44. If the lead role moves to another agent mid-conversation, the screen
+       names the conversation's agent from its DM participant row, in the
+       default colour slot.
   """
   use PlatformWeb, :live_view
 
@@ -149,6 +188,7 @@ defmodule PlatformWeb.GoalsLive do
   alias PlatformWeb.GoalsIdea
   alias PlatformWeb.GoalsRetro
   alias PlatformWeb.GoalsSettings
+  alias PlatformWeb.GoalsNew
 
   @impl true
   def mount(_params, session, socket) do
@@ -172,6 +212,7 @@ defmodule PlatformWeb.GoalsLive do
         screen: nil,
         check_choices: %{},
         retro_question_sent: false,
+        new: nil,
         from_brief: is_map(query) and query["from"] == "brief"
       )
 
@@ -182,7 +223,13 @@ defmodule PlatformWeb.GoalsLive do
                 Map.has_key?(query, "retro")),
            do: raise(NotFoundError)
 
-        {:ok, assign(socket, card: nil, page: nil)}
+        socket = assign(socket, card: nil, page: nil)
+
+        {:ok,
+         if(is_map(query) and Map.has_key?(query, "new"),
+           do: GoalsNew.mount(socket, user),
+           else: socket
+         )}
 
       goal_id ->
         with {:ok, card} <- Goals.describe_goal(user, goal_id),
@@ -494,7 +541,14 @@ defmodule PlatformWeb.GoalsLive do
     end
   end
 
+  # Goals 5/8: the New goal screen owns every `new_*` event.
+  def handle_event("new_" <> _ = event, params, socket),
+    do: GoalsNew.handle_event(event, params, socket)
+
   def handle_event(_event, _params, socket), do: {:noreply, socket}
+
+  @impl true
+  def handle_info(message, socket), do: {:noreply, GoalsNew.handle_info(message, socket)}
 
   defp open_screen(socket, query) when is_map(query) do
     case {query["check"], query["idea"], query["retro"]} do
@@ -639,7 +693,7 @@ defmodule PlatformWeb.GoalsLive do
     <div class="relative flex h-full min-h-0" data-role="goals-page">
       <%!-- Below lg the phone list is the screen; with a goal open it steps
            aside for the goal view (Inbox's breakpoints). --%>
-      <div :if={is_nil(@card)} class="min-w-0 flex-1 lg:hidden">
+      <div :if={is_nil(@card) and is_nil(@new)} class="min-w-0 flex-1 lg:hidden">
         <GoalsList.phone_list rows={@rows} />
       </div>
       <%!-- Two panes at lg and up: the list as a 380px column. --%>
@@ -652,13 +706,14 @@ defmodule PlatformWeb.GoalsLive do
       <section
         class={[
           "min-w-0 flex-1 overflow-auto bg-base-200",
-          is_nil(@card) && "max-lg:hidden"
+          is_nil(@card) && is_nil(@new) && "max-lg:hidden"
         ]}
         data-role="goals-detail-pane"
         aria-label="Goal"
       >
+        <GoalsNew.screen :if={@new} new={@new} />
         <p
-          :if={is_nil(@card)}
+          :if={is_nil(@card) and is_nil(@new)}
           class="flex h-full items-center justify-center p-6 text-sm text-subtle"
           data-role="goals-detail-empty"
         >

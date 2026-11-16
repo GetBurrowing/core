@@ -169,7 +169,16 @@ defmodule PlatformWeb.GoalsList do
             What you're working towards, and how it's going. Only you see your goals until you open them up.
           </p>
         </div>
-        <span data-goals-slot="new-goal" class="shrink-0"></span>
+        <span data-goals-slot="new-goal" class="shrink-0">
+          <.link
+            navigate="/m/goals?new=1"
+            class="btn btn-primary btn-sm min-h-11 focus-visible-ring lg:min-h-0"
+            data-act="newgoal"
+            data-role="goals-new-button"
+          >
+            New goal
+          </.link>
+        </span>
       </header>
 
       <.empty :if={@rows == []} />
@@ -267,7 +276,15 @@ defmodule PlatformWeb.GoalsList do
           <.icon name="hero-chevron-left" class="size-[22px]" />
         </button>
         <h1 class="min-w-0 flex-1 truncate text-[17px] font-semibold text-base-content">Goals</h1>
-        <span data-goals-slot="new-goal" class="shrink-0"></span>
+        <span data-goals-slot="new-goal" class="shrink-0">
+          <.link
+            navigate="/m/goals?new=1"
+            class="focus-visible-ring inline-flex h-8 items-center rounded-field border border-edge bg-base-100 px-3 text-sm font-medium text-base-content"
+            data-role="goals-new-chip"
+          >
+            New goal
+          </.link>
+        </span>
       </header>
       <div class="min-h-0 flex-1 overflow-y-auto overscroll-contain clears-tab-bar">
         <.empty :if={@rows == []} />

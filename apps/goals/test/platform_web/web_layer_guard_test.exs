@@ -16,7 +16,7 @@ defmodule PlatformWeb.GoalsWebLayerGuardTest do
   @lib Path.expand("../../lib", __DIR__)
   @web Path.join(@lib, "platform_web")
 
-  @schemas ~w(Goal Stop Grant Entry Reading)
+  @schemas ~w(Goal Stop Grant Entry Reading Proposal)
   @data_patterns [
     {:repo, ~r/\bRepo\./},
     {:ecto_query, ~r/\bEcto\.Query\b/},

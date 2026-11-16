@@ -926,11 +926,11 @@ defmodule PlatformWeb.GoalsPage do
   defp nudges(%{outreach: "off"}), do: "Nudges: off."
   defp nudges(_goal), do: "Nudges: gentle."
 
-  defp roles(%{agent_mode: "do"}, coach),
+  def roles(%{agent_mode: "do"}, coach),
     do: "#{coach} does the work and asks before anything goes public."
 
-  defp roles(%{agent_mode: "coach"}, coach), do: "You practise. #{coach} plans and prepares."
-  defp roles(_goal, coach), do: "#{coach} advises. You do the work."
+  def roles(%{agent_mode: "coach"}, coach), do: "You practise. #{coach} plans and prepares."
+  def roles(_goal, coach), do: "#{coach} advises. You do the work."
 
   defp verb("do"), do: "leads"
   defp verb("coach"), do: "coaches"
