@@ -669,7 +669,11 @@ defmodule PlatformWeb.GoalsLive do
           screen={@screen}
           choices={@check_choices}
         />
-        <GoalsRetro.screen :if={@screen && @screen.kind == :retro} screen={@screen} sent={@retro_question_sent} />
+        <GoalsRetro.screen
+          :if={@screen && @screen.kind == :retro}
+          screen={@screen}
+          sent={@retro_question_sent}
+        />
         <GoalsIdea.screen :if={@screen && @screen.kind == :idea} screen={@screen} />
         <GoalsRead.short_read :if={@page && @read && is_nil(@screen)} page={@page} focus={@read} />
         <GoalsPage.goal_page

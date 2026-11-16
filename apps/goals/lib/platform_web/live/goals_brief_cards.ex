@@ -180,7 +180,13 @@ defmodule PlatformWeb.GoalsBriefCards do
         Ask {@item.goal.coach_name || "your coach"}
       </button>
     </div>
-    <.question_box :if={@ask_open} id={@item.id} coach_name={@item.goal.coach_name || "your coach"} target={@target} blank={@blank} />
+    <.question_box
+      :if={@ask_open}
+      id={@item.id}
+      coach_name={@item.goal.coach_name || "your coach"}
+      target={@target}
+      blank={@blank}
+    />
     <div
       :for={question <- @item.questions}
       class="mt-3 text-sm text-subtle"
@@ -204,11 +210,27 @@ defmodule PlatformWeb.GoalsBriefCards do
     <form phx-submit={@event} phx-target={@target} data-role="goals-brief-ask" class="mt-3 space-y-2">
       <input type="hidden" name="item_id" value={@id} />
       <label class="sr-only" for={"goal-question-" <> @id}>Ask {@coach_name} about this</label>
-      <input id={"goal-question-" <> @id} name="question" type="text" maxlength="500" class={field()}
-        placeholder={if @blank, do: "Type a question first", else: "Ask #{@coach_name} about this"} />
+      <input
+        id={"goal-question-" <> @id}
+        name="question"
+        type="text"
+        maxlength="500"
+        class={field()}
+        placeholder={if @blank, do: "Type a question first", else: "Ask #{@coach_name} about this"}
+      />
       <div class="flex gap-2">
         <button type="submit" class={btn_primary()} data-action="ask-send">Send</button>
-        <button :if={@cancel} type="button" class={btn_ghost()} phx-click="ask-cancel" phx-target={@target} phx-value-item_id={@id} data-action="ask-cancel">Cancel</button>
+        <button
+          :if={@cancel}
+          type="button"
+          class={btn_ghost()}
+          phx-click="ask-cancel"
+          phx-target={@target}
+          phx-value-item_id={@id}
+          data-action="ask-cancel"
+        >
+          Cancel
+        </button>
       </div>
     </form>
     """

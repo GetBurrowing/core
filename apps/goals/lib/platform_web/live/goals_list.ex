@@ -84,7 +84,16 @@ defmodule PlatformWeb.GoalsList do
 
   defp pace_pill(assigns) do
     ~H"""
-    <span :if={@pace} class={["inline-block rounded-full px-2 py-0.5 text-[11px] font-semibold text-base-content", if(@pace && @pace.state == :behind, do: "bg-warning-dim", else: "bg-success-dim")]} data-role="goal-pace-pill">{if @pace && @pace.state == :behind, do: "A little behind", else: "On track"}</span>
+    <span
+      :if={@pace}
+      class={[
+        "inline-block rounded-full px-2 py-0.5 text-[11px] font-semibold text-base-content",
+        if(@pace.state == :behind, do: "bg-warning-dim", else: "bg-success-dim")
+      ]}
+      data-role="goal-pace-pill"
+    >
+      {if @pace.state == :behind, do: "A little behind", else: "On track"}
+    </span>
     """
   end
 
@@ -298,7 +307,9 @@ defmodule PlatformWeb.GoalsList do
             {@row.short_time}
           </time>
         </span>
-        <span class="mt-0.5 block text-sm tabular-nums text-base-content">{@row.number_line} <.pace_pill pace={@row.pace} /></span>
+        <span class="mt-0.5 block text-sm tabular-nums text-base-content">
+          {@row.number_line} <.pace_pill pace={@row.pace} />
+        </span>
         <span class="mt-0.5 flex min-w-0 items-center gap-1.5 text-xs text-subtle">
           <span class="truncate">{@row.who}</span>
           <GoalsComponents.privacy_chip privacy={@row.privacy} />

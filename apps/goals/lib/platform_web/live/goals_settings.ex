@@ -52,7 +52,12 @@ defmodule PlatformWeb.GoalsSettings do
         selected={@settings["agent_mode"]}
         options={[{"do", "Does the work"}, {"advise", "Advises"}, {"coach", "Coaches"}]}
       />
-      <.group field="retro_every" title="Retro" selected={to_string(@settings["retro_every"] || "")} options={retro_options(@settings["rhythm"])} />
+      <.group
+        field="retro_every"
+        title="Retro"
+        selected={to_string(@settings["retro_every"] || "")}
+        options={retro_options(@settings["rhythm"])}
+      />
       <:actions>
         <button type="button" phx-click="save_settings" class="btn btn-primary">Save</button>
       </:actions>
