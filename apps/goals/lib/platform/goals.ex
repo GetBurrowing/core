@@ -24,7 +24,7 @@ defmodule Platform.Goals do
   alias Platform.Accounts.User
   alias Platform.Agents.Agent
   alias Platform.Chat.Participant
-  alias Platform.Goals.{Entry, Goal, Grant, Reading, Sources, Stop, Visibility}
+  alias Platform.Goals.{Entry, Goal, GoalTasks, Grant, Reading, Sources, Stop, Visibility}
   alias Platform.Repo
   alias Platform.Tenancy.OrgMembership
 
@@ -510,24 +510,26 @@ defmodule Platform.Goals do
                :ok <- prediction_required(outcome, attrs),
                {:ok, entry_attrs} <- outcome_entry(outcome, attrs, wake),
                {:ok, ask} <- maybe_ask(actor, goal, wake, outcome, attrs),
-               {:ok, task} <- maybe_task(actor, goal, outcome, attrs),
-               entry_attrs = link_entry_attrs(entry_attrs, ask, task),
+               {:ok, tasks} <- maybe_tasks(actor, goal, outcome, attrs),
+               entry_attrs = link_entry_attrs(entry_attrs, ask, tasks),
                {:ok, entry} <- add_entry(actor, goal.id, entry_attrs),
-               :ok <- attach_outcome(actor, goal, wake, entry, ask, task),
+               :ok <- attach_outcome(actor, goal, wake, entry, ask, tasks),
                {:ok, closed} <- claim_close(wake, outcome, entry) do
             {:ok,
-             %{wake_up: closed, entry: entry, ask: ask && %{ask | entry_id: entry.id}, task: task}}
+             %{
+               wake_up: closed,
+               entry: entry,
+               ask: ask && %{ask | entry_id: entry.id},
+               task: List.first(tasks),
+               tasks: tasks
+             }}
           end
         end)
 
-      case result do
-        {:ok, %{task: task}} when not is_nil(task) ->
-          Platform.Tasks.maybe_start_planning_on_create(task)
-          result
+      with {:ok, %{tasks: tasks}} <- result,
+           do: Enum.each(tasks, &Platform.Tasks.maybe_start_planning_on_create/1)
 
-        _ ->
-          result
-      end
+      result
     end
   end
 
@@ -848,10 +850,14 @@ defmodule Platform.Goals do
              status: t.status,
              open: is_nil(t.deleted_at) and t.status not in ^closed,
              wake_up_id: l.wake_up_id,
-             linked_at: l.inserted_at
+             linked_at: l.inserted_at,
+             phase_assignees: t.phase_assignees,
+             assignee_id: t.assignee_id,
+             assignee_type: t.assignee_type
            }
          )
-       )}
+       )
+       |> GoalTasks.annotate()}
     end
   end
 
@@ -865,11 +871,12 @@ defmodule Platform.Goals do
              {:ok, goal} <- fetch_visible(actor, goal_id, false),
              :ok <- check_coach(actor, goal),
              :ok <- task_mode(goal),
-             :ok <- task_cap(actor, goal),
+             :ok <- GoalTasks.check_cap(actor, goal, 1),
              {:ok, id} <- project_task_id(task_id),
              %Platform.Tasks.Task{} = task <-
                Repo.one(from(t in Platform.Tasks.Task, where: t.id == ^id)),
-             {:ok, _} <- available_project(actor, goal, task.project_id),
+             {:ok, _} <- GoalTasks.available_project(actor, goal, task.project_id),
+             :ok <- GoalTasks.check_assignee(actor, goal, task),
              :ok <- unlinked(task.id) do
           insert_task_link(
             actor,
@@ -921,7 +928,7 @@ defmodule Platform.Goals do
   defp outcome_allowed(%{agent_mode: "advise"}, "do", _), do: {:error, :mode_forbids_do}
 
   defp outcome_allowed(goal, "do", attrs) do
-    if field_attr(attrs, :task), do: task_mode(goal), else: :ok
+    if field_attr(attrs, :task) in [nil, []], do: :ok, else: task_mode(goal)
   end
 
   defp outcome_allowed(%{outreach: "off"}, "ask", _), do: {:error, :outreach_off}
@@ -1065,32 +1072,6 @@ defmodule Platform.Goals do
     if valid, do: :ok, else: {:error, :addressee_cannot_see_goal}
   end
 
-  defp task_cap(actor, goal) do
-    closed = Platform.Goals.Sources.TaskCount.closed_statuses()
-
-    count =
-      Repo.aggregate(
-        from(l in children(actor, Platform.Goals.TaskLink, goal.id),
-          join: t in Platform.Tasks.Task,
-          on: t.id == l.task_id,
-          where: is_nil(t.deleted_at) and t.status not in ^closed
-        ),
-        :count
-      )
-
-    if count < Platform.Goals.Limits.max_open_tasks(), do: :ok, else: {:error, :task_cap_reached}
-  end
-
-  defp available_project(actor, goal, id) do
-    with {:ok, project} <- Platform.Goals.Sources.TaskCount.live_project(goal, id),
-         home = Platform.Experiments.Tools.home_org(actor),
-         true <- home == :root or home == {:tenant, project.org_id} do
-      {:ok, project}
-    else
-      _ -> {:error, :project_not_available}
-    end
-  end
-
   defp project_task_id(id) do
     case Platform.UUID.cast(id) do
       {:ok, id} -> {:ok, id}
@@ -1098,49 +1079,31 @@ defmodule Platform.Goals do
     end
   end
 
-  defp maybe_task(actor, goal, "do", attrs) do
-    case field_attr(attrs, :task) do
-      nil ->
-        {:ok, nil}
+  defp maybe_tasks(actor, goal, "do", attrs),
+    do: GoalTasks.create_for_wake_up(actor, goal, field_attr(attrs, :task))
 
-      task_attrs when is_map(task_attrs) ->
-        with :ok <- task_cap(actor, goal),
-             {:ok, project} <- available_project(actor, goal, field_attr(task_attrs, :project_id)),
-             {:ok, task} <-
-               Platform.Tasks.create_task(%{
-                 project_id: project.id,
-                 title: field_attr(task_attrs, :title),
-                 description: field_attr(task_attrs, :description),
-                 kind: field_attr(task_attrs, :kind) || "chore",
-                 priority: field_attr(task_attrs, :priority) || "medium",
-                 metadata: %{"source" => "goals.wake_up"}
-               }) do
-          one = %{"assignee_type" => "agent", "assignee_id" => actor.id}
+  defp maybe_tasks(_, _, _, _), do: {:ok, []}
 
-          Platform.Tasks.set_phase_assignees(
-            task,
-            Map.new(~w(planning execution review), &{&1, one})
-          )
-        end
-
-      _ ->
-        {:error, :project_not_available}
-    end
-  end
-
-  defp maybe_task(_, _, _, _), do: {:ok, nil}
-
-  defp link_entry_attrs(attrs, ask, task) do
+  defp link_entry_attrs(attrs, ask, tasks) do
     details = attrs.details
     details = if ask, do: Map.put(details, "ask_id", ask.id), else: details
-    details = if task, do: Map.put(details, "task_id", task.id), else: details
+
+    details =
+      case tasks do
+        [first | _] ->
+          Map.merge(details, %{"task_id" => first.id, "task_ids" => Enum.map(tasks, & &1.id)})
+
+        [] ->
+          details
+      end
+
     %{attrs | details: details}
   end
 
-  defp attach_outcome(actor, goal, wake, entry, ask, task) do
+  defp attach_outcome(actor, goal, wake, entry, ask, tasks) do
     if ask, do: Repo.update!(Ecto.Changeset.change(ask, entry_id: entry.id))
 
-    if task do
+    for task <- tasks do
       case insert_task_link(actor, goal, task, wake.id, entry.id) do
         {:ok, _} -> :ok
         {:error, reason} -> Repo.rollback(reason)

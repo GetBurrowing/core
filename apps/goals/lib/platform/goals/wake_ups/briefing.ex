@@ -50,6 +50,7 @@ defmodule Platform.Goals.WakeUps.Briefing do
         |> Map.put("target_value", scalar(goal.target_value))
         |> Map.put("stops", Enum.map(stops, &fields(&1, ~w(position label due_on reached_on)a))),
       "number" => number(actor, goal, wake_up, result),
+      "contributors" => contributors(actor, goal),
       "since_last" => %{
         "previous" => if(previous, do: fields(previous, [:status, :outcome]), else: nil),
         "finished_tasks" => finished_tasks(actor, goal, wake_up),
@@ -166,7 +167,15 @@ defmodule Platform.Goals.WakeUps.Briefing do
       from([l, _g, t] in task_rows(actor, goal),
         where:
           is_nil(l.reported_wake_up_id) and (t.status in ^closed or not is_nil(t.deleted_at)),
-        select: %{id: l.id, task_id: t.id, title: t.title, status: t.status}
+        select: %{
+          id: l.id,
+          task_id: t.id,
+          title: t.title,
+          status: t.status,
+          phase_assignees: t.phase_assignees,
+          assignee_id: t.assignee_id,
+          assignee_type: t.assignee_type
+        }
       )
 
     {:ok, rows} =
@@ -178,7 +187,17 @@ defmodule Platform.Goals.WakeUps.Briefing do
           set: [reported_wake_up_id: wake_up.id]
         )
 
-        Enum.map(rows, &%{"id" => &1.task_id, "title" => &1.title, "status" => &1.status})
+        rows
+        |> Goals.GoalTasks.annotate()
+        |> Enum.map(
+          &%{
+            "id" => &1.task_id,
+            "title" => &1.title,
+            "status" => &1.status,
+            "assignee_agent_id" => &1.assignee_agent_id,
+            "assignee_name" => &1.assignee_name
+          }
+        )
       end)
 
     rows
@@ -190,10 +209,27 @@ defmodule Platform.Goals.WakeUps.Briefing do
     Repo.all(
       from([_l, _g, t] in task_rows(actor, goal),
         where: t.status not in ^closed and is_nil(t.deleted_at),
-        select: %{id: t.id, title: t.title, status: t.status}
+        select: %{
+          id: t.id,
+          title: t.title,
+          status: t.status,
+          phase_assignees: t.phase_assignees,
+          assignee_id: t.assignee_id,
+          assignee_type: t.assignee_type
+        }
       )
     )
-    |> Enum.map(&fields(&1, [:id, :title, :status]))
+    |> Goals.GoalTasks.annotate()
+    |> Enum.map(&fields(&1, [:id, :title, :status, :assignee_agent_id, :assignee_name]))
+  end
+
+  # Goals 7/8 (task 01a1dfc1-dffb): the agents the coach may give a task to
+  # now, derived live from the spaces the goal is handed to.
+  defp contributors(actor, goal) do
+    case Goals.list_contributors(actor, goal.id) do
+      {:ok, rows} -> Enum.map(rows, &%{"agent_id" => &1.agent_id, "name" => &1.name})
+      _ -> []
+    end
   end
 
   defp answers(actor, goal, since, until) do
@@ -262,7 +298,8 @@ defmodule Platform.Goals.WakeUps.Briefing do
 
   def text(%{"goal" => goal, "number" => number, "since_last" => since} = snapshot) do
     pace_text(snapshot["pace"]) <>
-      "## The goal\n#{goal["title"]}\n#{goal["why"]}\nTarget: #{goal["target_value"]} #{goal["unit"]}\nSettings: #{inspect(goal)}\n\n## The number\n#{number_text(number)}\n\n## Since the last check-in\n#{inspect(since)}\n#{answer_text(since["answers"] || [])}\n\n## What you may do\nClose this check-in with exactly one of goal_do, goal_ask or goal_wait. Respect the goal's agent mode, stops and outreach settings."
+      "## The goal\n#{goal["title"]}\n#{goal["why"]}\nTarget: #{goal["target_value"]} #{goal["unit"]}\nSettings: #{inspect(goal)}\n\n## The number\n#{number_text(number)}\n\n## Since the last check-in\n#{inspect(since)}\n#{task_text(since)}#{answer_text(since["answers"] || [])}\n\n## What you may do\nClose this check-in with exactly one of goal_do, goal_ask or goal_wait. Respect the goal's agent mode, stops and outreach settings." <>
+      assign_text(goal, snapshot["contributors"] || [])
   end
 
   def text(_), do: "The briefing for this check-in is not available."
@@ -272,6 +309,29 @@ defmodule Platform.Goals.WakeUps.Briefing do
       "The owner has not answered the last #{n} briefs. You are checking in less often and may hold one open ask. An answer restores the usual rhythm.\n\n"
 
   defp pace_text(_), do: ""
+
+  # One line per task the coach should know about, naming who holds it.
+  defp task_text(since) do
+    lines =
+      for {label, key} <- [{"Finished", "finished_tasks"}, {"Open", "open_tasks"}],
+          task <- since[key] || [],
+          do: "#{label} task: #{task["title"]} (#{task["status"]}), #{assignee_text(task)}"
+
+    if lines == [], do: "", else: Enum.join(lines, "\n") <> "\n"
+  end
+
+  defp assignee_text(%{"assignee_name" => name}) when is_binary(name), do: "held by #{name}"
+  defp assignee_text(_), do: "no assignee"
+
+  defp assign_text(%{"agent_mode" => "do"}, [_ | _] = contributors) do
+    names = Enum.map_join(contributors, "\n", &"#{&1["name"]} (#{&1["agent_id"]})")
+
+    "\nAgents you can give tasks to:\n" <>
+      names <>
+      "\nOne goal_do may create up to #{Limits.max_tasks_per_wake_up()} tasks."
+  end
+
+  defp assign_text(_goal, _contributors), do: ""
 
   # Practice results and suggestion choices must reach the coach as readable signals
   # (task 01a1dfc1-abcc), beyond the persisted answer payload.
