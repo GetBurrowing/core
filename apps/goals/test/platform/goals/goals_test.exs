@@ -200,7 +200,8 @@ defmodule Platform.Goals.GoalsTest do
       "Repo.all(GoalClock",
       "Repo.all(Ask",
       "Repo.all(TaskLink",
-      "Repo.all(BriefItem"
+      "Repo.all(BriefItem",
+      "Repo.all(Proposal"
     ]
 
     defp hits(text), do: Enum.filter(@forbidden, &String.contains?(text, &1))
@@ -208,7 +209,8 @@ defmodule Platform.Goals.GoalsTest do
     test "the scan can hit (positive control)" do
       assert hits("goal = Repo.get(Goal, id)") == ["Repo.get("]
 
-      for schema <- ~w(Goal Stop Entry Grant Reading WakeUp GoalClock Ask TaskLink BriefItem) do
+      for schema <-
+            ~w(Goal Stop Entry Grant Reading WakeUp GoalClock Ask TaskLink BriefItem Proposal) do
         assert "Repo.all(#{schema}" in hits("Repo.all(#{schema})")
       end
     end
@@ -222,6 +224,9 @@ defmodule Platform.Goals.GoalsTest do
 
       assert Enum.any?(files, &String.ends_with?(&1, "platform/goals/owner_pace.ex")),
              "pacing reads must be scanned"
+
+      assert Enum.any?(files, &String.ends_with?(&1, "platform/goals/proposals.ex")),
+             "proposal reads must be scanned"
 
       found =
         for file <- files, hit <- hits(File.read!(file)), do: {Path.relative_to(file, @lib), hit}

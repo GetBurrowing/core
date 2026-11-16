@@ -38,6 +38,13 @@ defmodule Platform.Goals.Limits do
   def max_retro_rows, do: value(:max_retro_rows, 10)
   def max_retro_predictions, do: value(:max_retro_predictions, 50)
 
+  # Goals 5/8 (task 01a1dfc1-7625): the New goal conversation.
+  def proposal_expiry_days, do: value(:proposal_expiry_days, 7)
+  def max_quick_replies, do: value(:max_quick_replies, 4)
+  def max_reply_chars, do: value(:max_reply_chars, 40)
+  def max_stops, do: value(:max_stops, 12)
+  def max_opening_chars, do: value(:max_opening_chars, 2000)
+
   defp rhythm_value(key, rhythm, numbers) do
     defaults = Map.new(Enum.zip(~w(daily weekdays weekly biweekly), numbers))
     Map.get(value(key, %{}), rhythm, Map.fetch!(defaults, rhythm))

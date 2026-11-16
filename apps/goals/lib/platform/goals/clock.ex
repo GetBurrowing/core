@@ -215,39 +215,8 @@ defmodule Platform.Goals.Clock do
     wake |> WakeUp.changeset(%{delivery: delivery}) |> Repo.update!()
   end
 
-  defp dispatch(%{runtime_type: "external", runtime_id: id} = coach, wake) when is_binary(id) do
-    signal = %{
-      reason: :system_event,
-      metadata: %{
-        agent_id: coach.id,
-        agent_slug: coach.slug,
-        responsibility_key: "goals.wake_up",
-        feature: "goals",
-        trigger_kind: "cron",
-        prompt: Briefing.wire_prompt(wake),
-        prompt_status: :rendered
-      }
-    }
-
-    dispatcher =
-      Application.get_env(:goals, :wake_up_dispatcher, {Platform.Chat.AgentResponder, :respond})
-
-    result =
-      case dispatcher do
-        {module, function} -> apply(module, function, [signal])
-        function when is_function(function, 1) -> function.(signal)
-      end
-
-    case result do
-      :ok -> "sent"
-      {:error, :runtime_offline} -> "offline"
-      _ -> "failed"
-    end
-  rescue
-    _ -> "failed"
-  end
-
-  defp dispatch(_, _), do: "no_runtime"
+  defp dispatch(coach, wake),
+    do: Platform.Goals.Signals.deliver(coach, "goals.wake_up", Briefing.wire_prompt(wake))
 
   defp sweep(now) do
     # Identifier-only scan; goal content is loaded through the coach's visibility.

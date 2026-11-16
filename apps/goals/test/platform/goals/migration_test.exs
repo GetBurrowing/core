@@ -28,7 +28,7 @@ defmodule Platform.Goals.MigrationTest do
                   __DIR__
                 )
 
-  @tables ~w(goals goal_stops goal_grants goal_entries goal_readings goal_clocks goal_wake_ups goal_asks goal_ask_answers goal_task_links)
+  @tables ~w(goals goal_stops goal_grants goal_entries goal_readings goal_clocks goal_wake_ups goal_asks goal_ask_answers goal_task_links goal_proposals)
 
   test "the four goal tables exist after the module's test alias migrates" do
     %{rows: rows} =
@@ -110,6 +110,43 @@ defmodule Platform.Goals.MigrationTest do
 
     assert Regex.match?(~r/^\s*# old-code-compatible:/m, source)
     refute version in String.split(File.read!(@irreversible), "\n", trim: true)
+  end
+
+  test "proposals migration carries the waiver, is absent from the irreversible list and alters nothing" do
+    version = "20261115161001"
+
+    source =
+      File.read!(
+        Path.expand(
+          "../../../priv/repo/migrations/#{version}_create_goal_proposals.exs",
+          __DIR__
+        )
+      )
+
+    assert source =~
+             ~r/^  # old-code-compatible: creates the new goal_proposals table only; no existing table changes and the previous release does not read it$/m
+
+    refute version in String.split(File.read!(@irreversible), "\n", trim: true)
+    refute source =~ ~r/alter table|alter\(/
+
+    assert %{rows: [[_]]} =
+             Repo.query!("SELECT version FROM schema_migrations WHERE version = $1", [
+               String.to_integer(version)
+             ])
+
+    %{rows: checks} =
+      Repo.query!(
+        "SELECT conname FROM pg_constraint WHERE conrelid = 'goal_proposals'::regclass AND contype = 'c' ORDER BY conname"
+      )
+
+    assert List.flatten(checks) == ["goal_proposals_delivery", "goal_proposals_status"]
+
+    %{rows: [[index]]} =
+      Repo.query!("SELECT indexdef FROM pg_indexes WHERE indexname = 'goal_proposals_one_open'")
+
+    assert index =~ "UNIQUE"
+    assert index =~ "WHERE"
+    assert index =~ "'open'"
   end
 
   for notes? <- [true, false] do

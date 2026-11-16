@@ -408,6 +408,27 @@ defmodule Platform.Goals do
     with :ok <- check_enabled(), do: {:ok, Sources.describe()}
   end
 
+  # Goals 5/8 (task 01a1dfc1-7625): the New goal conversation. Thin delegates;
+  # the rules live in `Platform.Goals.Proposals`.
+  @doc "The install's lead agent (holder of `agents_leader`)."
+  def lead_agent(user), do: proposals(:lead_agent, [user])
+  @doc "Starts a New goal conversation with the lead agent."
+  def start_goal_conversation(user, text), do: proposals(:start_goal_conversation, [user, text])
+  def current_proposal(user), do: proposals(:current_proposal, [user])
+  def get_proposal(actor, id), do: proposals(:get_proposal, [actor, id])
+  def list_proposals(actor), do: proposals(:list_proposals, [actor])
+  def conversation(user, id), do: proposals(:conversation, [user, id])
+  def say_in_conversation(user, id, text), do: proposals(:say_in_conversation, [user, id, text])
+  @doc "The conversation's agent records the proposal; it creates nothing."
+  def propose_goal(agent, id, attrs), do: proposals(:propose_goal, [agent, id, attrs])
+  @doc "The person's own confirmation: creates the goal as the person."
+  def confirm_proposal(user, id, rev), do: proposals(:confirm_proposal, [user, id, rev])
+  def cancel_proposal(user, id), do: proposals(:cancel_proposal, [user, id])
+  def subscribe_proposal(user, id), do: proposals(:subscribe_proposal, [user, id])
+
+  defp proposals(fun, args),
+    do: with(:ok <- check_enabled(), do: apply(Platform.Goals.Proposals, fun, args))
+
   @doc "Lists visible wake-ups; private briefing is restricted to owner and coach."
   def list_wake_ups(actor, goal_id, opts \\ []) do
     with :ok <- check_enabled(), {:ok, goal} <- fetch_visible(actor, goal_id, false) do

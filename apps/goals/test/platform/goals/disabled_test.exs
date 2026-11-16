@@ -9,10 +9,26 @@ defmodule Platform.Goals.DisabledTest do
     Application.put_env(:goals, :enabled, false)
     before = counts()
     functions = Goals.__info__(:functions) |> Enum.reject(fn {name, _} -> name == :enabled? end)
-    assert length(functions) >= 63
+    assert length(functions) >= 74
 
     # Goals 4/8: the page reads are in the iterated set.
     for f <- [describe_goals: 1, describe_goal: 2, list_audience_options: 2],
+        do: assert(f in functions, "#{inspect(f)} is not exported")
+
+    # Goals 5/8: the New goal conversation.
+    for f <- [
+          lead_agent: 1,
+          start_goal_conversation: 2,
+          current_proposal: 1,
+          get_proposal: 2,
+          list_proposals: 1,
+          conversation: 2,
+          say_in_conversation: 3,
+          propose_goal: 3,
+          confirm_proposal: 3,
+          cancel_proposal: 2,
+          subscribe_proposal: 2
+        ],
         do: assert(f in functions, "#{inspect(f)} is not exported")
 
     for f <- [
@@ -71,6 +87,9 @@ defmodule Platform.Goals.DisabledTest do
           AskAnswer,
           TaskLink,
           Platform.Goals.BriefItem,
+          Platform.Goals.Proposal,
+          Platform.Chat.Message,
+          Platform.Chat.Space,
           Platform.Tasks.Task
         ],
         &Repo.aggregate(&1, :count)
