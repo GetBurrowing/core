@@ -9,6 +9,9 @@ defmodule PlatformWeb.GoalsBriefComponent do
 
   ## Design deviations
 
+  - The canvas kind resolves the renderer’s user tuple through Accounts; the
+    shared deck still receives only a User. Nil viewers render no card text.
+
   - Undo is a request for the next check-in, because the coach must perform
     the reversal; Cancel undo cancels that request.
   - The ask box sends a written question for the next check-in; there is no

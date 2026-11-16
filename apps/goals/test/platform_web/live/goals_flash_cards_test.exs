@@ -76,7 +76,7 @@ defmodule PlatformWeb.GoalsFlashCardsTest do
     assert has_element?(view, deck(ask), "Card 1 of 5")
     assert has_element?(view, deck(ask), "Front 0")
     refute has_element?(view, deck(ask), "Back 0")
-    view |> element(flash_action(ask, "flip")) |> render_click()
+    view |> element(deck(ask) <> " [data-role=flash-card]") |> render_keydown(%{"key" => "Enter"})
     assert has_element?(view, deck(ask), "Back 0")
     assert has_element?(view, flash_action(ask, "missed"), "Missed it")
     assert has_element?(view, flash_action(ask, "got"), "Got it")
@@ -124,7 +124,8 @@ defmodule PlatformWeb.GoalsFlashCardsTest do
     ask = practice(c, 2)
     build()
     {:ok, view, _} = open(c.conn, c.owner)
-    play(view, ask, ["got"])
+    view |> element(deck(ask) <> " [data-role=flash-card]") |> render_keydown(%{"key" => " "})
+    view |> element(flash_action(ask, "got")) |> render_click()
     assert has_element?(view, deck(ask), "Front 1")
     assert Repo.aggregate(AskAnswer, :count) == 0
     assert Repo.aggregate(Reading, :count) == 0

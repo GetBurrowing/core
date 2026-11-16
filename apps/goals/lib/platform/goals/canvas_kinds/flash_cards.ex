@@ -33,11 +33,18 @@ defmodule Platform.Goals.CanvasKinds.FlashCards do
     props = assigns.node["props"] || %{}
     scope = assigns[:dom_id_scope] || assigns[:canvas_id] || "x"
 
+    viewer =
+      case assigns[:viewer] do
+        %Platform.Accounts.User{} = user -> user
+        {:user, id} -> Platform.Accounts.get_user(id)
+        _ -> nil
+      end
+
     assigns =
       assigns
       |> assign(:ask_id, props["ask_id"])
       |> assign(:component_id, "goals-flash-#{scope}-#{assigns.node["id"] || "deck"}")
-      |> assign_new(:viewer, fn -> nil end)
+      |> assign(:viewer, viewer)
 
     ~H"""
     <.live_component

@@ -11,7 +11,13 @@ defmodule Platform.Goals.FlashCardsKindTest do
     alias Platform.Goals.CanvasKinds.FlashCards
 
     def mount(_params, session, socket) do
-      viewer = Platform.Accounts.get_user(session["viewer_id"])
+      viewer =
+        case session["viewer_shape"] do
+          "tuple" -> {:user, session["viewer_id"]}
+          "map" -> %{id: session["viewer_id"]}
+          _ -> Platform.Accounts.get_user(session["viewer_id"])
+        end
+
       node = %{"kind" => "flash_cards", "props" => %{"ask_id" => session["ask_id"]}}
       {:ok, assign(socket, viewer: viewer, node: node)}
     end
@@ -91,15 +97,27 @@ defmodule Platform.Goals.FlashCardsKindTest do
     assert {:ok, %{id: id}} = Goals.get_ask(c.owner, ask.id)
     assert id == ask.id
 
-    {:ok, addressed, addressed_html} =
-      live_isolated(conn, KindHost, session: %{"ask_id" => ask.id, "viewer_id" => addressee.id})
+    for shape <- ["user", "tuple"] do
+      {:ok, addressed, addressed_html} =
+        live_isolated(conn, KindHost,
+          session: %{"ask_id" => ask.id, "viewer_id" => addressee.id, "viewer_shape" => shape}
+        )
 
-    assert addressed_html =~ "Private front one"
-    assert render(addressed) =~ "Turn it over"
+      assert addressed_html =~ "Private front one"
+      assert render(addressed) =~ "Turn it over"
+    end
 
-    for viewer_id <- [c.owner.id, nil] do
+    for {viewer_id, shape} <- [
+          {c.owner.id, "user"},
+          {c.owner.id, "tuple"},
+          {nil, "user"},
+          {Ecto.UUID.generate(), "tuple"},
+          {addressee.id, "map"}
+        ] do
       {:ok, view, html} =
-        live_isolated(conn, KindHost, session: %{"ask_id" => ask.id, "viewer_id" => viewer_id})
+        live_isolated(conn, KindHost,
+          session: %{"ask_id" => ask.id, "viewer_id" => viewer_id, "viewer_shape" => shape}
+        )
 
       for card <- cards, text <- Map.values(card) do
         refute html =~ text
