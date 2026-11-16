@@ -26,6 +26,11 @@
 //   that lands in shell history or a log. Mint it with POST /api/app/handoff
 //   (bearer) and keep the bearer out of anything that prints.
 //
+// RIG NOTE: the rock CDP Chrome cannot reach the moon LAN address directly
+// (net::ERR_ADDRESS_UNREACHABLE, printed as a FAILED hop). Tunnel the dev
+// server to loopback (ssh -f -N -L 127.0.0.1:<p>:<moon-ip>:<port>) and mint
+// the handoff against that loopback origin; close the tunnel by pid.
+//
 // Requires Node 22+ (global fetch and WebSocket).
 
 const CDP = process.env.CDP || "http://127.0.0.1:9222";
@@ -159,6 +164,8 @@ async function main() {
       } else if (msg.method === "Network.responseReceivedExtraInfo") {
         const sc = header(p.headers, "set-cookie");
         if (sc) extra.set(`recv:${p.requestId}:${extra.size}`, sc);
+      } else if (msg.method === "Network.loadingFailed" && p.type === "Document") {
+        hops.push({ requestId: p.requestId, url: null, status: `FAILED ${p.errorText}` });
       } else if (msg.method === "Network.responseReceived" && p.type === "Document") {
         hops.push({
           requestId: p.requestId,
