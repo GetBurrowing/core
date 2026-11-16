@@ -5,9 +5,9 @@ defmodule Platform.Goals.ToolDefinitions do
   (`Platform.Social.ToolDefinitions` is the model). The behaviour lives in
   `Platform.Goals.Tools`.
 
-  Six tools, every name starting `goal_`: three read (`goal_list`,
-  `goal_get`, `goal_wake_up_get`) and three close a wake-up (`goal_do`,
-  `goal_ask`, `goal_wait`). Every tool is for the goal's coach only.
+  Seven tools, every name starting `goal_`: three read (`goal_list`,
+  `goal_get`, `goal_wake_up_get`) and four close a wake-up (`goal_do`,
+  `goal_ask`, `goal_wait`, `goal_retro`). Every tool is for the goal's coach only.
 
   ## Grantable, not a default grant
 
@@ -15,11 +15,11 @@ defmodule Platform.Goals.ToolDefinitions do
   tool profile: an admin grants it per runtime, and `goals.use` gates it.
   """
 
-  @one_outcome "A wake-up takes exactly one of goal_do, goal_ask or goal_wait; a second close is refused."
+  @one_outcome "A check-in takes exactly one of goal_do, goal_ask or goal_wait; a retro takes exactly goal_retro; a second close is refused."
 
   @coach_only "Only the goal's coach may use this: any other goal, seen or not, answers not_found."
 
-  @names ~w(goal_list goal_get goal_wake_up_get goal_do goal_ask goal_wait)
+  @names ~w(goal_list goal_get goal_wake_up_get goal_do goal_ask goal_wait goal_retro)
 
   @doc "The sentence every description carries."
   @spec one_outcome() :: String.t()
@@ -69,7 +69,7 @@ defmodule Platform.Goals.ToolDefinitions do
             @one_outcome,
         parameters: %{},
         returns:
-          "%{goals: [%{id, title, status, agent_mode, rhythm, outreach, next_wake_at, stalled, open_wake_up_id}], total}",
+          "%{goals: [%{id, title, status, agent_mode, rhythm, outreach, next_wake_at, stalled, open_wake_up_id, open_wake_up_kind}], total}",
         limitations:
           "Only goals whose coach is you; a goal you can merely see as a space participant is not listed.",
         when_to_use: "First, to find the goal_id of a goal you coach."
@@ -117,7 +117,7 @@ defmodule Platform.Goals.ToolDefinitions do
           }
         },
         returns:
-          "%{wake_up: %{id, goal_id, status, outcome, due_at, respond_by, closed_at}, briefing, text, allowed: %{do, do_with_task, ask, wait} each true or the refusal code that applies now}",
+          "%{wake_up: %{id, goal_id, kind, status, outcome, due_at, respond_by, closed_at}, briefing, text, allowed: %{do, do_with_task, ask, wait, retro} each true or the refusal code that applies now}",
         limitations:
           @coach_only <>
             " With goal_id and no open wake-up, answers no_open_wake_up.",
@@ -215,7 +215,78 @@ defmodule Platform.Goals.ToolDefinitions do
         returns: @closed_result,
         limitations: @coach_only <> " " <> @refusals,
         when_to_use: "When no action or ask is due at this check-in."
+      },
+      %{
+        name: "goal_retro",
+        description:
+          "Close a retro with what happened and what comes next. Verdicts come from the stored wake-up and cannot be supplied. " <>
+            @one_outcome,
+        parameters: %{
+          wake_up_id: @wake_up_id,
+          title: %{
+            type: "string",
+            required: true,
+            description: "Retro title, non-blank, at most 200 characters."
+          },
+          summary: %{
+            type: "string",
+            required: true,
+            description: "What happened, non-blank; the notebook body."
+          },
+          worked: %{
+            type: "array",
+            required: false,
+            description:
+              "Up to max_retro_rows maps: non-blank label, optional percent (0..100), optional note."
+          },
+          didnt_work: %{
+            type: "array",
+            required: false,
+            description: "Up to max_retro_rows maps with non-blank text."
+          },
+          dropped: %{
+            type: "array",
+            required: false,
+            description:
+              "Up to max_retro_rows maps: entry_id of an action in this goal, optional reason."
+          },
+          learned: %{
+            type: "array",
+            required: false,
+            description: "Up to max_retro_rows non-blank strings."
+          },
+          next_push: %{
+            type: "object",
+            required: false,
+            description:
+              "Non-blank title and suggestions (up to max_retro_rows maps: tag keep|start|stop, non-blank title, optional why and takeaway_id of this goal)."
+          },
+          stop_id: %{
+            type: "string",
+            required: false,
+            description: "Optional stop of this goal being reviewed."
+          },
+          check_in_change: %{
+            type: "object",
+            required: false,
+            description:
+              "Proposal: summary (non-blank, at most 500), set with one or more rhythm, rhythm_weekday, outreach, retro_every; must differ from current settings."
+          },
+          goal_change: %{
+            type: "object",
+            required: false,
+            description:
+              "Proposal: summary (non-blank, at most 500), kind target|scope|end, set: target exactly {target_value: number}; scope title and/or why; end exactly {status: finished}. Must differ from current settings."
+          }
+        },
+        returns:
+          "%{wake_up: %{id, goal_id, kind, status, outcome, closed_at, entry_id}, entry: %{id, kind, title, body, reading_id, details}}",
+        limitations:
+          @coach_only <>
+            " Send at most one change proposal. When the stored retro requires a goal change, goal_change is required and check_in_change is refused. Verdicts and window cannot be supplied. Shape and rule refusals are recoverable; wake_up_closed and not_found are final.",
+        when_to_use: "When goal_wake_up_get reports kind retro; this is its only closing tool."
       }
     ]
   end
 end
+

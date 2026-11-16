@@ -9,6 +9,10 @@ defmodule Platform.Goals.WakeUps.Briefing do
   alias Platform.Goals.{Ask, AskAnswer, GoalClock, Limits, Reading, TaskLink, Visibility, WakeUp}
   alias Platform.Repo
 
+  def wire_prompt(%{kind: "retro"} = wake_up) do
+    "A goal you coach is due for a retro. Wake-up id: #{wake_up.id}. Read it with goal_wake_up_get, then close it with goal_retro before #{DateTime.to_iso8601(wake_up.respond_by)}."
+  end
+
   def wire_prompt(wake_up) do
     "A goal you coach is due for a check-in. Wake-up id: #{wake_up.id}. Read it with goal_wake_up_get, then close it with exactly one of goal_do, goal_ask or goal_wait before #{DateTime.to_iso8601(wake_up.respond_by)}."
   end
@@ -34,7 +38,7 @@ defmodule Platform.Goals.WakeUps.Briefing do
 
     {:ok, entries} = Goals.list_entries(actor, goal.id, limit: Limits.briefing_entries())
 
-    %{
+    snapshot = %{
       "goal" =>
         goal
         |> fields(~w(id title why kind status agent_mode rhythm rhythm_weekday outreach unit)a)
@@ -57,6 +61,25 @@ defmodule Platform.Goals.WakeUps.Briefing do
           |> Enum.map(&fields(&1, [:id, :kind, :title, :author_type]))
       }
     }
+
+    if wake_up.kind == "retro" do
+      {:ok, window} = Goals.Retro.window(actor, goal.id, wake_up.fired_at)
+
+      retro = %{
+        "since" => scalar(window.since),
+        "change" => scalar(window.change),
+        "flat" => window.flat,
+        "flat_retros" => window.flat_retros,
+        "goal_change_required" => window.goal_change_required,
+        "every" => Goals.Retro.effective_every(goal),
+        "predictions" => window.predictions,
+        "answers" => fields(window.answers, [:used, :declined, :ignored])
+      }
+
+      Map.put(snapshot, "retro", retro)
+    else
+      snapshot
+    end
   end
 
   defp visible(actor, schema, id) do
@@ -199,6 +222,39 @@ defmodule Platform.Goals.WakeUps.Briefing do
     )
   end
 
+  def text(%{"retro" => retro} = snapshot) do
+    base = text(Map.delete(snapshot, "retro"))
+    [context, _] = String.split(base, "## What you may do", parts: 2)
+
+    predictions =
+      Enum.map_join(retro["predictions"] || [], "\n", fn row ->
+        verdict = String.replace(row["verdict"], "_", " ")
+
+        numbers =
+          if row["predicted_by"] && row["predicted_change"] && row["actual_change"],
+            do: "; expected #{row["predicted_change"]}, moved #{row["actual_change"]}",
+            else: ""
+
+        "#{row["prediction"]}: #{verdict}#{numbers}"
+      end)
+
+    change =
+      if retro["change"],
+        do: "The number moved #{retro["change"]} in this window.",
+        else: "The change could not be measured."
+
+    requirement =
+      if retro["goal_change_required"],
+        do:
+          "\nThe number has not moved across #{retro["flat_retros"]} retros. Propose changing the goal itself (its target, its scope, or ending it). Another tactic is refused.",
+        else: ""
+
+    context <>
+      "## Looking back\n" <>
+      predictions <>
+      "\n" <> change <> "\n\n## What you may do\nClose this retro with goal_retro." <> requirement
+  end
+
   def text(%{"goal" => goal, "number" => number, "since_last" => since}) do
     "## The goal\n#{goal["title"]}\n#{goal["why"]}\nTarget: #{goal["target_value"]} #{goal["unit"]}\nSettings: #{inspect(goal)}\n\n## The number\n#{number_text(number)}\n\n## Since the last check-in\n#{inspect(since)}\n#{answer_text(since["answers"] || [])}\n\n## What you may do\nClose this check-in with exactly one of goal_do, goal_ask or goal_wait. Respect the goal's agent mode, stops and outreach settings."
   end
@@ -254,3 +310,4 @@ defmodule Platform.Goals.WakeUps.Briefing do
   defp scalar(%Date{} = value), do: Date.to_iso8601(value)
   defp scalar(value), do: value
 end
+

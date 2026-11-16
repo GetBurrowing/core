@@ -143,7 +143,7 @@ defmodule Platform.Goals.Clock do
            open =
              Repo.all(
                from(w in visible_wakes(coach),
-                 where: w.goal_id == ^goal.id and w.kind == "check_in" and w.status == "open"
+                 where: w.goal_id == ^goal.id and w.status == "open"
                )
              )
 
@@ -151,6 +151,7 @@ defmodule Platform.Goals.Clock do
 
            %WakeUp{goal_id: goal.id, coach_agent_id: coach.id}
            |> WakeUp.changeset(%{
+             kind: wake_kind(coach, goal),
              due_at: clock.next_wake_at,
              fired_at: now,
              respond_by: DateTime.add(now, Limits.respond_within_hours(goal.rhythm) * 3600),
@@ -161,6 +162,23 @@ defmodule Platform.Goals.Clock do
       {:error, :already_claimed} -> :already_claimed
       other -> other
     end
+  end
+
+  defp wake_kind(actor, goal) do
+    latest =
+      Repo.one(
+        from(w in visible_wakes(actor),
+          where: w.goal_id == ^goal.id and w.kind == "retro",
+          order_by: [desc: w.due_at],
+          limit: 1,
+          select: w.due_at
+        )
+      )
+
+    query = from(w in visible_wakes(actor), where: w.goal_id == ^goal.id and w.kind == "check_in")
+    query = if latest, do: from(w in query, where: w.due_at > ^latest), else: query
+    count = Repo.aggregate(query, :count)
+    if count >= Platform.Goals.Retro.effective_every(goal) - 1, do: "retro", else: "check_in"
   end
 
   def visible_wakes(actor) do
@@ -261,7 +279,8 @@ defmodule Platform.Goals.Clock do
          {:ok, entry} <-
            Goals.add_entry(coach, wake.goal_id, %{
              kind: "wake_up",
-             title: "Check-in not answered",
+             title:
+               if(wake.kind == "retro", do: "Retro not answered", else: "Check-in not answered"),
              reading_id: wake.reading_id,
              occurred_at: now,
              details: %{"wake_up_id" => wake.id, "status" => "unanswered"}
@@ -306,3 +325,4 @@ defmodule Platform.Goals.Clock do
     |> Repo.update()
   end
 end
+

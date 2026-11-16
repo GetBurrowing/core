@@ -41,9 +41,9 @@ defmodule Platform.Goals.ToolsTest do
 
   defp wake_status(wake), do: Repo.one!(from(w in WakeUp, where: w.id == ^wake.id)).status
 
-  test "the bundle has exactly six goal_ tools, each saying a wake-up takes one outcome" do
+  test "the bundle has exactly seven goal_ tools, each saying a wake-up takes one outcome" do
     names = ToolDefinitions.names()
-    assert length(names) == 6
+    assert names == ~w(goal_list goal_get goal_wake_up_get goal_do goal_ask goal_wait goal_retro)
     assert Enum.all?(names, &String.starts_with?(&1, "goal_"))
     assert Enum.map(ToolDefinitions.definitions(), & &1.name) == names
 
@@ -169,7 +169,8 @@ defmodule Platform.Goals.ToolsTest do
         "goal_wake_up_get" => [%{"wake_up_id" => id}, %{"goal_id" => id}],
         "goal_do" => [do_args(%{id: id})],
         "goal_ask" => [ask_args(%{id: id})],
-        "goal_wait" => [wait_args(%{id: id})]
+        "goal_wait" => [wait_args(%{id: id})],
+        "goal_retro" => [%{"wake_up_id" => id, "title" => "Review", "summary" => "What happened"}]
       }
     end
 
@@ -213,7 +214,9 @@ defmodule Platform.Goals.ToolsTest do
     Application.put_env(:goals, :enabled, false)
     before = row_counts()
     names = ToolDefinitions.names()
-    assert length(names) == 6 and Enum.all?(names, &String.starts_with?(&1, "goal_"))
+
+    assert names == ~w(goal_list goal_get goal_wake_up_get goal_do goal_ask goal_wait goal_retro) and
+             Enum.all?(names, &String.starts_with?(&1, "goal_"))
 
     for tool <- names do
       args = do_args(wake, %{"goal_id" => c.goal.id, "reason" => "x"})
@@ -366,3 +369,4 @@ defmodule Platform.Goals.ToolsTest do
     refute number_free?(measured.number)
   end
 end
+

@@ -491,6 +491,7 @@ defmodule Platform.Goals do
                :ok <- lock_clock(actor, goal),
                {:ok, wake, goal} <- editable_wake(actor, wake_up_id),
                :ok <- check_open(wake),
+               :ok <- check_wake_kind(wake, "check_in"),
                :ok <- known_outcome(outcome),
                :ok <- outcome_allowed(goal, outcome, attrs),
                :ok <- prediction_required(outcome, attrs),
@@ -516,6 +517,105 @@ defmodule Platform.Goals do
       end
     end
   end
+
+  @doc "Closes a retro using its stored verdicts and the existing wake-up claim."
+  def close_retro(actor, wake_up_id, attrs) do
+    with :ok <- check_enabled() do
+      in_transaction(fn ->
+        with {:ok, _wake, goal} <- editable_wake(actor, wake_up_id),
+             :ok <- lock_clock(actor, goal),
+             {:ok, wake, goal} <- editable_wake(actor, wake_up_id),
+             :ok <- check_open(wake),
+             :ok <- check_wake_kind(wake, "retro"),
+             {:ok, entry_attrs} <-
+               Platform.Goals.RetroChanges.entry_attrs(actor, goal, wake, attrs),
+             {:ok, entry} <- add_entry(actor, goal.id, entry_attrs),
+             {:ok, closed} <- claim_close(wake, "retro", entry) do
+          {:ok, %{wake_up: closed, entry: entry}}
+        end
+      end)
+    end
+  end
+
+  @doc "The owner accepts or keeps a retro's proposed change, once."
+  def decide_retro_change(actor, goal_id, entry_id, decision) do
+    with :ok <- check_enabled() do
+      in_transaction(fn ->
+        with {:ok, goal} <- fetch_visible(actor, goal_id, false),
+             :ok <- lock_clock(actor, goal),
+             {:ok, goal} <- fetch_visible(actor, goal_id, true),
+             true <- owner?(actor, goal) || {:error, :forbidden},
+             true <- decision in ["switch", "keep"] || {:error, :unknown_decision},
+             {:ok, retro} <- Platform.Goals.RetroChanges.retro(actor, goal.id, entry_id),
+             {kind, change} when not is_nil(change) <- Platform.Goals.RetroChanges.proposal(retro),
+             nil <- Platform.Goals.RetroChanges.decision(actor, goal.id, retro.id),
+             {:ok, updated} <- apply_retro_decision(actor, goal, change["set"], decision),
+             {:ok, entry} <-
+               add_entry(actor, goal.id, %{
+                 kind: "ask",
+                 title:
+                   if(decision == "switch", do: "Switched: ", else: "Kept as is: ") <>
+                     String.slice(change["summary"], 0, 190),
+                 details: %{
+                   "request" => "retro_change",
+                   "decision" => decision,
+                   "retro_entry_id" => retro.id,
+                   "change" => kind,
+                   "set" => change["set"]
+                 }
+               }) do
+          {:ok, %{decision: decision, goal: updated, entry: entry}}
+        else
+          {_, nil} -> {:error, :nothing_to_decide}
+          %Entry{} -> {:error, :already_decided}
+          error -> error
+        end
+      end)
+    end
+  end
+
+  defp apply_retro_decision(actor, goal, set, "switch"), do: update_goal(actor, goal.id, set)
+  defp apply_retro_decision(_actor, goal, _set, "keep"), do: {:ok, goal}
+
+  @doc "Reads a retro and the owner's pending or recorded decision."
+  def get_retro(actor, goal_id, entry_id) do
+    with :ok <- check_enabled(), {:ok, goal} <- fetch_visible(actor, goal_id, false) do
+      Platform.Goals.RetroChanges.describe(actor, goal, entry_id)
+    end
+  end
+
+  @doc "Lists retro notebook entries, newest first."
+  def list_retros(actor, goal_id, opts \\ []) do
+    with :ok <- check_enabled(), {:ok, goal} <- fetch_visible(actor, goal_id, false) do
+      limit = opts |> Keyword.get(:limit, 20) |> max(0) |> min(100)
+
+      {:ok,
+       Repo.all(
+         from(e in children(actor, Entry, goal.id),
+           where: e.kind == "retro",
+           order_by: [desc: e.occurred_at, desc: e.id],
+           limit: ^limit,
+           select: %{
+             entry_id: e.id,
+             title: e.title,
+             occurred_at: e.occurred_at,
+             stop_id: e.stop_id
+           }
+         )
+       )}
+    end
+  end
+
+  @doc "Derives action states from retro entries alone."
+  def prediction_states(actor, goal_id) do
+    with :ok <- check_enabled(), {:ok, goal} <- fetch_visible(actor, goal_id, false) do
+      Platform.Goals.RetroChanges.states(actor, goal.id)
+    end
+  end
+
+  defp check_wake_kind(%{kind: kind}, kind), do: :ok
+  defp check_wake_kind(_, "retro"), do: {:error, :not_a_retro}
+  defp check_wake_kind(_, "check_in"), do: {:error, :retro_wake_up}
 
   @doc "Lists the asks the actor may read, with their answer signals."
   def list_asks(actor, goal_id, opts \\ []) do
@@ -1713,3 +1813,4 @@ defmodule Platform.Goals do
     end
   end
 end
+

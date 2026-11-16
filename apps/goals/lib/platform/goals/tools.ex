@@ -29,6 +29,7 @@ defmodule Platform.Goals.Tools do
   @do_keys ~w(title body prediction predicted_by predicted_change sources undo_note task)
   @ask_keys ~w(kind title body payload prediction predicted_by predicted_change addressed_user_ids)
   @wait_keys ~w(reason until prediction predicted_by predicted_change)
+  @retro_keys ~w(title summary worked didnt_work dropped learned next_push stop_id check_in_change goal_change)
 
   @spec execute(String.t(), map(), map()) :: {:ok, map()} | {:error, map()}
   def execute(tool, args, context) do
@@ -185,6 +186,18 @@ defmodule Platform.Goals.Tools do
     end
   end
 
+  defp run("goal_retro", args, agent) do
+    with {:ok, _goal, %{wake_up: wake}} <- coached_goal(agent, :wake_up, args["wake_up_id"]) do
+      case Goals.close_retro(agent, wake.id, Map.take(args, @retro_keys)) do
+        {:ok, %{wake_up: wake, entry: entry}} ->
+          {:ok, %{wake_up: wake_up_json(wake), entry: entry_json(entry)}}
+
+        {:error, reason} ->
+          {:error, context_error(reason)}
+      end
+    end
+  end
+
   defp keys("goal_do"), do: @do_keys
   defp keys("goal_ask"), do: @ask_keys
   defp keys("goal_wait"), do: @wait_keys
@@ -206,15 +219,22 @@ defmodule Platform.Goals.Tools do
   # order it checks them. Per-call checks (prediction, reason, project,
   # addressees) depend on arguments and are not predicted here.
   defp allowed(agent, goal, wake) do
-    if wake.status != "open" do
-      Map.new(~w(do do_with_task ask wait), &{&1, :wake_up_closed})
-    else
-      %{
-        "do" => if(goal.agent_mode == "advise", do: :mode_forbids_do, else: true),
-        "do_with_task" => do_with_task(agent, goal),
-        "ask" => ask_allowed(agent, goal),
-        "wait" => true
-      }
+    cond do
+      wake.status != "open" ->
+        Map.new(~w(do do_with_task ask wait retro), &{&1, :wake_up_closed})
+
+      wake.kind == "retro" ->
+        Map.new(~w(do do_with_task ask wait), &{&1, :retro_wake_up})
+        |> Map.put("retro", true)
+
+      true ->
+        %{
+          "do" => if(goal.agent_mode == "advise", do: :mode_forbids_do, else: true),
+          "do_with_task" => do_with_task(agent, goal),
+          "ask" => ask_allowed(agent, goal),
+          "wait" => true,
+          "retro" => :not_a_retro
+        }
     end
   end
 
@@ -258,6 +278,20 @@ defmodule Platform.Goals.Tools do
   # ── Refusals ─────────────────────────────────────────────────────────
 
   @refusals %{
+    retro_wake_up:
+      {"This is a retro wake-up: close it with goal_retro.", true, "Call goal_retro."},
+    not_a_retro:
+      {"This wake-up is a check-in, not a retro.", true, "Use goal_do, goal_ask or goal_wait."},
+    goal_change_required:
+      {"The number has not moved across several retros: include goal_change (target, scope or end).",
+       true, "Include a proposal to change the goal itself."},
+    goal_change_only:
+      {"This retro requires changing the goal itself, rather than its check-ins.", true,
+       "Replace check_in_change with goal_change (target, scope or end)."},
+    one_change_only:
+      {"A retro may propose only one change.", true, "Send check_in_change or goal_change."},
+    summary_required:
+      {"A retro needs a non-blank title and summary.", true, "Send title and summary."},
     wake_up_closed:
       {"This wake-up is already closed or was marked unanswered; a wake-up takes one outcome.",
        false, "Wait for the next wake-up; goal_wake_up_get with goal_id finds an open one."},
@@ -369,7 +403,7 @@ defmodule Platform.Goals.Tools do
 
     open =
       case Goals.list_wake_ups(agent, goal.id, status: "open", limit: 1) do
-        {:ok, [wake | _]} -> wake.id
+        {:ok, [wake | _]} -> wake
         _ -> nil
       end
 
@@ -382,7 +416,8 @@ defmodule Platform.Goals.Tools do
       outreach: goal.outreach,
       next_wake_at: clock && time(clock.next_wake_at),
       stalled: not is_nil(clock && clock.stalled_at),
-      open_wake_up_id: open
+      open_wake_up_id: open && open.id,
+      open_wake_up_kind: open && open.kind
     }
   end
 
@@ -570,3 +605,4 @@ defmodule Platform.Goals.Tools do
   defp time(nil), do: nil
   defp time(%DateTime{} = t), do: DateTime.to_iso8601(t)
 end
+
