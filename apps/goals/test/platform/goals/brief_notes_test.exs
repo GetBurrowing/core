@@ -56,21 +56,32 @@ defmodule Platform.Goals.BriefNotesTest do
   test "report pace comes from expected pace and is nil without a measurable due stop", c do
     today = Clock.now() |> DateTime.to_date()
     start = DateTime.add(Clock.now(), -40, :day)
-    Goals.log_reading(c.owner, c.goal.id, %{value: 500, measured_at: start})
+    assert {:ok, _} = Goals.log_reading(c.owner, c.goal.id, %{value: 500, measured_at: start})
 
     {:ok, [stop]} =
       Goals.put_stops(c.owner, c.goal.id, [
         %{label: "Finish", target_value: 1000, due_on: Date.add(today, 60)}
       ])
 
-    Goals.log_reading(c.owner, c.goal.id, %{value: 699, measured_at: Clock.now()})
+    assert {:ok, _} =
+             Goals.log_reading(c.owner, c.goal.id, %{
+               value: 699,
+               measured_at: DateTime.add(Clock.now(), -2, :day)
+             })
+
     action(c)
     day = date()
     Goals.prepare_brief(c.owner, day)
     assert {:ok, [item]} = Goals.brief_items(c.owner, day)
     assert item.pace == :behind
     put_now(DateTime.add(Clock.now(), 1))
-    Goals.log_reading(c.owner, c.goal.id, %{value: 700, measured_at: Clock.now()})
+
+    assert {:ok, _} =
+             Goals.log_reading(c.owner, c.goal.id, %{
+               value: 700,
+               measured_at: DateTime.add(Clock.now(), -2, :day)
+             })
+
     assert {:ok, [item]} = Goals.brief_items(c.owner, day)
     assert item.pace == :on_track
     Goals.update_stop(c.owner, c.goal.id, stop.id, %{due_on: nil})

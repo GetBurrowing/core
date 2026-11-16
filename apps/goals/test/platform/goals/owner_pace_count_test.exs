@@ -1,7 +1,6 @@
 defmodule Platform.Goals.OwnerPaceCountTest do
   use Platform.DataCase, async: false
   import Platform.GoalsFixtures
-  import Platform.Goals.OutcomeFixtures
   import Platform.Goals.BriefFixtures
   import Platform.Goals.PaceFixtures
   alias Platform.Goals
