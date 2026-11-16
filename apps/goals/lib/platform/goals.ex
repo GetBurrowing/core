@@ -1447,14 +1447,24 @@ defmodule Platform.Goals do
   @typedoc """
   What a page shows about who a goal belongs to and who sees it. `audience`
   is the list for the owner and the coach and `:hidden` for every other
-  viewer. `current_stop` is the first stop by position not yet reached.
+  viewer; a `:space` item also carries `handed?` (Goals 7/8). `current_stop`
+  is the first stop by position not yet reached.
   """
   @type card :: %{
           goal: Goal.t(),
           role: :owner | :coach | :viewer,
           owner_name: String.t(),
           coach_name: String.t() | nil,
-          audience: [%{type: :user | :team | :space, id: binary(), name: String.t()}] | :hidden,
+          audience:
+            [
+              %{
+                :type => :user | :team | :space,
+                :id => binary(),
+                :name => String.t(),
+                optional(:handed?) => boolean()
+              }
+            ]
+            | :hidden,
           current_stop: Stop.t() | nil
         }
 
@@ -1646,7 +1656,9 @@ defmodule Platform.Goals do
     grants
     |> Enum.map(fn gr ->
       {type, id} = grant_audience(gr)
-      {gr.goal_id, %{type: type, id: id, name: Map.get(names[type], id) || ""}}
+      item = %{type: type, id: id, name: Map.get(names[type], id) || ""}
+      item = if type == :space, do: Map.put(item, :handed?, gr.handed_at != nil), else: item
+      {gr.goal_id, item}
     end)
     |> Enum.group_by(&elem(&1, 0), &elem(&1, 1))
   end
@@ -1748,6 +1760,50 @@ defmodule Platform.Goals do
       %{id: id, name: name || "", detail: detail.(id), open?: MapSet.member?(open, {type, id})}
     end)
     |> Enum.sort_by(&{String.downcase(&1.name), &1.id})
+  end
+
+  # ── hand-off to a space's agents (Goals 7/8, task 01a1dfc1-dffb) ─────────
+  # Thin entry points: the rules live in `Platform.Goals.Handoff`.
+
+  @doc """
+  Hands a goal already opened to `space_id` to that space's agents. The user
+  must be a root admin AND a participant of the space; an unseen goal or a
+  malformed id is `:not_found`, a space without a grant `:not_linked`. A
+  coachless goal gets the space's leader as coach when the owner hands it,
+  else `:no_coach`; the coach must be in the space (`:coach_not_in_space`).
+  Idempotent.
+  """
+  def hand_goal_to_space(actor, goal_id, space_id) do
+    with :ok <- check_enabled() do
+      in_transaction(fn ->
+        with {:ok, goal} <- locked_goal(actor, goal_id),
+             do: Platform.Goals.Handoff.hand(actor, goal, owner?(actor, goal), space_id)
+      end)
+    end
+  end
+
+  @doc "Clears a space's hand-off: the owner or a user who may hand. Not handed is ok unchanged."
+  def take_goal_back(actor, goal_id, space_id) do
+    with :ok <- check_enabled() do
+      in_transaction(fn ->
+        with {:ok, goal} <- locked_goal(actor, goal_id),
+             do: Platform.Goals.Handoff.take_back(actor, goal, owner?(actor, goal), space_id)
+      end)
+    end
+  end
+
+  @doc "The agents working a visible goal in the spaces it is handed to, derived live."
+  def list_contributors(actor, goal_id) do
+    with :ok <- check_enabled(),
+         {:ok, goal} <- fetch_visible(actor, goal_id, false),
+         do: {:ok, Platform.Goals.Handoff.contributors(actor, goal)}
+  end
+
+  # update_goal/3's lock order: clock, then goal.
+  defp locked_goal(actor, goal_id) do
+    with {:ok, goal} <- fetch_visible(actor, goal_id, false),
+         :ok <- lock_clock(actor, goal),
+         do: fetch_visible(actor, goal_id, true)
   end
 
   # ── internals ────────────────────────────────────────────────────────────

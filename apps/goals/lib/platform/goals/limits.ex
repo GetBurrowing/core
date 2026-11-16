@@ -12,6 +12,7 @@ defmodule Platform.Goals.Limits do
   def stall_after, do: value(:stall_after, 3)
   def ask_expiry_days, do: value(:ask_expiry_days, 14)
   def max_open_tasks, do: value(:max_open_tasks, 5)
+  def max_tasks_per_wake_up, do: value(:max_tasks_per_wake_up, 3)
   def max_cards, do: value(:max_cards, 20)
   def max_addressed, do: value(:max_addressed, 20)
   def briefing_entries, do: value(:briefing_entries, 20)

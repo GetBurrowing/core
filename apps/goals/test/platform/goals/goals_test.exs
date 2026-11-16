@@ -260,6 +260,19 @@ defmodule Platform.Goals.GoalsTest do
           do: assert(source =~ "def #{name}(", "#{name} is not in the scanned file")
     end
 
+    test "the scan reads the Goals 7/8 hand-off module and its entry points" do
+      assert File.exists?(Path.join(@lib, "platform/goals/handoff.ex"))
+      source = File.read!(Path.join(@lib, "platform/goals.ex"))
+
+      for name <- ~w(hand_goal_to_space take_goal_back list_contributors),
+          do: assert(source =~ "def #{name}(", "#{name} is not in the scanned file")
+
+      handoff = File.read!(Path.join(@lib, "platform/goals/handoff.ex"))
+      assert hits(handoff) == []
+      refute actorless_goal_binding?(handoff)
+      assert handoff =~ "Visibility.visible_goals(actor)"
+    end
+
     test "Platform.Goals has no arity-0 function but enabled?/0" do
       zero = for {name, 0} <- Platform.Goals.__info__(:functions), do: name
       assert zero == [:enabled?]
