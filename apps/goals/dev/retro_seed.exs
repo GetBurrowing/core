@@ -54,9 +54,9 @@ defmodule Platform.Goals.DevRetroSeed do
     ok!(Goals.log_reading(user, g.id, %{value: 500, measured_at: Clock.now()}))
     for cycle <- 1..if(flat?, do: 3, else: 1) do
       check = fire(coach, g)
-      ok!(Goals.close_wake_up(coach, check.id, "do", %{title: "Prepared a small experiment", prediction: "A shorter format will help", predicted_change: 40, predicted_by: DateTime.to_date(Clock.now())}))
+      ok!(Goals.close_wake_up(coach, check.id, "do", %{title: "Prepared a small experiment", prediction: "A shorter format will help", predicted_change: 40, predicted_by: Date.add(DateTime.to_date(Clock.now()), 1)}))
       unless flat? do
-        ok!(Goals.add_entry(coach, g.id, %{kind: "action", title: "Try a longer format", prediction: "The longer format will grow faster", predicted_change: 100, predicted_by: DateTime.to_date(Clock.now()), reading_id: check.reading_id, occurred_at: Clock.now()}))
+        ok!(Goals.add_entry(coach, g.id, %{kind: "action", title: "Try a longer format", prediction: "The longer format will grow faster", predicted_change: 100, predicted_by: Date.add(DateTime.to_date(Clock.now()), 1), reading_id: check.reading_id, occurred_at: Clock.now()}))
       end
       unless flat?, do: ok!(Goals.log_reading(user, g.id, %{value: 555, measured_at: DateTime.add(Clock.now(), 60)}))
       wake = fire(coach, g)
