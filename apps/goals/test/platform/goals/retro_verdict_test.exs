@@ -1,5 +1,5 @@
 defmodule Platform.Goals.RetroVerdictTest do
-  use ExUnit.Case, async: false
+  use Platform.DataCase, async: false
   alias Platform.Goals.Retro
   @today ~D[2026-02-07]
 

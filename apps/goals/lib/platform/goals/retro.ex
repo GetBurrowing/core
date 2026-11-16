@@ -58,7 +58,10 @@ defmodule Platform.Goals.Retro do
   defp prediction_rows(actor, goal, now) do
     final_ids =
       Repo.all(
-        from(e in rows(actor, Entry, goal.id), where: e.kind == "retro", select: e.details)
+        from(e in rows(actor, Entry, goal.id),
+          where: e.kind == "retro" and e.occurred_at <= ^now,
+          select: e.details
+        )
       )
       |> Enum.flat_map(&Map.get(&1, "verdicts", []))
       |> Enum.filter(&(&1["verdict"] in @final))
@@ -121,7 +124,13 @@ defmodule Platform.Goals.Retro do
     if reading do
       zone = zone(actor, goal)
       # Start of the next local day minus one microsecond handles DST boundaries.
-      {:ok, next_day} = DateTime.new(Date.add(entry.predicted_by, 1), ~T[00:00:00], zone)
+      next_day =
+        case DateTime.new(Date.add(entry.predicted_by, 1), ~T[00:00:00], zone) do
+          {:ok, time} -> time
+          {:ambiguous, earlier, _} -> earlier
+          {:gap, _, after_gap} -> after_gap
+        end
+
       deadline = DateTime.add(next_day, -1, :microsecond)
       cutoff = if DateTime.after?(deadline, now), do: now, else: deadline
 

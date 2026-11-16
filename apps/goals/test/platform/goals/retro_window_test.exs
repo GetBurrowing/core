@@ -138,4 +138,35 @@ defmodule Platform.Goals.RetroWindowTest do
     assert n.first.id == n.previous.id and n.first.id == n.baseline.id
     assert Decimal.equal?(n.delta, 10) and Decimal.equal?(n.change_since, 10)
   end
+
+  test "three consecutive flat windows require a goal change and use the answer store", c do
+    {:ok, _} =
+      Goals.log_reading(c.owner, c.goal.id, %{value: 10, measured_at: ~U[2026-02-04 06:00:00Z]})
+
+    wake = fire(c.goal)
+    {:ok, result} = Goals.close_wake_up(c.coach, wake.id, "ask", ask_attrs())
+    {:ok, _} = Goals.answer_ask(c.owner, result.ask.id, "used")
+
+    for _ <- 1..2 do
+      wake = fire(c.goal)
+      {:ok, result} = Goals.close_wake_up(c.coach, wake.id, "wait", %{reason: "No new signal"})
+      # Stage 2 owns producing retros. Fixture a closed retro from a real clock wake.
+      result.wake_up
+      |> Platform.Goals.WakeUp.changeset(%{
+        kind: "retro",
+        outcome: "retro",
+        briefing: %{"retro" => %{"flat" => true}}
+      })
+      |> Repo.update!()
+    end
+
+    now = DateTime.add(Clock.now(), 1)
+    assert {:ok, window} = Retro.window(c.owner, c.goal.id, now)
+    assert window.flat_retros == 3 and window.goal_change_required
+    assert window.answers == %{used: 1, declined: 0, ignored: 0}
+    {:ok, _} = Goals.log_reading(c.owner, c.goal.id, %{value: 11, measured_at: now})
+
+    assert {:ok, %{flat: false, flat_retros: 0, goal_change_required: false}} =
+             Retro.window(c.owner, c.goal.id, now)
+  end
 end
