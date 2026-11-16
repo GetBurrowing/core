@@ -12,7 +12,13 @@ defmodule Platform.Goals.DisabledTest do
     assert length(functions) >= 68
 
     # Goals 7/8: the hand-off functions are in the iterated set.
-    for f <- [hand_goal_to_space: 3, take_goal_back: 3, list_contributors: 2, ensure_space_card: 3, space_card: 2],
+    for f <- [
+          hand_goal_to_space: 3,
+          take_goal_back: 3,
+          list_contributors: 2,
+          ensure_space_card: 3,
+          space_card: 2
+        ],
         do: assert(f in functions, "#{inspect(f)} is not exported")
 
     # Goals 4/8: the page reads are in the iterated set.

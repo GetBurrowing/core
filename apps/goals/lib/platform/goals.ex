@@ -1519,7 +1519,7 @@ defmodule Platform.Goals do
 
       agent_ids =
         ([goal.coach_agent_id | Enum.map(authors, &elem(&1, 0))] ++
-          Enum.map(Platform.Goals.Handoff.contributors(actor, goal), & &1.agent_id))
+           Enum.map(Platform.Goals.Handoff.contributors(actor, goal), & &1.agent_id))
         |> Enum.reject(&is_nil/1)
         |> Enum.uniq()
 

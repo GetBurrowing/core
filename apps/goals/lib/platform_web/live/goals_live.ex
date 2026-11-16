@@ -393,6 +393,7 @@ defmodule PlatformWeb.GoalsLive do
         {:ok, _} ->
           if type == "space" and audience not in audience_keys(card),
             do: Goals.ensure_space_card(socket.assigns.user, card.goal.id, id)
+
           {:noreply, reload(socket)}
 
         {:error, :audience_not_available} ->

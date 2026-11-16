@@ -80,8 +80,10 @@ defmodule PlatformWeb.GoalsPageTest do
     viewer = enabled_user_for_workers!(member!(c.org_id), c.org_id)
     join_space!(space.id, :user, viewer.id)
     child = page(c.conn, viewer, goal)
+
     for copy <- ["Who's working on it", coach.name, "leads", x.name, y.name],
-      do: assert(has_element?(child, "[data-role=goal-workers]", copy))
+        do: assert(has_element?(child, "[data-role=goal-workers]", copy))
+
     refute has_element?(child, "[data-role=goal-workers] button")
     for copy <- ["Outline", "Draft", "Review", "Open", "Blocked", "Done"], do: assert(has_element?(child, "[data-role=goal-workers]", copy))
     [first, second, third] = child |> element("[data-role=goal-workers]") |> render() |> Floki.parse_fragment!() |> Floki.find("[data-role=goal-worker-task]") |> Enum.map(&Floki.text/1)

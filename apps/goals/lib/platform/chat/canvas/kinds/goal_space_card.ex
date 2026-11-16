@@ -37,7 +37,12 @@ defmodule Platform.Goals.CanvasKinds.GoalSpaceCard do
       )
 
     ~H"""
-    <.live_component module={PlatformWeb.GoalsSpaceCardComponent} id={@component_id} canvas_id={@canvas_id} viewer={@viewer} />
+    <.live_component
+      module={PlatformWeb.GoalsSpaceCardComponent}
+      id={@component_id}
+      canvas_id={@canvas_id}
+      viewer={@viewer}
+    />
     """
   end
 end
