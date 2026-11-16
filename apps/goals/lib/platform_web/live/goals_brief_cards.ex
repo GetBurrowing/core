@@ -122,7 +122,9 @@ defmodule PlatformWeb.GoalsBriefCards do
       </li>
     </ul>
     <p :if={@item.number} class="mt-3 text-sm text-base-content">
-      <b>Where we are:</b> {number(@item.number.value)} of {number(@item.number.target)} {@item.number.unit}.{pace_clause(Map.get(@item, :pace))}
+      <b>Where we are:</b> {number(@item.number.value)} of {number(@item.number.target)} {@item.number.unit}.{pace_clause(
+        Map.get(@item, :pace)
+      )}
     </p>
     <div :if={@item.state == :open} class="mt-3 flex flex-wrap items-center gap-2">
       <button
@@ -309,17 +311,44 @@ defmodule PlatformWeb.GoalsBriefCards do
     <p :if={@item.stalled} class="mt-2 text-sm font-bold text-base-content">
       The number has not moved across {@item.flat_retros} retros.
     </p>
-    <a href={"/m/goals?goal=#{@item.goal.id}&retro=#{@item.entry.id}"} class={[link(), "mt-2 inline-block text-sm"]}>
+    <a
+      href={"/m/goals?goal=#{@item.goal.id}&retro=#{@item.entry.id}"}
+      class={[link(), "mt-2 inline-block text-sm"]}
+    >
       Read the retro
     </a>
     <div :if={@item.state == :open} class="mt-3">
-      <button type="button" class={btn_primary()} phx-click="retro_noted" phx-target={@target}
-        phx-value-item_id={@item.id} phx-value-noted="true" data-action="retro_noted">Looks good</button>
+      <button
+        type="button"
+        class={btn_primary()}
+        phx-click="retro_noted"
+        phx-target={@target}
+        phx-value-item_id={@item.id}
+        phx-value-noted="true"
+        data-action="retro_noted"
+      >
+        Looks good
+      </button>
     </div>
-    <div :if={@item.state == :done} class="mt-3 flex flex-wrap items-center gap-x-3 gap-y-1 text-sm text-subtle" data-role="goals-brief-receipt">
-      <b class="inline-flex items-center gap-1 text-success"><.icon name="hero-check" class="size-4" /> Noted</b>
-      <button type="button" class={link()} phx-click="retro_noted" phx-target={@target}
-        phx-value-item_id={@item.id} phx-value-noted="false" data-action="retro_noted">Undo</button>
+    <div
+      :if={@item.state == :done}
+      class="mt-3 flex flex-wrap items-center gap-x-3 gap-y-1 text-sm text-subtle"
+      data-role="goals-brief-receipt"
+    >
+      <b class="inline-flex items-center gap-1 text-success">
+        <.icon name="hero-check" class="size-4" /> Noted
+      </b>
+      <button
+        type="button"
+        class={link()}
+        phx-click="retro_noted"
+        phx-target={@target}
+        phx-value-item_id={@item.id}
+        phx-value-noted="false"
+        data-action="retro_noted"
+      >
+        Undo
+      </button>
     </div>
     """
   end
@@ -338,7 +367,11 @@ defmodule PlatformWeb.GoalsBriefCards do
       The number has not moved across {@item.flat_retros} retros.
     </p>
     <p class="mt-1 text-sm text-base-content">{@item.change.summary}</p>
-    <p :if={@item.change.state == :switched} class="mt-3 inline-flex items-center gap-1 text-sm font-bold text-success" data-role="goals-brief-receipt">
+    <p
+      :if={@item.change.state == :switched}
+      class="mt-3 inline-flex items-center gap-1 text-sm font-bold text-success"
+      data-role="goals-brief-receipt"
+    >
       <.icon name="hero-check" class="size-4" /> {if @goal_change?, do: "Changed", else: "Switched"}
     </p>
     <div :if={@item.change.state != :kept} class="mt-2 text-sm text-subtle">
@@ -346,19 +379,37 @@ defmodule PlatformWeb.GoalsBriefCards do
       <p :for={line <- @item.change.lines}>{line}</p>
     </div>
     <div :if={@item.change.state == :open} class="mt-3 flex flex-wrap items-center gap-2">
-      <button type="button" class={btn_primary()} phx-click="retro_switch" phx-target={@target}
-        phx-value-item_id={@item.id} phx-value-entry_id={@item.entry_id} data-action="retro_switch">
+      <button
+        type="button"
+        class={btn_primary()}
+        phx-click="retro_switch"
+        phx-target={@target}
+        phx-value-item_id={@item.id}
+        phx-value-entry_id={@item.entry_id}
+        data-action="retro_switch"
+      >
         {if @goal_change?, do: "Change the goal", else: "Switch"}
       </button>
-      <button type="button" class={btn_ghost()} phx-click="retro_keep" phx-target={@target}
-        phx-value-item_id={@item.id} phx-value-entry_id={@item.entry_id} data-action="retro_keep">
+      <button
+        type="button"
+        class={btn_ghost()}
+        phx-click="retro_keep"
+        phx-target={@target}
+        phx-value-item_id={@item.id}
+        phx-value-entry_id={@item.entry_id}
+        data-action="retro_keep"
+      >
         {if @goal_change?, do: "Keep the goal", else: "Keep it"}
       </button>
     </div>
     <p :if={@item.change.state == :open && !@goal_change?} class="mt-2 text-sm text-subtle">
       The check-in stays as it is until you choose.
     </p>
-    <p :if={@item.change.state == :kept} class="mt-3 text-sm text-subtle" data-role="goals-brief-receipt">
+    <p
+      :if={@item.change.state == :kept}
+      class="mt-3 text-sm text-subtle"
+      data-role="goals-brief-receipt"
+    >
       {if @goal_change?, do: "The goal stays as it is.", else: "The check-in stays as it is."}
     </p>
     """
@@ -370,7 +421,11 @@ defmodule PlatformWeb.GoalsBriefCards do
   def notice_card(assigns) do
     ~H"""
     <p class="mt-1 text-sm text-base-content">
-      <.coach item={@item} /> has slowed down on this goal. Nothing from the last {@item.ignored_briefs} briefs was answered, so check-ins now come {paced_words(@item)} and <.coach item={@item} /> keeps one thing waiting at most. Answer anything from <.coach item={@item} /> and the usual rhythm comes back.
+      <.coach item={@item} />
+      has slowed down on this goal. Nothing from the last {@item.ignored_briefs} briefs was answered, so check-ins now come {paced_words(
+        @item
+      )} and <.coach item={@item} /> keeps one thing waiting at most. Answer anything from
+      <.coach item={@item} /> and the usual rhythm comes back.
     </p>
     """
   end

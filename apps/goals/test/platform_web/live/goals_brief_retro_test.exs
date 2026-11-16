@@ -261,6 +261,15 @@ defmodule PlatformWeb.GoalsBriefRetroTest do
     refute has_element?(view, card(:retro))
   end
 
+  test "an owner without goals.use sees no retro card", c do
+    ungranted = member!(c.org)
+    goal = goal!(ungranted, c.org, %{coach_agent_id: c.coach.id})
+    retro(%{c | owner: ungranted, goal: goal})
+    build()
+    {:ok, view, _} = open(c.conn, ungranted)
+    refute has_element?(view, card(:retro))
+  end
+
   defp note_id(c, entry) do
     {:ok, items} = Goals.brief_items(c.owner, date())
     Enum.find(items, &(&1.kind == :retro && &1.entry_id == entry.id)).id
