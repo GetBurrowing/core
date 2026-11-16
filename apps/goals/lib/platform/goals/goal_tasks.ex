@@ -35,8 +35,6 @@ defmodule Platform.Goals.GoalTasks do
   alias Platform.Repo
   alias Platform.Tasks.Task
 
-  @phases ~w(planning execution review)
-
   @doc false
   @spec create_for_wake_up(Agent.t(), map(), term()) :: {:ok, [Task.t()]} | {:error, term()}
   def create_for_wake_up(coach, goal, raw) do
