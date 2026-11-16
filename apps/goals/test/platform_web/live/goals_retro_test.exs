@@ -143,11 +143,62 @@ defmodule PlatformWeb.GoalsRetroTest do
     assert goal.rhythm == "weekdays"
     assert has_element?(view, "[data-role=retro-change-result]", "Switched.")
 
+    assert has_element?(
+             view,
+             "[data-role=retro-change-result]",
+             "Check-ins: every day -> weekdays"
+           )
+
+    reloaded = open(c.conn, c.owner, c.goal, entry)
+
+    assert has_element?(
+             reloaded,
+             "[data-role=retro-change-result]",
+             "Check-ins: every day -> weekdays"
+           )
+
+    {:ok, _} = Goals.update_goal(c.owner, c.goal.id, %{rhythm: "weekly"})
+    later = open(c.conn, c.owner, c.goal, entry)
+
+    assert has_element?(
+             later,
+             "[data-role=retro-change-result]",
+             "Check-ins: every day -> weekdays"
+           )
+
     view
     |> form("[data-role=goals-brief-ask]", %{question: "What helped most?"})
     |> render_submit()
 
     assert render(view) =~ "Sent."
+  end
+
+  test "target change is grouped without decimal zeros in the retro and brief receipts", c do
+    {:ok, _} =
+      Goals.update_goal(c.owner, c.goal.id, %{target_value: "1000.000", unit: "subscribers"})
+
+    entry =
+      retro(c, %{
+        "goal_change" => %{
+          "kind" => "target",
+          "summary" => "Aim for 600",
+          "set" => %{"target_value" => "600.000"}
+        }
+      })
+
+    expected = "Target: 1,000 -> 600 subscribers"
+    view = open(c.conn, c.owner, c.goal, entry)
+    assert render(view) |> Floki.parse_fragment!() |> Floki.text() =~ expected
+    assert {:ok, _} = Goals.prepare_brief(c.owner, date())
+    assert {:ok, items} = Goals.brief_items(c.owner, date())
+    assert Enum.find(items, &(&1.kind == :retro_change)).change.lines == [expected]
+    view |> element("button[phx-click=retro_switch]") |> render_click()
+    assert has_element?(view, "[data-role=retro-change-result]", expected)
+    {:ok, _} = Goals.update_goal(c.owner, c.goal.id, %{target_value: 900, unit: "people"})
+    reloaded = open(c.conn, c.owner, c.goal, entry)
+    assert has_element?(reloaded, "[data-role=retro-change-result]", expected)
+    assert {:ok, items} = Goals.brief_items(c.owner, date())
+    assert Enum.find(items, &(&1.kind == :retro_change)).change.lines == [expected]
   end
 
   test "Spanish shape omits empty sections; Keep changes no goal setting and cannot be repeated",

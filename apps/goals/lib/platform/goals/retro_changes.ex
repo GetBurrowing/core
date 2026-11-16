@@ -216,7 +216,7 @@ defmodule Platform.Goals.RetroChanges do
             goal_change_kind: proposed["kind"],
             summary: proposed["summary"],
             set: proposed["set"],
-            lines: lines(goal, proposed["set"]),
+            lines: lines(goal, proposed["set"], answer && answer.details["from"]),
             state: state
           },
           else: nil
@@ -249,19 +249,45 @@ defmodule Platform.Goals.RetroChanges do
     end
   end
 
-  defp lines(goal, set) do
+  @doc "JSON-safe settings before an owner decision, including the target unit."
+  def before_values(goal, set) do
+    Map.new(["unit" | Map.keys(set)], fn key ->
+      value = Map.get(goal, String.to_existing_atom(key))
+      value = if match?(%Decimal{}, value), do: Decimal.to_string(value, :normal), else: value
+      {key, value}
+    end)
+  end
+
+  defp lines(goal, set, from) do
+    before = from || before_values(goal, set)
+
     Enum.map(Enum.sort(set), fn {key, value} ->
-      old = Map.get(goal, String.to_existing_atom(key))
+      old = before[key]
 
       case key do
-        "status" -> "Finish this goal"
-        "rhythm" -> "Check-ins: #{human(old)} -> #{human(value)}"
-        "outreach" -> "Nudges: #{old} -> #{value}"
-        "target_value" -> "Target: #{old} -> #{value} #{goal.unit}"
-        "rhythm_weekday" -> "Check-in weekday: #{old} -> #{value}"
-        "retro_every" -> "Retro every: #{old} -> #{value} check-ins"
-        "title" -> "Title: #{old} -> #{value}"
-        "why" -> "Why: #{old} -> #{value}"
+        "status" ->
+          "Finish this goal"
+
+        "rhythm" ->
+          "Check-ins: #{human(old)} -> #{human(value)}"
+
+        "outreach" ->
+          "Nudges: #{old} -> #{value}"
+
+        "target_value" ->
+          "Target: #{Platform.Goals.NumberFormatting.format(old)} -> #{Platform.Goals.NumberFormatting.format(value)} #{before["unit"]}"
+
+        "rhythm_weekday" ->
+          "Check-in weekday: #{old} -> #{value}"
+
+        "retro_every" ->
+          "Retro every: #{old} -> #{value} check-ins"
+
+        "title" ->
+          "Title: #{old} -> #{value}"
+
+        "why" ->
+          "Why: #{old} -> #{value}"
       end
     end)
   end

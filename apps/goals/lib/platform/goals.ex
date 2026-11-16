@@ -577,7 +577,8 @@ defmodule Platform.Goals do
                      "decision" => decision,
                      "retro_entry_id" => retro.id,
                      "change" => kind,
-                     "set" => change["set"]
+                     "set" => change["set"],
+                     "from" => Platform.Goals.RetroChanges.before_values(goal, change["set"])
                    }
                  }) do
             {:ok, %{decision: decision, goal: updated, entry: entry}}

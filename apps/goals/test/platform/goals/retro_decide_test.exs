@@ -59,6 +59,41 @@ defmodule Platform.Goals.RetroDecideTest do
              Goals.decide_retro_change(c.owner, c.goal.id, entry.id, "keep")
   end
 
+  test "switch receipts preserve before values and units across later settings edits", c do
+    {:ok, _} =
+      Goals.update_goal(c.owner, c.goal.id, %{target_value: "1234567.500", unit: "words"})
+
+    {:ok, retro} =
+      Goals.add_entry(c.coach, c.goal.id, %{
+        kind: "retro",
+        title: "Smaller target",
+        details: %{
+          "goal_change" => %{
+            "kind" => "target",
+            "summary" => "Make it reachable",
+            "set" => %{"target_value" => "1000.000"}
+          }
+        }
+      })
+
+    expected = ["Target: 1,234,567.5 -> 1,000 words"]
+    assert {:ok, %{change: %{lines: ^expected}}} = Goals.get_retro(c.owner, c.goal.id, retro.id)
+
+    assert {:ok, %{entry: decision}} =
+             Goals.decide_retro_change(c.owner, c.goal.id, retro.id, "switch")
+
+    assert Decimal.equal?(Decimal.new(decision.details["from"]["target_value"]), "1234567.500")
+    assert decision.details["from"]["unit"] == "words"
+
+    assert {:ok, %{change: %{lines: ^expected, state: :switched}}} =
+             Goals.get_retro(c.owner, c.goal.id, retro.id)
+
+    {:ok, _} = Goals.update_goal(c.owner, c.goal.id, %{target_value: 2000, unit: "pages"})
+
+    assert {:ok, %{change: %{lines: ^expected, state: :switched}}} =
+             Goals.get_retro(c.owner, c.goal.id, retro.id)
+  end
+
   test "only owner can decide and invalid decisions write nothing", c do
     entry = proposal(c, %{"rhythm" => "weekdays"})
     viewer = member!(c.org)

@@ -114,6 +114,13 @@ defmodule PlatformWeb.GoalsBriefRetroTest do
     assert {:ok, goal} = Goals.get_goal(c.owner, c.goal.id)
     assert goal.rhythm == "weekdays"
     assert has_element?(view, card(:retro_change), "Switched")
+    assert has_element?(view, card(:retro_change), "Check-ins: every day -> weekdays")
+    {:ok, reloaded, _} = open(c.conn, c.owner)
+    assert has_element?(reloaded, card(:retro_change), "Check-ins: every day -> weekdays")
+    {:ok, _} = Goals.update_goal(c.owner, c.goal.id, %{rhythm: "weekly"})
+    {:ok, later, _} = open(c.conn, c.owner)
+    assert has_element?(later, card(:retro_change), "Check-ins: every day -> weekdays")
+
     refute render(view) =~ "1 needs your call"
     {:ok, before} = Goals.list_entries(c.owner, c.goal.id)
 
@@ -154,9 +161,13 @@ defmodule PlatformWeb.GoalsBriefRetroTest do
   end
 
   test "flat goal change card has exact controls and changed receipt", c do
+    {:ok, _} =
+      Goals.update_goal(c.owner, c.goal.id, %{target_value: "1000.000", unit: "subscribers"})
+
     change(c, :goal)
     build()
     {:ok, view, _} = open(c.conn, c.owner)
+    assert has_element?(view, card(:retro_change), "Target: 1,000 -> 600 subscribers")
     assert has_element?(view, card(:retro), "The number has not moved across 3 retros.")
     assert has_element?(view, card(:retro_change), "Change the goal?")
     assert has_element?(view, card(:retro_change), "The number has not moved across 3 retros.")
@@ -168,6 +179,13 @@ defmodule PlatformWeb.GoalsBriefRetroTest do
     |> render_click()
 
     assert has_element?(view, card(:retro_change), "Changed")
+    assert has_element?(view, card(:retro_change), "Target: 1,000 -> 600 subscribers")
+    {:ok, reloaded, _} = open(c.conn, c.owner)
+    assert has_element?(reloaded, card(:retro_change), "Target: 1,000 -> 600 subscribers")
+    {:ok, _} = Goals.update_goal(c.owner, c.goal.id, %{unit: "people"})
+    {:ok, later, _} = open(c.conn, c.owner)
+    assert has_element?(later, card(:retro_change), "Target: 1,000 -> 600 subscribers")
+
     assert {:ok, %{target_value: value}} = Goals.get_goal(c.owner, c.goal.id)
     assert Decimal.equal?(value, 600)
   end

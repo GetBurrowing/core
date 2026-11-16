@@ -66,26 +66,5 @@ defmodule PlatformWeb.GoalsComponents do
       "1,250.5"
   """
   @spec format_number(Decimal.t() | integer()) :: String.t()
-  def format_number(n) when is_integer(n), do: format_number(Decimal.new(n))
-
-  def format_number(%Decimal{} = n) do
-    text = n |> Decimal.normalize() |> Decimal.to_string(:normal)
-    {sign, text} = if String.starts_with?(text, "-"), do: {"-", tail(text)}, else: {"", text}
-
-    case String.split(text, ".", parts: 2) do
-      [int] -> sign <> group(int)
-      [int, frac] -> sign <> group(int) <> "." <> frac
-    end
-  end
-
-  defp tail("-" <> rest), do: rest
-
-  defp group(int) do
-    int
-    |> String.reverse()
-    |> String.graphemes()
-    |> Enum.chunk_every(3)
-    |> Enum.map_join(",", &Enum.join/1)
-    |> String.reverse()
-  end
+  defdelegate format_number(n), to: Platform.Goals.NumberFormatting, as: :format
 end
