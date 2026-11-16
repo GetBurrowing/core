@@ -19,21 +19,21 @@ defmodule Platform.Goals.DevRetroSeed do
     previous = for key <- [:clock_now, :wake_up_dispatcher], do: {key, Application.fetch_env(:goals, key)}
     Application.put_env(:goals, :wake_up_dispatcher, fn _ -> {:error, :runtime_offline} end)
     try do
+      slowdown(user, org, coach, day)
       video = review(user, org, coach, day, "How to Computer", "do", -5, false)
       spanish = review(user, org, coach, day, "Get by in Spanish by June", "coach", -5, false)
       flat = review(user, org, coach, day, "Build a steady writing habit", "do", -7, true)
-      slowdown(user, org, coach, day)
       for {title, value, due} <- [{"A little behind", 699, true}, {"On the hoped-for pace", 700, true}, {"No pace yet", 700, false}] do
         now(at(day, -40))
         g = goal(user, org, coach, %{title: title, retro_every: 60})
         ok!(Goals.log_reading(user, g.id, %{value: 500, measured_at: Clock.now()}))
         ok!(Goals.put_stops(user, g.id, [%{label: "First 1,000", target_value: 1000, due_on: if(due, do: Date.add(day, 60), else: nil)}]))
-        now(actual)
+        now(DateTime.utc_now())
         ok!(Goals.log_reading(user, g.id, %{value: value, measured_at: DateTime.add(Clock.now(), -60)}))
         ok!(Goals.add_entry(coach, g.id, %{kind: "action", title: "Prepared the next draft", occurred_at: Clock.now()}))
       end
-      now(actual)
-      Disseminator.run(now: actual, notifications_module: __MODULE__)
+      now(DateTime.utc_now())
+      Disseminator.run(now: Clock.now(), notifications_module: __MODULE__)
       IO.inspect(%{date: day, video: video.id, spanish: spanish.id, flat: flat.id}, label: "Retro preview")
     after
       for {key, old} <- previous do
@@ -89,6 +89,7 @@ defmodule Platform.Goals.DevRetroSeed do
   end
 
   defp fire(coach, g) do
+    if Goals.clock_status(coach, g.id) == {:ok, nil}, do: Clock.tick(Clock.now())
     {:ok, clock} = Goals.clock_status(coach, g.id)
     now(clock.next_wake_at)
     :ok = Clock.tick(Clock.now())
