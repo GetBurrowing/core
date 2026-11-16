@@ -94,9 +94,9 @@ defmodule Platform.Goals.ExtensionTest do
       assert %{path: "/m/goals"} = Enum.find(IconRail.destinations(), &(&1.key == :goals))
     end
 
-    test "registers the goals bundle and no canvas kind" do
+    test "registers the goals bundle and practice canvas kind" do
       assert [%{name: "goals"}] = Extension.mcp_tool_bundles()
-      assert Extension.canvas_kinds() == []
+      assert Extension.canvas_kinds() == [Platform.Goals.CanvasKinds.FlashCards]
     end
 
     test "validates" do

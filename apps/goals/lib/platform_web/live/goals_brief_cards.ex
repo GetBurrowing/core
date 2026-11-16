@@ -18,6 +18,7 @@ defmodule PlatformWeb.GoalsBriefCards do
   attr(:target, :any, required: true)
   attr(:ask_open, :boolean, default: false)
   attr(:blank, :boolean, default: false)
+  attr(:viewer, :any, default: nil)
 
   def card(assigns) do
     assigns = assign(assigns, :tag, tag(assigns.item.kind))
@@ -36,11 +37,14 @@ defmodule PlatformWeb.GoalsBriefCards do
         ]}>
           {@tag.label}
         </span>
+        <span :if={@item.kind == :practice && @item.streak && @item.streak > 0} data-role="goals-streak" class="rounded-full bg-warning-dim px-2 py-0.5 text-[11px] font-bold text-base-content">{@item.streak}-day streak</span>
       </div>
       <h4 class="text-base font-semibold text-base-content">{@item.goal.title}</h4>
       <.report :if={@item.kind == :report} {assigns} />
       <.offer :if={@item.kind == :offer} {assigns} />
       <.linked_ask :if={@item.kind in [:idea, :question]} {assigns} />
+      <p :if={@item.kind == :practice} class="mt-1 text-sm text-base-content"><.coach item={@item} /> made today's {length(@item.cards)} {if length(@item.cards) == 1, do: "card", else: "cards"}.</p>
+      <.live_component :if={@item.kind == :practice} module={PlatformWeb.GoalsFlashCardsComponent} id={"brief-practice-" <> @item.id} ask_id={@item.ask.id} viewer={@viewer} />
       <.footer item={@item} />
     </article>
     """

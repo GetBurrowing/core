@@ -41,7 +41,8 @@ defmodule Platform.Goals.Extension do
   end
 
   @impl true
-  def canvas_kinds, do: []
+  def canvas_kinds,
+    do: if(Platform.Goals.enabled?(), do: [Platform.Goals.CanvasKinds.FlashCards], else: [])
 
   # Every `goal_*` name is Goals', listed or not, so an invented one gets
   # Goals' unknown_tool answer, not core's.

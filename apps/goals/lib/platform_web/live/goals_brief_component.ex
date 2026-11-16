@@ -27,7 +27,13 @@ defmodule PlatformWeb.GoalsBriefComponent do
   - The researching card belongs to the creation conversation (Goals 5/8).
   - A goal with no measurable reading or target has no number sentence;
     the prototype shows only a measured sample.
-  - Practice is a queued card here; its playable body is added in stage 4.
+  - A practice pass is recorded only when it ends, so leaving mid-pass loses
+    that pass; unrelated live updates preserve the current pass.
+  - The reading sentence (That makes) appears only when the owner logs a
+    self-reported practice reading. Done for today remains for every addressed
+    reader: the stage's declaration called this the first sentence, but its
+    inventory and tests restrict the reading sentence.
+  - Practice shares the one stop footer; the prototype's 180 so far is sample.
   """
   use PlatformWeb, :live_component
   alias Platform.Goals
@@ -167,6 +173,7 @@ defmodule PlatformWeb.GoalsBriefComponent do
             <GoalsBriefCards.card
               item={item}
               target={@myself}
+              viewer={@reader}
               ask_open={MapSet.member?(@open_asks, item.id)}
               blank={MapSet.member?(@blank, item.id)}
             />
