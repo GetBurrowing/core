@@ -42,7 +42,7 @@ defmodule Platform.Release.IrreversibleMigrationsTest do
     {"modify ", ~r/modify /},
     {"execute", ~r/execute/},
     {"unique_index", ~r/unique_index/},
-    {"create constraint", ~r/create constraint/}
+    {"create constraint", ~r/create\(?\s*constraint/}
   ]
 
   @waiver ~r/^[ \t]*#[ \t]*old-code-compatible:[ \t]*\S/m
@@ -180,6 +180,30 @@ defmodule Platform.Release.IrreversibleMigrationsTest do
     assert violations([{path, bare}], [], @cutoff) != []
   end
 
+  @widgets """
+  defmodule Platform.Repo.Migrations.CreateWidgets do
+    use Ecto.Migration
+
+    def change do
+      create table(:widgets) do
+        add :n, :integer
+      end
+
+      create(constraint(:widgets, :w_pos, check: "n > 0"))
+    end
+  end
+  """
+
+  test "a constraint on a table created in the same migration still needs a waiver" do
+    path = "apps/platform/priv/repo/migrations/20991231000000_widgets.exs"
+
+    assert violations([{path, @widgets}], [], @cutoff) ==
+             [{"20991231000000_widgets.exs", ["create constraint"]}]
+
+    waived = "# old-code-compatible: widgets is new; previous code never reads it\n" <> @widgets
+    assert violations([{path, waived}], [], @cutoff) == []
+  end
+
   test "a migration at or before the cutoff is not judged" do
     path = "apps/platform/priv/repo/migrations/#{@cutoff}_drop_legacy.exs"
     assert violations([{path, @remove_column}], [], @cutoff) == []
@@ -195,6 +219,8 @@ defmodule Platform.Release.IrreversibleMigrationsTest do
       {~s|execute "UPDATE a SET b = 1"|, "execute"},
       {"create unique_index(:a, [:b])", "unique_index"},
       {~s|create constraint(:a, :b, check: "c > 0")|, "create constraint"},
+      {~s|create(constraint(:a, :b, check: "c > 0"))|, "create constraint"},
+      {"create(\n    constraint(:a, :b, check: \"c > 0\")\n  )", "create constraint"},
       {"add :a, :text, null: false", "null: false without default:"}
     ]
 
