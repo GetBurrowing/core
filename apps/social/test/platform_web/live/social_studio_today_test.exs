@@ -181,6 +181,40 @@ defmodule PlatformWeb.SocialStudioTodayTest do
     assert has_element?(view, "[data-role='studio-trends']", "Trend source is not configured")
   end
 
+  test "the configured Wikimedia source still needs a contact before the page calls it configured",
+       %{conn: conn} do
+    keys = [:trends, :trends_wikimedia]
+    old = Map.new(keys, &{&1, Application.get_env(:social, &1)})
+
+    on_exit(fn ->
+      Enum.each(old, fn {key, value} ->
+        if is_nil(value),
+          do: Application.delete_env(:social, key),
+          else: Application.put_env(:social, key, value)
+      end)
+    end)
+
+    Application.put_env(:social, :trends,
+      enabled: true,
+      source: "wikimedia_pageviews",
+      refresh_interval_ms: :infinity
+    )
+
+    Application.put_env(:social, :trends_wikimedia, [])
+    w = studio_world!()
+    view = open(conn, w.approver, "?profile=#{w.profile.id}")
+    assert has_element?(view, "[data-role='studio-trends']", "Trend source is not configured")
+
+    Application.put_env(:social, :trends_wikimedia, contact: "https://example.com/contact")
+    configured_view = open(conn, w.approver, "?profile=#{w.profile.id}")
+
+    refute has_element?(
+             configured_view,
+             "[data-role='studio-trends']",
+             "Trend source is not configured"
+           )
+  end
+
   test "shows that the next Wikipedia dataset has not arrived while keeping the last one", %{
     conn: conn
   } do
