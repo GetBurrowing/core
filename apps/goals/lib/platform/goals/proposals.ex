@@ -186,21 +186,77 @@ defmodule Platform.Goals.Proposals do
         end)
 
       with {:ok, {proposal, agent}} <- result do
-        prompt =
-          "A person started a New goal conversation with you. Conversation id: #{proposal.id}. " <>
-            "Read it with goal_proposal_get, talk with them in this goal's conversation " <>
-            "(space #{proposal.space_id}), and record what you settle with goal_propose. " <>
-            "Nothing is created until they press Create goal."
-
-        delivery =
-          Signals.deliver(agent, "goals.new_goal", prompt, event(space_id: proposal.space_id))
-
-        {:ok, store_delivery(proposal, delivery)}
+        {:ok, signal_new_goal(proposal, agent)}
       end
     end
   end
 
   def start_goal_conversation(_actor, _text), do: {:error, :not_found}
+
+  @doc """
+  Re-sends the `goals.new_goal` signal for an OPEN, unexpired proposal and
+  stores the delivery (task 01a1eab6 stage 4). An operator command, not a
+  person's action, so it takes no actor.
+
+  `20261117220000_move_goal_proposals_out_of_dms` moves proposals written
+  before stage 2 out of the person's DM into their own space and dispatches
+  nothing; the agent still holds the DM as the conversation. After that
+  migration the deployer runs this once per migrated open proposal, so the
+  agent learns the new space id, in the RUNNING node (`rpc`, not `eval`: the
+  signal goes out through the live node's runtime connections, which a
+  fresh `eval` node does not hold):
+
+      /app/bin/platform rpc 'IO.inspect(Platform.Goals.resend_start_signal("<proposal id>"))'
+
+  `{:ok, %Platform.Goals.Proposal{delivery: "sent"}}` is the success shape.
+
+  Answers `{:error, :not_found}` for an unknown or malformed id,
+  `{:error, :proposal_closed}` for a proposal that is not open (or has
+  expired) and `{:error, :lead_missing_goals_tools}` when the proposal's
+  agent's runtime cannot use the Goals tools (`check_lead_tools/1`). The
+  signal carries the space id in its metadata only (`Signals.deliver/4`).
+  """
+  @spec resend_start_signal(term()) ::
+          {:ok, Proposal.t()}
+          | {:error, :not_found | :proposal_closed | :lead_missing_goals_tools}
+  def resend_start_signal(proposal_id) do
+    with {:ok, id} <- cast_id(proposal_id),
+         {:ok, proposal} <- fetch_open(id),
+         %Agent{} = agent <- load_agent(proposal.agent_id) || {:error, :not_found},
+         :ok <- check_lead_tools(agent) do
+      {:ok, signal_new_goal(proposal, agent)}
+    end
+  end
+
+  defp fetch_open(id) do
+    now = Clock.now()
+
+    case Repo.one(from(p in Proposal, where: p.id == ^id)) do
+      nil ->
+        {:error, :not_found}
+
+      %Proposal{status: "open"} = proposal ->
+        if DateTime.compare(proposal.expires_at, now) == :gt,
+          do: {:ok, proposal},
+          else: {:error, :proposal_closed}
+
+      _ ->
+        {:error, :proposal_closed}
+    end
+  end
+
+  defp signal_new_goal(proposal, agent) do
+    prompt =
+      "A person started a New goal conversation with you. Conversation id: #{proposal.id}. " <>
+        "Read it with goal_proposal_get, talk with them in this goal's conversation " <>
+        "(space #{proposal.space_id}), and record what you settle with goal_propose. " <>
+        "Nothing is created until they press Create goal."
+
+    delivery =
+      Signals.deliver(agent, "goals.new_goal", prompt, event(space_id: proposal.space_id))
+
+    store_delivery(proposal, delivery)
+  end
 
   @doc """
   Posts the person's message in the proposal's conversation space (status
