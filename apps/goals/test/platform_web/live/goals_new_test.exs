@@ -17,7 +17,7 @@ defmodule PlatformWeb.GoalsNewTest do
   alias Platform.Repo
 
   @yt "I want How to Computer to be a big channel. Really big."
-  @greeting "Hi Ryan. What do you want to achieve? It can be anything. Say it however it comes to mind, and I'll help turn it into something we can steer by."
+  @greeting "Hi Alex. What do you want to achieve? It can be anything. Say it however it comes to mind, and I'll help turn it into something we can steer by."
   @placeholder "For example: start a small woodworking business, run a half marathon by spring, or get our first 10 paying customers"
 
   setup do
@@ -38,7 +38,7 @@ defmodule PlatformWeb.GoalsNewTest do
     end)
 
     org_id = org_id!()
-    user = person!(org_id, "Ryan Tester")
+    user = person!(org_id, "Alex Tester")
     {:ok, org_id: org_id, user: user}
   end
 

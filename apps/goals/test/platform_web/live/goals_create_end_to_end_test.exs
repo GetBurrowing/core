@@ -57,7 +57,7 @@ defmodule PlatformWeb.GoalsCreateEndToEndTest do
     put_now(DateTime.add(DateTime.utc_now(), 60, :second))
 
     org_id = org_id!()
-    user = person!(org_id, "Ryan Tester")
+    user = person!(org_id, "Alex Tester")
     {:ok, org_id: org_id, user: user, lead: lead!(user)}
   end
 

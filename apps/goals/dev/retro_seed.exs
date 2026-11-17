@@ -1,5 +1,5 @@
 # Development only: GOALS_ENABLED=true mix run dev/retro_seed.exs <user email>
-# Task 01a1dfc2-0d97. Private moon dev database only; all goal writes use the context.
+# Task 01a1dfc2-0d97. Private dev database only; all goal writes use the context.
 defmodule Platform.Goals.DevRetroSeed do
   alias Platform.Goals
   alias Platform.Goals.Clock
