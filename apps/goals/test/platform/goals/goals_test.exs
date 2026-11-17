@@ -324,7 +324,8 @@ defmodule Platform.Goals.GoalsTest do
       {_expr, found?} =
         Macro.prewalk(expr, false, fn
           {:==, _, [a, b]} = node, acc ->
-            {node, acc or (id_field?(a, var) and pinned?(b)) or (id_field?(b, var) and pinned?(a))}
+            {node,
+             acc or (id_field?(a, var) and pinned?(b)) or (id_field?(b, var) and pinned?(a))}
 
           node, acc ->
             {node, acc}
@@ -373,7 +374,9 @@ defmodule Platform.Goals.GoalsTest do
       assert flagged.("def i(id), do: Repo.one(from(p in Proposal, where: ^id == p.id))") ==
                [{:i, 1}]
 
-      assert flagged.("def j(id), do: Repo.one(from(g in Platform.Goals.Goal, where: g.id == ^id))") ==
+      assert flagged.(
+               "def j(id), do: Repo.one(from(g in Platform.Goals.Goal, where: g.id == ^id))"
+             ) ==
                [{:j, 1}]
 
       assert flagged.(
@@ -400,7 +403,9 @@ defmodule Platform.Goals.GoalsTest do
              end
              """) == [{:inner, 1}]
 
-      assert flagged.("def o(actor, id), do: from(p in visible_proposals(actor), where: p.id == ^id)") ==
+      assert flagged.(
+               "def o(actor, id), do: from(p in visible_proposals(actor), where: p.id == ^id)"
+             ) ==
                []
 
       assert flagged.("def p(id), do: from(p in Proposal, where: p.goal_id == ^id)") == []
