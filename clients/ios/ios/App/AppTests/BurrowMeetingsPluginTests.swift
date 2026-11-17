@@ -76,7 +76,8 @@ final class BurrowMeetingsPluginTests: XCTestCase {
         XCTAssertEqual(resolved?["mic"] as? Bool, true)
         XCTAssertEqual(resolved?["camera"] as? Bool, true, "the page may open its video-only companion (task 01a13ca2)")
         XCTAssertEqual(resolved?["activeSpeakers"] as? Bool, true)
-        XCTAssertEqual(resolved?.count, 3)
+        XCTAssertEqual(resolved?["speaker"] as? Bool, true, "the page may show its Speaker button (WKWebView has no setSinkId)")
+        XCTAssertEqual(resolved?.count, 4)
     }
 
     func testStateShapeCarriesTheConfirmedMicAndEverySpeaker() {
