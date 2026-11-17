@@ -96,7 +96,16 @@ const ASSETS = resolve(HERE, "..");
 // switcher dropdown, browser-held install list, CORS unread). Main measured
 // 1,041,163 before it. First-party hook code with no new dependency; the
 // overage is past one 16 KB step, so two. 1056 KB still catches the ~8.2 MB leak.
-const MAX_BYTES = 1056 * 1024;
+//
+// Raised from 1056 KB to 1088 KB by task 01a1e82a (meeting presence: in-call
+// bar on every page, leave/stay guard, lock-screen card; PR #199): the
+// WITH-Play app.js measured 1,098,033 bytes in CI run 44064649333, 16,689 over
+// 1056 KB, after meeting_presence.js (toasts, full-load guard, beforeunload,
+// rejoin intent) and meeting_media_session.js (Media Session lock-screen card,
+// in-call tab title) joined the bundle. First-party code with no new
+// dependency; the overage is past one 16 KB step, so two. 1088 KB still
+// catches the ~8.2 MB leak.
+const MAX_BYTES = 1088 * 1024;
 
 // The profile also sets `env: %{"NODE_PATH" => [.../deps, build_path]}`, and
 // that half was missing here until this commit. js/app.js has exactly three
