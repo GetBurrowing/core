@@ -60,3 +60,9 @@
  .studio-projects > #studio-start-game { display:flex; }
  .studio-projects > .studio-project, .studio-projects > #studio-start-game { flex:0 0 auto; }
 }
+
+.studio-more { margin:6px 12px; font-size:13px; }
+.studio-more summary { cursor:pointer; padding:10px 0; }
+.studio-more a { display:block; padding:10px; border-radius:10px; }
+.studio-more a:hover { background:var(--color-base-200); }
+@media(max-width:767px) { .studio-more { display:none; } }

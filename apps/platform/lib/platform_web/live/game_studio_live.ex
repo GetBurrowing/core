@@ -46,6 +46,7 @@ defmodule PlatformWeb.GameStudioLive do
        entries: entries,
        entry: entry,
        tab: tab,
+       studio_tools: PlatformWeb.Components.IconRail.gaming_more_sheet_rows(socket.assigns.access_scope, false),
        new_game: params["new"] == "1" or entries == [],
        gaming_nav_project_id: entry && entry.project.id,
        playtest_notice: Studio.playtest_notice(entry, socket.assigns.current_user_record),
@@ -127,6 +128,7 @@ defmodule PlatformWeb.GameStudioLive do
     socket
     |> assign(
       entries: entries,
+      studio_tools: PlatformWeb.Components.IconRail.gaming_more_sheet_rows(socket.assigns.access_scope, false),
       entry: entry,
       gaming_nav_project_id: entry && entry.project.id,
       new_game: is_nil(entry),
@@ -194,8 +196,11 @@ defmodule PlatformWeb.GameStudioLive do
             <.icon name="hero-plus" class="size-4" />Start a game
           </.link>
           <.link navigate="/chat" class="studio-new">All conversations</.link>
-          <.link navigate="/tasks" class="studio-new">Tasks</.link>
-          <.link navigate="/control" class="studio-new">Agents</.link>
+          <.link :for={dest <- Enum.filter(@studio_tools, &(&1.key in [:tasks, :agents]))} navigate={dest.path} class="studio-new">{dest.label}</.link>
+          <details class="studio-more">
+            <summary>More tools</summary>
+            <.link :for={dest <- Enum.reject(@studio_tools, &(&1.key in [:tasks, :agents]))} navigate={dest.path}>{dest.label}</.link>
+          </details>
           <.link navigate="/settings" class="studio-new">Settings</.link>
           <a href="/play?mode=discover" class="studio-new">
             <.icon name="hero-squares-2x2" class="size-4" />Discover games

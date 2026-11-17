@@ -124,11 +124,15 @@ defmodule PlatformWeb.Components.IconRail do
         current_path
       )
 
+    more_destinations =
+      if assigns[:gaming],
+        do: gaming_more_sheet_rows(scope, Map.get(assigns, :root_user, false)) ++ settings_destinations(),
+        else: more_sheet_destinations(scope, Map.get(assigns, :root_user, false))
+
     more_active? =
       assigns[:more_open] == true or
         (link_winner == nil and
-           more_sheet_destinations(scope, Map.get(assigns, :root_user, false))
-           |> active_destination_key(current_path) != nil)
+           more_destinations |> active_destination_key(current_path) != nil)
 
     unread? = is_integer(assigns[:inbox_unread_count]) and assigns[:inbox_unread_count] > 0
 
@@ -424,6 +428,11 @@ defmodule PlatformWeb.Components.IconRail do
       |> Enum.split_while(&(&1.key in [:voice, :tasks]))
 
     lead ++ Enum.filter(visible, &(&1.key in extension_keys)) ++ rest
+  end
+
+  @doc "The game dock moves Inbox and Calendar into More, preserving every workspace tool."
+  def gaming_more_sheet_rows(scope, root_user) do
+    keyed([:inbox, :calendar], scope) ++ more_sheet_rows(scope, root_user)
   end
 
   @doc """

@@ -270,6 +270,7 @@
          Triggered by `phx-click="open_more_sheet"` on the More tab in
          <.bottom_rail>. lg:hidden inside the component itself. --%>
     <.more_sheet
+      gaming={gaming?}
       open={@more_sheet_open}
       current_user={@current_user}
       user={assigns[:current_user_record]}
