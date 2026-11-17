@@ -8782,23 +8782,34 @@ defmodule Platform.Chat do
   end
 
   defp publish_message_posted(msg, opts \\ []) do
-    :telemetry.execute(
-      [:platform, :chat, :message_posted],
-      %{system_time: System.system_time()},
-      %{
-        space_id: msg.space_id,
-        message_id: msg.id,
-        participant_id: msg.participant_id
-      }
-    )
+    # Task 01a1eab6 stage 1: when a caller posts inside an outer
+    # `Repo.transaction`, the telemetry below reached AttentionRouter before
+    # that transaction committed; the router's `Repo.get(Message, id)` runs on
+    # its own connection, saw nothing, and logged "[AttentionRouter] message
+    # not found", so the message was never routed. Inside a
+    # `Platform.Tasks.PostCommit.scope/1` these side effects now run after the
+    # outermost commit (and are dropped on rollback). With no scope open,
+    # `run_after_commit/2` runs the thunk immediately: today's behaviour.
+    # No dedupe `:key`: every message is its own event.
+    Platform.Tasks.PostCommit.run_after_commit(fn ->
+      :telemetry.execute(
+        [:platform, :chat, :message_posted],
+        %{system_time: System.system_time()},
+        %{
+          space_id: msg.space_id,
+          message_id: msg.id,
+          participant_id: msg.participant_id
+        }
+      )
 
-    case Keyword.get(opts, :from_pid) do
-      pid when is_pid(pid) -> ChatPubSub.broadcast_from(msg.space_id, pid, {:new_message, msg})
-      _ -> ChatPubSub.broadcast(msg.space_id, {:new_message, msg})
-    end
+      case Keyword.get(opts, :from_pid) do
+        pid when is_pid(pid) -> ChatPubSub.broadcast_from(msg.space_id, pid, {:new_message, msg})
+        _ -> ChatPubSub.broadcast(msg.space_id, {:new_message, msg})
+      end
 
-    # Link unfurls (task 01a1a944 stage 3): one call, which only spawns.
-    Platform.Chat.LinkUnfurls.unfurl_message(msg)
+      # Link unfurls (task 01a1a944 stage 3): one call, which only spawns.
+      Platform.Chat.LinkUnfurls.unfurl_message(msg)
+    end)
   end
 
   @doc """
