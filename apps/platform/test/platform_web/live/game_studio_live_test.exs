@@ -178,13 +178,20 @@ defmodule PlatformWeb.GameStudioLiveTest do
     assert Enum.any?(Platform.Gaming.Studio.list(user), &(&1.project.id == project.id))
   end
 
-  test "an offline setup agent still leaves a usable project and saved brief", %{user: user, project: project} do
+  test "an offline setup agent still leaves a usable project and saved brief", %{
+    user: user,
+    project: project
+  } do
     before = length(Tasks.list_projects_for_user(user))
 
     assert {:ok, created, :awaiting_agent} =
              Platform.Gaming.NewGame.create(
                user,
-               %{"name" => "Pending first build", "engine" => "godot", "org_id" => project.org_id},
+               %{
+                 "name" => "Pending first build",
+                 "engine" => "godot",
+                 "org_id" => project.org_id
+               },
                agent_provider: fn -> {:error, :no_agent} end
              )
 
@@ -192,12 +199,21 @@ defmodule PlatformWeb.GameStudioLiveTest do
     assert Chat.get_space(created.config["development_space_id"])
     assert created.repo_url == nil
   end
+
   test "an unauthorized team cannot provision a project or invoke setup", %{user: user} do
     before = length(Tasks.list_projects_for_user(user))
-    assert {:error, :setup_unavailable} = Platform.Gaming.NewGame.create(user,
-      %{"name" => "Forbidden game", "engine" => "godot", "org_id" => Ecto.UUID.generate()},
-      agent_provider: fn -> flunk("unauthorized setup must not reach the agent") end)
+
+    assert {:error, :setup_unavailable} =
+             Platform.Gaming.NewGame.create(
+               user,
+               %{
+                 "name" => "Forbidden game",
+                 "engine" => "godot",
+                 "org_id" => Ecto.UUID.generate()
+               },
+               agent_provider: fn -> flunk("unauthorized setup must not reach the agent") end
+             )
+
     assert length(Tasks.list_projects_for_user(user)) == before
   end
-
 end

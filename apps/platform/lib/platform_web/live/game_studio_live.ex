@@ -60,9 +60,22 @@ defmodule PlatformWeb.GameStudioLive do
       {:ok, project, state} ->
         socket =
           case state do
-            :message_failed -> put_flash(socket, :error, "Project and room created. Send your setup brief in the team chat to continue.")
-            :awaiting_agent -> put_flash(socket, :info, "Your project and room are ready, and the brief is saved. Open chat to invite an agent when you’re ready to build.")
-            _ -> socket
+            :message_failed ->
+              put_flash(
+                socket,
+                :error,
+                "Project and room created. Send your setup brief in the team chat to continue."
+              )
+
+            :awaiting_agent ->
+              put_flash(
+                socket,
+                :info,
+                "Your project and room are ready, and the brief is saved. Open chat to invite an agent when you’re ready to build."
+              )
+
+            _ ->
+              socket
           end
 
         {:noreply, push_patch(socket, to: "/studio?project=" <> project.id)}

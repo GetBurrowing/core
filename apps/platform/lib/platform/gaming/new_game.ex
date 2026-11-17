@@ -90,6 +90,7 @@ defmodule Platform.Gaming.NewGame do
       end
     end)
   end
+
   defp available_agent(provider) do
     case provider.() do
       {:ok, agent} -> agent
@@ -98,9 +99,10 @@ defmodule Platform.Gaming.NewGame do
   end
 
   defp connect_agent(_space, _user, nil), do: :ok
+
   defp connect_agent(space, user, agent) do
     with {:ok, _} <- Chat.ensure_space_agent(space.id, agent.id, role: "principal"),
-         {:ok, _} <- Chat.set_agent_attention_policy({:user, user.id}, space.id, "directed"), do: :ok
+         {:ok, _} <- Chat.set_agent_attention_policy({:user, user.id}, space.id, "directed"),
+         do: :ok
   end
-
 end
