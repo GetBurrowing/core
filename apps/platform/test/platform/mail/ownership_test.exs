@@ -261,6 +261,24 @@ defmodule Platform.Mail.OwnershipTest do
       refute readable?(ctx.support, account)
     end
 
+    test "a member of one shared mailbox does not read another", ctx do
+      a = shared!(ctx)
+      b = shared!(ctx)
+      {:ok, _} = Ownership.grant(ctx.admin, a, {:user, ctx.other.id})
+
+      assert readable?(ctx.other, a)
+      refute readable?(ctx.other, b)
+      refute Ownership.can_read_account?(ctx.other, b)
+    end
+
+    test "can_read_account? answers for that account only", ctx do
+      mine = personal!(ctx, ctx.owner)
+      theirs = personal!(ctx, ctx.other)
+
+      assert Ownership.can_read_account?(ctx.owner, mine)
+      refute Ownership.can_read_account?(ctx.owner, theirs)
+    end
+
     test "an AGENT grant whose id equals a user's id does not let that user read", ctx do
       account = shared!(ctx)
       raw_grant!(account, "agent", ctx.other.id)
@@ -410,6 +428,20 @@ defmodule Platform.Mail.OwnershipTest do
         assert {:error, :unauthorized} = Ownership.revoke(actor, account, {:agent, agent.id})
       end
 
+      assert Ownership.agent_granted_account_ids(agent.id, ctx.org_id) == [account.id]
+    end
+
+    test "grant and revoke re-read the row: a forged struct is refused", ctx do
+      account = personal!(ctx, ctx.owner)
+      agent = agent!()
+      forged = %{account | owner_user_id: ctx.other.id}
+
+      refute Ownership.can_manage_access?(ctx.other, forged)
+      assert {:error, :unauthorized} = Ownership.grant(ctx.other, forged, {:agent, agent.id})
+      assert Ownership.agent_granted_account_ids(agent.id, ctx.org_id) == []
+
+      {:ok, _} = Ownership.grant(ctx.owner, account, {:agent, agent.id})
+      assert {:error, :unauthorized} = Ownership.revoke(ctx.other, forged, {:agent, agent.id})
       assert Ownership.agent_granted_account_ids(agent.id, ctx.org_id) == [account.id]
     end
 
