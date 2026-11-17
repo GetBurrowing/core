@@ -490,11 +490,11 @@ describe("readState", () => {
   it("reads #meeting-presence's dataset", () => {
     expect(
       readState({
-        inCall: "true",
+        callActive: "true",
         meetingId: "m-1",
         meetingName: "Weekly sync",
         returnPath: "/meetings/weekly-sync",
-        inCallRoom: "false",
+        callRoom: "false",
         othersCount: "2",
         canEnd: "true",
         authRoutes: JSON.stringify(PATTERNS),

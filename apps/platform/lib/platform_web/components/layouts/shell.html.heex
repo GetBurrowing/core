@@ -326,7 +326,7 @@
       id="meeting-presence"
       phx-hook="MeetingPresence"
       class="hidden"
-      data-in-call={to_string(@meeting_active == true)}
+      data-call-active={to_string(@meeting_active == true)}
       data-meeting-id={assigns[:meeting_id] || @meeting_space_id}
       data-meeting-name={@meeting_space_name}
       data-return-path={
@@ -336,7 +336,7 @@
           @meeting_space_id
         )
       }
-      data-in-call-room={to_string(@in_call_room == true)}
+      data-call-room={to_string(@in_call_room == true)}
       data-others-count={max((@meeting_here_count || 0) - 1, 0)}
       data-can-end={to_string(assigns[:meeting_can_end] == true)}
       data-auth-routes={PlatformWeb.MeetingPresenceEvents.auth_route_patterns_json()}

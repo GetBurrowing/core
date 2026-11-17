@@ -135,7 +135,7 @@ defmodule PlatformWeb.MeetingPresenceEventsTest do
 
     assert has_element?(
              view,
-             ~s(#meeting-presence[phx-hook="MeetingPresence"][data-in-call="false"])
+             ~s(#meeting-presence[phx-hook="MeetingPresence"][data-call-active="false"])
            )
 
     join!(ctx)
@@ -143,12 +143,12 @@ defmodule PlatformWeb.MeetingPresenceEventsTest do
 
     assert has_element?(
              view,
-             ~s(#meeting-presence[data-in-call="true"][data-meeting-id="#{ctx.meeting.id}"][data-meeting-name="Weekly sync"])
+             ~s(#meeting-presence[data-call-active="true"][data-meeting-id="#{ctx.meeting.id}"][data-meeting-name="Weekly sync"])
            )
 
     assert has_element?(
              view,
-             ~s(#meeting-presence[data-return-path="/meetings/#{ctx.meeting.slug}"][data-in-call-room="false"])
+             ~s(#meeting-presence[data-return-path="/meetings/#{ctx.meeting.slug}"][data-call-room="false"])
            )
 
     assert has_element?(view, ~s(#meeting-presence[data-others-count="1"][data-can-end="true"]))

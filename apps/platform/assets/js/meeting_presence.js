@@ -221,11 +221,11 @@ export function readState(ds = {}) {
     patterns = []
   }
   return {
-    inCall: ds.inCall === "true",
+    inCall: ds.callActive === "true",
     meetingId: ds.meetingId || null,
     name: ds.meetingName || "Meeting",
     returnPath: ds.returnPath || "/meetings",
-    inCallRoom: ds.inCallRoom === "true",
+    inCallRoom: ds.callRoom === "true",
     patterns: Array.isArray(patterns) ? patterns : [],
     othersCount: Math.max(0, parseInt(ds.othersCount || "0", 10) || 0),
     canEnd: ds.canEnd === "true",
@@ -632,7 +632,7 @@ export function createDomUi(doc, win, { isPhone }) {
     const node = el(
       doc,
       "div",
-      "pointer-events-auto flex items-start gap-3 rounded-xl border border-base-300 bg-base-100 p-3 text-base-content shadow-lg",
+      "pointer-events-auto flex items-start gap-3 rounded-xl border border-edge bg-base-100 p-3 text-base-content shadow-lg",
     )
     node.setAttribute("role", "status")
     node.dataset.toast = spec.kind
