@@ -157,6 +157,9 @@ defmodule Platform.Goals.Proposals do
   turn for the router: `route: :none`) and records an open proposal, all in
   one transaction, then signals the agent `goals.new_goal` with the space id.
   The agent is never named by the caller.
+
+  Answers `{:error, :lead_missing_goals_tools}`, writing no row, when the
+  lead's runtime cannot use the Goals tools (`check_lead_tools/1`).
   """
   def start_goal_conversation(%User{id: user_id} = user, text) when is_binary(user_id) do
     with {:ok, text} <- message_text(text) do
@@ -172,6 +175,7 @@ defmodule Platform.Goals.Proposals do
 
             with :ok <- no_open_proposal(user),
                  {:ok, agent} <- resolve_lead(),
+                 :ok <- check_lead_tools(agent),
                  {:ok, org_id} <- pick_org(user),
                  {:ok, space} <- create_goal_space(user, agent, org_id),
                  {:ok, msg} <- post_as_person(space.id, user_id, text, route: :none),
@@ -317,6 +321,40 @@ defmodule Platform.Goals.Proposals do
   end
 
   def propose_goal(_actor, _proposal_id, _attrs), do: {:error, :not_found}
+
+  @lead_tools ~w(goal_proposal_get goal_propose)
+
+  @doc """
+  `:ok` when `agent`'s runtime may call both `goal_proposal_get` and
+  `goal_propose`, else `{:error, :lead_missing_goals_tools}` (task 01a1eab6
+  stage 3). Self-contained: an agent in, a result out, no proposal state.
+
+  The decision is core's authoritative `Platform.Access.Tools.effective_tools/1`
+  over the agent's `Platform.Agents.AgentRuntime` (`agent.runtime_id` is its
+  primary key, as `Platform.Chat.AgentResponder` resolves it), never the tool
+  profile alone: the `goals` bundle is grantable per runtime, never a default
+  grant, and the runtime owner's roles can cap `goals.use` away
+  (`Platform.Access.Caps`) while the profile still lists the bundle. An
+  external agent whose runtime row is missing is refused too.
+
+  An agent with no external runtime answers `:ok`: there is no runtime to
+  hold tools, and the start goes on to `Platform.Goals.Signals.deliver/4`'s
+  `"no_runtime"` delivery, exactly as before.
+  """
+  @spec check_lead_tools(Agent.t()) :: :ok | {:error, :lead_missing_goals_tools}
+  def check_lead_tools(%Agent{runtime_type: "external", runtime_id: runtime_id})
+      when is_binary(runtime_id) do
+    with %Platform.Agents.AgentRuntime{} = runtime <-
+           Repo.get(Platform.Agents.AgentRuntime, runtime_id),
+         names = runtime |> Platform.Access.Tools.effective_tools() |> Enum.map(& &1.name),
+         true <- Enum.all?(@lead_tools, &(&1 in names)) do
+      :ok
+    else
+      _ -> {:error, :lead_missing_goals_tools}
+    end
+  end
+
+  def check_lead_tools(_agent), do: :ok
 
   # ── internals ─────────────────────────────────────────────────────────────
 

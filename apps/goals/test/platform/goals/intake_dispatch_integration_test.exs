@@ -43,6 +43,7 @@ defmodule Platform.Goals.IntakeDispatchIntegrationTest do
   import ExUnit.CaptureLog
 
   alias Ecto.Adapters.SQL.Sandbox
+  alias Platform.Access.{Grant, RuntimeProfile}
   alias Platform.Accounts.User
   alias Platform.Agents.{Agent, AgentRuntime}
   alias Platform.Chat
@@ -118,6 +119,40 @@ defmodule Platform.Goals.IntakeDispatchIntegrationTest do
     lead_role = Chat.Sidebar.agents_leader_role()
     assert {:ok, _} = Platform.Roles.assign_role(lead_role, agent.id)
 
+    # The lead's runtime must be able to call the Goals tools or the start
+    # is refused (task 01a1eab6 stage 3): Goals on, the `goals` bundle in the
+    # runtime's profile, and its owner a member holding `goals.use`. The
+    # grant row is inserted directly (no ledger row to clean up) on a space
+    # of the org, all deleted below.
+    previous_enabled = Application.fetch_env(:goals, :enabled)
+    Application.put_env(:goals, :enabled, true)
+    {:ok, _} = Platform.Access.RuntimeProfiles.set_tool_profile(runtime, ["goals"])
+
+    %OrgMembership{}
+    |> OrgMembership.changeset(%{user_id: owner.id, org_id: org.id, role: "member"})
+    |> Repo.insert!()
+
+    {:ok, grant_space} =
+      Chat.create_space(%{
+        name: "Intake grants #{n}",
+        slug: "intake-grants-#{n}",
+        kind: "channel",
+        org_id: org.id
+      })
+
+    grant =
+      Repo.insert!(%Grant{
+        org_id: org.id,
+        principal_type: "user",
+        principal_id: owner.id,
+        permission: "goals.use",
+        resource_type: "space",
+        resource_id: grant_space.id,
+        effect: "allow"
+      })
+
+    assert Proposals.check_lead_tools(agent) == :ok
+
     on_exit(fn ->
       # Runs after the start_supervised router has stopped, still in :auto
       # mode, so these deletes commit on a real connection.
@@ -134,9 +169,20 @@ defmodule Platform.Goals.IntakeDispatchIntegrationTest do
       Repo.delete_all(from(p in Participant, where: p.space_id in ^space_ids))
       Repo.delete_all(from(s in Space, where: s.id in ^space_ids))
       Platform.Roles.unassign_role(lead_role)
+      Repo.delete_all(from(g in Grant, where: g.id == ^grant.id))
+      Repo.delete_all(from(m in Message, where: m.space_id == ^grant_space.id))
+      Repo.delete_all(from(p in Participant, where: p.space_id == ^grant_space.id))
+      Repo.delete_all(from(s in Space, where: s.id == ^grant_space.id))
+      Repo.delete_all(from(p in RuntimeProfile, where: p.runtime_id == ^runtime.id))
+
+      case previous_enabled do
+        {:ok, value} -> Application.put_env(:goals, :enabled, value)
+        :error -> Application.delete_env(:goals, :enabled)
+      end
+
       Repo.delete_all(from(a in Agent, where: a.id == ^agent.id))
       Repo.delete_all(from(r in AgentRuntime, where: r.id == ^runtime.id))
-      Repo.delete_all(from(m in OrgMembership, where: m.user_id == ^user.id))
+      Repo.delete_all(from(m in OrgMembership, where: m.user_id in ^[user.id, owner.id]))
       Repo.delete_all(from(o in Org, where: o.id == ^org.id))
       Repo.delete_all(from(u in User, where: u.id in ^[user.id, owner.id]))
 

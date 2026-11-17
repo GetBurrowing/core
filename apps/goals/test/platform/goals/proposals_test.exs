@@ -9,7 +9,7 @@ defmodule Platform.Goals.ProposalsTest do
 
   alias Platform.Chat
   alias Platform.Goals
-  alias Platform.Goals.{Goal, Grant, Limits, Proposal, Signals, Stop}
+  alias Platform.Goals.{Goal, Grant, Limits, Proposal, Proposals, Signals, Stop}
 
   @now ~U[2026-11-16 09:00:00.000000Z]
   @opening "ZEBRA-QUARTZ: I want to run a half marathon by spring"
@@ -58,7 +58,7 @@ defmodule Platform.Goals.ProposalsTest do
   end
 
   defp lead!(c) do
-    agent = external_agent!(c.person)
+    agent = c.person |> external_agent!() |> grant_goals_tools!()
     {:ok, _} = Platform.Roles.assign_role(Chat.Sidebar.agents_leader_role(), agent.id)
     agent
   end
@@ -249,6 +249,94 @@ defmodule Platform.Goals.ProposalsTest do
     assert counts() == before
 
     refute_received {:signal, _}
+  end
+
+  # ── the lead's Goals tools (task 01a1eab6 stage 3) ───────────────────────
+
+  describe "a lead whose runtime lacks the Goals tools" do
+    defp intake_counts,
+      do: Enum.map([Chat.Space, Chat.Message, Proposal], &Repo.aggregate(&1, :count))
+
+    defp toolless_lead!(owner, modules) do
+      agent = external_agent!(owner)
+      if modules, do: grant_goals_tools!(agent, modules)
+      {:ok, _} = Platform.Roles.assign_role(Chat.Sidebar.agents_leader_role(), agent.id)
+      agent
+    end
+
+    test "a profile without the goals bundle is refused and writes no row", c do
+      lead = toolless_lead!(c.person, ["messaging"])
+      before = intake_counts()
+
+      assert Goals.start_goal_conversation(c.person, @opening) ==
+               {:error, :lead_missing_goals_tools}
+
+      assert intake_counts() == before
+      refute_received {:signal, _}
+      assert Goals.current_proposal(c.person) == {:ok, nil}
+      assert Proposals.check_lead_tools(lead) == {:error, :lead_missing_goals_tools}
+    end
+
+    test "a runtime with no profile row is refused (fail closed)", c do
+      toolless_lead!(c.person, nil)
+      before = intake_counts()
+
+      assert Goals.start_goal_conversation(c.person, @opening) ==
+               {:error, :lead_missing_goals_tools}
+
+      assert intake_counts() == before
+    end
+
+    test "the goals bundle with an owner who lacks goals.use is refused: effective_tools decides",
+         c do
+      owner = member!(c.org)
+      lead = toolless_lead!(owner, ["goals"])
+      revoke_goals_use!(owner)
+      runtime = Repo.get!(Platform.Agents.AgentRuntime, lead.runtime_id)
+
+      # The profile alone would say yes, and core reports the owner cap.
+      assert "goals" in Platform.Access.RuntimeProfiles.tool_profile(runtime)
+      assert Map.has_key?(Platform.Access.Caps.for_runtime(runtime), "goals")
+
+      before = intake_counts()
+
+      assert Goals.start_goal_conversation(c.person, @opening) ==
+               {:error, :lead_missing_goals_tools}
+
+      assert intake_counts() == before
+      refute_received {:signal, _}
+
+      # Lifting the cap is all it takes.
+      grant_goals_use!(owner)
+      assert Proposals.check_lead_tools(lead) == :ok
+    end
+
+    test "after the grant the same start succeeds", c do
+      lead = toolless_lead!(c.person, ["messaging"])
+
+      assert Goals.start_goal_conversation(c.person, @opening) ==
+               {:error, :lead_missing_goals_tools}
+
+      grant_goals_tools!(lead)
+      assert {:ok, %Proposal{status: "open"} = proposal} =
+               Goals.start_goal_conversation(c.person, @opening)
+
+      assert proposal.agent_id == lead.id
+      assert_received {:signal, %{metadata: %{responsibility_key: "goals.new_goal"}}}
+    end
+
+    test "check_lead_tools/1 is public: agent in, result out", c do
+      lead = toolless_lead!(c.person, ["messaging"])
+      assert Proposals.check_lead_tools(lead) == {:error, :lead_missing_goals_tools}
+      assert Proposals.check_lead_tools(grant_goals_tools!(lead)) == :ok
+
+      # No external runtime: nothing to hold tools, so today's no_runtime path.
+      assert Proposals.check_lead_tools(agent!()) == :ok
+
+      # An external agent whose runtime row is gone is refused.
+      dangling = %{lead | runtime_id: Ecto.UUID.generate()}
+      assert Proposals.check_lead_tools(dangling) == {:error, :lead_missing_goals_tools}
+    end
   end
 
   test "an agent cannot start a conversation", c do

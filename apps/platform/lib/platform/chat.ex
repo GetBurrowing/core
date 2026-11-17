@@ -1739,6 +1739,26 @@ defmodule Platform.Chat do
   end
 
   @doc """
+  Whether `space` belongs on the chat rail.
+
+  A space whose metadata carries a non-empty `"surface" => <owner>` belongs
+  to another surface (the surface that created it renders it) and is not a
+  chat-rail conversation: it is left out of every rail list and of the rail
+  unread badge. Any other space, including one with no metadata, is
+  rail-visible. The value is never compared; core only reads whether it is
+  set (task 01a1eab6 stage 3).
+
+  Access is unaffected: `list_user_conversations/2` stays unfiltered, so the
+  person still reaches the space wherever participation decides access.
+  """
+  @spec rail_visible?(Space.t()) :: boolean()
+  def rail_visible?(%Space{metadata: %{"surface" => surface}})
+      when not is_nil(surface) and surface != "",
+      do: false
+
+  def rail_visible?(%Space{}), do: true
+
+  @doc """
   Compute a display name for a space relative to the current user.
 
   - Channel: space.name
@@ -8536,7 +8556,7 @@ defmodule Platform.Chat do
   struct, `unread_counts_for_user/1` keys off the id, and changing the accepted
   input here would ripple into every caller for no gain.
 
-  Counting exactly the set Chat RENDERS is what makes the badge honest, and two
+  Counting exactly the set Chat RENDERS is what makes the badge honest, and three
   predicates do that work:
 
     * **kind**: only `#{Enum.join(@chat_surface_kinds, "`, `")}`. Every other
@@ -8550,6 +8570,8 @@ defmodule Platform.Chat do
       and the member query does, so the `Map.take/2` intersection below is
       load-bearing rather than tidiness: an archived space holding unread would
       otherwise pin the badge at a number that can never move.
+    * **surface**: a space another surface owns (`rail_visible?/1` false) is
+      never on the rail, so it is not counted (task 01a1eab6 stage 3).
   There is deliberately NO org-visibility predicate. It was removed in task
   `01a01f4c`: `unread_counts_for_user/1` has never been org-fenced, so a fenced
   count disagreed permanently with the per-channel pills for any viewer whose
@@ -8645,12 +8667,17 @@ defmodule Platform.Chat do
     user_id
     |> participant_spaces_query()
     |> where([space: s], s.kind in @chat_surface_kinds)
-    |> select([participant: p], %{
+    |> select([participant: p, space: s], %{
       participant_id: p.id,
       space_id: p.space_id,
-      last_read_message_id: p.last_read_message_id
+      last_read_message_id: p.last_read_message_id,
+      metadata: s.metadata
     })
     |> Repo.all()
+    # A space owned by another surface is not on the rail, so the badge does
+    # not count it (`rail_visible?/1`, task 01a1eab6 stage 3).
+    |> Enum.filter(&rail_visible?(%Space{metadata: &1.metadata}))
+    |> Enum.map(&Map.delete(&1, :metadata))
   end
 
   @excerpt_max_graphemes 140

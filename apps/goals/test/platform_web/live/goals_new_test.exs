@@ -61,6 +61,7 @@ defmodule PlatformWeb.GoalsNewTest do
       agent!()
       |> Ecto.Changeset.change(name: "Dalton", runtime_type: "external", runtime_id: runtime.id)
       |> Repo.update!()
+      |> grant_goals_tools!()
 
     {:ok, _} = Platform.Roles.assign_role(Chat.Sidebar.agents_leader_role(), agent.id)
     agent
@@ -633,6 +634,50 @@ defmodule PlatformWeb.GoalsNewTest do
 
     refute has_element?(child, "[data-role='goals-new-box']")
     refute has_element?(child, "input")
+  end
+
+  # Task 01a1eab6 stage 3: the lead's runtime lacks the Goals tools.
+  test "a lead without the Goals tools: the refusal, the typed text kept, no message", %{
+    conn: conn,
+    user: user
+  } do
+    lead = user |> lead!() |> grant_goals_tools!(["messaging"])
+    child = open(conn, user)
+    before = message_count()
+
+    refute has_element?(child, "[data-role='goals-new-refused']")
+    send_text(child, @yt)
+
+    assert has_element?(
+             child,
+             "[data-role='goals-new-refused']",
+             "Dalton can't take new goals yet: its runtime doesn't have the Goals tools."
+           )
+
+    assert has_element?(
+             child,
+             "[data-role='goals-new-refused']",
+             "Ask an admin to turn on Goals for Dalton."
+           )
+
+    assert child
+           |> render()
+           |> Floki.parse_fragment!()
+           |> Floki.find("[data-role='goals-new-box'] input[name='text']")
+           |> Floki.attribute("value") == [@yt]
+
+    refute has_element?(child, "[data-role='goals-new-message']")
+    assert message_count() == before
+    assert Goals.current_proposal(user) == {:ok, nil}
+    refute_received {:signal, _}
+
+    # After the grant the next send starts the conversation and the block goes.
+    grant_goals_tools!(lead)
+    send_text(child, @yt)
+
+    refute has_element?(child, "[data-role='goals-new-refused']")
+    assert {:ok, [%{from: :person, content: @yt}]} = Goals.conversation(user, proposal!(user).id)
+    assert_received {:signal, _}
   end
 
   test "an offline agent: the offline line", %{conn: conn, user: user} do

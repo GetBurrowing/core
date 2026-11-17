@@ -78,6 +78,7 @@ defmodule PlatformWeb.GoalsNew do
       user: user,
       text: "",
       fill: 0,
+      refused: false,
       created: nil,
       subscribed: MapSet.new()
     })
@@ -283,7 +284,15 @@ defmodule PlatformWeb.GoalsNew do
 
     case result do
       {:ok, _} ->
-        {:noreply, socket |> put_new(text: "", fill: socket.assigns.new.fill + 1) |> refresh()}
+        {:noreply,
+         socket
+         |> put_new(text: "", fill: socket.assigns.new.fill + 1, refused: false)
+         |> refresh()}
+
+      # The lead's runtime cannot use the Goals tools (task 01a1eab6 stage
+      # 3): nothing was written, so keep what the person typed and say why.
+      {:error, :lead_missing_goals_tools} ->
+        {:noreply, socket |> put_new(text: text, refused: true) |> refresh()}
 
       {:error, :text_required} ->
         {:noreply, toast(socket, @empty_toast)}
@@ -726,6 +735,19 @@ defmodule PlatformWeb.GoalsNew do
           >
             {example.label}
           </button>
+        </div>
+
+        <div :if={@new[:refused]} class="mt-4" role="status" data-role="goals-new-refused">
+          <PlatformWeb.Components.EmptyState.empty_state variant={:minimal}>
+            <:body>
+              <span class="block font-semibold">
+                {@agent.name} can't take new goals yet: its runtime doesn't have the Goals tools.
+              </span>
+              <span class="mt-1 block">
+                Ask an admin to turn on Goals for {@agent.name}.
+              </span>
+            </:body>
+          </PlatformWeb.Components.EmptyState.empty_state>
         </div>
 
         <form

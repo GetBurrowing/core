@@ -416,7 +416,11 @@ defmodule Platform.Goals do
   # the rules live in `Platform.Goals.Proposals`.
   @doc "The install's lead agent (holder of `agents_leader`)."
   def lead_agent(user), do: proposals(:lead_agent, [user])
-  @doc "Starts a New goal conversation with the lead agent."
+  @doc """
+  Starts a New goal conversation with the lead agent. Answers
+  `{:error, :lead_missing_goals_tools}`, writing nothing, when the lead's
+  runtime lacks the Goals tools (`Platform.Goals.Proposals.check_lead_tools/1`).
+  """
   def start_goal_conversation(user, text), do: proposals(:start_goal_conversation, [user, text])
   def current_proposal(user), do: proposals(:current_proposal, [user])
   def get_proposal(actor, id), do: proposals(:get_proposal, [actor, id])

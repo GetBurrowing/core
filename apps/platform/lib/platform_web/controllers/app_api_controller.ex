@@ -157,6 +157,10 @@ defmodule PlatformWeb.AppApiController do
       |> ExternalScope.scope_spaces(Access.Scope.for_user(user))
       |> Repo.all()
 
+    # A space owned by another surface is not a chat conversation, so the
+    # app's space list leaves it out (`Chat.rail_visible?/1`, task 01a1eab6
+    # stage 3).
+    rows = Enum.filter(rows, &Chat.rail_visible?(elem(&1, 0)))
     spaces = Enum.map(rows, &elem(&1, 0))
     agents_by_space = agents_by_space(Enum.map(spaces, & &1.id))
     participants_by_space = participants_for_naming(spaces)

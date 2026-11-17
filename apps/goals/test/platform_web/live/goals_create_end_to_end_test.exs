@@ -80,6 +80,7 @@ defmodule PlatformWeb.GoalsCreateEndToEndTest do
       agent!()
       |> Ecto.Changeset.change(name: "Dalton", runtime_type: "external", runtime_id: runtime.id)
       |> Repo.update!()
+      |> grant_goals_tools!()
 
     {:ok, _} = Platform.Roles.assign_role(Chat.Sidebar.agents_leader_role(), agent.id)
     agent

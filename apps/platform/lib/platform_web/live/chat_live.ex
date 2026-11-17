@@ -2633,8 +2633,12 @@ defmodule PlatformWeb.ChatLive do
   defp dm_conversations_for(_user_id, _scope, true), do: []
   defp dm_conversations_for(nil, _scope, _embedded?), do: []
 
+  # A space owned by another surface (`Chat.rail_visible?/1`, task 01a1eab6
+  # stage 3) never reaches `@dm_conversations`, so it is in no rail list,
+  # Direct section, search result or switcher fed from it. Opening it by URL
+  # still works: `handle_params/3` resolves the space with `Chat.get_space/1`.
   defp dm_conversations_for(user_id, scope, _embedded?),
-    do: ReadScope.conversations(user_id, scope)
+    do: user_id |> ReadScope.conversations(scope) |> Enum.filter(&Chat.rail_visible?/1)
 
   # Coerce a hide/show flag (boolean or "true"/"false" string from the
   # client) into a boolean. Anything other than a truthy marker is false.
