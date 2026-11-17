@@ -84,7 +84,15 @@ defmodule Platform.Responsibilities.BuiltIns do
       Handlers.Hr,
       # Task 01a1af00 stage 2: the UX friction watch, one key in the designer
       # bundle. Runs server-side with a tool-less model call; never edits code.
-      Handlers.UxFrictionWatch
+      Handlers.UxFrictionWatch,
+      # Task 01a1eaf6 stage 3: the How to Computer showrunner (showrunner role).
+      Handlers.ShowrunnerWeeklyPitch,
+      Handlers.ShowrunnerResearchBrief,
+      Handlers.ShowrunnerRunSheet,
+      # Task 01a1eaf6 stage 4: logistics, post and retro.
+      Handlers.ShowrunnerRecordingPrep,
+      Handlers.ShowrunnerPostShow,
+      Handlers.ShowrunnerRetro
     ]
   end
 end

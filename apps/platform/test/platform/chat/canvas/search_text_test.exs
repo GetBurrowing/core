@@ -25,6 +25,8 @@ defmodule Platform.Chat.Canvas.SearchTextTest do
     #
     # `prototype` (task 01a1316b-4e46 stage 2) is the 17th: its text is a
     # bundle behind a URL, not document text, so it is a skipped marker.
+    # `production_rail`, `needs_you` and `run_sheet` (task 01a1eaf6 stage 2)
+    # are the 18th to 20th; the exporter writes each as text.
     # Registering an 18th kind makes this map differ and this test fails until
     # somebody decides, in writing, whether the new kind carries text.
     test "every registered kind's classification is pinned" do
@@ -45,7 +47,11 @@ defmodule Platform.Chat.Canvas.SearchTextTest do
         "checklist" => :text,
         "checklist_item" => :text,
         "table" => :empty,
-        "prototype" => :marker
+        "prototype" => :marker,
+        # The episode board's kinds (task 01a1eaf6 stage 2) export text.
+        "production_rail" => :text,
+        "needs_you" => :text,
+        "run_sheet" => :text
       }
 
       actual =
@@ -54,7 +60,7 @@ defmodule Platform.Chat.Canvas.SearchTextTest do
         end)
 
       # Reachability: the guard must actually have visited the whole registry.
-      assert map_size(actual) == 17
+      assert map_size(actual) == 20
       assert map_size(actual) == length(Kinds.all())
 
       assert actual == expected

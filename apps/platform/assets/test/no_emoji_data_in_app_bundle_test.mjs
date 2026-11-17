@@ -74,7 +74,10 @@ test("js/app.js bundle does not contain the emoji inventory", async () => {
     target: "es2022",
     write: false,
     outdir: "out",
-    external: ["/fonts/*", "/images/*"],
+    // app.js imports the colocated hooks from "phoenix-colocated/platform",
+    // which `mix compile` writes into the build path. CI runs these guards
+    // before compiling, so it stays external here (a few KB of hook code).
+    external: ["/fonts/*", "/images/*", "phoenix-colocated/*"],
     alias: { "@": ".", "@extensions": EXTENSIONS },
     nodePaths: [DEPS],
   });

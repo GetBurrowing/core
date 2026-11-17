@@ -1203,7 +1203,19 @@ defmodule Platform.RepoLookupBoundaryTest do
     {"platform/chat/canvas_room.ex", :platform_uuid_guard, "-", 2, :safe_internal,
      "(1) validate_key/2 guards the `canvas_id` every public CanvasRoom function takes (stage 2 passes it from a LiveView event's params) before the room's Registry key, its Repo.one on chat_canvas_rooms.canvas_id and Chat.get_canvas/1; a malformed id is {:error, :invalid_canvas_id}. (2) event_row/2 uses it as a BOOLEAN on the actor id before it becomes chat_canvas_room_events.actor_id (a uuid column); a non-UUID actor id is recorded as NULL rather than raising inside the flush transaction"},
     {"platform_web/live/chat/canvas_hooks.ex", :platform_uuid_guard, "-", 1, :safe_internal,
-     "room_canvas/2 (task 01a1316b-84fa stage 2) guards the `canvas_id` a `canvas_room_*` LiveView event carries in its params before CanvasAccess.fetch_for_viewer/3; a malformed id folds into {:error, :not_found}, the reply an unknown canvas already gets"}
+     "room_canvas/2 (task 01a1316b-84fa stage 2) guards the `canvas_id` a `canvas_room_*` LiveView event carries in its params before CanvasAccess.fetch_for_viewer/3; a malformed id folds into {:error, :not_found}, the reply an unknown canvas already gets"},
+    # ── Showrunner (task 01a1eaf6) ─────────────────────────────────────
+    {"platform/showrunner.ex", :get, "Agent", 1, :must_cast,
+     "agent/1 takes the operator-supplied `agent_id` of provision/1 (the mix task flag or an rpc map); it checks Platform.UUID.valid?/1 before Repo.get(Agent, id), and a malformed id is {:error, {:not_found, :agent_id}}"},
+    {"platform/showrunner.ex", :platform_uuid_guard, "-", 2, :must_cast,
+     "agent/1 and space/1 guard provision/1's operator-supplied `agent_id` and `space_id` before Repo.get(Agent, _) and Chat.get_space/1; a malformed id is {:error, {:not_found, field}}"},
+    {"platform/showrunner/config.ex", :platform_uuid_guard, "-", 1, :must_cast,
+     "uuid/1 reads id fields out of a responsibility's operator-written `trigger_config` JSON; a malformed value becomes nil (the unconfigured path) before any lookup uses it"},
+    {"platform/responsibilities/handlers/showrunner_recording_prep.ex", :get, "Agent", 1,
+     :flagged_sibling_owned,
+     "under the responsibilities/ sibling prefix, so flagged rather than classified; the id is internal regardless: runtime_scope/1 takes ctx.agent_id, built by Showrunner.Board.context/3 from the %Agent{} that Roles.assignee_for/1 loads through role_assignments.agent_id (a :binary_id FK to agents); no params, MCP payload or URL segment reaches it"},
+    {"platform/showrunner/social_bundle.ex", :get, "Agent", 1, :safe_internal,
+     "guard/4 takes ctx.agent_id, built by Showrunner.Board.context/3 from the %Agent{} that Roles.assignee_for/1 loads through role_assignments.agent_id (a :binary_id FK to agents); no params, MCP payload or URL segment reaches it"}
   ]
 
   # `Repo.one/1` per file. Counted, not classified: its ids live inside

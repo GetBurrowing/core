@@ -88,7 +88,11 @@ defmodule Platform.Experiments.Surfaces do
     # and decay (0061-learned-defaults.md). Nothing is seeded; the control
     # is prefill_threshold 0.6, min_signals 3, act_after_accepts 5,
     # half_life_days 30.
-    Platform.Experiments.Surfaces.LearnedDefaults
+    Platform.Experiments.Surfaces.LearnedDefaults,
+    # Task 01a1eaf6 stage 1: the How to Computer showrunner's run-sheet
+    # drafting prompt. The control is the seeded slug
+    # showrunner.run_sheet.v1 with no directive.
+    Platform.Experiments.Surfaces.ShowrunnerRunSheet
   ]
 
   @prompt_surface "dispatch.prompt"

@@ -143,6 +143,17 @@ defmodule Platform.Responsibilities.ClosedRosterTemplateCoverageTest do
     "security.cve_scan.v1",
     "security.deploy_audit.v1",
     "security.secret_leak.v1",
+    # Task 01a1eaf6 stage 3: the three `showrunner.*` keys (showrunner role)
+    # point at these; descriptors in `default_templates/0`, rows seeded by
+    # `20261117214509_add_showrunner_role.exs`.
+    # Task 01a1eaf6 stage 4: the loop's second half; rows seeded by
+    # `20261117231742_add_showrunner_loop_keys.exs`.
+    "showrunner.post_show.v1",
+    "showrunner.recording_prep.v1",
+    "showrunner.research_brief.v1",
+    "showrunner.retro.v1",
+    "showrunner.run_sheet.v1",
+    "showrunner.weekly_pitch.v1",
     "tasks.triage.v1",
     "tasks.unblock.v1",
     "tasks.weekly_review.v1",

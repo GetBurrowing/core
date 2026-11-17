@@ -1185,10 +1185,30 @@ defmodule PlatformWeb.ChatLive.CanvasHooks do
   defp handle_canvas_action_value("insight_delete_task:" <> key, canvas, socket),
     do: insight_card_action(:delete_task, key, nil, canvas, socket)
 
-  # Unrecognized action values: keep the generic emit-only contract.
-  # Agent-side subscribers still see the click via the CanvasServer.emit_event
-  # broadcast above.
-  defp handle_canvas_action_value(_value, _canvas, socket), do: {:halt, socket}
+  # Task 01a1eaf6 stage 4: a Needs-you option on a showrunner episode board
+  # (`Kinds.NeedsYou`, value `"<item id>:<option>"`). Only the show's producer
+  # may answer; `Platform.Showrunner.answer/4` decides that and writes the
+  # board. Any other canvas keeps the emit-only contract below.
+  defp handle_canvas_action_value(value, canvas, socket) do
+    if Platform.Showrunner.Board.board?(canvas) do
+      case Platform.Showrunner.answer(canvas, value, current_user_id(socket)) do
+        {:ok, _canvas} ->
+          {:halt, socket}
+
+        {:error, :not_producer} ->
+          {:halt, put_flash(socket, :error, "Only the show's producer can answer this.")}
+
+        {:error, reason} ->
+          Logger.info("[showrunner] Needs-you answer refused: #{inspect(reason)}")
+          {:halt, socket}
+      end
+    else
+      # Unrecognized action values: keep the generic emit-only contract.
+      # Agent-side subscribers still see the click via the
+      # CanvasServer.emit_event broadcast above.
+      {:halt, socket}
+    end
+  end
 
   defp handle_canvas_form("insight_flag_reason:" <> key, values, canvas, socket),
     do: insight_card_action(:flag, key, form_value(values, "reason"), canvas, socket)
