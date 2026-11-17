@@ -106,8 +106,9 @@ defmodule Platform.Goals do
 
   @doc """
   Changes a goal's settings or status: the owner or the coach agent only.
-  `coach_agent_id` is the owner's to change; `owner_user_id` and `org_id`
-  never change. Back to kind "personal" is refused while any grant exists.
+  `coach_agent_id` is the owner's to change, and only to an eligible coach
+  (`Platform.Goals.Coaches`; else `{:error, :lead_missing_goals_tools}`) or
+  nil; `owner_user_id` and `org_id` never change. Back to kind "personal" is refused while any grant exists.
   """
   @spec update_goal(actor(), term(), map()) :: {:ok, Goal.t()} | {:error, term()}
   def update_goal(actor, goal_id, attrs) when is_map(attrs) do
@@ -117,7 +118,9 @@ defmodule Platform.Goals do
              :ok <- lock_clock(actor, visible_goal),
              {:ok, goal} <- fetch_visible(actor, goal_id, true),
              :ok <- check_can_edit(actor, goal),
-             changeset = Goal.changeset(goal, editable_attrs(actor, goal, attrs)),
+             attrs = editable_attrs(actor, goal, attrs),
+             :ok <- check_coach_change(actor, goal, attrs),
+             changeset = Goal.changeset(goal, attrs),
              :ok <- check_kind_change(changeset, goal) do
           with {:ok, updated} <- Repo.update(changeset) do
             Platform.Goals.Clock.sync(goal, updated, Platform.Goals.Clock.now())
@@ -131,6 +134,29 @@ defmodule Platform.Goals do
   # The coach may not reassign the coach: only the owner casts it.
   defp editable_attrs(actor, goal, attrs) do
     if owner?(actor, goal), do: attrs, else: Map.drop(attrs, [:coach_agent_id, "coach_agent_id"])
+  end
+
+  # A changed, non-nil coach must be an eligible coach for the owner
+  # (`Platform.Goals.Coaches`, task 01a1eab7); nil keeps the coachless goal
+  # `hand_goal_to_space/3` relies on. Runs after `editable_attrs/3`, so only
+  # the owner's change reaches it.
+  defp check_coach_change(actor, goal, attrs) do
+    case coach_attr(attrs) do
+      {:ok, id} when not is_nil(id) and id != goal.coach_agent_id ->
+        if Platform.Goals.Coaches.eligible?(actor, id),
+          do: :ok,
+          else: {:error, :lead_missing_goals_tools}
+
+      _ ->
+        :ok
+    end
+  end
+
+  defp coach_attr(attrs) do
+    case Map.fetch(attrs, :coach_agent_id) do
+      {:ok, id} -> {:ok, id}
+      :error -> Map.fetch(attrs, "coach_agent_id")
+    end
   end
 
   defp check_kind_change(changeset, goal) do
@@ -418,11 +444,26 @@ defmodule Platform.Goals do
   def lead_agent(user), do: proposals(:lead_agent, [user])
 
   @doc """
-  Starts a New goal conversation with the lead agent. Answers
+  Starts a New goal conversation with the lead agent, or with
+  `opts[:coach_agent_id]` when the person picked one. Answers
   `{:error, :lead_missing_goals_tools}`, writing nothing, when the lead's
-  runtime lacks the Goals tools (`Platform.Goals.Proposals.check_lead_tools/1`).
+  runtime lacks the Goals tools (`Platform.Goals.Proposals.check_lead_tools/1`)
+  or the picked agent is not an eligible coach (`Platform.Goals.Coaches`).
   """
-  def start_goal_conversation(user, text), do: proposals(:start_goal_conversation, [user, text])
+  def start_goal_conversation(user, text, opts \\ []),
+    do: proposals(:start_goal_conversation, [user, text, opts])
+
+  @doc """
+  The agents `user` may pick as a goal's coach and the one a picker
+  preselects (task 01a1eab7): `{:ok, %{coaches: [...], default_id: id | nil}}`.
+  The rule lives in `Platform.Goals.Coaches`.
+  """
+  def list_coaches(user) do
+    with :ok <- check_enabled(), :ok <- check_use(user) do
+      coaches = Platform.Goals.Coaches.list_eligible(user)
+      {:ok, %{coaches: coaches, default_id: Platform.Goals.Coaches.default_id(user, coaches)}}
+    end
+  end
   def current_proposal(user), do: proposals(:current_proposal, [user])
   def get_proposal(actor, id), do: proposals(:get_proposal, [actor, id])
   def list_proposals(actor), do: proposals(:list_proposals, [actor])

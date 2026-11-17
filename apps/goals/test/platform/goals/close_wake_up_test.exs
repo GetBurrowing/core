@@ -154,4 +154,72 @@ defmodule Platform.Goals.CloseWakeUpTest do
       assert Repo.get!(WakeUp, wake.id).status == "open"
     end
   end
+
+  # ── coach change (task 01a1eab7 stage 1) ──────────────────────────────────
+  #
+  # The ticket expected the old coach to get :forbidden. On a PERSONAL goal
+  # it gets :not_found instead: `editable_wake/2` reads through
+  # `Visibility.visible_goals(%Agent{})`, so an agent that is no longer the
+  # coach no longer sees the goal at all. It gets :forbidden only while it
+  # still sees the goal through a space grant (`check_coach/2`).
+
+  defp new_coach!(owner) do
+    runtime =
+      Repo.insert!(%Platform.Agents.AgentRuntime{
+        owner_user_id: owner.id,
+        runtime_id: "goal-new-coach-#{unique()}",
+        display_name: "Goals new coach",
+        status: "active"
+      })
+
+    agent!()
+    |> Ecto.Changeset.change(runtime_type: "external", runtime_id: runtime.id)
+    |> Repo.update!()
+    |> grant_goals_tools!()
+  end
+
+  test "after a coach change the new coach closes the check-in; the old one gets :not_found",
+       c do
+    wake = fire(c.goal)
+    b = new_coach!(c.owner)
+
+    assert {:ok, updated} = Goals.update_goal(c.owner, c.goal.id, %{coach_agent_id: b.id})
+    assert updated.coach_agent_id == b.id
+    assert updated.kind == "personal"
+    before = row_counts()
+
+    assert Goals.close_wake_up(c.coach, wake.id, "wait", %{reason: "Old coach"}) ==
+             {:error, :not_found}
+
+    assert row_counts() == before
+    assert Repo.get!(WakeUp, wake.id).status == "open"
+
+    assert {:ok, result} = Goals.close_wake_up(b, wake.id, "wait", %{reason: "New coach"})
+    assert result.wake_up.status == "closed"
+    assert result.entry.body == "New coach"
+  end
+
+  test "the old coach that still sees the goal through a space grant gets :forbidden", c do
+    space = space!(c.org)
+    join_space!(space.id, :user, c.owner.id)
+    join_space!(space.id, :agent, c.coach.id)
+    assert {:ok, _} = Goals.open_goal(c.owner, c.goal.id, {:space, space.id})
+
+    wake = fire(c.goal)
+    b = new_coach!(c.owner)
+    assert {:ok, _} = Goals.update_goal(c.owner, c.goal.id, %{coach_agent_id: b.id})
+
+    # The old coach still sees the goal, through the space.
+    assert {:ok, _} = Goals.get_goal(c.coach, c.goal.id)
+    before = row_counts()
+
+    assert Goals.close_wake_up(c.coach, wake.id, "wait", %{reason: "Old coach"}) ==
+             {:error, :forbidden}
+
+    assert row_counts() == before
+    assert Repo.get!(WakeUp, wake.id).status == "open"
+
+    assert {:ok, _} = Goals.close_wake_up(b, wake.id, "wait", %{reason: "New coach"})
+    assert Repo.get!(WakeUp, wake.id).status == "closed"
+  end
 end
