@@ -2,9 +2,10 @@
 // @mentions render as chips. Pure DOM in, DOM out; no LiveView here, so the
 // hook (`hooks/compose_input.js`) owns events and this file owns the shape.
 //
-// The wire format is unchanged: `serialize/1` turns the field back into the
-// ADR 0037 text the server has always parsed, one `@[Name]` per chip, and the
-// hook copies it into the hidden `compose[text]` input.
+// `serialize/1` preserves ADR 0037 `@[Name]` mentions and the group extension
+// `@[group:UUID|label]`. Group chips show the friendly label while their
+// data-mention retains the stable wire identity for drafts and edits. The
+// hook copies that text into the hidden `compose[text]` input.
 //
 // A chip is `<span class="compose-chip" contenteditable="false"
 // data-mention="Name">@Name</span>` followed by a no-break space, so the caret
@@ -69,11 +70,19 @@ export function serialize(el) {
 }
 
 function makeChip(doc, name) {
+  const group = name.match(/^group:[0-9a-f]{8}-[0-9a-f]{4}-[0-9a-f]{4}-[0-9a-f]{4}-[0-9a-f]{12}\|([^\[\]\r\n]+)$/i)
   const chip = doc.createElement("span")
-  chip.setAttribute("class", CHIP_CLASS)
+  chip.setAttribute("class", group ? CHIP_CLASS + " compose-chip--group" : CHIP_CLASS)
   chip.setAttribute("contenteditable", "false")
   chip.setAttribute("data-mention", name)
-  chip.appendChild(doc.createTextNode("@" + name))
+  if (group) {
+    chip.setAttribute("data-mention-type", "group")
+    const icon = doc.createElement("span")
+    icon.setAttribute("class", "hero-user-group inline-block size-3 mr-1")
+    icon.setAttribute("aria-hidden", "true")
+    chip.appendChild(icon)
+  }
+  chip.appendChild(doc.createTextNode("@" + (group ? group[1] : name)))
   return chip
 }
 

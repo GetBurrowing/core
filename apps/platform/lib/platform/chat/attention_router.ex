@@ -142,6 +142,7 @@ defmodule Platform.Chat.AttentionRouter do
   alias Platform.Chat
   alias Platform.Chat.{ActiveAgentStore, AgentResponder, Message, Participant, Presence, Space}
   alias Platform.Chat.MentionIdentity
+  alias Platform.Chat.{GroupMentions, GroupMentionToken}
   alias Platform.Chat.ReplyFailure
   alias Platform.Chat.PubSub, as: ChatPubSub
   alias Platform.Repo
@@ -425,6 +426,7 @@ defmodule Platform.Chat.AttentionRouter do
          %Message{space_id: space_id, id: message_id, participant_id: author_id} = message,
          attention
        ) do
+    message = GroupMentions.load(message)
     participants = active_participants(space_id)
 
     # Exclude the message author. Added attention (`route_attention/3`) then
@@ -517,7 +519,7 @@ defmodule Platform.Chat.AttentionRouter do
 
           named_mention_decisions =
             Enum.flat_map(human_recipients, fn participant ->
-              if mentioned?(participant, message) do
+              if addressed?(participant, message) do
                 [%{participant_id: participant.id, reason: :mention}]
               else
                 []
@@ -573,6 +575,8 @@ defmodule Platform.Chat.AttentionRouter do
           attention
         )
 
+      signal = put_group_origin(signal, message, Map.get(participant_by_id, pid))
+
       case reason do
         :heartbeat ->
           :ets.insert(@table, {pid, signal})
@@ -600,6 +604,38 @@ defmodule Platform.Chat.AttentionRouter do
 
   defp restrict_to_added(recipients, %{ids: ids}),
     do: Enum.filter(recipients, &MapSet.member?(ids, &1.id))
+
+  defp put_group_origin(signal, message, %Participant{} = participant) do
+    # Origin is the saved addressed identity, not current authorization. If
+    # access changes after selection, retain group-only provenance so the
+    # responder refuses delivery rather than falling back to invite transport.
+    recipients =
+      Enum.filter(message.group_mention_recipients || [], fn row ->
+        row.participant_id == participant.id and
+          row.principal_type == participant.participant_type and
+          row.principal_id == participant.participant_id
+      end)
+
+    if recipients != [] do
+      group_ids =
+        recipients
+        |> Enum.flat_map(& &1.group_ids)
+        |> MapSet.new()
+
+      groups =
+        (message.group_mentions || [])
+        |> Enum.filter(&MapSet.member?(group_ids, &1.group_id))
+        |> Enum.map(&%{id: &1.group_id, name: &1.name})
+
+      signal
+      |> Map.put(:group_mentions, groups)
+      |> Map.put(:group_mention_only, not mentioned?(participant, message))
+    else
+      signal
+    end
+  end
+
+  defp put_group_origin(signal, _message, _participant), do: signal
 
   defp attention_adder(%{adder: %Participant{} = adder}), do: adder
   defp attention_adder(_attention), do: nil
@@ -839,7 +875,7 @@ defmodule Platform.Chat.AttentionRouter do
         # Added attention (`route_attention/3`): every recipient left IS an
         # added agent, so it counts as mentioned. The roster rule still holds.
         (wake.attention? or
-           mentioned?(participant, message, agent: roster_entry && roster_entry.agent)) and
+           addressed?(participant, message, agent: roster_entry && roster_entry.agent)) and
           mention_roster_ok?(roster_entry)
       end)
 
@@ -1571,7 +1607,7 @@ defmodule Platform.Chat.AttentionRouter do
   defp decide_human(%Participant{attention_mode: "active"}, _message), do: :active
 
   defp decide_human(%Participant{attention_mode: "mention"} = participant, message) do
-    if mentioned?(participant, message), do: :mention, else: nil
+    if addressed?(participant, message), do: :mention, else: nil
   end
 
   defp decide_human(%Participant{attention_mode: "heartbeat"}, _message), do: :heartbeat
@@ -1600,6 +1636,12 @@ defmodule Platform.Chat.AttentionRouter do
   @spec mentioned?(Participant.t(), Message.t()) :: boolean()
   def mentioned?(participant, message), do: mentioned?(participant, message, [])
 
+  @doc "Direct mentions plus immutable, currently authorized group recipients."
+  def addressed?(participant, message, opts \\ []) do
+    mentioned?(participant, message, opts) or
+      (mention_scan_enabled?(message) and GroupMentions.recipient?(participant, message))
+  end
+
   @doc """
   `mentioned?/2` with options.
 
@@ -1616,7 +1658,7 @@ defmodule Platform.Chat.AttentionRouter do
   def mentioned?(%Participant{} = p, %Message{content: content} = message, opts)
       when is_binary(content) and is_list(opts) do
     if mention_scan_enabled?(message) do
-      downcased = String.downcase(content)
+      downcased = content |> String.downcase() |> GroupMentionToken.strip()
       {bracketed_tokens, legacy_zone} = extract_bracketed_tokens(downcased)
 
       name_match =
@@ -1787,6 +1829,7 @@ defmodule Platform.Chat.AttentionRouter do
     ~r/@\[([^\[\]]+)\]/
     |> Regex.scan(content, capture: :all_but_first)
     |> List.flatten()
+    |> Enum.reject(&String.starts_with?(String.downcase(&1), "group:"))
     |> Enum.map(&classify_bracketed_token/1)
   end
 

@@ -29,6 +29,31 @@ function chips(el) {
   return el.childNodes.filter((n) => n.nodeType === 1 && n.getAttribute("data-mention") !== null)
 }
 
+describe("group mention identity", () => {
+  const wire = "group:12345678-1234-1234-1234-123456789abc|Design Team"
+
+  it("shows a friendly group label while round-tripping draft and edit identity", () => {
+    const el = field()
+    const text = `Ask @[${wire}] and @[Design Lead]`
+    hydrate(el, text)
+    expect(chips(el)[0].textContent).toBe("@Design Team")
+    expect(chips(el)[0].getAttribute("data-mention-type")).toBe("group")
+    expect(chips(el)[0].getAttribute("data-mention")).toBe(wire)
+    expect(serialize(el)).toBe(text)
+    hydrate(el, serialize(el))
+    expect(chips(el)[0].textContent).toBe("@Design Team")
+    expect(chips(el)[1].textContent).toBe("@Design Lead")
+    expect(serialize(el)).toBe(text)
+  })
+
+  it("inserts group wire identity with its friendly label", () => {
+    const el = field()
+    insertChip(el, {startContainer: el, startOffset: 0, endContainer: el, endOffset: 0}, wire)
+    expect(chips(el)[0].textContent).toBe("@Design Team")
+    expect(serialize(el)).toBe(`@[${wire}] `)
+  })
+})
+
 describe("serialize / hydrate round trip", () => {
   const cases = [
     ["plain text", "hello there"],

@@ -134,7 +134,12 @@ defmodule PlatformWeb.ChatLive.Partials.MentionList do
   )
 
   def mention_list(assigns) do
-    suggestions = order(assigns.suggestions)
+    suggestions =
+      assigns.suggestions
+      |> Enum.reject(
+        &(&1[:participant_type] == "group" and (assigns.pick || assigns.on_pick) != nil)
+      )
+      |> order()
 
     assigns =
       assigns
@@ -162,6 +167,7 @@ defmodule PlatformWeb.ChatLive.Partials.MentionList do
               aria-disabled={added?(suggestion, @added) && "true"}
               data-mention-suggestion={if idx == 0, do: "first", else: "row"}
               data-mention-name={suggestion.name}
+              data-mention-token={suggestion[:token]}
               data-principal-id={(@pick || @on_pick) && suggestion[:principal_id]}
               data-added={added?(suggestion, @added) && "true"}
               data-kind={kind(suggestion)}
@@ -177,6 +183,10 @@ defmodule PlatformWeb.ChatLive.Partials.MentionList do
               ]}
             >
               <%= case kind(suggestion) do %>
+                <% "group" -> %>
+                  <span class="mention-list-broadcast" aria-hidden="true">
+                    <span class="hero-user-group size-4"></span>
+                  </span>
                 <% "broadcast" -> %>
                   <span class="mention-list-broadcast" aria-hidden="true">
                     <span class="hero-megaphone size-4"></span>
@@ -206,6 +216,9 @@ defmodule PlatformWeb.ChatLive.Partials.MentionList do
                 </span>
                 <span :if={kind(suggestion) == "broadcast"} class="mention-list-note">
                   Notify everyone in the channel
+                </span>
+                <span :if={kind(suggestion) == "group"} class="mention-list-note">
+                  {group_note(suggestion)}
                 </span>
                 <span :if={suggestion[:not_in_space] == true} class="mention-list-note">
                   Not in this space · adds them
@@ -361,7 +374,10 @@ defmodule PlatformWeb.ChatLive.Partials.MentionList do
   # Composer mode inserts a chip into the field; pick mode asks attention for
   # the row's principal, and an already-added row does nothing.
   defp row_click(suggestion, nil, field_id, _added) do
-    JS.dispatch("chat:insert-mention", to: "##{field_id}", detail: %{name: suggestion.name})
+    JS.dispatch("chat:insert-mention",
+      to: "##{field_id}",
+      detail: %{name: suggestion.name, token: suggestion[:token] || suggestion.name}
+    )
   end
 
   defp row_click(suggestion, message_id, _field_id, added) do
@@ -394,10 +410,15 @@ defmodule PlatformWeb.ChatLive.Partials.MentionList do
   def status_text(suggestions) do
     agents = Enum.count(suggestions, &(kind(&1) == "agent"))
     people = Enum.count(suggestions, &(kind(&1) == "user"))
+    groups = Enum.count(suggestions, &(kind(&1) == "group"))
     here? = Enum.any?(suggestions, &(kind(&1) == "broadcast"))
 
     parts =
-      [count_label(agents, "agent", "agents"), count_label(people, "person", "people")]
+      [
+        count_label(agents, "agent", "agents"),
+        count_label(people, "person", "people"),
+        count_label(groups, "group", "groups")
+      ]
       |> Enum.reject(&is_nil/1)
 
     parts = if here?, do: parts ++ ["here"], else: parts
@@ -421,7 +442,8 @@ defmodule PlatformWeb.ChatLive.Partials.MentionList do
       cond do
         s[:learned] == true -> -1
         kind(s) == "agent" -> 0
-        kind(s) == "broadcast" -> 2
+        kind(s) == "group" -> 2
+        kind(s) == "broadcast" -> 3
         true -> 1
       end
     end)
@@ -429,7 +451,19 @@ defmodule PlatformWeb.ChatLive.Partials.MentionList do
 
   defp kind(%{participant_type: "agent"}), do: "agent"
   defp kind(%{participant_type: "broadcast"}), do: "broadcast"
+  defp kind(%{participant_type: "group"}), do: "group"
   defp kind(_), do: "user"
 
-  defp kind_label(s), do: if(kind(s) == "agent", do: "agent", else: "person")
+  defp kind_label(s) do
+    case kind(s) do
+      "agent" -> "agent"
+      "group" -> "group"
+      _ -> "person"
+    end
+  end
+
+  defp group_note(%{eligible_count: count}) when is_integer(count),
+    do: "#{count} eligible #{if count == 1, do: "recipient", else: "recipients"}"
+
+  defp group_note(_), do: "Existing participants only"
 end

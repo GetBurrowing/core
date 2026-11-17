@@ -103,7 +103,7 @@ defmodule Platform.People.Appearances do
 
   defp mention_appearances(%{content: content} = m) when is_binary(content) do
     @mention_re
-    |> Regex.scan(content)
+    |> Regex.scan(Platform.Chat.GroupMentionToken.strip(content))
     |> Enum.map(fn [_, name] -> String.trim(name) end)
     |> Enum.reject(&(&1 == ""))
     |> Enum.uniq()

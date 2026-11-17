@@ -107,6 +107,13 @@ describe("ComposeInput blur listener", () => {
     expect(scrollTo).not.toHaveBeenCalled()
   })
 
+  it("inserts a group's wire token in the textarea path", () => {
+    const token = "group:12345678-1234-1234-1234-123456789abc|Design Team"
+    hook.el.fire("chat:insert-mention", { detail: { name: "Design Team", token } })
+    expect(hook.el.value).toBe(`hi @[${token}] `)
+    expect(hook.el.selectionStart).toBe(hook.el.value.length)
+  })
+
   it("still resets the viewport when focus really leaves (keyboard dismissed)", () => {
     hook.el.blur()
     vi.advanceTimersByTime(200)
@@ -422,6 +429,20 @@ describe("ComposeInput chip field: value, draft, Send", () => {
     expect(c.hidden.value).toBe("ask @[Builder] ")
     expect(c.doc.activeElement).toBe(c.el)
     expect(c.hook.pushEvent).toHaveBeenLastCalledWith("mention_clear", {})
+  })
+
+  it("group selection keeps a friendly chip and stable draft identity", () => {
+    const token = "group:12345678-1234-1234-1234-123456789abc|Design Team"
+    const c = richComposer()
+    hydrate(c.el, "ask @De")
+    c.ctx.selection = caret(c.el.firstChild, 7)
+    c.el.fire("input")
+    c.el.fire("chat:insert-mention", { detail: { name: "Design Team", token } })
+    expect(c.hidden.value).toBe(`ask @[${token}] `)
+    expect(store.get("compose:chat-draft:space-1")).toBe(`ask @[${token}] `)
+    const chip = c.el.childNodes.find((n) => n.nodeType === 1)
+    expect(chip.textContent).toBe("@Design Team")
+    expect(c.doc.activeElement).toBe(c.el)
   })
 
   it("compose_reset clears the field, the hidden input and the draft", () => {

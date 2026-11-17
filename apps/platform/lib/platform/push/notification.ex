@@ -591,6 +591,10 @@ defmodule Platform.Push.Notification do
   # before links so it is never read as a link label.
   defp plain_text(text) do
     text
+    |> String.replace(
+      ~r/@\[group:[0-9a-fA-F]{8}-[0-9a-fA-F]{4}-[0-9a-fA-F]{4}-[0-9a-fA-F]{4}-[0-9a-fA-F]{12}\|([^\[\]\r\n]+)\]/u,
+      "@\\1"
+    )
     |> String.replace(~r/@\[([^\]]+)\]/u, "@\\1")
     |> String.replace(~r/```[a-zA-Z0-9_-]*\n?/u, "")
     |> String.replace(~r/!\[([^\]]*)\]\([^)]*\)/u, "\\1")

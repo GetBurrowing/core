@@ -21,6 +21,21 @@ These are fixable individually, but the underlying cause is shared: the wire for
 
 ## Decision
 
+### Named group extension (2026-11)
+
+Named organization groups use `@[group:<uuid>|<display label>]`. The UUID
+identifies the group; the label preserves the message-time display name.
+Renaming or archiving a group never reinterprets an old message. Group tokens
+are excluded from individual-name, legacy-name, keyword and People appearance
+matching. Composer chips show the friendly label and retain the complete token
+when serialized or restored from a draft.
+
+The server captures eligible existing recipients once, transactionally with
+message creation. Group membership is not an invitation or access grant;
+delivery rechecks current authorization. Edits retain the original snapshot
+and do not address new recipients. This extension leaves individual mentions
+and their explicit, authorized agent-summon behavior unchanged.
+
 **Change the mention wire format to `@[Display Name]`** — bracketed, human-readable, no embedded ID.
 
 Example raw text: `hey @[Alex Rivera] and @[higgins], can you look at this?`

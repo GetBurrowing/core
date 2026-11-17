@@ -15,6 +15,38 @@ defmodule PlatformWeb.ChatLive.Partials.MentionListTest do
 
   alias PlatformWeb.ChatLive.Partials.MentionList
 
+  test "group rows show their kind and friendly label and dispatch stable wire identity" do
+    group = %{
+      name: "Design Team",
+      display_name: "Design Team",
+      participant_type: "group",
+      token: "group:12345678-1234-1234-1234-123456789abc|Design Team"
+    }
+
+    doc = render_list([group])
+    assert count(doc, "[data-kind=group]") == 1
+    assert count(doc, ".hero-user-group") == 1
+    assert text(doc, ".mention-list-name") == "Design Team"
+    assert doc |> q("[data-kind=group]") |> LazyHTML.attribute("phx-click") |> hd() =~ group.token
+    assert MentionList.status_text([group]) == "1 group"
+  end
+
+  test "group rows are excluded from after-send attention and room-agent pick modes" do
+    assigns = %{
+      group: %{name: "Design Team", participant_type: "group", token: "group:id|Design Team"}
+    }
+
+    doc =
+      ~H"""
+      <MentionList.mention_list id="attention" suggestions={[@group]} pick="message-id" />
+      <MentionList.mention_list id="room" suggestions={[@group]} on_pick="room_add_agent" />
+      """
+      |> rendered_to_string()
+      |> LazyHTML.from_fragment()
+
+    assert count(doc, "[data-kind=group]") == 0
+  end
+
   defp person(name),
     do: %{
       name: name,

@@ -146,6 +146,11 @@ defmodule PlatformWeb.SettingsLive do
       path: "/admin/link-unfurls",
       view: PlatformWeb.AdminLinkUnfurlsLive
     },
+    %{
+      label: "Mention groups",
+      path: "/settings/mention-groups",
+      view: PlatformWeb.MentionGroupsLive
+    },
     %{label: "Orgs", path: "/admin/orgs", view: PlatformWeb.AdminOrgsLive},
     %{label: "Pipeline", path: "/tasks/pipeline", view: PlatformWeb.PipelineLive},
     %{label: "Prompts", path: "/admin/prompts", view: PlatformWeb.AdminPromptsLive},

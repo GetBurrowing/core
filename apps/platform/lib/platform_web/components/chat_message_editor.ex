@@ -18,7 +18,7 @@ defmodule PlatformWeb.Components.ChatMessageEditor do
 
   use Phoenix.Component
 
-  attr :msg, :map, required: true, doc: "the message being edited"
+  attr(:msg, :map, required: true, doc: "the message being edited")
 
   def chat_message_editor(assigns) do
     ~H"""
@@ -38,6 +38,10 @@ defmodule PlatformWeb.Components.ChatMessageEditor do
         class="min-w-0 w-full resize-y rounded-lg border border-base-content/10 bg-base-200/40 px-3 py-2 text-sm focus-visible:outline-none focus-visible:ring-2 focus-visible:ring-focus-ring"
         style="field-sizing:content;min-height:48px;max-height:400px"
       ><%= @msg.content || "" %></textarea>
+
+      <p class="text-xs text-subtle" data-role="group-edit-notice">
+        Group recipients are set when a message is sent. Send a new message to notify a new group.
+      </p>
 
       <div class="flex items-center justify-between gap-2">
         <p class="text-xs text-subtle">

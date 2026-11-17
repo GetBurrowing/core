@@ -289,6 +289,7 @@ const ComposeInput = {
     this.el.addEventListener("chat:insert-mention", (e) => {
       const name = e.detail && e.detail.name;
       if (!name) return;
+      const token = e.detail.token || name;
 
       const value = this.el.value;
       const cursor = this.el.selectionStart;
@@ -299,10 +300,10 @@ const ComposeInput = {
 
       if (atIndex !== -1) {
         const after = value.slice(cursor);
-        this.el.value = before.slice(0, atIndex) + "@[" + name + "] " + after;
+        this.el.value = before.slice(0, atIndex) + "@[" + token + "] " + after;
 
         // Cursor lands after "@[" + name + "] " (4 extra chars)
-        const newPos = atIndex + name.length + 4;
+        const newPos = atIndex + token.length + 4;
         this.el.setSelectionRange(newPos, newPos);
       }
 
@@ -588,7 +589,7 @@ const ComposeInput = {
 
       const range = this._mentionInsertRange();
       if (document.activeElement !== el) el.focus({ preventScroll: true });
-      const pos = insertChip(el, range, name);
+      const pos = insertChip(el, range, e.detail.token || name);
       this._placeCaret(pos);
       this._emit();
 

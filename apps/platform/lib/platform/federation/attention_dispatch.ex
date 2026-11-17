@@ -87,6 +87,9 @@ defmodule Platform.Federation.AttentionDispatch do
   require Logger
 
   alias Platform.Chat.DispatchMembership
+  alias Platform.Chat.{MentionGroups, Participant, Space}
+  alias Platform.Repo
+  import Ecto.Query, only: [from: 2]
 
   @typedoc """
   Which dispatch surface asked. Carried to
@@ -108,7 +111,7 @@ defmodule Platform.Federation.AttentionDispatch do
           | :agent_responder
           | :dead_letter_replay
 
-  @type result :: :ok | {:error, :broadcast_failed | :endpoint_not_ready}
+  @type result :: :ok | {:error, :broadcast_failed | :endpoint_not_ready | :recipient_unavailable}
 
   @doc """
   The PubSub topic a federated runtime is subscribed to.
@@ -132,6 +135,10 @@ defmodule Platform.Federation.AttentionDispatch do
       `:no_space_named` skip and the broadcast still goes out.
     * `:agent_id` — the target agent (id, slug, or `%Platform.Agents.Agent{}`).
     * `:source` — which dispatch surface asked. See `t:source/0`.
+    * `:membership` — defaults to `:invite`. Group-only mentions use
+      `:existing_only` plus the snapshotted `:participant_id`; they refuse
+      delivery if that participant is no longer present and readable, and
+      never call the invitation writer. This refusal blocks the broadcast.
 
   Returns `:ok`, or `{:error, :broadcast_failed | :endpoint_not_ready}` when the
   broadcast itself fails. The invite result is deliberately not reflected in the
@@ -140,6 +147,14 @@ defmodule Platform.Federation.AttentionDispatch do
   @spec broadcast(binary(), map(), keyword()) :: result()
   def broadcast(runtime_id, payload, opts \\ [])
       when is_binary(runtime_id) and is_map(payload) and is_list(opts) do
+    case Keyword.get(opts, :membership, :invite) do
+      :invite -> broadcast_with_invite(runtime_id, payload, opts)
+      :existing_only -> broadcast_existing(runtime_id, payload, opts)
+      _ -> {:error, :recipient_unavailable}
+    end
+  end
+
+  defp broadcast_with_invite(runtime_id, payload, opts) do
     # BEFORE the broadcast, and committed. Not a stylistic ordering — see
     # "Order is load-bearing" in the moduledoc. Do not move this below
     # do_broadcast/2, and do not make it concurrent with it.
@@ -152,6 +167,49 @@ defmodule Platform.Federation.AttentionDispatch do
 
     payload = Platform.InstructionPacks.Guidance.enrich(payload, Keyword.get(opts, :agent_id))
     do_broadcast(topic(runtime_id), payload)
+  end
+
+  # Hold the exact participant row through the broadcast. A removal that wins
+  # before this check refuses delivery; a concurrent removal waits until the
+  # send completes. Neither branch may restore or substitute participation.
+  defp broadcast_existing(runtime_id, payload, opts) do
+    space_id = Keyword.get(opts, :space_id)
+    participant_id = Keyword.get(opts, :participant_id)
+
+    agent_id =
+      case Keyword.get(opts, :agent_id) do
+        %Platform.Agents.Agent{id: id} -> id
+        id -> id
+      end
+
+    if Enum.all?([space_id, participant_id, agent_id], &Platform.UUID.valid?/1) do
+      Repo.transaction(fn ->
+        participant =
+          Repo.one(
+            from(p in Participant,
+              where:
+                p.id == ^participant_id and p.space_id == ^space_id and
+                  p.participant_type == "agent" and p.participant_id == ^agent_id,
+              lock: "FOR SHARE"
+            )
+          )
+
+        with %Space{} = space <- Repo.get(Space, space_id),
+             %Participant{} = current <- participant,
+             true <- MentionGroups.eligible_participant?(current, space) do
+          payload = Platform.InstructionPacks.Guidance.enrich(payload, agent_id)
+          do_broadcast(topic(runtime_id), payload)
+        else
+          _ -> Repo.rollback(:recipient_unavailable)
+        end
+      end)
+      |> case do
+        {:ok, result} -> result
+        {:error, reason} -> {:error, reason}
+      end
+    else
+      {:error, :recipient_unavailable}
+    end
   end
 
   # The rescue covers the broadcast ONLY. See "Errors" in the moduledoc for why

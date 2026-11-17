@@ -136,7 +136,8 @@ defmodule PlatformWeb.ChatLive.MentionsHooks do
       build_suggestions(query, participants,
         external?: socket.assigns[:external?] == true,
         user_id: socket.assigns[:user_id],
-        addable_agents: socket.assigns[:mention_addable_agents] || []
+        addable_agents: socket.assigns[:mention_addable_agents] || [],
+        groups: groups_for(socket.assigns)
       )
 
     previous = socket.assigns[:mention_source]
@@ -169,6 +170,17 @@ defmodule PlatformWeb.ChatLive.MentionsHooks do
   end
 
   defp handle_event(_event, _params, socket), do: {:cont, socket}
+
+  defp groups_for(%{external?: true}), do: []
+
+  defp groups_for(%{
+         active_space: %Space{} = space,
+         current_participant: %Platform.Chat.Participant{} = author
+       }) do
+    Platform.Chat.MentionGroups.groups_for_space(space, author)
+  end
+
+  defp groups_for(_), do: []
 
   defp open_room_picker(socket, query) do
     case room_agent_space(socket) do
@@ -287,11 +299,27 @@ defmodule PlatformWeb.ChatLive.MentionsHooks do
         opts |> Keyword.get(:addable_agents, []) |> addable_suggestions(in_space)
       end
 
-    (in_space ++ addable ++ here_candidates(query_lower))
+    groups =
+      if external?, do: [], else: Enum.map(Keyword.get(opts, :groups, []), &group_suggestion/1)
+
+    (in_space ++ addable ++ groups ++ here_candidates(query_lower))
     |> Enum.flat_map(&rank(&1, query_lower))
     |> Enum.sort()
     |> Enum.map(fn {_key, suggestion} -> suggestion end)
     |> Enum.take(@max_suggestions)
+  end
+
+  defp group_suggestion(group) do
+    token = Platform.Chat.GroupMentionToken.encode(group.id, group.name)
+
+    %{
+      name: group.name,
+      display_name: group.name,
+      participant_type: "group",
+      token: String.slice(token, 2, String.length(token) - 3),
+      eligible_count: Map.get(group, :eligible_count),
+      not_in_space: false
+    }
   end
 
   # Internal surface: no additional scope filter.
@@ -376,7 +404,8 @@ defmodule PlatformWeb.ChatLive.MentionsHooks do
   defp rank(_suggestion, _query), do: []
 
   defp group_rank(%{participant_type: "agent"}), do: 0
-  defp group_rank(%{participant_type: "broadcast"}), do: 2
+  defp group_rank(%{participant_type: "group"}), do: 2
+  defp group_rank(%{participant_type: "broadcast"}), do: 3
   defp group_rank(_), do: 1
 
   defp match_tier(name, query) do

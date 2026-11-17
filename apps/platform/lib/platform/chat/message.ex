@@ -20,6 +20,10 @@ defmodule Platform.Chat.Message do
     field(:edited_at, :utc_datetime_usec)
     field(:deleted_at, :utc_datetime_usec)
     field(:log_only, :boolean, default: false)
+    # Attached only by GroupMentions from server-owned snapshot tables. Never
+    # cast from request attrs or metadata; nil means the rows have not loaded.
+    field(:group_mentions, {:array, :map}, virtual: true, default: nil)
+    field(:group_mention_recipients, {:array, :map}, virtual: true, default: nil)
 
     # Editable-messages contract (docs/contracts/editable-messages-contract.md).
     # `frozen_at` non-null means PATCH /api/messages/:id returns 409. The

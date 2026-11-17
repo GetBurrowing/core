@@ -22,6 +22,13 @@ defmodule Platform.Push.NotificationTest do
   alias Platform.Tenancy
   alias Platform.TenancyFixtures
 
+  test "native notification bodies show friendly group labels and retain ordinary mentions" do
+    id = "12345678-1234-1234-1234-123456789abc"
+
+    assert Notification.body_text("Ask @[group:#{id}|Design Team] and @[Design Lead]") ==
+             "Ask @Design Team and @Design Lead"
+  end
+
   defp insert_user(name \\ "User") do
     n = System.unique_integer([:positive])
 
