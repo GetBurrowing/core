@@ -136,7 +136,7 @@ defmodule Platform.Showrunner.Config do
       Phoenix.PubSub.broadcast(
         Platform.PubSub,
         @changed_topic,
-        {:responsibilities_changed, :cron}
+        {:responsibilities_changed, :all}
       )
 
       {:ok, updated}

@@ -185,10 +185,8 @@ defmodule Platform.Responsibilities.Handlers.ShowrunnerRecordingPrep do
   def handle_output(_responsibility, _output, _trigger_meta), do: :ok
 
   @impl true
-  def handle_refusal(%Responsibility{}, refusal, _trigger_meta) do
-    Logger.info("[showrunner.recording_prep] refused: #{inspect(refusal)}")
-    :ok
-  end
+  def handle_refusal(%Responsibility{} = responsibility, refusal, _trigger_meta),
+    do: Runtime.refused(responsibility, refusal)
 
   # ── slot arithmetic (public for tests) ──
 
@@ -314,7 +312,12 @@ defmodule Platform.Responsibilities.Handlers.ShowrunnerRecordingPrep do
     from = List.first(candidates)
     to = DateTime.add(List.last(candidates), recording.minutes * 60, :second)
 
-    case busy(ctx, owners, from, to, logistics["hold_ids"] || [], opts) do
+    # The episode's own calendar holds and its own meeting room are not
+    # clashes: counting them made a second fire move the slot away from the
+    # room it had already booked (task 01a1eaf6 stage 4 review).
+    own = Enum.reject((logistics["hold_ids"] || []) ++ [logistics["meeting_id"]], &is_nil/1)
+
+    case busy(ctx, owners, from, to, own, opts) do
       {:ok, busy} ->
         current = parse_time(logistics["slot"])
 
@@ -485,7 +488,7 @@ defmodule Platform.Responsibilities.Handlers.ShowrunnerRecordingPrep do
 
   defp busy(_ctx, [], _from, _to, _own, _opts), do: {:error, :no_calendar_owner}
 
-  defp busy(ctx, owners, from, to, own_holds, opts) do
+  defp busy(ctx, owners, from, to, own_ids, opts) do
     case Keyword.get(opts, :busy) do
       fun when is_function(fun, 3) ->
         fun.(owners, from, to)
@@ -497,7 +500,7 @@ defmodule Platform.Responsibilities.Handlers.ShowrunnerRecordingPrep do
               {:ok, events} ->
                 intervals =
                   events
-                  |> Enum.reject(&(Map.get(&1, :id) in own_holds))
+                  |> Enum.reject(&(Map.get(&1, :id) in own_ids))
                   |> Enum.filter(
                     &(match?(%DateTime{}, &1.starts_at) and match?(%DateTime{}, &1.ends_at))
                   )

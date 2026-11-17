@@ -206,19 +206,28 @@ defmodule Platform.Showrunner.Episode do
         {:error, {:unknown_needs_you, id}}
 
       item ->
-        if choice in item.options do
-          remaining = Enum.reject(episode.needs_you, &(&1.id == id))
-
-          stages =
-            if remaining == [] and Map.get(episode.stages, episode.stage) == :needs_you,
-              do: Map.put(episode.stages, episode.stage, :in_progress),
-              else: episode.stages
-
-          {:ok, %{episode | needs_you: remaining, stages: stages}}
-        else
-          {:error, {:invalid_choice, id, choice}}
-        end
+        if choice in item.options,
+          do: {:ok, drop_needs_you(episode, id)},
+          else: {:error, {:invalid_choice, id, choice}}
     end
+  end
+
+  @doc """
+  Withdraws needs_you item `id` without an answer: the question no longer
+  stands (a valid run sheet landed after an invalid one was escalated). When
+  none remain, a `:needs_you` current stage goes back to `:in_progress`. An
+  absent `id` leaves the episode as it is.
+  """
+  @spec drop_needs_you(t(), String.t()) :: t()
+  def drop_needs_you(%__MODULE__{} = episode, id) do
+    remaining = Enum.reject(episode.needs_you, &(&1.id == id))
+
+    stages =
+      if remaining == [] and Map.get(episode.stages, episode.stage) == :needs_you,
+        do: Map.put(episode.stages, episode.stage, :in_progress),
+        else: episode.stages
+
+    %{episode | needs_you: remaining, stages: stages}
   end
 
   @doc """

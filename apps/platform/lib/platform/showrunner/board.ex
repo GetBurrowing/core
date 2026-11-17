@@ -32,6 +32,7 @@ defmodule Platform.Showrunner.Board do
   alias Platform.Inbox
   alias Platform.Showrunner.Episode
 
+  @escalation_title_prefix "Showrunner needs you: "
   @unreadable_id "board-unreadable"
   @unreadable_question "The episode board was edited and can't be read; restore or fix it"
   @unreadable_options ["Restored", "Fixed"]
@@ -243,6 +244,49 @@ defmodule Platform.Showrunner.Board do
   end
 
   @doc """
+  True when `user_id` still has an open (undismissed) escalation row for a
+  question starting with `question_prefix`.
+  """
+  @spec open_escalation?(String.t() | nil, String.t()) :: boolean()
+  def open_escalation?(user_id, question_prefix) when is_binary(user_id) do
+    open_escalations(user_id, question_prefix) != []
+  end
+
+  def open_escalation?(_user_id, _question_prefix), do: false
+
+  @doc """
+  Dismisses `ctx.escalate_user_id`'s open escalation rows for a question
+  starting with `question_prefix`: the decision was answered, or no longer
+  stands. Always `:ok`; never raises.
+  """
+  @spec clear_escalation(map(), String.t()) :: :ok
+  def clear_escalation(%{escalate_user_id: user_id}, question_prefix) when is_binary(user_id) do
+    user_id
+    |> open_escalations(question_prefix)
+    |> Enum.each(&Inbox.mark_dismissed(&1.id, user_id))
+  rescue
+    error ->
+      Logger.warning("[showrunner] clearing an escalation raised: #{Exception.message(error)}")
+      :ok
+  end
+
+  def clear_escalation(_ctx, _question_prefix), do: :ok
+
+  defp open_escalations(user_id, question_prefix) do
+    import Ecto.Query, only: [from: 2]
+
+    pattern = escape_like(@escalation_title_prefix <> question_prefix) <> "%"
+
+    Platform.Repo.all(
+      from(i in Platform.Inbox.Item,
+        where: i.user_id == ^user_id and is_nil(i.dismissed_at) and like(i.title, ^pattern)
+      )
+    )
+  end
+
+  defp escape_like(text), do: String.replace(text, ~r/([\\%_])/, "\\\\\\1")
+
+  @doc """
   The hand-edited-board path. Logs `reason`, appends one Needs-you item to the
   raw `needs_you` node when there is one and it does not already carry it,
   and escalates the same question. Always `:ok`; never raises.
@@ -392,7 +436,7 @@ defmodule Platform.Showrunner.Board do
            kind: "chat_mention",
            source_type: "chat_message",
            source_id: message.id,
-           title: "Showrunner needs you: #{question}",
+           title: @escalation_title_prefix <> question,
            body: String.slice(message.content || "", 0, 200),
            url: space && "/chat/#{Chat.space_path_segment(space)}?message=#{message.id}"
          }) do

@@ -208,10 +208,8 @@ defmodule Platform.Responsibilities.Handlers.ShowrunnerPostShow do
   end
 
   @impl true
-  def handle_refusal(%Responsibility{}, refusal, _trigger_meta) do
-    Logger.info("[showrunner.post_show] refused dispatch: #{inspect(refusal)}")
-    :ok
-  end
+  def handle_refusal(%Responsibility{} = responsibility, refusal, _trigger_meta),
+    do: Runtime.refused(responsibility, refusal)
 
   @doc """
   Reads the agent's report: `{:ok, %{show_notes, clip_ids, draft_ids}}`,

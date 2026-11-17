@@ -118,6 +118,16 @@ defmodule Platform.Responsibilities.ShowrunnerHandlersTest do
 
   defp inbox_rows(user), do: Repo.all(from(i in Item, where: i.user_id == ^user.id))
 
+  defp open_invalid_rows(user) do
+    Repo.all(
+      from(i in Item,
+        where:
+          i.user_id == ^user.id and is_nil(i.dismissed_at) and
+            like(i.title, "Showrunner needs you: The run sheet draft is still invalid%")
+      )
+    )
+  end
+
   defp board!(space) do
     canvas = Board.current(space.id)
     on_exit(fn -> CanvasServer.stop(canvas.id) end)
@@ -287,6 +297,46 @@ defmodule Platform.Responsibilities.ShowrunnerHandlersTest do
       assert invalid_id == RunSheet.invalid_id()
       assert episode.stages.run_sheet == :needs_you
       assert length(inbox_rows(user)) == inbox_before + 1
+    end
+
+    test "a valid draft after an escalated invalid one clears the stale invalid item and its inbox row",
+         ctx do
+      %{rows: rows, user: user} = ctx
+      canvas = at_run_sheet!(ctx)
+
+      invalid = %{
+        "segments" => [
+          segment("s1", 0, 600, [%{"text" => "9 in 10 never restore", "source_url" => ""}])
+        ]
+      }
+
+      assert :ok =
+               RunSheet.handle_output(
+                 rows[RunSheet],
+                 invalid,
+                 %{canvas_id: canvas.id, redraft_attempt: 1},
+                 ctx.opts
+               )
+
+      assert {:ok, %{needs_you: [%{id: "run-sheet-invalid"}]}, _} = Board.read(canvas)
+      assert [_] = open_invalid_rows(user)
+
+      valid = %{
+        "segments" => [
+          segment("s1", 0, 600, [
+            %{"text" => "3% test restores", "source_url" => "https://example.com/s"}
+          ])
+        ]
+      }
+
+      assert :ok =
+               RunSheet.handle_output(rows[RunSheet], valid, %{canvas_id: canvas.id}, ctx.opts)
+
+      assert {:ok, episode, _} = Board.read(canvas)
+      assert Enum.map(episode.run_sheet, & &1.id) == ["s1"]
+      assert episode.needs_you == []
+      assert episode.stages.run_sheet == :in_progress
+      assert open_invalid_rows(user) == []
     end
 
     test "a valid draft is written and the cold-open A/B choice goes to Needs you", ctx do

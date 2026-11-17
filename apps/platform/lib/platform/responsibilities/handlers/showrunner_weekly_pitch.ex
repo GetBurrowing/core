@@ -163,10 +163,8 @@ defmodule Platform.Responsibilities.Handlers.ShowrunnerWeeklyPitch do
   end
 
   @impl true
-  def handle_refusal(%Responsibility{}, refusal, _trigger_meta) do
-    Logger.info("[showrunner.weekly_pitch] refused dispatch: #{inspect(refusal)}")
-    :ok
-  end
+  def handle_refusal(%Responsibility{} = responsibility, refusal, _trigger_meta),
+    do: Runtime.refused(responsibility, refusal)
 
   @doc """
   Validates the pitch: exactly #{@topic_count} topics, each with a non-blank

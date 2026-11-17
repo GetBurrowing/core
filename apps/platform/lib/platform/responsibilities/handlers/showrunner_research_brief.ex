@@ -175,10 +175,8 @@ defmodule Platform.Responsibilities.Handlers.ShowrunnerResearchBrief do
   end
 
   @impl true
-  def handle_refusal(%Responsibility{}, refusal, _trigger_meta) do
-    Logger.info("[showrunner.research_brief] refused dispatch: #{inspect(refusal)}")
-    :ok
-  end
+  def handle_refusal(%Responsibility{} = responsibility, refusal, _trigger_meta),
+    do: Runtime.refused(responsibility, refusal)
 
   @doc """
   Validates the brief: non-blank `brief`, at least one source with a `url`,

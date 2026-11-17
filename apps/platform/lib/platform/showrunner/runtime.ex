@@ -27,6 +27,9 @@ defmodule Platform.Showrunner.Runtime do
   alias Platform.Showrunner.Config
   alias Platform.Showrunner.Memory
 
+  @setup_refusals [:no_space_configured, :agent_not_in_space]
+  @not_set_up_question "The showrunner isn't set up: it has no show space it can post in"
+
   @doc """
   The acting context for `responsibility`: its config, the assigned agent and
   that agent's participant row in the configured space.
@@ -38,6 +41,69 @@ defmodule Platform.Showrunner.Runtime do
     with {:ok, ctx} <- Board.context(config.space_id, assignee(key), config.escalate_user_id) do
       {:ok, ctx, config}
     end
+  end
+
+  @doc "The Needs-you question a fire refused for missing setup raises."
+  @spec not_set_up_question() :: String.t()
+  def not_set_up_question, do: @not_set_up_question
+
+  @doc """
+  What every `showrunner.*` `handle_refusal/3` does with a refusal.
+
+  A dispatch refused because the showrunner is not set up (no show space, or
+  the agent is not in it) is a human decision, so it raises ONE Needs-you
+  item, not just a log line: a message from the agent in its DM with the
+  configured `escalate_user_id`, and one inbox row. There is no show space to
+  post in, which is the problem being reported. Further refusals add nothing
+  while that row is open. With no escalate user configured there is nobody to
+  ask (only the configured escalate user is ever asked), so it only logs.
+  The config is re-read from the row as it is now, not the caller's copy.
+  Always `:ok`; never raises.
+  """
+  @spec refused(Responsibility.t(), term()) :: :ok
+  def refused(%Responsibility{key: key} = responsibility, {:context_gather_refused, reason})
+      when reason in @setup_refusals do
+    live = Platform.Responsibilities.get_by_key(key) || responsibility
+    config = Config.read(live)
+
+    with user_id when is_binary(user_id) <- config.escalate_user_id || {:skip, :no_escalate_user},
+         false <- Board.open_escalation?(user_id, @not_set_up_question),
+         %{id: agent_id} <- assignee(key) || {:skip, :no_assignee},
+         {:ok, dm} <- Chat.find_or_create_agent_dm(agent_id, user_id),
+         %{id: participant_id} <- Chat.get_agent_participant(dm.id, agent_id) || {:skip, :no_dm} do
+      Board.escalate(
+        %{
+          space_id: dm.id,
+          agent_id: agent_id,
+          participant_id: participant_id,
+          escalate_user_id: user_id
+        },
+        %{question: @not_set_up_question, options: ["Provisioned again"]},
+        detail:
+          "#{key} was refused (#{reason}). Run `mix platform.showrunner.provision` with the " <>
+            "show's space and make sure the showrunner agent is in it."
+      )
+    else
+      true ->
+        :ok
+
+      other ->
+        Logger.warning(
+          "[showrunner] #{key} refused (#{inspect(reason)}) and nobody could be asked: " <>
+            inspect(other)
+        )
+    end
+
+    :ok
+  rescue
+    error ->
+      Logger.warning("[showrunner] refusal handling raised: #{Exception.message(error)}")
+      :ok
+  end
+
+  def refused(%Responsibility{key: key}, refusal) do
+    Logger.info("[#{key}] refused: #{inspect(refusal)}")
+    :ok
   end
 
   @doc """

@@ -321,11 +321,16 @@ defmodule Platform.Responsibilities.Router do
   rescheduled from now; a row no longer returned (disabled, deleted,
   or moved off cron) leaves the bucket and the schedule. The per-row
   `cron_last_fire` debounce is carried forward untouched.
+
+  The `event_topics` bucket is re-read in the same pass (task 01a1eaf6
+  stage 4 review), subscribing to any newly declared topic, so an
+  event_topic row's `trigger_config` change takes effect without a restart
+  as well.
   """
   @spec reload_cron(GenServer.server()) :: :ok
   def reload_cron(server \\ __MODULE__), do: GenServer.call(server, :reload_cron)
 
-  @doc "PubSub topic that carries `{:responsibilities_changed, :cron}`."
+  @doc "PubSub topic that carries `{:responsibilities_changed, :cron | :all}`."
   @spec changed_topic() :: binary()
   def changed_topic, do: @changed_topic
 
@@ -454,7 +459,7 @@ defmodule Platform.Responsibilities.Router do
   end
 
   def handle_call(:reload_cron, _from, state) do
-    {:reply, :ok, reload_cron_bucket(state)}
+    {:reply, :ok, state |> reload_cron_bucket() |> reload_event_topic_bucket()}
   end
 
   @impl GenServer
@@ -478,8 +483,14 @@ defmodule Platform.Responsibilities.Router do
   # matches this message too, would hand it to `fire_event_match/3` as an
   # event named "responsibilities_changed", and the reload would silently
   # never happen.
-  def handle_info({:responsibilities_changed, :cron}, state) do
-    {:noreply, reload_cron_bucket(state)}
+  #
+  # Every reload re-reads the `event_topics` bucket too (task 01a1eaf6 stage 4
+  # review): a writer that changes an event_topic row's `trigger_config`
+  # (`Platform.Showrunner.provision/1` writing `space_id` onto
+  # `showrunner.post_show`) used to leave this process firing its boot-time
+  # copy until a restart. `:all` is the explicit spelling for such writers.
+  def handle_info({:responsibilities_changed, kind}, state) when kind in [:cron, :all] do
+    {:noreply, state |> reload_cron_bucket() |> reload_event_topic_bucket()}
   end
 
   # Chat ingest fan-out: a sibling subscriber to AttentionRouter. The
@@ -634,14 +645,31 @@ defmodule Platform.Responsibilities.Router do
   # Shared fan-out for both delivery envelopes. `topic` in trigger_meta
   # is always the topic the responsibility DECLARED, which for the
   # topic-as-head path is by construction the delivery topic too.
+  #
+  # Each match is re-read before it fires, so a `trigger_config` written by a
+  # process whose `responsibilities:changed` broadcast never reached this node
+  # (a mix task in its own VM) still takes effect. A row since disabled or
+  # moved off event_topic does not fire; a failed read fires the held copy.
   defp fire_matches(matches, payload, state) when is_list(matches) do
-    Enum.each(matches, fn responsibility ->
+    matches
+    |> Enum.flat_map(&current_event_row/1)
+    |> Enum.each(fn responsibility ->
       fire_trigger(
         responsibility,
         %{kind: :event_topic, topic: config_topic(responsibility), payload: payload},
         state
       )
     end)
+  end
+
+  defp current_event_row(%Responsibility{key: key} = held) do
+    case Responsibilities.get_by_key(key) do
+      %Responsibility{enabled: true, trigger_kind: "event_topic"} = row -> [row]
+      %Responsibility{} -> []
+      nil -> []
+    end
+  rescue
+    _ -> [held]
   end
 
   defp config_topic(%Responsibility{trigger_config: config}) do
@@ -745,6 +773,61 @@ defmodule Platform.Responsibilities.Router do
       {:ok, rows} -> apply_cron_reload(state, rows)
       :error -> state
     end
+  end
+
+  # Replaces the `event_topics` bucket with the enabled rows as they are now,
+  # subscribing to any topic a new or changed row declares and dropping
+  # topics no row declares any more. A failed read keeps the current bucket.
+  defp reload_event_topic_bucket(state) do
+    case safe_read_event_rows() do
+      {:ok, rows} -> apply_event_topic_reload(state, rows)
+      :error -> state
+    end
+  end
+
+  defp safe_read_event_rows do
+    {:ok, Responsibilities.get_by_trigger(:event_topic)}
+  rescue
+    error ->
+      Logger.warning(
+        "[ResponsibilityRouter] event_topic reload read failed, keeping current bucket: " <>
+          Exception.message(error)
+      )
+
+      :error
+  end
+
+  defp apply_event_topic_reload(state, rows) do
+    old_rows = state.by_trigger.event_topics
+    wanted = rows |> Enum.map(&config_topic/1) |> Enum.reject(&is_nil/1) |> MapSet.new()
+
+    added =
+      subscribe_event_topics(
+        Enum.reject(rows, &MapSet.member?(state.subscribed_topics, config_topic(&1)))
+      )
+
+    removed = MapSet.difference(state.subscribed_topics, wanted)
+
+    Enum.each(removed, fn topic ->
+      if topic != @changed_topic, do: Phoenix.PubSub.unsubscribe(@pubsub, topic)
+    end)
+
+    subscribed =
+      state.subscribed_topics
+      |> MapSet.difference(removed)
+      |> MapSet.union(added)
+
+    old_ids = MapSet.new(old_rows, & &1.id)
+
+    registry_snapshot =
+      Enum.reject(state.registry_snapshot, &MapSet.member?(old_ids, &1.id)) ++ rows
+
+    %{
+      state
+      | by_trigger: %{state.by_trigger | event_topics: rows},
+        registry_snapshot: registry_snapshot,
+        subscribed_topics: subscribed
+    }
   end
 
   defp read_cron_rows do

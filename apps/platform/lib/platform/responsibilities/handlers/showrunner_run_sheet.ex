@@ -56,6 +56,7 @@ defmodule Platform.Responsibilities.Handlers.ShowrunnerRunSheet do
   @max_redrafts 1
   @cold_open_id "cold-open"
   @invalid_id "run-sheet-invalid"
+  @invalid_question_prefix "The run sheet draft is still invalid"
 
   @system "You are the showrunner for How to Computer. You write tight, dry, " <>
             "numbers-first run sheets. Every stat card carries its source URL."
@@ -206,10 +207,8 @@ defmodule Platform.Responsibilities.Handlers.ShowrunnerRunSheet do
   end
 
   @impl true
-  def handle_refusal(%Responsibility{}, refusal, _trigger_meta) do
-    Logger.info("[showrunner.run_sheet] refused dispatch: #{inspect(refusal)}")
-    :ok
-  end
+  def handle_refusal(%Responsibility{} = responsibility, refusal, _trigger_meta),
+    do: Runtime.refused(responsibility, refusal)
 
   # ── internals ──
 
@@ -232,6 +231,12 @@ defmodule Platform.Responsibilities.Handlers.ShowrunnerRunSheet do
   defp accept(ctx, canvas, document, episode, decoded) do
     cold_open = cold_open(decoded["cold_open"])
     through_line = text(decoded["through_line"])
+
+    # A valid sheet answers an earlier "still invalid" escalation: withdraw it
+    # from the board and the inbox rather than leave it open (task 01a1eaf6
+    # stage 4 review).
+    had_invalid? = Enum.any?(episode.needs_you, &(&1.id == @invalid_id))
+    episode = Episode.drop_needs_you(episode, @invalid_id)
 
     {episode, item} =
       case cold_open do
@@ -260,6 +265,8 @@ defmodule Platform.Responsibilities.Handlers.ShowrunnerRunSheet do
       end)
 
     with {:ok, _canvas} <- Board.write(ctx, canvas, document, episode) do
+      if had_invalid?, do: Board.clear_escalation(ctx, @invalid_question_prefix)
+
       if item do
         Board.escalate(ctx, item, detail: "A: #{cold_open["a"]}\nB: #{cold_open["b"]}")
       end
@@ -303,7 +310,7 @@ defmodule Platform.Responsibilities.Handlers.ShowrunnerRunSheet do
 
     item = %{
       id: @invalid_id,
-      question: "The run sheet draft is still invalid (#{message}). Draft it by hand?",
+      question: "#{@invalid_question_prefix} (#{message}). Draft it by hand?",
       options: ["Draft by hand", "Ask again"]
     }
 

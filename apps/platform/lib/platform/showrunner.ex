@@ -15,6 +15,7 @@ defmodule Platform.Showrunner do
   alias Platform.Responsibilities.Providers.Showrunner, as: Provider
   alias Platform.Roles
   alias Platform.Roles.Seeds
+  alias Platform.Showrunner.Board
   alias Platform.Showrunner.Config
   alias Platform.Showrunner.SocialBundle
 
@@ -80,7 +81,7 @@ defmodule Platform.Showrunner do
       Phoenix.PubSub.broadcast(
         Platform.PubSub,
         @changed_topic,
-        {:responsibilities_changed, :cron}
+        {:responsibilities_changed, :all}
       )
 
       social = SocialBundle.status(agent)
@@ -97,6 +98,84 @@ defmodule Platform.Showrunner do
   end
 
   def provision(_attrs), do: {:error, :attrs_must_be_a_map}
+
+  @doc """
+  Answers a Needs-you item on an episode board: the click on one of
+  `Platform.Chat.Canvas.Kinds.NeedsYou`'s option buttons, whose action value
+  is `"<item id>:<option>"`.
+
+  Only the show's producer answers: the configured `escalate_user_id`, or one
+  of its `host_user_ids`. The topic pick goes through
+  `ShowrunnerResearchBrief.pick_topic/3` (title, rail to Research, the brief
+  fired); any other item is resolved with the option. Either way the item's
+  open inbox row is dismissed. The board is written as the assigned agent.
+
+  `{:ok, canvas}`, or `{:error, reason}`: `:not_a_board`, `:bad_value`,
+  `:not_producer`, `{:unknown_needs_you, id}`, `{:invalid_choice, id, option}`
+  and anything the board read or write refuses. `opts[:fire]` is passed to
+  the topic pick. Never raises.
+  """
+  @spec answer(Platform.Chat.Canvas.t(), String.t(), String.t() | nil, keyword()) ::
+          {:ok, Platform.Chat.Canvas.t()} | {:error, term()}
+  def answer(canvas, value, user_id, opts \\ [])
+
+  def answer(%Platform.Chat.Canvas{} = canvas, value, user_id, opts) when is_binary(value) do
+    with true <- Board.board?(canvas) || {:error, :not_a_board},
+         [item_id, option] when item_id != "" and option != "" <-
+           String.split(value, ":", parts: 2),
+         {:ok, ctx, config} <- context_for(canvas.space_id),
+         true <- producer?(config, user_id) || {:error, :not_producer},
+         {:ok, episode, document} <- Board.read(canvas),
+         %{} = item <-
+           Enum.find(episode.needs_you, &(&1.id == item_id)) ||
+             {:error, {:unknown_needs_you, item_id}},
+         {:ok, canvas} <- resolve(ctx, canvas, document, episode, item, option, opts) do
+      Board.clear_escalation(ctx, item.question)
+      {:ok, canvas}
+    else
+      [_ | _] -> {:error, :bad_value}
+      {:error, _} = error -> error
+      other -> {:error, other}
+    end
+  rescue
+    error -> {:error, {:raised, Exception.message(error)}}
+  end
+
+  def answer(_canvas, _value, _user_id, _opts), do: {:error, :bad_value}
+
+  defp resolve(ctx, canvas, document, episode, item, option, opts) do
+    if item.id == Platform.Responsibilities.Handlers.ShowrunnerWeeklyPitch.pick_id() do
+      if option in item.options,
+        do:
+          Platform.Responsibilities.Handlers.ShowrunnerResearchBrief.pick_topic(
+            canvas,
+            option,
+            opts
+          ),
+        else: {:error, {:invalid_choice, item.id, option}}
+    else
+      with {:ok, episode} <-
+             Platform.Showrunner.Episode.resolve_needs_you(episode, item.id, option) do
+        Board.write(ctx, canvas, document, episode)
+      end
+    end
+  end
+
+  # The acting context of the showrunner row configured for this space.
+  defp context_for(space_id) do
+    keys()
+    |> Enum.map(&Responsibilities.get_by_key/1)
+    |> Enum.find(&(&1 && Config.read(&1).space_id == space_id))
+    |> case do
+      nil -> {:error, :no_space_configured}
+      row -> Platform.Showrunner.Runtime.context(row)
+    end
+  end
+
+  defp producer?(_config, nil), do: false
+
+  defp producer?(config, user_id),
+    do: user_id == config.escalate_user_id or user_id in (config.host_user_ids || [])
 
   # ── internals ──
 

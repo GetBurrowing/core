@@ -365,6 +365,41 @@ defmodule Platform.Responsibilities.ShowrunnerLoopTest do
       assert [_meeting] = meetings(project)
     end
 
+    test "a second fire keeps the episode's own hold and room: one hold, one room, same time",
+         ctx do
+      %{rows: rows, user: user, project: project} = ctx
+      with_social!(ctx)
+      grant_calendar!(ctx)
+
+      # The escalate user can see the show's meetings (an org project), so
+      # the room shows up in their calendar read as a `:meeting` entry: the
+      # e2e rig's shape, where the room was counted as a clash.
+      {:ok, _} =
+        Platform.Tasks.update_project(project, %{
+          org_id: Tenancy.get_org_by_slug!("globex").id
+        })
+
+      canvas = board!(ctx, :run_sheet)
+      wed = wednesday()
+
+      assert {:handled, first} = Prep.run(rows[Prep], %{}, now: wed)
+      assert first.proposed
+      assert [meeting] = meetings(project)
+      assert DateTime.compare(meeting.scheduled_start_at, thursday_at(wed, 19)) == :eq
+
+      assert {:handled, second} = Prep.run(rows[Prep], %{}, now: thursday_at(wed, 9))
+      refute second.proposed
+
+      assert {:ok, episode, _} = Board.read(canvas)
+      assert DateTime.compare(episode.records_at, thursday_at(wed, 19)) == :eq
+
+      assert [consent] = Repo.all(from(c in Consent, where: c.owner_id == ^user.id))
+      hold = Repo.get!(Platform.Calendar.Event, consent.hold_id)
+      assert DateTime.compare(hold.starts_at, thursday_at(wed, 19)) == :eq
+      assert [^meeting] = meetings(project)
+      assert escalations(user) == []
+    end
+
     test "recording day seats the agent in the room with the run sheet and moves to Record",
          ctx do
       %{rows: rows, agent: agent, project: project} = ctx
