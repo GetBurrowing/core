@@ -231,4 +231,23 @@ defmodule Platform.Goals.CoachesTest do
       end
     end
   end
+
+  describe "Goals.hand_off_coach/3 (the hand-off's write, unchecked by design)" do
+    test "sets a coachless goal's coach without the eligible-coach check", c do
+      goal = goal!(c.person, c.org)
+      built_in = agent!()
+      refute Coaches.eligible?(c.person, built_in)
+
+      assert {:ok, %{coach_agent_id: id}} = Goals.hand_off_coach(c.person, goal.id, built_in.id)
+      assert id == built_in.id
+    end
+
+    test "a goal that already has a coach is :forbidden and keeps its coach", c do
+      a = coach!(c.person)
+      goal = goal!(c.person, c.org, %{coach_agent_id: a.id})
+
+      assert Goals.hand_off_coach(c.person, goal.id, agent!().id) == {:error, :forbidden}
+      assert Repo.one!(from(g in Goals.Goal, where: g.id == ^goal.id)).coach_agent_id == a.id
+    end
+  end
 end
