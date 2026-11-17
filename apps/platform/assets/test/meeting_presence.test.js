@@ -8,7 +8,14 @@ import {
   joinNames,
   leftToast,
   RECONNECT_LOST_MS,
+  REJOIN_INTENT_MS,
+  DIALOG_Z_CLASS,
+  createDomUi,
+  guardDialog,
 } from "../js/meeting_presence.js"
+import { readFileSync, readdirSync, statSync } from "node:fs"
+import { join, dirname } from "node:path"
+import { fileURLToPath } from "node:url"
 import { __resetForTests } from "../js/client_state.js"
 
 // Task 01a1e82a stage 2. vitest runs in node (no jsdom), so the controller
@@ -91,7 +98,7 @@ const CALL = {
   canEnd: false,
 }
 
-function setup({ phone = false, storage = memoryStorage(), choice = "cancel", path, owner = null } = {}) {
+function setup({ phone = false, storage = memoryStorage(), choice = "cancel", path, owner = null, roomState = null } = {}) {
   const toasts = []
   const dialogs = []
   const bar = fakeBar()
@@ -118,8 +125,11 @@ function setup({ phone = false, storage = memoryStorage(), choice = "cancel", pa
     assign: (href) => calls.assign.push(href),
     disconnectRoom: () => (calls.disconnect += 1),
     connectionOwner: () => owner,
+    roomState: () => roomState,
   })
   const host = {
+    pushes: [],
+    push: (event) => host.pushes.push(event),
     pushLeave: (done) => {
       calls.pushLeave += 1
       done(replyWith)
@@ -500,9 +510,274 @@ describe("readState", () => {
         authRoutes: JSON.stringify(PATTERNS),
         otherNames: JSON.stringify(["Sam Example"]),
         startedAt: "2026-11-17T10:00:00Z",
+        path: "/calendar",
       }),
-    ).toEqual({ ...CALL, canEnd: true, names: ["Sam Example"], startedAt: "2026-11-17T10:00:00Z" })
+    ).toEqual({ ...CALL, canEnd: true, names: ["Sam Example"], startedAt: "2026-11-17T10:00:00Z", path: "/calendar" })
     expect(readState({ authRoutes: "not json" }).patterns).toEqual([])
     expect(readState({ otherNames: "not json" }).names).toEqual([])
+  })
+})
+
+// ── Task 01a1e82a remediation (the failed behavioural gate) ─────────────
+
+describe("remediation finding 2: signal reconnects and offline are reconnecting", () => {
+  it("signalReconnecting turns the bar amber with the counter and toast, and connected turns it green", () => {
+    vi.useFakeTimers()
+    try {
+      const { presence, toasts, bar, host } = setup()
+      presence.mount(CALL, host)
+      presence.onRoomState("signalReconnecting")
+      expect(bar.attrs["data-state"]).toBe("reconnecting")
+      expect(titles(toasts)).toEqual(["Connection dropped. Reconnecting…"])
+      vi.advanceTimersByTime(3000)
+      expect(bar.counter.textContent).toBe("0:03")
+      // ConnectionStateChanged -> connected is the recovery signal for a
+      // signal-only reconnect (there is no SignalReconnected event).
+      presence.onRoomState("connected")
+      expect(bar.attrs["data-state"]).toBe("connected")
+      expect(toasts[0].dismissed).toBe(true)
+      expect(titles(toasts)).not.toContain("You left Weekly sync")
+    } finally {
+      vi.useRealTimers()
+    }
+  })
+
+  it("the 30s Connection lost clock starts at the FIRST reconnecting of any kind", () => {
+    vi.useFakeTimers()
+    try {
+      const { presence, toasts, bar, host } = setup()
+      presence.mount(CALL, host)
+      presence.onRoomState("signalReconnecting")
+      vi.advanceTimersByTime(20000)
+      // LiveKit escalates to a full reconnect: the clock does not restart.
+      presence.onRoomState("reconnecting")
+      expect(toasts.length).toBe(1)
+      vi.advanceTimersByTime(RECONNECT_LOST_MS - 20000)
+      expect(bar.attrs["data-lost"]).toBe("true")
+      expect(titles(toasts)).toEqual(["Connection dropped. Reconnecting…", "Connection lost"])
+      presence.onRoomState("reconnected")
+      expect(bar.attrs["data-state"]).toBe("connected")
+    } finally {
+      vi.useRealTimers()
+    }
+  })
+
+  it("the browser going offline is reconnecting at once; back online with a connected room is green", () => {
+    vi.useFakeTimers()
+    try {
+      const s = setup({ roomState: "connected" })
+      s.presence.mount(CALL, s.host)
+      s.presence.onNetwork(false)
+      expect(s.bar.attrs["data-state"]).toBe("reconnecting")
+      vi.advanceTimersByTime(5000)
+      s.presence.onNetwork(true)
+      expect(s.bar.attrs["data-state"]).toBe("connected")
+
+      // Back online while LiveKit is still recovering: stay amber until it says so.
+      const t = setup({ roomState: "signalReconnecting" })
+      t.presence.mount(CALL, t.host)
+      t.presence.onNetwork(false)
+      t.presence.onNetwork(true)
+      expect(t.bar.attrs["data-state"]).toBe("reconnecting")
+      t.presence.onRoomState("connected")
+      expect(t.bar.attrs["data-state"]).toBe("connected")
+
+      // Offline outside a call does nothing.
+      const u = setup()
+      u.presence.onNetwork(false)
+      expect(u.bar.attrs["data-state"]).toBe("connected")
+    } finally {
+      vi.useRealTimers()
+    }
+  })
+
+  it("a disconnect the call client is retrying stays reconnecting; a plain disconnect resets", () => {
+    vi.useFakeTimers()
+    try {
+      const owner = { _connLost: true }
+      const s = setup({ owner })
+      s.presence.mount(CALL, s.host)
+      s.presence.onRoomState("disconnected")
+      expect(s.bar.attrs["data-state"]).toBe("reconnecting")
+
+      const t = setup()
+      t.presence.mount(CALL, t.host)
+      t.presence.onRoomState("signalReconnecting")
+      t.presence.onRoomState("disconnected")
+      expect(t.bar.attrs["data-state"]).toBe("connected")
+    } finally {
+      vi.useRealTimers()
+    }
+  })
+})
+
+describe("remediation finding 7: Rejoin joins", () => {
+  const LEFT = { ...CALL, inCall: false, meetingId: null, path: "/calendar" }
+
+  it("the left toast's Rejoin goes to the call room and runs its explicit Join once", () => {
+    const { presence, toasts, host, calls } = setup({ path: "/calendar" })
+    presence.mount(LEFT, host)
+    presence.onServerEvent({ kind: "left", name: "Weekly sync", names: ["Sam"], count: 1, return_path: "/meetings/weekly-sync" })
+    const left = toasts.find((t) => t.spec.kind === "left")
+    left.onAction("rejoin", left.spec)
+    expect(calls.navigate).toEqual(["/meetings/weekly-sync"])
+    expect(host.pushes).toEqual([])
+
+    // The call room's LiveView mounts (a new hook, same controller).
+    presence.mount({ ...LEFT, path: "/meetings/weekly-sync" }, host)
+    expect(host.pushes).toEqual(["join_meeting"])
+
+    // One-shot: a later visit to the call room does not join.
+    presence.mount({ ...LEFT, path: "/meetings/weekly-sync" }, host)
+    expect(host.pushes).toEqual(["join_meeting"])
+  })
+
+  it("Rejoin while already on the call room joins in place", () => {
+    const { presence, host, calls } = setup()
+    presence.mount({ ...LEFT, path: "/meetings/weekly-sync" }, host)
+    presence.rejoinAt("/meetings/weekly-sync")
+    expect(host.pushes).toEqual(["join_meeting"])
+    expect(calls.navigate).toEqual([])
+  })
+
+  it("a stale intent, or one for another page, never joins", () => {
+    vi.useFakeTimers()
+    try {
+      const { presence, host } = setup()
+      presence.mount(LEFT, host)
+      presence.rejoinAt("/meetings/weekly-sync")
+      presence.mount({ ...LEFT, path: "/inbox" }, host)
+      expect(host.pushes).toEqual([])
+      vi.advanceTimersByTime(REJOIN_INTENT_MS + 1)
+      vi.setSystemTime(Date.now() + REJOIN_INTENT_MS + 1)
+      presence.mount({ ...LEFT, path: "/meetings/weekly-sync" }, host)
+      expect(host.pushes).toEqual([])
+    } finally {
+      vi.useRealTimers()
+    }
+  })
+
+  it("the lost bar's Rejoin with no call client goes back to the call; a still-held call restores without a second join", () => {
+    const { presence, host, calls } = setup()
+    presence.mount({ ...CALL, path: "/calendar" }, host)
+    presence.onRoomState("lost")
+    presence.rejoin()
+    expect(calls.navigate).toEqual(["/meetings/weekly-sync"])
+    presence.mount({ ...CALL, inCallRoom: true, path: "/meetings/weekly-sync" }, host)
+    expect(host.pushes).toEqual([])
+  })
+})
+
+describe("remediation finding 4: the phone overlay minimizes", () => {
+  it("minimizing the in-chat call is a kept call: \"Still in\" fires once", () => {
+    const { presence, toasts, host } = setup({ phone: true })
+    presence.mount(CALL, host)
+    presence.noteMinimized()
+    presence.noteMinimized()
+    expect(toasts.map((t) => [t.spec.title, t.spec.body])).toEqual([["Still in Weekly sync", "Tap the green bar to go back."]])
+    // A navigation after it does not repeat it.
+    presence.mount(CALL, host)
+    expect(toasts.length).toBe(1)
+  })
+})
+
+describe("remediation finding 8: the desktop End for everyone", () => {
+  it("disarms the unload prompt like the bar's Leave", () => {
+    const { presence, host } = setup()
+    presence.mount({ ...CALL, canEnd: true }, host)
+    expect(presence.armed()).toBe(true)
+    presence.noteBarEnd()
+    expect(presence.armed()).toBe(false)
+  })
+})
+
+// ── Finding 5: the guard dialog renders above every sheet ───────────────
+
+function fakeEl(tag) {
+  const listeners = {}
+  return {
+    tag,
+    className: "",
+    textContent: "",
+    id: "",
+    type: "",
+    dataset: {},
+    attrs: {},
+    children: [],
+    setAttribute(k, v) {
+      this.attrs[k] = v
+    },
+    appendChild(c) {
+      this.children.push(c)
+      c.parent = this
+      return c
+    },
+    addEventListener(t, fn) {
+      ;(listeners[t] ||= []).push(fn)
+    },
+    click() {
+      for (const fn of listeners.click || []) fn({ target: this })
+    },
+    remove() {
+      if (this.parent) this.parent.children = this.parent.children.filter((c) => c !== this)
+    },
+    focus() {},
+  }
+}
+
+function walk(node, out = []) {
+  out.push(node)
+  for (const c of node.children || []) walk(c, out)
+  return out
+}
+
+const HERE = dirname(fileURLToPath(import.meta.url))
+const ROOT = join(HERE, "..", "..")
+
+function files(dir, exts, out = []) {
+  for (const name of readdirSync(dir)) {
+    const p = join(dir, name)
+    if (statSync(p).isDirectory()) files(p, exts, out)
+    else if (exts.some((e) => name.endsWith(e))) out.push(p)
+  }
+  return out
+}
+
+describe("remediation finding 5: the guard dialog sits above every sheet", () => {
+  it("uses a z-index above every other z-index in the app (sheets are 100)", () => {
+    const own = Number(DIALOG_Z_CLASS.match(/^z-\[(\d+)\]$/)[1])
+    const others = []
+    const sources = [
+      ...files(join(ROOT, "lib"), [".ex", ".heex"]),
+      ...files(join(ROOT, "assets", "js"), [".js"]),
+      join(ROOT, "assets", "css", "app.css"),
+    ]
+    for (const f of sources) {
+      const text = readFileSync(f, "utf8")
+      for (const m of text.matchAll(/z-\[(\d+)\]/g)) others.push([Number(m[1]), f])
+      for (const m of text.matchAll(/z-index:\s*(\d+)/g)) others.push([Number(m[1]), f])
+    }
+    const above = others.filter(([z, f]) => z >= own && !f.endsWith("meeting_presence.js"))
+    expect(others.length).toBeGreaterThan(10) // the scan saw the app
+    expect(others.some(([z]) => z === 100)).toBe(true) // ...including the sheets
+    expect(above).toEqual([])
+  })
+
+  it("the dialog overlay carries it, and Cancel resolves the choice", async () => {
+    const body = fakeEl("body")
+    const doc = {
+      body,
+      createElement: (t) => fakeEl(t),
+      getElementById: (id) => walk(body).find((n) => n.id === id) || null,
+      addEventListener() {},
+      removeEventListener() {},
+    }
+    const ui = createDomUi(doc, { setTimeout, clearTimeout }, { isPhone: () => false })
+    const choice = ui.choose(guardDialog({ destination: "Admin", name: "Weekly sync" }))
+    const overlay = doc.getElementById("meeting-presence-dialog")
+    expect(overlay.className.split(" ")).toContain(DIALOG_Z_CLASS)
+    walk(overlay).find((n) => n.dataset.choice === "cancel").click()
+    await expect(choice).resolves.toBe("cancel")
+    expect(doc.getElementById("meeting-presence-dialog")).toBe(null)
   })
 })

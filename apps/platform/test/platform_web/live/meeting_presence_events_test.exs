@@ -316,4 +316,53 @@ defmodule PlatformWeb.MeetingPresenceEventsTest do
     _ = render(cal)
     assert Platform.PubSub |> Registry.keys(cal.pid) |> Enum.count(&(&1 == topic)) == 1
   end
+
+  # Task 01a1e82a remediation, finding 3: the clock is the MEETING's elapsed
+  # time. `MeetingState` restamps `started_at` on every join broadcast
+  # (including the restore after the call room), which restarted it at 0:00.
+  test "the bar and #meeting-presence count from the meeting's start, across a restore", ctx do
+    started = DateTime.add(DateTime.utc_now(), -600, :second)
+
+    {:ok, _} =
+      ctx.meeting
+      |> Ecto.Changeset.change(started_at: started)
+      |> Repo.update()
+
+    join!(ctx)
+    {:ok, view, _html} = live(ctx.conn, ~p"/calendar")
+    _ = render(view)
+
+    iso = DateTime.to_iso8601(Repo.get!(Meeting, ctx.meeting.id).started_at)
+    assert has_element?(view, ~s(#meeting-top-bar[data-started-at="#{iso}"]))
+    assert has_element?(view, ~s(#meeting-presence[data-started-at="#{iso}"]))
+
+    # The restore re-broadcast (leaving the call room) does not restart it.
+    join!(ctx)
+    _ = render(view)
+    assert has_element?(view, ~s(#meeting-top-bar[data-started-at="#{iso}"]))
+
+    {:ok, other, _html} = live(ctx.conn, ~p"/inbox")
+    assert has_element?(other, ~s(#meeting-top-bar[data-started-at="#{iso}"]))
+  end
+
+  # Task 01a1e82a remediation, finding 8: the desktop bar's End for everyone.
+  test "the bar's End for everyone ends the meeting for its host", ctx do
+    join!(ctx)
+    {:ok, view, _html} = live(ctx.conn, ~p"/tasks")
+    _ = render(view)
+
+    assert has_element?(view, "#meeting-top-bar [data-bar-end]", "End for everyone")
+    view |> element("#meeting-top-bar [data-bar-end]") |> render_click()
+    _ = render(view)
+
+    assert Repo.get!(Meeting, ctx.meeting.id).status == "ended"
+    assert_push_event(view, @event, %{kind: "ended", name: "Weekly sync"})
+    refute has_element?(view, "#meeting-top-bar")
+  end
+
+  test "#meeting-presence carries the current path for the Rejoin intent", ctx do
+    join!(ctx)
+    {:ok, view, _html} = live(ctx.conn, ~p"/inbox")
+    assert has_element?(view, ~s(#meeting-presence[data-path="/inbox"]))
+  end
 end

@@ -255,4 +255,26 @@ defmodule PlatformWeb.MeetingBarLiveTest do
       refute "text-success" in classes(d, "[data-bar-camera]")
     end
   end
+
+  # Task 01a1e82a remediation, finding 8: the host gets "End for everyone" on
+  # desktop, in a one-item menu split off Leave. Leave stays one click.
+  describe "End for everyone" do
+    test "the host gets it beside Leave, pushing the host-checked end" do
+      d = doc(Map.put(@meeting_assigns, :meeting_can_end, true))
+
+      assert text(d, "#meeting-bar-end-menu [data-bar-end]") == "End for everyone"
+      assert attr(d, "[data-bar-end]", "phx-click") =~ "meeting_presence_end"
+      assert attr(d, "[data-bar-end-menu]", "aria-controls") == "meeting-bar-end-menu"
+      assert "text-error" in classes(d, "[data-bar-end]")
+      assert attr(d, "[data-bar-leave]", "phx-click") == "leave_meeting"
+    end
+
+    test "nobody else sees it" do
+      d = doc(@meeting_assigns)
+
+      refute present?(d, "[data-bar-end]")
+      refute present?(d, "[data-bar-end-menu]")
+      assert present?(d, "[data-bar-leave]")
+    end
+  end
 end

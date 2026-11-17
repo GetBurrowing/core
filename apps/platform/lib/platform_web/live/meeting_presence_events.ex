@@ -76,11 +76,23 @@ defmodule PlatformWeb.MeetingPresenceEvents do
         |> assign(:meeting_id, meeting.id)
         |> assign(:meeting_project_id, meeting.project_id)
         |> assign(:meeting_can_end, host?(meeting, socket.assigns[:current_user_id]))
+        |> assign_meeting_started_at(meeting)
 
       _ ->
         reset(socket)
     end
   end
+
+  # The bar's clock, the lock-screen card and the tab title count the
+  # MEETING's elapsed time (task 01a1e82a remediation, finding 3), not this
+  # viewer's join: `Platform.Meetings.State` stamps `started_at` on every
+  # join broadcast, including the restore when the viewer walks out of the
+  # call room, so the join time restarted the clock at 0:00. An ad-hoc room
+  # with no started meeting keeps the join time.
+  defp assign_meeting_started_at(socket, %Meeting{started_at: %DateTime{} = started_at}),
+    do: assign(socket, :meeting_started_at, started_at)
+
+  defp assign_meeting_started_at(socket, _meeting), do: socket
 
   @doc "Subscribe to the tracked meeting's project topic unless the process already is."
   @spec subscribe(Phoenix.LiveView.Socket.t()) :: Phoenix.LiveView.Socket.t()

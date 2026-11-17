@@ -23,7 +23,7 @@
 // wires the real browser into it.
 
 import ClientState from "./client_state.js"
-import { formatElapsed } from "./hooks/meeting_bar.js"
+import { formatElapsed, watchLocalMedia } from "./hooks/meeting_bar.js"
 import { installMeetingMediaSession } from "./meeting_media_session.js"
 
 export const NS = "meeting-presence"
@@ -34,6 +34,21 @@ const STASH_KEY = "stash"
 const STASH_TTL_MS = 60000
 const STILL_IN_TTL_MS = 12 * 60 * 60 * 1000
 const LEAVE_REPLY_TIMEOUT_MS = 2500
+const REJOIN_KEY = "rejoin"
+export const REJOIN_INTENT_MS = 30000
+
+// Room states that mean "the call is still ours but the connection is not"
+// (task 01a1e82a remediation, finding 2). LiveKit's signal-only reconnect
+// (`signalReconnecting`, from ConnectionStateChanged and the
+// SignalReconnecting event) is the common one: a short drop or a network
+// change never reaches the full `reconnecting` state. `offline` is the
+// browser's own offline event.
+export const RECONNECTING_STATES = new Set([
+  "reconnecting",
+  "signalReconnecting",
+  "signal-reconnecting",
+  "offline",
+])
 
 // ── Copy (approved prototype 01a1e823, direction A; do not paraphrase) ───
 
@@ -238,6 +253,7 @@ export function readState(ds = {}) {
     canEnd: ds.canEnd === "true",
     names: Array.isArray(names) ? names.filter((n) => typeof n === "string") : [],
     startedAt: ds.startedAt || null,
+    path: ds.path || null,
   }
 }
 
@@ -254,6 +270,7 @@ const NO_CALL = {
   canEnd: false,
   names: [],
   startedAt: null,
+  path: null,
 }
 
 export function createMeetingPresence(env = {}) {
@@ -271,6 +288,8 @@ export function createMeetingPresence(env = {}) {
   const assign = env.assign || (() => {})
   const disconnectRoom = env.disconnectRoom || (() => {})
   const connectionOwner = env.connectionOwner || (() => null)
+  // The live LiveKit room's connection state ("connected", …) or null.
+  const roomState = env.roomState || (() => null)
   // Stage 3: the lock-screen card and tab title follow every state change.
   const onChange = env.onChange || (() => {})
 
@@ -345,7 +364,52 @@ export function createMeetingPresence(env = {}) {
 
   function onToastAction(value, spec) {
     if (value === "back") navigate(call.returnPath)
-    if (value === "rejoin") navigate((spec && spec.returnPath) || call.returnPath)
+    if (value === "rejoin") rejoinAt((spec && spec.returnPath) || call.returnPath)
+  }
+
+  function currentPath() {
+    return call.path || location.pathname
+  }
+
+  // Rejoin is a click on Rejoin, so it joins (task 01a1e82a remediation,
+  // finding 7): it runs the call room's own explicit Join (`join_meeting`),
+  // never a URL flag (a link or a history entry must not join; task
+  // 01a18d0a). Already on the call room: join now. Elsewhere: hold a
+  // one-shot, short-lived intent for that path and go there; the call room's
+  // mount spends it (`spendRejoin`).
+  function rejoinAt(path) {
+    if (!path) return
+    if (currentPath() === path) {
+      pushJoin()
+      return
+    }
+    store.set(REJOIN_KEY, { path, at: now() }, { ttlMs: REJOIN_INTENT_MS })
+    navigate(path)
+  }
+
+  function pushJoin() {
+    // Still in the call (a lost connection the server never saw as a
+    // leave): the call room restores it on its own; a second join would not.
+    if (call.inCall) return
+    if (host && typeof host.push === "function") {
+      try {
+        host.push("join_meeting")
+      } catch (_) {
+        /* no live view to take it */
+      }
+    }
+  }
+
+  function spendRejoin() {
+    const intent = store.get(REJOIN_KEY)
+    if (!intent || typeof intent !== "object") return
+    if (typeof intent.at === "number" && now() - intent.at > REJOIN_INTENT_MS) {
+      store.remove(REJOIN_KEY)
+      return
+    }
+    if (intent.path !== currentPath()) return
+    store.remove(REJOIN_KEY)
+    pushJoin()
   }
 
   // The guard and the unload prompt are armed only in a call, before any
@@ -429,15 +493,40 @@ export function createMeetingPresence(env = {}) {
     syncBar()
   }
 
+  function startReconnecting() {
+    if (conn.state === "reconnecting") return
+    conn = { state: "reconnecting", since: now(), lost: false }
+    connTick = setTick(syncBar, 1000)
+    lostTimer = setTimer(enterLost, RECONNECT_LOST_MS)
+    connToast = toast(reconnectingToast(isPhone()))
+    syncBar()
+  }
+
+  // The browser's own online / offline events. Offline in a call is a
+  // reconnect from the first moment, whatever LiveKit has noticed yet. Back
+  // online, a room that still reads connected never dropped (nothing else
+  // will say so); any other state waits for LiveKit's own recovery event.
+  function onNetwork(online) {
+    if (!call.inCall || explicitLeave) return
+    if (!online) {
+      startReconnecting()
+      return
+    }
+    if (conn.state === "reconnecting" && safe(roomState) === "connected") resetConnection()
+  }
+
   function onRoomState(state) {
-    if (state === "reconnecting") {
-      if (conn.state === "reconnecting") return
-      conn = { state: "reconnecting", since: now(), lost: false }
-      connTick = setTick(syncBar, 1000)
-      lostTimer = setTimer(enterLost, RECONNECT_LOST_MS)
-      connToast = toast(reconnectingToast(isPhone()))
-      syncBar()
-    } else if (state === "lost") {
+    // A room that disconnected while the call client retries it is still a
+    // reconnect, not the end of the call.
+    if (state === "disconnected" && call.inCall && !explicitLeave) {
+      const owner = connectionOwner()
+      if (owner && owner._connLost) state = "reconnecting"
+    }
+    if (RECONNECTING_STATES.has(state)) {
+      startReconnecting()
+      return
+    }
+    if (state === "lost") {
       if (conn.state !== "reconnecting") {
         conn = { state: "reconnecting", since: now(), lost: false }
         connTick = setTick(syncBar, 1000)
@@ -453,8 +542,27 @@ export function createMeetingPresence(env = {}) {
     if (owner && owner._connLost && typeof owner._manualRejoin === "function") {
       owner._manualRejoin()
     } else {
-      navigate(call.returnPath)
+      rejoinAt(call.returnPath)
     }
+  }
+
+  // The desktop bar's "End for everyone" runs the server end through its
+  // phx-click; like the bar's Leave, it disarms the guards first.
+  function noteBarEnd() {
+    explicitLeave = true
+    resetConnection()
+    notify()
+  }
+
+  // The phone overlay's "Chat" minimizes the in-chat call instead of leaving
+  // it: the call carries on behind the strip, which is a kept call.
+  function noteMinimized() {
+    if (call.inCall && !call.inCallRoom && !explicitLeave) maybeStillIn()
+  }
+
+  // The live mic / camera moved: the lock-screen card follows.
+  function onLocalMedia() {
+    notify()
   }
 
   // The bar's own Leave (`[data-bar-leave]`) runs the server leave through
@@ -634,6 +742,7 @@ export function createMeetingPresence(env = {}) {
       if (call.inCall && !call.inCallRoom && prev && prev === call.meetingId) maybeStillIn()
       lastSeenMeetingId = call.inCall ? call.meetingId : null
       syncBar()
+      spendRejoin()
     },
     update(state) {
       apply(state)
@@ -651,7 +760,12 @@ export function createMeetingPresence(env = {}) {
     leaveNow,
     toggleMedia,
     rejoin,
+    rejoinAt,
     noteBarLeave,
+    noteBarEnd,
+    noteMinimized,
+    onNetwork,
+    onLocalMedia,
     showStashed,
     syncBar,
     armed,
@@ -674,6 +788,13 @@ function el(doc, tag, className, text) {
   if (text != null) node.textContent = text
   return node
 }
+
+// The guard dialog and the sheets sit above every sheet, modal and layer the
+// app has (task 01a1e82a remediation, finding 5): the Settings sheets are
+// z-index 100, the More sheet's tab bar 110, the image layer 120 and the
+// skip link 1000. A guard that fires from inside an open sheet must still be
+// the thing you can press.
+export const DIALOG_Z_CLASS = "z-[1100]"
 
 // Real-DOM toast + dialog renderer. Token slots only: toasts, dialogs and
 // sheets are base-100 / base-content, Leave and destructive actions error,
@@ -746,8 +867,8 @@ export function createDomUi(doc, win, { isPhone }) {
         doc,
         "div",
         sheet
-          ? "fixed inset-0 z-[80] flex items-end bg-base-content/40"
-          : "fixed inset-0 z-[80] flex items-center justify-center bg-base-content/40 p-4",
+          ? `fixed inset-0 ${DIALOG_Z_CLASS} flex items-end bg-base-content/40`
+          : `fixed inset-0 ${DIALOG_Z_CLASS} flex items-center justify-center bg-base-content/40 p-4`,
       )
       overlay.id = "meeting-presence-dialog"
       overlay.dataset.dialog = spec.kind
@@ -843,6 +964,7 @@ export function installMeetingPresence(win = window, doc = document) {
     // MeetingClient registers itself as the owner of the (now hidden)
     // connection-state element; its Rejoin / Leave-after-loss live there.
     connectionOwner: () => doc.getElementById("meeting-connection-banner")?._owner || null,
+    roomState: () => (win.__livekit_room || win.__livekitRoom || null)?.state || null,
     barControl: (kind) =>
       doc.querySelector?.(`#meeting-top-bar ${kind === "camera" ? "[data-bar-camera]" : "[data-bar-mic]"}`) || null,
     onChange: (state) => media && media.update(state),
@@ -867,13 +989,24 @@ export function installMeetingPresence(win = window, doc = document) {
   // already cancelled, so "Stay" on the native prompt keeps the call.
   win.addEventListener("beforeunload", (e) => presence.onBeforeUnload(e))
   doc.addEventListener("livekit:state", (e) => presence.onRoomState(e?.detail?.state))
+  win.addEventListener("offline", () => presence.onNetwork(false))
+  win.addEventListener("online", () => presence.onNetwork(true))
   doc.addEventListener("click", (e) => {
     const t = e.target
     if (!t || typeof t.closest !== "function") return
     if (t.closest("[data-bar-rejoin]")) presence.rejoin()
     else if (t.closest("[data-meeting-leave-sheet]")) presence.openLeaveSheet()
     else if (t.closest("[data-bar-leave]")) presence.noteBarLeave()
+    else if (t.closest("[data-bar-end]")) presence.noteBarEnd()
   })
+  // The in-chat phone overlay's "Chat" (partials.ex) minimizes the call.
+  doc.addEventListener("meeting-presence:minimized", () => presence.noteMinimized())
+  // The lock-screen card reads the live mic / camera; refresh it when they move.
+  try {
+    watchLocalMedia(win, () => presence.onLocalMedia())
+  } catch (_) {
+    /* no room events: the card still follows every state change */
+  }
 
   const show = () => presence.showStashed()
   if (doc.readyState === "loading") doc.addEventListener("DOMContentLoaded", show, { once: true })

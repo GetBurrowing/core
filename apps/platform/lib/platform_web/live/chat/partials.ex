@@ -1319,7 +1319,20 @@ defmodule PlatformWeb.ChatLive.Partials do
             <span class="hero-user-group size-4"></span>
           </button>
           <.soundboard_menu id="soundboard-menu-mobile" />
-          <button phx-click="meeting_leave" class="btn btn-ghost btn-xs" title="Back to chat">
+          <%!-- Minimizes, never leaves (task 01a1e82a remediation): the
+               overlay hides, the call carries on behind the green strip
+               and the tab bar is reachable again. Leave is the explicit
+               control in the call controls below. --%>
+          <button
+            type="button"
+            data-role="quickmeet-minimize"
+            phx-click={
+              JS.add_class("hidden", to: ~s([data-role="quickmeet-mobile-overlay"]))
+              |> JS.dispatch("meeting-presence:minimized")
+            }
+            class="btn btn-ghost btn-xs"
+            title="Back to chat (the call stays on)"
+          >
             <span class="hero-arrow-left size-4"></span>
             <span class="text-xs">Chat</span>
           </button>

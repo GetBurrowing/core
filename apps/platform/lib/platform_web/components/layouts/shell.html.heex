@@ -143,6 +143,7 @@
       in_call_room={@in_call_room}
       meeting_roster={@meeting_roster}
       meeting_here_count={@meeting_here_count}
+      meeting_can_end={assigns[:meeting_can_end] == true}
     />
     <%!-- Phone top strip (was #utility-bar; renamed in place by Burrow
          redesign 22 stage 1). `lg:hidden`: at lg the sidebar carries what
@@ -341,6 +342,7 @@
       data-can-end={to_string(assigns[:meeting_can_end] == true)}
       data-other-names={Jason.encode!(assigns[:meeting_other_names] || [])}
       data-started-at={@meeting_started_at && DateTime.to_iso8601(@meeting_started_at)}
+      data-path={assigns[:current_path]}
       data-auth-routes={PlatformWeb.MeetingPresenceEvents.auth_route_patterns_json()}
     >
     </div>

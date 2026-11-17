@@ -1620,11 +1620,19 @@ const MeetingClient = {
 
   // The Room both connections use: the web call's and the app's companion
   // (task 01a13ca2 stage 3 factored these two out of `_join`).
+  //
+  // `disconnectOnPageLeave: false` (task 01a1e82a remediation, finding 6):
+  // livekit-client's own beforeunload listener otherwise disconnects even
+  // when meeting_presence.js cancelled that beforeunload and the user chose
+  // "Stay" on the browser's leave-page prompt. A real exit still leaves:
+  // pagehide (and an uncancelled beforeunload) run `_onPageHide` -> `_leave`
+  // here and the watchdog's disconnect on every other shell page.
   _newRoom() {
     return new Room({
       adaptiveStream: true,
       dynacast: true,
       publishDefaults: { simulcast: true },
+      disconnectOnPageLeave: false,
     })
   },
 

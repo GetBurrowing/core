@@ -1,3 +1,5 @@
+import { RoomEvent } from "livekit-client"
+
 /**
  * MeetingBar hook — bridges the in-call top bar controls to the LiveKit Room instance.
  *
@@ -19,13 +21,94 @@ export function formatElapsed(totalSeconds) {
     : `${minutes}:${seconds}`
 }
 
+// The local publication events that change what "Mic on" / "Cam off" should
+// read (task 01a1e82a remediation). `room-connected` fires BEFORE the join
+// publishes its tracks, so a read there sees mic and camera off; these are
+// the moments the live state actually moves.
+export const LOCAL_MEDIA_EVENTS = [
+  RoomEvent.LocalTrackPublished,
+  RoomEvent.LocalTrackUnpublished,
+  RoomEvent.TrackMuted,
+  RoomEvent.TrackUnmuted,
+]
+
+// The live mic / camera state of the local participant, or null with no room.
+export function liveMediaState(room) {
+  const lp = room && room.localParticipant
+  if (!lp) return null
+  return { mic: lp.isMicrophoneEnabled === true, camera: lp.isCameraEnabled === true }
+}
+
+// Call `onChange(room)` whenever the local participant's mic / camera state
+// can have changed: on every room the page connects (window
+// `livekit:room-connected`) and on each local publish / unpublish / mute /
+// unmute in it. Remote mutes are ignored. Returns a stop function that takes
+// every listener back off the room and the window.
+export function watchLocalMedia(win, onChange) {
+  let bound = null
+  let handlers = []
+  const currentRoom = () => win.__livekit_room || win.__livekitRoom || null
+
+  const release = () => {
+    if (bound && typeof bound.off === "function") {
+      for (const [event, fn] of handlers) {
+        try {
+          bound.off(event, fn)
+        } catch (_) {
+          /* already gone */
+        }
+      }
+    }
+    bound = null
+    handlers = []
+  }
+
+  const bind = (room) => {
+    if (!room || bound === room || typeof room.on !== "function") return
+    release()
+    bound = room
+    for (const event of LOCAL_MEDIA_EVENTS) {
+      const fn = (_pub, participant) => {
+        const lp = room.localParticipant
+        // TrackMuted / TrackUnmuted fire for remote participants too.
+        if (participant && lp && participant !== lp && participant.identity !== lp.identity) return
+        onChange(room)
+      }
+      room.on(event, fn)
+      handlers.push([event, fn])
+    }
+  }
+
+  const onConnected = (e) => {
+    const room = (e && e.detail && e.detail.room) || currentRoom()
+    bind(room)
+    if (room) onChange(room)
+  }
+  const onDisconnected = () => release()
+
+  win.addEventListener("livekit:room-connected", onConnected)
+  win.addEventListener("livekit:room-disconnected", onDisconnected)
+  bind(currentRoom())
+
+  return () => {
+    release()
+    win.removeEventListener("livekit:room-connected", onConnected)
+    win.removeEventListener("livekit:room-disconnected", onDisconnected)
+  }
+}
+
 const MeetingBar = {
   mounted() {
     this._syncState()
     this._startTimer()
     this._bindControls()
 
+    // Re-read mic / camera on every local publish and mute change, not only
+    // at mount and room-connected (task 01a1e82a remediation, finding 1).
+    this._stopWatch = watchLocalMedia(window, () => this._syncState())
+
     this._onDisconnected = () => {
+      this._lastPushed = null
       // Route to the MeetingBarLive LiveComponent (this.el lives inside it),
       // not the parent ChatLive which doesn't care about mini-bar state.
       this.pushEventTo(this.el, "meeting_bar_state", { mic: false, camera: false, connected: false })
@@ -35,7 +118,10 @@ const MeetingBar = {
     this._onConnected = () => this._syncState()
     window.addEventListener("livekit:room-connected", this._onConnected)
 
-    this.handleEvent("meeting_bar_sync", () => this._syncState())
+    this.handleEvent("meeting_bar_sync", () => {
+      this._lastPushed = null
+      this._syncState()
+    })
   },
 
   updated() {
@@ -49,14 +135,18 @@ const MeetingBar = {
     this._unbindControls()
     window.removeEventListener("livekit:room-disconnected", this._onDisconnected)
     window.removeEventListener("livekit:room-connected", this._onConnected)
+    if (this._stopWatch) this._stopWatch()
+    this._stopWatch = null
   },
 
   _syncState() {
-    const room = window.__livekitRoom
-    if (!room || !room.localParticipant) return
-    const mic = room.localParticipant.isMicrophoneEnabled ?? true
-    const camera = room.localParticipant.isCameraEnabled ?? false
-    this.pushEventTo(this.el, "meeting_bar_state", { mic, camera, connected: true })
+    const state = liveMediaState(window.__livekit_room || window.__livekitRoom)
+    if (!state) return
+    // Identical pushes are dropped: the watcher fires per publication.
+    const key = `${state.mic}:${state.camera}`
+    if (key === this._lastPushed) return
+    this._lastPushed = key
+    this.pushEventTo(this.el, "meeting_bar_state", { ...state, connected: true })
   },
 
   _bindControls() {

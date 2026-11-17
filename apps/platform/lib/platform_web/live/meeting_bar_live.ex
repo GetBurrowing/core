@@ -18,11 +18,15 @@ defmodule PlatformWeb.MeetingBarLive do
       (used by the Return-to-call deep link to `/meetings/<slug>`); may be nil
       if the meeting row hasn't been persisted yet, in which case the bar
       falls back to the chat surface via `space_slug`
-    * `:meeting_started_at` — `DateTime` when the user joined
+    * `:meeting_started_at` — `DateTime` the MEETING started (its row's
+      `started_at`; task 01a1e82a remediation), falling back to the join time
+      for an ad-hoc room with no meeting row
     * `:in_call_room` — boolean, true only on `/meetings/<meeting_slug>`
       (computed once, by `PlatformWeb.MeetingBarPresence.in_call_room?/2`)
     * `:meeting_roster` — up to four `%{id, name, initials}` faces
     * `:meeting_here_count` — how many participants are in the call
+    * `:meeting_can_end` — the viewer hosts the meeting, so the desktop bar
+      offers "End for everyone" next to Leave (the server re-checks)
   """
 
   use PlatformWeb, :live_component
@@ -70,6 +74,7 @@ defmodule PlatformWeb.MeetingBarLive do
           {:in_call_room, :in_call_room},
           {:meeting_roster, :roster},
           {:meeting_here_count, :here_count},
+          {:meeting_can_end, :can_end},
           {:id, :id},
           {:mic_on, :mic_on},
           {:camera_on, :camera_on},
@@ -110,6 +115,7 @@ defmodule PlatformWeb.MeetingBarLive do
       |> assign_new(:in_call_room, fn -> false end)
       |> assign_new(:roster, fn -> [] end)
       |> assign_new(:here_count, fn -> 0 end)
+      |> assign_new(:can_end, fn -> false end)
       |> assign(
         :return_path,
         return_to_call_path(assigns[:meeting_slug], assigns[:space_slug], assigns[:space_id])
@@ -255,16 +261,67 @@ defmodule PlatformWeb.MeetingBarLive do
           </span>
         </span>
 
-        <button
-          type="button"
-          phx-click="leave_meeting"
-          phx-target={@myself}
-          data-bar-leave
-          class={[control_class(), "bg-error text-error-content lg:hover:opacity-90"]}
-          title="Leave meeting"
-        >
-          Leave
-        </button>
+        <%!-- Leave stays one click. For the host a split chevron beside it
+             opens a one-item menu, "End for everyone" (task 01a1e82a
+             remediation), which pushes the same host-checked
+             `meeting_presence_end` the phone Leave sheet uses. Desktop
+             only, like every bar control. --%>
+        <span class="hidden shrink-0 items-stretch sm:inline-flex">
+          <button
+            type="button"
+            phx-click="leave_meeting"
+            phx-target={@myself}
+            data-bar-leave
+            class={[
+              control_class(),
+              "bg-error text-error-content lg:hover:opacity-90",
+              @can_end && "rounded-r-none"
+            ]}
+            title="Leave meeting"
+          >
+            Leave
+          </button>
+          <span :if={@can_end} class="relative inline-flex">
+            <button
+              type="button"
+              data-bar-end-menu
+              aria-haspopup="menu"
+              aria-expanded="false"
+              aria-controls="meeting-bar-end-menu"
+              title="More leave options"
+              phx-click={
+                JS.toggle(to: "#meeting-bar-end-menu")
+                |> JS.toggle_attribute({"aria-expanded", "true", "false"})
+              }
+              class={[
+                control_class(),
+                "rounded-l-none border-l border-error-content/30 bg-error px-1.5 text-error-content lg:hover:opacity-90"
+              ]}
+            >
+              <span class="hero-chevron-down size-3.5" aria-hidden="true" />
+              <span class="sr-only">More leave options</span>
+            </button>
+            <div
+              id="meeting-bar-end-menu"
+              role="menu"
+              phx-click-away={
+                JS.hide(to: "#meeting-bar-end-menu")
+                |> JS.set_attribute({"aria-expanded", "false"}, to: "[data-bar-end-menu]")
+              }
+              class="absolute right-0 top-full z-[60] mt-1.5 hidden min-w-44 rounded-xl border border-edge bg-base-100 p-1 text-base-content shadow-lg"
+            >
+              <button
+                type="button"
+                role="menuitem"
+                data-bar-end
+                phx-click={JS.hide(to: "#meeting-bar-end-menu") |> JS.push("meeting_presence_end")}
+                class="w-full rounded-lg px-3 py-2 text-left text-[13px] font-semibold text-error lg:hover:bg-base-200"
+              >
+                End for everyone
+              </button>
+            </div>
+          </span>
+        </span>
       </div>
     </div>
     """
