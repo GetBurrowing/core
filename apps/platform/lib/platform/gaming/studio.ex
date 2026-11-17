@@ -1,6 +1,7 @@
 defmodule Platform.Gaming.Studio do
   @moduledoc "Authorized game workspaces, separate from the public game catalog."
-  alias Platform.{Access, Chat, Games, Tasks}
+  alias Platform.{Access, Chat, Games, Repo, Tasks}
+  import Ecto.Query
   alias Platform.Access.Scope
 
   def list(user) do
@@ -12,6 +13,11 @@ defmodule Platform.Gaming.Studio do
     |> Enum.map(fn project ->
       game = Enum.find(games, &(&1["project_id"] == project.id and &1["org_id"] == project.org_id))
       %{project: project, game: game, space: development_space(project, game, scope)}
+    end)
+    |> Enum.filter(&(&1.game || &1.project.config["game_studio"] == true || &1.project.tech_stack["engine"] in ~w(godot unity unreal)))
+    |> Enum.sort_by(fn entry ->
+      index = Enum.find_index(games, &(&1["project_id"] == entry.project.id))
+      {index || length(games), entry.project.name}
     end)
   end
 
@@ -32,7 +38,11 @@ defmodule Platform.Gaming.Studio do
 
   def tasks(nil, _scope), do: []
   def tasks(entry, scope) do
-    Tasks.list_tasks_page([project_id: entry.project.id, access_scope: scope], limit: 6, offset: 0)
+    from(t in Tasks.Task,
+      where: t.project_id == ^entry.project.id and is_nil(t.deleted_at) and t.status not in ["done", "cancelled"],
+      order_by: [desc: t.inserted_at, desc: t.id], limit: 6)
+    |> Platform.Access.Query.where_readable(scope, "tasks.read", :task, %{id: :id})
+    |> Repo.all()
   end
 
   def canvases(%{space: %{id: id}}, scope),

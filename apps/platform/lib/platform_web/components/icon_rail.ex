@@ -109,8 +109,20 @@ defmodule PlatformWeb.Components.IconRail do
   def bottom_rail(assigns) do
     current_path = assigns |> Map.get(:current_path, "/") |> nav_path()
     scope = assigns[:access_scope]
-    primary = if assigns[:gaming], do: gaming_destinations(scope, assigns[:project_id]), else: tab_destinations(scope)
-    link_winner = active_destination_key(if(assigns[:gaming], do: Enum.map(primary, &Map.update!(&1, :path, fn path -> URI.parse(path).path end)), else: primary), current_path)
+
+    primary =
+      if assigns[:gaming],
+        do: gaming_destinations(scope, assigns[:project_id]),
+        else: tab_destinations(scope)
+
+    link_winner =
+      active_destination_key(
+        if(assigns[:gaming],
+          do: Enum.map(primary, &Map.update!(&1, :path, fn path -> URI.parse(path).path end)),
+          else: primary
+        ),
+        current_path
+      )
 
     more_active? =
       assigns[:more_open] == true or
@@ -557,11 +569,16 @@ defmodule PlatformWeb.Components.IconRail do
   @doc "Game navigation shares the shell's docked bar, safe areas and native bridge."
   def gaming_destinations(scope, project_id \\ nil) do
     suffix = if project_id, do: "?project=" <> URI.encode_www_form(project_id), else: ""
-    studio = if Platform.Access.module_access?(scope, :chat), do: [
-      %{key: :studio, label: "Studio", path: "/studio" <> suffix},
-      %{key: :chat, label: "Chat", path: "/studio/chat" <> suffix},
-      %{key: :playtest, label: "Playtest", path: "/studio/playtest" <> suffix}
-    ], else: []
+
+    studio =
+      if Platform.Access.module_access?(scope, :chat),
+        do: [
+          %{key: :studio, label: "Studio", path: "/studio" <> suffix},
+          %{key: :chat, label: "Chat", path: "/studio/chat" <> suffix},
+          %{key: :playtest, label: "Playtest", path: "/studio/playtest" <> suffix}
+        ],
+        else: []
+
     studio ++ [%{key: :discover, label: "Discover", path: "/play?mode=discover"}]
   end
 

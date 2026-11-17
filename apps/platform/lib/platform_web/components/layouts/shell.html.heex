@@ -213,7 +213,10 @@
         />
       </div>
     </header>
-    <div :if={gaming? && @current_path not in ["/studio", "/studio/chat", "/studio/playtest"]} class="cg-workspace-modes lg:hidden">
+    <div
+      :if={gaming? && @current_path not in ["/studio", "/studio/chat", "/studio/playtest"]}
+      class="cg-workspace-modes lg:hidden"
+    >
       <PlatformWeb.Components.GamingShell.modes mode="create" />
     </div>
     <%!-- Flash messages --%>

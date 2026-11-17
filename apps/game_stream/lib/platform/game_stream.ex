@@ -175,9 +175,21 @@ defmodule Platform.GameStream do
 
   defp start_build(build, opts) do
     with {:ok, host} <- find_free_host() do
-      {experiment_id, variant_slug, encoder} = if build.task, do: resolve_encoder(build.task.id), else: {nil, nil, GameStreamEncoder.control()}
-      {roster_experiment_id, roster_variant_slug, roster} = if build.task, do: resolve_roster(build.task.id), else: {nil, nil, GameStreamRoster.control()}
-      {touch_experiment_id, touch_variant_slug, touch_tuning} = if build.task, do: resolve_touch(build.task.id), else: {nil, nil, GameStreamTouch.control()}
+      {experiment_id, variant_slug, encoder} =
+        if build.task,
+          do: resolve_encoder(build.task.id),
+          else: {nil, nil, GameStreamEncoder.control()}
+
+      {roster_experiment_id, roster_variant_slug, roster} =
+        if build.task,
+          do: resolve_roster(build.task.id),
+          else: {nil, nil, GameStreamRoster.control()}
+
+      {touch_experiment_id, touch_variant_slug, touch_tuning} =
+        if build.task,
+          do: resolve_touch(build.task.id),
+          else: {nil, nil, GameStreamTouch.control()}
+
       session_id = UUIDv7.generate()
 
       args = %{

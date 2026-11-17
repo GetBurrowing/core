@@ -77,7 +77,12 @@ defmodule PlatformWeb.Components.GamingShellBottomNavTest do
 
     assert tabs == expected ++ ["more"]
     assert has_element?(doc, ~s(#bottom-nav a[data-destination="chat"][href="/studio/chat"]))
-    assert has_element?(doc, ~s(#bottom-nav a[data-destination="playtest"][href="/studio/playtest"]))
+
+    assert has_element?(
+             doc,
+             ~s(#bottom-nav a[data-destination="playtest"][href="/studio/playtest"])
+           )
+
     # Meetings left the bar with task 01a1b8a5 stage 4.
     refute has_element?(doc, ~s(#bottom-nav a[data-destination="meetings"]))
     assert has_element?(doc, "#bottom-nav [data-destination=discover][aria-current=page]")

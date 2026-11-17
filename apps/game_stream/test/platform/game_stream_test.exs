@@ -133,12 +133,33 @@ defmodule Platform.GameStreamTest do
   end
 
   describe "project playtests" do
-    test "default branch runs without a task or review-state change and persists its source", ctx do
-      Repo.insert!(%Platform.Tenancy.OrgMembership{user_id: ctx.user.id, org_id: ctx.project.org_id, role: "member"})
-      Repo.insert!(%Platform.Access.Grant{org_id: ctx.project.org_id, principal_type: "user", principal_id: ctx.user.id, permission: "play.use", resource_type: "project", resource_id: ctx.project.id, effect: "allow"})
+    test "default branch runs without a task or review-state change and persists its source",
+         ctx do
+      Repo.insert!(%Platform.Tenancy.OrgMembership{
+        user_id: ctx.user.id,
+        org_id: ctx.project.org_id,
+        role: "member"
+      })
+
+      Repo.insert!(%Platform.Access.Grant{
+        org_id: ctx.project.org_id,
+        principal_type: "user",
+        principal_id: ctx.user.id,
+        permission: "play.use",
+        resource_type: "project",
+        resource_id: ctx.project.id,
+        effect: "allow"
+      })
+
       host!(ctx.user)
       heads!(%{{"example/voltron", "main"} => @sha})
-      assert {:ok, status} = GameStream.start_project_session(ctx.project.id, ctx.user, runner: StubRunner, linger_ms: 50)
+
+      assert {:ok, status} =
+               GameStream.start_project_session(ctx.project.id, ctx.user,
+                 runner: StubRunner,
+                 linger_ms: 50
+               )
+
       assert status.review_sha == @sha
       assert status.branch == "main"
       assert status.task_id == nil
@@ -151,8 +172,12 @@ defmodule Platform.GameStreamTest do
     end
 
     test "ungranted or malformed project requests never resolve a repository", ctx do
-      assert {:error, :project_build_unavailable} = GameStream.start_project_session(ctx.project.id, ctx.user, runner: StubRunner)
-      assert {:error, :project_build_unavailable} = GameStream.start_project_session("broken", ctx.user, runner: StubRunner)
+      assert {:error, :project_build_unavailable} =
+               GameStream.start_project_session(ctx.project.id, ctx.user, runner: StubRunner)
+
+      assert {:error, :project_build_unavailable} =
+               GameStream.start_project_session("broken", ctx.user, runner: StubRunner)
+
       refute_received {:branch_head_sha, _}
     end
   end

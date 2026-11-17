@@ -9,7 +9,7 @@ defmodule PlatformWeb.GameStudioLiveTest do
     org = Tenancy.get_org_by_slug!("acme")
     Repo.insert!(%Platform.Tenancy.OrgMembership{user_id: user.id, org_id: org.id, role: "admin"})
     {:ok, _} = Branding.update_identity(user, %{experience: "gaming"})
-    {:ok, project} = Tasks.create_project(%{name: "Real game", org_id: org.id})
+    {:ok, project} = Tasks.create_project(%{name: "Real game", org_id: org.id, tech_stack: %{"engine" => "godot"}})
     {:ok, space} = Chat.create_channel(%{name: "Game dev", slug: "studio-dev-#{n}", org_id: org.id, created_by: user.id, metadata: %{"goal_project_id" => project.id}})
     {:ok, project} = Tasks.update_project(project, %{config: %{"development_space_id" => space.id}})
     %{conn: init_test_session(conn, current_user_id: user.id), user: user, project: project, space: space}
@@ -28,6 +28,7 @@ defmodule PlatformWeb.GameStudioLiveTest do
     end
     assert has_element?(view, "#game-studio")
     assert html =~ "studio-chat-#{space.id}"
+    refute html =~ "the Transcript tab is for"
     assert has_element?(view, "#studio-playtest")
     assert has_element?(view, "a[href='/studio/chat?project=#{project.id}']", "Ask an agent")
     assert has_element?(view, "#bottom-nav [data-destination=studio][aria-current=page]")
@@ -53,7 +54,7 @@ defmodule PlatformWeb.GameStudioLiveTest do
     membership = Repo.get_by!(Platform.Tenancy.OrgMembership, user_id: user.id)
     membership |> Ecto.Changeset.change(role: "member") |> Repo.update!()
     {:ok, other_org} = Repo.insert(%Tenancy.Org{name: "Foreign studio", slug: "foreign-studio-#{System.unique_integer([:positive])}", parent_org_id: Tenancy.get_root_org().id})
-    {:ok, project} = Tasks.create_project(%{name: "Secret foreign game", org_id: other_org.id})
+    {:ok, project} = Tasks.create_project(%{name: "Secret foreign game", org_id: other_org.id, tech_stack: %{"engine" => "godot"}})
     {:ok, _, html} = live(conn, "/studio?project=#{project.id}")
     refute html =~ "Secret foreign game"
     {:ok, _, html} = live(conn, "/studio?project=broken")

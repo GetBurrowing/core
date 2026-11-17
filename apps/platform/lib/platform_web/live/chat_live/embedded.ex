@@ -37,8 +37,10 @@ defmodule PlatformWeb.ChatLive.Embedded do
   use PlatformWeb, :live_view
 
   @impl true
-  def mount(params, session, socket),
-    do: PlatformWeb.ChatLive.embedded_mount(params, session, socket)
+  def mount(params, session, socket) do
+    {:ok, socket} = PlatformWeb.ChatLive.embedded_mount(params, session, socket)
+    {:ok, assign(socket, :embedded_context, if(session["chat_embed_context"] == "studio", do: "studio", else: "meeting"))}
+  end
 
   @impl true
   def render(assigns), do: PlatformWeb.ChatLive.render(assigns)

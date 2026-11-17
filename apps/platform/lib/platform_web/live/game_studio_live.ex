@@ -1,6 +1,7 @@
 defmodule PlatformWeb.GameStudioLive do
   use PlatformWeb, :live_view
   alias Platform.Gaming.{NewGame, Studio}
+  alias Phoenix.LiveView.JS
   import PlatformWeb.Components.InstallSwitch, only: [install_switch: 1]
 
   @impl true
@@ -16,6 +17,10 @@ defmodule PlatformWeb.GameStudioLive do
   def handle_params(params, _url, socket) do
     entries = Studio.list(socket.assigns.current_user_record)
     entry = Enum.find(entries, &(&1.project.id == params["project"])) || List.first(entries)
+    if connected?(socket) and (socket.assigns.entry && socket.assigns.entry.project.id) != (entry && entry.project.id) do
+      if socket.assigns.entry, do: Platform.Tasks.unsubscribe_board(project: socket.assigns.entry.project.id)
+      if entry, do: Platform.Tasks.subscribe_board(project: entry.project.id)
+    end
     tab = Atom.to_string(socket.assigns.live_action)
 
     {:noreply,
@@ -50,6 +55,12 @@ defmodule PlatformWeb.GameStudioLive do
   def handle_async(:playtest, _result, socket),
     do: {:noreply, put_flash(assign(socket, :playtesting, false), :error, "Playtest could not start. Check the project repository and available Play host, then try again.")}
 
+  @impl true
+  def handle_info({_event, _payload}, socket) do
+    entry = socket.assigns.entry && Enum.find(Studio.list(socket.assigns.current_user_record), &(&1.project.id == socket.assigns.entry.project.id))
+    {:noreply, assign(socket, entry: entry, tasks: Studio.tasks(entry, socket.assigns.access_scope), canvases: Studio.canvases(entry, socket.assigns.access_scope))}
+  end
+
   def studio_path(entry, tab \\ "studio") do
     (if tab == "studio", do: "/studio", else: "/studio/" <> tab) <> "?" <> URI.encode_query(%{"project" => entry.project.id})
   end
@@ -60,7 +71,7 @@ defmodule PlatformWeb.GameStudioLive do
     <Layouts.app flash={@flash} embedded>
       <div id="game-studio" class="game-studio" data-studio-tab={@tab}>
         <aside class="studio-projects" aria-label="Game projects">
-          <.install_switch id="studio-install-switch" brand_name={Platform.Branding.app_name()} />
+          <.install_switch id="studio-install-switch" variant={:sidebar} brand_name={Platform.Branding.app_name()} />
           <p class="studio-eyebrow">YOUR STUDIO</p>
           <h1>Make something fun.</h1>
           <.link :for={entry <- @entries} patch={studio_path(entry)} class={["studio-project", @entry && @entry.project.id == entry.project.id && "is-current"]}>
@@ -92,7 +103,7 @@ defmodule PlatformWeb.GameStudioLive do
             <div class="studio-actions">
               <button :if={@entry.space} id="studio-playtest" disabled={@playtesting} phx-click="playtest" phx-disable-with="Starting…" class="studio-button"><.icon name="hero-play" class="size-4" />Playtest now</button>
               <a :if={@entry.game} href={"/games/#{@entry.game["slug"]}"} class="studio-button">Open build</a>
-              <.link :if={@entry.space} patch={studio_path(@entry, "chat")} class="studio-button">Ask an agent</.link>
+              <.link :if={@entry.space} patch={studio_path(@entry, "chat")} phx-click={JS.focus(to: "#studio-chat-#{@entry.space.id} [contenteditable=true]")} class="studio-button">Ask an agent</.link>
             </div>
           </header>
           <div class="studio-columns">
@@ -101,7 +112,7 @@ defmodule PlatformWeb.GameStudioLive do
               <%= if @entry.space do %>
                 {live_render(@socket, PlatformWeb.ChatLive.Embedded,
                   id: "studio-chat-#{@entry.space.id}",
-                  session: %{"chat_space_slug" => @entry.space.slug, "current_user_id" => @current_user_record.id})}
+                  session: %{"chat_space_slug" => @entry.space.slug, "chat_embed_context" => "studio", "current_user_id" => @current_user_record.id})}
               <% else %>
                 <div class="studio-empty"><.icon name="hero-chat-bubble-left-right" class="size-8" /><h3>Connect your team room.</h3><p>This project has no accessible development room yet.</p><.link navigate={"/files/#{@entry.project.id}"} class="studio-button">Open project files</.link></div>
               <% end %>

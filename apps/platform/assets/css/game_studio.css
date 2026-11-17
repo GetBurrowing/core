@@ -28,6 +28,7 @@
 @media(max-width:767px) {
  .game-studio { flex-direction:column; padding-bottom:var(--bottom-nav-clearance); }
  .studio-projects { width:auto; display:flex; flex-shrink:0; gap:6px; padding:8px 12px; border-right:0; border-bottom:1px solid var(--color-edge); overflow-x:auto; }
+ #studio-install-switch, #studio-install-switch-menu, .studio-projects > a:not(.studio-project):not(.studio-new) { display:none; }
  .studio-projects h1,.studio-projects>.studio-eyebrow,.studio-project small,.studio-projects>.studio-new:last-child { display:none; }
  .studio-project,.studio-new { white-space:nowrap; margin:0; }
  .studio-workspace { padding:12px; gap:12px; }

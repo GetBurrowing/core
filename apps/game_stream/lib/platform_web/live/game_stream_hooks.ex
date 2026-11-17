@@ -416,15 +416,28 @@ defmodule PlatformWeb.GameStreamHooks do
     case viewer(socket) do
       {:user, user_id} ->
         case Platform.Accounts.get_user(user_id) do
-          nil -> {:error, :forbidden}
-          user -> GameStream.start_project_session(id, user, viewer: self(), viewer_info: viewer_info(socket))
+          nil ->
+            {:error, :forbidden}
+
+          user ->
+            GameStream.start_project_session(id, user,
+              viewer: self(),
+              viewer_info: viewer_info(socket)
+            )
         end
-      _ -> {:error, :forbidden}
+
+      _ ->
+        {:error, :forbidden}
     end
   end
 
   defp restart_build(%{props: %{"task_id" => id}}, socket) when is_binary(id),
-    do: GameStream.start_session(id, started_by: viewer(socket), viewer: self(), viewer_info: viewer_info(socket))
+    do:
+      GameStream.start_session(id,
+        started_by: viewer(socket),
+        viewer: self(),
+        viewer_info: viewer_info(socket)
+      )
 
   defp restart_build(_, _), do: {:error, :task_not_found}
 
