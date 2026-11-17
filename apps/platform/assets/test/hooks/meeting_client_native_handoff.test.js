@@ -1,6 +1,7 @@
 import { describe, it, expect, beforeEach, afterEach, vi } from "vitest"
 import { RoomEvent, Track } from "livekit-client"
 import MeetingClient, {
+  COMPANION_CAMERA_MUTE_GRACE_MS,
   COMPANION_CAMERA_TIMEOUT_MS,
   NATIVE_MUTE_TIMEOUT_MS,
   isCompanionRoom,
@@ -885,10 +886,10 @@ describe("MeetingClient companion Room (task 01a13ca2 stage 3)", () => {
     expect(room.localParticipant.setCameraCalls).toEqual([false])
   })
 
-  it("(d) appStateChanged {active:false} turns it OFF; {active:true} does not turn it on", async () => {
+  it("(d) appStateChanged {active:false, background:true} turns it OFF; {active:true} does not turn it on", async () => {
     const { plugin, room } = await cameraOn()
 
-    plugin.listeners.appStateChanged({ active: false })
+    plugin.listeners.appStateChanged({ active: false, background: true })
     await flush()
     expect(room.localParticipant.setCameraCalls).toEqual([false])
 
@@ -897,18 +898,52 @@ describe("MeetingClient companion Room (task 01a13ca2 stage 3)", () => {
     expect(room.localParticipant.setCameraCalls).toEqual([false])
   })
 
-  it("(d) pagehide, and the local track's ended / mute, turn it OFF", async () => {
+  // The camera permission alert, Control Center and the notification shade
+  // resign the app without backgrounding it. Turning the camera off there
+  // undid the first Camera tap behind its own permission alert.
+  it("(d) resigning active without backgrounding leaves the camera ON (old and new builds)", async () => {
+    const { plugin, room } = await cameraOn()
+
+    plugin.listeners.appStateChanged({ active: false })
+    plugin.listeners.appStateChanged({ active: false, background: false })
+    await flush()
+    plugin.listeners.appStateChanged({ active: true })
+    await flush()
+    expect(room.localParticipant.setCameraCalls).toEqual([])
+  })
+
+  it("(d) pagehide and the local track's ended turn it OFF", async () => {
     const { room, pub } = await cameraOn()
 
     pub.track.mediaStreamTrack.fire("ended")
     await flush()
-    pub.track.mediaStreamTrack.fire("mute")
-    await flush()
-    expect(room.localParticipant.setCameraCalls).toEqual([false, false])
+    expect(room.localParticipant.setCameraCalls).toEqual([false])
 
     winListeners.pagehide()
     await flush()
-    expect(room.localParticipant.setCameraCalls).toEqual([false, false, false])
+    expect(room.localParticipant.setCameraCalls).toEqual([false, false])
+  })
+
+  // iOS WebKit mutes a capture track for every short interruption and
+  // unmutes it after; livekit-client pauses and resumes the upstream itself.
+  it("(d) a track mute turns it OFF only if it outlasts the grace; an unmute in time keeps it ON", async () => {
+    vi.useFakeTimers({ toFake: ["setTimeout", "clearTimeout"] })
+    const { room, pub } = await cameraOn()
+    const mst = pub.track.mediaStreamTrack
+
+    mst.fire("mute")
+    vi.advanceTimersByTime(COMPANION_CAMERA_MUTE_GRACE_MS - 1)
+    await flush()
+    expect(room.localParticipant.setCameraCalls).toEqual([])
+    mst.fire("unmute")
+    vi.advanceTimersByTime(COMPANION_CAMERA_MUTE_GRACE_MS)
+    await flush()
+    expect(room.localParticipant.setCameraCalls).toEqual([])
+
+    mst.fire("mute")
+    vi.advanceTimersByTime(COMPANION_CAMERA_MUTE_GRACE_MS)
+    await flush()
+    expect(room.localParticipant.setCameraCalls).toEqual([false])
   })
 
   it("(d) the OFF is confirmed through the publication like any other change", async () => {

@@ -115,6 +115,8 @@ struct CallState: Equatable {
     var mutedByHost = false
     /// The current audio output's name ("iPhone", "AirPods Pro", ...).
     var route: String?
+    /// Whether the call is playing through the built-in loudspeaker.
+    var speakerOn = false
     /// The other PERSONS and agents in the call. Companion connections
     /// (`video:user:`) never land here: `reduce` drops them.
     var participants: [CallParticipant] = []
@@ -228,6 +230,9 @@ struct CallState: Equatable {
             // pulling out AirPods must not open the mic.
             s.route = name
 
+        case .speakerChanged(let on):
+            s.speakerOn = on
+
         case .held:
             s.phase = .onHold
             s.isMuted = true
@@ -274,9 +279,71 @@ enum CallEvent: Equatable {
     case micFailed
     case hostMuted(Bool)
     case routeChanged(String?)
+    /// Whether the current output is the built-in loudspeaker.
+    case speakerChanged(Bool)
     case held
     case resumed
     case interruptionBegan(at: Date)
     case interruptionEnded(at: Date)
     case ended(CallEndReason)
+}
+
+/// The call's speakerphone decision, apart from `AVAudioSession` so tests
+/// can drive it.
+///
+/// Before this, the call ran `.playAndRecord` / `.voiceChat` without
+/// `.defaultToSpeaker`, so audio started on the earpiece. Picking Speaker in
+/// the route picker is an output override, and iOS drops an override on the
+/// next category change or route change. The web view's own media (the
+/// companion camera and remote video) can trigger those changes, so the
+/// speaker fell back to the earpiece. Now the call keeps a speaker
+/// PREFERENCE, defaulting to on, and puts it back after any change it did
+/// not ask for. A connected headset, Bluetooth device, car or AirPlay
+/// output always wins over the speaker.
+enum CallAudioRoute {
+    enum Output: Equatable {
+        /// The earpiece.
+        case receiver
+        /// The built-in loudspeaker.
+        case speaker
+        /// Anything the person plugged in or paired: headphones, Bluetooth,
+        /// CarPlay, AirPlay, USB, HDMI.
+        case external
+    }
+
+    /// Why the route changed, reduced to what the policy needs.
+    enum ChangeReason: Equatable {
+        /// An output override: the system route picker, Control Center, or
+        /// this app's own `overrideOutputAudioPort`.
+        case override
+        /// Any other reason: a category change (often someone else's), a
+        /// device plugged in or removed, a configuration change.
+        case other
+    }
+
+    enum Action: Equatable {
+        /// The person picked an output: make it the preference.
+        case adopt(speaker: Bool)
+        /// The route moved away from the preference: apply it again.
+        case reassert
+        case none
+    }
+
+    static func hasExternal(_ outputs: [Output]) -> Bool { outputs.contains(.external) }
+
+    static func isSpeaker(_ outputs: [Output]) -> Bool { outputs.contains(.speaker) }
+
+    /// Whether to override the output to the loudspeaker. Never over a
+    /// headset or a car.
+    static func overridesToSpeaker(preferSpeaker: Bool, outputs: [Output]) -> Bool {
+        preferSpeaker && !hasExternal(outputs)
+    }
+
+    /// What to do after a route change.
+    static func onRouteChange(reason: ChangeReason, preferSpeaker: Bool, outputs: [Output]) -> Action {
+        if hasExternal(outputs) { return .none }
+        let speaker = isSpeaker(outputs)
+        if reason == .override { return speaker == preferSpeaker ? .none : .adopt(speaker: speaker) }
+        return speaker == preferSpeaker ? .none : .reassert
+    }
 }

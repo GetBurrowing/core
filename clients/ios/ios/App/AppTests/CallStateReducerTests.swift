@@ -1,3 +1,4 @@
+import AVFoundation
 import XCTest
 
 @testable import App
@@ -208,5 +209,58 @@ final class CallStateReducerTests: XCTestCase {
     func testEndingClearsTheConfirmedMic() {
         let s = run([.micConfirmed(true), .ended(.local)], from: connectedAlone())
         XCTAssertFalse(s.micEnabled)
+    }
+
+    // MARK: Speaker
+
+    func testSpeakerChangedSetsSpeakerOnWithoutTouchingMute() {
+        var s = run([.setMuted(true), .speakerChanged(true)], from: connectedAlone())
+        XCTAssertTrue(s.speakerOn)
+        XCTAssertTrue(s.isMuted)
+        s = run([.speakerChanged(false)], from: s)
+        XCTAssertFalse(s.speakerOn)
+    }
+}
+
+/// The speakerphone decision (2026-11-17 report: "the speaker can't be
+/// turned on; audio stays on the earpiece").
+final class CallAudioRouteTests: XCTestCase {
+    func testTheCallCategoryDefaultsToTheSpeaker() {
+        XCTAssertTrue(CallController.categoryOptions(speaker: true).contains(.defaultToSpeaker))
+        XCTAssertTrue(CallController.categoryOptions(speaker: true).contains(.allowBluetoothA2DP))
+        XCTAssertFalse(CallController.categoryOptions(speaker: false).contains(.defaultToSpeaker))
+    }
+
+    func testPortsMapToReceiverSpeakerOrExternal() {
+        XCTAssertEqual(CallController.output(.builtInReceiver), .receiver)
+        XCTAssertEqual(CallController.output(.builtInSpeaker), .speaker)
+        for port: AVAudioSession.Port in [.headphones, .bluetoothHFP, .bluetoothA2DP, .bluetoothLE, .carAudio, .airPlay, .usbAudio] {
+            XCTAssertEqual(CallController.output(port), .external, port.rawValue)
+        }
+    }
+
+    func testTheSpeakerOverridesTheEarpieceButNeverAHeadset() {
+        XCTAssertTrue(CallAudioRoute.overridesToSpeaker(preferSpeaker: true, outputs: [.receiver]))
+        XCTAssertFalse(CallAudioRoute.overridesToSpeaker(preferSpeaker: true, outputs: [.external]))
+        XCTAssertFalse(CallAudioRoute.overridesToSpeaker(preferSpeaker: false, outputs: [.receiver]))
+    }
+
+    func testARouteChangeTheAppDidNotAskForIsUndone() {
+        // The web view's media (or anything else) reset the category and the
+        // audio fell back to the earpiece while the speaker is preferred.
+        XCTAssertEqual(CallAudioRoute.onRouteChange(reason: .other, preferSpeaker: true, outputs: [.receiver]), .reassert)
+        XCTAssertEqual(CallAudioRoute.onRouteChange(reason: .other, preferSpeaker: false, outputs: [.speaker]), .reassert)
+        XCTAssertEqual(CallAudioRoute.onRouteChange(reason: .other, preferSpeaker: true, outputs: [.speaker]), .none)
+    }
+
+    func testPickingAnOutputInTheRoutePickerBecomesThePreference() {
+        XCTAssertEqual(CallAudioRoute.onRouteChange(reason: .override, preferSpeaker: true, outputs: [.receiver]), .adopt(speaker: false))
+        XCTAssertEqual(CallAudioRoute.onRouteChange(reason: .override, preferSpeaker: false, outputs: [.speaker]), .adopt(speaker: true))
+        XCTAssertEqual(CallAudioRoute.onRouteChange(reason: .override, preferSpeaker: true, outputs: [.speaker]), .none)
+    }
+
+    func testAHeadsetIsLeftAlone() {
+        XCTAssertEqual(CallAudioRoute.onRouteChange(reason: .other, preferSpeaker: true, outputs: [.external]), .none)
+        XCTAssertEqual(CallAudioRoute.onRouteChange(reason: .override, preferSpeaker: true, outputs: [.external]), .none)
     }
 }
