@@ -1,7 +1,7 @@
 # Burrow Play: Studio home
 
-Jordan approved Octavius’s dev-first option A on 2026-11-17.
-Source prototype: https://burrow.kobo-ai.com/proto/01a1e83d-fcdd-7000-8e8c-6c015d600c6f/latest/
+The dev-first Studio home direction was approved on 2026-11-17.
+Source prototype: /proto/01a1e83d-fcdd-7000-8e8c-6c015d600c6f/latest/
 Original handoff: attachment `01a1e83d-dc82-7000-b34f-3020aee86ca6`, `play-dev-first.zip`.
 
 Studio opens a game project with its existing development conversation in the

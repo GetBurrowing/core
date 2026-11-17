@@ -1,4 +1,10 @@
 defmodule Platform.Repo.Migrations.AddProjectPlaySessions do
+  @moduledoc """
+  PR #200: records default-branch project playtests independently of review tasks.
+  Existing task-backed sessions retain their task IDs and write contract.
+  """
+  # old-code-compatible: task_id becomes nullable; existing task-backed inserts
+  # retain every column and satisfy the source constraint unchanged.
   use Ecto.Migration
 
   def change do

@@ -180,15 +180,15 @@ defmodule PlatformWeb.AppHandoffLandingTest do
       :ok
     end
 
-    test "the handoff chain lands on /play showing the signed-in persona" do
+    test "the handoff chain lands in the signed-in game studio" do
       user = member!()
 
       {conn, hops} = user |> handoff!() |> follow()
 
-      assert hops == ["/", "/play"]
+      assert hops == ["/", "/play", "/studio"]
       body = html_response(conn, 200)
       doc = LazyHTML.from_document(body)
-      assert Enum.count(LazyHTML.query(doc, "#gaming-persona")) == 1
+      assert Enum.count(LazyHTML.query(doc, "#game-studio")) == 1
       refute body =~ "Sign in with Burrow"
     end
 
