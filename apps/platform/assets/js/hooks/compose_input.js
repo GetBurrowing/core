@@ -374,8 +374,6 @@ const ComposeInput = {
       this._form.removeEventListener("pointerdown", this._onListPress);
       this._form.removeEventListener("mousedown", this._onListPress);
       this._form.removeEventListener("pointerover", this._onListHover);
-      this._form.removeEventListener("pointerdown", this._onPressStart, true);
-      this._form.removeEventListener("click", this._onListClick, true);
     }
     if (this._threadMentionCleanup) this._threadMentionCleanup();
     if (this._richObserver) this._richObserver.disconnect();
@@ -624,37 +622,10 @@ const ComposeInput = {
         this._syncList();
       }
     };
-    // A tap that began outside the list never picks a row. With the phone
-    // keyboard down, focusing the field hides the bottom tab bar, so the
-    // pill and the open list slide down under a finger that is still on
-    // the field, and WebKit synthesizes the click on whichever row moved
-    // there (measured in iOS 26.3 Simulator Safari, task 01a1c863 stage 3:
-    // tapping the pill to bring the keyboard back inserted the last row).
-    // pointerdown fires at touch start, before that shift, so it records
-    // where the press really began; a trusted click on a row whose press
-    // began elsewhere is swallowed before LiveView's window listener sees
-    // it. Keyboard picks (`row.click()`, untrusted) are never affected.
-    this._onPressStart = (e) => {
-      const t = e.target;
-      this._pressInList = !!(t && typeof t.closest === "function" && t.closest('[data-role="mention-list"]'));
-    };
-    this._onListClick = (e) => {
-      const began = this._pressInList;
-      this._pressInList = null;
-      if (began !== false || e.isTrusted === false) return;
-      const t = e.target;
-      const row = t && typeof t.closest === "function" ? t.closest('[role="option"]') : null;
-      if (row && row.closest('[data-role="mention-list"]')) {
-        e.preventDefault();
-        e.stopPropagation();
-      }
-    };
     if (this._form) {
       this._form.addEventListener("pointerdown", this._onListPress);
       this._form.addEventListener("mousedown", this._onListPress);
       this._form.addEventListener("pointerover", this._onListHover);
-      this._form.addEventListener("pointerdown", this._onPressStart, true);
-      this._form.addEventListener("click", this._onListClick, true);
     }
 
     // Paste: an image stages as a thumbnail (rung 11, unchanged); text goes
