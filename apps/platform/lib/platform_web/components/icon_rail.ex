@@ -434,10 +434,11 @@ defmodule PlatformWeb.Components.IconRail do
 
   @doc "The game dock keeps the workspace's original tabs and tools reachable in More."
   def gaming_more_sheet_rows(scope, root_user) do
-    workspace_tabs = Enum.map(tab_destinations(scope), fn
-      %{key: :chat} = destination -> %{destination | label: "All conversations"}
-      destination -> destination
-    end)
+    workspace_tabs =
+      Enum.map(tab_destinations(scope), fn
+        %{key: :chat} = destination -> %{destination | label: "All conversations"}
+        destination -> destination
+      end)
 
     workspace_tabs ++ more_sheet_rows(scope, root_user)
   end
