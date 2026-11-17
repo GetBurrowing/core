@@ -83,7 +83,10 @@ const MeetingWatchdog = {
     // Page-exit teardown — mirrors MeetingClient lines 61-65. Disconnect the
     // room on a real navigation away (tab close, hard reload), not on an LV
     // repatch (those go through destroyed() without pagehide).
-    this._onPageHide = () => {
+    // A beforeunload meeting_presence.js already cancelled is not an exit
+    // yet (task 01a1e82a stage 2); pagehide still disconnects on a real one.
+    this._onPageHide = (event) => {
+      if (event && event.type === "beforeunload" && event.defaultPrevented) return
       const room = this._currentRoom()
       if (room && typeof room.disconnect === "function") {
         try {

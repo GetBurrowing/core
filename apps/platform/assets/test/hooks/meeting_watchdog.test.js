@@ -396,6 +396,23 @@ describe("MeetingWatchdog — singleton + lifecycle", () => {
     expect(room.disconnectCalls).toBe(1)
   })
 
+  // Task 01a1e82a stage 2: meeting_presence.js cancels beforeunload while in
+  // a call so the browser asks first. "Stay" must keep the call, so a
+  // cancelled beforeunload is not an exit; an uncancelled one still is.
+  it("a beforeunload already cancelled by the in-call guard keeps the room", () => {
+    const room = fakeRoom({ state: "connected" })
+    globalThis.window = buildWindow({ existingRoom: room })
+    const hook = buildHook()
+    hook.mounted()
+
+    const onUnload = globalThis.window._listeners.get("beforeunload")[0]
+    onUnload({ type: "beforeunload", defaultPrevented: true })
+    expect(room.disconnectCalls).toBe(0)
+
+    onUnload({ type: "beforeunload", defaultPrevented: false })
+    expect(room.disconnectCalls).toBe(1)
+  })
+
   it("Reconnected handler fires _emitState('reconnected') and dispatches livekit:state", () => {
     const room = fakeRoom({ state: "connected" })
     globalThis.window = buildWindow({ existingRoom: room })

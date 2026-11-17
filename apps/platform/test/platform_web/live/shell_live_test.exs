@@ -1342,15 +1342,14 @@ defmodule PlatformWeb.ShellLiveTest do
       :ok = MeetingState.broadcast_left(user_id)
     end
 
-    test "on_meeting_page tracks both /chat/<space_slug> and /meetings/<meeting_slug>",
-         %{conn: conn} do
+    # Task 01a1e82a stage 1: the bar hides ONLY in the call room. The
+    # meeting's own chat used to hide it too; it now shows it.
+    test "in_call_room is true only on /meetings/<meeting_slug>", %{conn: conn} do
       conn = authenticated_conn(conn)
       user_id = conn.private.plug_session["current_user_id"]
 
       {:ok, view, _html} = live(conn, ~p"/tasks")
 
-      # Simulate a mid-session join with both slugs populated so the
-      # :track_path hook has the assigns it needs for both branches.
       send(
         view.pid,
         {:meeting_joined,
@@ -1368,25 +1367,16 @@ defmodule PlatformWeb.ShellLiveTest do
 
       assigns = :sys.get_state(view.pid).socket.assigns
       assert assigns.meeting_slug == "tracked-meeting"
-      # On /tasks we are not on a meeting page.
-      assert assigns.on_meeting_page == false
+      assert assigns.in_call_room == false
+      refute Map.has_key?(assigns, :on_meeting_page)
 
-      # Mirror the :track_path hook's expression for both legal "meeting
-      # page" URLs so a regression that drops one branch is caught here.
-      space_slug = assigns.meeting_space_slug
-      meeting_slug = assigns.meeting_slug
-      chat_path = "/chat/#{space_slug}"
-      meeting_path = "/meetings/#{meeting_slug}"
-      tasks_path = "/tasks"
-
-      assert ((space_slug && chat_path == "/chat/#{space_slug}") ||
-                (meeting_slug && chat_path == "/meetings/#{meeting_slug}") || false) == true
-
-      assert ((space_slug && meeting_path == "/chat/#{space_slug}") ||
-                (meeting_slug && meeting_path == "/meetings/#{meeting_slug}") || false) == true
-
-      assert ((space_slug && tasks_path == "/chat/#{space_slug}") ||
-                (meeting_slug && tasks_path == "/meetings/#{meeting_slug}") || false) == false
+      alias PlatformWeb.MeetingBarPresence
+      assert MeetingBarPresence.in_call_room?("/meetings/tracked-meeting", "tracked-meeting")
+      refute MeetingBarPresence.in_call_room?("/chat/tracked-space", "tracked-meeting")
+      refute MeetingBarPresence.in_call_room?("/chat/space-track-1", "tracked-meeting")
+      refute MeetingBarPresence.in_call_room?("/meetings/other", "tracked-meeting")
+      refute MeetingBarPresence.in_call_room?("/tasks", "tracked-meeting")
+      refute MeetingBarPresence.in_call_room?("/meetings/tracked-meeting", nil)
 
       :ok = MeetingState.broadcast_left(user_id)
     end
@@ -1402,8 +1392,7 @@ defmodule PlatformWeb.ShellLiveTest do
       user_id = conn.private.plug_session["current_user_id"]
 
       # Bar must be visible for the assertion to be meaningful — seed an
-      # active meeting + navigate to a non-meeting route so `@on_meeting_page`
-      # is false and the bar renders without `hidden`.
+      # active meeting + navigate to a route that is not the call room.
       :ok =
         MeetingState.broadcast_joined(
           user_id,
@@ -1415,9 +1404,10 @@ defmodule PlatformWeb.ShellLiveTest do
 
       {:ok, view, _html} = live(conn, ~p"/tasks")
 
-      # Default bar state: mic-on (hero-microphone, no -slash).
-      pre_html = render(view)
-      assert pre_html =~ "hero-microphone"
+      # Default bar state: Mic on.
+      render(view)
+      assert view |> element("[data-bar-mic]") |> render() =~ "on"
+      assert view |> element("[data-bar-mic]") |> render() =~ ~s(title="Mute mic")
 
       # Broadcast the authoritative post-toggle state. ShellLive's
       # `:roster_updates` hook intercepts via the new `:meeting_media_state`
@@ -1431,12 +1421,13 @@ defmodule PlatformWeb.ShellLiveTest do
       # Two flushes, not one: the bar's mic state is written by
       # `send_update/2`, which lands a turn after the broadcast. See
       # `render_settled/1`.
-      post_html = render_settled(view)
+      _ = render_settled(view)
 
-      assert post_html =~ "hero-microphone-slash"
-      assert post_html =~ "text-error"
-      # Camera flipped on too — verify the camera-on icon appears.
-      assert post_html =~ "hero-video-camera"
+      mic = view |> element("[data-bar-mic]") |> render()
+      assert mic =~ "off"
+      assert mic =~ ~s(title="Unmute mic")
+      # Camera flipped on too.
+      assert view |> element("[data-bar-camera]") |> render() =~ "Cam on"
 
       :ok = MeetingState.broadcast_left(user_id)
     end
@@ -1564,6 +1555,51 @@ defmodule PlatformWeb.ShellLiveTest do
       :ok = MeetingState.broadcast_left(user_id)
     end
 
+    # Task 01a1e82a remediation round 2: on a shell page the bar toggles the
+    # LiveKit room itself and then reports the CONFIRMED pair. The shell
+    # caches it and fans it out; it never flips anything optimistically and
+    # pushes no `toggle-mic` (no MeetingClient is mounted here to take it).
+    test "meeting_media_confirmed caches and broadcasts the room's real pair",
+         %{conn: conn} do
+      conn = authenticated_conn(conn)
+      user_id = conn.private.plug_session["current_user_id"]
+
+      :ok = MeetingState.subscribe(user_id)
+
+      :ok =
+        MeetingState.broadcast_joined(
+          user_id,
+          "space-shell-confirmed",
+          "Shell Confirmed",
+          "shell-confirmed-slug",
+          "shell-confirmed-meeting-slug"
+        )
+
+      {:ok, view, _html} = live(conn, ~p"/calendar")
+      assert_receive {:meeting_joined, %{user_id: ^user_id}}
+
+      render_hook(view, "meeting_media_confirmed", %{"mic" => false, "camera" => true})
+
+      assert_receive {:meeting_media_state,
+                      %{user_id: ^user_id, mic_enabled: false, camera_enabled: true}}
+
+      assigns = :sys.get_state(view.pid).socket.assigns
+      assert assigns.shell_bar_mic_on == false
+      assert assigns.shell_bar_camera_on == true
+      refute_push_event(view, "toggle-mic", %{})
+
+      # The loopback repaints the bar from the confirmed pair.
+      html = view |> element("[data-bar-mic]") |> render()
+      assert html =~ "off"
+      assert view |> element("[data-bar-camera]") |> render() =~ "Cam on"
+
+      # A malformed payload is ignored, not a crash.
+      render_hook(view, "meeting_media_confirmed", %{"mic" => "nope"})
+      assert Process.alive?(view.pid)
+
+      :ok = MeetingState.broadcast_left(user_id)
+    end
+
     test "shell fallback consecutive toggles alternate (cached state, not default)",
          %{conn: conn} do
       # Without the cache update inside shell_meeting_toggle/2 the second
@@ -1630,9 +1666,9 @@ defmodule PlatformWeb.ShellLiveTest do
       # `send_update/2`-written state — see `render_settled/1`. Same race as
       # the mic-button test above; this one had simply not been observed
       # losing it yet.
-      html = render_settled(view)
-      assert html =~ "hero-microphone-slash"
-      assert html =~ "hero-video-camera-slash"
+      _ = render_settled(view)
+      assert view |> element("[data-bar-mic]") |> render() =~ ~s(title="Unmute mic")
+      assert view |> element("[data-bar-camera]") |> render() =~ "Cam off"
 
       :ok = MeetingState.broadcast_left(user_id)
     end
@@ -1764,6 +1800,201 @@ defmodule PlatformWeb.ShellLiveTest do
   # tests pin both branches of the `:if={@meeting_active}` gate so an
   # accidental delete or class-name drift is caught.
   # ---------------------------------------------------------------------
+
+  # ---------------------------------------------------------------------
+  # Task 01a1e82a stage 1: the in-call top bar is on every shell page while
+  # in a call, the meeting's own chat included, and absent only in the call
+  # room. Real space, meeting row, active room and participant rows, so the
+  # roster ("<N> here") and the call-room route resolve for real.
+  # ---------------------------------------------------------------------
+  describe "in-call top bar placement" do
+    alias Platform.Meetings
+    alias Platform.Meetings.Meeting
+    alias Platform.Meetings.State, as: MeetingState
+    alias Platform.Tasks.Project
+
+    setup %{conn: conn} do
+      _ = start_supervised(MeetingState)
+
+      {conn, user} = authenticated_conn_with_user(conn)
+      acme = Tenancy.get_org_by_slug!("acme")
+
+      {:ok, project} =
+        %Project{}
+        |> Project.changeset(%{
+          name: "Bar Project #{System.unique_integer([:positive])}",
+          slug: "bar-project-#{System.unique_integer([:positive])}",
+          org_id: acme.id
+        })
+        |> Repo.insert()
+
+      meeting_space = bar_channel!("Weekly sync", user)
+      other_space = bar_channel!("Product", user)
+
+      meeting_id = Platform.Types.UUIDv7.generate()
+
+      {:ok, meeting} =
+        %Meeting{id: meeting_id}
+        |> Meeting.changeset(%{
+          project_id: project.id,
+          chat_space_id: meeting_space.id,
+          slug: "weekly-sync-#{System.unique_integer([:positive])}",
+          name: "Weekly sync",
+          livekit_room_name: "meeting-#{meeting_id}"
+        })
+        |> Repo.insert()
+
+      {:ok, room} = Meetings.ensure_room(meeting_space.id)
+      {:ok, room} = Meetings.activate_room(room)
+
+      {:ok, _} =
+        Meetings.upsert_live_participant(room, %{
+          identity: "user:#{user.id}",
+          name: "Shell Test User"
+        })
+
+      other = bar_user!("Sam Example")
+
+      {:ok, _} =
+        Meetings.upsert_live_participant(room, %{
+          identity: "user:#{other.id}",
+          name: "Sam Example"
+        })
+
+      on_exit(fn -> MeetingState.broadcast_left(user.id) end)
+
+      %{
+        conn: conn,
+        user: user,
+        meeting: meeting,
+        room: room,
+        meeting_space: meeting_space,
+        other_space: other_space
+      }
+    end
+
+    defp bar_channel!(name, user) do
+      {:ok, space} =
+        Chat.create_space(%{
+          name: name,
+          slug: "bar-#{System.unique_integer([:positive])}",
+          kind: "channel"
+        })
+
+      {:ok, _} =
+        Chat.add_participant(space.id, %{
+          participant_type: "user",
+          participant_id: user.id,
+          display_name: "Shell Test User",
+          joined_at: DateTime.utc_now()
+        })
+
+      space
+    end
+
+    defp bar_user!(name) do
+      Repo.insert!(%User{
+        email: "bar_#{System.unique_integer([:positive])}@example.com",
+        name: name,
+        oidc_sub: "oidc-bar-#{System.unique_integer([:positive])}"
+      })
+    end
+
+    defp join!(%{user: user, meeting_space: space, meeting: meeting}) do
+      :ok =
+        MeetingState.broadcast_joined(user.id, space.id, space.name, space.slug, meeting.slug)
+    end
+
+    test "shows on a non-meeting channel, /calendar, /inbox and the meeting's own chat", ctx do
+      join!(ctx)
+
+      for path <- [
+            ~p"/chat/#{Chat.space_path_segment(ctx.other_space)}",
+            ~p"/calendar",
+            ~p"/inbox",
+            ~p"/chat/#{Chat.space_path_segment(ctx.meeting_space)}"
+          ] do
+        {:ok, view, _html} = live(ctx.conn, path)
+        _ = render(view)
+
+        assert has_element?(view, "#meeting-top-bar"), "no top bar on #{path}"
+        assert has_element?(view, "#meeting-top-bar [data-role=meeting-name]", "Weekly sync")
+        assert has_element?(view, "#meeting-top-bar [data-role=meeting-here]", "2 here")
+
+        assert has_element?(
+                 view,
+                 ~s(#meeting-top-bar [data-role=meeting-return][href="/meetings/#{ctx.meeting.slug}"])
+               )
+
+        assert has_element?(view, "#meeting-top-bar [data-bar-mic]")
+        refute has_element?(view, "#meeting-mini-bar")
+      end
+    end
+
+    test "sits first in the main column, before the phone top strip", ctx do
+      join!(ctx)
+      {:ok, _view, html} = live(ctx.conn, ~p"/calendar")
+
+      {bar_at, _} = :binary.match(html, ~s(id="meeting-top-bar"))
+      {strip_at, _} = :binary.match(html, ~s(id="phone-top-bar"))
+      assert bar_at < strip_at
+
+      refute html =~ "--meeting-bar-height"
+    end
+
+    test "is absent in the call room /meetings/<slug>", ctx do
+      join!(ctx)
+      {:ok, view, _html} = live(ctx.conn, ~p"/meetings/#{ctx.meeting.slug}")
+      _ = render(view)
+
+      refute has_element?(view, "#meeting-top-bar")
+      refute has_element?(view, "[data-bar-mic]")
+    end
+
+    test "is absent with no active meeting", ctx do
+      {:ok, view, _html} = live(ctx.conn, ~p"/calendar")
+
+      refute has_element?(view, "#meeting-top-bar")
+    end
+
+    test "the count follows meeting presence on a page the shell subscribes for", ctx do
+      join!(ctx)
+      {:ok, view, _html} = live(ctx.conn, ~p"/calendar")
+      _ = render(view)
+      assert has_element?(view, "[data-role=meeting-here]", "2 here")
+
+      third = bar_user!("Alex Example")
+
+      {:ok, _} =
+        Meetings.upsert_live_participant(ctx.room, %{
+          identity: "user:#{third.id}",
+          name: "Alex Example"
+        })
+
+      :ok = Meetings.broadcast_presence_change(ctx.room.id, ctx.meeting_space.id)
+      _ = render(view)
+
+      assert has_element?(view, "[data-role=meeting-here]", "3 here")
+    end
+
+    # ChatLive's MeetingHooks already subscribes this process to the
+    # meeting space's presence topic. A second shell subscription would
+    # double every delivery to it.
+    test "never doubles the presence subscription ChatLive already holds", ctx do
+      join!(ctx)
+      {:ok, view, _html} = live(ctx.conn, ~p"/chat/#{Chat.space_path_segment(ctx.meeting_space)}")
+      _ = render(view)
+
+      topic = Platform.Meetings.PubSub.presence_topic(ctx.meeting_space.id)
+      held = Platform.PubSub |> Registry.keys(view.pid) |> Enum.count(&(&1 == topic))
+      assert held == 1
+
+      {:ok, cal, _html} = live(ctx.conn, ~p"/calendar")
+      _ = render(cal)
+      held = Platform.PubSub |> Registry.keys(cal.pid) |> Enum.count(&(&1 == topic))
+      assert held == 1
+    end
+  end
 
   describe "meeting watchdog mount gate" do
     alias Platform.Meetings.State, as: MeetingState

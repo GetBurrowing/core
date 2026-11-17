@@ -552,32 +552,33 @@ test.describe("call-control label swing @ 1440x900", () => {
 })
 
 /**
- * `[data-bar-mic]` — the persistent mini-bar's mic.
+ * `[data-bar-mic]` — the in-call top bar's mic.
  *
  * The stage asks for this to be ATTEMPTED, and to be recorded as UNMEASURED
  * with a structural reason if it cannot be shown. FE-19 never got it visible
- * (Playwright timed out at 180s), and reasoning alone that "it is icon-only so
- * it cannot exhibit this" is reasoning, not measurement.
+ * (Playwright timed out at 180s), and reasoning alone is not measurement.
  *
- * IT IS MEASURABLE, and here is the trick FE-19 was missing: `#meeting-mini-bar`
- * carries `hidden` when `!@meeting_active || @on_meeting_page`. On the meetings
- * page the second disjunct is true, so the button is in the DOM with an all-zero
- * rect no matter how long anything waits for it. Viewed from a DIFFERENT route
- * while still in the call, the bar lays out and the button has a real box.
+ * IT IS MEASURABLE. Since task 01a1e82a stage 1 the bar (`#meeting-top-bar`)
+ * is not rendered at all in the call room (`/meetings/<slug>`), the one page
+ * that hides it; every other page, the meeting's own chat included, shows it
+ * at the top of the main column. Viewed from a different route while still
+ * in the call, the bar lays out and the button has a real box. At 1440 the
+ * mic is a labelled control ("Mic on" / "Mic off"); below `sm` it is hidden
+ * with the rest of the desktop controls, so this stays a 1440 measurement.
  *
  * If a future run cannot get it on screen, this test FAILS rather than skipping.
  * Recording an unmeasured control as clean is the false attestation the stage
  * spec names by name.
  */
-test.describe("mini-bar mic @ 1440x900", () => {
+test.describe("top bar mic @ 1440x900", () => {
   test("[data-bar-mic] across the mic toggle", async ({ page }) => {
     await page.setViewportSize(VIEWPORT)
     await login(page)
     await applyTheme(page, "dark")
     await openJoinedCallSurface(page)
 
-    // Leave the meeting PAGE without leaving the meeting: `on_meeting_page`
-    // goes false, `meeting_active` stays true, and the bar unhides.
+    // Leave the call room without leaving the meeting: `in_call_room` goes
+    // false, `meeting_active` stays true, and the top bar renders.
     await page.goto("/tasks")
     await page.waitForFunction(() => !!(window as any).liveSocket?.isConnected?.(), null, {
       timeout: 30_000,
@@ -585,7 +586,7 @@ test.describe("mini-bar mic @ 1440x900", () => {
     await applyTheme(page, "dark")
     await page.waitForFunction(
       () => {
-        const bar = document.querySelector("#meeting-mini-bar")
+        const bar = document.querySelector("#meeting-top-bar")
         return !!bar && bar.getBoundingClientRect().width > 0
       },
       null,
@@ -595,7 +596,7 @@ test.describe("mini-bar mic @ 1440x900", () => {
 
     const read = async (tag: string) => {
       const data = await page.evaluate(() => {
-        const bar = document.querySelector("#meeting-mini-bar")
+        const bar = document.querySelector("#meeting-top-bar")
         const btn = document.querySelector("[data-bar-mic]")
         const glyph = btn?.querySelector("span")
         const box = (el: Element | null | undefined) => {
@@ -609,8 +610,8 @@ test.describe("mini-bar mic @ 1440x900", () => {
           glyph: box(glyph),
           title: btn?.getAttribute("title") ?? null,
           glyphClass: glyph?.className ?? null,
-          // The structural claim, checked rather than asserted in prose: an
-          // icon-only control has no label span to change width.
+          // The bar's mic is a text control ("Mic on" / "Mic off"), not the
+          // call shell's `.call-control-label` pattern; record the count.
           labelSpans: btn ? btn.querySelectorAll(".call-control-label").length : null,
         }
       })

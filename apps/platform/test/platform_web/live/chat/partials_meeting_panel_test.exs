@@ -1067,4 +1067,58 @@ defmodule PlatformWeb.Chat.PartialsMeetingPanelTest do
       assert count(html, ~s([data-component="call-rail"])) == 1
     end
   end
+
+  # Task 01a1e82a remediation, finding 4. The phone overlay's "← Chat" used
+  # to push `meeting_leave`, so walking back to chat ended the call. It now
+  # only minimizes (hides the overlay, keeps the call); the explicit Leave
+  # lives in the call controls.
+  describe "the phone overlay's Chat button" do
+    defp overlay_nodes(html, selector) do
+      html
+      |> LazyHTML.from_fragment()
+      |> LazyHTML.query(~s([data-role="quickmeet-mobile-overlay"] ) <> selector)
+    end
+
+    test "minimizes instead of leaving" do
+      html = render_panel(%{})
+
+      assert overlay_nodes(html, ~s(header [phx-click="meeting_leave"])) |> Enum.count() == 0
+
+      [click] =
+        html
+        |> overlay_nodes(~s([data-role="quickmeet-minimize"]))
+        |> LazyHTML.attribute("phx-click")
+
+      refute click =~ "meeting_leave"
+      assert click =~ "quickmeet-mobile-overlay"
+      assert click =~ "meeting-presence:minimized"
+    end
+
+    test "the overlay still has an explicit Leave" do
+      html = render_panel(%{})
+
+      assert overlay_nodes(html, ~s([data-role="meeting-leave"][phx-click="meeting_leave"]))
+             |> Enum.count() == 1
+    end
+  end
+
+  # Task 01a1e82a remediation round 2 (minor). Both panel headers carried a
+  # "0:00" span nothing ever updated, sitting under the top bar's live
+  # meeting clock. The bar's clock is the one clock; the panels show none.
+  describe "the panel headers" do
+    test "carry no second, frozen call clock" do
+      html = render_panel(%{})
+      doc = LazyHTML.from_fragment(html)
+
+      assert LazyHTML.query(doc, "#meeting-duration") |> Enum.count() == 0
+      assert LazyHTML.query(doc, "#meeting-duration-mobile") |> Enum.count() == 0
+
+      for header <- [
+            "#meeting-panel > div:first-child",
+            ~s([data-role="quickmeet-mobile-overlay"] header)
+          ] do
+        refute doc |> LazyHTML.query(header) |> LazyHTML.text() =~ "0:00"
+      end
+    end
+  end
 end

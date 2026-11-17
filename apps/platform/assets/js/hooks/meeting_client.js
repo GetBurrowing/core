@@ -165,7 +165,13 @@ const MeetingClient = {
     // only thing that should tear the room down here; an LV element
     // re-mount must ADOPT the still-connected room left on
     // window.__livekit_room (mirrors meeting_room.js:32-52).
-    this._onPageHide = () => {
+    //
+    // A beforeunload that meeting_presence.js already cancelled (the user is
+    // in a call and is about to see the browser's leave-page confirm) is not
+    // a page exit yet: "Stay" must keep the call. pagehide still tears down
+    // when the page really goes (task 01a1e82a stage 2).
+    this._onPageHide = (event) => {
+      if (event && event.type === "beforeunload" && event.defaultPrevented) return
       this._leaving = true
       this._companionCameraOff()
       this._leave()
@@ -1080,9 +1086,13 @@ const MeetingClient = {
     }
   },
 
-  // One banner for both call surfaces, created lazily in <body> and keyed on
-  // `data-state` (the same value as `#meeting-client[data-room-state]`), so
-  // CSS alone shows "Reconnecting…" or "Connection lost" + buttons.
+  // The connection-state carrier for both call surfaces, created lazily in
+  // <body> and keyed on `data-state` (the same value as
+  // `#meeting-client[data-room-state]`). Task 01a1e82a stage 2 folded its
+  // visible "Reconnecting…" / "Connection lost" pill into the in-call top
+  // bar (meeting_presence.js), so there is one indicator; this element stays,
+  // hidden, as the `dataset.state` machine and as the `_owner` handle the
+  // bar's Rejoin / Leave reach this hook through.
   _ensureConnectionBanner() {
     if (typeof document === "undefined" || !document.body) return
     let el = document.getElementById("meeting-connection-banner")
@@ -1090,21 +1100,9 @@ const MeetingClient = {
       el = document.createElement("div")
       el.id = "meeting-connection-banner"
       el.className = "meeting-connection-banner"
-      el.setAttribute("role", "status")
+      el.hidden = true
+      el.setAttribute("aria-hidden", "true")
       el.dataset.state = "idle"
-      el.innerHTML =
-        '<span class="mcb-reconnecting">Reconnecting…</span>' +
-        '<span class="mcb-lost"><span>Connection lost</span>' +
-        '<button type="button" data-mcb-action="rejoin">Rejoin</button>' +
-        '<button type="button" data-mcb-action="leave">Leave</button></span>'
-      // Hosts with a bare-bones DOM (unit tests) simply get no click wiring.
-      el.addEventListener?.("click", (event) => {
-        const btn = event.target.closest && event.target.closest("[data-mcb-action]")
-        const owner = el._owner
-        if (!btn || !owner) return
-        if (btn.dataset.mcbAction === "rejoin") owner._manualRejoin()
-        else owner._leaveAfterLoss()
-      })
       document.body.appendChild(el)
     }
     el._owner = this
@@ -1622,11 +1620,19 @@ const MeetingClient = {
 
   // The Room both connections use: the web call's and the app's companion
   // (task 01a13ca2 stage 3 factored these two out of `_join`).
+  //
+  // `disconnectOnPageLeave: false` (task 01a1e82a remediation, finding 6):
+  // livekit-client's own beforeunload listener otherwise disconnects even
+  // when meeting_presence.js cancelled that beforeunload and the user chose
+  // "Stay" on the browser's leave-page prompt. A real exit still leaves:
+  // pagehide (and an uncancelled beforeunload) run `_onPageHide` -> `_leave`
+  // here and the watchdog's disconnect on every other shell page.
   _newRoom() {
     return new Room({
       adaptiveStream: true,
       dynacast: true,
       publishDefaults: { simulcast: true },
+      disconnectOnPageLeave: false,
     })
   },
 

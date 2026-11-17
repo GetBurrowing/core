@@ -828,45 +828,12 @@
   }
 }
 
-/* Call connection banner (meeting_client.js). A network drop keeps the call UI
-   up: "Reconnecting…" while LiveKit/the hook retries, then "Connection lost"
-   with Rejoin / Leave. #meeting-connection-banner[data-state] mirrors
-   #meeting-client[data-room-state]; anything else is hidden. */
+/* Call connection banner (meeting_client.js). Task 01a1e82a stage 2 folded
+   its visible pill into the in-call top bar (#meeting-top-bar[data-state],
+   driven by meeting_presence.js); #meeting-connection-banner survives only
+   as a hidden data-state carrier. */
 .meeting-connection-banner {
-  position: fixed;
-  top: 0.75rem;
-  left: 50%;
-  transform: translateX(-50%);
-  z-index: 60;
-  display: none;
-  align-items: center;
-  gap: 0.5rem;
-  padding: 0.4rem 0.9rem;
-  border-radius: 9999px;
-  font-size: 0.875rem;
-  background: var(--color-base-300, #333);
-  color: var(--color-base-content, #fff);
-  box-shadow: 0 2px 8px rgb(0 0 0 / 0.25);
-}
-.meeting-connection-banner .mcb-reconnecting,
-.meeting-connection-banner .mcb-lost {
-  display: none;
-  align-items: center;
-  gap: 0.5rem;
-}
-.meeting-connection-banner[data-state="reconnecting"],
-.meeting-connection-banner[data-state="lost"] {
-  display: flex;
-}
-.meeting-connection-banner[data-state="reconnecting"] .mcb-reconnecting,
-.meeting-connection-banner[data-state="lost"] .mcb-lost {
-  display: inline-flex;
-}
-.meeting-connection-banner button {
-  padding: 0.15rem 0.7rem;
-  border-radius: 9999px;
-  border: 1px solid currentColor;
-  cursor: pointer;
+  display: none !important;
 }
 
 /* ──────────────────────────────────────────────────────
@@ -5157,7 +5124,7 @@ body, .font-suite {
    bar's top edge plus 8px of breathing room, so a last row ends 8px above
    the glass (`.clears-tab-bar` below).
    --bottom-nav-gap is the masters' 12px gap above the bar, for elements that
-   stack on top of it (the in-call mini bar); 0 where there is no bar.
+   stack on top of it; 0 where there is no bar.
    ──────────────────────────────────────────────────────────────────── */
 :root {
   --bottom-nav-height: 0px;
@@ -5165,13 +5132,6 @@ body, .font-suite {
   --bottom-nav-offset: max(env(safe-area-inset-bottom, 0px) - 13px, 12px);
   --bottom-nav-clearance: calc(var(--bottom-nav-height) + env(safe-area-inset-bottom, 0px));
   --phone-chrome-bottom: calc(var(--bottom-nav-clearance) + 8px);
-  /* Persistent meeting bar height. Set inline on the shell root to 3rem
-     when `@meeting_active` is true (see shell.html.heex). The :root
-     default of 0px keeps any `calc(... + var(--meeting-bar-height))`
-     consumer well-behaved when no meeting is active. Reserving this on
-     the shell's padding-bottom is what keeps the chat composer above
-     the fixed-positioned meeting bar (meeting_bar_live.ex:52). */
-  --meeting-bar-height: 0px;
 }
 /* Only where the bar exists: a document with no `[data-bottom-rail]` (the
    guest `meet.` surface, auth pages) reserves nothing. */

@@ -52,6 +52,7 @@ import MeetingBar from "./meeting_bar"
 import MeetingCaptions, { MeetingCaptionsPersist } from "./meeting_captions"
 import MeetingClient from "./meeting_client"
 import MeetingLobbyPreview from "./meeting_lobby_preview"
+import MeetingPresence from "./meeting_presence"
 import MeetingPushToTalk from "./meeting_push_to_talk"
 import MeetingRoom from "./meeting_room"
 import MeetingScreenShare from "./meeting_screen_share"
@@ -148,6 +149,7 @@ export default {
   MeetingCaptionsPersist,
   MeetingClient,
   MeetingLobbyPreview,
+  MeetingPresence,
   MeetingPushToTalk,
   MeetingRoom,
   MeetingScreenShare,
