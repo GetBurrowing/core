@@ -233,7 +233,11 @@ defmodule Platform.Chat.PostMessageAfterCommitUnboxedTest do
     on_exit(fn -> :telemetry.detach(handler_id) end)
 
     user_p =
-      Repo.get_by!(Participant, space_id: dm.id, participant_type: "user", participant_id: user.id)
+      Repo.get_by!(Participant,
+        space_id: dm.id,
+        participant_type: "user",
+        participant_id: user.id
+      )
 
     agent_p =
       Repo.get_by!(Participant,
