@@ -60,8 +60,9 @@ defmodule Platform.Feedback.IntakeRetryTest do
     )
   end
 
-  # A pending record, as Kobo has them: the first delivery's classifier call
-  # failed. The issue source then serves the issue for the retry.
+  # A pending record, as a stuck install has them: the first delivery's
+  # classifier call failed. The issue source then serves the issue for the
+  # retry.
   defp pending!(issue) do
     Stub.reply!(fn _c, _m, _o -> {:error, :timeout} end)
 
