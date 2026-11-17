@@ -211,7 +211,7 @@ defmodule PlatformWeb.GameStudioLive do
           <details class="studio-more">
             <summary>More tools</summary>
             <.link
-              :for={dest <- Enum.reject(@studio_tools, &(&1.key in [:tasks, :agents]))}
+              :for={dest <- Enum.reject(@studio_tools, &(&1.key in [:chat, :tasks, :agents]))}
               navigate={dest.path}
             >
               {dest.label}

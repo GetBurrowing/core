@@ -224,6 +224,7 @@ defmodule PlatformWeb.GameStudioLiveTest do
     assert has_element?(view, ".studio-more a[href='/inbox']", "Inbox")
     assert has_element?(view, ".studio-more a[href='/calendar']", "Calendar")
     render_click(view, "open_more_sheet")
+    assert has_element?(view, "#more-sheet a[href='/chat']", "All conversations")
     assert has_element?(view, "#more-sheet a[href='/inbox']", "Inbox")
     assert has_element?(view, "#more-sheet a[href='/calendar']", "Calendar")
   end

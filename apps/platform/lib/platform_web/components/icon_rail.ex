@@ -432,9 +432,14 @@ defmodule PlatformWeb.Components.IconRail do
     lead ++ Enum.filter(visible, &(&1.key in extension_keys)) ++ rest
   end
 
-  @doc "The game dock moves Inbox and Calendar into More, preserving every workspace tool."
+  @doc "The game dock keeps the workspace's original tabs and tools reachable in More."
   def gaming_more_sheet_rows(scope, root_user) do
-    keyed([:inbox, :calendar], scope) ++ more_sheet_rows(scope, root_user)
+    workspace_tabs = Enum.map(tab_destinations(scope), fn
+      %{key: :chat} = destination -> %{destination | label: "All conversations"}
+      destination -> destination
+    end)
+
+    workspace_tabs ++ more_sheet_rows(scope, root_user)
   end
 
   @doc """
