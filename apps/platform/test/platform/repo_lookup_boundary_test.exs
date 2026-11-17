@@ -153,6 +153,9 @@ defmodule Platform.RepoLookupBoundaryTest do
      "revert_approved/2 uses Consent.event_id, the UUID foreign key assigned by approve/3 before it marks the intent approved, plus Consent.owner_id UUID FK"},
     {"platform/calendar/agent_access.ex", :platform_uuid_guard, "-", 3, :must_cast,
      "revoke/2 guards the agent id, authority/3 guards the Calendar owner id, and target/4 guards the event id before their typed queries; malformed boundary values fail closed"},
+    # Task 01a1e82a stage 1: the in-call top bar's roster.
+    {"platform_web/live/meeting_bar_presence.ex", :platform_uuid_guard, "-", 1, :must_cast,
+     "assign_roster/1 guards the shell's :meeting_space_id, which arrives from a Meetings.State join broadcast (and from tests and the dev evidence endpoint as an arbitrary string), before Meetings.active_participants_for_space/1; a malformed id answers an empty roster"},
     # Task 01a1b8a5 stage 1: the Calendar authoring coordinator.
     {"platform/calendar/authoring.ex", :get, "Event", 2, :safe_internal,
      "do_save/3 re-reads Event.id after Calendar.update_event/3 or create_event/2 returned that row, a UUIDv7 primary key; the draft's own event id reaches the Repo only through Calendar's guarded owned_event/2"},

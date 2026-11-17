@@ -55,11 +55,12 @@ defmodule PlatformWeb.MeetingBarPresence do
   """
   @spec assign_roster(Phoenix.LiveView.Socket.t()) :: Phoenix.LiveView.Socket.t()
   def assign_roster(socket) do
+    space_id = socket.assigns[:meeting_space_id]
+
     participants =
-      case Ecto.UUID.cast(socket.assigns[:meeting_space_id] || "") do
-        {:ok, space_id} -> Meetings.active_participants_for_space(space_id)
-        :error -> []
-      end
+      if Platform.UUID.valid?(space_id),
+        do: Meetings.active_participants_for_space(space_id),
+        else: []
 
     socket
     |> assign(:meeting_roster, participants |> Enum.take(@max_faces) |> Enum.map(&face/1))

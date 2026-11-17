@@ -1808,12 +1808,12 @@ defmodule PlatformWeb.ShellLiveTest do
           name: "Shell Test User"
         })
 
-      other = bar_user!("Dalton Example")
+      other = bar_user!("Sam Example")
 
       {:ok, _} =
         Meetings.upsert_live_participant(room, %{
           identity: "user:#{other.id}",
-          name: "Dalton Example"
+          name: "Sam Example"
         })
 
       on_exit(fn -> MeetingState.broadcast_left(user.id) end)
@@ -1918,12 +1918,12 @@ defmodule PlatformWeb.ShellLiveTest do
       _ = render(view)
       assert has_element?(view, "[data-role=meeting-here]", "2 here")
 
-      third = bar_user!("Brosnan Example")
+      third = bar_user!("Alex Example")
 
       {:ok, _} =
         Meetings.upsert_live_participant(ctx.room, %{
           identity: "user:#{third.id}",
-          name: "Brosnan Example"
+          name: "Alex Example"
         })
 
       :ok = Meetings.broadcast_presence_change(ctx.room.id, ctx.meeting_space.id)

@@ -19,8 +19,8 @@ defmodule PlatformWeb.MeetingBarLiveTest do
     meeting_started_at: ~U[2026-04-14 08:00:00Z],
     in_call_room: false,
     meeting_roster: [
-      %{id: "p1", name: "Jordan Coombs", initials: "JC"},
-      %{id: "p2", name: "Dalton", initials: "D"}
+      %{id: "p1", name: "Riley Park", initials: "RP"},
+      %{id: "p2", name: "Sam", initials: "S"}
     ],
     meeting_here_count: 2,
     id: "meeting-bar"
@@ -65,7 +65,7 @@ defmodule PlatformWeb.MeetingBarLiveTest do
       bar = text(d, "#meeting-top-bar") |> String.replace(~r/\s+/, " ")
 
       assert bar =~
-               ~r/In call Weekly sync 0:00 JC D 2 here .*Mic on Cam off Return to call ↗ Leave/
+               ~r/In call Weekly sync 0:00 RP S 2 here .*Mic on Cam off Return to call ↗ Leave/
 
       assert text(d, "[data-role=meeting-name]") == "Weekly sync"
       assert text(d, "[data-role=meeting-here]") == "2 here"
