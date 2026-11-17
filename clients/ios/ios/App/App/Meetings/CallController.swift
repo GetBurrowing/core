@@ -135,7 +135,7 @@ final class CallController: NSObject, ObservableObject, MeetingMediaControl {
         provider.reportCall(with: uuid, updated: Self.videoUpdate(active))
     }
 
-    /// The page's Speaker button (`SuiteMeetings.setSpeaker`): the
+    /// The page's Speaker button (the meetings plugin's `setSpeaker`): the
     /// preference, applied now and kept through later route changes.
     func setSpeaker(_ on: Bool) {
         speakerPreferred = on
