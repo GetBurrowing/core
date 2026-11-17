@@ -138,7 +138,7 @@ const STALL_CONFIRM_MS = 5000
 //   speaker name, human   base-content, semibold  NAME_PLAIN
 //   caption interim       italic on the wrapper,  CAPTION_INTERIM on the TEXT span
 //                         opacity-70 on the text  only, never a
-//                                                 `text-base-content/70` slot
+//                                                 base-content alpha-slash slot
 //
 // DEVIATION (declared), interim opacity: the stage spec put `opacity-70` on
 // the LINE WRAPPER. On base-200 that composes an agent's `--ag-text` name
