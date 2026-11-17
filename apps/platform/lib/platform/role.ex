@@ -269,6 +269,8 @@ defmodule Platform.Role do
     Platform.Responsibilities.StallRegistry,
     Platform.Meetings.SummarizerSweeper,
     Platform.Meetings.CandidateSweeper,
+    # Retries pending feedback intake records every 5 minutes (task 01a1e670).
+    Platform.Feedback.IntakeSweeper,
     Platform.Meetings.CompletionSweeper,
     Platform.Security.Sweeper,
     Platform.Chat.SpacePurger,
