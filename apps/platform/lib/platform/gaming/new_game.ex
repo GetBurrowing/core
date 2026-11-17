@@ -24,7 +24,9 @@ defmodule Platform.Gaming.NewGame do
   end
 
   def create(user, params, opts \\ []) do
-    agent_provider = Keyword.get(opts, :agent_provider, &Platform.Onboarding.FirstRunGoal.burrow/0)
+    agent_provider =
+      Keyword.get(opts, :agent_provider, &Platform.Onboarding.FirstRunGoal.burrow/0)
+
     org = Enum.find(organizations(user), &(&1.id == params["org_id"]))
     name = String.trim(params["name"] || "") |> String.slice(0, 80)
     engine = params["engine"]

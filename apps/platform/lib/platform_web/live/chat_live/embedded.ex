@@ -39,7 +39,13 @@ defmodule PlatformWeb.ChatLive.Embedded do
   @impl true
   def mount(params, session, socket) do
     {:ok, socket} = PlatformWeb.ChatLive.embedded_mount(params, session, socket)
-    {:ok, assign(socket, :embedded_context, if(session["chat_embed_context"] == "studio", do: "studio", else: "meeting"))}
+
+    {:ok,
+     assign(
+       socket,
+       :embedded_context,
+       if(session["chat_embed_context"] == "studio", do: "studio", else: "meeting")
+     )}
   end
 
   @impl true

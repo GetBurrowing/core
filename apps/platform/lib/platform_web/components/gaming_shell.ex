@@ -12,6 +12,7 @@ defmodule PlatformWeb.Components.GamingShell do
   attr :user, :any, default: nil
   attr :creator, :boolean, default: false
   attr :details, :boolean, default: false
+  attr :project_id, :string, default: nil
   attr :communities, :map, default: %{}
   attr :brand_name, :string, default: nil, doc: "this install's name; defaults to the branding"
   slot :inner_block, required: true
@@ -126,6 +127,7 @@ defmodule PlatformWeb.Components.GamingShell do
       <.bottom_rail
         :if={@workspace_nav}
         gaming={true}
+        project_id={@project_id}
         current_path="/play"
         access_scope={@workspace_nav.scope}
         more_href={@workspace_nav.more_href}

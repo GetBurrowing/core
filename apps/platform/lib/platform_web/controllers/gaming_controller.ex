@@ -5,7 +5,10 @@ defmodule PlatformWeb.GamingController do
 
   def home(conn, params) do
     user = Platform.Games.user(get_session(conn, :current_user_id))
-    studio? = not is_nil(user) and Platform.Access.module_access?(Platform.Access.Scope.for_user(user), :chat)
+
+    studio? =
+      not is_nil(user) and
+        Platform.Access.module_access?(Platform.Access.Scope.for_user(user), :chat)
 
     cond do
       Platform.Gaming.enabled?() and studio? and params["mode"] not in ["discover", "play"] ->

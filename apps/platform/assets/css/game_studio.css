@@ -52,3 +52,11 @@
 @media(max-width:767px) { .studio-heading { min-height:170px; padding:16px; border-radius:20px; } .studio-heading h2 { font-size:28px; } .studio-hero-art { width:100%; opacity:.55; } .studio-heading::after { background:linear-gradient(90deg,var(--color-base-200),transparent); } .studio-actions { gap:6px; } .studio-button { padding:9px 10px; } }
 
 .studio-button:disabled { cursor:not-allowed; opacity:.5; }
+
+/* The studio already reserves the dock's clearance outside the conversation. */
+.game-studio .compose-input-area { padding-bottom:12px; }
+@media(max-width:767px) {
+ .studio-projects > .studio-new { display:none; }
+ .studio-projects > #studio-start-game { display:flex; }
+ .studio-projects > .studio-project, .studio-projects > #studio-start-game { flex:0 0 auto; }
+}

@@ -30,6 +30,11 @@ const {chromium} = require(process.env.STUDIO_PLAYWRIGHT);
         const nav = await page.locator('#bottom-nav').boundingBox();
         assert.ok(nav && nav.y + nav.height <= height, 'phone dock is reachable');
         assert.equal(await page.locator('#bottom-nav [data-destination]').count(), 5);
+        const composer = await page.locator('#compose-form').boundingBox();
+        assert.ok(composer && box.y + box.height - composer.y - composer.height <= 32, 'composer clears dock once, without dead space');
+        const project = await page.locator('.studio-project').first().boundingBox();
+        const start = await page.locator('#studio-start-game').boundingBox();
+        assert.ok(project && start && start.x >= project.x + project.width, 'project picker and Start a game do not overlap');
       }
       await context.close();
     }
