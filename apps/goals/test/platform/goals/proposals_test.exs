@@ -318,6 +318,7 @@ defmodule Platform.Goals.ProposalsTest do
                {:error, :lead_missing_goals_tools}
 
       grant_goals_tools!(lead)
+
       assert {:ok, %Proposal{status: "open"} = proposal} =
                Goals.start_goal_conversation(c.person, @opening)
 

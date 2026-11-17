@@ -69,6 +69,7 @@ defmodule PlatformWeb.CommandPalette.Sources do
     # Surface-owned spaces are not chat conversations (`Chat.rail_visible?/1`).
     conversations =
       user_id |> ReadScope.conversations(scope) |> Enum.filter(&Chat.rail_visible?/1)
+
     archived = ReadScope.archived_channels(ReadScope.fenced_scope(access_scope), guest?)
 
     modules(access_scope, viewer[:root_user] == true) ++
