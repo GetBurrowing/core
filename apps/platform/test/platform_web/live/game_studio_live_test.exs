@@ -71,4 +71,27 @@ defmodule PlatformWeb.GameStudioLiveTest do
     {:ok, _, html} = live(conn, "/studio?project=broken")
     refute html =~ "Secret foreign game"
   end
+  test "starting a game creates a project, development room and actual setup brief", %{user: user, project: existing} do
+    agent = Platform.PrototypeFixtures.agent!()
+    assert {:ok, project, :requested} = Platform.Gaming.NewGame.create(user,
+      %{"name" => "Tiny physics game", "engine" => "godot", "org_id" => existing.org_id, "idea" => "Throw cars together"},
+      agent_provider: fn -> {:ok, agent} end)
+    assert project.repo_url == nil
+    assert project.tech_stack["engine"] == "godot"
+    space = Chat.get_space(project.config["development_space_id"])
+    assert space.metadata["goal_project_id"] == project.id
+    assert is_nil(space.metadata["public_game_slug"])
+    assert Chat.get_agent_participant(space.id, agent.id)
+    assert Enum.any?(Chat.list_messages(space.id), &String.contains?(&1.content, "Throw cars together"))
+    assert Enum.any?(Platform.Gaming.Studio.list(user), &(&1.project.id == project.id))
+  end
+
+  test "unavailable setup agent leaves no orphan project", %{user: user, project: project} do
+    before = length(Tasks.list_projects_for_user(user))
+    assert {:error, :setup_unavailable} = Platform.Gaming.NewGame.create(user,
+      %{"name" => "Never provisioned", "engine" => "godot", "org_id" => project.org_id},
+      agent_provider: fn -> {:error, :no_agent} end)
+    assert length(Tasks.list_projects_for_user(user)) == before
+  end
+
 end

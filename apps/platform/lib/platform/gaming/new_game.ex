@@ -23,13 +23,14 @@ defmodule Platform.Gaming.NewGame do
     end)
   end
 
-  def create(user, params) do
+  def create(user, params, opts \\ []) do
+    agent_provider = Keyword.get(opts, :agent_provider, &Platform.Onboarding.FirstRunGoal.burrow/0)
     org = Enum.find(organizations(user), &(&1.id == params["org_id"]))
     name = String.trim(params["name"] || "") |> String.slice(0, 80)
     engine = params["engine"]
 
     with true <- not is_nil(org) and name != "" and engine in ~w(godot unity unreal),
-         {:ok, agent} <- Platform.Onboarding.FirstRunGoal.burrow(),
+         {:ok, agent} <- agent_provider.(),
          {:ok, %{project: project, space: space}} <- provision(user, org, name, engine, agent) do
       participant =
         Repo.get_by!(Chat.Participant,

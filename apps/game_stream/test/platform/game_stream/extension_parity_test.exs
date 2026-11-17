@@ -579,6 +579,7 @@ defmodule Platform.GameStream.ExtensionParityTest do
     # Studio adds one optional game-stream prop. Remove only that addition
     # from the frozen extraction oracle; every legacy field remains pinned.
     # The new prop is asserted separately below, not accepted by re-pinning a hash.
+    defp without_project_playtests(%_{} = value), do: value |> Map.from_struct() |> without_project_playtests()
     defp without_project_playtests(value) when is_map(value) do
       value = if Map.has_key?(value, "review_sha") and Map.has_key?(value, "latency_warn_ms"),
         do: Map.delete(value, "project_id"), else: value

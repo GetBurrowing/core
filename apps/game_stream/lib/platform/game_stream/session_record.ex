@@ -76,5 +76,7 @@ defmodule Platform.GameStream.SessionRecord do
     |> check_constraint(:connection_path, name: :game_stream_sessions_connection_path_check)
     |> check_constraint(:ended_state, name: :game_stream_sessions_ended_state_check)
     |> foreign_key_constraint(:task_id)
+    |> foreign_key_constraint(:project_id)
+    |> check_constraint(:project_id, name: :game_stream_build_source)
   end
 end
