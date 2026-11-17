@@ -252,8 +252,9 @@ defmodule Platform.Goals.GoalsTest do
 
     @unscoped_by_id_allowed [
       {"platform/goals/proposals.ex", {:fetch_open, 1},
-       "the only reader is the operator-only resend_start_signal/1, run by a deployer in a " <>
-         "release rpc with no actor"},
+       "the only reader is Proposals.resend_start_signal/1, whose only caller is the " <>
+         "operator-only Platform.Goals.Ops.resend_start_signal/1, run by a deployer in a " <>
+         "release rpc with no actor (task 01a1eb3f)"},
       {"platform/goals/proposals.ex", {:lock_live, 1},
        "every caller (confirm_proposal/3, cancel_proposal/2, propose_goal/3) first reads the " <>
          "same id through addressed/2 or get_proposal/2, which are actor-scoped"},

@@ -1,7 +1,9 @@
 defmodule Platform.Goals.MoveProposalsOutOfDmsMigrationTest do
   @moduledoc """
   `20261117220000_move_goal_proposals_out_of_dms` and
-  `Platform.Goals.Proposals.resend_start_signal/1` (task 01a1eab6 stage 4).
+  `Platform.Goals.Ops.resend_start_signal/1` over
+  `Platform.Goals.Proposals.resend_start_signal/1` (task 01a1eab6 stage 4;
+  moved to `Platform.Goals.Ops` by task 01a1eb3f).
 
   Migrations run to `:up` before ExUnit boots, so `up/0` cannot be driven
   through `Ecto.Migrator` inside the sandbox transaction. The migration's
@@ -25,7 +27,7 @@ defmodule Platform.Goals.MoveProposalsOutOfDmsMigrationTest do
 
   alias Platform.Chat
   alias Platform.Goals
-  alias Platform.Goals.{Proposal, Proposals}
+  alias Platform.Goals.{Ops, Proposal, Proposals}
   alias Platform.Repo.Migrations.MoveGoalProposalsOutOfDms
 
   @now ~U[2026-11-16 09:00:00.000000Z]
@@ -360,7 +362,7 @@ defmodule Platform.Goals.MoveProposalsOutOfDmsMigrationTest do
     up!()
     new_space_id = row(c.open).space_id
 
-    assert {:ok, %Proposal{id: id, delivery: "sent"}} = Goals.resend_start_signal(c.open.id)
+    assert {:ok, %Proposal{id: id, delivery: "sent"}} = Ops.resend_start_signal(c.open.id)
     assert id == c.open.id
 
     assert_received {:signal, signal}
