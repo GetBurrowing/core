@@ -322,7 +322,9 @@
          call was kept; the call state rides on the data attributes. The
          toasts and dialogs themselves live in <body>
          (assets/js/meeting_presence.js). `data-auth-routes` is the
-         `live_session :authenticated` route list from the router. --%>
+         `live_session :authenticated` route list from the router.
+         `data-path` is omitted while names are masked (a slug can carry a
+         masked name); the hook falls back to `location.pathname`. --%>
     <div
       id="meeting-presence"
       phx-hook="MeetingPresence"
@@ -342,7 +344,7 @@
       data-can-end={to_string(assigns[:meeting_can_end] == true)}
       data-other-names={Jason.encode!(assigns[:meeting_other_names] || [])}
       data-started-at={@meeting_started_at && DateTime.to_iso8601(@meeting_started_at)}
-      data-path={assigns[:current_path]}
+      data-path={assigns[:mask_names?] != true && assigns[:current_path]}
       data-auth-routes={PlatformWeb.MeetingPresenceEvents.auth_route_patterns_json()}
     >
     </div>
