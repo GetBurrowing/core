@@ -68,14 +68,14 @@ defmodule Platform.Gaming.Studio do
     provider = Module.concat([Platform, GameStream])
 
     cond do
-      not Access.can?(Scope.for_user(user), "play.use", entry.project) ->
-        "Your account does not have permission to start Play sessions for this project."
-
       not Code.ensure_loaded?(provider) ->
         "Browser playtests are not installed here yet. Open the published build to play locally."
 
       not apply(provider, :enabled?, []) ->
         "Browser playtests are disabled on this install. Open the published build to play locally."
+
+      not Access.can?(Scope.for_user(user), "play.use", entry.project) ->
+        "Your account does not have permission to start Play sessions for this project."
 
       not apply(provider, :host_available?, []) ->
         "No Play host is connected. Your published build is still available to play locally."
