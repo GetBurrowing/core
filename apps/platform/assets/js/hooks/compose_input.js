@@ -742,10 +742,23 @@ const ComposeInput = {
     document.addEventListener("selectionchange", this._onSelectionChange);
 
     el.addEventListener("blur", () => {
+      this._hasFocus = false;
       this._blurPending = { caret: this._lastCaret || null };
       queueMicrotask(() => {
         this._blurPending = null;
       });
+    });
+
+    // WebKit fires no blur when a patch removes and re-adds the focused
+    // field, so `_blurPending` was never set there and focus fell to
+    // <body>: the thread reply lost focus, and the iOS keyboard, the moment
+    // its @ list rendered (measured in iOS 26.3 Simulator Safari, task
+    // 01a1c863 stages 1 and 3: activeElement body, no focusout, field still
+    // connected). The field tracks its own focus; one that never saw a blur
+    // but no longer holds focus counts as a blur the patch caused.
+    this._hasFocus = document.activeElement === el;
+    el.addEventListener("focus", () => {
+      this._hasFocus = true;
     });
 
     if (typeof MutationObserver !== "undefined" && this._form) {
@@ -755,7 +768,8 @@ const ComposeInput = {
         // cannot see a thread reply's text (it renders Send disabled), so
         // the field's own rule is re-applied after every patch.
         this._updateSend(serialize(el));
-        const pending = this._blurPending;
+        const silent = this._hasFocus && document.activeElement !== el;
+        const pending = this._blurPending || (silent ? { caret: this._lastCaret || null } : null);
         if (!pending || !el.isConnected) return;
         if (!shouldRestoreFocusAfterMove(records, el, document.activeElement, document.body)) return;
         this._blurPending = null;
