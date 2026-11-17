@@ -327,7 +327,8 @@ defmodule PlatformWeb.GameStudioLive do
                 <p :if={@tasks == []} class="studio-muted">No tasks to show.</p>
                 <.link :for={task <- @tasks} navigate={"/tasks/#{task.id}"} class="studio-row">
                   <span>{task.title}</span><small>{String.replace(task.status, "_", " ")}</small>
-                </.link><.link navigate="/tasks">Task board →</.link>
+                </.link>
+                <.link navigate="/tasks">Task board →</.link>
               </section>
               <section class="studio-card">
                 <h3>Recent canvases</h3>

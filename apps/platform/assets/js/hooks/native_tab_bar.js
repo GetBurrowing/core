@@ -98,7 +98,9 @@ export function itemsOf(el) {
 }
 
 // Whether the bar should show, by the web bar's own hide rules.
-export function barVisible(win, doc) {
+export function barVisible(win, doc, el = null) {
+  // Shipped native apps cannot draw the new game destinations yet.
+  if (el?.getAttribute("data-web-tabs") === "true") return false
   if (win.matchMedia && win.matchMedia(DESKTOP_QUERY).matches) return false
   const root = doc.documentElement
   try {
@@ -222,9 +224,7 @@ export function stateOf(el, win, doc, normalise = null) {
     selected: active ? active : null,
     inbox_dot: el.getAttribute("data-inbox-unread") === "true",
     inbox_badge: inboxBadgeOf(el),
-    // Existing app builds only know Chat/Calendar/Inbox/More. Keep the full
-    // game dock in the web view rather than silently dropping new destinations.
-    visible: el.getAttribute("data-web-tabs") !== "true" && barVisible(win, doc),
+    visible: barVisible(win, doc, el),
     ink: inksOf(el, win, normalise),
     scheme: schemeOf(win, doc),
   }
