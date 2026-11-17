@@ -176,7 +176,6 @@ defmodule PlatformWeb.MeetingBarLive do
           aria-label={"Return to call: " <> (@space_name || "Meeting")}
           class="absolute inset-0 sm:hidden"
         >
-          <span class="sr-only">Tap to return</span>
         </.link>
 
         <%!-- Mic. No `phx-click`: the MeetingBar hook binds `[data-bar-mic]`
