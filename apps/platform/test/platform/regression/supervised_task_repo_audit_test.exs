@@ -262,6 +262,10 @@ defmodule Platform.Regression.SupervisedTaskRepoAuditTest do
     # "#general" on an install with no channel, from its own process at boot.
     # Tests call `DefaultSpace.ensure/0` inside the sandbox instead.
     :start_default_space_seed,
+    # Task 01a1e65e stage 2: `EmailLoginCodeBoot.run_at_boot/0` reads and
+    # writes `install_boot_markers` from its own process at boot. Tests call
+    # `run_at_boot/1` inside the sandbox instead.
+    :start_pocket_id_email_login_code,
     # Task 019f4eaa — container retention purger. Sibling of
     # :start_space_purger (which is channel-specific by contract); this one
     # hard-deletes deletion-scheduled projects and the cascade-hidden

@@ -274,11 +274,28 @@ class FakePocketId(_Server):
             "smtpHost": "mail.example.test",
             "smtpPassword": "smtp-secret-kept-exactly",
             "ldapBindPassword": "",
+            # v2.18.0 default (appconfig/model.go:145).
+            "emailOneTimeAccessAsUnauthenticatedEnabled": "false",
         }
         self.config_puts = []
         self.logos = []
 
+    # The keys the public, unauthenticated GET /api/application-configuration
+    # serves (appconfig/model.go `public:"true"`); secrets are never among them.
+    PUBLIC_CONFIG_KEYS = (
+        "appName",
+        "sessionDuration",
+        "homePageUrl",
+        "emailsVerified",
+        "accentColor",
+        "emailOneTimeAccessAsUnauthenticatedEnabled",
+    )
+
     def dispatch(self, method, path, headers, data):
+        if path == "/api/application-configuration" and method == "GET":
+            return 200, [
+                {"key": k, "value": v} for k, v in self.config.items() if k in self.PUBLIC_CONFIG_KEYS
+            ], None
         if headers.get("X-Api-Key", headers.get("X-API-Key")) != self.api_key:
             return 401, {"error": "unauthorized"}, None
         parsed = urllib.parse.urlparse(path)

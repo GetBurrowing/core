@@ -292,7 +292,9 @@ defmodule Platform.Role do
     Platform.Mail.Outbox,
     :canvas_search_backfill,
     :burrow_docs_seed,
-    :default_space_seed
+    :default_space_seed,
+    # Once-per-install pocket-id email login code switch (task 01a1e65e).
+    :pocket_id_email_login_code
   ]
 
   # Web children that `Platform.Application.children/2` adds only under :web,
