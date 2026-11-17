@@ -65,7 +65,7 @@ defmodule PlatformWeb.Components.GamingShellBottomNavTest do
     expected =
       user
       |> Platform.Access.Scope.for_user()
-      |> IconRail.tab_destinations()
+      |> IconRail.gaming_destinations()
       |> Enum.map(&to_string(&1.key))
 
     assert "chat" in expected

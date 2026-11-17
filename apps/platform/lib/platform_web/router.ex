@@ -677,6 +677,9 @@ defmodule PlatformWeb.Router do
       session: %{"chat_mode" => "external"} do
       live("/access/view-as/role/:id/:key", AccessViewAsLive, :show)
       live("/access/view-as/:type/:id", AccessViewAsLive, :show)
+      live("/studio", GameStudioLive, :studio)
+      live("/studio/chat", GameStudioLive, :chat)
+      live("/studio/playtest", GameStudioLive, :playtest)
       live("/chat", ChatLive, :index)
       live("/chat/:space_slug", ChatLive, :show)
     end
@@ -1008,6 +1011,9 @@ defmodule PlatformWeb.Router do
       live("/access/roles", AccessRolesLive, :index)
       live("/access/roles/:key", AccessRolesLive, :edit)
       live("/access/:type/:id", AccessLive, :show)
+      live("/studio", GameStudioLive, :studio)
+      live("/studio/chat", GameStudioLive, :chat)
+      live("/studio/playtest", GameStudioLive, :playtest)
       live("/chat", ChatLive, :index)
       live("/chat/:space_slug", ChatLive, :show)
       live("/inbox", InboxLive, :index)

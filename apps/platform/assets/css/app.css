@@ -9,6 +9,7 @@
 @import "./theme_presets.css";
 @import "./public_game_page.css";
 @import "./console_glass.css";
+@import "./game_studio.css";
 @source "../css";
 @source "../js";
 @source "../../lib/platform_web";

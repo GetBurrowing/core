@@ -4,7 +4,13 @@ defmodule PlatformWeb.GamingController do
   plug :put_root_layout, html: false
 
   def home(conn, params) do
-    if Platform.Gaming.enabled?() do
+    user = Platform.Games.user(get_session(conn, :current_user_id))
+    studio? = user && Platform.Access.module_access?(Platform.Access.Scope.for_user(user), :chat)
+
+    cond do
+      Platform.Gaming.enabled?() and studio? and params["mode"] not in ["discover", "play"] ->
+        conn |> put_resp_header("cache-control", "private, no-store") |> redirect(to: "/studio")
+      Platform.Gaming.enabled?() ->
       games =
         Platform.Games.list_published()
 
@@ -51,8 +57,7 @@ defmodule PlatformWeb.GamingController do
         creator?: not is_nil(user) and Platform.Access.authorize_install(user) == :ok,
         csrf_token: Plug.CSRFProtection.get_csrf_token()
       )
-    else
-      send_resp(conn, 404, "Not found")
+      true -> send_resp(conn, 404, "Not found")
     end
   end
 end
