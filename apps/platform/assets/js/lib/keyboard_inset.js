@@ -51,6 +51,13 @@ function startWatcher(win, vv, root) {
   let width = win.innerWidth
   let baseline = Math.max(vv.height, win.innerHeight || 0)
   let last = { open: false, inset: 0, height: 0 }
+  // The no-keyboard height per width, so rotating back to a width already
+  // seen restores its real baseline. Without it, a keyboard that stays up
+  // through a rotation became the new baseline and read as closed: back in
+  // portrait the dock sat behind the keyboard with the @mention list
+  // (measured, iOS 26.3 Simulator Safari, task 01a1c863 stage 3: vv 409 of
+  // 714 after landscape -> portrait, data-keyboard-open absent).
+  const baselines = new Map([[width, baseline]])
 
   const apply = (state) => {
     if (state.open === last.open && state.inset === last.inset && state.height === last.height) return
@@ -70,7 +77,7 @@ function startWatcher(win, vv, root) {
     // A rotation or window resize changes what "no keyboard" means.
     if (win.innerWidth !== width) {
       width = win.innerWidth
-      baseline = vv.height
+      baseline = baselines.get(width) ?? vv.height
     }
     const state = keyboardState({
       innerHeight: win.innerHeight,
@@ -79,6 +86,7 @@ function startWatcher(win, vv, root) {
       baseline,
     })
     if (!state.open) baseline = Math.max(baseline, vv.height)
+    baselines.set(width, baseline)
     apply({ ...state, height: state.open ? Math.round(vv.height) : 0 })
   }
 

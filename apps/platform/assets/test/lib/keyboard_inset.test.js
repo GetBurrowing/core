@@ -135,6 +135,39 @@ describe("watchKeyboard", () => {
     expect(root.attrs[KEYBOARD_ATTR]).toBeUndefined()
   })
 
+  it("rotating back to a width seen without the keyboard restores its baseline, so a keyboard kept up through the rotation still reads open", () => {
+    // Measured shape, task 01a1c863 stage 3: portrait, landscape with the
+    // keyboard up, back to portrait with it still up (vv 409 of 714).
+    const { vv, win, root } = setup()
+    win.innerWidth = 844
+    win.innerHeight = 390
+    vv.height = 390
+    vv.fire("resize")
+    vv.height = 120
+    vv.fire("resize")
+    expect(root.attrs[KEYBOARD_ATTR]).toBe("")
+
+    win.innerWidth = 390
+    win.innerHeight = LAYOUT
+    vv.height = LAYOUT - KEYBOARD
+    vv.fire("resize")
+    expect(root.attrs[KEYBOARD_ATTR]).toBe("")
+    expect(root.style.props[KEYBOARD_INSET_VAR]).toBe(`${KEYBOARD}px`)
+
+    vv.height = LAYOUT
+    vv.fire("resize")
+    expect(root.attrs[KEYBOARD_ATTR]).toBeUndefined()
+  })
+
+  it("a width never seen still takes the current height as its baseline", () => {
+    const { vv, win, root } = setup()
+    win.innerWidth = 844
+    win.innerHeight = 390
+    vv.height = 300
+    vv.fire("resize")
+    expect(root.attrs[KEYBOARD_ATTR]).toBeUndefined()
+  })
+
   it("detaches its listeners and clears the state", () => {
     const { vv, root, detach } = setup()
     vv.height = LAYOUT - KEYBOARD
