@@ -18,6 +18,14 @@ defmodule Platform.Goals.Signals do
   @doc """
   Sends `prompt` to `agent`'s runtime under `responsibility_key` and returns
   the delivery value: "sent", "offline", "failed" or "no_runtime".
+
+  Options: `:trigger_kind` (default "cron") and `:space_id`, the space the
+  agent should answer in. `:space_id` goes in the signal's `metadata` ONLY,
+  never at its top level: core's dispatcher reads the named space from
+  `metadata.space_id` (`Platform.Chat.AgentResponder`'s `dispatch_space_id`),
+  and a runtime pins a pending permission prompt's answer space from a
+  TOP-LEVEL `space_id`, which a signal must not claim (task 01a1eab6
+  stage 2).
   """
   @spec deliver(term(), String.t(), String.t(), keyword()) :: delivery()
   def deliver(agent, responsibility_key, prompt, opts \\ [])
@@ -36,6 +44,12 @@ defmodule Platform.Goals.Signals do
         prompt_status: :rendered
       }
     }
+
+    signal =
+      case Keyword.get(opts, :space_id) do
+        id when is_binary(id) -> put_in(signal, [:metadata, :space_id], id)
+        _ -> signal
+      end
 
     dispatcher =
       Application.get_env(:goals, :wake_up_dispatcher, {Platform.Chat.AgentResponder, :respond})

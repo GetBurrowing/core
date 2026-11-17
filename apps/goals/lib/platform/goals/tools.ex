@@ -138,7 +138,12 @@ defmodule Platform.Goals.Tools do
       {:ok, proposals} ->
         rows =
           for p <- proposals,
-              do: %{id: p.id, started_at: time(p.inserted_at), ready: p.ready}
+              do: %{
+                id: p.id,
+                space_id: p.space_id,
+                started_at: time(p.inserted_at),
+                ready: p.ready
+              }
 
         {:ok, %{conversations: rows, total: length(rows)}}
 
@@ -658,6 +663,7 @@ defmodule Platform.Goals.Tools do
   defp proposal_json(proposal, sources \\ nil) do
     base = %{
       id: proposal.id,
+      space_id: proposal.space_id,
       status: proposal.status,
       revision: proposal.revision,
       draft: proposal.draft,

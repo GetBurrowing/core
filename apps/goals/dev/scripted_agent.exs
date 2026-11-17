@@ -9,7 +9,8 @@
 # pass `start "<opening text>"` as the third and fourth arguments to start
 # one as them). It plays the agent's next turn with
 # `Platform.Goals.ScriptedAgent.next_turn/3`, which records the proposal
-# through the `goal_propose` tool and posts in the DM as the agent: the same
+# through the `goal_propose` tool and posts in the proposal's own
+# conversation space as the agent: the same
 # moves a real agent makes. This script runs in its own BEAM, so an open
 # page does not hear it: reload the page after each turn.
 #
@@ -22,7 +23,7 @@
 #     GOALS_ENABLED=true mix run dev/scripted_agent.exs you@example.com yt cite
 #
 # `research` plays the coach's answer to the confirmed signal on the
-# person's latest confirmed conversation: the researching message in the DM
+# person's latest confirmed conversation: the researching message in its space
 # and three takeaways through `goal_takeaway_add`. `cite` runs the goal's
 # clock to its first slot and closes that wake-up with `goal_do` (yt) or a
 # practice `goal_ask` (es) citing the first takeaway.

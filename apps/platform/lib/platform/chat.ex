@@ -2466,6 +2466,16 @@ defmodule Platform.Chat do
   else) is itself a voice record (metadata `"source" => "voice"`). If an older
   unread typed message sits in between, the cursor stays put and that message
   keeps its badge.
+
+  Option `route: :none` posts a message that is NOT a turn for any agent:
+  the message is stored with metadata `"attention" => "none"` and
+  `Platform.Chat.AttentionRouter` makes no routing decision for it (reason
+  `:caller_suppressed`, see `AttentionRouter.caller_suppressed?/1`). It is for
+  a server-side caller that triggers the agent some other way and must not
+  trigger it twice. Everything else is unchanged: the message is stored,
+  broadcast to open screens and counted as usual. Only this option sets the
+  key: a caller-supplied `"attention"` in `:metadata` is always STRIPPED, so
+  a client-supplied metadata map can never silence routing.
   """
   @spec post_message(map(), keyword()) ::
           {:ok, Message.t()}
@@ -2483,6 +2493,7 @@ defmodule Platform.Chat do
   defp do_post_message(attrs, opts) do
     attrs =
       attrs
+      |> apply_route_option(opts)
       |> Platform.Chat.ReplyTarget.apply_to_attrs()
       |> put_author_snapshot(:participant_id, :author)
 
@@ -2514,6 +2525,38 @@ defmodule Platform.Chat do
 
       {:error, changeset} ->
         {:error, changeset}
+    end
+  end
+
+  # `post_message/2`'s `route: :none` (task 01a1eab6 stage 2). The
+  # `"attention"` metadata key is server-owned: whatever the caller put there
+  # is dropped first, so a metadata map that came from a client can never
+  # silence routing, and only the option writes it back. Metadata may arrive
+  # under `:metadata` or `"metadata"`, and its keys as strings or atoms.
+  @route_none_attention "none"
+
+  defp apply_route_option(attrs, opts) when is_map(attrs) do
+    key =
+      cond do
+        Map.has_key?(attrs, :metadata) -> :metadata
+        Map.has_key?(attrs, "metadata") -> "metadata"
+        Enum.any?(Map.keys(attrs), &is_binary/1) -> "metadata"
+        true -> :metadata
+      end
+
+    attrs =
+      case Map.get(attrs, key) do
+        %{} = metadata -> Map.put(attrs, key, Map.drop(metadata, ["attention", :attention]))
+        _ -> attrs
+      end
+
+    case Keyword.get(opts, :route) do
+      :none ->
+        metadata = Map.get(attrs, key) || %{}
+        Map.put(attrs, key, Map.put(metadata, "attention", @route_none_attention))
+
+      _ ->
+        attrs
     end
   end
 
@@ -2625,6 +2668,7 @@ defmodule Platform.Chat do
   defp do_post_message_with_attachments(attrs, attachment_attrs_list, opts) do
     attrs =
       attrs
+      |> apply_route_option(opts)
       |> Platform.Chat.ReplyTarget.apply_to_attrs()
       |> put_author_snapshot(:participant_id, :author)
 
@@ -2828,7 +2872,10 @@ defmodule Platform.Chat do
     with :ok <- ensure_space_writable(space_id),
          :ok <- ensure_dm_send_allowed(space_id, participant_id),
          :ok <- ensure_external_upload_allowed(space_id, poster_user_id) do
-      attrs = put_author_snapshot(attrs, :participant_id, :author)
+      attrs =
+        attrs
+        |> apply_route_option(opts)
+        |> put_author_snapshot(:participant_id, :author)
 
       Multi.new()
       |> Multi.insert(:message, Message.changeset(%Message{}, attrs))
@@ -2923,6 +2970,7 @@ defmodule Platform.Chat do
 
       attrs =
         attrs
+        |> apply_route_option(opts)
         |> put_author_snapshot(:participant_id, :author)
         |> Map.update(
           :metadata,

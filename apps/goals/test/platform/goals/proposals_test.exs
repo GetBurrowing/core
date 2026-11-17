@@ -166,7 +166,8 @@ defmodule Platform.Goals.ProposalsTest do
     assert id == lead.id
   end
 
-  test "start opens a DM with the lead agent, posts as the person and signals ids only", c do
+  test "start opens the proposal's own space with the lead agent, posts as the person and signals ids only",
+       c do
     lead = lead!(c)
     assert {:ok, proposal} = Goals.start_goal_conversation(c.person, "  #{@opening}  ")
 
@@ -180,6 +181,10 @@ defmodule Platform.Goals.ProposalsTest do
 
     space = Repo.one!(from(s in Chat.Space, where: s.id == ^proposal.space_id))
     assert space.kind == "dm"
+    assert space.is_direct == false
+    assert space.metadata == %{"surface" => "goals"}
+    assert space.org_id == c.org
+    assert space.created_by == c.person.id
 
     participants =
       Repo.all(
@@ -204,8 +209,9 @@ defmodule Platform.Goals.ProposalsTest do
 
     assert signal.metadata.prompt ==
              "A person started a New goal conversation with you. Conversation id: #{proposal.id}. " <>
-               "Read it with goal_proposal_get, talk with them in your direct conversation, and " <>
-               "record what you settle with goal_propose. Nothing is created until they press Create goal."
+               "Read it with goal_proposal_get, talk with them in this goal's conversation " <>
+               "(space #{proposal.space_id}), and record what you settle with goal_propose. " <>
+               "Nothing is created until they press Create goal."
 
     assert signal.metadata.responsibility_key == "goals.new_goal"
     assert signal.metadata.agent_id == lead.id
@@ -260,7 +266,7 @@ defmodule Platform.Goals.ProposalsTest do
     assert proposal.org_id == c.org
   end
 
-  test "a stale open row is expired and a new conversation starts in the same DM", c do
+  test "a stale open row is expired and a new conversation starts in a space of its own", c do
     lead!(c)
     first = start!(c.person)
     set_now(DateTime.add(@now, 8 * 86_400))
@@ -268,9 +274,166 @@ defmodule Platform.Goals.ProposalsTest do
 
     second = start!(c.person, "Something new")
     assert row(first).status == "expired"
-    assert second.space_id == first.space_id
+    assert second.space_id != first.space_id
     assert {:ok, %{id: id}} = Goals.current_proposal(c.person)
     assert id == second.id
+  end
+
+  # ── its own space (task 01a1eab6 stage 2) ────────────────────────────────
+
+  defp dm_user_participant!(dm, user) do
+    Repo.get_by!(Chat.Participant,
+      space_id: dm.id,
+      participant_type: "user",
+      participant_id: user.id
+    )
+  end
+
+  defp post_in!(space_id, participant, text) do
+    {:ok, msg} =
+      Chat.post_message(%{
+        space_id: space_id,
+        participant_id: participant.id,
+        content_type: "text",
+        content: text
+      })
+
+    msg
+  end
+
+  test "the goal conversation and the person's DM never see each other's messages", c do
+    lead = lead!(c)
+    {:ok, dm} = Chat.find_or_create_dm(c.person.id, "agent", lead.id)
+    dm_me = dm_user_participant!(dm, c.person)
+    post_in!(dm.id, dm_me, "DM-ONLY before")
+
+    proposal = start!(c.person)
+    post_in!(dm.id, dm_me, "DM-ONLY after")
+    agent_p = Chat.get_agent_participant(proposal.space_id, lead.id)
+    post_in!(proposal.space_id, agent_p, "GOAL-ONLY agent")
+    {:ok, _} = Goals.say_in_conversation(c.person, proposal.id, "GOAL-ONLY person")
+
+    assert proposal.space_id != dm.id
+
+    space = Repo.one!(from(s in Chat.Space, where: s.id == ^proposal.space_id))
+    assert space.metadata["surface"] == "goals"
+    assert space.is_direct == false
+
+    # The DM is still the person's DM with the agent.
+    assert {:ok, %{id: dm_id}} = Chat.find_or_create_dm(c.person.id, "agent", lead.id)
+    assert dm_id == dm.id
+
+    assert {:ok, conversation} = Goals.conversation(c.person, proposal.id)
+
+    assert Enum.map(conversation, & &1.content) ==
+             [@opening, "GOAL-ONLY agent", "GOAL-ONLY person"]
+
+    dm_contents = dm.id |> Chat.list_messages(limit: 200) |> Enum.map(& &1.content)
+    assert Enum.sort(dm_contents) == Enum.sort(["DM-ONLY before", "DM-ONLY after"])
+    refute Enum.any?(dm_contents, &(&1 =~ "GOAL-ONLY" or &1 == @opening))
+  end
+
+  test "the new_goal and research signals carry the space id in metadata only", c do
+    lead = lead!(c)
+    {:ok, proposal} = Goals.start_goal_conversation(c.person, @opening)
+
+    assert_received {:signal, new_goal}
+    assert new_goal.metadata.responsibility_key == "goals.new_goal"
+    assert new_goal.metadata.space_id == proposal.space_id
+    refute Map.has_key?(new_goal, :space_id)
+
+    proposal = ready!(lead, proposal)
+    {:ok, _} = Goals.confirm_proposal(c.person, proposal.id, proposal.revision)
+
+    assert_received {:signal, research}
+    assert research.metadata.responsibility_key == "goals.research"
+    assert research.metadata.space_id == proposal.space_id
+    refute Map.has_key?(research, :space_id)
+    refute_received {:signal, _}
+  end
+
+  test "Signals.deliver puts :space_id in metadata only, and not at all without it", c do
+    agent = external_agent!(c.person)
+    space_id = Ecto.UUID.generate()
+
+    assert Signals.deliver(agent, "k", "p", space_id: space_id) == "sent"
+    assert_received {:signal, %{metadata: %{space_id: ^space_id}} = with_space}
+    refute Map.has_key?(with_space, :space_id)
+
+    assert Signals.deliver(agent, "k", "p") == "sent"
+    assert_received {:signal, without}
+    refute Map.has_key?(without.metadata, :space_id)
+  end
+
+  describe "routing (the real AttentionRouter in the sandbox)" do
+    alias Ecto.Adapters.SQL.Sandbox
+    alias Platform.Chat.{AttentionRouter, Message}
+    alias Platform.Federation.RuntimePresence
+
+    setup c do
+      previous_mode = Application.get_env(:platform, :chat_agent_dispatch_mode)
+      Application.put_env(:platform, :chat_agent_dispatch_mode, :sync)
+
+      on_exit(fn ->
+        if previous_mode,
+          do: Application.put_env(:platform, :chat_agent_dispatch_mode, previous_mode),
+          else: Application.delete_env(:platform, :chat_agent_dispatch_mode)
+      end)
+
+      router = Process.whereis(AttentionRouter) || start_supervised!({AttentionRouter, []})
+      Sandbox.allow(Repo, self(), router)
+      presence = Process.whereis(RuntimePresence) || start_supervised!(RuntimePresence)
+      Sandbox.allow(Repo, self(), presence)
+
+      test_pid = self()
+      handler_id = "goals-routing-#{unique()}"
+
+      :ok =
+        :telemetry.attach_many(
+          handler_id,
+          [[:platform, :chat, :attention_routed], [:platform, :chat, :attention_skipped]],
+          fn event, _measurements, meta, _ -> send(test_pid, {List.last(event), meta}) end,
+          nil
+        )
+
+      on_exit(fn -> :telemetry.detach(handler_id) end)
+
+      lead = lead!(c)
+      runtime = Repo.get!(Platform.Agents.AgentRuntime, lead.runtime_id)
+      RuntimePresence.track(runtime.runtime_id)
+      on_exit(fn -> RuntimePresence.untrack(runtime.runtime_id) end)
+
+      %{lead: lead, router: router}
+    end
+
+    defp drain(router), do: :ok = GenServer.call(router, :__drain__, 10_000)
+
+    test "the opening message is :caller_suppressed and a later message routes :directed",
+         c do
+      proposal = start!(c.person)
+      drain(c.router)
+      opening_id = proposal.first_message_id
+
+      assert Repo.get!(Message, opening_id).metadata["attention"] == "none"
+
+      assert_received {:attention_skipped, %{message_id: ^opening_id, reason: :caller_suppressed}}
+
+      refute_received {:attention_routed, %{message_id: ^opening_id}}
+
+      {:ok, second} = Goals.say_in_conversation(c.person, proposal.id, "Second turn")
+      drain(c.router)
+      second_id = second.id
+      agent_p = Chat.get_agent_participant(proposal.space_id, c.lead.id)
+      agent_p_id = agent_p.id
+
+      refute Map.has_key?(Repo.get!(Message, second_id).metadata, "attention")
+
+      assert_received {:attention_routed,
+                       %{message_id: ^second_id, recipient_id: ^agent_p_id, reason: :directed}}
+
+      refute_received {:attention_routed, %{message_id: ^second_id}}
+      refute_received {:attention_skipped, %{message_id: ^second_id}}
+    end
   end
 
   # ── reads ─────────────────────────────────────────────────────────────────
@@ -539,8 +702,9 @@ defmodule Platform.Goals.ProposalsTest do
 
     assert signal.metadata.prompt ==
              "The person confirmed the goal from conversation #{proposal.id}. Goal id: #{goal.id}. " <>
-               "You are its coach. Tell them in your direct conversation that you are researching, " <>
-               "then record each finding with goal_takeaway_add. A finding needs at least one source."
+               "You are its coach. Tell them in this goal's conversation (space #{proposal.space_id}) " <>
+               "that you are researching, then record each finding with goal_takeaway_add. " <>
+               "A finding needs at least one source."
 
     assert signal.metadata.responsibility_key == "goals.research"
     refute inspect(signal) =~ "VIOLET-ANVIL"

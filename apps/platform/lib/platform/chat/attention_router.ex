@@ -11,6 +11,11 @@ defmodule Platform.Chat.AttentionRouter do
   1. **Execution spaces** — `log_only` messages are silently skipped.
      **Voice tab records in a DM** (`dm_voice_record?/2`) are skipped too:
      no agent decision, no mutex, no push (reason `:voice_record`).
+     **A caller-suppressed message** (`caller_suppressed?/1`: metadata
+     `"attention" => "none"`, written only by `Platform.Chat.post_message/2`'s
+     `route: :none` option) is skipped in every space kind: no agent
+     decision, no mutex, no push (reason `:caller_suppressed`). The caller
+     triggers the agent some other way, so routing it would trigger it twice.
   2. **DM spaces** — always route to the single agent participant (`:directed`).
   3. **Single @mention or reply** — route (`:mention`, or `:reply` when the
      agent is addressed only as the REPLY TARGET, below) and set the agent as
@@ -415,6 +420,15 @@ defmodule Platform.Chat.AttentionRouter do
       dm_voice_record?(message, space.kind) ->
         empty_attention_route(space, message, attention, :voice_record)
 
+      # A message its server-side poster marked as not a turn
+      # (`Platform.Chat.post_message/2` option `route: :none`, task 01a1eab6
+      # stage 2): the poster triggers the agent through another channel, so
+      # routing it here would be a second trigger for the same words. PubSub
+      # delivery to open screens happens in `Chat` and is unaffected. See
+      # `caller_suppressed?/1`.
+      caller_suppressed?(message) ->
+        empty_attention_route(space, message, attention, :caller_suppressed)
+
       true ->
         route_in_space(space, message, attention)
     end
@@ -752,6 +766,18 @@ defmodule Platform.Chat.AttentionRouter do
   @spec dm_voice_record?(Message.t() | map(), String.t() | nil) :: boolean()
   def dm_voice_record?(message, "dm"), do: voice_record?(message)
   def dm_voice_record?(_message, _space_kind), do: false
+
+  @doc """
+  True for a message whose poster said it is not a turn for any agent:
+  `metadata["attention"] == "none"`. Only `Platform.Chat.post_message/2`'s
+  `route: :none` option writes that key; `post_message` strips a
+  caller-supplied `"attention"` key, so no client post path can set it.
+  Such a message never produces an agent routing decision (reason
+  `:caller_suppressed`, task 01a1eab6 stage 2).
+  """
+  @spec caller_suppressed?(Message.t() | map()) :: boolean()
+  def caller_suppressed?(%{metadata: %{"attention" => "none"}}), do: true
+  def caller_suppressed?(_), do: false
 
   @untrusted_inbound_sources ~w(email_inbound federation_inbound)
 

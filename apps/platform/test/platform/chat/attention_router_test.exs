@@ -163,6 +163,119 @@ defmodule Platform.Chat.AttentionRouterTest do
     end
   end
 
+  describe "caller-suppressed messages (post_message route: :none, task 01a1eab6 stage 2)" do
+    # Observable: the router's own decision telemetry
+    # (`[:platform, :chat, :attention_skipped]` with its reason, and
+    # `[:platform, :chat, :attention_routed]` per decision), plus the stub
+    # agent module's `{:agent_chat_called, ...}` for a real dispatch. The
+    # messages go through `Chat.post_message/2`, so the router sees them the
+    # way production does: through the message_posted telemetry.
+    setup do
+      test_pid = self()
+      handler_id = "caller-suppressed-#{System.unique_integer([:positive])}"
+
+      :ok =
+        :telemetry.attach_many(
+          handler_id,
+          [[:platform, :chat, :attention_routed], [:platform, :chat, :attention_skipped]],
+          fn event, _measurements, meta, _ -> send(test_pid, {List.last(event), meta}) end,
+          nil
+        )
+
+      on_exit(fn -> :telemetry.detach(handler_id) end)
+
+      space = create_space(%{kind: "dm"})
+      user = create_participant(space.id)
+      agent = create_agent()
+      {:ok, agent_p} = Chat.add_agent_participant(space.id, agent, display_name: "Zip")
+
+      %{space: space, user: user, agent_p: agent_p}
+    end
+
+    defp post!(space, user, content, metadata, opts) do
+      {:ok, message} =
+        Chat.post_message(
+          %{
+            space_id: space.id,
+            participant_id: user.id,
+            content_type: "text",
+            content: content,
+            metadata: metadata
+          },
+          opts
+        )
+
+      drain()
+      message
+    end
+
+    test "route: :none is stored as attention none and gets :caller_suppressed, no dispatch",
+         %{space: space, user: user} do
+      message = post!(space, user, "suppressed opening", %{}, route: :none)
+      message_id = message.id
+
+      assert Repo.get!(Message, message_id).metadata["attention"] == "none"
+      assert AttentionRouter.caller_suppressed?(Repo.get!(Message, message_id))
+
+      assert_received {:attention_skipped, %{message_id: ^message_id, reason: :caller_suppressed}}
+
+      refute_received {:attention_routed, %{message_id: ^message_id}}
+      refute_received {:agent_chat_called, "suppressed opening", _}
+
+      # A direct route/1 of the stored row decides nothing either.
+      assert {:ok, []} = AttentionRouter.route(Repo.get!(Message, message_id))
+      drain()
+      refute_received {:agent_chat_called, "suppressed opening", _}
+    end
+
+    test "POSITIVE CONTROL: the same message without the option routes :directed",
+         %{space: space, user: user, agent_p: agent_p} do
+      message = post!(space, user, "ordinary turn", %{}, [])
+      message_id = message.id
+      agent_p_id = agent_p.id
+
+      refute Map.has_key?(Repo.get!(Message, message_id).metadata, "attention")
+
+      assert_received {:attention_routed,
+                       %{message_id: ^message_id, recipient_id: ^agent_p_id, reason: :directed}}
+
+      refute_received {:attention_skipped, %{message_id: ^message_id}}
+      assert_receive {:agent_chat_called, "ordinary turn", _opts}, 500
+    end
+
+    test "a caller-supplied attention none in metadata is stripped and the message routes",
+         %{space: space, user: user, agent_p: agent_p} do
+      agent_p_id = agent_p.id
+
+      for {metadata, content} <- [
+            {%{"attention" => "none", "keep" => "me"}, "string key"},
+            {%{attention: "none"}, "atom key"}
+          ] do
+        message = post!(space, user, content, metadata, [])
+        message_id = message.id
+        stored = Repo.get!(Message, message_id)
+
+        refute Map.has_key?(stored.metadata, "attention"), inspect(metadata)
+        refute AttentionRouter.caller_suppressed?(stored)
+        if content == "string key", do: assert(stored.metadata["keep"] == "me")
+
+        assert_received {:attention_routed,
+                         %{message_id: ^message_id, recipient_id: ^agent_p_id, reason: :directed}}
+
+        refute_received {:attention_skipped, %{message_id: ^message_id}}
+        assert_receive {:agent_chat_called, ^content, _opts}, 500
+      end
+    end
+
+    test "caller_suppressed?/1 is true only for metadata attention none" do
+      assert AttentionRouter.caller_suppressed?(%{metadata: %{"attention" => "none"}})
+      refute AttentionRouter.caller_suppressed?(%{metadata: %{"attention" => "all"}})
+      refute AttentionRouter.caller_suppressed?(%{metadata: %{}})
+      refute AttentionRouter.caller_suppressed?(%{metadata: nil})
+      refute AttentionRouter.caller_suppressed?(nil)
+    end
+  end
+
   describe "execution spaces" do
     test "log_only messages return empty" do
       space = create_space(%{kind: "execution"})

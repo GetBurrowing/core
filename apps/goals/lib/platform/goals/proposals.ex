@@ -23,6 +23,21 @@ defmodule Platform.Goals.Proposals do
   No function here lets an agent create a goal: `confirm_proposal/3` refuses
   agents and calls `Platform.Goals.create_goal/2` as the person.
 
+  Each proposal has ITS OWN conversation space (task 01a1eab6 stage 2), never
+  the person's DM with the agent: a `kind: "dm"`, `is_direct: false` space
+  with the person and the lead agent as its only participants and metadata
+  `"surface" => "goals"` (core's generic "owned by another surface" marker).
+  Kind dm keeps core's DM routing, so every later message routes to the agent
+  as `:directed`; `is_direct: false` keeps it out of
+  `Platform.Chat.find_or_create_dm/3`, so it is never returned as the DM and
+  the DM's messages never show here.
+
+  The opening message has exactly ONE agent trigger, the `goals.new_goal`
+  signal: it is posted with `Chat.post_message/2`'s `route: :none`, so the
+  router makes no decision for it. The start runs inside
+  `Platform.Tasks.PostCommit.scope/1`, so the message is published after the
+  space, the message and the proposal have committed.
+
   Signals to the agent go through `Platform.Goals.Signals.deliver/4` and
   carry identifiers only, never the person's words, a title or a setting.
   Every write broadcasts `{:goal_proposal_changed, id}` on
@@ -91,7 +106,8 @@ defmodule Platform.Goals.Proposals do
   end
 
   @doc """
-  The opening message and the top-level messages after it in the DM, oldest
+  The opening message and the top-level messages after it in the
+  proposal's own conversation space, oldest
   first, at most #{@conversation_limit}; the person's and the agent's
   messages only (core's system notices are left out). The addressed user
   only.
@@ -136,42 +152,56 @@ defmodule Platform.Goals.Proposals do
   # ── the person's writes ───────────────────────────────────────────────────
 
   @doc """
-  Starts a New goal conversation with the lead agent: posts `text` as the
-  person in their DM and records an open proposal. The agent is never named
-  by the caller.
+  Starts a New goal conversation with the lead agent: creates the
+  proposal's own conversation space, posts `text` as the person in it (not a
+  turn for the router: `route: :none`) and records an open proposal, all in
+  one transaction, then signals the agent `goals.new_goal` with the space id.
+  The agent is never named by the caller.
   """
   def start_goal_conversation(%User{id: user_id} = user, text) when is_binary(user_id) do
     with {:ok, text} <- message_text(text) do
       now = Clock.now()
 
+      # The scope holds the opening message's publish (telemetry, broadcast)
+      # until the transaction commits, so nothing reads the message before
+      # its row is visible (task 01a1eab6 stage 1).
       result =
-        tx(fn ->
-          expire_stale(user, now)
+        Platform.Tasks.PostCommit.scope(fn ->
+          tx(fn ->
+            expire_stale(user, now)
 
-          with :ok <- no_open_proposal(user),
-               {:ok, agent} <- resolve_lead(),
-               {:ok, org_id} <- pick_org(user),
-               {:ok, space} <- Chat.find_or_create_dm(user_id, "agent", agent.id),
-               {:ok, msg} <- post_as_person(space.id, user_id, text),
-               {:ok, proposal} <- insert_proposal(user, agent, org_id, space, msg, now) do
-            {:ok, {proposal, agent}}
-          end
+            with :ok <- no_open_proposal(user),
+                 {:ok, agent} <- resolve_lead(),
+                 {:ok, org_id} <- pick_org(user),
+                 {:ok, space} <- create_goal_space(user, agent, org_id),
+                 {:ok, msg} <- post_as_person(space.id, user_id, text, route: :none),
+                 {:ok, proposal} <- insert_proposal(user, agent, org_id, space, msg, now) do
+              {:ok, {proposal, agent}}
+            end
+          end)
         end)
 
       with {:ok, {proposal, agent}} <- result do
         prompt =
           "A person started a New goal conversation with you. Conversation id: #{proposal.id}. " <>
-            "Read it with goal_proposal_get, talk with them in your direct conversation, and " <>
-            "record what you settle with goal_propose. Nothing is created until they press Create goal."
+            "Read it with goal_proposal_get, talk with them in this goal's conversation " <>
+            "(space #{proposal.space_id}), and record what you settle with goal_propose. " <>
+            "Nothing is created until they press Create goal."
 
-        {:ok, store_delivery(proposal, Signals.deliver(agent, "goals.new_goal", prompt, event()))}
+        delivery =
+          Signals.deliver(agent, "goals.new_goal", prompt, event(space_id: proposal.space_id))
+
+        {:ok, store_delivery(proposal, delivery)}
       end
     end
   end
 
   def start_goal_conversation(_actor, _text), do: {:error, :not_found}
 
-  @doc "Posts the person's message in the conversation's DM (status open or confirmed)."
+  @doc """
+  Posts the person's message in the proposal's conversation space (status
+  open or confirmed). It routes to the agent as an ordinary turn.
+  """
   def say_in_conversation(actor, proposal_id, text) do
     with {:ok, proposal} <- addressed(actor, proposal_id),
          :ok <- check_sayable(proposal),
@@ -214,10 +244,18 @@ defmodule Platform.Goals.Proposals do
       with {:ok, %{goal: goal, proposal: row}} <- result do
         prompt =
           "The person confirmed the goal from conversation #{row.id}. Goal id: #{goal.id}. " <>
-            "You are its coach. Tell them in your direct conversation that you are researching, " <>
-            "then record each finding with goal_takeaway_add. A finding needs at least one source."
+            "You are its coach. Tell them in this goal's conversation (space #{row.space_id}) " <>
+            "that you are researching, then record each finding with goal_takeaway_add. " <>
+            "A finding needs at least one source."
 
-        delivery = Signals.deliver(load_agent(row.agent_id), "goals.research", prompt, event())
+        delivery =
+          Signals.deliver(
+            load_agent(row.agent_id),
+            "goals.research",
+            prompt,
+            event(space_id: row.space_id)
+          )
+
         {:ok, %{goal: goal, proposal: store_delivery(row, delivery)}}
       end
     end
@@ -378,14 +416,51 @@ defmodule Platform.Goals.Proposals do
 
   defp message_text(_text), do: {:error, :text_required}
 
-  defp post_as_person(space_id, user_id, text) do
+  defp post_as_person(space_id, user_id, text, opts \\ []) do
     with {:ok, participant} <- Chat.SpaceAccess.authorize_writer(space_id, {:user, user_id}) do
-      Chat.post_message(%{
-        space_id: space_id,
-        participant_id: participant.id,
-        content_type: "text",
-        content: text
-      })
+      Chat.post_message(
+        %{
+          space_id: space_id,
+          participant_id: participant.id,
+          content_type: "text",
+          content: text
+        },
+        opts
+      )
+    end
+  end
+
+  # The proposal's own conversation space (task 01a1eab6 stage 2). Kind dm so
+  # core routes every later message to the agent as `:directed`; is_direct
+  # false so `Chat.find_or_create_dm/3` never returns it as the person's DM;
+  # `"surface" => "goals"` marks it as owned by this surface, not a chat-rail
+  # conversation. Runs inside the start's transaction, so a refused start
+  # leaves no space behind.
+  defp create_goal_space(%User{} = user, %Agent{} = agent, org_id) do
+    with {:ok, space} <-
+           Chat.create_space(%{
+             kind: "dm",
+             is_direct: false,
+             name: "New goal",
+             created_by: user.id,
+             org_id: org_id,
+             metadata: %{"surface" => "goals"}
+           }),
+         :ok <- add_member(space, "user", user.id, user.name || user.email || "User"),
+         :ok <- add_member(space, "agent", agent.id, agent.name) do
+      {:ok, space}
+    end
+  end
+
+  defp add_member(space, type, id, display_name) do
+    case Chat.add_participant(space.id, %{
+           participant_type: type,
+           participant_id: id,
+           display_name: display_name,
+           joined_at: DateTime.utc_now()
+         }) do
+      {:ok, _participant} -> :ok
+      {:error, reason} -> {:error, reason}
     end
   end
 
@@ -455,7 +530,7 @@ defmodule Platform.Goals.Proposals do
     proposal
   end
 
-  defp event, do: [trigger_kind: "event_topic"]
+  defp event(opts), do: Keyword.put(opts, :trigger_kind, "event_topic")
 
   defp stringify(attrs), do: Map.new(attrs, fn {k, v} -> {to_string(k), v} end)
 
