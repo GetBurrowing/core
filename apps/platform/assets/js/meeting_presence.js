@@ -290,6 +290,8 @@ export function createMeetingPresence(env = {}) {
   const connectionOwner = env.connectionOwner || (() => null)
   // The live LiveKit room's connection state ("connected", …) or null.
   const roomState = env.roomState || (() => null)
+  // The browser says it has no network.
+  const isOffline = env.isOffline || (() => false)
   // Stage 3: the lock-screen card and tab title follow every state change.
   const onChange = env.onChange || (() => {})
 
@@ -524,6 +526,12 @@ export function createMeetingPresence(env = {}) {
     }
     if (RECONNECTING_STATES.has(state)) {
       startReconnecting()
+      return
+    }
+    // A late "connected" from a reconnect that began before the network went
+    // away is not a recovery: the browser is still offline. Seen on the rig:
+    // a signal resume landing 2s into a 40s outage restarted the 30s clock.
+    if ((state === "connected" || state === "reconnected") && conn.state === "reconnecting" && safe(isOffline)) {
       return
     }
     if (state === "lost") {
@@ -965,6 +973,7 @@ export function installMeetingPresence(win = window, doc = document) {
     // connection-state element; its Rejoin / Leave-after-loss live there.
     connectionOwner: () => doc.getElementById("meeting-connection-banner")?._owner || null,
     roomState: () => (win.__livekit_room || win.__livekitRoom || null)?.state || null,
+    isOffline: () => !!win.navigator && win.navigator.onLine === false,
     barControl: (kind) =>
       doc.querySelector?.(`#meeting-top-bar ${kind === "camera" ? "[data-bar-camera]" : "[data-bar-mic]"}`) || null,
     onChange: (state) => media && media.update(state),

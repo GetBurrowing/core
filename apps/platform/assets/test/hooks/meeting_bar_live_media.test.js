@@ -97,15 +97,28 @@ describe("MeetingBar mic / camera state on join", () => {
     expect(states(pushes).at(-1)).toEqual([false, true])
   })
 
-  it("ignores remote mutes and drops identical pushes", () => {
+  it("ignores remote mutes", () => {
     const { pushes } = mountBar()
     const room = fakeRoom({ mic: true })
     win.__livekit_room = room
     win.dispatchEvent(new CustomEvent("livekit:room-connected", { detail: { room } }))
     const before = states(pushes).length
     room.emit("trackMuted", { kind: "audio" }, { identity: "user:other" })
-    room.emit("localTrackPublished", { kind: "audio" }, room.localParticipant)
     expect(states(pushes).length).toBe(before)
+  })
+
+  // Rig, offline 40s: the server repainted "Cam off" from the publication the
+  // drop removed; the republish carried the same live state as the last push
+  // and a dedupe swallowed it, leaving "Cam off" over a live camera.
+  it("pushes a republish even when it matches the previous push", () => {
+    const { pushes } = mountBar()
+    const room = fakeRoom({ mic: true, camera: true })
+    win.__livekit_room = room
+    win.dispatchEvent(new CustomEvent("livekit:room-connected", { detail: { room } }))
+    const before = states(pushes).length
+    room.emit("localTrackPublished", { kind: "video" }, room.localParticipant)
+    expect(states(pushes).length).toBe(before + 1)
+    expect(states(pushes).at(-1)).toEqual([true, true])
   })
 
   it("takes its room listeners off on destroy", () => {

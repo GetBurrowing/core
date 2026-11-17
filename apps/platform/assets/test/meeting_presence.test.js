@@ -591,6 +591,35 @@ describe("remediation finding 2: signal reconnects and offline are reconnecting"
     }
   })
 
+  it("a late connected while the browser is still offline does not restart the lost clock", () => {
+    vi.useFakeTimers()
+    try {
+      let offline = false
+      const toasts = []
+      const bar = fakeBar()
+      const presence = createMeetingPresence({
+        storage: memoryStorage(),
+        location: fakeLocation(),
+        isOffline: () => offline,
+        ui: { toast: (spec) => (toasts.push(spec), { dismiss() {} }), bar: () => bar },
+      })
+      presence.mount(CALL, { navigate() {} })
+      offline = true
+      presence.onNetwork(false)
+      vi.advanceTimersByTime(2000)
+      presence.onRoomState("connected") // a signal resume that began before the outage
+      presence.onRoomState("reconnected")
+      expect(bar.attrs["data-state"]).toBe("reconnecting")
+      vi.advanceTimersByTime(RECONNECT_LOST_MS - 2000)
+      expect(bar.attrs["data-lost"]).toBe("true")
+      offline = false
+      presence.onRoomState("connected")
+      expect(bar.attrs["data-state"]).toBe("connected")
+    } finally {
+      vi.useRealTimers()
+    }
+  })
+
   it("a disconnect the call client is retrying stays reconnecting; a plain disconnect resets", () => {
     vi.useFakeTimers()
     try {

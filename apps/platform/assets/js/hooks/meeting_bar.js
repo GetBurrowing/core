@@ -108,7 +108,6 @@ const MeetingBar = {
     this._stopWatch = watchLocalMedia(window, () => this._syncState())
 
     this._onDisconnected = () => {
-      this._lastPushed = null
       // Route to the MeetingBarLive LiveComponent (this.el lives inside it),
       // not the parent ChatLive which doesn't care about mini-bar state.
       this.pushEventTo(this.el, "meeting_bar_state", { mic: false, camera: false, connected: false })
@@ -118,10 +117,7 @@ const MeetingBar = {
     this._onConnected = () => this._syncState()
     window.addEventListener("livekit:room-connected", this._onConnected)
 
-    this.handleEvent("meeting_bar_sync", () => {
-      this._lastPushed = null
-      this._syncState()
-    })
+    this.handleEvent("meeting_bar_sync", () => this._syncState())
   },
 
   updated() {
@@ -142,10 +138,9 @@ const MeetingBar = {
   _syncState() {
     const state = liveMediaState(window.__livekit_room || window.__livekitRoom)
     if (!state) return
-    // Identical pushes are dropped: the watcher fires per publication.
-    const key = `${state.mic}:${state.camera}`
-    if (key === this._lastPushed) return
-    this._lastPushed = key
+    // Never deduplicated against the last push: the server can repaint the
+    // bar in between (a `:meeting_media_state` from a dropped publication
+    // during a reconnect), and the republish that follows must win.
     this.pushEventTo(this.el, "meeting_bar_state", { ...state, connected: true })
   },
 
