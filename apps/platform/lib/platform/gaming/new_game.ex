@@ -25,7 +25,7 @@ defmodule Platform.Gaming.NewGame do
     with true <- not is_nil(org) and name != "" and engine in ~w(godot unity unreal),
          {:ok, agent} <- Platform.Onboarding.FirstRunGoal.burrow(),
          {:ok, %{project: project, space: space}} <- provision(user, org, name, engine, agent) do
-      participant = Repo.get_by!(Chat.Participant, space_id: space.id, user_id: user.id)
+      participant = Repo.get_by!(Chat.Participant, space_id: space.id, participant_type: "user", participant_id: user.id)
       brief = "Help us build #{name} with #{engine}. Set up its repository and a minimal playable first build, then run a playtest. Project ID: #{project.id}. Keep this room as our team conversation and update the project repository configuration once it exists. Start by discussing: " <> String.slice(params["idea"] || "", 0, 2000)
 
       case Chat.post_message(%{space_id: space.id, participant_id: participant.id, content_type: "text", content: brief}) do

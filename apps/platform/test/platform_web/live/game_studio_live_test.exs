@@ -22,6 +22,10 @@ defmodule PlatformWeb.GameStudioLiveTest do
 
   test "studio embeds the actual authorized project chat and project actions", %{conn: conn, project: project, space: space} do
     {:ok, view, html} = live(conn, "/studio?project=#{project.id}")
+    if directory = System.get_env("STUDIO_EVIDENCE") do
+      File.mkdir_p!(directory)
+      File.write!(Path.join(directory, "studio.html"), conn |> get("/studio?project=#{project.id}") |> html_response(200))
+    end
     assert has_element?(view, "#game-studio")
     assert html =~ "studio-chat-#{space.id}"
     assert has_element?(view, "#studio-playtest")

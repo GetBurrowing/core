@@ -97,6 +97,7 @@
        and desktop cannot disagree; see PlatformWeb.Components.Sidebar.
        `hidden lg:flex` inside the component. --%>
   <.sidebar
+    :if={@current_path not in ["/studio", "/studio/chat", "/studio/playtest"]}
     gaming={gaming?}
     current_path={@current_path}
     root_user={@root_user}

@@ -1,11 +1,12 @@
 defmodule PlatformWeb.GameStudioLive do
   use PlatformWeb, :live_view
   alias Platform.Gaming.{NewGame, Studio}
+  import PlatformWeb.Components.InstallSwitch, only: [install_switch: 1]
 
   @impl true
   def mount(_params, _session, socket) do
     if Platform.Gaming.enabled?() do
-      {:ok, assign(socket, page_title: "Studio", entries: [], entry: nil, tasks: [], canvases: [], tab: "studio", new_game: false, new_game_form: to_form(%{}, as: :game), game_orgs: NewGame.organizations(socket.assigns.current_user_record))}
+      {:ok, assign(socket, page_title: "Studio", entries: [], entry: nil, tasks: [], canvases: [], tab: "studio", playtesting: false, new_game: false, new_game_form: to_form(%{}, as: :game), game_orgs: NewGame.organizations(socket.assigns.current_user_record))}
     else
       {:ok, redirect(socket, to: "/chat")}
     end
@@ -39,15 +40,15 @@ defmodule PlatformWeb.GameStudioLive do
     # by the provider immediately before starting a host.
     entry = socket.assigns.entry
     user = socket.assigns.current_user_record
-    {:noreply, start_async(socket, :playtest, fn -> Studio.playtest(entry, user) end)}
+    {:noreply, start_async(assign(socket, :playtesting, true), :playtest, fn -> Studio.playtest(entry, user) end)}
   end
 
   @impl true
   def handle_async(:playtest, {:ok, {:ok, path}}, socket),
-    do: {:noreply, push_navigate(socket, to: path)}
+    do: {:noreply, push_navigate(assign(socket, :playtesting, false), to: path)}
 
   def handle_async(:playtest, _result, socket),
-    do: {:noreply, put_flash(socket, :error, "Playtest could not start. Check the project repository and available Play host, then try again.")}
+    do: {:noreply, put_flash(assign(socket, :playtesting, false), :error, "Playtest could not start. Check the project repository and available Play host, then try again.")}
 
   def studio_path(entry, tab \\ "studio") do
     (if tab == "studio", do: "/studio", else: "/studio/" <> tab) <> "?" <> URI.encode_query(%{"project" => entry.project.id})
@@ -59,6 +60,7 @@ defmodule PlatformWeb.GameStudioLive do
     <Layouts.app flash={@flash} embedded>
       <div id="game-studio" class="game-studio" data-studio-tab={@tab}>
         <aside class="studio-projects" aria-label="Game projects">
+          <.install_switch id="studio-install-switch" brand_name={Platform.Branding.app_name()} />
           <p class="studio-eyebrow">YOUR STUDIO</p>
           <h1>Make something fun.</h1>
           <.link :for={entry <- @entries} patch={studio_path(entry)} class={["studio-project", @entry && @entry.project.id == entry.project.id && "is-current"]}>
@@ -66,6 +68,10 @@ defmodule PlatformWeb.GameStudioLive do
             <span>{entry.project.name}<small>{if entry.space, do: "Team + agents", else: "Project workspace"}</small></span>
           </.link>
           <.link navigate="/studio?new=1" class="studio-new"><.icon name="hero-plus" class="size-4" />Start a game</.link>
+          <.link navigate="/chat" class="studio-new">All conversations</.link>
+          <.link navigate="/tasks" class="studio-new">Tasks</.link>
+          <.link navigate="/control" class="studio-new">Agents</.link>
+          <.link navigate="/settings" class="studio-new">Settings</.link>
           <a href="/play?mode=discover" class="studio-new"><.icon name="hero-squares-2x2" class="size-4" />Discover games</a>
         </aside>
         <section :if={@new_game} class="studio-empty">
@@ -84,7 +90,7 @@ defmodule PlatformWeb.GameStudioLive do
           <header class="studio-heading">
             <div><p class="studio-eyebrow">GAME STUDIO</p><h2>{@entry.project.name}</h2><p>Build, talk, play. Together.</p></div>
             <div class="studio-actions">
-              <button :if={@entry.space} id="studio-playtest" phx-click="playtest" phx-disable-with="Starting…" class="studio-button"><.icon name="hero-play" class="size-4" />Playtest now</button>
+              <button :if={@entry.space} id="studio-playtest" disabled={@playtesting} phx-click="playtest" phx-disable-with="Starting…" class="studio-button"><.icon name="hero-play" class="size-4" />Playtest now</button>
               <a :if={@entry.game} href={"/games/#{@entry.game["slug"]}"} class="studio-button">Open build</a>
               <.link :if={@entry.space} patch={studio_path(@entry, "chat")} class="studio-button">Ask an agent</.link>
             </div>
@@ -101,7 +107,7 @@ defmodule PlatformWeb.GameStudioLive do
               <% end %>
             </section>
             <aside class="studio-work" aria-label="Project work">
-              <section class="studio-card"><h3>Build & playtest</h3><p>{if @entry.game, do: "Published build: " <> @entry.game["current_version"], else: "Your first published build will appear here."}</p><p class="studio-muted">Playtest builds the project’s default branch. Review builds stay attached to their tasks.</p><button :if={@entry.space} phx-click="playtest" class="studio-button">Launch project playtest</button></section>
+              <section class="studio-card"><h3>Build & playtest</h3><p>{if @entry.game, do: "Published build: " <> @entry.game["current_version"], else: "Your first published build will appear here."}</p><p class="studio-muted">Playtest builds the project’s default branch. Review builds stay attached to their tasks.</p><button :if={@entry.space} disabled={@playtesting} phx-click="playtest" class="studio-button">Launch project playtest</button></section>
               <section class="studio-card"><h3>Open tasks</h3><p :if={@tasks == []} class="studio-muted">No tasks to show.</p><.link :for={task <- @tasks} navigate={"/tasks/#{task.id}"} class="studio-row"><span>{task.title}</span><small>{String.replace(task.status, "_", " ")}</small></.link><.link navigate="/tasks">Task board →</.link></section>
               <section class="studio-card"><h3>Recent canvases</h3><p :if={@canvases == []} class="studio-muted">Playtests, clips and designs shared with your team appear here.</p><.link :for={canvas <- @canvases} navigate={"/canvases/#{canvas.id}"} class="studio-row">{canvas.title}</.link></section>
             </aside>

@@ -46,8 +46,8 @@ defmodule Platform.Gaming.Studio do
 
     with %{space: %{id: space_id}} <- current,
          :ok <- Access.check(scope, "canvas.write", {:space, space_id}),
-         :ok <- Access.check(scope, "play.use", {:org, current.project.org_id}),
-         %{id: participant_id} <- Platform.Repo.get_by(Chat.Participant, space_id: space_id, user_id: user.id),
+         :ok <- Access.authorize(scope, "play.use", current.project),
+         %{id: participant_id} <- Platform.Repo.get_by(Chat.Participant, space_id: space_id, participant_type: "user", participant_id: user.id),
          true <- Code.ensure_loaded?(provider) and function_exported?(provider, :start_project_session, 3),
          {:ok, status} <- apply(provider, :start_project_session, [current.project.id, user, []]) do
       document = %{

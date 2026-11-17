@@ -142,7 +142,7 @@ defmodule PlatformWeb.GamingControllerTest do
   } do
     {:ok, _} = Branding.update_identity(actor, %{experience: "gaming"})
     conn = init_test_session(conn, current_user_id: actor.id)
-    page = conn |> get("/play") |> html_response(200)
+    page = conn |> get("/play?mode=discover") |> html_response(200)
     evidence("gaming-owner", page)
     doc = LazyHTML.from_document(page)
     assert Enum.count(LazyHTML.query(doc, "#gaming-create[href='/admin/games']")) == 1
@@ -297,11 +297,12 @@ defmodule PlatformWeb.GamingControllerTest do
     end
 
     owner = init_test_session(build_conn(), current_user_id: actor.id)
-    create = get(owner, "/play?mode=create") |> html_response(200)
+    assert get(owner, "/play?mode=create") |> redirected_to() == "/studio"
+    create = get(owner, "/studio") |> html_response(200)
     evidence("gaming-create", create)
 
     for game <- games do
-      assert create =~ "/chat/#{game["slug"]}-development"
+      assert create =~ "/studio?project=#{game["project_id"]}"
 
       assert Platform.Gaming.workspace_path(
                Map.put(game, "development_space_id", game["community_space_id"]),
@@ -342,8 +343,8 @@ defmodule PlatformWeb.GamingControllerTest do
       )
 
     doc = LazyHTML.from_fragment(html)
-    assert Enum.count(LazyHTML.query(doc, ".cg-modes a[href='/play']")) == 1
-    assert Enum.count(LazyHTML.query(doc, ".cg-modes a[aria-current='page']")) == 1
+    assert Enum.count(LazyHTML.query(doc, ".cg-modes a[href='/studio']")) == 1
+    assert Enum.count(LazyHTML.query(doc, ".cg-modes a[href='/play?mode=discover']")) == 1
     assert Enum.count(LazyHTML.query(doc, "#sidebar-nav a[href='/chat']")) == 1
     assert Enum.count(LazyHTML.query(doc, "#sidebar-nav a[href='/tasks']")) == 1
   end

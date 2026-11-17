@@ -44,6 +44,8 @@ jobs:
           apt-get install -y --no-install-recommends build-essential ca-certificates curl git
           update-ca-certificates
       - uses: actions/checkout@v5
+        with:
+          fetch-depth: 0
       - name: Hex
         run: |
           mix local.hex --force
@@ -61,9 +63,10 @@ jobs:
           sh "$GITHUB_WORKSPACE/scripts/fetch-github-release-binaries.sh" nifs .
       - name: Format studio changes
         run: |
-          files=$(git diff-tree --no-commit-id --name-only -r HEAD | sed -n 's|^apps/platform/||p' | sed -n '/\.exs\?$/p; /\.heex$/p')
-          mix format $files
-          tar -czf "$GITHUB_WORKSPACE/studio-format.tar.gz" $files
+          git diff --name-only origin/main...HEAD -- '*.ex' '*.exs' '*.heex' > /tmp/studio-files
+          sed 's|^|../../|' /tmp/studio-files | xargs mix format --dot-formatter .formatter.exs
+          cd ../..
+          tar -czf studio-format.tar.gz -T /tmp/studio-files
       - uses: actions/upload-artifact@v4
         with:
           name: studio-format
@@ -72,4 +75,24 @@ jobs:
         run: |
           mix ecto.create
           mix ecto.migrate
-          mix test test/platform_web/live/game_studio_live_test.exs test/platform_web/components/gaming_shell_bottom_nav_test.exs test/platform_web/components/gaming_shell_install_switch_test.exs test/platform_web/module_gate_test.exs
+          mix test test/platform_web/live/game_studio_live_test.exs test/platform_web/components/gaming_shell_bottom_nav_test.exs test/platform_web/components/gaming_shell_install_switch_test.exs test/platform_web/module_gate_test.exs test/platform_web/controllers/gaming_controller_test.exs
+      - uses: actions/setup-node@v5
+        with:
+          node-version: 24
+      - name: Render actual studio at desktop and phone sizes
+        run: |
+          cd assets
+          npm ci
+          cd ..
+          mix assets.setup
+          mix assets.build
+          mkdir -p /tmp/studio-evidence/assets /tmp/studio-screens
+          cp -r priv/static/assets priv/static/images priv/static/fonts /tmp/studio-evidence/
+          npm install --prefix /tmp/studio-browser playwright@1.58.2
+          /tmp/studio-browser/node_modules/.bin/playwright install --with-deps chromium
+          STUDIO_PLAYWRIGHT=/tmp/studio-browser/node_modules/playwright node "$GITHUB_WORKSPACE/.github/scripts/studio-layout.cjs"
+      - uses: actions/upload-artifact@v4
+        if: always()
+        with:
+          name: studio-screens
+          path: /tmp/studio-screens
