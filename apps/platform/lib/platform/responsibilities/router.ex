@@ -213,7 +213,8 @@ defmodule Platform.Responsibilities.Router do
           subscribed_topics: MapSet.t(binary()),
           compiled_chat_patterns: [{Regex.t(), Responsibility.t()}],
           chat_telemetry_handler_id: binary(),
-          now_fn: (-> DateTime.t())
+          now_fn: (-> DateTime.t()),
+          event_row_reader: (binary() -> Responsibility.t() | nil)
         }
 
   # ── start_link / init ──────────────────────────────────────────────────────
@@ -239,6 +240,12 @@ defmodule Platform.Responsibilities.Router do
     # path goes through this fun, so a test can drive simulated time; see
     # the `{:tick_at, now}` clause.
     now_fn = Keyword.get(opts, :now_fn, &DateTime.utc_now/0)
+
+    # Fire-time re-read seam (task 01a1eaf6). `fire_matches/3` re-reads each
+    # event_topic match through this fun before firing; a test injects a
+    # raising reader to pin the fall-back-to-held-copy path. A start option,
+    # not an Application env hook.
+    event_row_reader = Keyword.get(opts, :event_row_reader, &Responsibilities.get_by_key/1)
 
     {snapshot, by_trigger} = walk_registry()
 
@@ -275,7 +282,8 @@ defmodule Platform.Responsibilities.Router do
       subscribed_topics: subscribed_topics,
       compiled_chat_patterns: compiled_chat_patterns,
       chat_telemetry_handler_id: chat_telemetry_handler_id,
-      now_fn: now_fn
+      now_fn: now_fn,
+      event_row_reader: event_row_reader
     }
 
     {:ok, state}
@@ -652,7 +660,7 @@ defmodule Platform.Responsibilities.Router do
   # moved off event_topic does not fire; a failed read fires the held copy.
   defp fire_matches(matches, payload, state) when is_list(matches) do
     matches
-    |> Enum.flat_map(&current_event_row/1)
+    |> Enum.flat_map(&current_event_row(&1, Map.get(state, :event_row_reader)))
     |> Enum.each(fn responsibility ->
       fire_trigger(
         responsibility,
@@ -662,8 +670,11 @@ defmodule Platform.Responsibilities.Router do
     end)
   end
 
-  defp current_event_row(%Responsibility{key: key} = held) do
-    case Responsibilities.get_by_key(key) do
+  defp current_event_row(%Responsibility{} = held, nil),
+    do: current_event_row(held, &Responsibilities.get_by_key/1)
+
+  defp current_event_row(%Responsibility{key: key} = held, reader) do
+    case reader.(key) do
       %Responsibility{enabled: true, trigger_kind: "event_topic"} = row -> [row]
       %Responsibility{} -> []
       nil -> []
