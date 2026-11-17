@@ -217,21 +217,14 @@ defmodule PlatformWeb.MeetingLiveIndexExternalTest do
 
   # ── Direction control ──────────────────────────────────────────────────
 
-  test "an INTERNAL viewer on the app host still gets the shell index and the internal copy",
+  # The shell listing is retired (task 01a1b8a5 stage 4): an internal viewer
+  # on the app host lands in Calendar, while the external member above keeps
+  # the meet-host list. The direction control is the redirect itself.
+  test "an INTERNAL viewer on the app host is sent to Calendar, not shown the list",
        %{conn: conn} do
     {conn, _user} = internal_conn(conn)
 
-    {:ok, _view, html} = live(conn, ~p"/meetings")
-
-    assert html =~ ~s(data-empty-state="meetings-index")
-
-    assert html
-           |> LazyHTML.from_document()
-           |> LazyHTML.query(~s([data-role="meetings-index-empty-note"]))
-           |> LazyHTML.attribute("data-viewer") == ["internal"]
-
-    assert html =~ "Meetings for your organisation will appear here."
-    refute html =~ "once you&#39;ve been invited"
+    assert {:error, {:live_redirect, %{to: "/calendar"}}} = live(conn, ~p"/meetings")
   end
 
   # ── The surface was NOT opened generally ───────────────────────────────

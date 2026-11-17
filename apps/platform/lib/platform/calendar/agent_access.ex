@@ -142,6 +142,51 @@ defmodule Platform.Calendar.AgentAccess do
 
   def read(_, _, _, _), do: {:error, :forbidden}
 
+  @doc """
+  The live checks `calendar_draft` needs (task 01a1b8a5 stage 3): exactly
+  `propose/6`'s for a create (active runtime and agent, the owner's live
+  grant with `create`, the runtime's and the owner's `calendar.write`).
+  `{:ok, owner_scope, grant}` or `{:error, :forbidden}`. A draft writes no
+  event, hold or consent, so nothing here takes the owner lock.
+  """
+  def draft_authority(%Scope{} = scope, owner_id), do: authority(scope, owner_id, :create)
+  def draft_authority(_scope, _owner_id), do: {:error, :forbidden}
+
+  @doc """
+  The agents this owner can ask for a draft from Calendar: a live grant
+  with `create`, the agent active and at least one active runtime.
+  `online?` says whether one of those runtimes is connected right now.
+  Each is `%{id, name, online?}`, by name.
+  """
+  def draft_agents(%Scope{actor: %Accounts.User{id: id}} = scope) do
+    if Access.can?(scope, "calendar.write") do
+      from(g in AgentGrant,
+        join: a in Platform.Agents.Agent,
+        on: a.id == g.agent_id,
+        join: r in AgentRuntime,
+        on: r.agent_id == a.id,
+        where: g.owner_id == ^id and is_nil(g.revoked_at) and g.create == true,
+        where: a.status == "active" and r.status == "active",
+        select: {a.id, a.name, r.runtime_id},
+        order_by: [a.name, r.runtime_id]
+      )
+      |> Repo.all()
+      |> Enum.group_by(fn {agent_id, name, _} -> {agent_id, name} end, &elem(&1, 2))
+      |> Enum.map(fn {{agent_id, name}, runtime_ids} ->
+        %{
+          id: agent_id,
+          name: name,
+          online?: Enum.any?(runtime_ids, &Platform.Federation.RuntimePresence.online?/1)
+        }
+      end)
+      |> Enum.sort_by(& &1.name)
+    else
+      []
+    end
+  end
+
+  def draft_agents(_scope), do: []
+
   def propose(scope, owner_id, operation, attrs, request_key, event_id \\ nil)
 
   def propose(%Scope{} = scope, owner_id, operation, attrs, request_key, event_id)

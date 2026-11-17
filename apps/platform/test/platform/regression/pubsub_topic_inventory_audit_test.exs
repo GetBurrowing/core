@@ -147,6 +147,10 @@ defmodule Platform.Regression.PubSubTopicInventoryAuditTest do
     # subscribes with its authenticated Access.Scope actor, never a client id,
     # and reloads its own permission-scoped entries on receipt.
     {"calendar:<id>", :user},
+    # Task 01a1b8a5 stage 3: a new agent draft for its owner. Draft.subscribe/1
+    # takes the authenticated Scope actor's id; the payload is the draft id,
+    # agent id and request key, and CalendarLive re-reads it owner-scoped.
+    {"calendar_drafts:<id>", :user},
     # Only the user's authenticated LiveView sessions subscribe. The payload
     # is a change id; ShellLive reloads that user's own scope after commit.
     {"access:user:<id>", :user},

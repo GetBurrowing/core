@@ -246,14 +246,10 @@ defmodule PlatformWeb.CalendarLiveTest do
     assert has_element?(view, "[data-role=feed-old]", "Old URL …/#{prefix}….ics was revoked")
   end
 
-  test "default Meetings destination is its workspace list", %{conn: conn} do
-    {:ok, view, _} = live(conn, "/meetings")
-    assert has_element?(view, "[data-region=meetings-workspace]")
-    refute has_element?(view, "[data-role=calendar-week-grid]")
-    # v4 list pane section labels (task 01a18d9f stage 4).
-    assert has_element?(view, ".mt-section-label", "Live now")
-    assert has_element?(view, ".mt-section-label", "Upcoming")
-    assert has_element?(view, ".mt-section-label", "Past")
+  # Task 01a1b8a5 stage 4: the app-host Meetings listing is retired into
+  # Calendar (`MeetingLive.CalendarRedirect`).
+  test "the old Meetings destination lands in Calendar", %{conn: conn} do
+    assert {:error, {:live_redirect, %{to: "/calendar"}}} = live(conn, "/meetings")
   end
 
   test "overlapping recurrence occurrences have distinct DOM identities", %{
@@ -787,7 +783,7 @@ defmodule PlatformWeb.CalendarLiveTest do
     assert has_element?(
              view,
              "button[data-calendar-key=meetings]",
-             "Burrow meetings you are invited to"
+             "Events with a Burrow call"
            )
 
     assert has_element?(view, "[data-legend=meeting]")
@@ -944,7 +940,10 @@ defmodule PlatformWeb.CalendarLiveTest do
     assert has_element?(view, "[data-role=calendar-details] .cal-pill-ok", "Live")
     copy = details_text(view)
     assert copy =~ "Burrow meeting in #design-"
-    assert has_element?(view, "#{@invite_header}", "Invited · 1")
+    # The viewer is an invitee here, so the details carry v7's "N invited /
+    # names" row rather than the hosts' live list (stage 5 review).
+    assert has_element?(view, "[data-role=calendar-detail-people]", "1 invited")
+    refute has_element?(view, "#{@invite_header}")
     assert copy =~ "Calendar user"
 
     assert has_element?(
@@ -953,7 +952,9 @@ defmodule PlatformWeb.CalendarLiveTest do
              "Join now"
            )
 
-    assert has_element?(view, ".cal-dfoot a", "View in Meetings")
+    # The old "View in Meetings" link went with the listing (task 01a1b8a5
+    # stage 4; prototype v7 excludes it).
+    refute has_element?(view, ".cal-dfoot a", "View in Meetings")
 
     open_chip(view, "external")
     assert has_element?(view, "[data-role=calendar-details] .cal-dhead b", "External event")
@@ -974,8 +975,10 @@ defmodule PlatformWeb.CalendarLiveTest do
     assert has_element?(view, "[data-role=calendar-details] .cal-dhead b", "Agent hold")
     assert has_element?(view, ".cal-pill-acc", "Tentative · needs your OK")
     assert details_text(view) =~ "held by Higgins"
-    assert has_element?(view, ".cal-dfoot button", "Approve")
-    assert has_element?(view, ".cal-dfoot button", "Revert")
+    # Approve / Revert are Inbox-only (task 01a1b8a5 stage 5).
+    refute has_element?(view, ".cal-dfoot button", "Approve")
+    refute has_element?(view, ".cal-dfoot button", "Revert")
+    assert has_element?(view, ".cal-dfoot a[href='/inbox']", "Open Inbox")
   end
 
   defp seed_member!(name) do
@@ -1100,16 +1103,19 @@ defmodule PlatformWeb.CalendarLiveTest do
 
     rsvp = "[data-role=calendar-details] [data-role=meeting-rsvp]"
     assert has_element?(view, "#{rsvp}[data-rsvp=invited]")
-    assert has_element?(view, "[data-role=meeting-invite-rsvp][data-rsvp=invited]", "Invited")
+    # An invitee's details show the v7 "N invited / names" row, not the
+    # owner's invite list (task 01a1b8a5 stage 5), so the answer is read
+    # from the control and the invite row rather than a list chip.
+    refute has_element?(view, "[data-role=meeting-invite-rsvp]")
 
     view |> element("#{rsvp} [data-value=accepted]") |> render_click()
     assert has_element?(view, "#{rsvp}[data-rsvp=accepted]")
     assert has_element?(view, "#{rsvp} [data-value=accepted][aria-pressed=true]")
-    assert has_element?(view, "[data-role=meeting-invite-rsvp][data-rsvp=accepted]", "Accepted")
     assert Platform.Meetings.invite_rsvp(meeting, user) == "accepted"
 
     view |> element("#{rsvp} [data-value=declined]") |> render_click()
-    assert has_element?(view, "[data-role=meeting-invite-rsvp][data-rsvp=declined]", "Declined")
+    assert has_element?(view, "#{rsvp}[data-rsvp=declined]")
+    assert Platform.Meetings.invite_rsvp(meeting, user) == "declined"
     assert Repo.get!(Platform.Meetings.Meeting, meeting.id).ical_sequence == 2
   end
 
@@ -1491,7 +1497,10 @@ defmodule PlatformWeb.CalendarLiveTest do
     end
   end
 
-  test "Approve in the hold's details commits it through AgentAccess", %{
+  # Every briefing, consent included, stays Inbox-only (task 01a1b8a5 stage
+  # 5): the hold's details offer no Approve / Revert, and a forged "consent"
+  # event has no clause, so it changes nothing.
+  test "a hold's details send its owner to Inbox and cannot approve or revert it", %{
     conn: conn,
     scope: scope,
     user: user
@@ -1502,28 +1511,15 @@ defmodule PlatformWeb.CalendarLiveTest do
     {:ok, view, _} = live(zoned(conn, zone), "/calendar")
 
     open_chip(view, "tentative")
-    view |> element(".cal-dfoot button", "Approve") |> render_click()
+    assert has_element?(view, "[data-role=calendar-detail-consent-note]", "in Inbox")
+    assert has_element?(view, "[data-role=calendar-detail-open-inbox][href='/inbox']")
+    refute has_element?(view, "[phx-click=consent]")
 
-    assert [%{state: "approved"}] = Repo.all(Calendar.Consent)
-    refute has_element?(view, ".cal-ev[data-kind=tentative]")
-    assert has_element?(view, ".cal-ev[data-kind=native]", "Interview · Sam Rivera")
-    # The open details follow the hold into a native event.
-    assert has_element?(view, "[data-role=calendar-details] .cal-pill-info", "Your event")
-  end
+    Process.flag(:trap_exit, true)
+    catch_exit(render_click(view, "consent", %{"verb" => "approve"}))
 
-  test "Revert in the hold's details removes the hold", %{conn: conn, scope: scope, user: user} do
-    zone = midday_zone()
-    today = local_today(zone)
-    seed_hold!(user, scope, zone, today)
-    {:ok, view, _} = live(zoned(conn, zone), "/calendar")
-
-    open_chip(view, "tentative")
-    view |> element(".cal-dfoot button", "Revert") |> render_click()
-
-    assert [%{state: "reverted"}] = Repo.all(Calendar.Consent)
-    refute has_element?(view, ".cal-ev[data-kind=tentative]")
-    refute has_element?(view, "[data-role=calendar-details]")
-    assert render(view) =~ "Reverted · hold removed"
+    assert [%{state: "pending"}] = Repo.all(Calendar.Consent)
+    assert [%{tentative: true}] = Repo.all(Platform.Calendar.Event)
   end
 
   test "the editor shows the three v4 validation messages", %{conn: conn} do
@@ -1795,19 +1791,15 @@ defmodule PlatformWeb.CalendarLiveTest do
       })
   end
 
-  defp redirect_query(to) do
-    %URI{path: path, query: query} = URI.parse(to)
-    {path, URI.decode_query(query || "")}
-  end
-
-  test "New renders the Event | Meeting toggle with Event checked", %{conn: conn} do
+  # Task 01a1b8a5 stage 2 retired the Event | Meeting toggle (task
+  # 01a1986e): Calendar has one editor, and a call is a checkbox in it.
+  test "New renders one editor with no Event | Meeting toggle", %{conn: conn} do
     {:ok, view, _} = live(zoned(conn, "America/Chicago"), "/calendar")
     view |> element("#calendar-new") |> render_click()
 
-    assert has_element?(view, "#{@toggle}[role=radiogroup]")
-    assert has_element?(view, "#{@toggle} [role=radio][data-kind=event][aria-checked=true]")
-    assert has_element?(view, "#{@toggle} [role=radio][data-kind=meeting][aria-checked=false]")
-    assert has_element?(view, "#{@toggle} [data-kind=meeting] i.cal-sw.cal-k-meeting")
+    assert has_element?(view, "#calendar-editor h2", "New event")
+    refute has_element?(view, @toggle)
+    refute has_element?(view, "#calendar-editor [data-kind=meeting]")
   end
 
   test "a New event still saves exactly one Event; Edit renders no toggle", %{
@@ -1840,7 +1832,7 @@ defmodule PlatformWeb.CalendarLiveTest do
     refute has_element?(view, @toggle)
   end
 
-  test "with Meetings off, New renders no toggle and new_meeting does nothing", %{
+  test "with Meetings off, New renders no toggle and offers no call", %{
     conn: conn,
     user: user
   } do
@@ -1850,10 +1842,10 @@ defmodule PlatformWeb.CalendarLiveTest do
 
     assert has_element?(view, "#calendar-editor h2", "New event")
     refute has_element?(view, @toggle)
-    assert is_binary(render_click(view, "new_meeting", %{}))
+    refute has_element?(view, "#calendar-editor input[data-role=f-call]")
   end
 
-  test "a slot tap at 10:30, then Meeting, carries the date and time to the scheduler", %{
+  test "a slot tap at 10:30 opens the editor there and hands nothing to the scheduler", %{
     conn: conn
   } do
     zone = midday_zone()
@@ -1865,18 +1857,9 @@ defmodule PlatformWeb.CalendarLiveTest do
     |> element("[data-role=calendar-week] button.cal-slot[aria-label='#{label}']")
     |> render_click()
 
-    view |> element("#{@toggle} [data-kind=meeting]") |> render_click()
-
-    {to, _flash} = assert_redirect(view)
-    {path, query} = redirect_query(to)
-    assert path == "/meetings"
-
-    assert query == %{
-             "schedule" => "true",
-             "from" => "calendar",
-             "date" => Date.to_iso8601(today),
-             "start_time" => "10:30 AM"
-           }
+    assert has_element?(view, "#calendar-event-form input[name='event[start]'][value='10:30 AM']")
+    assert has_element?(view, "#calendar-event-form input[name='event[end]'][value='11:00 AM']")
+    refute has_element?(view, @toggle)
   end
 
   test "?new=1 with date and start presets that day and time", %{conn: conn} do

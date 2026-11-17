@@ -1104,6 +1104,44 @@ defmodule Platform.Chat do
     end
   end
 
+  @doc """
+  Post `content` as the user `user_id` into their DM with `agent_id`,
+  opening the DM first if there is none (`find_or_create_dm/4`, so the same
+  external-user rule applies). Delivery to the agent is whatever
+  `post_message/2` already does for a DM message; nothing is added.
+
+  The smallest shared step for a surface outside Chat that sends a person's
+  own words to an agent (task 01a1b8a5 stage 3: Calendar's scheduling
+  entry). Option `:metadata` is stored on the message.
+
+  `{:ok, space, message}` or `{:error, reason}`.
+  """
+  @spec post_to_agent_dm(binary(), binary(), String.t(), keyword()) ::
+          {:ok, Space.t(), Message.t()} | {:error, term()}
+  def post_to_agent_dm(user_id, agent_id, content, opts \\ [])
+      when is_binary(user_id) and is_binary(agent_id) and is_binary(content) do
+    with {:ok, %Space{} = space} <- find_or_create_dm(user_id, "agent", agent_id),
+         %Participant{} = participant <-
+           Repo.one(
+             from(p in Participant,
+               where:
+                 p.space_id == ^space.id and p.participant_type == "user" and
+                   p.participant_id == ^user_id,
+               limit: 1
+             )
+           ) || {:error, :not_participant},
+         {:ok, message} <-
+           post_message(%{
+             space_id: space.id,
+             participant_id: participant.id,
+             content_type: "text",
+             content: content,
+             metadata: Keyword.get(opts, :metadata, %{})
+           }) do
+      {:ok, space, message}
+    end
+  end
+
   # Learned defaults broad capture (task 01a1b6a1 stage 3): who a person
   # opens DMs with, org-level (`space_id` nil). Never fails the open.
   defp capture_dm_target({:ok, %Space{}}, user_id, target_type, target_id) do

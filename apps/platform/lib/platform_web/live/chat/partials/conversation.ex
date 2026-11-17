@@ -101,6 +101,8 @@ defmodule PlatformWeb.ChatLive.Partials.Conversation do
   attr(:revealed_section_ids, :any, required: true)
   attr(:sidebar_sections, :list, required: true)
   attr(:meetings_enabled, :boolean, required: true)
+  # The space backs an event whose Burrow call is off (task 01a1b8a5 stage 5).
+  attr(:call_off?, :boolean, default: false)
   attr(:in_meeting, :boolean, required: true)
   # The goal decides whether the desktop subtitle shows the topic (task
   # 01a0b491): a goal replaces it.
@@ -245,7 +247,7 @@ defmodule PlatformWeb.ChatLive.Partials.Conversation do
                join server-side. THE SERVER REFUSAL IS THE GATE; this keeps a
                dead button off their header. --%>
           <button
-            :if={@meetings_enabled && !@in_meeting && !@external?}
+            :if={@meetings_enabled && !@in_meeting && !@external? && !@call_off?}
             type="button"
             id="chat-call"
             phx-click="meeting_join"
@@ -253,6 +255,18 @@ defmodule PlatformWeb.ChatLive.Partials.Conversation do
           >
             <.icon name="hero-phone" class="size-4" /> Call
           </button>
+          <%!-- The call toggle (task 01a1b8a5 stage 5): this space belongs
+               to an event whose organizer turned the Burrow call off. Not a
+               button — there is nothing to join; the server refuses one. --%>
+          <span
+            :if={@meetings_enabled && !@in_meeting && !@external? && @call_off?}
+            id="chat-call-off"
+            data-role="chat-call-off"
+            title="The organizer turned the Burrow call off for this event."
+            class="inline-flex items-center gap-1.5 rounded-full px-3 py-1 text-sm text-subtle"
+          >
+            <.icon name="hero-video-camera-slash" class="size-4" /> No call for this event
+          </span>
           <button
             type="button"
             id="chat-details"
@@ -281,8 +295,18 @@ defmodule PlatformWeb.ChatLive.Partials.Conversation do
       <%!-- Phone Call (task 01a1557a-8a6d stage 1): the Meet button's gate
            and event, as the header's one coloured control. The server
            refusal in `Meetings.join_for_user/3` is still the gate. --%>
+      <span
+        :if={@meetings_enabled && !@in_meeting && !@external? && @call_off?}
+        data-role="space-call-off"
+        role="img"
+        aria-label="No call for this event"
+        title="The organizer turned the Burrow call off for this event."
+        class="flex size-11 shrink-0 items-center justify-center lg:hidden"
+      >
+        <span class="hero-video-camera-slash size-5 text-subtle" aria-hidden="true"></span>
+      </span>
       <button
-        :if={@meetings_enabled && !@in_meeting && !@external?}
+        :if={@meetings_enabled && !@in_meeting && !@external? && !@call_off?}
         type="button"
         phx-click="meeting_join"
         data-role="space-call"

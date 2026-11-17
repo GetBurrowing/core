@@ -24,6 +24,12 @@ defmodule PlatformWeb.MeetingLiveGuestHostFlashTest do
   """
   use PlatformWeb.ConnCase, async: false
 
+  # The meetings LISTING survives only on the `meet.` host's member surface
+  # (task 01a1b8a5 stage 4, the `meet-member-meetings-index` ParallelUI
+  # shim); the app-host `/meetings` redirects to Calendar. These tests
+  # exercise that surviving listing, so they reach it the way a member does.
+  defp meet_member_host(conn), do: %{conn | host: "meet.example.com"}
+
   import Phoenix.LiveViewTest
 
   alias Platform.{Chat, Meetings, Repo}
@@ -122,7 +128,7 @@ defmodule PlatformWeb.MeetingLiveGuestHostFlashTest do
   # The whole flow a host performs, ending in the click that calls
   # `invite_guest/2`. Returns the HTML rendered by that final click.
   defp submit_guest_invite(conn, meeting, address) do
-    {:ok, view, _html} = live(conn, ~p"/meetings?view=calendar")
+    {:ok, view, _html} = live(meet_member_host(conn), ~p"/meetings?view=calendar")
 
     view
     |> element(in_grid(~s([data-role="calendar-event"][data-meeting-id="#{meeting.id}"])))

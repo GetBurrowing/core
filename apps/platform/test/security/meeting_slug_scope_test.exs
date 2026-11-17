@@ -73,6 +73,12 @@ defmodule Platform.Security.MeetingSlugScopeTest do
   """
   use PlatformWeb.ConnCase, async: false
 
+  # The meetings LISTING survives only on the `meet.` host's member surface
+  # (task 01a1b8a5 stage 4, the `meet-member-meetings-index` ParallelUI
+  # shim); the app-host `/meetings` redirects to Calendar. These tests
+  # exercise that surviving listing, so they reach it the way a member does.
+  defp meet_member_host(conn), do: %{conn | host: "meet.example.com"}
+
   import Phoenix.LiveViewTest
   import Platform.TenancyFixtures
 
@@ -232,7 +238,7 @@ defmodule Platform.Security.MeetingSlugScopeTest do
   end
 
   defp index_html(conn, user, opts \\ []) do
-    {:ok, view, _html} = live(index_conn(conn, user, opts), ~p"/meetings")
+    {:ok, view, _html} = live(meet_member_host(index_conn(conn, user, opts)), ~p"/meetings")
     {view, render(view)}
   end
 
@@ -253,7 +259,7 @@ defmodule Platform.Security.MeetingSlugScopeTest do
 
   defp archive_ids(conn, user, opts \\ []) do
     conn = index_conn(conn, user, opts)
-    {:ok, _view, html} = live(conn, ~p"/meetings?view=archive")
+    {:ok, _view, html} = live(meet_member_host(conn), ~p"/meetings?view=archive")
     {rendered_ids(html, ~s([data-role="archive-row"])), html}
   end
 
@@ -720,7 +726,9 @@ defmodule Platform.Security.MeetingSlugScopeTest do
 
       # The explicit compatibility calendar must retain the same boundary.
       for {actor, visible, denied} <- [{viewer, own, foreign}, {insider, foreign, own}] do
-        {:ok, _view, grid_html} = live(index_conn(conn, actor, []), ~p"/meetings?view=calendar")
+        {:ok, _view, grid_html} =
+          live(meet_member_host(index_conn(conn, actor, [])), ~p"/meetings?view=calendar")
+
         grid_ids = rendered_ids(grid_html, ~s([data-role="calendar-event"]))
         assert visible.id in grid_ids
         refute denied.id in grid_ids
@@ -782,7 +790,7 @@ defmodule Platform.Security.MeetingSlugScopeTest do
       # Through the route: no session means no mount at all, so the page
       # cannot leak — but the context floor above is what holds if a future
       # surface mounts without one.
-      assert {:error, {:redirect, _}} = live(conn, ~p"/meetings")
+      assert {:error, {:redirect, _}} = live(meet_member_host(conn), ~p"/meetings")
 
       {rendered, html} = index_ids(conn, insider)
       assert meeting.id in rendered, "positive control: the row is real and renderable"

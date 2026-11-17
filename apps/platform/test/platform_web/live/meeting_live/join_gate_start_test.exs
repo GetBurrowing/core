@@ -260,8 +260,10 @@ defmodule PlatformWeb.MeetingLive.JoinGateStartTest do
   end
 
   test "a stray Join event on the index (no meeting on the socket) does not crash", %{conn: conn} do
-    %{user: user} = internal_member(:scheduled)
-    {:ok, view, _html} = conn |> login(user) |> live("/meetings")
+    # The app-host index redirects to Calendar (task 01a1b8a5 stage 4); the
+    # meet host's member index is the meeting-less MeetingLive that remains.
+    %{user: user} = external_with_invite(:scheduled)
+    {:ok, view, _html} = conn |> login(user) |> on_meet_host() |> live("/meetings")
 
     render_click(view, "join_meeting", %{})
 

@@ -342,6 +342,7 @@ defmodule Platform.Application do
     |> maybe_add_prototype_purger(flag)
     |> maybe_add_insight_purger(flag)
     |> maybe_add_habits_pruner(flag)
+    |> maybe_add_calendar_draft_pruner(flag)
     |> maybe_add_insight_disseminator(flag)
     |> maybe_add_catalog_emitter(flag)
     |> maybe_add_deploy_merge_reconciler(flag)
@@ -727,6 +728,19 @@ defmodule Platform.Application do
     if flag.(:platform, :start_habits_pruner, true) do
       idx = Enum.find_index(children, &(&1 == PlatformWeb.Endpoint)) || length(children)
       List.insert_at(children, idx, Platform.Habits.Pruner)
+    else
+      children
+    end
+  end
+
+  # Calendar DraftPruner (task 01a1b8a5 stage 5): daily delete of
+  # calendar_drafts rows whose link expired more than a week ago. Needs Repo.
+  # Disabled in config/test.exs — tests call
+  # `Platform.Calendar.Draft.prune_expired/1` directly.
+  defp maybe_add_calendar_draft_pruner(children, flag) do
+    if flag.(:platform, :start_calendar_draft_pruner, true) do
+      idx = Enum.find_index(children, &(&1 == PlatformWeb.Endpoint)) || length(children)
+      List.insert_at(children, idx, Platform.Calendar.DraftPruner)
     else
       children
     end

@@ -22,7 +22,6 @@ struct NativeTab: Equatable {
     static let catalog: [NativeTab] = [
         NativeTab(key: "chat", title: "Chat", image: "tab-chat"),
         NativeTab(key: "calendar", title: "Calendar", image: "tab-calendar"),
-        NativeTab(key: "meetings", title: "Meetings", image: "tab-meetings"),
         NativeTab(key: "inbox", title: "Inbox", image: "tab-inbox"),
         NativeTab(key: "more", title: "More", image: "tab-more"),
     ]

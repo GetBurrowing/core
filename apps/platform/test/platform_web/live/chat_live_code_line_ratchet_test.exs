@@ -685,7 +685,7 @@ defmodule PlatformWeb.ChatLiveCodeLineRatchetTest do
   # (`ChatListHooks.float_on_open/2`, before `clear_unread/2` zeroes the
   # count it reads) and clears it on `/chat` (`ChatListHooks.clear_floated/1`),
   # one pipeline line each; the logic lives in `ChatListHooks`.
-  @chat_live_code_line_count 2034
+  @chat_live_code_line_count 2038
 
   @doc """
   Count the CODE lines of a source file.

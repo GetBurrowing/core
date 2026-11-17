@@ -2330,6 +2330,17 @@ defmodule PlatformWeb.ChatLive.MeetingHooks do
       {:error, :join_not_permitted} ->
         {:refused, socket}
 
+      # The call toggle (task 01a1b8a5 stage 4): the meeting this space
+      # backs has its call off. Nothing was written, so it is a refusal
+      # (the write throttle takes no slot); say why.
+      {:error, :call_disabled} ->
+        {:refused,
+         Phoenix.LiveView.put_flash(
+           socket,
+           :error,
+           "The organizer turned the Burrow call off for this event."
+         )}
+
       {:error, reason} ->
         Logger.warning("[ChatLive] meeting_join failed: #{inspect(reason)}")
         {:attempted, socket}

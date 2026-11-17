@@ -47,7 +47,9 @@ defmodule PlatformWeb.Components.PhoneReachabilityTest do
     context: {:tab_or_row, :context},
     prompts: {:settings, "/admin/prompts"},
     experiments: {:tab_or_row, :experiments},
-    meetings: {:tab_or_row, :meetings},
+    # The Meetings listing was retired into Calendar (task 01a1b8a5 stage
+    # 4); a call room is reached from its Calendar event.
+    meetings: {:successor, :calendar},
     email: {:tab_or_row, :email},
     admin: :settings_admin
   ]
@@ -106,7 +108,7 @@ defmodule PlatformWeb.Components.PhoneReachabilityTest do
   defp reachable?(phone, {:tab_or_row, key}),
     do: to_string(key) in (phone.tabs ++ phone.rows)
 
-  defp reachable?(phone, {:successor, key}), do: to_string(key) in phone.rows
+  defp reachable?(phone, {:successor, key}), do: to_string(key) in (phone.tabs ++ phone.rows)
 
   defp reachable?(phone, {:settings, path}), do: phone.settings? and path in phone.admin_paths
 

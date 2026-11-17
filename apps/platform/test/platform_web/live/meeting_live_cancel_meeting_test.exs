@@ -12,6 +12,12 @@ defmodule PlatformWeb.MeetingLiveCancelMeetingTest do
   """
   use PlatformWeb.ConnCase, async: false
 
+  # The meetings LISTING survives only on the `meet.` host's member surface
+  # (task 01a1b8a5 stage 4, the `meet-member-meetings-index` ParallelUI
+  # shim); the app-host `/meetings` redirects to Calendar. These tests
+  # exercise that surviving listing, so they reach it the way a member does.
+  defp meet_member_host(conn), do: %{conn | host: "meet.example.com"}
+
   import Phoenix.LiveViewTest
 
   alias Platform.Meetings
@@ -101,7 +107,7 @@ defmodule PlatformWeb.MeetingLiveCancelMeetingTest do
       creator: creator
     } do
       meeting = meeting!(project, creator)
-      {:ok, view, _} = live(conn_for(conn, creator), detail_path(meeting))
+      {:ok, view, _} = live(meet_member_host(conn_for(conn, creator)), detail_path(meeting))
 
       assert has_element?(view, @detail <> " [data-role=meeting-cancel-row]", "Cancel meeting")
       refute has_element?(view, "[data-role=meeting-cancel-confirm]")
@@ -112,7 +118,7 @@ defmodule PlatformWeb.MeetingLiveCancelMeetingTest do
          %{conn: conn, project: project, creator: creator, plain: plain, org_id: org_id} do
       meeting = meeting!(project, creator)
 
-      {:ok, view, _} = live(conn_for(conn, plain), detail_path(meeting))
+      {:ok, view, _} = live(meet_member_host(conn_for(conn, plain)), detail_path(meeting))
 
       # The detail rendered (positive control), and it carries no control.
       assert has_element?(view, @detail <> " [data-meeting-id='#{meeting.id}']")
@@ -129,7 +135,10 @@ defmodule PlatformWeb.MeetingLiveCancelMeetingTest do
       assert render(view) =~ "You can&#39;t cancel this meeting."
 
       admin = member!(org_id, "Admin", "admin")
-      {:ok, admin_view, _} = live(conn_for(build_conn(), admin), detail_path(meeting))
+
+      {:ok, admin_view, _} =
+        live(meet_member_host(conn_for(build_conn(), admin)), detail_path(meeting))
+
       assert has_element?(admin_view, "[data-role=meeting-cancel-row]")
     end
   end
@@ -139,7 +148,7 @@ defmodule PlatformWeb.MeetingLiveCancelMeetingTest do
   describe "the confirm inset" do
     test "names three invitees", %{conn: conn, project: project, creator: creator} do
       meeting = meeting!(project, creator, invitees: 3)
-      {:ok, view, _} = live(conn_for(conn, creator), detail_path(meeting))
+      {:ok, view, _} = live(meet_member_host(conn_for(conn, creator)), detail_path(meeting))
 
       view |> element("[data-role=meeting-cancel-row]") |> render_click()
 
@@ -162,7 +171,7 @@ defmodule PlatformWeb.MeetingLiveCancelMeetingTest do
       creator: creator
     } do
       nobody = meeting!(project, creator, name: "Solo")
-      {:ok, view, _} = live(conn_for(conn, creator), detail_path(nobody))
+      {:ok, view, _} = live(meet_member_host(conn_for(conn, creator)), detail_path(nobody))
       render_click(view, "cancel_meeting_open", %{})
 
       assert has_element?(
@@ -174,7 +183,7 @@ defmodule PlatformWeb.MeetingLiveCancelMeetingTest do
       refute render(view) =~ "be told it"
 
       one = meeting!(project, creator, name: "Pair", invitees: 1)
-      {:ok, view, _} = live(conn_for(build_conn(), creator), detail_path(one))
+      {:ok, view, _} = live(meet_member_host(conn_for(build_conn(), creator)), detail_path(one))
       render_click(view, "cancel_meeting_open", %{})
 
       assert has_element?(
@@ -190,7 +199,7 @@ defmodule PlatformWeb.MeetingLiveCancelMeetingTest do
       creator: creator
     } do
       meeting = meeting!(project, creator)
-      {:ok, view, _} = live(conn_for(conn, creator), detail_path(meeting))
+      {:ok, view, _} = live(meet_member_host(conn_for(conn, creator)), detail_path(meeting))
 
       render_click(view, "cancel_meeting_open", %{})
       view |> element("[data-role=meeting-cancel-keep]") |> render_click()
@@ -214,7 +223,7 @@ defmodule PlatformWeb.MeetingLiveCancelMeetingTest do
       creator: creator
     } do
       meeting = meeting!(project, creator)
-      {:ok, view, _} = live(conn_for(conn, creator), detail_path(meeting))
+      {:ok, view, _} = live(meet_member_host(conn_for(conn, creator)), detail_path(meeting))
       render_click(view, "cancel_meeting_open", %{})
 
       [keep] =
@@ -237,7 +246,7 @@ defmodule PlatformWeb.MeetingLiveCancelMeetingTest do
       creator: creator
     } do
       meeting = meeting!(project, creator, invitees: 2)
-      {:ok, view, _} = live(conn_for(conn, creator), detail_path(meeting))
+      {:ok, view, _} = live(meet_member_host(conn_for(conn, creator)), detail_path(meeting))
 
       render_click(view, "cancel_meeting_open", %{})
       view |> element("[data-role=meeting-cancel-submit]") |> render_click()
@@ -270,7 +279,7 @@ defmodule PlatformWeb.MeetingLiveCancelMeetingTest do
     } do
       selected = meeting!(project, creator, name: "Selected")
       other = meeting!(project, creator, name: "Other")
-      {:ok, view, _} = live(conn_for(conn, creator), detail_path(selected))
+      {:ok, view, _} = live(meet_member_host(conn_for(conn, creator)), detail_path(selected))
 
       render_click(view, "cancel_meeting_confirm", %{"id" => other.id, "meeting_id" => other.id})
       render_async(view)
@@ -287,7 +296,7 @@ defmodule PlatformWeb.MeetingLiveCancelMeetingTest do
       meeting = meeting!(project, creator)
       {:ok, cancelled} = Meetings.cancel_meeting_for_user(meeting.id, creator)
 
-      {:ok, view, _} = live(conn_for(conn, creator), detail_path(meeting))
+      {:ok, view, _} = live(meet_member_host(conn_for(conn, creator)), detail_path(meeting))
       refute has_element?(view, "[data-role=meeting-cancel-row]")
       assert has_element?(view, @detail <> " [data-role=meeting-cancelled-chip]")
 
@@ -306,7 +315,7 @@ defmodule PlatformWeb.MeetingLiveCancelMeetingTest do
       creator: creator
     } do
       meeting = meeting!(project, creator)
-      {:ok, view, _} = live(conn_for(conn, creator), detail_path(meeting))
+      {:ok, view, _} = live(meet_member_host(conn_for(conn, creator)), detail_path(meeting))
       render_click(view, "cancel_meeting_open", %{})
 
       # The meeting ends under the open confirm without a broadcast, so the
@@ -343,7 +352,9 @@ defmodule PlatformWeb.MeetingLiveCancelMeetingTest do
 
       meeting = meeting!(project, creator, start: start, invitees: 3)
 
-      {:ok, view, _} = live(conn_for(conn, creator, zone), "/meetings?view=calendar")
+      {:ok, view, _} =
+        live(meet_member_host(conn_for(conn, creator, zone)), "/meetings?view=calendar")
+
       render_click(view, "select_meeting", %{"id" => meeting.id})
 
       for footer <- ["meeting-detail-panel-footer", "meeting-detail-sheet-footer"] do
@@ -359,7 +370,9 @@ defmodule PlatformWeb.MeetingLiveCancelMeetingTest do
                "3 people were invited."
              )
 
-      {:ok, plain_view, _} = live(conn_for(build_conn(), plain, zone), "/meetings?view=calendar")
+      {:ok, plain_view, _} =
+        live(meet_member_host(conn_for(build_conn(), plain, zone)), "/meetings?view=calendar")
+
       render_click(plain_view, "select_meeting", %{"id" => meeting.id})
       assert has_element?(plain_view, "[data-role=meeting-detail-panel-footer]")
       refute has_element?(plain_view, "[data-role=meeting-cancel-row]")

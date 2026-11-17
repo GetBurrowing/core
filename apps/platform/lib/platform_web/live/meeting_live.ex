@@ -249,9 +249,6 @@ defmodule PlatformWeb.MeetingLive do
   import PlatformWeb.Components.Meetings.IntentsCollapse,
     only: [intents_collapse: 1, intents_overlays: 1]
 
-  import PlatformWeb.Components.Meetings.InviteControl,
-    only: [invite_control: 1, invite_list: 1]
-
   import PlatformWeb.Components.Meetings.MeetingDetail,
     only: [meeting_detail_body: 1, meeting_detail_actions: 1]
 
@@ -284,6 +281,7 @@ defmodule PlatformWeb.MeetingLive do
   alias Platform.Tasks
   alias Platform.Tenancy
   alias PlatformWeb.ChatLive.MeetingHooks
+  alias PlatformWeb.MeetingLive.CalendarRedirect
   alias PlatformWeb.ChatLive.MeetingHumanInvite
   alias PlatformWeb.Components.Meetings.IntentsCollapse
   alias PlatformWeb.MeetingLive.CalendarWindow
@@ -392,13 +390,6 @@ defmodule PlatformWeb.MeetingLive do
   # scheduling a meeting nobody asked for.
   @duration_options [15, 30, 45, 60, 90, 120]
   @default_duration_minutes 30
-
-  @schedule_pair_error "Date and start time are required together."
-  @no_time_zone_error "Time zone unavailable — reload to pick a time."
-  @invalid_time_error "Date and start time are invalid."
-  @incomplete_date_error "Date is incomplete — pick the month, day and year."
-  @nonexistent_time_error "That time does not exist on that date."
-  @invalid_duration_error "Duration is invalid."
 
   @doc "Durations, in minutes, the new-meeting sheet offers."
   def duration_options, do: @duration_options
@@ -686,14 +677,7 @@ defmodule PlatformWeb.MeetingLive do
     |> assign(:viewer_external?, true)
     |> assign(:projects, [])
     |> assign(:meeting_subscribed_project_ids, [])
-    |> assign(:show_start_meeting_sheet, false)
-    |> assign(:schedule_origin, nil)
-    |> assign(:meet_now_pending?, false)
     |> assign(:meet_now_project_id, nil)
-    |> assign(:meet_now_project_name, nil)
-    |> assign(:start_meeting_form, blank_start_meeting_form([]))
-    |> assign(:start_meeting_error, nil)
-    |> seed_create_invite_assigns()
     |> LiveInvites.seed()
   end
 
@@ -1351,6 +1335,19 @@ defmodule PlatformWeb.MeetingLive do
     end
   end
 
+  # The app-host `/meetings` index is retired (task 01a1b8a5 stage 4): its
+  # listing, archive and schedule links land in Calendar, mapped by the
+  # allow list in `CalendarRedirect.path/1`. Only the SHELL surface
+  # redirects. The `meet.` host's member index (`chrome_mode: :none`) is the
+  # one listing an external member has, so it stays, registered as the
+  # `meet-member-meetings-index` shim in `Platform.ParallelUI`.
+  # A push_navigate here is a 302 on the dead render, so a bookmark never
+  # draws the old list first.
+  # parallel-ui: meet-member-meetings-index
+  def handle_params(params, _url, %{assigns: %{shell?: true}} = socket) do
+    {:noreply, push_navigate(socket, to: CalendarRedirect.path(params))}
+  end
+
   def handle_params(params, _url, socket) do
     # `:index` action — grouped meetings list (live / upcoming / ended)
     # plus an empty-state when no meetings exist. Pre-project-routing
@@ -1447,25 +1444,13 @@ defmodule PlatformWeb.MeetingLive do
      |> assign(:viewer_external?, Tenancy.external_user?(socket.assigns[:current_user_record]))
      |> assign(:meeting_subscribed_project_ids, project_ids)
      |> assign_new(:projects, fn -> projects end)
-     |> assign_new(:show_start_meeting_sheet, fn -> false end)
-     # Where the open sheet came from: `:calendar` returns the viewer to
-     # /calendar after Create or Close (task 01a1986e), nil stays here.
-     |> assign_new(:schedule_origin, fn -> nil end)
-     |> assign_new(:meet_now_pending?, fn -> false end)
      |> assign_meet_now_project()
-     |> assign_new(:start_meeting_form, fn -> blank_start_meeting_form(projects) end)
-     |> assign_new(:start_meeting_error, fn -> nil end)
-     |> assign_new(:meeting_create_invites, fn -> [] end)
-     |> assign_new(:meeting_create_invite_query, fn -> "" end)
-     |> assign_new(:meeting_create_invite_candidates, fn -> [] end)
-     |> assign_new(:meeting_create_invite_email, fn -> nil end)
      |> assign_new(:selected_meeting_id, fn -> nil end)
      |> assign_new(:invite_ring_states, fn -> %{} end)
      |> assign_new(:ring_topic_meeting_ids, fn -> MapSet.new() end)
      |> seed_live_invites_once()
      |> assign_calendar_week(calendar_today(socket))
      |> assign_archive(params)
-     |> maybe_open_scheduler(params)
      |> sync_meeting_cancel()}
   end
 
@@ -1482,51 +1467,6 @@ defmodule PlatformWeb.MeetingLive do
     |> assign(:list_meeting_id, id)
     |> assign(:list_tab, tab || "summary")
   end
-
-  # `?schedule=true` opens the create sheet (task 01a1986e). Calendar's
-  # New -> Meeting is the entry point: it NAVIGATES here with `from=calendar`
-  # plus the day and start time the viewer was looking at, so the meeting
-  # commits through the one `create_from_sheet/7` path rather than a second
-  # constructor in CalendarLive.
-  #
-  # The reset comes first so a prefill lands on a blank sheet, never on a
-  # previous draft. `date` and `start_time` are prefilled only when they
-  # parse — an unparseable value is dropped rather than echoed into the
-  # field, where it would be refused at submit with a message about input
-  # the viewer never typed. A link without `from` keeps the plain open.
-  defp maybe_open_scheduler(socket, %{"schedule" => "true"} = params) do
-    socket = reset_create_sheet(socket)
-
-    form =
-      socket.assigns.start_meeting_form
-      |> put_schedule_date(params["date"])
-      |> put_schedule_start_time(params["start_time"])
-
-    socket
-    |> assign(:start_meeting_form, form)
-    |> assign(:schedule_origin, if(params["from"] == "calendar", do: :calendar))
-    |> assign(:show_start_meeting_sheet, true)
-  end
-
-  defp maybe_open_scheduler(socket, _), do: socket
-
-  defp put_schedule_date(form, date) when is_binary(date) do
-    case Date.from_iso8601(date) do
-      {:ok, date} -> Map.put(form, "date", Date.to_iso8601(date))
-      {:error, _reason} -> form
-    end
-  end
-
-  defp put_schedule_date(form, _date), do: form
-
-  defp put_schedule_start_time(form, start_time) when is_binary(start_time) do
-    case PlatformWeb.TimeEntry.parse(start_time) do
-      {:ok, time} -> Map.put(form, "start_time", PlatformWeb.TimeEntry.format(time))
-      {:error, _reason} -> form
-    end
-  end
-
-  defp put_schedule_start_time(form, _start_time), do: form
 
   # ── Calendar window (task 019fb954-8ead) ─────────────────────────────────
 
@@ -2179,6 +2119,21 @@ defmodule PlatformWeb.MeetingLive do
 
   def cancel_attrs(_cancel, _meeting), do: nil
 
+  @doc """
+  The Delete action's attrs for `meeting` (task 01a1b281 stage 4), or nil.
+  `can_delete` is `Meetings.can_delete_meeting?/2` for the selection,
+  computed with the cancel state when the selection changes: cancelled,
+  ended, or scheduled with its time past. A live or future scheduled
+  meeting never gets the row.
+  """
+  def delete_attrs(%{meeting_id: id} = cancel, %Meeting{id: id}),
+    do: %{
+      can_delete: Map.get(cancel, :can_delete, false),
+      state: Map.get(cancel, :delete_state, :idle)
+    }
+
+  def delete_attrs(_cancel, _meeting), do: nil
+
   defp sync_meeting_cancel(socket) do
     target = cancel_target_id(socket.assigns)
 
@@ -2189,7 +2144,15 @@ defmodule PlatformWeb.MeetingLive do
   end
 
   defp build_meeting_cancel(_socket, nil),
-    do: %{meeting_id: nil, can_cancel: false, audience: 0, state: :idle}
+    do: %{
+      meeting_id: nil,
+      can_cancel: false,
+      can_edit: false,
+      can_delete: false,
+      audience: 0,
+      state: :idle,
+      delete_state: :idle
+    }
 
   defp build_meeting_cancel(socket, id) do
     meeting =
@@ -2205,12 +2168,38 @@ defmodule PlatformWeb.MeetingLive do
         %{
           meeting_id: id,
           can_cancel: can_cancel,
+          can_edit: can_cancel and Meetings.can_edit_meeting?(meeting, viewer),
+          can_delete: can_cancel and Meetings.can_delete_meeting?(meeting, viewer),
           audience: if(can_cancel, do: Meetings.cancellation_audience_count(meeting), else: 0),
-          state: :idle
+          state: :idle,
+          delete_state: :idle
         }
 
       nil ->
-        %{meeting_id: id, can_cancel: false, audience: 0, state: :idle}
+        %{
+          meeting_id: id,
+          can_cancel: false,
+          can_edit: false,
+          can_delete: false,
+          audience: 0,
+          state: :idle,
+          delete_state: :idle
+        }
+    end
+  end
+
+  # The Delete inset's state (task 01a1b281 stage 4), beside the cancel
+  # inset's on the same selection map. Opening is gated on `can_delete`;
+  # `:idle` and `:working` are always writable so a refused delete can
+  # settle.
+  defp put_meeting_delete_state(socket, state) do
+    socket = sync_meeting_cancel(socket)
+    cancel = socket.assigns.meeting_cancel
+
+    if cancel.can_delete or state == :idle or state == :working do
+      assign(socket, :meeting_cancel, %{cancel | delete_state: state})
+    else
+      socket
     end
   end
 
@@ -2224,6 +2213,38 @@ defmodule PlatformWeb.MeetingLive do
       socket
     end
   end
+
+  defp drop_deleted_selection(%{assigns: %{meetings_view: :list}} = socket) do
+    socket
+    |> assign(:list_meeting_id, nil)
+    |> push_patch(to: ~p"/meetings")
+  end
+
+  defp drop_deleted_selection(%{assigns: %{meetings_view: :calendar}} = socket) do
+    socket
+    |> assign(:selected_meeting_id, nil)
+    |> LiveInvites.seed()
+    |> sync_meeting_cancel()
+  end
+
+  defp drop_deleted_selection(socket), do: socket
+
+  # The archive half re-runs its search on the same broadcasts (task
+  # 01a1b281 stage 4), so a meeting deleted in another window leaves this
+  # one's archive rows too. A page not on the archive pays nothing:
+  # `archive_result` is nil there and the search is not run.
+  defp refresh_archive(%{assigns: %{meetings_view: :archive, archive_result: %{}}} = socket) do
+    assign_archive_result(
+      socket,
+      :archive,
+      socket.assigns[:archive_query] || "",
+      socket.assigns[:archive_types],
+      socket.assigns[:archive_person_id],
+      socket.assigns[:archive_project_id]
+    )
+  end
+
+  defp refresh_archive(socket), do: socket
 
   defp reload_index_meetings(socket) do
     meetings = Meetings.list_meetings_for_user(socket.assigns[:current_user_record])
@@ -3013,11 +3034,19 @@ defmodule PlatformWeb.MeetingLive do
     {:noreply, socket}
   end
 
+  # On the shell the call's home is its Calendar event (task 01a1b8a5
+  # stage 4); the chrome-less member surface keeps its list.
   def handle_event("dismiss_call_recap", _params, socket) do
+    to =
+      case socket.assigns do
+        %{shell?: true, meeting: %{id: id}} -> ~p"/calendar?#{%{meeting: id}}"
+        _ -> ~p"/meetings"
+      end
+
     {:noreply,
      socket
      |> assign(:call_recap, nil)
-     |> push_navigate(to: ~p"/meetings")}
+     |> push_navigate(to: to)}
   end
 
   # Right-rail tab select (task 01a05b14 stage 3). An unrecognised tab
@@ -3793,6 +3822,13 @@ defmodule PlatformWeb.MeetingLive do
      |> sync_meeting_cancel()}
   end
 
+  # ── Edit meeting: retired here (task 01a1b8a5 stage 4) ───────────────────
+  #
+  # The listing's Edit meeting form (task 01a1b281 stage 3) was the second
+  # authoring flow. Editing a call is Calendar's ONE editor now
+  # (`PlatformWeb.CalendarLive.Editor`, the event's details > Edit); this
+  # LiveView renders no Edit and handles no `meeting_edit_*` event.
+
   # ── Cancel meeting (task 01a19e7f stage 3) ──────────────────────────────
   #
   # `PlatformWeb.Components.Meetings.CancelMeeting`'s three events. None
@@ -3830,6 +3866,49 @@ defmodule PlatformWeb.MeetingLive do
          |> put_meeting_cancel_state(:working)
          |> start_async(:cancel_meeting, fn ->
            Meetings.cancel_meeting_for_user(id, viewer)
+         end)}
+    end
+  end
+
+  # ── Delete meeting (task 01a1b281 stage 4) ──────────────────────────────
+  #
+  # `PlatformWeb.Components.Meetings.DeleteMeeting`'s three events, under the
+  # cancel row's rule: no meeting id is carried or read, the target is the
+  # viewer's own SELECTION, and `Meetings.delete_meeting_for_user/2` reloads
+  # it through the viewer scope and re-checks `can_delete_meeting?/2` before
+  # it writes. `can_delete` here only decides whether the row is drawn.
+  def handle_event("delete_meeting_open", _params, socket) do
+    {:noreply, put_meeting_delete_state(socket, :confirming)}
+  end
+
+  def handle_event("delete_meeting_keep", _params, socket) do
+    case socket.assigns[:meeting_cancel] do
+      %{delete_state: :working} -> {:noreply, socket}
+      _ -> {:noreply, put_meeting_delete_state(socket, :idle)}
+    end
+  end
+
+  def handle_event("delete_meeting_confirm", _params, socket) do
+    socket = sync_meeting_cancel(socket)
+
+    case {cancel_target_id(socket.assigns), socket.assigns.meeting_cancel} do
+      {nil, _} ->
+        {:noreply, socket}
+
+      {_id, %{delete_state: :working}} ->
+        {:noreply, socket}
+
+      {_id, %{can_delete: false}} ->
+        {:noreply, socket}
+
+      {id, _} ->
+        viewer = socket.assigns[:current_user_record]
+
+        {:noreply,
+         socket
+         |> put_meeting_delete_state(:working)
+         |> start_async(:delete_meeting, fn ->
+           Meetings.delete_meeting_for_user(id, viewer)
          end)}
     end
   end
@@ -3907,225 +3986,15 @@ defmodule PlatformWeb.MeetingLive do
     {:noreply, push_patch(socket, to: archive_path(socket.assigns, overrides))}
   end
 
-  # ── New-meeting FAB + create sheet (`:index` action only) ────────────────
+  # ── The scheduled-meeting create sheet: retired (task 01a1b8a5 stage 4) ──
   #
-  # The FAB lives only on the meetings index. Clicking it flips
-  # `:show_start_meeting_sheet` so the sheet wrapper renders. The sheet
-  # collects { name, project, date, start, duration } plus a list of
-  # STAGED invites, and submits to `Meetings.create_meeting/1`.
-  #
-  # ## It does not drop you into the room any more (stage 4)
-  #
-  # This handler used to `push_navigate` into `/meetings/<slug>` on
-  # success. That was defensible when every meeting was ad-hoc and
-  # "create" meant "start". With a date and a start time on the form it is
-  # wrong: a meeting scheduled for next Wednesday must not open its room
-  # now. The sheet closes, the flash confirms, and the index stays put —
-  # `create_meeting/1` broadcasts `{:meeting_created, meeting}` on the
-  # project topic and this LiveView is subscribed to every project's, so
-  # the calendar redraws itself. Joining is still one click, from the
-  # meeting.
-  #
-  # ## Staged invites are replayed AFTER the commit, and their failures
-  #    are reported
-  #
-  # Nothing touches `meeting_invites` until submit, because at create time
-  # there is no meeting row to hang an invite off. Once the meeting is
-  # committed the staged entries are replayed one call each; a failure
-  # does NOT roll the meeting back — but it is not swallowed either. The
-  # count comes back as a second flash. An invite that silently evaporates
-  # is a bug that files no report.
+  # Its open/close/stage/submit events and the Meet now inside it are gone:
+  # a call is scheduled in Calendar's one editor (`Platform.Calendar.Authoring`
+  # through `Meetings.Scheduling`). The v4 list's "Start a room now"
+  # (`start_room`, below) still starts an instant room through
+  # `start_instant_room/3`, and a space's Meet button and every direct room
+  # link are untouched.
 
-  def handle_event("open_start_meeting_sheet", _params, socket) do
-    {:noreply,
-     socket
-     |> assign(:show_start_meeting_sheet, true)
-     |> reset_create_sheet()}
-  end
-
-  # Dismissal only HIDES. The reset lives on the open path, and duplicating
-  # it here was measurably unfalsifiable: a mutant that deleted the
-  # close-side reset left every test green, because the staged list is only
-  # observable through a rendered sheet and rendering one requires an open,
-  # which resets. Belt-and-braces no test can constrain is a claim nobody
-  # is checking.
-  #
-  # A sheet opened from Calendar (`@schedule_origin == :calendar`) closes
-  # back to the calendar day it came from, since the viewer never chose to
-  # be on /meetings at all.
-  def handle_event("close_start_meeting_sheet", _params, socket) do
-    origin = socket.assigns[:schedule_origin]
-
-    socket =
-      socket
-      |> assign(:show_start_meeting_sheet, false)
-      |> assign(:start_meeting_error, nil)
-      |> assign(:schedule_origin, nil)
-
-    case origin do
-      :calendar ->
-        date = schedule_form_date(socket.assigns.start_meeting_form) || calendar_today(socket)
-        {:noreply, push_navigate(socket, to: ~p"/calendar?#{%{date: Date.to_iso8601(date)}}")}
-
-      _ ->
-        {:noreply, socket}
-    end
-  end
-
-  # The calendar-origin toggle's Event side (task 01a1986e stage 3): back to
-  # Calendar's New editor with the sheet's date and start. Carried in the URL
-  # because /calendar is a different live_session, so nothing on this socket
-  # survives the navigation.
-  def handle_event("switch_to_event", _params, socket) do
-    form = socket.assigns[:start_meeting_form] || %{}
-
-    query = %{
-      new: "1",
-      date: form |> Map.get("date", "") |> to_string(),
-      start: form |> Map.get("start_time", "") |> to_string()
-    }
-
-    {:noreply,
-     socket
-     |> assign(:schedule_origin, nil)
-     |> push_navigate(to: ~p"/calendar?#{query}")}
-  end
-
-  # Live-update form state on input change so re-render keeps the user's
-  # input in the sheet (otherwise an inline-validation render wipes it).
-  def handle_event("start_meeting_form_change", %{"start_meeting" => attrs}, socket) do
-    # Re-resolves Meet now's project too: picking one in the select is the
-    # one interaction that moves the answer while the sheet is open, and a
-    # tile still naming the previous project would be telling the viewer
-    # something untrue about what their next click does.
-    {:noreply,
-     socket
-     |> assign(:start_meeting_form, start_meeting_form(attrs))
-     |> assign_meet_now_project()}
-  end
-
-  # ── Draft invite staging (create sheet only) ─────────────────────────────
-  #
-  # `:draft` mode of `PlatformWeb.Components.Meetings.InviteControl`. The
-  # event names are the component's `event(:draft, _)` set, which is
-  # disjoint from the `:live` set the detail panel uses — both surfaces are
-  # this same LiveView, so the name is the only thing that tells a
-  # create-sheet click apart from a detail-panel one.
-
-  # A blank query closes the dropdown rather than listing every member. The
-  # debounced keyup of the last typed character can land AFTER Enter has
-  # staged the address and cleared the box, carrying "" (task 01a199ac).
-  def handle_event("meeting_create_invite_search", %{"value" => query}, socket) do
-    query = to_string(query)
-
-    if String.trim(query) == "",
-      do: {:noreply, clear_create_invite_search(socket)},
-      else: {:noreply, assign_create_invite_candidates(socket, query)}
-  end
-
-  def handle_event("meeting_create_invite_stage", %{"kind" => kind} = params, socket) do
-    entry = build_draft_invite(kind, params, socket)
-    staged = socket.assigns.meeting_create_invites
-
-    staged =
-      if Enum.any?(staged, &(&1.id == entry.id)), do: staged, else: staged ++ [entry]
-
-    # A tap has no reply channel, and the box keeps its text after the
-    # server empties the query assign, so the hook is told to clear it
-    # (task 01a199ac). Enter reaches here through `stage_via/3` too; it also
-    # clears on its reply, and clearing twice is harmless.
-    {:noreply,
-     socket
-     |> assign(:meeting_create_invites, staged)
-     |> clear_create_invite_search()
-     |> push_event("invite-search:clear", %{id: "meeting-create-invite-search"})}
-  end
-
-  # Enter in the create sheet's search box. Same rule as
-  # `meeting_invite_commit` above: re-resolve the raw value, then stage the
-  # option the dropdown highlights, through the stage handler.
-  def handle_event("meeting_create_invite_commit", %{"value" => value}, socket) do
-    value = to_string(value)
-
-    if String.trim(value) == "" do
-      {:noreply, socket}
-    else
-      socket = assign_create_invite_candidates(socket, value)
-
-      case LiveInvites.commit_params(
-             socket.assigns.meeting_create_invite_candidates,
-             socket.assigns.meeting_create_invite_email,
-             value
-           ) do
-        nil -> {:noreply, socket}
-        params -> socket |> stage_via("meeting_create_invite_stage", params) |> reply_staged()
-      end
-    end
-  end
-
-  def handle_event("meeting_create_invite_unstage", %{"id" => id}, socket) do
-    staged = Enum.reject(socket.assigns.meeting_create_invites, &(&1.id == id))
-
-    {:noreply, assign(socket, :meeting_create_invites, staged)}
-  end
-
-  def handle_event("start_meeting", %{"start_meeting" => attrs}, socket) do
-    name = attrs |> Map.get("name", "") |> to_string() |> String.trim()
-    project_id = attrs |> Map.get("project_id", "") |> to_string() |> String.trim()
-    staged = socket.assigns.meeting_create_invites
-    invite_query = attrs |> invite_query() |> leftover_invite_query(staged)
-
-    cond do
-      name == "" ->
-        refuse_create(socket, attrs, "Name is required.")
-
-      # `meetings.project_id` is NOT NULL and the slug is unique per
-      # project, so the `required` attribute on the select is a hint, not a
-      # gate. This clause is the gate.
-      project_id == "" ->
-        refuse_create(socket, attrs, "Project is required.")
-
-      # A typed but unadded address BLOCKS rather than auto-adding: guest
-      # vs external costs an org grant, and that choice belongs to the user
-      # (task 01a192d6). The staged list and the typed text both survive.
-      # Text naming a staged invite was already added, so it is not an unadded address.
-      invite_query != "" ->
-        socket
-        |> assign_create_invite_candidates(invite_query)
-        |> refuse_create(attrs, "Add #{invite_query} or clear it.")
-
-      true ->
-        case scheduled_window(attrs, socket.assigns.calendar_time_zone) do
-          {:error, message} ->
-            refuse_create(socket, attrs, message)
-
-          {:ok, starts_at, ends_at} ->
-            mode = if socket.assigns[:schedule_origin] == :calendar, do: :calendar, else: :stay
-            create_from_sheet(socket, attrs, name, project_id, starts_at, ends_at, mode)
-        end
-    end
-  end
-
-  # ── Meet now (task 01a0d4d5) ─────────────────────────────────────────────
-  #
-  # One click, no field touched, and you are in a live room. It shares the
-  # commit path with `start_meeting` above rather than reaching for
-  # `Meetings.create_meeting/1` a second time: that function is what wires
-  # the backing chat space, the `meeting-<uuid>` LiveKit room name and the
-  # project PubSub broadcast, and the staged-invite replay lives in
-  # `create_from_sheet/7`. A parallel constructor would drift from all of
-  # it silently — the transcriber and the voice agent would simply stop
-  # arriving for meetings created this way, and nothing would fail loudly.
-  #
-  # It does NOT route through `scheduled_window/2`. That function exists to
-  # turn a typed date and wall-clock time into an instant, which is why it
-  # refuses without a time zone. Meet now already holds the instant.
-  #
-  # RE-ENTRY. `:meet_now_pending?` is checked HERE and not only used to
-  # disable the button. A `phx-click` is a message from a client, and a
-  # client that has already sent one can send another — a double-tap on a
-  # slow connection must not commit two meetings. The template's `disabled`
-  # is the courtesy; this clause is the gate.
   # ── v4 list view (task 01a18d9f stage 4) ─────────────────────────────────
 
   def handle_event("meetings_list_tab", %{"tab" => tab}, socket)
@@ -4138,8 +4007,7 @@ defmodule PlatformWeb.MeetingLive do
   def handle_event("close_new_room", _params, socket),
     do: {:noreply, assign(socket, show_new_room: false, new_room_error: nil)}
 
-  # v4 `Start a room now`: the same create path Meet now takes
-  # (`create_from_sheet/7` in `:enter` mode), with the typed name and the
+  # v4 `Start a room now`: `start_instant_room/3` with the typed name and the
   # chosen project.
   def handle_event("start_room", %{"title" => title} = params, socket) do
     title = String.trim(title)
@@ -4154,50 +4022,7 @@ defmodule PlatformWeb.MeetingLive do
         {:noreply, assign(socket, :new_room_error, "Create a project before starting a meeting.")}
 
       true ->
-        starts_at = DateTime.utc_now()
-        ends_at = DateTime.add(starts_at, @default_duration_minutes * 60, :second)
-
-        socket
-        |> assign(show_new_room: false, new_room_error: nil)
-        |> create_from_sheet(
-          socket.assigns.start_meeting_form,
-          title,
-          project_id,
-          starts_at,
-          ends_at,
-          :enter
-        )
-    end
-  end
-
-  def handle_event("meet_now", _params, %{assigns: %{meet_now_pending?: true}} = socket) do
-    {:noreply, socket}
-  end
-
-  def handle_event("meet_now", _params, socket) do
-    case socket.assigns[:meet_now_project_id] do
-      nil ->
-        # Refused in place, sheet still open. `meetings.project_id` is NOT
-        # NULL, so the ticket's "otherwise none" is not representable and
-        # there is nothing honest to create. Says what to do next rather
-        # than what went wrong.
-        {:noreply,
-         assign(socket, :start_meeting_error, "Create a project before starting a meeting.")}
-
-      project_id ->
-        starts_at = DateTime.utc_now()
-        ends_at = DateTime.add(starts_at, @default_duration_minutes * 60, :second)
-
-        socket
-        |> assign(:meet_now_pending?, true)
-        |> create_from_sheet(
-          socket.assigns.start_meeting_form,
-          meet_now_name(starts_at, socket.assigns[:calendar_time_zone]),
-          project_id,
-          starts_at,
-          ends_at,
-          :enter
-        )
+        start_instant_room(socket, title, project_id)
     end
   end
 
@@ -4902,6 +4727,32 @@ defmodule PlatformWeb.MeetingLive do
   # meeting's project topic (the `{:meeting_cancelled, _}` broadcast does the
   # same for every other open window). A refusal writes nothing and says so
   # in a flash; any other failure keeps the inset open with its error line.
+  # A deleted meeting has no row left to stand on, so the selection is
+  # dropped with it: the list view patches back to the bare index (the
+  # `?meeting=` param IS the selection there) and the calendar view clears
+  # its selected id. The `{:meeting_deleted, _}` broadcast redraws the lists
+  # for every viewer, this process included.
+  def handle_async(:delete_meeting, result, socket) do
+    socket =
+      case result do
+        {:ok, {:ok, _meeting}} ->
+          socket
+          |> put_meeting_delete_state(:idle)
+          |> drop_deleted_selection()
+          |> reload_index_meetings()
+
+        {:ok, {:error, reason}} when reason in [:forbidden, :not_found, :not_deletable] ->
+          socket
+          |> put_meeting_delete_state(:idle)
+          |> put_flash(:error, "You can't delete this meeting.")
+
+        _other ->
+          put_meeting_delete_state(socket, :error)
+      end
+
+    {:noreply, socket}
+  end
+
   def handle_async(:cancel_meeting, result, socket) do
     socket =
       case result do
@@ -5525,7 +5376,8 @@ defmodule PlatformWeb.MeetingLive do
              :meeting_resumed,
              :meeting_ended,
              :meeting_cancelled,
-             :meeting_rescheduled
+             :meeting_rescheduled,
+             :meeting_deleted
            ] do
     if Map.has_key?(socket.assigns, :meetings) do
       # Scoped with the same viewer as the initial render. A peer's
@@ -5539,9 +5391,26 @@ defmodule PlatformWeb.MeetingLive do
        |> assign(:meetings, meetings)
        |> assign(:grouped_meetings, group_meetings_by_status(meetings))
        |> refresh_calendar_week()
+       |> refresh_archive()
        |> sync_meeting_cancel()}
     else
       {:noreply, socket}
+    end
+  end
+
+  # An in-place edit (task 01a1b281 stage 3) redraws the index the same way:
+  # the row keeps its id and slug, so the re-query moves it on the grid and
+  # renames it in the list. The open meeting page refreshes its own row.
+  def handle_info({:meeting_updated, %Meetings.Meeting{} = meeting, _info}, socket) do
+    case socket.assigns[:meeting] do
+      # Only the edited columns: the page's row carries preloads the
+      # broadcast struct does not.
+      %Meeting{id: id} = current when id == meeting.id ->
+        fields = [:name, :description, :scheduled_start_at, :scheduled_end_at, :ical_sequence]
+        {:noreply, assign(socket, :meeting, Map.merge(current, Map.take(meeting, fields)))}
+
+      _ ->
+        handle_info({:meeting_rescheduled, meeting}, socket)
     end
   end
 
@@ -6057,6 +5926,11 @@ defmodule PlatformWeb.MeetingLive do
   # updated meeting is re-assigned so the render path sees the live status.
   # Call it through `maybe_start_meeting_if_permitted/1`: the start/resume is
   # gated by `join_permitted?/2`.
+  # A call that is off never flips its meeting live or resumes it (task
+  # 01a1b8a5 stage 4); the join that follows is refused by
+  # `Meetings.join_for_user/3` with `:call_disabled`.
+  defp maybe_start_meeting(%{assigns: %{meeting: %{call_enabled: false}}} = socket), do: socket
+
   defp maybe_start_meeting(%{assigns: %{meeting: %{status: "scheduled"} = m}} = socket) do
     # The joining user is recorded as the starter (task 01a10db7); a guest
     # surface has no `:user_id`, and the stamp is then simply absent.
@@ -6402,6 +6276,16 @@ defmodule PlatformWeb.MeetingLive do
   # future atom means, and a transient upstream failure is exactly the
   # shape it is most likely to take, so it keeps the retry wording. Guessing
   # "permanent" there would just trade one lie for the opposite one.
+  # The call toggle (task 01a1b8a5 stage 4): not a fault, so no warning.
+  defp guest_mint_failure(socket, meeting, :call_disabled) do
+    socket
+    |> assign(:state, :unavailable)
+    |> assign(:unavailable_kind, :no_call)
+    |> assign(:page_title, "This event has no call")
+    |> assign(:meeting, meeting)
+    |> seed_guest_index_fallback_assigns()
+  end
+
   defp guest_mint_failure(socket, meeting, reason) do
     case classify_guest_mint_failure(meeting, reason) do
       {:recoverable_name, message} ->
@@ -8293,552 +8177,63 @@ defmodule PlatformWeb.MeetingLive do
   defp status_bucket("cancelled"), do: :ended
   defp status_bucket(_), do: :upcoming
 
-  # Default create-sheet form values. When exactly one project exists we
-  # pre-fill it so a single-project workspace doesn't show a useless
-  # one-option select.
-  #
-  # `date` and `start_time` default to BLANK, which is the ad-hoc meeting:
-  # `create_meeting/1` takes the intended-time pair as both-or-neither, and
-  # both nil is the supported "started but never scheduled" state. Nothing
-  # here invents a start time the user did not choose.
-  defp blank_start_meeting_form(projects) when is_list(projects) do
-    project_id =
-      case projects do
-        [%{id: id}] -> id
-        _ -> ""
-      end
+  # An instant room, started now for the default duration, and the viewer
+  # taken into it. The commit is `Meetings.Scheduling.create_with_invites/2`
+  # (task 01a1b8a5 stage 1), shared with `Platform.Calendar.Authoring`; with
+  # no staged invitees it is a plain create. The retired create sheet's
+  # `:stay`/`:calendar` modes and its form/invite assigns went with the sheet
+  # (task 01a1b8a5 stage 5).
+  defp start_instant_room(socket, name, project_id) do
+    starts_at = DateTime.utc_now()
 
-    %{
-      "name" => "",
-      "project_id" => project_id,
-      "date" => "",
-      "start_time" => "",
-      "duration_minutes" => to_string(@default_duration_minutes)
-    }
-  end
-
-  defp blank_start_meeting_form(_), do: blank_start_meeting_form([])
-
-  # Echo the submitted params back into the form assign so a refusal
-  # re-render keeps what the user typed. Raw, not trimmed: trimming here
-  # would edit the field under the cursor.
-  defp start_meeting_form(attrs) do
-    %{
-      "name" => attrs |> Map.get("name", "") |> to_string(),
-      "project_id" => attrs |> Map.get("project_id", "") |> to_string(),
-      "date" => attrs |> Map.get("date", "") |> to_string(),
-      "start_time" => attrs |> Map.get("start_time", "") |> to_string(),
-      "duration_minutes" =>
-        attrs
-        |> Map.get("duration_minutes", @default_duration_minutes)
-        |> to_string()
-    }
-  end
-
-  defp refuse_create(socket, attrs, message) do
-    {:noreply,
-     socket
-     |> assign(:start_meeting_form, start_meeting_form(attrs))
-     |> assign(:start_meeting_error, message)}
-  end
-
-  # `mode` is `:stay` for the scheduling form, `:calendar` for the same form
-  # opened from Calendar, and `:enter` for Meet now.
-  #
-  # The COMMIT is identical in both — same `Meetings.create_meeting/1`, same
-  # staged-invite replay, same undelivered-invite flash — and only what
-  # happens to the viewer afterwards differs. That split is deliberate and
-  # is the reason the mode is a caller's argument rather than something
-  # this function infers: a meeting scheduled for next Wednesday must not
-  # open its room now (see the long note above `open_start_meeting_sheet`),
-  # and a meeting started now must. Inferring it from `starts_at` would
-  # make "is this meeting starting soon enough to jump into" a threshold
-  # nobody chose.
-  #
-  # `:enter` drops the "Meeting created." flash: the viewer is about to be
-  # looking at the room, so the confirmation is redundant with the evidence
-  # in front of them. It keeps the undelivered-invite flash, which is a
-  # report of something that did NOT happen and survives the navigation.
-  #
-  # `:calendar` is `:stay` for a sheet opened from Calendar's New -> Meeting
-  # (task 01a1986e): same commit, same flash, then back to /calendar on the
-  # meeting's own day in the viewer's zone with the meeting selected. An
-  # unscheduled meeting has no day of its own, so it lands on the day the
-  # sheet was submitted with, or today.
-  defp create_from_sheet(socket, attrs, name, project_id, starts_at, ends_at, mode) do
-    case Meetings.create_meeting(%{
-           project_id: project_id,
-           created_by_user_id: socket.assigns.user_id,
-           name: name,
-           scheduled_start_at: starts_at,
-           scheduled_end_at: ends_at
-         }) do
-      {:ok, meeting} ->
-        undelivered = replay_draft_invites(meeting, socket.assigns.meeting_create_invites)
-
-        socket =
-          socket
-          |> assign(:show_start_meeting_sheet, false)
-          |> reset_create_sheet()
-          |> flash_undelivered_invites(undelivered)
-
-        case mode do
-          :stay ->
-            {:noreply, put_flash(socket, :info, "Meeting created.")}
-
-          :calendar ->
-            date =
-              calendar_return_date(meeting, socket.assigns[:calendar_time_zone]) ||
-                schedule_form_date(attrs) || calendar_today(socket)
-
-            {:noreply,
-             socket
-             |> assign(:schedule_origin, nil)
-             |> put_flash(:info, "Meeting created.")
-             |> push_navigate(
-               to: ~p"/calendar?#{%{date: Date.to_iso8601(date), select: meeting.id}}"
-             )}
-
-          :enter ->
-            # Re-asserted AFTER `reset_create_sheet/1`, which clears it.
-            # Without this the double-tap guard is vacuous: a LiveView
-            # handles its events one at a time, so the second tap is not
-            # racing the first — it arrives after the first has already
-            # completed and reset the flag, and it would commit a second
-            # meeting. This process is about to be replaced by the
-            # navigation, so leaving the flag set costs nothing.
-            #
-            # Burrow personal context (task 01a111bb): the meeting id only.
-            # LiveView flushes pending events before a navigation.
-            {:noreply,
-             socket
-             |> assign(:meet_now_pending?, true)
-             |> PlatformWeb.NativeDonation.push("meeting_started", %{meeting_id: meeting.id})
-             |> push_navigate(to: ~p"/meetings/#{meeting.slug}")}
-        end
+    case Platform.Meetings.Scheduling.create_with_invites(
+           %{
+             project_id: project_id,
+             created_by_user_id: socket.assigns.user_id,
+             name: name,
+             scheduled_start_at: starts_at,
+             scheduled_end_at: DateTime.add(starts_at, @default_duration_minutes * 60, :second)
+           },
+           []
+         ) do
+      {:ok, meeting, _undelivered} ->
+        # Burrow personal context (task 01a111bb): the meeting id only.
+        # LiveView flushes pending events before a navigation.
+        {:noreply,
+         socket
+         |> assign(show_new_room: false, new_room_error: nil)
+         |> PlatformWeb.NativeDonation.push("meeting_started", %{meeting_id: meeting.id})
+         |> push_navigate(to: ~p"/meetings/#{meeting.slug}")}
 
       {:error, _reason} ->
-        # Cleared here so a failed Meet now can be retried in place. A
-        # button left disabled after a failure would need a sheet reopen to
-        # recover and the viewer has no way to know that.
-        socket
-        |> assign(:meet_now_pending?, false)
-        |> refuse_create(attrs, "Could not create meeting.")
+        # The sheet stays open with a reason, so the viewer can retry.
+        {:noreply,
+         assign(socket, show_new_room: true, new_room_error: "Could not start the room.")}
     end
   end
 
-  # The calendar day a scheduled meeting sits on, in the viewer's zone.
-  defp calendar_return_date(%{scheduled_start_at: %DateTime{} = at}, time_zone) do
-    case DateTime.shift_zone(at, time_zone || "Etc/UTC") do
-      {:ok, shifted} -> DateTime.to_date(shifted)
-      {:error, _reason} -> DateTime.to_date(at)
-    end
-  end
-
-  defp calendar_return_date(_meeting, _time_zone), do: nil
-
-  defp schedule_form_date(form) when is_map(form) do
-    case Date.from_iso8601(form |> Map.get("date", "") |> to_string() |> String.trim()) do
-      {:ok, date} -> date
-      {:error, _reason} -> nil
-    end
-  end
-
-  defp schedule_form_date(_form), do: nil
-
-  # The default name. `"Meeting · 25 Sep 2026, 7:14 PM"` in the viewer's
-  # zone — the same shift-then-fall-back shape `archive_strftime/3` uses.
-  #
-  # A nil zone must NOT refuse the way `resolve_window/4` does. That clause
-  # refuses because there is no honest way to turn "9:00" into an instant
-  # without a zone; here the instant is already known and the zone only
-  # decides how to LABEL it. Refusing to create a meeting over the wording
-  # of its own title would be the wrong trade.
-  defp meet_now_name(%DateTime{} = at, time_zone) do
-    zone = time_zone || "Etc/UTC"
-
-    formatted =
-      case DateTime.shift_zone(at, zone) do
-        {:ok, shifted} -> Calendar.strftime(shifted, "%-d %b %Y, %-I:%M %p")
-        {:error, _reason} -> Calendar.strftime(at, "%-d %b %Y, %-I:%M %p")
-      end
-
-    "Meeting · " <> formatted
-  end
-
-  # Which project an instant meeting lands in, or nil when nothing can be
-  # resolved. `meetings.project_id` is NOT NULL, so nil here means refuse,
-  # never "create it without one".
-  #
-  # Every branch reads an assign the index already holds. Deliberately no
-  # query: this runs on a click that is supposed to feel instant, and the
-  # "most recent" answer a query would give is the same one `@meetings`
-  # already carries — `list_meetings_for_user/1` orders `desc: inserted_at`.
-  # Resolve ONCE and store both halves, so the label on the tile and the
-  # project the click commits to cannot disagree. The alternative — the
-  # template deriving a name and the handler re-resolving an id — is two
-  # answers to one question, and the sheet would eventually name one
-  # project and create the meeting in another.
-  defp assign_meet_now_project(socket) do
-    id = meet_now_project_id(socket)
-
-    name =
-      id &&
-        (socket.assigns[:projects] || [])
-        |> Enum.find(&(&1.id == id))
-        |> then(&(&1 && &1.name))
-
-    socket
-    |> assign(:meet_now_project_id, id)
-    |> assign(:meet_now_project_name, name)
-  end
+  # Which project an instant room defaults to (the "Start a room now"
+  # sheet's select), or nil when nothing can be resolved. Deliberately no
+  # query: `@meetings` is ordered `desc: inserted_at`, so the most recent
+  # meeting's project the viewer can still pick is already in hand.
+  defp assign_meet_now_project(socket),
+    do: assign(socket, :meet_now_project_id, meet_now_project_id(socket))
 
   defp meet_now_project_id(socket) do
     projects = socket.assigns[:projects] || []
     project_ids = MapSet.new(projects, & &1.id)
 
-    selected =
-      socket.assigns[:start_meeting_form]
-      |> Kernel.||(%{})
-      |> Map.get("project_id", "")
-      |> to_string()
-      |> String.trim()
+    recent =
+      (socket.assigns[:meetings] || [])
+      |> Enum.find_value(fn meeting ->
+        id = Map.get(meeting, :project_id)
+        if id && MapSet.member?(project_ids, id), do: id
+      end)
 
-    cond do
-      # Covers two cases at once: the single-project pre-fill in
-      # `blank_start_meeting_form/1`, and a viewer who picked a project in
-      # the form and then decided to start the call now instead. Membership
-      # is re-checked because the form echoes back whatever was submitted.
-      selected != "" and MapSet.member?(project_ids, selected) ->
-        selected
-
-      true ->
-        recent =
-          (socket.assigns[:meetings] || [])
-          |> Enum.find_value(fn meeting ->
-            id = Map.get(meeting, :project_id)
-            if id && MapSet.member?(project_ids, id), do: id
-          end)
-
-        recent || projects |> List.first() |> then(&(&1 && &1.id))
-    end
-  end
-
-  # ── The intended-time pair ───────────────────────────────────────────────
-  #
-  # `Meeting.changeset/2` validates `scheduled_start_at` and
-  # `scheduled_end_at` as a pair, so this returns both or neither. It never
-  # synthesises one endpoint from the other beyond the duration the user
-  # picked.
-  #
-  # Start is a TEXT field parsed by `PlatformWeb.TimeEntry` (task 01a192d6),
-  # not `<input type="time">`: a half-entered native time control (AM/PM
-  # left as "--") submits "" and blocks submit with a browser bubble, so the
-  # server could never say what was wrong. A non-blank Start is parsed
-  # FIRST, before the pair check, so "01:00" with no date is answered with
-  # "pick AM or PM" rather than the pair error.
-
-  defp scheduled_window(attrs, time_zone) do
-    date = attrs |> Map.get("date", "") |> to_string() |> String.trim()
-    start_time = attrs |> Map.get("start_time", "") |> to_string() |> String.trim()
-
-    with :ok <- check_date_complete(attrs),
-         {:ok, time} <- parse_start_time(start_time) do
-      case {date, time} do
-        {"", nil} -> {:ok, nil, nil}
-        {"", _} -> {:error, @schedule_pair_error}
-        {_, nil} -> {:error, @schedule_pair_error}
-        {date, time} -> resolve_window(date, time, attrs, time_zone)
-      end
-    end
-  end
-
-  # `date_incomplete` is set by the DateEntryGuard hook when the native date
-  # control holds a half-typed value, which the browser posts as "". Without
-  # it a missing year reads as "no date" and, with Start blank, would
-  # create an unscheduled meeting.
-  defp check_date_complete(%{"date_incomplete" => "true"}), do: {:error, @incomplete_date_error}
-  defp check_date_complete(_attrs), do: :ok
-
-  defp parse_start_time(text) do
-    case PlatformWeb.TimeEntry.parse(text) do
-      {:ok, time} -> {:ok, time}
-      {:error, :blank} -> {:ok, nil}
-      {:error, reason} -> {:error, PlatformWeb.TimeEntry.message(:start, reason)}
-    end
-  end
-
-  # True when the sheet's inline error is about the Start field, so the
-  # input can carry `aria-invalid`.
-  defp start_time_error?(message) when is_binary(message),
-    do: message in [start_time_message(:needs_meridiem), start_time_message(:invalid)]
-
-  defp start_time_error?(_message), do: false
-
-  defp start_time_message(reason), do: PlatformWeb.TimeEntry.message(:start, reason)
-
-  # A nil zone is the DEAD RENDER's answer: `resolve_time_zone/1` returns
-  # nil when the browser sent no usable IANA name, which on the index means
-  # the LiveSocket has not connected yet. A submit cannot arrive over a
-  # dead render, so reaching here with nil means the browser genuinely
-  # could not name its zone — and there is no honest way to turn "9:00" into
-  # an instant without one. Refuse rather than quietly reading it as UTC:
-  # a meeting silently placed hours off is worse than one not created.
-  # Unscheduled creates are unaffected, because they never reach this
-  # clause.
-  defp resolve_window(_date, _time, _attrs, nil), do: {:error, @no_time_zone_error}
-
-  defp resolve_window(date, %Time{} = time, attrs, time_zone) do
-    with {:ok, date} <- Date.from_iso8601(date),
-         {:ok, minutes} <- duration_minutes(attrs),
-         {:ok, starts_at} <- local_datetime(date, time, time_zone) do
-      {:ok, starts_at, DateTime.add(starts_at, minutes * 60, :second)}
-    else
-      {:error, message} when is_binary(message) -> {:error, message}
-      {:error, _reason} -> {:error, @invalid_time_error}
-    end
-  end
-
-  # An allowlist, not a range check. The select offers exactly these, so a
-  # value outside them did not come from this form.
-  defp duration_minutes(attrs) do
-    raw = attrs |> Map.get("duration_minutes", "") |> to_string() |> String.trim()
-
-    case Integer.parse(raw) do
-      {minutes, ""} when minutes in @duration_options -> {:ok, minutes}
-      _ -> {:error, @invalid_duration_error}
-    end
-  end
-
-  # `{:ambiguous, …}` is the autumn DST repeat: the wall clock reads this
-  # time twice and both instants are real. The FIRST is chosen because it
-  # is the one still on the pre-transition offset, which is what someone
-  # reading a clock that day means. `{:gap, …}` is the spring skip — that
-  # wall time does not occur, so there is nothing to choose and it is
-  # refused rather than nudged to a neighbour.
-  defp local_datetime(date, time, time_zone) do
-    case DateTime.new(date, time, time_zone) do
-      {:ok, datetime} -> {:ok, datetime}
-      {:ambiguous, first, _second} -> {:ok, first}
-      {:gap, _before, _after} -> {:error, @nonexistent_time_error}
-      {:error, _reason} -> {:error, @invalid_time_error}
-    end
-  end
-
-  # ── Draft invites ────────────────────────────────────────────────────────
-
-  defp reset_create_sheet(socket) do
-    socket
-    |> assign(:start_meeting_form, blank_start_meeting_form(socket.assigns[:projects] || []))
-    |> assign(:start_meeting_error, nil)
-    # Cleared on the OPEN path, which is where the sheet's reset lives, so
-    # a Meet now that navigated away leaves no disabled button behind for
-    # the next open. The failure path clears it separately — that one never
-    # reaches here.
-    |> assign(:meet_now_pending?, false)
-    |> assign_meet_now_project()
-    |> seed_create_invite_assigns()
-  end
-
-  defp seed_create_invite_assigns(socket) do
-    socket
-    |> assign(:meeting_create_invites, [])
-    |> clear_create_invite_search()
-  end
-
-  # Staging closes the dropdown by emptying what it dispatches on, rather
-  # than by a separate "open?" flag that could disagree with the list.
-  defp clear_create_invite_search(socket) do
-    socket
-    |> assign(:meeting_create_invite_query, "")
-    |> assign(:meeting_create_invite_candidates, [])
-    |> assign(:meeting_create_invite_email, nil)
-  end
-
-  # The search input still has focus after Enter, and LiveView does not
-  # overwrite a focused input's value, so the server clearing its query
-  # assign does not clear the box. The reply tells the hook to clear it;
-  # otherwise the next address is typed into the old one.
-  defp stage_via(socket, event, params) do
-    {:noreply, socket} = handle_event(event, params, socket)
-    socket
+    recent || projects |> List.first() |> then(&(&1 && &1.id))
   end
 
   defp reply_staged(socket), do: {:reply, %{staged: true}, socket}
-
-  defp invite_query(attrs),
-    do: attrs |> Map.get("invite_query", "") |> to_string() |> String.trim()
-
-  # A tap on a dropdown row stages the invite but leaves its text in the
-  # box, so Create posts it back. That text names an invite already staged,
-  # so it is not an unadded address: drop it. Exact match only, case- and
-  # whitespace-insensitive, against a staged entry's email or a staged
-  # member's display name. Anything else is returned unchanged and refused.
-  defp leftover_invite_query("", _staged), do: ""
-
-  defp leftover_invite_query(query, staged) do
-    needle = query |> String.trim() |> String.downcase()
-
-    if Enum.any?(staged, &names_staged_invite?(&1, needle)), do: "", else: query
-  end
-
-  defp names_staged_invite?(entry, needle) do
-    same_text?(entry[:email], needle) or
-      (entry[:kind] == :user and same_text?(entry[:display_name], needle))
-  end
-
-  defp same_text?(value, needle) when is_binary(value),
-    do: value |> String.trim() |> String.downcase() == needle
-
-  defp same_text?(_value, _needle), do: false
-
-  defp assign_create_invite_candidates(socket, query) do
-    staged = socket.assigns.meeting_create_invites
-
-    %{users: users, email: email} =
-      Meetings.resolve_invite_candidates(query,
-        exclude_user_ids: for(%{kind: :user, user_id: id} <- staged, do: id),
-        exclude_emails: for(%{email: address} <- staged, is_binary(address), do: address)
-      )
-
-    socket
-    |> assign(:meeting_create_invite_query, query)
-    |> assign(:meeting_create_invite_candidates, users)
-    |> assign(:meeting_create_invite_email, email)
-  end
-
-  # The staged shapes. `:user` resolves against the RENDERED candidate
-  # list, not the database: the only legal source of that id is a row this
-  # socket just drew, so an id from anywhere else is a forged event and
-  # raises instead of quietly staging a stranger.
-  defp build_draft_invite("user", %{"id" => user_id}, socket) do
-    case Enum.find(socket.assigns.meeting_create_invite_candidates, &(&1.id == user_id)) do
-      nil ->
-        raise ArgumentError,
-              "cannot stage invite: no candidate is currently offered for that id"
-
-      user ->
-        %{
-          id: "user:" <> user.id,
-          kind: :user,
-          user_id: user.id,
-          email: user.email,
-          display_name: user.name || user.email,
-          subtitle: user.name && user.email,
-          avatar_url: nil
-        }
-    end
-  end
-
-  defp build_draft_invite("guest", %{"email" => email}, _socket) do
-    address = email |> to_string() |> String.trim()
-
-    %{
-      id: "guest:" <> address,
-      kind: :guest,
-      user_id: nil,
-      email: address,
-      display_name: address,
-      subtitle: "expires in #{Meetings.guest_invite_default_expiry_hours()}h",
-      avatar_url: nil
-    }
-  end
-
-  # A guest chosen by NAME (task 01a18d0a-ec37 stage 2): no address, so
-  # `deliver_draft_invite/2` mints the link with `email: nil`. A blank name
-  # stages nothing a host could not see, so it raises like any forged event.
-  defp build_draft_invite("guest", %{"name" => name}, _socket) do
-    case String.trim(to_string(name)) do
-      "" ->
-        raise ArgumentError, "cannot stage a guest with a blank name"
-
-      trimmed ->
-        %{
-          id: "guest-name:" <> trimmed,
-          kind: :guest,
-          user_id: nil,
-          email: nil,
-          display_name: trimmed,
-          subtitle: "expires in #{Meetings.guest_invite_default_expiry_hours()}h",
-          avatar_url: nil
-        }
-    end
-  end
-
-  defp build_draft_invite("external", %{"email" => email}, _socket) do
-    address = email |> to_string() |> String.trim()
-
-    %{
-      id: "external:" <> address,
-      kind: :external,
-      user_id: nil,
-      email: address,
-      display_name: address,
-      subtitle: nil,
-      avatar_url: nil
-    }
-  end
-
-  defp build_draft_invite(kind, _params, _socket) do
-    raise ArgumentError, "no draft invite kind #{inspect(kind)}"
-  end
-
-  @doc """
-  Map staged create-sheet entries onto `InviteControl.invite_list/1`'s
-  entry contract.
-
-  `:expires_at` on a guest row is a PROJECTION, not a record: no token has
-  been minted, so this is the expiry `invite_guest/2` would mint if the
-  sheet were submitted now. It exists because `InviteControl.tag/1` reads
-  a `%DateTime{}` expiry as the thing that distinguishes a guest from an
-  external address awaiting a grant — the two differ in nothing else at
-  draft time.
-  """
-  def draft_invite_rows(entries) when is_list(entries), do: Enum.map(entries, &draft_invite_row/1)
-
-  defp draft_invite_row(entry) do
-    %{
-      id: entry.id,
-      name: entry.display_name,
-      subtitle: entry.subtitle,
-      user_id: entry.user_id,
-      email: entry.email,
-      expires_at: projected_expiry(entry.kind),
-      # External-ness of an ACCOUNT is an org-membership property that the
-      # candidate list does not carry, so a staged member is tagged by what
-      # is known: they hold an account.
-      external: false,
-      agent: false,
-      avatar_url: entry.avatar_url,
-      removable: true,
-      copy_url: nil
-    }
-  end
-
-  defp projected_expiry(:guest) do
-    DateTime.add(
-      DateTime.utc_now(),
-      Meetings.guest_invite_default_expiry_hours() * 3600,
-      :second
-    )
-  end
-
-  defp projected_expiry(_kind), do: nil
-
-  # One call per staged entry, after the meeting is committed. Returns the
-  # entries that did NOT produce a row.
-  defp replay_draft_invites(meeting, entries) do
-    Enum.reject(entries, &match?({:ok, _}, deliver_draft_invite(meeting, &1)))
-  end
-
-  defp deliver_draft_invite(meeting, %{kind: :user} = entry),
-    do: Meetings.invite_user(meeting, entry.user_id, display_name: entry.display_name)
-
-  defp deliver_draft_invite(meeting, %{kind: :guest} = entry),
-    do: Meetings.invite_guest(meeting, %{display_name: entry.display_name, email: entry.email})
-
-  defp deliver_draft_invite(meeting, %{kind: :external} = entry),
-    do: Meetings.invite_external_user(meeting, entry.email, display_name: entry.display_name)
 
   # ── Live invites (private) ───────────────────────────────────────────────
 
@@ -8890,15 +8285,6 @@ defmodule PlatformWeb.MeetingLive do
   # the render and keep showing the old row. Bumping this counter forces it.
   defp touch_invite_rows(socket),
     do: assign(socket, :meeting_invite_rows_rev, System.unique_integer([:positive]))
-
-  defp flash_undelivered_invites(socket, []), do: socket
-
-  defp flash_undelivered_invites(socket, undelivered) do
-    count = length(undelivered)
-    noun = if count == 1, do: "invite", else: "invites"
-
-    put_flash(socket, :error, "#{count} #{noun} could not be sent.")
-  end
 
   # `blank_guest_invite_form/0`, `trim_or_nil/1` and `parse_expires_hours/1`
   # lived here until task 019fb955-1d7b stage 1. They existed only to feed the
