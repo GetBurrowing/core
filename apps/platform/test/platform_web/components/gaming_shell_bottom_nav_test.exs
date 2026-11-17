@@ -69,6 +69,7 @@ defmodule PlatformWeb.Components.GamingShellBottomNavTest do
       |> Enum.map(&to_string(&1.key))
 
     assert "chat" in expected
+    refute has_element?(doc, "#bottom-nav [data-module-id]")
 
     tabs =
       doc

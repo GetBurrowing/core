@@ -162,7 +162,7 @@ defmodule PlatformWeb.Components.IconRail do
         navigate={dest.path}
         class={["bottom-nav-tab", mobile_active_class(dest, @active_key)]}
         data-destination={dest.key}
-        data-module-id={dest.key}
+        data-module-id={if !@gaming, do: dest.key}
         data-nav-label={dest.label}
         aria-label={tab_aria_label(dest, @inbox_unread_count)}
         aria-current={aria_current_for(dest, @active_key)}

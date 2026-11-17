@@ -62,7 +62,8 @@ defmodule PlatformWeb.GameStudioLiveTest do
 
   test "foreign and malformed project selection never reveals foreign project data", %{conn: conn, user: user} do
     membership = Repo.get_by!(Platform.Tenancy.OrgMembership, user_id: user.id)
-    membership |> Ecto.Changeset.change(role: "member") |> Repo.update!()
+    own_org_id = Platform.TenancyFixtures.tenant_org_id("initech")
+    membership |> Ecto.Changeset.change(role: "member", org_id: own_org_id) |> Repo.update!()
     {:ok, other_org} = Repo.insert(%Tenancy.Org{name: "Foreign studio", slug: "foreign-studio-#{System.unique_integer([:positive])}", parent_org_id: Tenancy.get_root_org().id})
     {:ok, project} = Tasks.create_project(%{name: "Secret foreign game", org_id: other_org.id, tech_stack: %{"engine" => "godot"}})
     {:ok, _, html} = live(conn, "/studio?project=#{project.id}")

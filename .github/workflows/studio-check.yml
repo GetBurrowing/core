@@ -100,3 +100,10 @@ jobs:
         with:
           name: studio-screens
           path: /tmp/studio-screens
+      - uses: actions/cache/save@v5
+        if: always() && steps.cache.outputs.cache-hit != 'true'
+        with:
+          path: |
+            apps/platform/deps
+            apps/platform/_build
+          key: game-page-${{ runner.os }}-${{ hashFiles('apps/platform/mix.lock') }}

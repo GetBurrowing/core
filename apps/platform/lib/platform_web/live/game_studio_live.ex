@@ -58,8 +58,8 @@ defmodule PlatformWeb.GameStudioLive do
 
   def on_access_changed(socket) do
     entries = Studio.list(socket.assigns.current_user_record)
-    entry = socket.assigns.entry && Enum.find(entries, &(&1.project.id == socket.assigns.entry.project.id))
-    socket |> assign(entries: entries, entry: entry, tasks: Studio.tasks(entry, socket.assigns.access_scope), canvases: Studio.canvases(entry, socket.assigns.access_scope))
+    entry = (socket.assigns.entry && Enum.find(entries, &(&1.project.id == socket.assigns.entry.project.id))) || List.first(entries)
+    socket |> assign(entries: entries, entry: entry, new_game: is_nil(entry), game_orgs: NewGame.organizations(socket.assigns.current_user_record), playtest_notice: Studio.playtest_notice(entry, socket.assigns.current_user_record), tasks: Studio.tasks(entry, socket.assigns.access_scope), canvases: Studio.canvases(entry, socket.assigns.access_scope))
   end
 
   @impl true
@@ -67,6 +67,8 @@ defmodule PlatformWeb.GameStudioLive do
     entry = socket.assigns.entry && Enum.find(Studio.list(socket.assigns.current_user_record), &(&1.project.id == socket.assigns.entry.project.id))
     {:noreply, assign(socket, entry: entry, tasks: Studio.tasks(entry, socket.assigns.access_scope), canvases: Studio.canvases(entry, socket.assigns.access_scope))}
   end
+
+  def handle_info(_message, socket), do: {:noreply, socket}
 
   def studio_path(entry, tab \\ "studio") do
     (if tab == "studio", do: "/studio", else: "/studio/" <> tab) <> "?" <> URI.encode_query(%{"project" => entry.project.id})
