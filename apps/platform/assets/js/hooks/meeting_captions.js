@@ -157,7 +157,9 @@ const STALL_CONFIRM_MS = 5000
 // Contrast for every pair here is held on base-200 in all theme variants by
 // test/platform/design/meeting_reskin_contrast_guard_test.exs.
 const CAPTION_TEXT = "text-base-content"
-const NAME_BASE = "shrink-0 font-semibold"
+// The name is capped at 40% of the strip and truncates, so a long name at
+// 375px cannot squeeze the caption text to 0px and paint over "just you".
+const NAME_BASE = "max-w-[40%] shrink-0 truncate font-semibold"
 const NAME_PLAIN = `${NAME_BASE} text-base-content`
 const NAME_AGENT = `${NAME_BASE} text-[var(--ag-text)]`
 const CAPTION_INTERIM = "opacity-70"
@@ -324,7 +326,7 @@ const MeetingCaptions = {
         // the base-content ink — never a second colour slot.
         const opacity = line.final ? "opacity-100" : "italic"
         const textDim = line.final ? "" : ` ${CAPTION_INTERIM}`
-        // The name never shrinks; the text truncates first.
+        // The name never shrinks below its 40% cap; the text truncates first.
         const slot = agentSlot(line.identity)
         const name = slot
           ? `<span class="${NAME_AGENT}" data-agent-slot="${slot}">${this._escapeHtml(line.speaker)}</span>`

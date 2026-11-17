@@ -291,6 +291,20 @@ describe("MeetingCaptions docked strip — 1 line idle, 2 while speaking", () =>
     expect(html).toMatch(/class="caption-line flex min-w-0 /)
   })
 
+  it("a 40-character name is capped at 40% and truncates (reviewer fix, 375px)", () => {
+    const longName = "Maximiliana Wolfeschlegelsteinhausen-Ba"
+    expect(longName.length).toBe(39)
+    const name40 = longName + "x"
+    hook._onCaption({ detail: { id: "n", speaker: name40, text: "hello there", final: true } })
+    const html = hook.el.innerHTML
+    const re = new RegExp(`<span class="([^"]*)">${name40}</span>`)
+    const m = html.match(re)
+    expect(m).not.toBeNull()
+    const classes = m[1].split(/\s+/)
+    expect(classes).toContain("max-w-[40%]")
+    expect(classes).toContain("truncate")
+  })
+
   it("an identity in data-agent-slots gets data-agent-slot and the --ag-text colour", () => {
     globalThis.document.getElementById = (id) =>
       id === "meeting-room"
@@ -310,7 +324,7 @@ describe("MeetingCaptions docked strip — 1 line idle, 2 while speaking", () =>
     })
     html = hook.el.innerHTML
     expect(html).not.toContain("data-agent-slot")
-    expect(html).toContain('<span class="shrink-0 font-semibold text-base-content">Ada</span>')
+    expect(html).toContain('<span class="max-w-[40%] shrink-0 truncate font-semibold text-base-content">Ada</span>')
   })
 })
 
@@ -335,7 +349,7 @@ describe("MeetingCaptions palette — the strip is a base-200 theme surface (tas
     caption(hook, { id: "a", text: "hello there", final: true })
 
     const html = hook.el.innerHTML
-    expect(html).toContain('<span class="shrink-0 font-semibold text-base-content">Ada</span>')
+    expect(html).toContain('<span class="max-w-[40%] shrink-0 truncate font-semibold text-base-content">Ada</span>')
     expect(html).toContain('<span class="min-w-0 truncate text-base-content">hello there</span>')
   })
 
@@ -365,7 +379,7 @@ describe("MeetingCaptions palette — the strip is a base-200 theme surface (tas
     expect(hook.el.innerHTML).toContain(
       '<span class="min-w-0 truncate text-base-content opacity-70">half a sent</span>',
     )
-    expect(hook.el.innerHTML).toContain('<span class="shrink-0 font-semibold text-base-content">Ada</span>')
+    expect(hook.el.innerHTML).toContain('<span class="max-w-[40%] shrink-0 truncate font-semibold text-base-content">Ada</span>')
 
     // …and a final line does NOT get the interim treatment.
     caption(hook, { id: "f", text: "half a sentence", final: true })
