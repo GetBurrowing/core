@@ -27,6 +27,7 @@ import {LiveSocket} from "phoenix_live_view"
 import topbar from "../vendor/topbar"
 import Hooks from "./hooks"
 import {installNativeDonations} from "./native_donations"
+import {installMeetingPresence} from "./meeting_presence"
 import {uploadManager} from "./hooks/large_upload"
 import {installReloadGuard} from "./lib/reload_guard"
 import {createReconnectEscalation, parseThresholds} from "./lib/reconnect_escalation"
@@ -54,6 +55,13 @@ installDeadViewTabBar(document)
 // message listener only when this page is framed AND carries
 // theme_preview=1. See ./hooks/theme_preview_receiver.js.
 installThemePreviewReceiver(window)
+
+// In-call toasts, the full-load link guard and the unload prompt (task
+// 01a1e82a stage 2, ./meeting_presence.js). Installed before the LiveSocket
+// and nav_pending so its capture-phase click and its beforeunload listener
+// run first. Also runs on pages outside the shell, where it only shows the
+// "You left" toast a "Leave call and go" stashed.
+installMeetingPresence(window, document)
 
 const csrfToken = document.querySelector("meta[name='csrf-token']").getAttribute("content")
 const liveSocket = new LiveSocket("/live", Socket, {

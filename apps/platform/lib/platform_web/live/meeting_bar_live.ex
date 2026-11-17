@@ -121,7 +121,7 @@ defmodule PlatformWeb.MeetingBarLive do
         :if={@meeting_active && !@in_call_room}
         id="meeting-top-bar"
         phx-hook="MeetingBar"
-        phx-mounted={JS.ignore_attributes(["data-state"])}
+        phx-mounted={JS.ignore_attributes(["data-state", "data-lost"])}
         data-state="connected"
         data-started-at={@started_at && DateTime.to_iso8601(@started_at)}
         aria-label="In call"
@@ -140,8 +140,21 @@ defmodule PlatformWeb.MeetingBarLive do
         <span data-role="meeting-name" class="min-w-0 truncate font-bold">
           {@space_name || "Meeting"}
         </span>
-        <%!-- Ticked by the MeetingBar hook from `data-started-at`. --%>
-        <span data-timer class="shrink-0 tabular-nums">0:00</span>
+        <%!-- Ticked by the MeetingBar hook from `data-started-at`. While
+             reconnecting (stage 2, meeting_presence.js) the clock gives way
+             to "Reconnecting… 0:07", and after 30s to "Connection lost". --%>
+        <span data-timer class="shrink-0 tabular-nums group-data-[state=reconnecting]:hidden">
+          0:00
+        </span>
+        <span
+          data-role="meeting-conn-status"
+          class="hidden shrink-0 tabular-nums group-data-[state=reconnecting]:inline"
+        >
+          <span class="group-data-[lost=true]:hidden">
+            Reconnecting… <span data-conn-timer>0:00</span>
+          </span>
+          <span class="hidden font-semibold group-data-[lost=true]:inline">Connection lost</span>
+        </span>
 
         <span :if={@roster != []} data-role="meeting-faces" class="hidden shrink-0 pl-1.5 sm:flex">
           <span
@@ -167,7 +180,10 @@ defmodule PlatformWeb.MeetingBarLive do
         <span class="flex-1" />
 
         <%!-- Phone strip action. The link over the strip is what you tap. --%>
-        <span aria-hidden="true" class="shrink-0 text-[13px] font-semibold opacity-95 sm:hidden">
+        <span
+          aria-hidden="true"
+          class="shrink-0 text-[13px] font-semibold opacity-95 group-data-[lost=true]:hidden sm:hidden"
+        >
           Tap to return ›
         </span>
         <.link
@@ -217,6 +233,28 @@ defmodule PlatformWeb.MeetingBarLive do
           Return to call ↗
         </.link>
 
+        <%!-- Connection lost (stage 2): Rejoin at both widths; on the phone
+             strip, Leave opens the Leave sheet (meeting_presence.js). Above
+             the strip link, so a tap reaches them. --%>
+        <span class="hidden group-data-[lost=true]:contents">
+          <button
+            type="button"
+            data-bar-rejoin
+            class="relative z-10 inline-flex shrink-0 items-center rounded-lg bg-warning-content/15 px-2.5 py-1 text-[13px] font-semibold lg:hover:opacity-90"
+          >
+            Rejoin
+          </button>
+          <span class="contents sm:hidden">
+            <button
+              type="button"
+              data-meeting-leave-sheet
+              class="relative z-10 inline-flex shrink-0 items-center rounded-lg bg-error px-2.5 py-1 text-[13px] font-semibold text-error-content"
+            >
+              Leave
+            </button>
+          </span>
+        </span>
+
         <button
           type="button"
           phx-click="leave_meeting"
@@ -253,16 +291,17 @@ defmodule PlatformWeb.MeetingBarLive do
   # if the meeting_slug isn't available yet. The final `space_id` fallback
   # mirrors the pre-existing space-name link logic so a truly nil bar still
   # renders without a broken `nil` interpolation.
-  defp return_to_call_path(meeting_slug, _space_slug, _space_id) when is_binary(meeting_slug),
+  @doc false
+  def return_to_call_path(meeting_slug, _space_slug, _space_id) when is_binary(meeting_slug),
     do: "/meetings/#{meeting_slug}"
 
-  defp return_to_call_path(_, space_slug, _space_id) when is_binary(space_slug),
+  def return_to_call_path(_, space_slug, _space_id) when is_binary(space_slug),
     do: "/chat/#{space_slug}"
 
-  defp return_to_call_path(_, _, space_id) when is_binary(space_id),
+  def return_to_call_path(_, _, space_id) when is_binary(space_id),
     do: "/chat/#{space_id}"
 
-  defp return_to_call_path(_, _, _), do: "/meetings"
+  def return_to_call_path(_, _, _), do: "/meetings"
 
   @impl true
   def handle_event("meeting_bar_state", %{"mic" => mic, "camera" => camera} = _params, socket) do

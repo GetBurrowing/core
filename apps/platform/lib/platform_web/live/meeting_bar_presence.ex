@@ -125,10 +125,12 @@ defmodule PlatformWeb.MeetingBarPresence do
     %{id: participant.id, name: name, initials: initials(name)}
   end
 
-  defp display_name(%{display_name: name}) when is_binary(name) and name != "", do: name
-  defp display_name(%{user: %{name: name}}) when is_binary(name) and name != "", do: name
-  defp display_name(%{agent: %{name: name}}) when is_binary(name) and name != "", do: name
-  defp display_name(_), do: "?"
+  @doc "A meeting participant's display name, as the bar's faces show it."
+  @spec display_name(map()) :: String.t()
+  def display_name(%{display_name: name}) when is_binary(name) and name != "", do: name
+  def display_name(%{user: %{name: name}}) when is_binary(name) and name != "", do: name
+  def display_name(%{agent: %{name: name}}) when is_binary(name) and name != "", do: name
+  def display_name(_), do: "?"
 
   defp initials(name) do
     name

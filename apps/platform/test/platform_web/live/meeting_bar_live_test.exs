@@ -64,8 +64,10 @@ defmodule PlatformWeb.MeetingBarLiveTest do
       d = doc(@meeting_assigns)
       bar = text(d, "#meeting-top-bar") |> String.replace(~r/\s+/, " ")
 
+      # The reconnecting / lost spans and Rejoin are in the markup but hidden
+      # while connected (stage 2); see "reconnecting and lost" below.
       assert bar =~
-               ~r/In call Weekly sync 0:00 RP S 2 here .*Mic on Cam off Return to call ↗ Leave/
+               ~r/In call Weekly sync 0:00 (Reconnecting… 0:00 Connection lost )?RP S 2 here .*Mic on Cam off Return to call ↗ (Rejoin Leave )?Leave/
 
       assert text(d, "[data-role=meeting-name]") == "Weekly sync"
       assert text(d, "[data-role=meeting-here]") == "2 here"
@@ -99,6 +101,27 @@ defmodule PlatformWeb.MeetingBarLiveTest do
       assert attr(d, "#meeting-top-bar", "data-state") == "connected"
       assert attr(d, "#meeting-top-bar", "phx-mounted") =~ "ignore_attrs"
       assert attr(d, "#meeting-top-bar", "phx-mounted") =~ "data-state"
+      assert attr(d, "#meeting-top-bar", "phx-mounted") =~ "data-lost"
+    end
+
+    # Task 01a1e82a stage 2: meeting_presence.js sets data-state=reconnecting
+    # (and data-lost=true after 30s); these variants and slots are what it
+    # repaints. The old body-level banner is folded into the bar.
+    test "reconnecting and lost: the clock gives way, Rejoin and the phone Leave sheet appear" do
+      d = doc(@meeting_assigns)
+
+      assert attr(d, "#meeting-top-bar [data-timer]", "class") =~
+               "group-data-[state=reconnecting]:hidden"
+
+      status = "#meeting-top-bar [data-role=meeting-conn-status]"
+      assert attr(d, status, "class") =~ "group-data-[state=reconnecting]:inline"
+      assert text(d, status) |> String.replace(~r/\s+/, " ") =~ "Reconnecting… 0:00"
+      assert text(d, status) =~ "Connection lost"
+      assert present?(d, "#{status} [data-conn-timer]")
+
+      assert text(d, "#meeting-top-bar [data-bar-rejoin]") == "Rejoin"
+      assert text(d, "#meeting-top-bar [data-meeting-leave-sheet]") == "Leave"
+      assert attr(d, "#meeting-top-bar", "class") =~ "data-[state=reconnecting]:bg-warning"
     end
 
     test "keeps the MeetingBar hook, timer and started-at contract" do

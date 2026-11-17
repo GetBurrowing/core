@@ -156,6 +156,9 @@ defmodule Platform.RepoLookupBoundaryTest do
     # Task 01a1e82a stage 1: the in-call top bar's roster.
     {"platform_web/live/meeting_bar_presence.ex", :platform_uuid_guard, "-", 1, :must_cast,
      "assign_roster/1 guards the shell's :meeting_space_id, which arrives from a Meetings.State join broadcast (and from tests and the dev evidence endpoint as an arbitrary string), before Meetings.active_participants_for_space/1; a malformed id answers an empty roster"},
+    # Task 01a1e82a stage 2: the in-call toasts and the host check.
+    {"platform_web/live/meeting_presence_events.ex", :platform_uuid_guard, "-", 3, :must_cast,
+     "track/1 and left_payload/1 guard the shell's :meeting_space_id (a Meetings.State join broadcast, or an arbitrary string from tests and the dev evidence endpoint) before Meetings.get_live_meeting_for_space/1 and active_participants_for_space/1, and host_participant/1 guards Meeting.host_participant_id before Chat.get_participant/1; a malformed id answers no meeting, an empty room or no host"},
     # Task 01a1b8a5 stage 1: the Calendar authoring coordinator.
     {"platform/calendar/authoring.ex", :get, "Event", 2, :safe_internal,
      "do_save/3 re-reads Event.id after Calendar.update_event/3 or create_event/2 returned that row, a UUIDv7 primary key; the draft's own event id reaches the Repo only through Calendar's guarded owned_event/2"},

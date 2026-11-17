@@ -17,6 +17,7 @@ defmodule PlatformWeb.ShellLive do
   alias Platform.Meetings
   alias Platform.Meetings.State, as: MeetingState
   alias PlatformWeb.MeetingBarPresence
+  alias PlatformWeb.MeetingPresenceEvents
   alias Platform.Push
   alias Platform.Repo
   alias Platform.Tasks
@@ -198,6 +199,10 @@ defmodule PlatformWeb.ShellLive do
       |> assign(:in_call_room, false)
       |> assign(:meeting_presence_sub, nil)
       |> MeetingBarPresence.reset()
+      # Task 01a1e82a stage 2: the live meeting behind the bar (toasts, the
+      # host-ended broadcast, "End for everyone"). See MeetingPresenceEvents.
+      |> assign(:meeting_project_sub, nil)
+      |> MeetingPresenceEvents.reset()
       # Stage 4 (task 019ee06b): the no-ChatLive bar-toggle fallback caches
       # the post-toggle mic/camera state here so it can flip them on each
       # click without round-tripping. Defaults mirror MeetingBarLive's
@@ -411,6 +416,13 @@ defmodule PlatformWeb.ShellLive do
           # See the `:track_path` hook above: only the call room hides the bar.
           in_call_room = MeetingBarPresence.in_call_room?(path, meeting_slug)
 
+          # Task 01a1e82a stage 2: the restore-on-reconnect join re-broadcasts
+          # `:meeting_joined` for a user who never left; that is not a join to
+          # announce.
+          rejoin? =
+            socket.assigns[:meeting_active] == true and
+              socket.assigns[:meeting_space_id] == space_id
+
           socket =
             socket
             |> assign(:meeting_active, true)
@@ -421,7 +433,13 @@ defmodule PlatformWeb.ShellLive do
             |> assign(:meeting_started_at, started_at)
             |> assign(:in_call_room, in_call_room)
             |> MeetingBarPresence.assign_roster()
+            |> MeetingPresenceEvents.track()
             |> MeetingBarPresence.schedule_subscribe()
+
+          socket =
+            if rejoin?,
+              do: socket,
+              else: MeetingPresenceEvents.push_joined(socket, joined_media(socket))
 
           {:halt, socket}
 
@@ -429,7 +447,45 @@ defmodule PlatformWeb.ShellLive do
         # presence subscription can see whether the host already holds one.
         # See `PlatformWeb.MeetingBarPresence`.
         :meeting_bar_presence_subscribe, socket ->
-          {:halt, MeetingBarPresence.subscribe(socket)}
+          {:halt,
+           socket
+           |> MeetingBarPresence.subscribe()
+           |> MeetingPresenceEvents.subscribe()}
+
+        # Task 01a1e82a stage 2: the meeting this shell is in was ended
+        # (`Meetings.end_meeting/1`). Leave it the way the bar's Leave does,
+        # silently (no "You left"), and say who ended it.
+        {:meeting_ended, %Meetings.Meeting{} = meeting}, socket ->
+          socket =
+            if MeetingPresenceEvents.current_meeting?(socket, meeting) do
+              # Toast first: it names the meeting from assigns the leave resets.
+              {socket, _left} =
+                socket
+                |> MeetingPresenceEvents.push_ended(meeting)
+                |> shell_leave_meeting()
+
+              socket
+            else
+              socket
+            end
+
+          project_event_result(socket)
+
+        # Every other lifecycle event on the project topic: only a shell-owned
+        # subscription swallows it; a host that subscribed itself expects it.
+        {tag, %Meetings.Meeting{}}, socket
+        when tag in [
+               :meeting_created,
+               :meeting_started,
+               :meeting_resumed,
+               :meeting_cancelled,
+               :meeting_rescheduled,
+               :meeting_deleted
+             ] ->
+          project_event_result(socket)
+
+        {:meeting_updated, %Meetings.Meeting{}, _changes}, socket ->
+          project_event_result(socket)
 
         # The bar's avatars and "<N> here" follow the active meeting space's
         # presence. Halt only when the shell owns the subscription; when the
@@ -480,8 +536,23 @@ defmodule PlatformWeb.ShellLive do
            |> assign(:shell_bar_camera_on, camera)}
 
         {:meeting_left, _payload}, socket ->
+          # Task 01a1e82a stage 2: a leave from another surface (the call
+          # room's or the chat's own Leave) still says "You left <name>". The
+          # shell's own leave paths reset `:meeting_active` before this
+          # broadcast loops back, so they are not announced twice.
+          socket =
+            if socket.assigns[:meeting_active] == true,
+              do:
+                MeetingPresenceEvents.push_left(
+                  socket,
+                  MeetingPresenceEvents.left_payload(socket)
+                ),
+              else: socket
+
           socket =
             socket
+            |> MeetingPresenceEvents.release()
+            |> MeetingPresenceEvents.reset()
             |> assign(:meeting_active, false)
             |> assign(:meeting_space_id, nil)
             |> assign(:meeting_space_name, nil)
@@ -506,50 +577,10 @@ defmodule PlatformWeb.ShellLive do
           {:halt, socket}
 
         :meeting_bar_leave, socket ->
-          # The mini-bar "Leave" button sends this. Two cleanup steps in
-          # order: (1) stamp the durable participant row server-side via
-          # `Meetings.leave_for_user/2` so a presence-driven roster refetch
-          # after the COUNT decrement does NOT still see this user as
-          # active, then (2) broadcast the leave event so the shell + any
-          # other LV tabs for this user flip out of meeting mode. The bar
-          # path used to skip (1) entirely — MeetingHooks' `stamp_local_left/1`
-          # was the only leave-stamp writer and it only fires when the
-          # in-chat LV (where MeetingHooks is attached) is still mounted.
-          # If the user clicked Leave from /tasks, the chat LV was already
-          # gone and the participant row stayed orphaned (task 019ee06b).
-          space_id = socket.assigns[:meeting_space_id]
-          uid = socket.assigns[:current_user_id]
-
-          if space_id && uid do
-            Meetings.leave_for_user(space_id, uid)
-          end
-
-          if uid do
-            MeetingState.broadcast_left(uid)
-          end
-
-          socket =
-            socket
-            |> assign(:meeting_active, false)
-            |> assign(:meeting_space_id, nil)
-            |> assign(:meeting_space_name, nil)
-            |> assign(:meeting_space_slug, nil)
-            |> assign(:meeting_slug, nil)
-            |> assign(:meeting_started_at, nil)
-            |> assign(:in_call_room, false)
-            |> MeetingBarPresence.release()
-            |> MeetingBarPresence.reset()
-            |> assign(:shell_bar_mic_on, true)
-            |> assign(:shell_bar_camera_on, false)
-            |> assign(:shell_bar_native, nil)
-
-          send_update(PlatformWeb.MeetingBarLive,
-            id: "meeting-bar",
-            native: nil,
-            mic_pending: false
-          )
-
-          {:halt, socket}
+          # The bar's "Leave" button sends this. See `shell_leave_meeting/1`;
+          # task 01a1e82a stage 2 adds the "You left <name>" toast.
+          {socket, left} = shell_leave_meeting(socket)
+          {:halt, MeetingPresenceEvents.push_left(socket, left)}
 
         _msg, socket ->
           {:cont, socket}
@@ -688,6 +719,27 @@ defmodule PlatformWeb.ShellLive do
           else
             {:halt, shell_meeting_toggle(socket, :camera)}
           end
+
+        # Task 01a1e82a stage 2: the explicit leave the full-load guard
+        # ("Leave call and go") and the phone Leave sheet use. The same server
+        # path as the bar's Leave (left_at stamped, other tabs flipped); the
+        # "You left" payload comes back as the reply, because the guard
+        # stashes it for the page it is about to load instead of showing it.
+        "meeting_presence_leave", _params, socket ->
+          {socket, left} = shell_leave_meeting(socket)
+          {:halt, %{left: left}, socket}
+
+        # The phone Leave sheet's "End for everyone", offered only to the
+        # meeting's host (`:meeting_can_end`). The `{:meeting_ended, _}`
+        # broadcast then takes every shell in the call out of it.
+        "meeting_presence_end", _params, socket ->
+          with true <- socket.assigns[:meeting_can_end] == true,
+               %Meetings.Meeting{} = meeting <-
+                 Meetings.get_live_meeting_for_space(socket.assigns[:meeting_space_id]) do
+            Meetings.end_meeting(meeting)
+          end
+
+          {:halt, socket}
 
         # Mobile bottom-nav More tab → opens the long-tail sheet (task 019e1322 Stage 2)
         "open_more_sheet", _params, socket ->
@@ -1035,10 +1087,84 @@ defmodule PlatformWeb.ShellLive do
         |> assign(:meeting_slug, meeting_slug)
         |> assign(:meeting_started_at, started_at)
         |> MeetingBarPresence.assign_roster()
+        |> MeetingPresenceEvents.track()
         |> MeetingBarPresence.schedule_subscribe()
 
       _ ->
         socket
+    end
+  end
+
+  # The bar's Leave, the guard's "Leave call and go" and a host-ended
+  # meeting all leave through here. Two cleanup steps in order: (1) stamp the
+  # durable participant row server-side via `Meetings.leave_for_user/2` so a
+  # presence-driven roster refetch after the COUNT decrement does NOT still
+  # see this user as active, then (2) broadcast the leave event so any other
+  # LV tabs for this user flip out of meeting mode. The bar path used to skip
+  # (1) entirely — MeetingHooks' `stamp_local_left/1` was the only
+  # leave-stamp writer and it only fires when the in-chat LV (where
+  # MeetingHooks is attached) is still mounted (task 019ee06b).
+  #
+  # Returns the socket with the meeting assigns reset, plus the "You left"
+  # payload (task 01a1e82a stage 2), read after (1) and before the reset.
+  defp shell_leave_meeting(socket) do
+    space_id = socket.assigns[:meeting_space_id]
+    uid = socket.assigns[:current_user_id]
+
+    if space_id && uid do
+      Meetings.leave_for_user(space_id, uid)
+    end
+
+    left = MeetingPresenceEvents.left_payload(socket)
+
+    socket =
+      socket
+      |> assign(:meeting_active, false)
+      |> assign(:meeting_space_id, nil)
+      |> assign(:meeting_space_name, nil)
+      |> assign(:meeting_space_slug, nil)
+      |> assign(:meeting_slug, nil)
+      |> assign(:meeting_started_at, nil)
+      |> assign(:in_call_room, false)
+      |> MeetingBarPresence.release()
+      |> MeetingBarPresence.reset()
+      |> MeetingPresenceEvents.release()
+      |> MeetingPresenceEvents.reset()
+      |> assign(:shell_bar_mic_on, true)
+      |> assign(:shell_bar_camera_on, false)
+      |> assign(:shell_bar_native, nil)
+
+    # Broadcast after the reset, so this process's own `:meeting_left`
+    # finds `:meeting_active` false and does not announce the leave again.
+    if uid do
+      MeetingState.broadcast_left(uid)
+    end
+
+    send_update(PlatformWeb.MeetingBarLive,
+      id: "meeting-bar",
+      native: nil,
+      mic_pending: false
+    )
+
+    {socket, left}
+  end
+
+  defp project_event_result(socket) do
+    if MeetingPresenceEvents.owns_update?(socket), do: {:halt, socket}, else: {:cont, socket}
+  end
+
+  # The mic / camera pair the "You joined" toast names: the committed media
+  # intent when one is cached, else the bar's defaults.
+  defp joined_media(socket) do
+    case MeetingState.media_intent(socket.assigns[:current_user_id]) do
+      %{mic_enabled: mic, camera_enabled: camera} ->
+        %{mic: mic, camera: camera}
+
+      nil ->
+        %{
+          mic: socket.assigns[:shell_bar_mic_on] != false,
+          camera: socket.assigns[:shell_bar_camera_on] == true
+        }
     end
   end
 
