@@ -315,8 +315,11 @@ defmodule PlatformWeb.MeetingBarLive do
                 role="menuitem"
                 data-bar-end
                 phx-click={JS.hide(to: "#meeting-bar-end-menu") |> JS.push("meeting_presence_end")}
-                class="w-full rounded-lg px-3 py-2 text-left text-[13px] font-semibold text-error lg:hover:bg-base-200"
+                class="flex w-full items-center gap-2 rounded-lg px-3 py-2 text-left text-[13px] font-semibold text-base-content lg:hover:bg-base-200"
               >
+                <%!-- The room's palette rule (R3): the hue goes on the glyph,
+                     never on the label. --%>
+                <span class="hero-phone-x-mark size-4 shrink-0 text-error" aria-hidden="true" />
                 End for everyone
               </button>
             </div>

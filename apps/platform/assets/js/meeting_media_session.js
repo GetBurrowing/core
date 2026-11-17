@@ -8,6 +8,14 @@
 //     or "● ↻ 0:07 <name> · <app>" while LiveKit reconnects.
 // On leave / end both are cleared and the page's own title comes back.
 //
+// THE TITLE IS SHARED WITH AppBadge (task 01a1e82a remediation round 2).
+// AppBadge owns the leading "(N) " unread prefix; this writer owns what
+// follows it while in a call. Every read strips the prefix, every write
+// keeps the one already there ("(1) ● 12:04 Weekly sync · Burrow"), and a
+// write happens only when the full string differs. Stripping the prefix
+// instead made the two MutationObservers undo each other forever and froze
+// the tab whenever Inbox unread was above zero.
+//
 // Inside the iOS app the native call (CallKit) owns the lock screen, so the
 // Media Session half stays off there; the title half still runs.
 //
@@ -16,7 +24,8 @@
 // the actions, timers) so vitest drives it without a DOM. It is wired up in
 // `installMeetingPresence` (meeting_presence.js).
 
-import { formatElapsed } from "./hooks/meeting_bar.js"
+import { formatElapsed, nativeCallOwnsMedia } from "./hooks/meeting_bar.js"
+import { badgePrefix, stripBadgePrefix } from "./hooks/app_badge.js"
 
 export const METADATA_REFRESH_MS = 15000
 export const TICK_MS = 1000
@@ -64,6 +73,7 @@ export function createMeetingMediaSession(env = {}) {
 
   let active = false
   let tick = null
+  // Both are BARE titles: the badge prefix is never part of either.
   let baseTitle = null
   let ownTitle = null
   let sessionOn = false
@@ -78,21 +88,34 @@ export function createMeetingMediaSession(env = {}) {
   }
 
   // ── Tab title ──
-  function writeTitle(text) {
-    ownTitle = text
+  // Write `bare` behind whatever badge prefix the title carries now, and
+  // only when that changes the string: an equal write would still queue a
+  // mutation for every title observer on the page.
+  function composeTitle(bare) {
+    const current = safeTitle()
+    const next = badgePrefix(current) + bare
+    if (next === current) return
     try {
-      setTitle(text)
+      setTitle(next)
     } catch (_) {
       /* no title to write */
     }
   }
 
-  // LiveView rewrote the title (a live navigation, a page_title change):
-  // that is the page's own title now, and ours goes back on top.
+  function writeTitle(text) {
+    ownTitle = text
+    composeTitle(text)
+  }
+
+  // Someone else wrote the title. If only the badge prefix moved, AppBadge
+  // already composed it with ours and there is nothing to do. Otherwise
+  // LiveView wrote the page's own title (a live navigation, a page_title
+  // change): that is the base now, and ours goes back on top.
   function onTitleChanged() {
-    if (safeTitle() === ownTitle) return
+    const bare = stripBadgePrefix(safeTitle())
+    if (ownTitle != null && bare === ownTitle) return
     if (active && snapshot && !snapshot.inCallRoom) render(snapshot, { metadata: false })
-    else baseTitle = safeTitle()
+    else baseTitle = bare
   }
 
   function safeTitle() {
@@ -107,14 +130,8 @@ export function createMeetingMediaSession(env = {}) {
     if (ownTitle == null) return
     const current = safeTitle()
     // Only put the page title back over our own text; LiveView may have
-    // written a fresher one already.
-    if (current === ownTitle && baseTitle != null) {
-      try {
-        setTitle(baseTitle)
-      } catch (_) {
-        /* nothing to restore into */
-      }
-    }
+    // written a fresher one already. The badge prefix stays where it is.
+    if (stripBadgePrefix(current) === ownTitle && baseTitle != null) composeTitle(baseTitle)
     ownTitle = null
   }
 
@@ -211,7 +228,7 @@ export function createMeetingMediaSession(env = {}) {
       restoreTitle()
     } else {
       // Anything that is not our own text is the page's own title.
-      const current = safeTitle()
+      const current = stripBadgePrefix(safeTitle())
       if (ownTitle == null || current !== ownTitle) baseTitle = current
       const reconnecting = state.conn && state.conn.state === "reconnecting"
       const shown = reconnecting ? formatElapsed((now() - state.conn.since) / 1000) : elapsed
@@ -291,22 +308,14 @@ export function createMeetingMediaSession(env = {}) {
 
 // ── Browser wiring ───────────────────────────────────────────────────────
 
-// The native call owns media inside the iOS app when its meetings plugin is
-// there (the same check MeetingClient's native hand-off makes).
-export function nativeCallOwnsMedia(win) {
-  try {
-    if (!win.Capacitor?.isNativePlatform?.()) return false
-    const plugins = win.Capacitor.Plugins
-    return !!(plugins && (plugins.BurrowMeetings || plugins.SuiteMeetings))
-  } catch (_) {
-    return false
-  }
-}
+// Defined beside the bar's toggle, which makes the same check.
+export { nativeCallOwnsMedia }
 
 export function installMeetingMediaSession(win, doc, { toggleMic, toggleCamera, hangup }) {
   const titleEl = () => doc.querySelector && doc.querySelector("title")
   const room = () => win.__livekit_room || win.__livekitRoom || null
   const barButton = (sel) => doc.querySelector && doc.querySelector(`#meeting-top-bar ${sel}`)
+  let observer = null
 
   const controller = createMeetingMediaSession({
     mediaSession: () => (win.navigator && win.navigator.mediaSession) || null,
@@ -316,6 +325,10 @@ export function installMeetingMediaSession(win, doc, { toggleMic, toggleCamera, 
     getTitle: () => doc.title,
     setTitle: (t) => {
       doc.title = t
+      // Our own write is not news: drop the records it queued for our
+      // observer, so this writer never re-enters on itself. (AppBadge's
+      // observer still sees it, finds its prefix in place and writes nothing.)
+      if (observer && typeof observer.takeRecords === "function") observer.takeRecords()
     },
     appName: () => titleEl()?.dataset?.default || "",
     readMic: () => {
@@ -339,12 +352,14 @@ export function installMeetingMediaSession(win, doc, { toggleMic, toggleCamera, 
   const el = titleEl()
   if (el && typeof win.MutationObserver === "function") {
     try {
-      new win.MutationObserver(() => controller.onTitleChanged()).observe(el, {
+      observer = new win.MutationObserver(() => controller.onTitleChanged())
+      observer.observe(el, {
         childList: true,
         characterData: true,
         subtree: true,
       })
     } catch (_) {
+      observer = null
       /* no observer: the 1s tick still rewrites ours */
     }
   }

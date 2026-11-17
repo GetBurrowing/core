@@ -1119,7 +1119,8 @@ defmodule PlatformWeb.ChatLive.Partials do
           <p class="text-sm font-semibold truncate">
             {(@active_space && @active_space.name) || "Meeting"}
           </p>
-          <span id="meeting-duration" class="text-xs text-subtle tabular-nums">0:00</span>
+          <%!-- No clock here: the top bar's meeting clock is the one clock
+               (task 01a1e82a remediation round 2). --%>
         </div>
         <div class="flex items-center gap-1">
           <.soundboard_menu id="soundboard-menu-desktop" />
@@ -1295,9 +1296,7 @@ defmodule PlatformWeb.ChatLive.Partials do
           <p class="text-sm font-semibold truncate">
             {(@active_space && @active_space.name) || "Meeting"}
           </p>
-          <span id="meeting-duration-mobile" class="text-xs text-subtle tabular-nums">
-            0:00
-          </span>
+          <%!-- No clock here: the top bar's meeting clock is the one clock. --%>
         </div>
         <div class="flex items-center gap-1">
           <%!-- Opens the hoisted call rail as a bottom sheet. Mobile-only:

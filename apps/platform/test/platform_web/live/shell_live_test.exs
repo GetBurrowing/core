@@ -1555,6 +1555,51 @@ defmodule PlatformWeb.ShellLiveTest do
       :ok = MeetingState.broadcast_left(user_id)
     end
 
+    # Task 01a1e82a remediation round 2: on a shell page the bar toggles the
+    # LiveKit room itself and then reports the CONFIRMED pair. The shell
+    # caches it and fans it out; it never flips anything optimistically and
+    # pushes no `toggle-mic` (no MeetingClient is mounted here to take it).
+    test "meeting_media_confirmed caches and broadcasts the room's real pair",
+         %{conn: conn} do
+      conn = authenticated_conn(conn)
+      user_id = conn.private.plug_session["current_user_id"]
+
+      :ok = MeetingState.subscribe(user_id)
+
+      :ok =
+        MeetingState.broadcast_joined(
+          user_id,
+          "space-shell-confirmed",
+          "Shell Confirmed",
+          "shell-confirmed-slug",
+          "shell-confirmed-meeting-slug"
+        )
+
+      {:ok, view, _html} = live(conn, ~p"/calendar")
+      assert_receive {:meeting_joined, %{user_id: ^user_id}}
+
+      render_hook(view, "meeting_media_confirmed", %{"mic" => false, "camera" => true})
+
+      assert_receive {:meeting_media_state,
+                      %{user_id: ^user_id, mic_enabled: false, camera_enabled: true}}
+
+      assigns = :sys.get_state(view.pid).socket.assigns
+      assert assigns.shell_bar_mic_on == false
+      assert assigns.shell_bar_camera_on == true
+      refute_push_event(view, "toggle-mic", %{})
+
+      # The loopback repaints the bar from the confirmed pair.
+      html = view |> element("[data-bar-mic]") |> render()
+      assert html =~ "off"
+      assert view |> element("[data-bar-camera]") |> render() =~ "Cam on"
+
+      # A malformed payload is ignored, not a crash.
+      render_hook(view, "meeting_media_confirmed", %{"mic" => "nope"})
+      assert Process.alive?(view.pid)
+
+      :ok = MeetingState.broadcast_left(user_id)
+    end
+
     test "shell fallback consecutive toggles alternate (cached state, not default)",
          %{conn: conn} do
       # Without the cache update inside shell_meeting_toggle/2 the second

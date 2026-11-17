@@ -1101,4 +1101,24 @@ defmodule PlatformWeb.Chat.PartialsMeetingPanelTest do
              |> Enum.count() == 1
     end
   end
+
+  # Task 01a1e82a remediation round 2 (minor). Both panel headers carried a
+  # "0:00" span nothing ever updated, sitting under the top bar's live
+  # meeting clock. The bar's clock is the one clock; the panels show none.
+  describe "the panel headers" do
+    test "carry no second, frozen call clock" do
+      html = render_panel(%{})
+      doc = LazyHTML.from_fragment(html)
+
+      assert LazyHTML.query(doc, "#meeting-duration") |> Enum.count() == 0
+      assert LazyHTML.query(doc, "#meeting-duration-mobile") |> Enum.count() == 0
+
+      for header <- [
+            "#meeting-panel > div:first-child",
+            ~s([data-role="quickmeet-mobile-overlay"] header)
+          ] do
+        refute doc |> LazyHTML.query(header) |> LazyHTML.text() =~ "0:00"
+      end
+    end
+  end
 end

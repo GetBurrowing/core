@@ -720,6 +720,26 @@ defmodule PlatformWeb.ShellLive do
             {:halt, shell_meeting_toggle(socket, :camera)}
           end
 
+        # Task 01a1e82a remediation round 2: on a page without the chat's
+        # call client the bar toggles the LiveKit room in the browser
+        # (`toggleLocalMedia` in meeting_bar.js) and reports the pair the
+        # room CONFIRMED. Cache it and fan it out, so MeetingState, other
+        # tabs and a later return to the chat agree with the room. Nothing
+        # is flipped optimistically and no `toggle-mic` is pushed.
+        "meeting_media_confirmed", %{"mic" => mic, "camera" => camera}, socket
+        when is_boolean(mic) and is_boolean(camera) ->
+          if uid = socket.assigns[:current_user_id] do
+            MeetingState.broadcast_media_state(uid, %{mic_enabled: mic, camera_enabled: camera})
+          end
+
+          {:halt,
+           socket
+           |> assign(:shell_bar_mic_on, mic)
+           |> assign(:shell_bar_camera_on, camera)}
+
+        "meeting_media_confirmed", _params, socket ->
+          {:halt, socket}
+
         # Task 01a1e82a stage 2: the explicit leave the full-load guard
         # ("Leave call and go") and the phone Leave sheet use. The same server
         # path as the bar's Leave (left_at stamped, other tabs flipped); the

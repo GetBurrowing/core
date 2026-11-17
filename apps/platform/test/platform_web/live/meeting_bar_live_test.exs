@@ -265,7 +265,10 @@ defmodule PlatformWeb.MeetingBarLiveTest do
       assert text(d, "#meeting-bar-end-menu [data-bar-end]") == "End for everyone"
       assert attr(d, "[data-bar-end]", "phx-click") =~ "meeting_presence_end"
       assert attr(d, "[data-bar-end-menu]", "aria-controls") == "meeting-bar-end-menu"
-      assert "text-error" in classes(d, "[data-bar-end]")
+      # The destructive tone sits on the aria-hidden glyph, never on the
+      # label (the room's palette guard, R3).
+      assert "text-error" in classes(d, "[data-bar-end] [aria-hidden=\"true\"]")
+      refute "text-error" in classes(d, "[data-bar-end]")
       assert attr(d, "[data-bar-leave]", "phx-click") == "leave_meeting"
     end
 

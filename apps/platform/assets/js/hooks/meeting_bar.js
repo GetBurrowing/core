@@ -97,6 +97,65 @@ export function watchLocalMedia(win, onChange) {
   }
 }
 
+// The native call owns media inside the iOS app when its meetings plugin is
+// there (the same check MeetingClient's native hand-off makes).
+export function nativeCallOwnsMedia(win) {
+  try {
+    if (!win.Capacitor?.isNativePlatform?.()) return false
+    const plugins = win.Capacitor.Plugins
+    return !!(plugins && (plugins.BurrowMeetings || plugins.SuiteMeetings))
+  } catch (_) {
+    return false
+  }
+}
+
+/**
+ * Toggle the local mic or camera from the top bar (or the lock screen) on
+ * whatever page the person is on (task 01a1e82a remediation round 2).
+ *
+ *   - Native call owns media (iOS app): `meeting_toggle_*` to the server,
+ *     which asks the native call with `%{want}` and repaints only on the
+ *     call's confirmed state. Unchanged.
+ *   - The chat's call client is mounted (`#meeting-client`): the same
+ *     `meeting_toggle_*` push, so MeetingHooks keeps the chat's committed
+ *     media intent (`data-mic-enabled`, which the reconnect reconciler
+ *     reads) in step while MeetingClient toggles this same room.
+ *   - Any other page (/calendar, /inbox, …): no call client is mounted to
+ *     take a `toggle-mic` push, so the bar toggles `window.__livekit_room`
+ *     itself, exactly as MeetingClient would, then reports the CONFIRMED
+ *     pair as `meeting_media_confirmed` so the shell's cache, MeetingState
+ *     and the chat (if the person goes back) agree with the room.
+ *
+ * The chip is never set here: it follows the room's own TrackMuted /
+ * TrackUnmuted events through `watchLocalMedia`.
+ */
+export async function toggleLocalMedia(kind, { win, doc, push }) {
+  const camera = kind === "camera"
+  if (nativeCallOwnsMedia(win)) {
+    push(camera ? "meeting_toggle_camera" : "meeting_toggle_mic", {})
+    return "native"
+  }
+  const callClient = doc && typeof doc.getElementById === "function" && doc.getElementById("meeting-client")
+  if (callClient) {
+    push(camera ? "meeting_toggle_camera" : "meeting_toggle_mic", {})
+    return "client"
+  }
+  const room = win.__livekit_room || win.__livekitRoom || null
+  const lp = room && room.localParticipant
+  if (!lp) return "none"
+  try {
+    if (camera) await lp.setCameraEnabled(!lp.isCameraEnabled)
+    else await lp.setMicrophoneEnabled(!lp.isMicrophoneEnabled)
+  } catch (err) {
+    console.warn(`[MeetingBar] ${camera ? "camera" : "mic"} toggle failed:`, err)
+  }
+  push("meeting_media_confirmed", {
+    mic: lp.isMicrophoneEnabled === true,
+    camera: lp.isCameraEnabled === true,
+  })
+  return "room"
+}
+
 const MeetingBar = {
   mounted() {
     this._syncState()
@@ -147,22 +206,27 @@ const MeetingBar = {
   _bindControls() {
     this._unbindControls()
 
-    // Stage 4 (task 019ee06b): route bar-initiated toggles through the
-    // canonical server pathway so MeetingHooks (when mounted, e.g. on /chat)
-    // sees them and the authoritative post-toggle state fans out via
-    // `MeetingState.broadcast_media_state/2`. `pushEvent` (NOT
-    // `pushEventTo`) targets the active LiveView, which is ChatLive on
-    // /chat and the shell LV's catch-all elsewhere — see ShellLive's
-    // `:meeting_toggle_mic` / `:meeting_toggle_camera` clauses for the
-    // no-ChatLive fallback. Skipping the direct LiveKit call here means
-    // the bar no longer drifts from the in-chat controls.
-    this._micHandler = () => {
-      this.pushEvent("meeting_toggle_mic", {})
+    // Task 01a1e82a remediation round 2: see `toggleLocalMedia`. On the
+    // chat (and in the iOS app) this is still the `meeting_toggle_*` push to
+    // the active LiveView; on every other page it toggles the real room.
+    // `pushEvent` (NOT `pushEventTo`) targets the active LiveView. A click
+    // while the previous toggle of the same kind is in flight is dropped,
+    // so a double click cannot race two enables against each other.
+    this._pending = this._pending || { mic: false, camera: false }
+    const toggle = (kind) => {
+      if (this._pending[kind]) return
+      this._pending[kind] = true
+      const done = () => {
+        this._pending[kind] = false
+      }
+      toggleLocalMedia(kind, {
+        win: window,
+        doc: typeof document === "undefined" ? null : document,
+        push: (event, payload) => this.pushEvent(event, payload),
+      }).then(done, done)
     }
-
-    this._cameraHandler = () => {
-      this.pushEvent("meeting_toggle_camera", {})
-    }
+    this._micHandler = () => toggle("mic")
+    this._cameraHandler = () => toggle("camera")
 
     this._leaveHandler = () => {
       const room = window.__livekitRoom
