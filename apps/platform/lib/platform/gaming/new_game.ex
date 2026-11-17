@@ -32,7 +32,7 @@ defmodule Platform.Gaming.NewGame do
     engine = params["engine"]
 
     with true <- not is_nil(org) and name != "" and engine in ~w(godot unity unreal),
-         {:ok, agent} <- agent_provider.(),
+         agent = available_agent(agent_provider),
          {:ok, %{project: project, space: space}} <- provision(user, org, name, engine, agent) do
       participant =
         Repo.get_by!(Chat.Participant,
@@ -51,7 +51,7 @@ defmodule Platform.Gaming.NewGame do
              content_type: "text",
              content: brief
            }) do
-        {:ok, _} -> {:ok, project, :requested}
+        {:ok, _} -> {:ok, project, if(agent, do: :requested, else: :awaiting_agent)}
         _ -> {:ok, project, :message_failed}
       end
     else
@@ -79,8 +79,7 @@ defmodule Platform.Gaming.NewGame do
                created_by: user.id,
                metadata: %{"goal_project_id" => project.id}
              }),
-           {:ok, _} <- Chat.ensure_space_agent(space.id, agent.id, role: "principal"),
-           {:ok, _} <- Chat.set_agent_attention_policy({:user, user.id}, space.id, "directed"),
+           :ok <- connect_agent(space, user, agent),
            {:ok, project} <-
              Tasks.update_project(project, %{
                config: Map.put(project.config, "development_space_id", space.id)
@@ -91,4 +90,17 @@ defmodule Platform.Gaming.NewGame do
       end
     end)
   end
+  defp available_agent(provider) do
+    case provider.() do
+      {:ok, agent} -> agent
+      _ -> nil
+    end
+  end
+
+  defp connect_agent(_space, _user, nil), do: :ok
+  defp connect_agent(space, user, agent) do
+    with {:ok, _} <- Chat.ensure_space_agent(space.id, agent.id, role: "principal"),
+         {:ok, _} <- Chat.set_agent_attention_policy({:user, user.id}, space.id, "directed"), do: :ok
+  end
+
 end

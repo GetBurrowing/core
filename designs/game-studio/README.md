@@ -14,8 +14,10 @@ the complete web dock because their native catalog does not know these new keys.
 Project playtests resolve an exact commit on the default branch and create a
 real Play canvas in the authorized development room. Task review playtests keep
 their existing branch-only contract. Neither path changes task state. Starting a
-project requires project and room creation permissions and a running Burrow
-agent. The setup brief is posted into the new team room; repository and build
+project requires project and room creation permissions. When the setup agent is
+offline, the project and room still open with the saved brief; agent setup remains
+pending. When the agent is running, it joins as principal and receives the brief.
+The setup brief is posted into the new team room; repository and build
 readiness are never fabricated. The current implementation offers engine briefs,
 not prebuilt engine starter repositories.
 

@@ -59,14 +59,11 @@ defmodule PlatformWeb.GameStudioLive do
     case NewGame.create(socket.assigns.current_user_record, params) do
       {:ok, project, state} ->
         socket =
-          if state == :message_failed,
-            do:
-              put_flash(
-                socket,
-                :error,
-                "Project and room created. Send your setup brief in the team chat to continue."
-              ),
-            else: socket
+          case state do
+            :message_failed -> put_flash(socket, :error, "Project and room created. Send your setup brief in the team chat to continue.")
+            :awaiting_agent -> put_flash(socket, :info, "Your project and room are ready, and the brief is saved. Open chat to invite an agent when you’re ready to build.")
+            _ -> socket
+          end
 
         {:noreply, push_patch(socket, to: "/studio?project=" <> project.id)}
 
@@ -76,7 +73,7 @@ defmodule PlatformWeb.GameStudioLive do
          |> assign(:new_game_form, to_form(params, as: :game))
          |> put_flash(
            :error,
-           "Could not start the game. Check your project permissions and that the Burrow agent is running."
+           "Could not start the game. Check your project and team-room permissions, then try again."
          )}
     end
   end
@@ -229,7 +226,7 @@ defmodule PlatformWeb.GameStudioLive do
               phx-disable-with="Starting…"
               class="studio-button"
             >
-              Start with an agent
+              Start my game
             </button>
           </.form>
           <p :if={@game_orgs == []}>

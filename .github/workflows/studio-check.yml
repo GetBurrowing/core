@@ -86,7 +86,7 @@ jobs:
         run: |
           cd assets
           npm ci
-          npx vitest run test/hooks/native_tab_bar.test.js test/hooks/native_tab_bar_contract.test.js
+          npx vitest run test/hooks/native_tab_bar.test.js test/hooks/native_tab_bar_contract.test.js test/hooks/jump_anchor_stylesheet.test.js
           cd ..
           mix assets.setup
           mix assets.build
