@@ -108,7 +108,8 @@ defmodule Platform.Goals do
   Changes a goal's settings or status: the owner or the coach agent only.
   `coach_agent_id` is the owner's to change, and only to an eligible coach
   (`Platform.Goals.Coaches`; else `{:error, :lead_missing_goals_tools}`) or
-  nil; `owner_user_id` and `org_id` never change. Back to kind "personal" is refused while any grant exists.
+  nil; `owner_user_id` and `org_id` never change. Back to kind "personal"
+  is refused while any grant exists.
   """
   @spec update_goal(actor(), term(), map()) :: {:ok, Goal.t()} | {:error, term()}
   def update_goal(actor, goal_id, attrs) when is_map(attrs),
