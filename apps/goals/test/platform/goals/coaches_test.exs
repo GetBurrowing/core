@@ -108,6 +108,7 @@ defmodule Platform.Goals.CoachesTest do
                id: a.id,
                name: "Alpha",
                slot: Platform.Agents.ColorPalette.slot_for("teal"),
+               avatar_url: nil,
                model_label: "Opus",
                role_label: leader_name
              }

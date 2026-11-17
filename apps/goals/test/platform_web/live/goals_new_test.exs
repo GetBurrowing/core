@@ -194,7 +194,9 @@ defmodule PlatformWeb.GoalsNewTest do
              "input[aria-label='What do you want to achieve?'][placeholder='#{@placeholder}']"
            )
 
-    assert has_element?(child, "[data-role='goals-new-send']", "Send")
+    # Task 01a1eab7: the leader is the one eligible coach, so it is the
+    # default and the button names it.
+    assert texts(child, "[data-role='goals-new-send']") == ["Start with Dalton"]
     assert has_element?(child, "[data-role='goals-new-back']", "‹ Goals")
     assert has_element?(child, "[data-role='goals-new-examples']", "Try an example:")
 
@@ -646,6 +648,13 @@ defmodule PlatformWeb.GoalsNewTest do
     before = message_count()
 
     refute has_element?(child, "[data-role='goals-new-refused']")
+
+    # Task 01a1eab7: zero eligible coaches keeps this refusal state. No
+    # cards, no "Start with", and the start goes the lead's way.
+    refute has_element?(child, "[data-role='goals-coach-cards']")
+    refute has_element?(child, "[data-role='goals-coach-card']")
+    assert texts(child, "[data-role='goals-new-send']") == ["Send"]
+
     send_text(child, @yt)
 
     assert has_element?(
@@ -786,6 +795,200 @@ defmodule PlatformWeb.GoalsNewTest do
     assert {:error, :conversation_open} = Goals.start_goal_conversation(user, "PLUM-ORBIT again")
     refute_received {:goal_proposal_changed, _}
   end
+
+  # ── task 01a1eab7 stage 2: the coach cards ─────────────────────────────
+
+  describe "coach cards" do
+    test "only eligible agents, above the box; the leader preselected as Default", %{
+      conn: conn,
+      user: user
+    } do
+      lead = lead!(user)
+      brosnan = coach!("Brosnan", %{color: "teal", model: "claude-opus-5"})
+      bundleless = "Charlie" |> coach!() |> grant_goals_tools!(["messaging"])
+
+      child = open(conn, user)
+      html = render(child)
+      cards = html |> Floki.parse_fragment!() |> Floki.find("[data-role='goals-coach-card']")
+
+      assert length(cards) == 2
+
+      assert Enum.sort(Floki.attribute(cards, "data-agent-id")) ==
+               Enum.sort([lead.id, brosnan.id])
+
+      refute html =~ bundleless.id
+      refute html =~ "Charlie"
+      refute has_element?(child, "select")
+
+      assert has_element?(child, "[data-role='goals-coach-label']", "Who should coach you?")
+      assert has_element?(child, "[role='radiogroup'][aria-labelledby='goals-new-coaches-label']")
+
+      assert has_element?(
+               child,
+               "[role='radio'][aria-checked='true'][data-selected='true'][data-agent-id='#{lead.id}'] [data-role='goals-coach-default']",
+               "Default"
+             )
+
+      assert has_element?(
+               child,
+               "[role='radio'][aria-checked='false'][data-selected='false'][data-agent-id='#{brosnan.id}']"
+             )
+
+      refute has_element?(
+               child,
+               "[data-agent-id='#{brosnan.id}'] [data-role='goals-coach-default']"
+             )
+
+      assert texts(
+               child,
+               "[data-agent-id='#{brosnan.id}'] [data-role='goals-coach-model']"
+             ) == ["Opus"]
+
+      assert has_element?(
+               child,
+               "[data-agent-id='#{brosnan.id}'] [data-role='goals-coach-avatar'][data-agent-slot='#{Platform.Agents.ColorPalette.slot_for("teal")}']"
+             )
+
+      assert texts(child, "[data-role='goals-new-send']") == ["Start with Dalton"]
+
+      {cards_at, _} = :binary.match(html, "data-role=\"goals-coach-cards\"")
+      {box_at, _} = :binary.match(html, "data-role=\"goals-new-box\"")
+      assert cards_at < box_at
+    end
+
+    test "picking a card renames the button; the start and the goal take that coach", %{
+      conn: conn,
+      user: user
+    } do
+      lead!(user)
+      brosnan = coach!("Brosnan")
+      child = open(conn, user)
+
+      child
+      |> element("[data-role='goals-coach-card'][data-agent-id='#{brosnan.id}']")
+      |> render_click()
+
+      assert texts(child, "[data-role='goals-new-send']") == ["Start with Brosnan"]
+      assert has_element?(child, "[data-agent-id='#{brosnan.id}'][data-selected='true']")
+      assert texts(child, "[data-role='goals-new-meta'] [data-role='agent-name']") == ["Brosnan"]
+
+      send_text(child, @yt)
+
+      proposal = proposal!(user)
+      assert proposal.agent_id == brosnan.id
+      assert_received {:signal, _}
+
+      # Once a proposal exists the cards are gone, the meta names the
+      # chosen coach and the button keeps its label.
+      refute has_element?(child, "[data-role='goals-coach-cards']")
+      assert texts(child, "[data-role='goals-new-meta'] [data-role='agent-name']") == ["Brosnan"]
+      assert texts(child, "[data-role='goals-new-send']") == ["Send"]
+
+      propose!(brosnan, user, %{
+        "title" => "Half marathon",
+        "agent_mode" => "coach",
+        "rhythm" => "daily",
+        "outreach" => "gentle",
+        "ready" => true
+      })
+
+      child |> element("[data-role='goals-new-create']") |> render_click()
+      assert goal_count() == 1
+      assert Repo.one!(Platform.Goals.Goal).coach_agent_id == brosnan.id
+    end
+
+    test "a forged pick is refused by the server: the note, nothing written, back to Default",
+         %{conn: conn, user: user} do
+      lead = lead!(user)
+      bundleless = "Charlie" |> coach!() |> grant_goals_tools!(["messaging"])
+      child = open(conn, user)
+
+      for forged <- [bundleless.id, Ecto.UUID.generate(), "not-a-uuid"] do
+        counts = {proposal_count(), space_count(), message_count()}
+
+        render_click(child, "new_pick_coach", %{"agent_id" => forged})
+        refute has_element?(child, "[data-role='goals-new-coach-refused']")
+        send_text(child, @yt)
+
+        assert has_element?(
+                 child,
+                 "[data-role='goals-new-coach-refused']",
+                 "That agent can't coach goals"
+               )
+
+        refute has_element?(child, "[data-role='goals-new-refused']")
+        assert {proposal_count(), space_count(), message_count()} == counts
+        assert Goals.current_proposal(user) == {:ok, nil}
+        refute_received {:signal, _}
+
+        # The selection falls back to the default; the typed text is kept.
+        assert has_element?(child, "[data-agent-id='#{lead.id}'][data-selected='true']")
+        assert texts(child, "[data-role='goals-new-send']") == ["Start with Dalton"]
+
+        assert child
+               |> render()
+               |> Floki.parse_fragment!()
+               |> Floki.find("[data-role='goals-new-box'] input[name='text']")
+               |> Floki.attribute("value") == [@yt]
+
+        html = render(child)
+        {note_at, _} = :binary.match(html, "data-role=\"goals-new-coach-refused\"")
+        {box_at, _} = :binary.match(html, "data-role=\"goals-new-box\"")
+        assert note_at < box_at
+      end
+
+      # The default then starts normally and the note goes.
+      send_text(child, @yt)
+      assert proposal!(user).agent_id == lead.id
+      refute has_element?(child, "[data-role='goals-new-coach-refused']")
+    end
+
+    test "more than 4 coaches: 3 cards and More coaches, which shows them all", %{
+      conn: conn,
+      user: user
+    } do
+      lead = lead!(user)
+      others = for name <- ~w(Alpha Bravo Charlie Echo), do: coach!(name)
+      child = open(conn, user)
+
+      shown = card_ids(child)
+      assert length(shown) == 3
+      # The default (Dalton sorts fourth) stays among the three.
+      assert lead.id in shown
+      assert has_element?(child, "[data-role='goals-coach-more']", "More coaches")
+
+      child |> element("[data-role='goals-coach-more']") |> render_click()
+
+      assert Enum.sort(card_ids(child)) == Enum.sort([lead.id | Enum.map(others, & &1.id)])
+      refute has_element?(child, "[data-role='goals-coach-more']")
+    end
+
+    test "4 coaches show as 4 cards with no More", %{conn: conn, user: user} do
+      lead!(user)
+      for name <- ~w(Alpha Bravo Charlie), do: coach!(name)
+      child = open(conn, user)
+
+      assert length(card_ids(child)) == 4
+      refute has_element?(child, "[data-role='goals-coach-more']")
+    end
+  end
+
+  defp coach!(name, attrs \\ %{}) do
+    coach_agent!()
+    |> Ecto.Changeset.change(Map.merge(%{name: name}, attrs))
+    |> Repo.update!()
+  end
+
+  defp card_ids(child) do
+    child
+    |> render()
+    |> Floki.parse_fragment!()
+    |> Floki.find("[data-role='goals-coach-card']")
+    |> Floki.attribute("data-agent-id")
+  end
+
+  defp proposal_count, do: Repo.aggregate(Platform.Goals.Proposal, :count)
+  defp space_count, do: Repo.aggregate(Chat.Space, :count)
 
   test "the type scan hits a planted control" do
     assert [_] = type_controls(~s(<div><select name="type"><option>a</option></select></div>))

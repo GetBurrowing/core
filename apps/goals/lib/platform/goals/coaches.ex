@@ -38,6 +38,7 @@ defmodule Platform.Goals.Coaches do
           id: binary(),
           name: String.t() | nil,
           slot: String.t(),
+          avatar_url: String.t() | nil,
           model_label: String.t() | nil,
           role_label: String.t() | nil
         }
@@ -116,6 +117,7 @@ defmodule Platform.Goals.Coaches do
       id: agent.id,
       name: agent.name,
       slot: ColorPalette.slot_for(agent.color),
+      avatar_url: agent.avatar_url,
       model_label: model_label(agent),
       role_label: role_label(agent)
     }
