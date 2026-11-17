@@ -300,8 +300,80 @@ describe("iOS WebKit keyboard pan: thread reply @mention cap (measured, task 01a
     }
     const hook = Object.assign(Object.create(ComposeInput), { el: field })
     hook._mountThreadMentionViewport()
-    return { hook, cap: () => parseInt(values.get("--thread-mention-max-h"), 10) }
+    return { hook, values, cap: () => parseInt(values.get("--thread-mention-max-h"), 10) }
   }
+
+  // Stage 3, measured in iOS 26.3 Simulator Safari with the real keyboard:
+  // the panel is position: fixed, and panned WebKit lays fixed boxes out
+  // against a layout viewport whose top is at client -337. Writing the
+  // field's client top (336.5) drew the panel's bottom edge at client -0.5,
+  // wholly off screen.
+  it("writes the fixed panel's top in the fixed origin's space: client 272.5 + 337 in panned WebKit", () => {
+    const { hook, values } = mountThread(THREAD_KEYBOARD_OPEN)
+    expect(values.get("--thread-mention-top")).toBe("609.5px")
+    expect(values.get("--thread-mention-left")).toBe("94px")
+    hook._threadMentionCleanup()
+  })
+
+  it("Chromium-style pan (document not scrolled): the fixed origin is client 0", () => {
+    const { hook, values } = mountThread({
+      innerWidth: 402, innerHeight: 714, scrollY: 0,
+      vv: { width: 402, height: 377, offsetTop: 337, offsetLeft: 0, pageTop: 337, scale: 1 },
+      field: { top: 609.5, bottom: 651.5, left: 105, width: 205.3, height: 42 },
+    })
+    expect(values.get("--thread-mention-top")).toBe("609.5px")
+    hook._threadMentionCleanup()
+  })
+
+  describe("a focused reply is scrolled clear of the glass dock", () => {
+    function mountWithDock({ focused = true, dock = { top: 325, height: 52 }, fieldBottom = 367.5 } = {}) {
+      const fns = new Map()
+      const target = () => ({
+        addEventListener: vi.fn((n, f) => fns.set(f, n)),
+        removeEventListener: vi.fn((n, f) => fns.delete(f)),
+      })
+      const viewport = { ...target(), ...THREAD_KEYBOARD_OPEN.vv }
+      const win = { ...target(), visualViewport: viewport, innerWidth: 402, innerHeight: 377, scrollY: 337 }
+      const scroller = { ...target(), scrollTop: 1000 }
+      let shift = 0
+      const field = {
+        getBoundingClientRect: () => ({ top: fieldBottom - 42 - shift, bottom: fieldBottom - shift, left: 105, width: 205.3, height: 42 }),
+        closest: (s) => ({ ".thread-field-box": box, "#chat-message-scroller": scroller })[s],
+      }
+      Object.defineProperty(scroller, "scrollTop", {
+        get: () => 1000 + shift,
+        set: (v) => (shift = v - 1000),
+      })
+      const values = new Map()
+      const box = { style: { setProperty: (k, v) => values.set(k, v), removeProperty: (k) => values.delete(k) } }
+      vi.stubGlobal("window", win)
+      vi.stubGlobal("document", {
+        activeElement: focused ? field : null,
+        getElementById: (id) => (id === "chat-dock" ? { getBoundingClientRect: () => dock } : null),
+      })
+      vi.stubGlobal("requestAnimationFrame", vi.fn((f) => { win.frame = f; return 1 }))
+      vi.stubGlobal("cancelAnimationFrame", vi.fn())
+      const hook = Object.assign(Object.create(ComposeInput), { el: field })
+      hook._mountThreadMentionViewport()
+      return { hook, scroller, values, field }
+    }
+
+    it("field bottom 367.5 under a dock at 325: scrolls 51px (367.5 + 8 - 325), then places above the moved field", () => {
+      const { hook, scroller, values } = mountWithDock()
+      expect(scroller.scrollTop).toBe(1051)
+      // Field top is now 325.5 - 51 = 274.5 client, 611.5 in the fixed space.
+      expect(values.get("--thread-mention-top")).toBe("611.5px")
+      hook._threadMentionCleanup()
+    })
+
+    it("does not scroll when the field is not focused, already clear, or the dock has no box (desktop)", () => {
+      for (const opts of [{ focused: false }, { fieldBottom: 300 }, { dock: { top: 0, height: 0 } }]) {
+        const { hook, scroller } = mountWithDock(opts)
+        expect(scroller.scrollTop).toBe(1000)
+        hook._threadMentionCleanup()
+      }
+    })
+  })
 
   // CAUSE 1 again, in threadMentionPlacement/viewportBounds: 272.5 - 337 -
   // 8 - 10 < 0 -> 0px on #150. The user can see 272.5px above the reply field.

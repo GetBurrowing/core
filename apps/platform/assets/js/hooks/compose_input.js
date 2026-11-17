@@ -16,7 +16,7 @@
 // ever arrives already-prefixed with `"suite:"`, we strip it before passing
 // through so ClientState's own `suite:compose:` prefix isn't doubled.
 import ClientState from "../client_state.js";
-import { visibleViewportRect, watchKeyboard } from "../lib/keyboard_inset.js";
+import { fixedOriginInClient, visibleViewportRect, watchKeyboard } from "../lib/keyboard_inset.js";
 import { attachSendFeel, SEND_SELECTOR } from "../lib/send_feel.js";
 import {
   attachedToastText,
@@ -102,7 +102,8 @@ export function shouldHoldFocusOnSend(target, activeElement, el) {
 }
 
 // The visible viewport in client coordinates (what getBoundingClientRect
-// and `position: fixed` use). visualViewport shrinks and pans under a phone
+// uses; `position: fixed` differs in panned WebKit, see
+// fixedOriginInClient). visualViewport shrinks and pans under a phone
 // keyboard; iOS WebKit reports its offsetTop in a different space from its
 // client rects, so the shared helper converts it (task 01a1c863, see
 // lib/keyboard_inset.js). Without visualViewport, the window is the viewport.
@@ -824,14 +825,34 @@ const ComposeInput = {
     const scroller = this.el.closest("#chat-message-scroller");
     const viewport = window.visualViewport;
     const unwatch = watchKeyboard();
+    // A focused reply must sit above the phone's glass dock. iOS scrolls a
+    // focused field into the part of the screen the keyboard leaves, not the
+    // part the dock leaves, so a reply near the end of the timeline ended
+    // under the channel composer with its @ panel (measured, iOS 26.3
+    // Simulator Safari, task 01a1c863 stage 3: field top 325.5, dock top
+    // 325). Scroll the timeline just enough to clear the dock plus a gutter.
+    // The dock is `display: contents` (no box) at lg and up, so desktop never
+    // scrolls here.
+    const keepAboveDock = () => {
+      if (!scroller || document.activeElement !== this.el) return;
+      const dock = typeof document.getElementById === "function" ? document.getElementById("chat-dock") : null;
+      const d = dock?.getBoundingClientRect();
+      if (!d || !(d.height > 0)) return;
+      const over = Math.ceil(this.el.getBoundingClientRect().bottom + THREAD_MENTION_GUTTER - d.top);
+      if (over > 0) scroller.scrollTop += over;
+    };
     this._measureThreadMentionSpace = () => {
+      keepAboveDock();
       const place = threadMentionPlacement(
         this.el.getBoundingClientRect(),
         viewportBounds(),
       );
+      // The panel is position: fixed; its top/left are in the fixed origin's
+      // space, which panned WebKit puts above client 0 (see keyboard_inset).
+      const origin = fixedOriginInClient(window);
       box.style.setProperty("--thread-mention-max-h", `${place.maxHeight}px`);
-      box.style.setProperty("--thread-mention-top", `${place.top}px`);
-      box.style.setProperty("--thread-mention-left", `${place.left}px`);
+      box.style.setProperty("--thread-mention-top", `${place.top - origin.top}px`);
+      box.style.setProperty("--thread-mention-left", `${place.left - origin.left}px`);
       box.style.setProperty("--thread-mention-width", `${place.width}px`);
     };
     let frame = null;

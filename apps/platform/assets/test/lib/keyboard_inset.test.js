@@ -1,5 +1,6 @@
 import { describe, it, expect } from "vitest"
 import {
+  fixedOriginInClient,
   keyboardState,
   roomAbove,
   visibleViewportRect,
@@ -293,6 +294,13 @@ describe("visibleViewportRect / roomAbove", () => {
     expect(visibleViewportRect({ scrollY: 337, visualViewport: { width: 1, height: 2, offsetTop: 5, offsetLeft: 6 } }))
       .toEqual({ top: 5, left: 6, width: 1, height: 2 })
     expect(visibleViewportRect({ innerWidth: 800, innerHeight: 600 })).toEqual({ top: 0, left: 0, width: 800, height: 600 })
+  })
+
+  it("fixedOriginInClient: -offsetTop in panned WebKit, 0 in Chromium, 0 without pageTop or visualViewport", () => {
+    expect(fixedOriginInClient(webkitPanned)).toEqual({ top: -337, left: 0 })
+    expect(fixedOriginInClient(chromiumPanned)).toEqual({ top: 0, left: 0 })
+    expect(fixedOriginInClient({ visualViewport: { offsetTop: 40, offsetLeft: 0 } })).toEqual({ top: 0, left: 0 })
+    expect(fixedOriginInClient({ innerWidth: 800, innerHeight: 600 })).toEqual({ top: 0, left: 0 })
   })
 
   it("roomAbove: bounded by the visible top or the ceiling, whichever is lower on screen, never negative", () => {

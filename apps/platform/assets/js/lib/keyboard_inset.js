@@ -167,6 +167,24 @@ export function visibleViewportRect(win = globalThis.window) {
   }
 }
 
+// Where `position: fixed` puts (0, 0), in CLIENT coordinates (task 01a1c863
+// stage 3). Fixed boxes are laid out against the layout viewport. Chromium
+// reports client rects against that same viewport, so the origin is 0. iOS
+// WebKit with the keyboard up scrolls the document and reports client rects
+// against the scrolled view, while the layout viewport stays put: the origin
+// sits at client -offsetTop. Measured in iOS 26.3 Simulator Safari: a thread
+// reply's fixed @ panel given `top: 336.5px` (the field's client top) drew
+// its bottom edge at client -0.5, wholly off screen. visibleTop - offsetTop
+// gives 0 in Chromium (pageTop - scrollY = offsetTop) and -offsetTop in
+// panned WebKit (pageTop - scrollY = 0). Subtract it from a client
+// coordinate to get the value to write into a fixed box's top/left.
+export function fixedOriginInClient(win = globalThis.window) {
+  const vv = win?.visualViewport
+  if (!vv) return { top: 0, left: 0 }
+  const visible = visibleViewportRect(win)
+  return { top: visible.top - (vv.offsetTop || 0), left: visible.left - (vv.offsetLeft || 0) }
+}
+
 // The room for an upward-opening list whose bottom edge sits on `anchorTop`
 // (a client y), bounded by the visible viewport's top and by `ceilingTop`
 // (a client y such as the chat zone's top, below the header), less `gap`.
