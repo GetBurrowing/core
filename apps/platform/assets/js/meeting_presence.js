@@ -619,7 +619,7 @@ export function createDomUi(doc, win, { isPhone }) {
       node = el(
         doc,
         "div",
-        "pointer-events-none fixed inset-x-4 top-[calc(env(safe-area-inset-top)+3.5rem)] z-[70] flex flex-col items-stretch gap-2 sm:inset-x-auto sm:top-auto sm:bottom-4 sm:right-4 sm:w-[22rem]",
+        "pointer-events-none fixed inset-x-4 bottom-[calc(env(safe-area-inset-bottom)+5rem)] z-[70] flex flex-col items-stretch gap-2 sm:inset-x-auto sm:bottom-4 sm:right-4 sm:w-[22rem]",
       )
       node.id = "meeting-presence-toasts"
       node.setAttribute("aria-live", "polite")
