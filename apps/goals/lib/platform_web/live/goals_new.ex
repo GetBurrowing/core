@@ -7,8 +7,9 @@ defmodule PlatformWeb.GoalsNew do
 
   ## The conversation
 
-  It is the person's direct conversation (DM) with the install's lead
-  agent, created by `Platform.Goals.start_goal_conversation/2`. This page
+  It is the proposal's own conversation space with the install's lead agent
+  (never the person's DM with it; task 01a1eab6 stage 2), created by
+  `Platform.Goals.start_goal_conversation/2`. This page
   renders that conversation itself. It does not call
   `PlatformWeb.ChatLive` or `PlatformWeb.Components.ChatMessage.chat_message/1`
   (a nested page gets no `handle_params`, and the component needs ChatLive's
@@ -31,15 +32,16 @@ defmodule PlatformWeb.GoalsNew do
   `Platform.Goals.confirm_proposal/3` with the revision the page last
   RENDERED, carried in the click; if the agent rewrote the proposal since,
   the context answers `:proposal_changed` and nothing is written.
-  PubSub messages (`{:new_message, _}` on the DM, `{:goal_proposal_changed, _}`
-  on the proposal) only trigger a re-read; their payload is never rendered.
+  PubSub messages (`{:new_message, _}` on the conversation space,
+  `{:goal_proposal_changed, _}` on the proposal and on the person's own
+  `"goals:proposals:user:<user_id>"`) only trigger a re-read; their payload is never rendered.
 
   After Create the proposal is no longer open, so the page keeps the id of
   the proposal IT confirmed (a server value) and re-reads it with
   `Platform.Goals.get_proposal/2`. It also keeps the id of the last message
   it showed before the click: messages after it (the coach's researching
   message, stage 4) are drawn after "Goal created · only you can see it",
-  where the canvas puts them, as they arrive on the DM.
+  where the canvas puts them, as they arrive in the conversation space.
   """
   use Phoenix.Component
 
@@ -72,11 +74,18 @@ defmodule PlatformWeb.GoalsNew do
 
   @doc "Sets up the screen for `user` on `socket` (assign `:new`)."
   def mount(socket, user) do
+    # A screen open before the person starts a goal (here or in another
+    # window) has no proposal to subscribe to; the person's own topic tells
+    # it one started, and `refresh/1` then subscribes to the proposal and its
+    # space (task 01a1eab6 stage 5). Mounted once per LiveView process.
+    if Phoenix.LiveView.connected?(socket), do: Goals.subscribe_proposals(user)
+
     socket
     |> Phoenix.Component.assign(:new, %{
       user: user,
       text: "",
       fill: 0,
+      refused: false,
       created: nil,
       subscribed: MapSet.new()
     })
@@ -164,7 +173,7 @@ defmodule PlatformWeb.GoalsNew do
        }
 
   # The role moved after the conversation started: name the agent from its
-  # participant row in the DM.
+  # participant row in the conversation space.
   defp agent_view(_lead, %{space_id: space_id, agent_id: agent_id}) do
     case Platform.Chat.get_agent_participant(space_id, agent_id) do
       %{display_name: name, avatar_url: url} ->
@@ -282,7 +291,15 @@ defmodule PlatformWeb.GoalsNew do
 
     case result do
       {:ok, _} ->
-        {:noreply, socket |> put_new(text: "", fill: socket.assigns.new.fill + 1) |> refresh()}
+        {:noreply,
+         socket
+         |> put_new(text: "", fill: socket.assigns.new.fill + 1, refused: false)
+         |> refresh()}
+
+      # The lead's runtime cannot use the Goals tools (task 01a1eab6 stage
+      # 3): nothing was written, so keep what the person typed and say why.
+      {:error, :lead_missing_goals_tools} ->
+        {:noreply, socket |> put_new(text: text, refused: true) |> refresh()}
 
       {:error, :text_required} ->
         {:noreply, toast(socket, @empty_toast)}
@@ -292,7 +309,7 @@ defmodule PlatformWeb.GoalsNew do
     end
   end
 
-  @doc "PubSub: a DM message or a proposal change re-reads the screen."
+  @doc "PubSub: a conversation message or a proposal change re-reads the screen."
   def handle_info({:new_message, _}, %{assigns: %{new: %{}}} = socket), do: refresh(socket)
 
   def handle_info({:goal_proposal_changed, _}, %{assigns: %{new: %{}}} = socket),
@@ -725,6 +742,19 @@ defmodule PlatformWeb.GoalsNew do
           >
             {example.label}
           </button>
+        </div>
+
+        <div :if={@new[:refused]} class="mt-4" role="status" data-role="goals-new-refused">
+          <PlatformWeb.Components.EmptyState.empty_state variant={:minimal}>
+            <:body>
+              <span class="block font-semibold">
+                {@agent.name} can't take new goals yet: its runtime doesn't have the Goals tools.
+              </span>
+              <span class="mt-1 block">
+                Ask an admin to turn on Goals for {@agent.name}.
+              </span>
+            </:body>
+          </PlatformWeb.Components.EmptyState.empty_state>
         </div>
 
         <form

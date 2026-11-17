@@ -23,10 +23,30 @@ defmodule Platform.Goals.Proposals do
   No function here lets an agent create a goal: `confirm_proposal/3` refuses
   agents and calls `Platform.Goals.create_goal/2` as the person.
 
+  Each proposal has ITS OWN conversation space (task 01a1eab6 stage 2), never
+  the person's DM with the agent: a `kind: "dm"`, `is_direct: false` space
+  with the person and the lead agent as its only participants and metadata
+  `"surface" => "goals"` (core's generic "owned by another surface" marker).
+  Kind dm keeps core's DM routing, so every later message routes to the agent
+  as `:directed`; `is_direct: false` keeps it out of
+  `Platform.Chat.find_or_create_dm/3`, so it is never returned as the DM and
+  the DM's messages never show here.
+
+  The opening message has exactly ONE agent trigger, the `goals.new_goal`
+  signal: it is posted with `Chat.post_message/2`'s `route: :none`, so the
+  router makes no decision for it. The start runs inside
+  `Platform.Tasks.PostCommit.scope/1`, so the message is published after the
+  space, the message and the proposal have committed.
+
   Signals to the agent go through `Platform.Goals.Signals.deliver/4` and
   carry identifiers only, never the person's words, a title or a setting.
   Every write broadcasts `{:goal_proposal_changed, id}` on
-  `"goals:proposal:<id>"` (`Platform.PubSub`): the id only.
+  `"goals:proposal:<id>"` (`Platform.PubSub`): the id only. A start, which
+  no screen can be subscribed to yet, also broadcasts it on the person's
+  `"goals:proposals:user:<user_id>"` (`subscribe_proposals/1`), after the
+  transaction commits, so every New goal screen the person already has open
+  picks the new conversation up (task 01a1eab6 stage 5). A rolled-back or
+  refused start broadcasts nothing.
   """
 
   import Ecto.Query
@@ -91,7 +111,8 @@ defmodule Platform.Goals.Proposals do
   end
 
   @doc """
-  The opening message and the top-level messages after it in the DM, oldest
+  The opening message and the top-level messages after it in the
+  proposal's own conversation space, oldest
   first, at most #{@conversation_limit}; the person's and the agent's
   messages only (core's system notices are left out). The addressed user
   only.
@@ -136,42 +157,118 @@ defmodule Platform.Goals.Proposals do
   # ── the person's writes ───────────────────────────────────────────────────
 
   @doc """
-  Starts a New goal conversation with the lead agent: posts `text` as the
-  person in their DM and records an open proposal. The agent is never named
-  by the caller.
+  Starts a New goal conversation with the lead agent: creates the
+  proposal's own conversation space, posts `text` as the person in it (not a
+  turn for the router: `route: :none`) and records an open proposal, all in
+  one transaction, then signals the agent `goals.new_goal` with the space id.
+  The agent is never named by the caller.
+
+  Answers `{:error, :lead_missing_goals_tools}`, writing no row, when the
+  lead's runtime cannot use the Goals tools (`check_lead_tools/1`).
   """
   def start_goal_conversation(%User{id: user_id} = user, text) when is_binary(user_id) do
     with {:ok, text} <- message_text(text) do
       now = Clock.now()
 
+      # The scope holds the opening message's publish (telemetry, broadcast)
+      # until the transaction commits, so nothing reads the message before
+      # its row is visible (task 01a1eab6 stage 1).
       result =
-        tx(fn ->
-          expire_stale(user, now)
+        Platform.Tasks.PostCommit.scope(fn ->
+          tx(fn ->
+            expire_stale(user, now)
 
-          with :ok <- no_open_proposal(user),
-               {:ok, agent} <- resolve_lead(),
-               {:ok, org_id} <- pick_org(user),
-               {:ok, space} <- Chat.find_or_create_dm(user_id, "agent", agent.id),
-               {:ok, msg} <- post_as_person(space.id, user_id, text),
-               {:ok, proposal} <- insert_proposal(user, agent, org_id, space, msg, now) do
-            {:ok, {proposal, agent}}
-          end
+            with :ok <- no_open_proposal(user),
+                 {:ok, agent} <- resolve_lead(),
+                 :ok <- check_lead_tools(agent),
+                 {:ok, org_id} <- pick_org(user),
+                 {:ok, space} <- create_goal_space(user, agent, org_id),
+                 {:ok, msg} <- post_as_person(space.id, user_id, text, route: :none),
+                 {:ok, proposal} <- insert_proposal(user, agent, org_id, space, msg, now) do
+              {:ok, {proposal, agent}}
+            end
+          end)
         end)
 
       with {:ok, {proposal, agent}} <- result do
-        prompt =
-          "A person started a New goal conversation with you. Conversation id: #{proposal.id}. " <>
-            "Read it with goal_proposal_get, talk with them in your direct conversation, and " <>
-            "record what you settle with goal_propose. Nothing is created until they press Create goal."
-
-        {:ok, store_delivery(proposal, Signals.deliver(agent, "goals.new_goal", prompt, event()))}
+        proposal = signal_new_goal(proposal, agent)
+        broadcast_user(proposal)
+        {:ok, proposal}
       end
     end
   end
 
   def start_goal_conversation(_actor, _text), do: {:error, :not_found}
 
-  @doc "Posts the person's message in the conversation's DM (status open or confirmed)."
+  @doc """
+  Re-sends the `goals.new_goal` signal for an OPEN, unexpired proposal and
+  stores the delivery (task 01a1eab6 stage 4). An operator command, not a
+  person's action, so it takes no actor.
+
+  `20261117220000_move_goal_proposals_out_of_dms` moves proposals written
+  before stage 2 out of the person's DM into their own space and dispatches
+  nothing; the agent still holds the DM as the conversation. After that
+  migration the deployer runs this once per migrated open proposal, so the
+  agent learns the new space id, in the RUNNING node (`rpc`, not `eval`: the
+  signal goes out through the live node's runtime connections, which a
+  fresh `eval` node does not hold):
+
+      /app/bin/platform rpc 'IO.inspect(Platform.Goals.resend_start_signal("<proposal id>"))'
+
+  `{:ok, %Platform.Goals.Proposal{delivery: "sent"}}` is the success shape.
+
+  Answers `{:error, :not_found}` for an unknown or malformed id,
+  `{:error, :proposal_closed}` for a proposal that is not open (or has
+  expired) and `{:error, :lead_missing_goals_tools}` when the proposal's
+  agent's runtime cannot use the Goals tools (`check_lead_tools/1`). The
+  signal carries the space id in its metadata only (`Signals.deliver/4`).
+  """
+  @spec resend_start_signal(term()) ::
+          {:ok, Proposal.t()}
+          | {:error, :not_found | :proposal_closed | :lead_missing_goals_tools}
+  def resend_start_signal(proposal_id) do
+    with {:ok, id} <- cast_id(proposal_id),
+         {:ok, proposal} <- fetch_open(id),
+         %Agent{} = agent <- load_agent(proposal.agent_id) || {:error, :not_found},
+         :ok <- check_lead_tools(agent) do
+      {:ok, signal_new_goal(proposal, agent)}
+    end
+  end
+
+  defp fetch_open(id) do
+    now = Clock.now()
+
+    case Repo.one(from(p in Proposal, where: p.id == ^id)) do
+      nil ->
+        {:error, :not_found}
+
+      %Proposal{status: "open"} = proposal ->
+        if DateTime.compare(proposal.expires_at, now) == :gt,
+          do: {:ok, proposal},
+          else: {:error, :proposal_closed}
+
+      _ ->
+        {:error, :proposal_closed}
+    end
+  end
+
+  defp signal_new_goal(proposal, agent) do
+    prompt =
+      "A person started a New goal conversation with you. Conversation id: #{proposal.id}. " <>
+        "Read it with goal_proposal_get, talk with them in this goal's conversation " <>
+        "(space #{proposal.space_id}), and record what you settle with goal_propose. " <>
+        "Nothing is created until they press Create goal."
+
+    delivery =
+      Signals.deliver(agent, "goals.new_goal", prompt, event(space_id: proposal.space_id))
+
+    store_delivery(proposal, delivery)
+  end
+
+  @doc """
+  Posts the person's message in the proposal's conversation space (status
+  open or confirmed). It routes to the agent as an ordinary turn.
+  """
   def say_in_conversation(actor, proposal_id, text) do
     with {:ok, proposal} <- addressed(actor, proposal_id),
          :ok <- check_sayable(proposal),
@@ -214,10 +311,18 @@ defmodule Platform.Goals.Proposals do
       with {:ok, %{goal: goal, proposal: row}} <- result do
         prompt =
           "The person confirmed the goal from conversation #{row.id}. Goal id: #{goal.id}. " <>
-            "You are its coach. Tell them in your direct conversation that you are researching, " <>
-            "then record each finding with goal_takeaway_add. A finding needs at least one source."
+            "You are its coach. Tell them in this goal's conversation (space #{row.space_id}) " <>
+            "that you are researching, then record each finding with goal_takeaway_add. " <>
+            "A finding needs at least one source."
 
-        delivery = Signals.deliver(load_agent(row.agent_id), "goals.research", prompt, event())
+        delivery =
+          Signals.deliver(
+            load_agent(row.agent_id),
+            "goals.research",
+            prompt,
+            event(space_id: row.space_id)
+          )
+
         {:ok, %{goal: goal, proposal: store_delivery(row, delivery)}}
       end
     end
@@ -234,6 +339,16 @@ defmodule Platform.Goals.Proposals do
       |> tap(&broadcast_ok/1)
     end
   end
+
+  @doc """
+  Subscribes the caller to `{:goal_proposal_changed, id}` for every proposal
+  `user` starts (`"goals:proposals:user:<user_id>"`). Only the person's own
+  topic; any other actor gets `{:error, :not_found}`.
+  """
+  def subscribe_proposals(%User{id: user_id}) when is_binary(user_id),
+    do: Phoenix.PubSub.subscribe(Platform.PubSub, user_topic(user_id))
+
+  def subscribe_proposals(_actor), do: {:error, :not_found}
 
   @doc "Subscribes the caller to `{:goal_proposal_changed, id}` for a proposal it sees."
   def subscribe_proposal(actor, proposal_id) do
@@ -279,6 +394,41 @@ defmodule Platform.Goals.Proposals do
   end
 
   def propose_goal(_actor, _proposal_id, _attrs), do: {:error, :not_found}
+
+  @lead_tools ~w(goal_proposal_get goal_propose)
+
+  @doc """
+  `:ok` when `agent`'s runtime may call both `goal_proposal_get` and
+  `goal_propose`, else `{:error, :lead_missing_goals_tools}` (task 01a1eab6
+  stage 3). Self-contained: an agent in, a result out, no proposal state.
+
+  The decision is core's authoritative `Platform.Access.Tools.effective_tools/1`
+  over the agent's `Platform.Agents.AgentRuntime` (`agent.runtime_id` is its
+  primary key, as `Platform.Chat.AgentResponder` resolves it), never the tool
+  profile alone: the `goals` bundle is grantable per runtime, never a default
+  grant, and the runtime owner's roles can cap `goals.use` away
+  (`Platform.Access.Caps`) while the profile still lists the bundle. An
+  external agent whose runtime row is missing is refused too.
+
+  An agent with no external runtime answers `:ok`: there is no runtime to
+  hold tools, and the start goes on to `Platform.Goals.Signals.deliver/4`'s
+  `"no_runtime"` delivery, exactly as before.
+  """
+  @spec check_lead_tools(Agent.t()) :: :ok | {:error, :lead_missing_goals_tools}
+  def check_lead_tools(%Agent{runtime_type: "external", runtime_id: runtime_id})
+      when is_binary(runtime_id) do
+    # Core's public read (`Platform.Federation.get_runtime/1`), never a query
+    # of core's schema from here; it answers nil for an unknown id.
+    with runtime when not is_nil(runtime) <- Platform.Federation.get_runtime(runtime_id),
+         names = runtime |> Platform.Access.Tools.effective_tools() |> Enum.map(& &1.name),
+         true <- Enum.all?(@lead_tools, &(&1 in names)) do
+      :ok
+    else
+      _ -> {:error, :lead_missing_goals_tools}
+    end
+  end
+
+  def check_lead_tools(_agent), do: :ok
 
   # ── internals ─────────────────────────────────────────────────────────────
 
@@ -378,14 +528,51 @@ defmodule Platform.Goals.Proposals do
 
   defp message_text(_text), do: {:error, :text_required}
 
-  defp post_as_person(space_id, user_id, text) do
+  defp post_as_person(space_id, user_id, text, opts \\ []) do
     with {:ok, participant} <- Chat.SpaceAccess.authorize_writer(space_id, {:user, user_id}) do
-      Chat.post_message(%{
-        space_id: space_id,
-        participant_id: participant.id,
-        content_type: "text",
-        content: text
-      })
+      Chat.post_message(
+        %{
+          space_id: space_id,
+          participant_id: participant.id,
+          content_type: "text",
+          content: text
+        },
+        opts
+      )
+    end
+  end
+
+  # The proposal's own conversation space (task 01a1eab6 stage 2). Kind dm so
+  # core routes every later message to the agent as `:directed`; is_direct
+  # false so `Chat.find_or_create_dm/3` never returns it as the person's DM;
+  # `"surface" => "goals"` marks it as owned by this surface, not a chat-rail
+  # conversation. Runs inside the start's transaction, so a refused start
+  # leaves no space behind.
+  defp create_goal_space(%User{} = user, %Agent{} = agent, org_id) do
+    with {:ok, space} <-
+           Chat.create_space(%{
+             kind: "dm",
+             is_direct: false,
+             name: "New goal",
+             created_by: user.id,
+             org_id: org_id,
+             metadata: %{"surface" => "goals"}
+           }),
+         :ok <- add_member(space, "user", user.id, user.name || user.email || "User"),
+         :ok <- add_member(space, "agent", agent.id, agent.name) do
+      {:ok, space}
+    end
+  end
+
+  defp add_member(space, type, id, display_name) do
+    case Chat.add_participant(space.id, %{
+           participant_type: type,
+           participant_id: id,
+           display_name: display_name,
+           joined_at: DateTime.utc_now()
+         }) do
+      {:ok, _participant} -> :ok
+      {:error, reason} -> {:error, reason}
     end
   end
 
@@ -455,7 +642,7 @@ defmodule Platform.Goals.Proposals do
     proposal
   end
 
-  defp event, do: [trigger_kind: "event_topic"]
+  defp event(opts), do: Keyword.put(opts, :trigger_kind, "event_topic")
 
   defp stringify(attrs), do: Map.new(attrs, fn {k, v} -> {to_string(k), v} end)
 
@@ -613,6 +800,11 @@ defmodule Platform.Goals.Proposals do
   end
 
   defp topic(id), do: "goals:proposal:#{id}"
+  defp user_topic(user_id), do: "goals:proposals:user:#{user_id}"
+
+  defp broadcast_user(%Proposal{id: id, user_id: user_id}) do
+    Phoenix.PubSub.broadcast(Platform.PubSub, user_topic(user_id), {:goal_proposal_changed, id})
+  end
 
   defp broadcast(id),
     do: Phoenix.PubSub.broadcast(Platform.PubSub, topic(id), {:goal_proposal_changed, id})

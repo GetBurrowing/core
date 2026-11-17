@@ -72,6 +72,21 @@ defmodule Platform.GoalsFixtures do
     user
   end
 
+  @doc """
+  Sets `agent`'s external runtime tool profile to `modules` (default the
+  `goals` bundle) through core's `Platform.Access.RuntimeProfiles`, so the
+  runtime can call the Goals tools when its owner holds `goals.use` (task
+  01a1eab6 stage 3: a lead without them is refused a New goal start).
+  Call after `enable_goals!/1`: the bundle is only a valid module while
+  Goals is on. Returns the agent.
+  """
+  def grant_goals_tools!(%Platform.Agents.Agent{runtime_id: id} = agent, modules \\ ["goals"])
+      when is_binary(id) do
+    runtime = Repo.get!(Platform.Agents.AgentRuntime, id)
+    {:ok, _} = Platform.Access.RuntimeProfiles.set_tool_profile(runtime, modules)
+    agent
+  end
+
   @doc "A user with no membership and no `goals.use`."
   def user_without_goals_use! do
     n = unique()

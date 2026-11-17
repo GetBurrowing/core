@@ -818,4 +818,67 @@ defmodule PlatformWeb.ChatLiveCloseDmTest do
              "the second message did not count"
     end
   end
+
+  # ── 2. A space owned by another surface is not on the rail ─────────────
+  #
+  # Task 01a1eab6 stage 3: `Chat.rail_visible?/1`. The surface value is an
+  # arbitrary string on purpose: core never compares it. The control is the
+  # viewer's real DM with the SAME agent, which must stay, so a rail that
+  # dropped agent DMs altogether cannot pass.
+
+  describe "a surface-owned space" do
+    test "is absent from the rail while the real DM with the same agent stays",
+         %{conn: conn} do
+      {conn, user} = authed(conn)
+      create_channel("surface-rail")
+      n = System.unique_integer([:positive])
+
+      agent =
+        Repo.insert!(%Platform.Agents.Agent{
+          slug: "surface-agent-#{n}",
+          name: "Surface Agent #{n}",
+          status: "active"
+        })
+
+      {:ok, dm} = Chat.find_or_create_dm(user.id, "agent", agent.id)
+
+      {:ok, owned} =
+        Chat.create_space(%{
+          kind: "dm",
+          is_direct: false,
+          name: "Owned elsewhere",
+          created_by: user.id,
+          metadata: %{"surface" => "x"}
+        })
+
+      for {type, id, name} <- [{"user", user.id, user.name}, {"agent", agent.id, agent.name}] do
+        {:ok, _} =
+          Chat.add_participant(owned.id, %{
+            participant_type: type,
+            participant_id: id,
+            display_name: name,
+            joined_at: DateTime.utc_now()
+          })
+      end
+
+      # The viewer really participates in it, so only the rail rule hides it.
+      assert owned.id in Enum.map(Chat.list_user_conversations(user.id), & &1.id)
+      message_from_other!(owned, user, DateTime.utc_now())
+
+      {:ok, view, html} = live_rail(conn)
+
+      assert dm_row(html, dm.id), "the real DM with the agent is missing from the rail"
+      refute rail_row(html, owned.id), "the surface-owned space reached the rail"
+
+      dm_ids =
+        view.pid
+        |> :sys.get_state()
+        |> get_in([Access.key(:socket), Access.key(:assigns), :dm_conversations])
+        |> Enum.map(& &1.id)
+
+      assert dm.id in dm_ids
+      refute owned.id in dm_ids
+      assert Chat.total_unread_for_viewer(user) == 0
+    end
+  end
 end

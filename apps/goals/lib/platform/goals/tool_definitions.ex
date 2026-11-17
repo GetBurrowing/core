@@ -357,7 +357,7 @@ defmodule Platform.Goals.ToolDefinitions do
           }
         },
         returns:
-          "Without id: %{conversations: [%{id, started_at, ready}], total}. With id: %{id, status, revision, draft, replies, settled, ready, expires_at, person: %{user_id, name}, sources: [%{key, label, kind}], allowed: %{agent_mode, rhythm, outreach, kind}}",
+          "Without id: %{conversations: [%{id, space_id, started_at, ready}], total}. With id: %{id, space_id, status, revision, draft, replies, settled, ready, expires_at, person: %{user_id, name}, sources: [%{key, label, kind}], allowed: %{agent_mode, rhythm, outreach, kind}}",
         limitations: @proposal_only,
         when_to_use:
           "When a person starts a New goal conversation with you, and before each goal_propose."
@@ -441,7 +441,7 @@ defmodule Platform.Goals.ToolDefinitions do
           }
         },
         returns:
-          "%{id, status, revision, draft, replies, settled, ready, expires_at}: revision rises by one on every call.",
+          "%{id, space_id, status, revision, draft, replies, settled, ready, expires_at}: revision rises by one on every call.",
         limitations:
           @proposal_only <>
             " Absent keys are left alone. Refusals: proposal_closed (final), unknown_source, proposal_incomplete (names what is missing), invalid (with messages); nothing is written.",

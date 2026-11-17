@@ -689,7 +689,7 @@ defmodule Platform.Role do
     },
     %{
       target:
-        "Platform.Chat.AttentionRouter: mentioned?/2,3, extract_bracketed_tokens/1, untrusted_inbound?/1, voice_record?/1, dm_voice_record?/2",
+        "Platform.Chat.AttentionRouter: mentioned?/2,3, extract_bracketed_tokens/1, untrusted_inbound?/1, voice_record?/1, dm_voice_record?/2, caller_suppressed?/1",
       handling: :pure,
       note: "Platform.Chat and Responsibilities.Router call them; no process state"
     },

@@ -191,10 +191,10 @@ defmodule PlatformWeb.GoalsLive do
        the goal" are not built: suggestions are recorded at check-ins
        (member 3). "Open the goal" replaces the last chip. The toast after
        opening the goal is not built.
-   53. The conversation is the person's ordinary direct conversation with
-       the lead agent, so it also appears in Chat, and anything else the
-       person or the agent says in that DM after the opening message shows
-       here too. Core's system notices in the DM (a reply-failure line) are
+   53. The conversation is the proposal's own space with the lead agent
+       (task 01a1eab6 stage 2), not the person's DM: what either says in
+       the DM never shows here, and this conversation never shows in the
+       DM. Core's system notices in the space (a reply-failure line) are
        left out: they are not the agent speaking.
    54. The canvas screen `idea` (accept or decline a suggestion) belongs to
        Goals 6/8.
@@ -209,8 +209,8 @@ defmodule PlatformWeb.GoalsLive do
        navigate to `/m/goals?new=1`), styled as the canvas's button and
        chip.
    58. If the lead role moves to another agent mid-conversation, the screen
-       names the conversation's agent from its DM participant row, in the
-       default colour slot.
+       names the conversation's agent from its participant row in the
+       conversation space, in the default colour slot.
 
   Goals 5/8 stage 4 (research takeaways and cited suggestions):
 

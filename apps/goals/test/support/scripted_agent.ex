@@ -8,8 +8,9 @@ defmodule Platform.Goals.ScriptedAgent do
   (screen `create`): `:yt` (How to Computer) and `:es` (Spanish). It can do
   nothing a real agent could not: it records the proposal through
   `Platform.Goals.Tools.execute("goal_propose", ...)` with the agent's id in
-  the context, reads the DM with `Platform.Chat.list_messages/2` (after
-  Create it finds the DM with `Platform.Chat.find_or_create_dm/3`), and posts
+  the context, reads the proposal's conversation space with
+  `Platform.Chat.list_messages/2` (after Create it takes that space's id from
+  `goal_proposal_get`'s `space_id`), and posts
   as the agent's participant with `Platform.Chat.post_message/1`. It calls
   no other `Platform.Goals` function.
 
@@ -22,7 +23,7 @@ defmodule Platform.Goals.ScriptedAgent do
 
   `research/2` (stage 4) is what the agent does on the confirmed signal: it
   reads the conversation and goal ids from the signal's prompt (as a real
-  agent would), posts the researching message in the DM, then records
+  agent would), posts the researching message in the proposal's space, then records
   three takeaways with `goal_takeaway_add`. `research/3` takes the ids
   directly for the dev script.
   """
@@ -251,12 +252,12 @@ defmodule Platform.Goals.ScriptedAgent do
 
   @doc "Posts the researching message, then adds the example's takeaways."
   def research(agent, proposal_id, goal_id, example) do
-    {:ok, %{person: %{user_id: user_id}}} =
+    {:ok, %{space_id: space_id}} =
       Tools.execute("goal_proposal_get", %{"proposal_id" => proposal_id}, %{agent_id: agent.id})
 
-    # The agent's direct conversation with the person (core's public DM lookup).
-    {:ok, dm} = Chat.find_or_create_dm(user_id, "agent", agent.id)
-    {:ok, _} = post(agent, dm.id, researching(example))
+    # The goal's own conversation space, as the tool reports it (task
+    # 01a1eab6 stage 2), never the person's DM with the agent.
+    {:ok, _} = post(agent, space_id, researching(example))
 
     entries =
       for args <- takeaways(example) do
@@ -276,7 +277,7 @@ defmodule Platform.Goals.ScriptedAgent do
         %{agent_id: agent.id}
       )
 
-  @doc "Posts `text` in the proposal's DM as the agent's participant."
+  @doc "Posts `text` in the proposal's conversation space as the agent's participant."
   def say(agent, proposal, text), do: post(agent, proposal.space_id, text)
 
   defp post(agent, space_id, text) do

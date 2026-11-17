@@ -649,6 +649,30 @@ defmodule PlatformWeb.AppApiControllerTest do
       assert agent_name == agent.name
     end
 
+    # Task 01a1eab6 stage 3: `Chat.rail_visible?/1`; the value is arbitrary.
+    test "leaves out a space owned by another surface", %{
+      conn: conn,
+      token: token,
+      user: user,
+      space: space
+    } do
+      {:ok, owned} =
+        Chat.create_space(%{kind: "dm", is_direct: false, metadata: %{"surface" => "x"}})
+
+      add_user!(owned.id, user.id)
+
+      ids =
+        conn
+        |> bearer(token)
+        |> get("/api/app/spaces")
+        |> json_response(200)
+        |> Map.fetch!("spaces")
+        |> Enum.map(& &1["id"])
+
+      assert space.id in ids
+      refute owned.id in ids
+    end
+
     test "an external user sees only their scoped spaces", %{conn: conn} do
       world = external_world()
       %{token: token} = app_session!(world.ext)
