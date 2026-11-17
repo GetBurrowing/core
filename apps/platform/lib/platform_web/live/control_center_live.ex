@@ -120,6 +120,9 @@ defmodule PlatformWeb.ControlCenterLive do
      |> assign(:sheet_refusal, nil)
      # Roles panel assigns (M7 stage 5)
      |> assign(:active_tab, :roles)
+     # Below lg the main panel is hidden while no agent is selected, so the
+     # Roles panel needs its own way in on a phone (task 01a1e670 stage 3).
+     |> assign(:mobile_roles_open?, false)
      |> assign(:show_role_advanced, false)
      |> assign_roles_panel()
      # Avatar upload (task 01a00122 stage 2). `max_entries: 1` also buys the
@@ -152,6 +155,7 @@ defmodule PlatformWeb.ControlCenterLive do
       |> assign(:agents, agents)
       |> assign(:selected_agent, selected_agent)
       |> assign(:selected_agent_directory_entry, selected_entry)
+      |> assign(:mobile_roles_open?, socket.assigns.mobile_roles_open? and is_nil(selected_agent))
       |> assign_builder_from_params(params)
 
     socket =
@@ -303,6 +307,7 @@ defmodule PlatformWeb.ControlCenterLive do
   @event_policy %{
     "switch_control_tab" => :ui,
     "toggle_role_advanced" => :ui,
+    "toggle_mobile_roles" => :ui,
     "assign_role" => :responsibility,
     "clear_role_assignment" => :responsibility,
     "set_responsibility_override" => :responsibility,
@@ -463,6 +468,10 @@ defmodule PlatformWeb.ControlCenterLive do
 
   defp handle_control_event("switch_control_tab", %{"tab" => tab}, socket) do
     {:noreply, assign(socket, :active_tab, normalize_tab(tab))}
+  end
+
+  defp handle_control_event("toggle_mobile_roles", _params, socket) do
+    {:noreply, assign(socket, :mobile_roles_open?, !socket.assigns.mobile_roles_open?)}
   end
 
   defp handle_control_event("toggle_role_advanced", _params, socket) do
@@ -1029,7 +1038,7 @@ defmodule PlatformWeb.ControlCenterLive do
           id="agent-directory"
           class={[
             "flex min-h-0 w-full flex-col overflow-hidden border-edge bg-base-200/60 lg:w-80 lg:flex-shrink-0 lg:border-r",
-            @selected_agent && "hidden lg:flex"
+            (@selected_agent || @mobile_roles_open?) && "hidden lg:flex"
           ]}
         >
           <div class="border-b border-edge px-4 py-4 sm:px-5">
@@ -1042,14 +1051,24 @@ defmodule PlatformWeb.ControlCenterLive do
                   Manage, federate, and monitor your agents.
                 </p>
               </div>
-              <button
-                id="add-agent-btn-sidebar"
-                type="button"
-                phx-click="open_onboarding_chooser"
-                class="btn btn-primary btn-sm gap-1"
-              >
-                <span class="hero-plus h-4 w-4" /> Add
-              </button>
+              <div class="flex items-center gap-2">
+                <button
+                  id="mobile-roles-btn"
+                  type="button"
+                  phx-click="toggle_mobile_roles"
+                  class="btn btn-ghost btn-sm gap-1 lg:hidden"
+                >
+                  <span class="hero-user-group h-4 w-4" /> Roles
+                </button>
+                <button
+                  id="add-agent-btn-sidebar"
+                  type="button"
+                  phx-click="open_onboarding_chooser"
+                  class="btn btn-primary btn-sm gap-1"
+                >
+                  <span class="hero-plus h-4 w-4" /> Add
+                </button>
+              </div>
             </div>
           </div>
 
@@ -1145,10 +1164,26 @@ defmodule PlatformWeb.ControlCenterLive do
         </aside>
 
         <%!-- ── Main panel ─────────────────────────────────────────── --%>
-        <main class={[
-          "min-h-0 flex-1 overflow-y-auto",
-          is_nil(@selected_agent) && "hidden lg:block"
-        ]}>
+        <main
+          id="control-main-panel"
+          class={[
+            "min-h-0 flex-1 overflow-y-auto",
+            is_nil(@selected_agent) && !@mobile_roles_open? && "hidden lg:block"
+          ]}
+        >
+          <div
+            :if={is_nil(@selected_agent) and @mobile_roles_open?}
+            class="px-4 pt-4 sm:px-6 lg:hidden"
+          >
+            <button
+              id="mobile-roles-back"
+              type="button"
+              phx-click="toggle_mobile_roles"
+              class="btn btn-ghost btn-sm gap-1"
+            >
+              <span class="hero-arrow-left h-4 w-4" /> Agents
+            </button>
+          </div>
           <%!-- Agent detail view --%>
           <div
             :if={@selected_agent}
@@ -1328,7 +1363,10 @@ defmodule PlatformWeb.ControlCenterLive do
 
       <%!-- Floating add button (mobile, when agents exist and no agent selected) --%>
       <button
-        :if={@agents != [] && is_nil(@selected_agent) && !@show_onboarding_chooser}
+        :if={
+          @agents != [] && is_nil(@selected_agent) && !@mobile_roles_open? &&
+            !@show_onboarding_chooser
+        }
         type="button"
         phx-click="open_onboarding_chooser"
         class="fixed bottom-[calc(env(safe-area-inset-bottom)+1.5rem+var(--bottom-nav-height,0px))] right-6 z-40 btn btn-primary btn-circle shadow-lg lg:hidden"

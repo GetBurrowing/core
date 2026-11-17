@@ -2157,6 +2157,47 @@ defmodule PlatformWeb.ControlCenterLiveTest do
       assert has_element?(view, ~s([data-role="responsibility-health"]), "0 stopped retrying")
     end
 
+    test "C4: a phone user reaches the Roles panel from /control through a visible entry",
+         %{conn: conn} do
+      exhausted_record!(Platform.Feedback.Intake.max_attempts())
+      {:ok, view, _html} = live(authenticated_conn(conn), ~p"/control")
+
+      # Before the tap the main panel is hidden below lg (desktop-only).
+      main = view |> element("#control-main-panel") |> render()
+      assert classes_of(main) |> Enum.member?("hidden")
+      assert classes_of(main) |> Enum.member?("lg:block")
+
+      # The entry point is visible at the base breakpoint, and only there.
+      entry = view |> element("#mobile-roles-btn") |> render()
+      assert entry =~ "Roles"
+      assert "lg:hidden" in classes_of(entry)
+      refute "hidden" in classes_of(entry)
+
+      view |> element("#mobile-roles-btn") |> render_click()
+
+      main = view |> element("#control-main-panel") |> render()
+      refute "hidden" in classes_of(main)
+      assert "hidden" in classes_of(view |> element("#agent-directory") |> render())
+      assert "lg:flex" in classes_of(view |> element("#agent-directory") |> render())
+
+      render_click(view, "toggle_role_advanced", %{})
+
+      assert has_element?(
+               view,
+               ~s(#control-main-panel [data-role="responsibility-health"]),
+               "1 stopped retrying"
+             )
+
+      view |> element("#mobile-roles-back") |> render_click()
+      assert "hidden" in classes_of(view |> element("#control-main-panel") |> render())
+      refute "hidden" in classes_of(view |> element("#agent-directory") |> render())
+    end
+
+    defp classes_of(html) do
+      [{_tag, attrs, _children}] = html |> Floki.parse_fragment!() |> Enum.take(1)
+      attrs |> List.keyfind("class", 0, {"class", ""}) |> elem(1) |> String.split()
+    end
+
     test "C4: a non-admin sees no retry button and cannot fire the event", %{conn: conn} do
       record = exhausted_record!(Platform.Feedback.Intake.max_attempts())
       n = System.unique_integer([:positive])
