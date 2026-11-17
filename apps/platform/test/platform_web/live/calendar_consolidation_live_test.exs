@@ -258,6 +258,26 @@ defmodule PlatformWeb.CalendarConsolidationLiveTest do
       assert has_element?(view, "[data-role=calendar-detail-call-live]")
     end
 
+    # Below lg the details are a bottom sheet with Join in its footer. On the
+    # web the sheet covers the tab bar (z 60 over 30), but the iOS app's
+    # native tab bar is drawn over the webview and cannot be covered: it sat
+    # on the footer and hid Join. `native_tab_bar.js` hides the native bar
+    # while any `[data-covers-tab-bar]` element is in the document, so the
+    # sheet that holds Join must carry the marker, and the hook must read it.
+    test "the sheet holding Join is one the native tab bar gets out of the way of", ctx do
+      %{meeting: meeting} = linked!(ctx)
+
+      for viewer <- [ctx.owner, ctx.invitee] do
+        view = calendar(viewer, "?meeting=#{meeting.id}")
+        assert has_element?(view, "#{@details}[data-covers-tab-bar] #{@join}")
+      end
+
+      hook = File.read!(Path.expand("../../../assets/js/hooks/native_tab_bar.js", __DIR__))
+
+      assert hook =~
+               ~s|export const OTHER_SHEET_SELECTOR = ".sheet-open:not(#more-sheet), [data-covers-tab-bar]"|
+    end
+
     test "an invitee lands on the call record itself, with no View in Meetings", ctx do
       %{meeting: meeting} = linked!(ctx)
       view = calendar(ctx.invitee, "?meeting=#{meeting.id}")

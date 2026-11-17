@@ -432,7 +432,7 @@ defmodule PlatformWeb.MeetingLive.ListComponents do
 
   def new_room_modal(assigns) do
     ~H"""
-    <div class="cal-modal-scrim" data-role="meetings-new-room">
+    <div class="cal-modal-scrim" data-role="meetings-new-room" data-covers-tab-bar>
       <.focus_wrap
         id="meetings-new-room-modal"
         class="cal-modal"
