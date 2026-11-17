@@ -78,7 +78,7 @@ jobs:
         run: |
           mix ecto.create
           mix ecto.migrate
-          mix test test/platform_web/live/game_studio_live_test.exs test/platform_web/components/gaming_shell_bottom_nav_test.exs test/platform_web/components/gaming_shell_install_switch_test.exs test/platform_web/module_gate_test.exs test/platform_web/controllers/gaming_controller_test.exs test/platform_web/controllers/app_handoff_landing_test.exs test/platform/design/bottom_nav_glass_guard_test.exs test/platform/design/placeholder_contrast_test.exs test/platform/repo_lookup_boundary_test.exs test/platform/release/irreversible_migrations_test.exs test/platform/org/wiki/context_t4_e2e_test.exs test/platform/regression/install_identity_guard_test.exs
+          mix test test/platform_web/live/game_studio_live_test.exs test/platform/orchestration/task_router_stage_isolation_test.exs test/platform_web/components/gaming_shell_bottom_nav_test.exs test/platform_web/components/gaming_shell_install_switch_test.exs test/platform_web/module_gate_test.exs test/platform_web/controllers/gaming_controller_test.exs test/platform_web/controllers/app_handoff_landing_test.exs test/platform/design/bottom_nav_glass_guard_test.exs test/platform/design/placeholder_contrast_test.exs test/platform/repo_lookup_boundary_test.exs test/platform/release/irreversible_migrations_test.exs test/platform/org/wiki/context_t4_e2e_test.exs test/platform/regression/install_identity_guard_test.exs
       - uses: actions/setup-node@v5
         with:
           node-version: 24
