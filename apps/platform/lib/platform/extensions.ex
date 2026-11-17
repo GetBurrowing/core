@@ -165,6 +165,50 @@ defmodule Platform.Extensions do
     Enum.flat_map(list(), &ext_inbox_kinds/1)
   end
 
+  @doc "Every extension's optional daily briefing sections, read per call."
+  def briefing_sections do
+    Enum.flat_map(list(), &ext_briefing_sections/1)
+  end
+
+  defp ext_briefing_sections(ext) do
+    if implements?(ext, :briefing_sections, 0), do: ext.briefing_sections(), else: []
+  end
+
+  @doc """
+  Whether any extension claims the goal of the chat space `space_id`
+  (`claims_space_goal?/1` is optional), read per call.
+
+  Only an exact `true` counts. A non-binary id is `false`. An extension that
+  raises or exits is logged at warning and counts as `false`, so a broken
+  module fails towards core's behaviour with no module at all.
+  """
+  @spec space_goal_claimed?(term()) :: boolean()
+  def space_goal_claimed?(space_id) when is_binary(space_id) do
+    Enum.any?(list(), &ext_claims_space_goal?(&1, space_id))
+  end
+
+  def space_goal_claimed?(_space_id), do: false
+
+  defp ext_claims_space_goal?(ext, space_id) do
+    implements?(ext, :claims_space_goal?, 1) and ext.claims_space_goal?(space_id) == true
+  rescue
+    error ->
+      Logger.warning(
+        "[Extensions] #{inspect(ext)}.claims_space_goal?(#{space_id}) raised: " <>
+          Exception.message(error)
+      )
+
+      false
+  catch
+    kind, reason ->
+      Logger.warning(
+        "[Extensions] #{inspect(ext)}.claims_space_goal?(#{space_id}) #{kind}: " <>
+          inspect(reason)
+      )
+
+      false
+  end
+
   @doc "The registered extension's inbox kind spec for `kind`, or nil."
   @spec inbox_kind(term()) :: Platform.Extension.inbox_kind() | nil
   def inbox_kind(kind) when is_binary(kind), do: Enum.find(inbox_kinds(), &(&1.kind == kind))
@@ -231,8 +275,10 @@ defmodule Platform.Extensions do
   extensions share one, across every registry the extensions merge into:
   tool bundle names, tool names, runtime-channel event names, canvas kind
   names, experiment surface keys, experiment metric slugs, HTTP route
-  prefixes, live page prefixes, inbox kinds and inbox source types. A route
+  prefixes, live page prefixes, inbox kinds, inbox source types and briefing section keys. A route
   prefix and a live page prefix must also each be one lowercase path segment.
+  `claims_space_goal?/1` contributes no name, so it has nothing to clash on
+  and is not checked.
 
   Core's tool names include its hidden legacy aliases
   (`Platform.Federation.ToolAliases`), and tool names are also compared
@@ -268,6 +314,7 @@ defmodule Platform.Extensions do
        fn ext -> Enum.map(ext.experiment_surfaces(), & &1.key()) end},
       {"experiment metric slug", Platform.Experiments.Metrics.core_metric_slugs(),
        fn ext -> Map.keys(ext.experiment_metrics()) end},
+      {"briefing section key", [], fn ext -> Enum.map(ext_briefing_sections(ext), & &1.key) end},
       {"route prefix", [], &route_prefixes/1},
       {"live page prefix", [], &live_page_prefixes/1},
       {"inbox kind", Platform.Inbox.Item.core_kinds(),
@@ -279,7 +326,8 @@ defmodule Platform.Extensions do
     case Enum.flat_map(checks, &clashes(&1, extensions)) ++
            normalised_tool_name_clashes(extensions) ++
            bad_route_prefixes(extensions) ++
-           bad_live_page_prefixes(extensions) do
+           bad_live_page_prefixes(extensions) ++
+           bad_briefing_section_keys(extensions) do
       [] -> :ok
       messages -> {:error, messages}
     end
@@ -339,6 +387,14 @@ defmodule Platform.Extensions do
         not one_segment?(prefix),
         do:
           "live page prefix #{inspect(prefix)} of #{inspect(ext)} is not one lowercase path segment"
+  end
+
+  defp bad_briefing_section_keys(extensions) do
+    for ext <- extensions,
+        section <- ext_briefing_sections(ext),
+        not one_segment?(section.key),
+        do:
+          "briefing section key #{inspect(section.key)} of #{inspect(ext)} is not one lowercase path segment"
   end
 
   defp one_segment?(prefix),

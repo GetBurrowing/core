@@ -338,6 +338,15 @@ defmodule PlatformWeb.InboxLive.BriefingComponent do
         <p class="mt-1.5 text-xs text-subtle" data-role="briefing-progress">{@progress.label}</p>
       </div>
 
+      <.live_component
+        :for={s <- @view.sections}
+        module={s.component}
+        id={@id <> "-section-" <> s.key}
+        user_id={@user_id}
+        date={@view.date}
+        today={@today}
+        refresh={@refresh}
+      />
       <.section
         :if={@view.needs_call != []}
         id={@id <> "-needs-call"}

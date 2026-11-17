@@ -10,6 +10,10 @@ defmodule Platform.Memory.Insights.Disseminator do
   synchronous `run/1` that tests and operators call directly. Disabled in
   `config/test.exs` (`:start_insight_disseminator false`).
 
+  Optional extension sections run after the insights pass, even when insight
+  delivery is disabled or nobody holds the dreaming role. With no registered
+  sections that pass reads no users and preserves the original result.
+
   ## One run
 
   1. `Platform.Memory.Insights.Digest.select/2` decides who gets what. While
@@ -141,24 +145,116 @@ defmodule Platform.Memory.Insights.Disseminator do
     now = Keyword.get(opts, :now, DateTime.utc_now())
     digest = Digest.select(now)
 
-    cond do
-      digest == %{} ->
-        {:ok, %{users: 0, items: 0}}
+    result =
+      cond do
+        digest == %{} ->
+          {:ok, %{users: 0, items: 0}}
 
-      true ->
-        case Platform.Roles.assignee_for(Dreaming.key()) do
-          nil ->
-            Logger.warning(
-              "[insight_disseminator] no agent holds #{Dreaming.key()}; " <>
-                "#{map_size(digest)} digest(s) not delivered"
-            )
+        true ->
+          case Platform.Roles.assignee_for(Dreaming.key()) do
+            nil ->
+              Logger.warning(
+                "[insight_disseminator] no agent holds #{Dreaming.key()}; " <>
+                  "#{map_size(digest)} digest(s) not delivered"
+              )
 
-            {:ok, %{users: 0, items: 0, reason: :no_agent}}
+              {:ok, %{users: 0, items: 0, reason: :no_agent}}
 
-          agent ->
-            deliver_all(digest, agent, now, opts)
-        end
+            agent ->
+              deliver_all(digest, agent, now, opts)
+          end
+      end
+
+    deliver_sections(result, now, opts)
+  end
+
+  defp deliver_sections(result, now, opts) do
+    if Platform.Extensions.briefing_sections() == [] do
+      result
+    else
+      date = local_date(now)
+      notifications = Keyword.get(opts, :notifications_module, Platform.Notifications)
+
+      counts =
+        Platform.Accounts.list_users()
+        |> Enum.reject(fn user ->
+          Platform.Tenancy.external_user?(user) or
+            Platform.Accounts.insight_delivery_opted_out?(user.id)
+        end)
+        |> Enum.reduce(%{users: 0, items: 0}, fn user, counts ->
+          case deliver_section(user, date, notifications) do
+            n when n > 0 -> %{users: counts.users + 1, items: counts.items + n}
+            _ -> counts
+          end
+        end)
+
+      {:ok, original} = result
+      {:ok, Map.put(original, :sections, counts)}
     end
+  end
+
+  defp deliver_section(user, date, notifications) do
+    alias Platform.Memory.Insights.BriefingSections
+    n = BriefingSections.prepare(user.id, date)
+
+    if n > 0 do
+      case Repo.transaction(fn ->
+             Repo.insert!(
+               Briefing.changeset(%Briefing{}, %{user_id: user.id, digest_date: date, items: %{}}),
+               on_conflict: :nothing
+             )
+
+             briefing = Platform.Memory.Insights.Briefings.for_user_on(user.id, date)
+
+             counts =
+               Platform.Memory.Insights.Briefings.view(
+                 briefing,
+                 Platform.Access.Scope.for_user(user)
+               ).counts
+
+             case Inbox.upsert_briefing_item(briefing, %{
+                    total: counts.total,
+                    calls: counts.calls,
+                    body: Inbox.briefing_summary(counts),
+                    new_items?: true
+                  }) do
+               {:ok, _item, status} -> status
+               {:error, reason} -> Repo.rollback(reason)
+             end
+           end) do
+        {:ok, :created} -> push_section(notifications, user.id, date, n)
+        _ -> :ok
+      end
+    end
+
+    n
+  rescue
+    error ->
+      Logger.warning(
+        "[insight_disseminator] section delivery failed: #{Exception.message(error)}"
+      )
+
+      0
+  catch
+    kind, _reason ->
+      Logger.warning("[insight_disseminator] section delivery failed: #{kind}")
+      0
+  end
+
+  defp push_section(notifications, user_id, date, count) do
+    notification =
+      Notification.new(%{
+        kind: "insight_briefing",
+        title: "Your briefing",
+        body: "#{count} new #{if count == 1, do: "item", else: "items"}",
+        url: Inbox.briefing_url(date)
+      })
+
+    notifications.fan_out_to_user(user_id, notification)
+  rescue
+    error ->
+      Logger.warning("[insight_disseminator] push failed: #{Exception.message(error)}")
+      :ok
   end
 
   defp deliver_all(digest, agent, now, opts) do

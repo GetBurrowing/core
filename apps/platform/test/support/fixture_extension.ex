@@ -43,6 +43,64 @@ defmodule Platform.FixtureExtension do
   def migrations, do: @migrations
 
   @impl true
+  def briefing_sections do
+    [
+      %{
+        key: "fixture",
+        component: __MODULE__.BriefComponent,
+        prepare: &brief_prepare/2,
+        summary: &brief_summary/2
+      }
+    ]
+  end
+
+  def brief_prepare(user_id, date), do: brief_value(:prepare, user_id, date, 0)
+  def brief_summary(user_id, date), do: brief_value(:summary, user_id, date, nil)
+
+  defp brief_value(function, user_id, date, default) do
+    if pid = Application.get_env(:platform, :fixture_extension_test_pid),
+      do: send(pid, {:fixture_briefing, function, user_id, date})
+
+    value =
+      Application.get_env(:platform, :fixture_briefing_section, %{})
+      |> Map.get(user_id, %{})
+      |> Map.get(function, default)
+
+    if is_function(value, 0), do: value.(), else: value
+  end
+
+  defmodule BriefComponent do
+    use PlatformWeb, :live_component
+
+    def update(assigns, socket) do
+      summary = Platform.FixtureExtension.brief_summary(assigns.user_id, assigns.date)
+      {:ok, socket |> assign(assigns) |> assign(:summary, summary)}
+    end
+
+    def handle_event("fixture_finish", _, socket) do
+      env = Application.get_env(:platform, :fixture_briefing_section, %{})
+      env = update_in(env, [socket.assigns.user_id, :summary], &%{&1 | open: 0, calls: 0})
+      Application.put_env(:platform, :fixture_briefing_section, env)
+
+      Platform.Memory.Insights.BriefingSections.changed(
+        socket.assigns.user_id,
+        socket.assigns.date
+      )
+
+      {:noreply, assign(socket, :summary, env[socket.assigns.user_id].summary)}
+    end
+
+    def render(assigns) do
+      ~H"""
+      <div id={@id} data-role="fixture-briefing">
+        Fixture section {@summary.total}/{@summary.open}/{@summary.calls}
+        <button phx-click="fixture_finish" phx-target={@myself}>Finish fixture</button>
+      </div>
+      """
+    end
+  end
+
+  @impl true
   def canvas_kinds, do: [__MODULE__.Kinds.FixtureWidget]
 
   @impl true
@@ -291,8 +349,8 @@ defmodule Platform.FixtureExtension do
     @impl true
     def schema, do: %{"type" => "object", "properties" => %{}}
 
-    attr :node, :map, required: true
-    attr :viewer, :any, default: nil
+    attr(:node, :map, required: true)
+    attr(:viewer, :any, default: nil)
 
     # `data-viewer` is the positive control for the renderer's `viewer`
     # reaching a kind on every path (the inline chat-message path included).
