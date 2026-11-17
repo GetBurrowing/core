@@ -40,3 +40,15 @@
  [data-studio-tab="playtest"] .studio-conversation { display:none; }
  [data-studio-tab="playtest"] .studio-work { display:flex; width:100%; }
 }
+
+/* Cover art belongs to the game, while the surrounding shell stays quiet. */
+.studio-game-cover { width:34px; height:34px; border-radius:10px; object-fit:cover; }
+.studio-heading { position:relative; isolation:isolate; overflow:hidden; border:1px solid var(--color-edge); border-radius:24px; padding:24px; min-height:200px; align-content:space-between; background:var(--color-base-200); }
+.studio-heading::after { content:""; position:absolute; inset:0; z-index:-1; background:linear-gradient(90deg,var(--color-base-200) 30%,color-mix(in srgb,var(--color-base-200) 85%,transparent) 60%,transparent); pointer-events:none; }
+.studio-hero-art { position:absolute; right:0; top:0; width:65%; height:100%; object-fit:cover; z-index:-2; }
+.studio-heading-copy { width:100%; }
+.studio-heading h2 { font-size:38px; line-height:1.2; margin:8px 0; }
+@media(min-width:768px) { .studio-projects { margin:12px 0 12px 12px; border:1px solid var(--color-edge); border-radius:24px; } .studio-workspace { padding:12px; gap:16px; } }
+@media(max-width:767px) { .studio-heading { min-height:170px; padding:16px; border-radius:20px; } .studio-heading h2 { font-size:28px; } .studio-hero-art { width:100%; opacity:.55; } .studio-heading::after { background:linear-gradient(90deg,var(--color-base-200),transparent); } .studio-actions { gap:6px; } .studio-button { padding:9px 10px; } }
+
+.studio-button:disabled { cursor:not-allowed; opacity:.5; }

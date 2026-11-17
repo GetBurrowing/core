@@ -4,14 +4,23 @@ defmodule PlatformWeb.GameStudioLiveTest do
   alias Platform.{Branding, Chat, Repo, Tasks, Tenancy}
 
   setup %{conn: conn} do
+    old = Application.get_env(:platform, :game_publications)
+    on_exit(fn -> Application.put_env(:platform, :game_publications, old || []) end)
     n = System.unique_integer([:positive])
     user = Repo.insert!(%Platform.Accounts.User{email: "studio-#{n}@example.invalid", name: "Studio user", oidc_sub: "studio-#{n}", preferences: %{"first_run_goal" => "existing"}})
     org = Tenancy.get_org_by_slug!("acme")
     Repo.insert!(%Platform.Tenancy.OrgMembership{user_id: user.id, org_id: org.id, role: "admin"})
     {:ok, _} = Branding.update_identity(user, %{experience: "gaming"})
-    {:ok, project} = Tasks.create_project(%{name: "Real game", org_id: org.id, tech_stack: %{"engine" => "godot"}})
+    {:ok, project} = Tasks.create_project(%{name: "Voltron", org_id: org.id, tech_stack: %{"engine" => "godot"}})
     {:ok, space} = Chat.create_channel(%{name: "Game dev", slug: "studio-dev-#{n}", org_id: org.id, created_by: user.id, metadata: %{"goal_project_id" => project.id}})
     {:ok, project} = Tasks.update_project(project, %{config: %{"development_space_id" => space.id}})
+    Application.put_env(:platform, :game_publications, [%{
+      "slug" => "voltron", "published" => true, "org_id" => org.id,
+      "project_id" => project.id, "development_space_id" => space.id,
+      "title" => "Voltron", "summary" => "Build a giant mech together.",
+      "image_path" => "/images/voltron-game.png", "current_version" => "test-build",
+      "releases" => [%{"version" => "test-build", "attachment_id" => Ecto.UUID.generate(), "sha256" => String.duplicate("a", 64), "byte_size" => 1000}]
+    }])
     %{conn: init_test_session(conn, current_user_id: user.id), user: user, project: project, space: space}
   end
 
@@ -29,6 +38,7 @@ defmodule PlatformWeb.GameStudioLiveTest do
     assert has_element?(view, "#game-studio")
     assert html =~ "studio-chat-#{space.id}"
     refute html =~ "the Transcript tab is for"
+    assert html =~ "Start the conversation"
     assert has_element?(view, "#studio-playtest")
     assert has_element?(view, "a[href='/studio/chat?project=#{project.id}']", "Ask an agent")
     assert has_element?(view, "#bottom-nav [data-destination=studio][aria-current=page]")

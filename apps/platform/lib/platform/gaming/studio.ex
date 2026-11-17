@@ -48,6 +48,20 @@ defmodule Platform.Gaming.Studio do
   def canvases(%{space: %{id: id}}, scope),
     do: Chat.list_recent_canvases([id], limit: 6, access_scope: scope)
   def canvases(_, _scope), do: []
+  def playtest_notice(nil, _user), do: "Choose a game project to playtest."
+  def playtest_notice(%{space: nil}, _user), do: "Connect a development room before starting a shared playtest."
+  def playtest_notice(entry, user) do
+    provider = Module.concat([Platform, GameStream])
+    cond do
+      not Access.can?(Scope.for_user(user), "play.use", entry.project) -> "Your account does not have permission to start Play sessions for this project."
+      not Code.ensure_loaded?(provider) -> "Browser playtests are not installed here yet. Open the published build to play locally."
+      not apply(provider, :enabled?, []) -> "Browser playtests are disabled on this install. Open the published build to play locally."
+      not apply(provider, :host_available?, []) -> "No Play host is connected. Your published build is still available to play locally."
+      is_nil(entry.project.repo_url) or entry.project.repo_url == "" -> "Your agent needs to connect the game repository before its first playtest."
+      true -> nil
+    end
+  end
+
   def playtest(nil, _user), do: {:error, :no_project}
   def playtest(entry, user) do
     scope = Scope.for_user(user)
