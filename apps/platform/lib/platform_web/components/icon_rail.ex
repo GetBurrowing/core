@@ -134,6 +134,7 @@ defmodule PlatformWeb.Components.IconRail do
       role="navigation"
       aria-label="Main navigation"
       data-bottom-rail
+      data-web-tabs={if @gaming, do: "true"}
       phx-hook="TabPill"
     >
       <div
@@ -207,6 +208,7 @@ defmodule PlatformWeb.Components.IconRail do
         id="native-tab-bridge"
         phx-hook="NativeTabBar"
         hidden
+        data-web-tabs={if @gaming, do: "true"}
         data-items={Enum.map_join(@mobile_destinations, ",", &to_string(&1.key)) <> ",more"}
         data-active-key={@active_key}
         data-inbox-unread={to_string(@inbox_unread?)}

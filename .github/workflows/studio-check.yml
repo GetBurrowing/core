@@ -63,7 +63,10 @@ jobs:
           sh "$GITHUB_WORKSPACE/scripts/fetch-github-release-binaries.sh" nifs .
       - name: Format studio changes
         run: |
+          git config --global --add safe.directory "$GITHUB_WORKSPACE"
+          cd "$GITHUB_WORKSPACE"
           git diff --name-only origin/main...HEAD -- '*.ex' '*.exs' '*.heex' > /tmp/studio-files
+          cd apps/platform
           sed 's|^|../../|' /tmp/studio-files | xargs mix format --dot-formatter .formatter.exs
           cd ../..
           tar -czf studio-format.tar.gz -T /tmp/studio-files
@@ -83,6 +86,7 @@ jobs:
         run: |
           cd assets
           npm ci
+          npx vitest run test/hooks/native_tab_bar.test.js test/hooks/native_tab_bar_contract.test.js
           cd ..
           mix assets.setup
           mix assets.build

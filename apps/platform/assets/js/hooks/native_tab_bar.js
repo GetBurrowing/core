@@ -222,7 +222,9 @@ export function stateOf(el, win, doc, normalise = null) {
     selected: active ? active : null,
     inbox_dot: el.getAttribute("data-inbox-unread") === "true",
     inbox_badge: inboxBadgeOf(el),
-    visible: barVisible(win, doc),
+    // Existing app builds only know Chat/Calendar/Inbox/More. Keep the full
+    // game dock in the web view rather than silently dropping new destinations.
+    visible: el.getAttribute("data-web-tabs") !== "true" && barVisible(win, doc),
     ink: inksOf(el, win, normalise),
     scheme: schemeOf(win, doc),
   }

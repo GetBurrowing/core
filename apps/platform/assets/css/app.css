@@ -5262,12 +5262,12 @@ body, .font-suite {
    rules above are (0,3,0) for the composer but only (0,2,0) for the viewer
    and the in-call room, so they would LOSE to it; they are restated here at
    (0,4,0) and (0,5,0) to drop the clearance to 0 again. */
-:root[data-native-tab-bar] .bottom-nav {
+:root[data-native-tab-bar] .bottom-nav:not([data-web-tabs]) {
   display: none;
 }
 
 @media (max-width: 1023.98px) {
-  :root[data-native-tab-bar]:has([data-bottom-rail]) {
+  :root[data-native-tab-bar]:has([data-bottom-rail]:not([data-web-tabs])) {
     --bottom-nav-height: var(--native-tab-bar-height, 0px);
   }
 

@@ -723,3 +723,13 @@ describe("plugin failures", () => {
     expect(() => mount(throwing)).not.toThrow()
   })
 })
+
+// A game install must remain navigable in already-shipped native clients.
+describe("game dock compatibility", () => {
+  it("keeps native chrome hidden when the complete game dock is rendered on the web", () => {
+    const el = fakeSpan({"data-web-tabs": "true", "data-items": "studio,chat,playtest,discover,more"});
+    const state = stateOf(el, {matchMedia: () => ({matches: false})}, {documentElement: {matches: () => false}}, () => null);
+    expect(state.visible).toBe(false);
+    expect(state.items).toEqual(["studio", "chat", "playtest", "discover", "more"]);
+  });
+});
