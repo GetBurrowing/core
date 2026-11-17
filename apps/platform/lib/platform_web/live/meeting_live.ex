@@ -458,6 +458,7 @@ defmodule PlatformWeb.MeetingLive do
       |> assign(:call_rail_unread, false)
       |> assign(:active_meeting_tab, "people")
       |> assign(:captions_visible, false)
+      |> assign(:captions_menu_open, false)
       |> assign(:speaking_identities, MapSet.new())
       |> assign(:muted_identities, MapSet.new())
       |> assign(:camera_off_identities, MapSet.new())
@@ -628,6 +629,7 @@ defmodule PlatformWeb.MeetingLive do
      # spec; a viewer preference is mirrored to localStorage by the
      # MeetingCaptions JS hook and restored via `meeting_captions_hydrate`.
      |> assign(:captions_visible, false)
+     |> assign(:captions_menu_open, false)
      # Active-speaker identities reported by THIS viewer's LiveKit client
      # (`MeetingRoom._onActiveSpeaker` -> `active_speakers`). VIEWER-LOCAL
      # for the same reason `:captions_visible` is: never persisted, never
@@ -3145,6 +3147,18 @@ defmodule PlatformWeb.MeetingLive do
      socket
      |> assign(:captions_visible, next)
      |> push_event("meeting_captions_persist", %{visible: next})}
+  end
+
+  # The CC chevron menu (task 01a1eb27 stage 2). UI-only state, exactly like
+  # `:captions_visible`: never persisted, never broadcast. Desktop renders it
+  # as a daisyUI dropdown, phones as `#meeting-captions-sheet`; both close on
+  # Escape and on an outside click / backdrop tap through this one event.
+  def handle_event("toggle_captions_menu", _params, socket) do
+    {:noreply, assign(socket, :captions_menu_open, !socket.assigns.captions_menu_open)}
+  end
+
+  def handle_event("close_captions_menu", _params, socket) do
+    {:noreply, assign(socket, :captions_menu_open, false)}
   end
 
   # Restore the persisted preference on hook-mount from localStorage.
@@ -6991,6 +7005,95 @@ defmodule PlatformWeb.MeetingLive do
   def captions_toggle_label(captions_visible?, transcriber_present?) do
     base = if captions_visible?, do: "Hide captions", else: "Show captions"
     if transcriber_present?, do: base <> " (meeting is being transcribed)", else: base
+  end
+
+  # The CC menu's rows (task 01a1eb27 stage 2). ONE private component that
+  # both the desktop dropdown and the phone sheet render, so the copy cannot
+  # drift between them. `surface` only namespaces the DOM ids.
+  #
+  # Row 1 is the viewer's own captions: a switch wired to the EXISTING
+  # `toggle_captions_meeting` event, so persistence still goes through
+  # `meeting_captions_persist` -> `MeetingCaptionsPersist`.
+  #
+  # Row 2 is READ-ONLY for every viewer, host included. Nobody starts or stops
+  # the transcriber (LiveKit dispatches it at room creation), so there is no
+  # control and no permission to gate one on. Plain text, not a disabled
+  # control, so no `aria-disabled`.
+  #
+  # DECLARED COPY DEVIATIONS from canvas 01a1eb28 (md node):
+  #   1. "started by Scribe" -> "started automatically": no one starts it.
+  #   2. "everyone in this meeting + its space" -> "everyone who can open this
+  #      meeting": transcripts are served by `Meetings.get_transcript_for_user/2`,
+  #      which is the meeting viewer rule (`get_meeting_for_user/2`).
+  attr :surface, :string, required: true
+  attr :captions_visible, :boolean, required: true
+  attr :transcriber_present?, :boolean, required: true
+  attr :transcription_started_at, :any, default: nil
+
+  defp captions_menu_rows(assigns) do
+    ~H"""
+    <div class="flex flex-col gap-1">
+      <div
+        data-role="meeting-captions-row"
+        class="flex items-start justify-between gap-4 rounded-box px-3 py-2.5"
+      >
+        <div class="min-w-0">
+          <div id={"#{@surface}-captions-label"} class="text-sm font-medium text-base-content">
+            Captions (just for you)
+          </div>
+          <p class="mt-0.5 text-xs text-subtle">
+            Only you see captions. Turning them off doesn't stop transcription.
+          </p>
+        </div>
+        <input
+          type="checkbox"
+          role="switch"
+          class="toggle toggle-sm mt-0.5 shrink-0"
+          data-role="meeting-captions-row-switch"
+          aria-labelledby={"#{@surface}-captions-label"}
+          aria-checked={to_string(@captions_visible)}
+          checked={@captions_visible}
+          phx-click="toggle_captions_meeting"
+        />
+      </div>
+      <div
+        data-role="meeting-transcription-row"
+        data-readonly="true"
+        class="border-t border-edge px-3 py-2.5"
+      >
+        <div class="text-sm font-medium text-base-content">
+          Transcription (for the meeting record)
+        </div>
+        <p
+          data-role="meeting-transcription-state"
+          class="mt-0.5 flex items-center gap-1.5 text-xs text-subtle"
+        >
+          <%= if @transcriber_present? do %>
+            <span aria-hidden="true" class="size-1.5 shrink-0 rounded-full bg-info"></span>
+            <span>
+              On · started automatically<%= if @transcription_started_at do %>
+                ·
+                <time
+                  id={"#{@surface}-transcription-started-at"}
+                  data-role="meeting-transcription-started-at"
+                  phx-hook="LocalTime"
+                  datetime={DateTime.to_iso8601(@transcription_started_at)}
+                  class="font-mono text-xs"
+                >
+                  {Calendar.strftime(@transcription_started_at, "%H:%M")}
+                </time>
+              <% end %>
+            </span>
+          <% else %>
+            <span>Off</span>
+          <% end %>
+        </p>
+        <p class="mt-0.5 text-xs text-subtle">
+          Visible to: everyone who can open this meeting
+        </p>
+      </div>
+    </div>
+    """
   end
 
   # `meeting_presence/1` plus `transcription_started_at` (task 01a1eb27

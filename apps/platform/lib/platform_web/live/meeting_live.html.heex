@@ -2505,6 +2505,52 @@
                 >
                 </span>
               </button>
+              <%!-- THE CC CHEVRON MENU (task 01a1eb27 stage 2, canvas 01a1eb28).
+                 The CC button above still toggles captions in ONE click; this
+                 chevron opens the two labelled rows that separate "captions,
+                 just for you" from "transcription, the meeting record".
+                 `lg` and up: a daisyUI dropdown anchored above the bar on
+                 `bg-base-100`. Phones (`@mobile_viewport?`): the same rows in
+                 `#meeting-captions-sheet` (rendered at the LV root below), the
+                 room's one overlay grammar. Both call the private
+                 `captions_menu_rows/1`, so the copy cannot drift; the declared
+                 copy deviations are documented on that component. Escape and
+                 an outside click close the dropdown; the sheet brings its own
+                 backdrop and Escape. The click-away / Escape bindings exist
+                 only while open, so a closed menu sends nothing. --%>
+              <div class={[
+                "dropdown dropdown-top dropdown-end",
+                (@captions_menu_open and not @mobile_viewport?) && "dropdown-open"
+              ]}>
+                <button
+                  type="button"
+                  phx-click="toggle_captions_menu"
+                  aria-haspopup="menu"
+                  aria-expanded={to_string(@captions_menu_open)}
+                  aria-label="Caption and transcription settings"
+                  title="Caption and transcription settings"
+                  data-role="meeting-captions-menu-toggle"
+                  class="btn btn-sm btn-ghost min-h-11 w-6 px-0 text-base-content"
+                >
+                  <.icon name="hero-chevron-up" class="size-3.5" />
+                </button>
+                <div
+                  :if={@captions_menu_open and not @mobile_viewport?}
+                  data-role="meeting-captions-menu"
+                  aria-label="Caption and transcription settings"
+                  phx-click-away="close_captions_menu"
+                  phx-window-keydown="close_captions_menu"
+                  phx-key="Escape"
+                  class="dropdown-content z-50 mb-2 w-80 rounded-box border border-edge bg-base-100 p-1 shadow-lg"
+                >
+                  <.captions_menu_rows
+                    surface="meeting-captions-menu"
+                    captions_visible={@captions_visible}
+                    transcriber_present?={@transcriber_present?}
+                    transcription_started_at={@transcription_started_at}
+                  />
+                </div>
+              </div>
             </:before_leave>
           </CallShell.call_controls>
 
@@ -3379,6 +3425,26 @@
         </section>
       </footer>
     </div>
+
+    <%!-- CC menu, phone frame (task 01a1eb27 stage 2). Below `lg` only;
+       the desktop dropdown lives beside the CC button. Same rows partial. --%>
+    <.sheet
+      :if={@in_meeting and @mobile_viewport?}
+      id="meeting-captions-sheet"
+      placement={:bottom}
+      open={@captions_menu_open}
+      on_close="close_captions_menu"
+    >
+      <:title>Captions and transcription</:title>
+      <div data-role="meeting-captions-menu" class="bg-base-100">
+        <.captions_menu_rows
+          surface="meeting-captions-sheet"
+          captions_visible={@captions_visible}
+          transcriber_present?={@transcriber_present?}
+          transcription_started_at={@transcription_started_at}
+        />
+      </div>
+    </.sheet>
 
     <%!-- ── Guest-invite bottom-sheet (stage 4 of task 019f2483) ────────────
        Host-only surface: the trigger button in the top-bar is gated on
