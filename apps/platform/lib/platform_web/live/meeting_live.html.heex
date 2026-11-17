@@ -488,6 +488,17 @@
          reload (stage 1 review finding). This always-mounted host
          reads/writes localStorage on `meeting_captions_persist` /
          `meeting_captions_hydrate` and has no visible UI. --%>
+      <%!-- CAPTIONS DEFAULT AND KEY ARE KEPT ON PURPOSE (task 01a1eb27
+         stage 1, "captions off with a pulse"). The server default
+         `:captions_visible` was ALREADY false, so "off by default" needed
+         no change, and this host's key `suite.meeting.captions_visible`
+         (plus ClientState `meeting:captions_visible` and its legacy
+         read-once migration in assets/js/hooks/meeting_captions.js) is
+         unchanged. No key migration: since the default did not move, a
+         stored `true` can only be the viewer's own deliberate choice, and
+         it keeps meaning "on". What changed is that "off" no longer reads
+         as "nothing is happening": the CC button's `info` pulse says the
+         meeting is being transcribed whatever this preference is. --%>
       <div
         id="meeting-captions-persist-host"
         phx-hook="MeetingCaptionsPersist"
@@ -2400,6 +2411,88 @@
              `push_to_talk_press` / `push_to_talk_release` events — now with
              the addressed agent's id. See the rail component and the two
              `hold_to_talk?` call sites above. --%>
+          <%!-- ── Docked captions strip (task 01a1eb27 stage 3) ──────────
+             Captions used to be a `fixed bottom-[…] z-40` overlay that
+             floated over the video in every stage mode and covered faces
+             ("when i turn it on it blocks everything"). It is now an
+             IN-FLOW row of this stage column, directly above the controls,
+             in EVERY stage mode (gallery, screen, canvas, whiteboard). The
+             stage body above is `flex-1 min-h-0`, so it shrinks to make
+             room: the strip cannot intersect a tile by construction. On a
+             phone the strip therefore sits between the stage video and the
+             controls, and `#meeting-bottom-strip` (the filmstrip footer,
+             non-gallery modes) stays BELOW `<main>`.
+
+             No safe-area or bottom-nav calc terms: the strip is no longer
+             fixed, and the controls / footer below already own that
+             clearance.
+
+             Tokens: `base-200` ground with the `edge` border (a theme
+             surface, not a scrim over video), `base-content` caption text
+             (written by the hook), `text-subtle` for "just you" and the
+             separator, and the Transcript link in base-content. Never
+             primary, never error.
+
+             Two-div structure, unchanged: this OUTER shell is freely
+             re-rendered by LiveView (class list, `data-stage-mode`), while
+             the INNER `#meeting-captions` is the stable hook host
+             (`phx-update="ignore"` + `phx-hook="MeetingCaptions"`). With
+             `ignore` on the host, morphdom preserves its non-`data-*`
+             attributes across renders, so anything that has to change on
+             a render lives out here. The hook renders 1 line idle and 2
+             while someone is speaking (`assets/js/hooks/meeting_captions.js`).
+
+             Rendered ONLY when the viewer has captions on (server default
+             off; the preference persists through the always-mounted
+             `#meeting-captions-persist-host`). Turning captions off never
+             touches transcription: the CC pulse keeps breathing. --%>
+          <div
+            :if={@captions_visible}
+            data-role="meeting-captions-shell"
+            data-stage-mode={@current_stage_mode}
+            class="flex w-full min-w-0 shrink-0 items-center gap-3 rounded-box border border-edge bg-base-200 px-3 py-1.5 text-sm"
+          >
+            <div
+              id="meeting-captions"
+              phx-hook="MeetingCaptions"
+              phx-update="ignore"
+              data-role="meeting-captions"
+              data-meeting-id={@meeting.id}
+              class="min-h-5 min-w-0 flex-1 text-base-content transition-opacity duration-300"
+              aria-live="polite"
+              aria-label="Meeting captions"
+            >
+            </div>
+            <div class="flex shrink-0 items-center gap-1.5 text-xs">
+              <span data-role="meeting-captions-just-you" class="text-xs text-subtle">
+                just you
+              </span>
+              <span class="text-subtle" aria-hidden="true">·</span>
+              <%!-- Opens the rail's existing Transcript pane. Signed-in
+                 viewers patch to `?tab=transcript` (handle_params assigns
+                 `:active_meeting_tab` from it). The guest surface's
+                 handle_params is a no-op, so a guest uses the
+                 `meeting_tab_select` event instead. --%>
+              <.link
+                :if={@state != :in_meeting}
+                patch={~p"/meetings/#{@meeting.slug}?tab=transcript"}
+                data-role="meeting-captions-transcript-link"
+                class="link text-xs text-base-content"
+              >
+                Transcript
+              </.link>
+              <button
+                :if={@state == :in_meeting}
+                type="button"
+                phx-click="meeting_tab_select"
+                phx-value-tab="transcript"
+                data-role="meeting-captions-transcript-link"
+                class="link text-xs text-base-content"
+              >
+                Transcript
+              </button>
+            </div>
+          </div>
           <CallShell.call_controls
             data-role="meeting-stage-controls"
             class="min-h-[46px] w-full shrink-0 gap-2 rounded-box border border-edge bg-base-100 px-3"
@@ -2446,18 +2539,32 @@
              sibling pills in this row. Behaviour, event name,
              `data-role`, `data-active` and ARIA are byte-identical to the
              top-bar version this replaces -- this is a relocation, not a
-             rewrite. --%>
+             rewrite.
+
+             THE PULSE (task 01a1eb27 stage 1, canvas 01a1eb28). The
+             transcriber is auto-dispatched by LiveKit at room creation;
+             nobody starts or stops it, so there is no control here for it,
+             only a STATE: a small `bg-info` dot, shown iff
+             `@transcriber_present?`, whether captions are on OR off,
+             because captions are "just for you" and transcription is the
+             meeting record. `info` because it is a state, never `primary`
+             (an action) and never `error` (red reads as "recording
+             problem"). It breathes via `motion-safe:animate-pulse`, so
+             under prefers-reduced-motion it is a SOLID dot. aria-hidden:
+             the label carries the state for screen readers instead.
+             `phx-click`, `data-role`, `data-active` and `aria-pressed` are
+             byte-identical; only the label/title gain the suffix. --%>
             <:before_leave :if={@in_meeting}>
               <button
                 type="button"
                 phx-click="toggle_captions_meeting"
-                aria-label={if @captions_visible, do: "Hide captions", else: "Show captions"}
+                aria-label={captions_toggle_label(@captions_visible, @transcriber_present?)}
                 aria-pressed={to_string(@captions_visible)}
-                title={if @captions_visible, do: "Hide captions", else: "Show captions"}
+                title={captions_toggle_label(@captions_visible, @transcriber_present?)}
                 data-role="meeting-captions-toggle"
                 data-active={to_string(@captions_visible)}
                 class={[
-                  "btn btn-sm btn-ghost btn-square min-h-11",
+                  "btn btn-sm btn-ghost btn-square min-h-11 relative",
                   if(@captions_visible,
                     do: "bg-base-300 text-base-content shadow-[inset_0_1px_3px_var(--shade)]",
                     else: "text-base-content"
@@ -2472,7 +2579,60 @@
                 >
                   <path d="M2 5a2 2 0 012-2h16a2 2 0 012 2v10a2 2 0 01-2 2H6l-4 4V5zm5 3a1 1 0 00-1 1v1a1 1 0 001 1h2a1 1 0 001-1V9a1 1 0 00-1-1H7zm7 0a1 1 0 00-1 1v1a1 1 0 001 1h2a1 1 0 001-1V9a1 1 0 00-1-1h-2z" />
                 </svg>
+                <span
+                  :if={@transcriber_present?}
+                  data-role="meeting-captions-pulse"
+                  aria-hidden="true"
+                  class="absolute top-1 right-1 size-2 rounded-full bg-info motion-safe:animate-pulse"
+                >
+                </span>
               </button>
+              <%!-- THE CC CHEVRON MENU (task 01a1eb27 stage 2, canvas 01a1eb28).
+                 The CC button above still toggles captions in ONE click; this
+                 chevron opens the two labelled rows that separate "captions,
+                 just for you" from "transcription, the meeting record".
+                 `lg` and up: a daisyUI dropdown anchored above the bar on
+                 `bg-base-100`. Phones (`@mobile_viewport?`): the same rows in
+                 `#meeting-captions-sheet` (rendered at the LV root below), the
+                 room's one overlay grammar. Both call the private
+                 `captions_menu_rows/1`, so the copy cannot drift; the declared
+                 copy deviations are documented on that component. Escape and
+                 an outside click close the dropdown; the sheet brings its own
+                 backdrop and Escape. The click-away / Escape bindings exist
+                 only while open, so a closed menu sends nothing. --%>
+              <div class={[
+                "dropdown dropdown-top dropdown-end",
+                (@captions_menu_open and not @mobile_viewport?) && "dropdown-open"
+              ]}>
+                <button
+                  type="button"
+                  phx-click="toggle_captions_menu"
+                  aria-haspopup="menu"
+                  aria-expanded={to_string(@captions_menu_open)}
+                  aria-label="Caption and transcription settings"
+                  title="Caption and transcription settings"
+                  data-role="meeting-captions-menu-toggle"
+                  class="btn btn-sm btn-ghost min-h-11 w-6 px-0 text-base-content"
+                >
+                  <.icon name="hero-chevron-up" class="size-3.5" />
+                </button>
+                <div
+                  :if={@captions_menu_open and not @mobile_viewport?}
+                  data-role="meeting-captions-menu"
+                  aria-label="Caption and transcription settings"
+                  phx-click-away="close_captions_menu"
+                  phx-window-keydown="close_captions_menu"
+                  phx-key="Escape"
+                  class="dropdown-content z-50 mb-2 w-80 rounded-box border border-edge bg-base-100 p-1 shadow-lg"
+                >
+                  <.captions_menu_rows
+                    surface="meeting-captions-menu"
+                    captions_visible={@captions_visible}
+                    transcriber_present?={@transcriber_present?}
+                    transcription_started_at={@transcription_started_at}
+                  />
+                </div>
+              </div>
             </:before_leave>
           </CallShell.call_controls>
 
@@ -3348,6 +3508,26 @@
       </footer>
     </div>
 
+    <%!-- CC menu, phone frame (task 01a1eb27 stage 2). Below `lg` only;
+       the desktop dropdown lives beside the CC button. Same rows partial. --%>
+    <.sheet
+      :if={@in_meeting and @mobile_viewport?}
+      id="meeting-captions-sheet"
+      placement={:bottom}
+      open={@captions_menu_open}
+      on_close="close_captions_menu"
+    >
+      <:title>Captions and transcription</:title>
+      <div data-role="meeting-captions-menu" class="bg-base-100">
+        <.captions_menu_rows
+          surface="meeting-captions-sheet"
+          captions_visible={@captions_visible}
+          transcriber_present?={@transcriber_present?}
+          transcription_started_at={@transcription_started_at}
+        />
+      </div>
+    </.sheet>
+
     <%!-- ── Guest-invite bottom-sheet (stage 4 of task 019f2483) ────────────
        Host-only surface: the trigger button in the top-bar is gated on
        `host?/2`, but the sheet itself is unconditionally scoped inside
@@ -3378,80 +3558,10 @@
       agent_options={@intent_agent_options}
     />
 
-    <%!-- ── Closed-captions overlay (task 019f3f17 stage 1 + stage 2) ────
-       The MeetingCaptions JS hook binds here, listens for `meeting:caption`
-       CustomEvents dispatched by MeetingRoom, and renders up to
-       MAX_LINES=3 speaker+text lines with the interim-vs-final treatment.
-       `phx-update="ignore"` prevents LV morphdom from clearing the
-       hook-written innerHTML on unrelated re-renders. Positioned as a
-       fixed overlay centered above the mobile bottom-nav; the
-       `--bottom-nav-height` shell CSS var expands to 56px on phones and
-       0 on desktop so this bar clears the nav automatically. Rendered
-       ONLY when the viewer has toggled captions on, so it stays out of
-       the DOM (and out of JS event listeners) at rest.
-
-       Stage 2: `z-40` (was `z-30`) so the caption bar reliably paints
-       above the mobile bottom-nav rail (`z-30`) — the stage-1 reviewer
-       flagged a mobile z-index collision where the 3-line caption bar
-       overlapped the sticky nav on narrow viewports. Also, the persist-
-       key + persistence branch moved to the always-mounted
-       `#meeting-captions-persist-host` (see above) so a page reload with
-       the server default `:captions_visible = false` still restores the
-       viewer's stored preference. --%>
-    <%!-- One caption surface in EVERY stage mode, gallery included (task
-       019ff712). Gallery used to hide this bar because it had per-tile
-       caption overlays of its own; those are gone, and the mode-conditional
-       `hidden` class went with them. Re-adding either without the other
-       leaves gallery viewers with no captions at all.
-
-       Two-div structure — the OUTER `#meeting-captions-shell` carries the
-       positioning classes. The INNER `#meeting-captions` div is the stable
-       hook host (`phx-update="ignore"` + `phx-hook="MeetingCaptions"`).
-       Splitting them matters: with `phx-update="ignore"` on the hook host,
-       Phoenix's morphdom (and the LV test client, see
-       `Phoenix.LiveViewTest.TreeDOM.apply_phx_update/4`) preserves
-       NON-`data-*` attributes across renders, so any class flip has to live
-       on an element the LV freely re-renders. The wrapper's
-       `data-stage-mode` attribute mirrors the assign so CDP e2e and tests
-       can query it.
-
-       OFFSET (stage 4): `1.75rem`, up from `1rem`, and deliberately the SAME
-       constant in every stage mode — a gallery-specific position would make
-       the eye hunt for the bar on a mode switch, which is the thing one
-       caption surface exists to avoid. It is composed from the layout's own
-       gutters rather than guessed: the centre stage is `p-4` (1rem), the
-       gallery grid inside it is `p-1` (0.25rem), and tiles are separated by
-       `gap-2` (0.5rem) — so seating the bar one inter-tile gutter below the
-       grid's own bottom edge is 1 + 0.25 + 0.5 = 1.75rem. Measured at
-       1280x800 with a full 2x2 grid: bottom tile row ends at y=684, bar top
-       at y=700 — 16px of clear space, where the old 1rem offset left 4px.
-
-       Both the `env(safe-area-inset-bottom)` and `var(--bottom-nav-height,0px)`
-       terms are load-bearing and must stay: dropping the first puts the bar
-       under the iOS home indicator, dropping the second puts it behind the
-       mobile bottom-nav rail. A headless screenshot cannot prove the
-       safe-area term (headless Chrome reports a zero inset), so it is pinned
-       by the render test instead. --%>
-    <div
-      :if={@captions_visible}
-      data-role="meeting-captions-shell"
-      data-stage-mode={@current_stage_mode}
-      class={[
-        "fixed bottom-[calc(1.75rem+env(safe-area-inset-bottom)+var(--bottom-nav-height,0px))] left-1/2 -translate-x-1/2 z-40 w-full max-w-2xl px-4 pointer-events-none"
-      ]}
-    >
-      <div
-        id="meeting-captions"
-        phx-hook="MeetingCaptions"
-        phx-update="ignore"
-        data-role="meeting-captions"
-        data-meeting-id={@meeting.id}
-        class="w-full py-3 rounded-xl bg-viewer/75 backdrop-blur-sm text-sm text-on-viewer shadow-lg transition-opacity duration-300"
-        aria-live="polite"
-        aria-label="Meeting captions"
-      >
-      </div>
-    </div>
+    <%!-- The closed-captions bar used to render HERE as a `fixed … z-40`
+       overlay. Task 01a1eb27 stage 3 docked it inside the stage column:
+       search `data-role="meeting-captions-shell"` inside
+       `<main data-role="call-stage">`. --%>
     <%!-- Task 01a0e906 stage 4: the Undo toast after the host removes an
        agent (canvas 01a0e99d-2af5, "Signature element"). Visible for 8s;
        `:clear_agent_removal_undo` hides it. The copy deliberately makes no

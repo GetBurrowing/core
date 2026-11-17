@@ -1,19 +1,24 @@
 import ClientState from "../client_state"
 import { guestSpeakerLabel } from "./lib/participant_label"
+import { agentSlot } from "./meeting_transcript"
 
 /**
- * MeetingCaptions hook — renders a rolling caption overlay during meetings.
+ * MeetingCaptions hook — renders the docked captions strip during meetings.
  *
- * Mounted on a container element (typically `#meeting-captions`). Listens for
- * `meeting:caption` custom DOM events dispatched by the MeetingRoom hook and
- * renders them as a rolling buffer of the last 3 caption lines.
+ * Mounted on a container element (typically `#meeting-captions`, the hook
+ * host inside the in-flow `[data-role="meeting-captions-shell"]` strip in
+ * the stage column). Listens for `meeting:caption` custom DOM events
+ * dispatched by the MeetingRoom hook and renders ONE line when idle (the
+ * last finalized line) and TWO while someone is speaking (the last final
+ * plus the interim) — task 01a1eb27 stage 3.
  *
  * Behaviour:
  * - Each line shows **speaker name** (bold) + text
  * - Interim (non-final) segments update the current line in place
  * - Final segments scroll up and become permanent
  * - Auto-hides after 5 seconds of silence, DROPPING the buffer as it goes
- * - CSS classes handle positioning (bottom overlay, semi-transparent bg)
+ * - Positioning is not this hook's business: the strip is an in-flow row of
+ *   the stage column, styled in meeting_live.html.heex
  *
  * THREE STATES, not two (task 01a0740e stage 2):
  *
@@ -42,15 +47,16 @@ import { guestSpeakerLabel } from "./lib/participant_label"
  * attributed line beneath the video area is the whole contract.
  */
 
-// Two, not three (task 019ff712 stage 4). The 3-line buffer was chosen when
-// this bar only ever drew over canvas / screen-share, where the bottom of the
-// frame is dead space. It is now the caption surface in gallery too, and
-// there the same three lines land on somebody's face — occlusion, not
-// headroom. Measured at 1280x800: three lines make the bar 96px tall against
-// a 116px band of clear space below the bottom tile row; two make it 72px.
-// This is the ONLY knob that was turned — the dedupe in `_commitLine`
-// (stage 1) is untouched.
+// Line caps (task 01a1eb27 stage 3). The strip is docked in the stage column
+// now, so every line it shows is height the video gives up. The design rule
+// (canvas 01a1eb28): "The strip is one line and grows to two only while
+// someone is speaking." So:
+//   * IDLE_LINES = 1 — no interim in flight: the last finalized line only.
+//   * MAX_LINES  = 2 — an interim exists: the last final plus the interim.
+// MAX_LINES also stays the finalized-buffer cap (task 019ff712 stage 4), so
+// a final arriving mid-utterance still has its predecessor to sit beside.
 const MAX_LINES = 2
+const IDLE_LINES = 1
 const HIDE_AFTER_MS = 5000
 
 // ── Stall window (task 01a0740e stage 2, retuned task 01a0cf5c stage 2) ──
@@ -110,48 +116,52 @@ const STALL_AFTER_MS = 12000
 // window absorbs the NEXT one nobody has measured yet.
 const STALL_CONFIRM_MS = 5000
 
-// ── Caption palette — THEME-INVARIANT BY INTENT (task 01a0740e stage 1) ──
+// ── Caption palette — THE STRIP IS A THEME SURFACE (task 01a1eb27 stage 3) ──
 //
-// These slots deliberately do NOT follow the daisyUI theme. That is the
-// design decision, not an oversight: Saru's FE-8 canvas keeps it in its
-// own self-critique, and this comment exists so the next tidy-up does
-// not undo it.
-//
-// WHY: this bar sits over arbitrary VIDEO in both themes, not over a
-// theme surface. Over video you want a dark scrim and light text
-// whatever the shell is doing. Routing these through `base-content` is
-// the tidy instinct and it is the wrong one here.
-//
-// It has already gone wrong exactly that way once. The host div in
-// `meeting_live.html.heex` carried `text-white`, but `_render` used to
-// write `text-base-content`, at full and at 90% strength, on the CHILD
-// spans, and a colour declared on a child always beats one inherited
-// from a parent — so the host's `text-white` was dead. In the light
-// theme (`default: true` in app.css) `--color-base-content` is
-// `oklch(0% 0 0)`, i.e. #000000. Net result: black caption text on a
-// `bg-black/75` scrim. Not a contrast complaint — invisible.
+// This bar used to float over arbitrary VIDEO, so it wore the theme-
+// invariant viewer pair (`bg-viewer/75` scrim, `text-on-viewer` ink). It no
+// longer does: it is an in-flow row of the stage column on the `base-200`
+// theme surface, so the viewer / on-viewer slots no longer apply, and the
+// text follows the theme like every other row on that surface. Do not bring
+// `on-viewer` back here: white ink on a light `base-200` is invisible.
 //
 //   SLOT                  VALUE                   WHERE
-//   caption scrim         viewer at 75%           `bg-viewer/75`, on the
-//                                                 `#meeting-captions` host in
-//                                                 meeting_live.html.heex — the
-//                                                 bar's ground, not written here
-//   caption text          --on-viewer             CAPTION_TEXT
-//   caption attribution   the SAME on-viewer, semibold  CAPTION_ATTRIBUTION —
-//                                                 separated from the text by
-//                                                 WEIGHT, never by colour: on
-//                                                 this surface colour is spent
-//                                                 on state
-//   caption interim       on-viewer at 70%        CAPTION_TEXT composed with
-//                                                 CAPTION_INTERIM on the line
-//                                                 wrapper (+ italic)
+//   strip ground          base-200, edge border   the
+//                                                 `[data-role="meeting-captions-shell"]`
+//                                                 wrapper in meeting_live.html.heex —
+//                                                 not written here
+//   caption text          base-content            CAPTION_TEXT
+//   speaker name, agent   the agent's rung-3 slot NAME_AGENT + `data-agent-slot`,
+//                         (`--ag-text`)           read from `data-agent-slots` on
+//                                                 `#meeting-room` via `agentSlot`
+//                                                 (same lookup as meeting_transcript.js)
+//   speaker name, human   base-content, semibold  NAME_PLAIN
+//   caption interim       italic on the wrapper,  CAPTION_INTERIM on the TEXT span
+//                         opacity-70 on the text  only, never a
+//                                                 base-content alpha-slash slot
 //
-// Rung 18: the viewer tokens. `text-on-viewer` on `bg-viewer/75` (masters
-// burrow-meeting.js `.bm-caps .bm-bar`). --viewer / --on-viewer are black
-// and white in every theme block, so they are theme-invariant by
-// declaration, which is the exact property being asked for. No raw hex.
-const CAPTION_TEXT = "text-on-viewer"
-const CAPTION_ATTRIBUTION = "font-semibold text-on-viewer"
+// DEVIATION (declared), interim opacity: the stage spec put `opacity-70` on
+// the LINE WRAPPER. On base-200 that composes an agent's `--ag-text` name
+// down to 2.69:1 (burrow light, worst slot), under AA. So the wrapper keeps
+// `italic` (the interim cue) and the 70% dim lands on the caption TEXT only:
+// base-content at 70% on base-200 is >= 7.5:1 in every variant, and the
+// speaker name stays at full strength. Both are held by
+// meeting_reskin_contrast_guard_test.exs.
+//
+// DEVIATION (declared): the canvas puts each speaker's name in "that
+// participant's agent/person accent slot". Only the rung-3 AGENT slots exist
+// on main; there is no per-person accent. So humans (and agents the room has
+// no slot for) keep `base-content` and are told apart from the caption text
+// by WEIGHT, not by colour.
+//
+// Contrast for every pair here is held on base-200 in all theme variants by
+// test/platform/design/meeting_reskin_contrast_guard_test.exs.
+const CAPTION_TEXT = "text-base-content"
+// The name is capped at 40% of the strip and truncates, so a long name at
+// 375px cannot squeeze the caption text to 0px and paint over "just you".
+const NAME_BASE = "max-w-[40%] shrink-0 truncate font-semibold"
+const NAME_PLAIN = `${NAME_BASE} text-base-content`
+const NAME_AGENT = `${NAME_BASE} text-[var(--ag-text)]`
 const CAPTION_INTERIM = "opacity-70"
 
 // ── The stalled notice — state 3 ─────────────────────────────────────
@@ -161,14 +171,10 @@ const CAPTION_INTERIM = "opacity-70"
 // restraint and the boldness is spent here. Do not reword it.
 //
 // `warning`, never `error` and never `info`: the meeting is fine, the
-// transcript is not. This is the ONE slot on this surface that reads a
-// theme token, and that is deliberate rather than a leak of the
-// tidy-instinct the block above warns about — `--color-warning` is
-// declared with the SAME value in both the light and dark theme blocks
-// in app.css, so `bg-warning` is already theme-invariant and needs no
-// special handling. Rung 18: the hue is on the dot only; the words are
-// `text-on-viewer`, as every caption line is, because a status hue never
-// sits on text (R3). No raw hex.
+// transcript is not. The hue is on the dot only; the words are
+// `text-base-content`, as every caption line is (task 01a1eb27 stage 3:
+// the strip is on base-200 now, not over video), because a status hue
+// never sits on text (R3). No raw hex.
 //
 // Utility type at `text-[12.5px]`, matching the rail's transcript pane,
 // so the two caption surfaces speak in one voice. Semibold, preceded by
@@ -178,14 +184,14 @@ const CAPTION_INTERIM = "opacity-70"
 // than matching on the copy.
 const STALL_COPY = "Captions stopped. Nothing is being transcribed."
 const STALL_MARKUP =
-  '<div data-role="caption-stall" class="flex items-center gap-2 py-0.5 text-[12.5px] font-semibold text-on-viewer">' +
+  '<div data-role="caption-stall" class="flex items-center gap-2 py-0.5 text-[12.5px] font-semibold text-base-content">' +
   '<span class="h-[7px] w-[7px] shrink-0 rounded-full bg-warning"></span>' +
   STALL_COPY +
   "</div>"
 
 const MeetingCaptions = {
   mounted() {
-    /** @type {{ id: string, speaker: string, text: string, final: boolean }[]} */
+    /** @type {{ id: string, speaker: string, identity?: string, text: string, final: boolean }[]} */
     this._lines = []
     this._hideTimer = null
     this._interimLine = null // Track the current interim segment by ID
@@ -255,27 +261,28 @@ const MeetingCaptions = {
 
     if (!final) {
       // Interim: update in place if same ID, or replace the interim slot
-      this._updateInterim({ id, speaker: displaySpeaker, text })
+      this._updateInterim({ id, speaker: displaySpeaker, identity, text })
     } else {
       // Final: commit the line
-      this._commitLine({ id, speaker: displaySpeaker, text })
+      this._commitLine({ id, speaker: displaySpeaker, identity, text })
     }
 
     this._render()
   },
 
-  _updateInterim({ id, speaker, text }) {
+  _updateInterim({ id, speaker, identity, text }) {
     // If we have an existing interim line, update it
     if (this._interimLine && this._interimLine.id === id) {
       this._interimLine.text = text
       this._interimLine.speaker = speaker
+      this._interimLine.identity = identity
     } else {
       // New interim segment — replace any previous interim
-      this._interimLine = { id, speaker, text, final: false }
+      this._interimLine = { id, speaker, identity, text, final: false }
     }
   },
 
-  _commitLine({ id, speaker, text }) {
+  _commitLine({ id, speaker, identity, text }) {
     // A final segment ends the current interim segment, whatever id it
     // carries. Transcribers do not reliably reuse the interim's id for
     // the final (task 019ff712): the previous `id === this._interimLine.id`
@@ -287,7 +294,7 @@ const MeetingCaptions = {
     // Add to the finalized lines buffer. A redelivered final must update
     // the entry it already owns rather than append a second identical
     // one; a genuinely new id still appends, so scrollback is preserved.
-    const line = { id, speaker, text, final: true }
+    const line = { id, speaker, identity, text, final: true }
     const existing = this._lines.findIndex((l) => l.id === id)
     if (existing !== -1) {
       this._lines[existing] = line
@@ -308,21 +315,23 @@ const MeetingCaptions = {
       displayLines.push(this._interimLine)
     }
 
-    // Keep only MAX_LINES visible
-    const visible = displayLines.slice(-MAX_LINES)
+    // One line idle, two while someone is speaking (an interim exists).
+    const cap = this._interimLine ? MAX_LINES : IDLE_LINES
+    const visible = displayLines.slice(-cap)
 
     this.el.innerHTML = visible
       .map((line) => {
-        // Interim treatment is unchanged: `opacity-70` + `italic` on the
-        // LINE WRAPPER. Once the base colour is white that composes to
-        // the canvas's "caption interim = white at 70%" on its own — it
-        // does not need (and must not get) a second colour slot.
-        const opacity = line.final ? "opacity-100" : CAPTION_INTERIM
-        const italic = line.final ? "" : "italic"
-        return `<div class="caption-line ${opacity} ${italic} py-0.5 transition-opacity duration-200">
-          <span class="${CAPTION_ATTRIBUTION}">${this._escapeHtml(line.speaker)}</span>
-          <span class="${CAPTION_TEXT}">${this._escapeHtml(line.text)}</span>
-        </div>`
+        // Interim treatment: `italic` on the LINE WRAPPER and `opacity-70`
+        // on the TEXT span (see the palette DEVIATION above), composing over
+        // the base-content ink — never a second colour slot.
+        const opacity = line.final ? "opacity-100" : "italic"
+        const textDim = line.final ? "" : ` ${CAPTION_INTERIM}`
+        // The name never shrinks below its 40% cap; the text truncates first.
+        const slot = agentSlot(line.identity)
+        const name = slot
+          ? `<span class="${NAME_AGENT}" data-agent-slot="${slot}">${this._escapeHtml(line.speaker)}</span>`
+          : `<span class="${NAME_PLAIN}">${this._escapeHtml(line.speaker)}</span>`
+        return `<div class="caption-line flex min-w-0 items-baseline gap-2 ${opacity} py-0.5 transition-opacity duration-200">${name}<span class="min-w-0 truncate ${CAPTION_TEXT}${textDim}">${this._escapeHtml(line.text)}</span></div>`
       })
       .join("")
   },
@@ -412,9 +421,8 @@ const MeetingCaptions = {
   /**
    * State 3. The bar HOLDS POSITION instead of fading: the hide timer is
    * cancelled and `opacity-0` / `pointer-events-none` come off. Geometry
-   * is untouched — `max-w-2xl`, the centring, `rounded-xl`, the offset and
-   * the safe-area / bottom-nav terms all live on the shell in
-   * `meeting_live.html.heex` and are not this hook's business.
+   * is untouched — the docked strip's layout lives on the shell in
+   * `meeting_live.html.heex` and is not this hook's business.
    *
    * The transcript is DROPPED first. An old utterance sitting beside
    * "nothing is being transcribed" reads as something just said, which is
@@ -567,4 +575,11 @@ export default MeetingCaptions
 // FLOOR invariant (STALL_AFTER_MS > HIDE_AFTER_MS) and the two-stage
 // confirmation window directly instead of duplicating the numbers and
 // drifting from them.
-export { MeetingCaptionsPersist, HIDE_AFTER_MS, STALL_AFTER_MS, STALL_CONFIRM_MS }
+export {
+  MeetingCaptionsPersist,
+  HIDE_AFTER_MS,
+  STALL_AFTER_MS,
+  STALL_CONFIRM_MS,
+  MAX_LINES,
+  IDLE_LINES,
+}

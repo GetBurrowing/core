@@ -8582,14 +8582,16 @@ defmodule PlatformWeb.MeetingLiveTest do
       assert html =~ ~s(id="meeting-captions")
     end
 
-    test "caption bar paints at z-40 (above the floating mobile bottom-nav at z-30)", %{
+    test "caption bar is docked in flow inside call-stage, not a z-40 overlay", %{
       conn: conn,
       meeting: meeting
     } do
-      # Stage 1 review finding: the 3-line caption bar was at `z-30`,
-      # colliding with the mobile bottom-nav rail (also `z-30`) on narrow
-      # viewports. Bump to `z-40` guarantees the caption bar wins the
-      # z-order.
+      # History: the bar was a `fixed … z-40` overlay (z-30 before that,
+      # which collided with the mobile bottom-nav). Task 01a1eb27 stage 3
+      # docked it in flow inside `<main data-role="call-stage">`, above the
+      # controls, because the overlay covered faces. With no overlay there
+      # is no z-order to win: this pins that NO stacking/positioning class
+      # comes back.
       {:ok, view, _html} = live(conn, ~p"/meetings/#{meeting.slug}")
       join_call!(view)
       assert_push_event(view, "join-meeting", %{token: _, url: _, room_name: _})
@@ -8599,15 +8601,15 @@ defmodule PlatformWeb.MeetingLiveTest do
         |> element(~s([data-role="meeting-captions-toggle"]))
         |> render_click()
 
-      # The caption bar's OUTER positioning shell carries `z-40` (was
-      # `z-30` in stage 1). Task 019f43e4 stage 1 split the caption bar
-      # into an outer positioning shell (`data-role="meeting-captions-shell"`)
-      # and an inner stable hook host (`#meeting-captions`) so the outer
-      # can carry a dynamic `hidden` class through `phx-update="ignore"`.
-      # The z-index has to live on the positioning shell for the CSS to
-      # take effect (z-index only applies to positioned elements).
-      assert html =~ ~r/data-role="meeting-captions-shell"[^>]*z-40/
-      refute html =~ ~r/data-role="meeting-captions-shell"[^>]*\bz-30\b/
+      assert has_element?(
+               view,
+               ~s([data-role="call-stage"] [data-role="meeting-captions-shell"])
+             )
+
+      classes = caption_bar_shell_class(html) |> String.split()
+      refute "z-40" in classes
+      refute "z-30" in classes
+      refute "fixed" in classes
     end
 
     test "gallery with CC on: zero caption slots AND one un-hidden consolidated bar", %{
@@ -8656,26 +8658,25 @@ defmodule PlatformWeb.MeetingLiveTest do
              "consolidated caption bar must render in gallery; class list was: #{shell_class}"
     end
 
-    test "the shell's positioning classes are pinned in gallery AND canvas", %{
+    test "the docked strip's classes are pinned, identically, in gallery AND canvas", %{
       conn: conn,
       meeting: meeting,
       space: space
     } do
-      # Task 019ff712 stage 4. Three separate regressions this pins, each of
-      # which a later refactor could reintroduce silently:
+      # Task 019ff712 stage 4, re-pinned for the docked strip by task
+      # 01a1eb27 stage 3. Three regressions this pins:
       #
       #   1. the gallery-specific `hidden` class coming back (refuted on the
       #      GALLERY render specifically — the canvas assert below cannot see
       #      it, which is why there is one assertion per side);
-      #   2. either of the two offset terms being dropped —
-      #      `env(safe-area-inset-bottom)` (the iOS home indicator) or
-      #      `var(--bottom-nav-height,0px)` (the mobile bottom-nav rail).
-      #      NEITHER is observable in a headless screenshot: headless Chrome
-      #      reports a zero safe-area inset and the nav var is 0 on desktop,
-      #      so this render assertion is the only thing that can see them;
-      #   3. the offset becoming mode-conditional. The exact same class
-      #      string is asserted in gallery and in canvas — one caption
-      #      surface means one position, not a per-mode position.
+      #   2. the overlay coming back: `fixed`, the centring translate, and
+      #      the bottom calc with its safe-area / bottom-nav terms are all
+      #      GONE — the strip is in flow in the stage column, and the
+      #      controls / footer below own that clearance. Its contract is the
+      #      base-200 ground with the edge border, `shrink-0` so the stage
+      #      body (not the strip) gives up the height;
+      #   3. the placement becoming mode-conditional. The exact same class
+      #      string is asserted in gallery and in canvas.
       {_ada, _} = seed_meeting_presence(space, "user", "Ada Lovelace")
 
       {:ok, view, _html} = live(conn, ~p"/meetings/#{meeting.slug}")
@@ -8689,19 +8690,22 @@ defmodule PlatformWeb.MeetingLiveTest do
 
       assert :sys.get_state(view.pid).socket.assigns.current_stage_mode == :gallery
 
-      offset =
-        "bottom-[calc(1.75rem+env(safe-area-inset-bottom)+var(--bottom-nav-height,0px))]"
-
       gallery_class = caption_bar_shell_class(gallery_html)
+      gallery_tokens = String.split(gallery_class)
 
-      assert gallery_class =~ offset,
-             "gallery caption shell lost its offset; class list was: #{gallery_class}"
+      for token <- ~w(shrink-0 w-full bg-base-200 border border-edge rounded-box) do
+        assert token in gallery_tokens,
+               "docked strip lost #{token}; class list was: #{gallery_class}"
+      end
 
-      assert gallery_class =~ "env(safe-area-inset-bottom)"
-      assert gallery_class =~ "var(--bottom-nav-height,0px)"
-      assert gallery_class =~ "fixed"
-      assert gallery_class =~ "left-1/2"
-      assert gallery_class =~ "-translate-x-1/2"
+      for token <- ~w(fixed absolute left-1/2 -translate-x-1/2 z-40 pointer-events-none) do
+        refute token in gallery_tokens,
+               "overlay class #{token} came back; class list was: #{gallery_class}"
+      end
+
+      refute gallery_class =~ "env(safe-area-inset-bottom)"
+      refute gallery_class =~ "var(--bottom-nav-height"
+      refute gallery_class =~ "bg-viewer"
 
       # One assertion per side: the canvas case below cannot observe a
       # `hidden` that only gallery renders.
@@ -8711,8 +8715,8 @@ defmodule PlatformWeb.MeetingLiveTest do
       canvas_html = render_click(view, "set_stage_mode", %{"mode" => "canvas"})
       canvas_class = caption_bar_shell_class(canvas_html)
 
-      assert canvas_class =~ offset,
-             "canvas caption shell lost its offset; class list was: #{canvas_class}"
+      assert "bg-base-200" in String.split(canvas_class),
+             "canvas caption strip lost its ground; class list was: #{canvas_class}"
 
       refute "hidden" in String.split(canvas_class),
              "caption shell must not be hidden in canvas; class list was: #{canvas_class}"

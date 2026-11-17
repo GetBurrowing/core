@@ -1,9 +1,13 @@
 import { describe, it, expect, beforeEach, afterEach, vi } from "vitest"
 import MeetingCaptions, {
+  MeetingCaptionsPersist,
   HIDE_AFTER_MS,
   STALL_AFTER_MS,
   STALL_CONFIRM_MS,
+  MAX_LINES,
+  IDLE_LINES,
 } from "../../js/hooks/meeting_captions.js"
+import { __resetForTests as resetClientState } from "../../js/client_state.js"
 
 /**
  * Stage-2 home for the quick-meet caption duplication regression
@@ -190,19 +194,17 @@ describe("MeetingCaptions rolling buffer — one utterance, one line", () => {
 
   it("keeps scrollback: distinct finals accumulate up to the cap", () => {
     // Guards the dedupe fix from collapsing every utterance into one —
-    // duplicates must go without history going with them. Updated for
-    // MAX_LINES = 2 (task 019ff712 stage 4, gallery occlusion); the
-    // discriminating step is still that two DISTINCT ids give two lines,
-    // which the collapse bug would have shown as one.
+    // duplicates must go without history going with them. The BUFFER is
+    // what this pins (task 01a1eb27 stage 3 renders one line idle, so the
+    // rendered count is pinned separately below): two DISTINCT ids give two
+    // buffered entries, which the collapse bug would have shown as one.
     caption(hook, { id: "a", text: "first", final: true })
-    expect(captionLineCount(hook)).toBe(1)
+    expect(hook._lines.map((l) => l.id)).toEqual(["a"])
 
     caption(hook, { id: "b", text: "second", final: true })
-    expect(captionLineCount(hook)).toBe(2)
+    expect(hook._lines.map((l) => l.id)).toEqual(["a", "b"])
 
     caption(hook, { id: "c", text: "third", final: true })
-    expect(captionLineCount(hook)).toBe(2)
-
     expect(hook._lines.map((l) => l.id)).toEqual(["b", "c"])
     expect(hook.el.innerHTML).toContain("third")
   })
@@ -212,26 +214,28 @@ describe("MeetingCaptions rolling buffer — one utterance, one line", () => {
     caption(hook, { id: "b", text: "secnd", final: true })
     caption(hook, { id: "b", text: "second", final: true })
 
-    expect(captionLineCount(hook)).toBe(2)
     expect(hook._lines.map((l) => l.id)).toEqual(["a", "b"])
     expect(hook.el.innerHTML).toContain("second")
     expect(hook.el.innerHTML).not.toContain("secnd")
   })
 
   it("caps the rolling buffer at two finalised lines", () => {
-    // MAX_LINES is intended behaviour, not part of the bug. Lowered from 3
-    // to 2 in stage 4 so the bar occludes less of the gallery grid; the cap
-    // itself is what this case pins, and the oldest line is what drops.
+    // MAX_LINES is intended behaviour, not part of the bug. The cap itself
+    // is what this case pins, and the oldest line is what drops.
     for (const id of ["a", "b", "c", "d"]) {
       caption(hook, { id, text: `line ${id}`, final: true })
     }
 
-    expect(captionLineCount(hook)).toBe(2)
     expect(hook._lines.map((l) => l.id)).toEqual(["c", "d"])
   })
 })
 
-describe("MeetingCaptions palette — theme-invariant by intent (task 01a0740e)", () => {
+// ── Docked strip: one line idle, two while speaking (task 01a1eb27 stage 3) ──
+//
+// Canvas 01a1eb28: "The strip is one line and grows to two only while
+// someone is speaking. The speaker name is `shrink-0`; the line text
+// truncates first."
+describe("MeetingCaptions docked strip — 1 line idle, 2 while speaking", () => {
   let hook
 
   beforeEach(() => {
@@ -245,32 +249,111 @@ describe("MeetingCaptions palette — theme-invariant by intent (task 01a0740e)"
     delete globalThis.document
   })
 
-  // The defect this pins: the host div carries `text-white`, but
-  // `_render` wrote `text-base-content`, at full and at 90% strength, on
-  // the CHILD spans, and a colour on a child beats one inherited from a
-  // parent — so the host's white was dead. `light` is `default: true` in
-  // app.css and sets `--color-base-content: oklch(0% 0 0)`, so a
-  // light-theme viewer got BLACK caption text on the `bg-black/75`
-  // scrim. Not low contrast: invisible, and invisible to `mix test`.
-  it("emits the on-viewer slots for the speaker and the text", () => {
+  it("exports the caps: 1 idle, 2 while speaking", () => {
+    expect(IDLE_LINES).toBe(1)
+    expect(MAX_LINES).toBe(2)
+  })
+
+  it("idle renders ONE line, the last finalised one, with two finals buffered", () => {
+    caption(hook, { id: "a", text: "first", final: true })
+    caption(hook, { id: "b", text: "second", final: true })
+
+    // Reachability: two finals really are buffered, so the 1 below is the
+    // idle cap and not an empty buffer.
+    expect(hook._lines).toHaveLength(2)
+    expect(captionLineCount(hook)).toBe(1)
+    expect(hook.el.innerHTML).toContain("second")
+    expect(hook.el.innerHTML).not.toContain("first")
+  })
+
+  it("an interim renders TWO lines: the last final plus the interim", () => {
+    caption(hook, { id: "a", text: "first", final: true })
+    caption(hook, { id: "b", text: "second", final: true })
+    caption(hook, { id: "i", text: "and then", final: false })
+
+    expect(captionLineCount(hook)).toBe(2)
+    expect(hook.el.innerHTML).toContain("second")
+    expect(hook.el.innerHTML).toContain("and then")
+    expect(hook.el.innerHTML).not.toContain("first")
+
+    // …and back to one line when the interim commits.
+    caption(hook, { id: "c", text: "and then some", final: true })
+    expect(captionLineCount(hook)).toBe(1)
+    expect(hook.el.innerHTML).toContain("and then some")
+  })
+
+  it("the name span is shrink-0 and the text span truncates", () => {
+    caption(hook, { id: "a", text: "a very long line of speech", final: true })
+    const html = hook.el.innerHTML
+
+    expect(html).toMatch(/<span class="[^"]*\bshrink-0\b[^"]*">Ada<\/span>/)
+    expect(html).toMatch(/<span class="[^"]*\bmin-w-0\b[^"]*\btruncate\b[^"]*">a very long line of speech<\/span>/)
+    expect(html).toMatch(/class="caption-line flex min-w-0 /)
+  })
+
+  it("a 40-character name is capped at 40% and truncates (reviewer fix, 375px)", () => {
+    const longName = "Maximiliana Wolfeschlegelsteinhausen-Ba"
+    expect(longName.length).toBe(39)
+    const name40 = longName + "x"
+    hook._onCaption({ detail: { id: "n", speaker: name40, text: "hello there", final: true } })
+    const html = hook.el.innerHTML
+    const re = new RegExp(`<span class="([^"]*)">${name40}</span>`)
+    const m = html.match(re)
+    expect(m).not.toBeNull()
+    const classes = m[1].split(/\s+/)
+    expect(classes).toContain("max-w-[40%]")
+    expect(classes).toContain("truncate")
+  })
+
+  it("an identity in data-agent-slots gets data-agent-slot and the --ag-text colour", () => {
+    globalThis.document.getElementById = (id) =>
+      id === "meeting-room"
+        ? { dataset: { agentSlots: JSON.stringify({ "agent:scribe": "teal" }) } }
+        : null
+
+    hook._onCaption({
+      detail: { id: "a", speaker: "Scribe", identity: "agent:scribe", text: "noted", final: true },
+    })
+    let html = hook.el.innerHTML
+    expect(html).toContain('data-agent-slot="teal"')
+    expect(html).toMatch(/<span class="[^"]*text-\[var\(--ag-text\)\][^"]*" data-agent-slot="teal">Scribe<\/span>/)
+
+    // A human (no slot) keeps base-content, separated by weight.
+    hook._onCaption({
+      detail: { id: "b", speaker: "Ada", identity: "user:u1", text: "thanks", final: true },
+    })
+    html = hook.el.innerHTML
+    expect(html).not.toContain("data-agent-slot")
+    expect(html).toContain('<span class="max-w-[40%] shrink-0 truncate font-semibold text-base-content">Ada</span>')
+  })
+})
+
+describe("MeetingCaptions palette — the strip is a base-200 theme surface (task 01a1eb27 stage 3)", () => {
+  let hook
+
+  beforeEach(() => {
+    installDocumentStub()
+    hook = newHook()
+  })
+
+  afterEach(() => {
+    hook._clearHideTimer()
+    hook._clearStallTimer()
+    delete globalThis.document
+  })
+
+  // The bar used to float over VIDEO and wore the theme-invariant viewer
+  // pair. It is now docked on `base-200`, so its ink follows the theme:
+  // white on-viewer ink on a light base-200 would be invisible.
+  it("emits base-content for the speaker and the text", () => {
     caption(hook, { id: "a", text: "hello there", final: true })
 
     const html = hook.el.innerHTML
-
-    // Attribution: on-viewer (white in every theme), separated from the
-    // text by WEIGHT only. Rung 18: the viewer token replaced `text-white`.
-    expect(html).toContain('<span class="font-semibold text-on-viewer">Ada</span>')
-    // The spoken line: the same white, at full strength (the old
-    // `/90` is gone — the canvas's slot is `oklch(100% 0 0)`).
-    expect(html).toContain('<span class="text-on-viewer">hello there</span>')
+    expect(html).toContain('<span class="max-w-[40%] shrink-0 truncate font-semibold text-base-content">Ada</span>')
+    expect(html).toContain('<span class="min-w-0 truncate text-base-content">hello there</span>')
   })
 
-  // Asserting the ABSENCE is the load-bearing half. This is a
-  // regression that reintroduces itself the moment someone "tidies"
-  // the hook back toward the theme tokens, which is the tidy-looking
-  // and wrong move here: the bar sits over arbitrary VIDEO, not over a
-  // theme surface, so it is theme-invariant BY INTENT.
-  it("emits no theme-following colour token anywhere in a caption line", () => {
+  it("emits no viewer slot, no primary/error, no hex and no alpha base-content", () => {
     caption(hook, { id: "a", text: "first", final: true })
     caption(hook, { id: "i", text: "and then", final: false })
 
@@ -278,21 +361,25 @@ describe("MeetingCaptions palette — theme-invariant by intent (task 01a0740e)"
     // against an empty host, so pin that lines were actually drawn.
     expect(captionLineCount(hook)).toBe(2)
 
-    expect(hook.el.innerHTML).not.toContain("text-base-content")
-    expect(hook.el.innerHTML).not.toContain("base-content")
-    // Semantic slots and Tailwind built-ins only — no raw hex.
-    expect(hook.el.innerHTML).not.toMatch(/#[0-9a-fA-F]{3,8}\b/)
+    const html = hook.el.innerHTML
+    expect(html).not.toContain("on-viewer")
+    expect(html).not.toContain("primary")
+    expect(html).not.toContain("error")
+    expect(html).not.toMatch(/text-base-content\/\d+/)
+    expect(html).not.toMatch(/#[0-9a-fA-F]{3,8}\b/)
   })
 
-  it("interim keeps its 70% + italic treatment on the line wrapper", () => {
+  it("interim: italic on the line wrapper, 70% on the text only, the name at full strength", () => {
     caption(hook, { id: "i", text: "half a sent", final: false })
 
-    // White base colour composed with `opacity-70` IS the canvas's
-    // "caption interim = white at 70%". It must not acquire a second
-    // colour slot of its own.
-    expect(hook.el.innerHTML).toContain("opacity-70")
-    expect(hook.el.innerHTML).toContain("italic")
-    expect(hook.el.innerHTML).toContain('<span class="text-on-viewer">half a sent</span>')
+    // Declared deviation: wrapper opacity would take an agent's --ag-text
+    // name below AA on base-200, so the dim is on the text span.
+    expect(hook.el.innerHTML).toMatch(/class="caption-line [^"]*\bitalic\b/)
+    expect(hook.el.innerHTML).not.toMatch(/class="caption-line [^"]*opacity-70/)
+    expect(hook.el.innerHTML).toContain(
+      '<span class="min-w-0 truncate text-base-content opacity-70">half a sent</span>',
+    )
+    expect(hook.el.innerHTML).toContain('<span class="max-w-[40%] shrink-0 truncate font-semibold text-base-content">Ada</span>')
 
     // …and a final line does NOT get the interim treatment.
     caption(hook, { id: "f", text: "half a sentence", final: true })
@@ -371,9 +458,9 @@ describe("MeetingCaptions state 3 — the stalled bar (task 01a0740e stage 2)", 
     expect(hook.el.classList.has("pointer-events-none")).toBe(false)
 
     // Warning, not error, and no raw hex. Rung 18: the hue is on the dot
-    // (`bg-warning`), never on the words, which stay `text-on-viewer`.
+    // (`bg-warning`), never on the words, which stay `text-base-content` (task 01a1eb27 stage 3).
     expect(hook.el.innerHTML).toContain("bg-warning")
-    expect(hook.el.innerHTML).toContain("font-semibold text-on-viewer")
+    expect(hook.el.innerHTML).toContain("font-semibold text-base-content")
     expect(hook.el.innerHTML).not.toContain("text-warning")
     expect(hook.el.innerHTML).not.toContain("text-error")
     expect(hook.el.innerHTML).not.toMatch(/#[0-9a-fA-F]{3,8}\b/)
@@ -685,5 +772,46 @@ describe("MeetingCaptions guest suffix", () => {
     // Non-guests are unchanged.
     expect(speakerOf({ speaker: "Ada", identity: "user:u1" })).toBe("Ada")
     expect(speakerOf({ speaker: "Ada (guest)", identity: "user:u1" })).toBe("Ada (guest)")
+  })
+})
+
+// ── Persistence is unchanged by the docked strip (task 01a1eb27 stage 3) ──
+describe("MeetingCaptionsPersist — unchanged", () => {
+  let store
+
+  beforeEach(() => {
+    store = new Map()
+    globalThis.localStorage = {
+      getItem: (k) => (store.has(k) ? store.get(k) : null),
+      setItem: (k, v) => store.set(k, String(v)),
+      removeItem: (k) => store.delete(k),
+      key: (i) => Array.from(store.keys())[i] ?? null,
+      get length() {
+        return store.size
+      },
+    }
+    globalThis.window = globalThis
+    resetClientState()
+  })
+
+  afterEach(() => {
+    delete globalThis.localStorage
+    delete globalThis.window
+    resetClientState()
+  })
+
+  it("a legacy suite.meeting.captions_visible = true still hydrates true", () => {
+    store.set("suite.meeting.captions_visible", "true")
+    const pushEvent = vi.fn()
+    const hook = Object.create(MeetingCaptionsPersist)
+    hook.el = { dataset: { persistKey: "suite.meeting.captions_visible" } }
+    hook.pushEvent = pushEvent
+    hook.handleEvent = vi.fn()
+
+    hook.mounted()
+
+    expect(pushEvent).toHaveBeenCalledWith("meeting_captions_hydrate", { visible: true })
+    // The legacy key is read once and removed.
+    expect(store.has("suite.meeting.captions_visible")).toBe(false)
   })
 })

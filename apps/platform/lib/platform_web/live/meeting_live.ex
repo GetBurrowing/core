@@ -458,6 +458,7 @@ defmodule PlatformWeb.MeetingLive do
       |> assign(:call_rail_unread, false)
       |> assign(:active_meeting_tab, "people")
       |> assign(:captions_visible, false)
+      |> assign(:captions_menu_open, false)
       |> assign(:speaking_identities, MapSet.new())
       |> assign(:muted_identities, MapSet.new())
       |> assign(:camera_off_identities, MapSet.new())
@@ -628,6 +629,7 @@ defmodule PlatformWeb.MeetingLive do
      # spec; a viewer preference is mirrored to localStorage by the
      # MeetingCaptions JS hook and restored via `meeting_captions_hydrate`.
      |> assign(:captions_visible, false)
+     |> assign(:captions_menu_open, false)
      # Active-speaker identities reported by THIS viewer's LiveKit client
      # (`MeetingRoom._onActiveSpeaker` -> `active_speakers`). VIEWER-LOCAL
      # for the same reason `:captions_visible` is: never persisted, never
@@ -688,10 +690,8 @@ defmodule PlatformWeb.MeetingLive do
   # `enter_meeting_as_guest/3` which then overrides some values. All
   # side-effect-free (no PubSub subscribes, no LiveKit calls).
   defp seed_guest_shell_tree_assigns(socket, meeting) do
-    {participants, transcriber_present?} =
-      if is_binary(meeting.chat_space_id),
-        do: meeting_presence(meeting.chat_space_id),
-        else: {[], false}
+    {participants, transcriber_present?, transcription_started_at} =
+      meeting_presence_detail(meeting.chat_space_id)
 
     socket
     |> assign(:meeting, meeting)
@@ -720,6 +720,7 @@ defmodule PlatformWeb.MeetingLive do
     |> assign(:muted_agent_ids, MapSet.new())
     |> assign(:agent_mute_errors, %{})
     |> assign(:transcriber_present?, transcriber_present?)
+    |> assign(:transcription_started_at, transcription_started_at)
     |> assign(:room_live?, room_live?(meeting.chat_space_id))
     |> assign(:room_recording?, room_recording?(meeting.chat_space_id))
     |> assign(:agents_by_id, %{})
@@ -1144,10 +1145,8 @@ defmodule PlatformWeb.MeetingLive do
             seed_ask_floor_holders(socket, meeting.id)
           end
 
-        {participants, transcriber_present?} =
-          if meeting.chat_space_id,
-            do: meeting_presence(meeting.chat_space_id),
-            else: {[], false}
+        {participants, transcriber_present?, transcription_started_at} =
+          meeting_presence_detail(meeting.chat_space_id)
 
         agents_by_id = load_agents_by_id(participants)
 
@@ -1187,6 +1186,7 @@ defmodule PlatformWeb.MeetingLive do
           |> assign(:muted_agent_ids, MapSet.new())
           |> assign(:agent_mute_errors, %{})
           |> assign(:transcriber_present?, transcriber_present?)
+          |> assign(:transcription_started_at, transcription_started_at)
           |> assign(:room_live?, room_live?(meeting.chat_space_id))
           |> assign(:room_recording?, room_recording?(meeting.chat_space_id))
           |> assign(:agents_by_id, agents_by_id)
@@ -3147,6 +3147,18 @@ defmodule PlatformWeb.MeetingLive do
      socket
      |> assign(:captions_visible, next)
      |> push_event("meeting_captions_persist", %{visible: next})}
+  end
+
+  # The CC chevron menu (task 01a1eb27 stage 2). UI-only state, exactly like
+  # `:captions_visible`: never persisted, never broadcast. Desktop renders it
+  # as a daisyUI dropdown, phones as `#meeting-captions-sheet`; both close on
+  # Escape and on an outside click / backdrop tap through this one event.
+  def handle_event("toggle_captions_menu", _params, socket) do
+    {:noreply, assign(socket, :captions_menu_open, !socket.assigns.captions_menu_open)}
+  end
+
+  def handle_event("close_captions_menu", _params, socket) do
+    {:noreply, assign(socket, :captions_menu_open, false)}
   end
 
   # Restore the persisted preference on hook-mount from localStorage.
@@ -6547,11 +6559,14 @@ defmodule PlatformWeb.MeetingLive do
 
   defp refresh_participants(%{assigns: %{meeting: %{chat_space_id: space_id}}} = socket)
        when is_binary(space_id) do
-    {participants, transcriber_present?} = meeting_presence(space_id)
+    {participants, transcriber_present?, transcription_started_at} =
+      meeting_presence_detail(space_id)
 
     socket
     |> assign(:participants, participants)
     |> assign(:transcriber_present?, transcriber_present?)
+    # Task 01a1eb27 stage 1: clears to nil with the pill when the row leaves.
+    |> assign(:transcription_started_at, transcription_started_at)
     |> assign(:room_live?, room_live?(space_id))
     |> assign(:room_recording?, room_recording?(space_id))
     |> assign(:agents_by_id, load_agents_by_id(participants))
@@ -6979,7 +6994,114 @@ defmodule PlatformWeb.MeetingLive do
   A non-binary `space_id` returns `{[], false}`.
   """
   @spec meeting_presence(term()) :: {[map()], boolean()}
-  def meeting_presence(space_id) when is_binary(space_id) do
+  def meeting_presence(space_id) do
+    {participants, transcriber_present?, _started_at} = meeting_presence_detail(space_id)
+    {participants, transcriber_present?}
+  end
+
+  # The CC button's aria-label/title (task 01a1eb27 stage 1). The pulse dot
+  # is aria-hidden, so the transcription state reaches screen readers here.
+  @doc false
+  def captions_toggle_label(captions_visible?, transcriber_present?) do
+    base = if captions_visible?, do: "Hide captions", else: "Show captions"
+    if transcriber_present?, do: base <> " (meeting is being transcribed)", else: base
+  end
+
+  # The CC menu's rows (task 01a1eb27 stage 2). ONE private component that
+  # both the desktop dropdown and the phone sheet render, so the copy cannot
+  # drift between them. `surface` only namespaces the DOM ids.
+  #
+  # Row 1 is the viewer's own captions: a switch wired to the EXISTING
+  # `toggle_captions_meeting` event, so persistence still goes through
+  # `meeting_captions_persist` -> `MeetingCaptionsPersist`.
+  #
+  # Row 2 is READ-ONLY for every viewer, host included. Nobody starts or stops
+  # the transcriber (LiveKit dispatches it at room creation), so there is no
+  # control and no permission to gate one on. Plain text, not a disabled
+  # control, so no `aria-disabled`.
+  #
+  # DECLARED COPY DEVIATIONS from canvas 01a1eb28 (md node):
+  #   1. "started by Scribe" -> "started automatically": no one starts it.
+  #   2. "everyone in this meeting + its space" -> "everyone who can open this
+  #      meeting": transcripts are served by `Meetings.get_transcript_for_user/2`,
+  #      which is the meeting viewer rule (`get_meeting_for_user/2`).
+  attr :surface, :string, required: true
+  attr :captions_visible, :boolean, required: true
+  attr :transcriber_present?, :boolean, required: true
+  attr :transcription_started_at, :any, default: nil
+
+  defp captions_menu_rows(assigns) do
+    ~H"""
+    <div class="flex flex-col gap-1">
+      <div
+        data-role="meeting-captions-row"
+        class="flex items-start justify-between gap-4 rounded-box px-3 py-2.5"
+      >
+        <div class="min-w-0">
+          <div id={"#{@surface}-captions-label"} class="text-sm font-medium text-base-content">
+            Captions (just for you)
+          </div>
+          <p class="mt-0.5 text-xs text-subtle">
+            Only you see captions. Turning them off doesn't stop transcription.
+          </p>
+        </div>
+        <input
+          type="checkbox"
+          role="switch"
+          class="toggle toggle-sm mt-0.5 shrink-0"
+          data-role="meeting-captions-row-switch"
+          aria-labelledby={"#{@surface}-captions-label"}
+          aria-checked={to_string(@captions_visible)}
+          checked={@captions_visible}
+          phx-click="toggle_captions_meeting"
+        />
+      </div>
+      <div
+        data-role="meeting-transcription-row"
+        data-readonly="true"
+        class="border-t border-edge px-3 py-2.5"
+      >
+        <div class="text-sm font-medium text-base-content">
+          Transcription (for the meeting record)
+        </div>
+        <p
+          data-role="meeting-transcription-state"
+          class="mt-0.5 flex items-center gap-1.5 text-xs text-subtle"
+        >
+          <%= if @transcriber_present? do %>
+            <span aria-hidden="true" class="size-1.5 shrink-0 rounded-full bg-info"></span>
+            <span>
+              On · started automatically<%= if @transcription_started_at do %>
+                ·
+                <time
+                  id={"#{@surface}-transcription-started-at"}
+                  data-role="meeting-transcription-started-at"
+                  phx-hook="LocalTime"
+                  datetime={DateTime.to_iso8601(@transcription_started_at)}
+                  class="font-mono text-xs"
+                >
+                  {Calendar.strftime(@transcription_started_at, "%H:%M")}
+                </time>
+              <% end %>
+            </span>
+          <% else %>
+            <span>Off</span>
+          <% end %>
+        </p>
+        <p class="mt-0.5 text-xs text-subtle">
+          Visible to: everyone who can open this meeting
+        </p>
+      </div>
+    </div>
+    """
+  end
+
+  # `meeting_presence/1` plus `transcription_started_at` (task 01a1eb27
+  # stage 1), from the SAME split, so the CC pulse's timestamp can never
+  # disagree with `transcriber_present?`. Kept private so the public
+  # 2-tuple contract (3 call sites + tests) is unchanged; the standalone
+  # read is `Meetings.transcription_started_at/1`.
+  defp meeting_presence_detail(space_id) when is_binary(space_id) do
     {transcribers, participants} =
       space_id
       |> Meetings.active_participants_for_space()
@@ -6987,10 +7109,11 @@ defmodule PlatformWeb.MeetingLive do
 
     visible = Enum.reject(participants, &Meetings.unresolved_agent_worker_participant?/1)
 
-    {Enum.map(visible, &meeting_participant_view_model/1), transcribers != []}
+    {Enum.map(visible, &meeting_participant_view_model/1), transcribers != [],
+     Meetings.earliest_joined_at(transcribers)}
   end
 
-  def meeting_presence(_), do: {[], false}
+  defp meeting_presence_detail(_), do: {[], false, nil}
 
   # Map a single live `Meetings.Participant` row into the rail/gallery
   # view-model. `:participant_id` is the preloaded `user.id` / `agent.id`
