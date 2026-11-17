@@ -116,7 +116,7 @@ defmodule PlatformWeb.GoalsPageTest do
   # a takeaway), two takeaways, a theme with criteria, and one entry of each
   # other notebook kind.
   defp full_goal!(owner, org_id) do
-    coach = agent!()
+    coach = coach_agent!()
 
     goal =
       goal!(owner, org_id, %{
@@ -335,7 +335,7 @@ defmodule PlatformWeb.GoalsPageTest do
       owner: owner,
       org_id: org_id
     } do
-      coach = agent!()
+      coach = coach_agent!()
 
       practice =
         goal!(owner, org_id, %{

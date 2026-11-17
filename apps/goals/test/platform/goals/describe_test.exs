@@ -18,7 +18,7 @@ defmodule Platform.Goals.DescribeTest do
   end
 
   defp coached_goal!(owner, org_id, attrs \\ %{}) do
-    coach = agent!()
+    coach = coach_agent!()
     goal = goal!(owner, org_id, attrs)
     {:ok, goal} = Goals.update_goal(owner, goal.id, %{coach_agent_id: coach.id})
     {goal, coach}
@@ -263,7 +263,7 @@ defmodule Platform.Goals.DescribeTest do
 
     test "a viewer and the coach are :forbidden, a stranger :not_found", ctx do
       {:ok, _} = Goals.open_goal(ctx.owner, ctx.goal.id, {:user, ctx.teammate.id})
-      coach = agent!()
+      coach = coach_agent!()
       {:ok, _} = Goals.update_goal(ctx.owner, ctx.goal.id, %{coach_agent_id: coach.id})
 
       assert Goals.list_audience_options(ctx.teammate, ctx.goal.id) == {:error, :forbidden}

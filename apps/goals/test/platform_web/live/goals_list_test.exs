@@ -115,7 +115,7 @@ defmodule PlatformWeb.GoalsListTest do
       user: user,
       org_id: org_id
     } do
-      coach = agent!()
+      coach = coach_agent!()
       lead = goal!(user, org_id, %{agent_mode: "do"})
       {:ok, _} = Goals.update_goal(user, lead.id, %{coach_agent_id: coach.id})
       practice = goal!(user, org_id, %{agent_mode: "coach"})

@@ -111,7 +111,23 @@ defmodule Platform.Goals do
   nil; `owner_user_id` and `org_id` never change. Back to kind "personal" is refused while any grant exists.
   """
   @spec update_goal(actor(), term(), map()) :: {:ok, Goal.t()} | {:error, term()}
-  def update_goal(actor, goal_id, attrs) when is_map(attrs) do
+  def update_goal(actor, goal_id, attrs) when is_map(attrs),
+    do: do_update_goal(actor, goal_id, attrs, &check_coach_change/3)
+
+  @doc """
+  The hand-off's coach write (`hand_goal_to_space/3`, through
+  `Platform.Goals.Handoff`): sets the coach of a COACHLESS goal to the
+  space's leader by the same path as `update_goal/3`, without the
+  eligible-coach check `update_goal/3` makes (task 01a1eab7 kept the
+  hand-off's behaviour unchanged; whether the leader must be an eligible
+  coach is a follow-up). A goal that already has a coach is
+  `{:error, :forbidden}`.
+  """
+  @spec hand_off_coach(actor(), term(), term()) :: {:ok, Goal.t()} | {:error, term()}
+  def hand_off_coach(actor, goal_id, agent_id),
+    do: do_update_goal(actor, goal_id, %{coach_agent_id: agent_id}, &check_coachless/3)
+
+  defp do_update_goal(actor, goal_id, attrs, check_coach) do
     with :ok <- check_enabled() do
       in_transaction(fn ->
         with {:ok, visible_goal} <- fetch_visible(actor, goal_id, false),
@@ -119,7 +135,7 @@ defmodule Platform.Goals do
              {:ok, goal} <- fetch_visible(actor, goal_id, true),
              :ok <- check_can_edit(actor, goal),
              attrs = editable_attrs(actor, goal, attrs),
-             :ok <- check_coach_change(actor, goal, attrs),
+             :ok <- check_coach.(actor, goal, attrs),
              changeset = Goal.changeset(goal, attrs),
              :ok <- check_kind_change(changeset, goal) do
           with {:ok, updated} <- Repo.update(changeset) do
@@ -151,6 +167,9 @@ defmodule Platform.Goals do
         :ok
     end
   end
+
+  defp check_coachless(_actor, %Goal{coach_agent_id: nil}, _attrs), do: :ok
+  defp check_coachless(_actor, _goal, _attrs), do: {:error, :forbidden}
 
   defp coach_attr(attrs) do
     case Map.fetch(attrs, :coach_agent_id) do

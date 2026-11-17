@@ -133,6 +133,28 @@ defmodule Platform.GoalsFixtures do
     Repo.insert!(%Platform.Agents.Agent{slug: "goals-agent-#{n}", name: "Goals Agent #{n}"})
   end
 
+  @doc """
+  An agent that passes `Platform.Goals.Coaches`'s rule for an internal
+  user (task 01a1eab7): active, accepts chat, and an external runtime owned
+  by `owner` (a `goals.use` holder) with the `goals` bundle. A goal's coach
+  set through `Platform.Goals.update_goal/3` must be one. Call after
+  `enable_goals!/1`.
+  """
+  def coach_agent!(owner \\ user!()) do
+    runtime =
+      Repo.insert!(%Platform.Agents.AgentRuntime{
+        owner_user_id: owner.id,
+        runtime_id: "goals-coach-#{unique()}",
+        display_name: "Goals coach",
+        status: "active"
+      })
+
+    agent!()
+    |> Ecto.Changeset.change(runtime_type: "external", runtime_id: runtime.id)
+    |> Repo.update!()
+    |> grant_goals_tools!()
+  end
+
   @doc "A channel space in `org_id`, through core's Chat context."
   def space!(org_id) do
     n = unique()
