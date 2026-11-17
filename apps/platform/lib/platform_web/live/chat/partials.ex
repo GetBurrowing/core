@@ -1270,6 +1270,7 @@ defmodule PlatformWeb.ChatLive.Partials do
         share_role="meeting-share-button"
         leave_role="meeting-leave"
         share_id="meeting-share-btn-desktop"
+        speaker_id="meeting-speaker-btn-desktop"
         share_hook="MeetingShareButton"
         share_click?={false}
       />
@@ -1437,6 +1438,7 @@ defmodule PlatformWeb.ChatLive.Partials do
         share_role="meeting-share-button"
         leave_role="meeting-leave"
         share_id="meeting-share-btn-mobile"
+        speaker_id="meeting-speaker-btn-mobile"
         share_hook="MeetingShareButton"
         share_click?={false}
       />

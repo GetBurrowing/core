@@ -62,6 +62,11 @@ final class CallController: NSObject, ObservableObject, MeetingMediaControl {
     /// CallKit has activated the audio session (an answered ring can
     /// activate it before the join returns).
     private var audioActive = false
+    /// Whether the call should play through the loudspeaker when no headset,
+    /// Bluetooth device or car is connected. On by default for every call;
+    /// the page's Speaker button, the native route picker and Control
+    /// Center change it (`CallAudioRoute`).
+    @Published private(set) var speakerPreferred = true
     /// "Switch" from the invite banner: join this once the current call ends.
     private var pendingSwitch: (host: String, meetingID: String)?
     private var callUUID: UUID?
@@ -128,6 +133,14 @@ final class CallController: NSObject, ObservableObject, MeetingMediaControl {
     func setVideoActive(_ active: Bool) {
         guard meetingID != nil, let uuid = callUUID else { return }
         provider.reportCall(with: uuid, updated: Self.videoUpdate(active))
+    }
+
+    /// The page's Speaker button (`SuiteMeetings.setSpeaker`): the
+    /// preference, applied now and kept through later route changes.
+    func setSpeaker(_ on: Bool) {
+        speakerPreferred = on
+        guard meetingID != nil else { return }
+        applyAudioRoute()
     }
 
     /// `donates`: a call the person started in Burrow's UI is donated as a
@@ -283,13 +296,13 @@ final class CallController: NSObject, ObservableObject, MeetingMediaControl {
                 RecentCalls.record(handle: join.meeting.name, host: host, meetingID: meetingID, spaceID: join.meeting.spaceID)
                 Self.donateJoin(join, host: host)
                 prepare(join)
-                Self.configureAudioSession()
+                Self.configureAudioSession(speaker: speakerPreferred)
                 guard let session else { return completion(false) }
                 if uuid == nil { try? AVAudioSession.sharedInstance().setActive(true) }
                 try await session.connect(defaultURL: nil)
                 if audioActive || uuid == nil { session.audioActivated() }
                 state = CallState.reduce(state, .connected)
-                publishRoute()
+                applyAudioRoute()
                 completion(true)
             } catch MeetingAPI.Failure.meetingOver {
                 Self.log.error("answered ring for a meeting that is over meeting=\(meetingID, privacy: .public)")
@@ -359,6 +372,7 @@ final class CallController: NSObject, ObservableObject, MeetingMediaControl {
     /// The session, observers and clock for a join, before connecting.
     private func prepare(_ join: MeetingJoin) {
         state = CallState.reduce(state, .startConnecting(meetingName: join.meeting.name))
+        speakerPreferred = true
         meetingSlug = join.meeting.slug
         spaceID = join.meeting.spaceID
         let session = MeetingSession(join: join) { [weak self] event in
@@ -410,7 +424,7 @@ final class CallController: NSObject, ObservableObject, MeetingMediaControl {
                 try await session.connect(defaultURL: nil)
                 if let uuid { provider.reportOutgoingCall(with: uuid, connectedAt: Date()) }
                 state = CallState.reduce(state, .connected)
-                publishRoute()
+                applyAudioRoute()
             } catch {
                 Self.log.error("meeting connect failed kind=\(String(describing: type(of: error)), privacy: .public) code=\((error as NSError).code)")
                 if let uuid { provider.reportCall(with: uuid, endedAt: Date(), reason: .failed) }
@@ -421,7 +435,7 @@ final class CallController: NSObject, ObservableObject, MeetingMediaControl {
 
     private func connectWithoutCallKit() {
         callUUID = nil
-        Self.configureAudioSession()
+        Self.configureAudioSession(speaker: speakerPreferred)
         try? AVAudioSession.sharedInstance().setActive(true)
         connect(reportingTo: nil)
         session?.audioActivated()
@@ -504,16 +518,79 @@ final class CallController: NSObject, ObservableObject, MeetingMediaControl {
 
     // MARK: Audio session, route, interruptions
 
-    static func configureAudioSession() {
+    /// The call's category options. `.defaultToSpeaker` while the speaker
+    /// is preferred: without it `.playAndRecord` starts on the earpiece,
+    /// and unlike an output override the option survives route changes.
+    /// iOS still routes to a headset or Bluetooth device over it.
+    nonisolated static func categoryOptions(speaker: Bool) -> AVAudioSession.CategoryOptions {
+        var options: AVAudioSession.CategoryOptions = [.allowBluetooth, .allowBluetoothA2DP]
+        if speaker { options.insert(.defaultToSpeaker) }
+        return options
+    }
+
+    static func configureAudioSession(speaker: Bool = true) {
         let session = AVAudioSession.sharedInstance()
-        try? session.setCategory(.playAndRecord, mode: .voiceChat, options: [.allowBluetooth, .allowBluetoothA2DP])
+        let options = categoryOptions(speaker: speaker)
+        // Skip a no-op set: setting the category again can itself post a
+        // route change.
+        if session.category == .playAndRecord, session.mode == .voiceChat, session.categoryOptions == options { return }
+        try? session.setCategory(.playAndRecord, mode: .voiceChat, options: options)
+    }
+
+    nonisolated static func output(_ port: AVAudioSession.Port) -> CallAudioRoute.Output {
+        switch port {
+        case .builtInReceiver: return .receiver
+        case .builtInSpeaker: return .speaker
+        default: return .external
+        }
+    }
+
+    private static func currentOutputs() -> [CallAudioRoute.Output] {
+        AVAudioSession.sharedInstance().currentRoute.outputs.map { output($0.portType) }
+    }
+
+    /// Puts the call's category back (the web view's media can change it)
+    /// and overrides the output to the speaker when the preference says so
+    /// and nothing external is connected.
+    private func applyAudioRoute() {
+        Self.configureAudioSession(speaker: speakerPreferred)
+        let session = AVAudioSession.sharedInstance()
+        let speaker = CallAudioRoute.overridesToSpeaker(preferSpeaker: speakerPreferred, outputs: Self.currentOutputs())
+        do {
+            try session.overrideOutputAudioPort(speaker ? .speaker : .none)
+        } catch {
+            Self.log.error("audio output override failed code=\((error as NSError).code)")
+        }
+        MeetingTrace.append("audio route applied speaker=\(speaker) preferred=\(speakerPreferred)")
+        publishRoute()
+    }
+
+    private func routeChanged(_ rawReason: UInt?) {
+        let reason: CallAudioRoute.ChangeReason =
+            rawReason.flatMap(AVAudioSession.RouteChangeReason.init(rawValue:)) == .override ? .override : .other
+        switch CallAudioRoute.onRouteChange(reason: reason, preferSpeaker: speakerPreferred, outputs: Self.currentOutputs()) {
+        case .adopt(let speaker):
+            // The person picked iPhone or Speaker in the route picker or
+            // Control Center: that is the preference now.
+            speakerPreferred = speaker
+            Self.configureAudioSession(speaker: speaker)
+            publishRoute()
+        case .reassert:
+            applyAudioRoute()
+        case .none:
+            publishRoute()
+        }
     }
 
     private func observeAudioSession() {
         let center = NotificationCenter.default
         observers.append(
-            center.addObserver(forName: AVAudioSession.routeChangeNotification, object: nil, queue: .main) { [weak self] _ in
-                Task { @MainActor in self?.publishRoute() }
+            center.addObserver(forName: AVAudioSession.routeChangeNotification, object: nil, queue: .main) { [weak self] note in
+                let reason = note.userInfo?[AVAudioSessionRouteChangeReasonKey] as? UInt
+                Task { @MainActor in
+                    guard let self, self.meetingID != nil else { return }
+                    self.routeChanged(reason)
+                }
             })
         observers.append(
             center.addObserver(forName: AVAudioSession.interruptionNotification, object: nil, queue: .main) { [weak self] note in
@@ -530,8 +607,9 @@ final class CallController: NSObject, ObservableObject, MeetingMediaControl {
     }
 
     private func publishRoute() {
-        let name = AVAudioSession.sharedInstance().currentRoute.outputs.first?.portName
-        state = CallState.reduce(state, .routeChanged(name))
+        let route = AVAudioSession.sharedInstance().currentRoute
+        state = CallState.reduce(state, .routeChanged(route.outputs.first?.portName))
+        state = CallState.reduce(state, .speakerChanged(CallAudioRoute.isSpeaker(route.outputs.map { Self.output($0.portType) })))
     }
 
     private func startTicker() {
@@ -554,7 +632,7 @@ extension CallController: CXProviderDelegate {
 
     nonisolated func provider(_ provider: CXProvider, perform action: CXStartCallAction) {
         Task { @MainActor in
-            Self.configureAudioSession()
+            Self.configureAudioSession(speaker: self.speakerPreferred)
             provider.reportOutgoingCall(with: action.callUUID, startedConnectingAt: Date())
             action.fulfill()
             self.connect(reportingTo: action.callUUID)
@@ -564,7 +642,7 @@ extension CallController: CXProviderDelegate {
     nonisolated func provider(_ provider: CXProvider, perform action: CXAnswerCallAction) {
         Task { @MainActor in
             Self.log.info("callkit answer action")
-            Self.configureAudioSession()
+            Self.configureAudioSession(speaker: self.speakerPreferred)
             RingCenter.shared.answer(action.callUUID) { connected in
                 connected ? action.fulfill() : action.fail()
             }
@@ -622,6 +700,9 @@ extension CallController: CXProviderDelegate {
             MeetingTrace.append("callkit didActivate session=\(self.session != nil)")
             self.audioActive = true
             self.session?.audioActivated()
+            // The session is live now; an override set before activation
+            // does not stick.
+            if self.meetingID != nil { self.applyAudioRoute() }
         }
     }
 
