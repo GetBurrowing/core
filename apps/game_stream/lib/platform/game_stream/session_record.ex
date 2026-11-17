@@ -33,6 +33,7 @@ defmodule Platform.GameStream.SessionRecord do
 
   schema "game_stream_sessions" do
     field(:task_id, :binary_id)
+    field(:project_id, :binary_id)
     field(:review_sha, :string)
     field(:branch, :string)
     field(:host_runtime_id, :string)
@@ -58,8 +59,8 @@ defmodule Platform.GameStream.SessionRecord do
     timestamps(type: :utc_datetime_usec)
   end
 
-  @required ~w(id task_id review_sha branch host_runtime_id ended_state started_at ended_at)a
-  @optional ~w(started_by_kind started_by_id experiment_id variant_slug encoder connection_path
+  @required ~w(id review_sha branch host_runtime_id ended_state started_at ended_at)a
+  @optional ~w(task_id project_id started_by_kind started_by_id experiment_id variant_slug encoder connection_path
                rtt_p50_ms rtt_p95_ms fps_avg ended_reason slot_stats peak_players
                peak_spectators roster_experiment_id roster_variant_slug)a
 
@@ -75,5 +76,7 @@ defmodule Platform.GameStream.SessionRecord do
     |> check_constraint(:connection_path, name: :game_stream_sessions_connection_path_check)
     |> check_constraint(:ended_state, name: :game_stream_sessions_ended_state_check)
     |> foreign_key_constraint(:task_id)
+    |> foreign_key_constraint(:project_id)
+    |> check_constraint(:project_id, name: :game_stream_build_source)
   end
 end

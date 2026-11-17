@@ -103,17 +103,38 @@ defmodule PlatformWeb.Components.IconRail do
         "instead, e.g. `/chat?more=1`, which ShellLive opens with the sheet up"
   )
 
+  attr(:gaming, :boolean, default: false)
+  attr(:project_id, :string, default: nil)
+
   def bottom_rail(assigns) do
     current_path = assigns |> Map.get(:current_path, "/") |> nav_path()
     scope = assigns[:access_scope]
-    primary = tab_destinations(scope)
-    link_winner = active_destination_key(primary, current_path)
+
+    primary =
+      if assigns[:gaming],
+        do: gaming_destinations(scope, assigns[:project_id]),
+        else: tab_destinations(scope)
+
+    link_winner =
+      active_destination_key(
+        if(assigns[:gaming],
+          do: Enum.map(primary, &Map.update!(&1, :path, fn path -> URI.parse(path).path end)),
+          else: primary
+        ),
+        current_path
+      )
+
+    more_destinations =
+      if assigns[:gaming],
+        do:
+          gaming_more_sheet_rows(scope, Map.get(assigns, :root_user, false)) ++
+            settings_destinations(),
+        else: more_sheet_destinations(scope, Map.get(assigns, :root_user, false))
 
     more_active? =
       assigns[:more_open] == true or
         (link_winner == nil and
-           more_sheet_destinations(scope, Map.get(assigns, :root_user, false))
-           |> active_destination_key(current_path) != nil)
+           more_destinations |> active_destination_key(current_path) != nil)
 
     unread? = is_integer(assigns[:inbox_unread_count]) and assigns[:inbox_unread_count] > 0
 
@@ -131,6 +152,7 @@ defmodule PlatformWeb.Components.IconRail do
       role="navigation"
       aria-label="Main navigation"
       data-bottom-rail
+      data-web-tabs={if @gaming, do: "true"}
       phx-hook="TabPill"
     >
       <div
@@ -146,7 +168,7 @@ defmodule PlatformWeb.Components.IconRail do
         navigate={dest.path}
         class={["bottom-nav-tab", mobile_active_class(dest, @active_key)]}
         data-destination={dest.key}
-        data-module-id={dest.key}
+        data-module-id={if !@gaming, do: dest.key}
         data-nav-label={dest.label}
         aria-label={tab_aria_label(dest, @inbox_unread_count)}
         aria-current={aria_current_for(dest, @active_key)}
@@ -204,6 +226,7 @@ defmodule PlatformWeb.Components.IconRail do
         id="native-tab-bridge"
         phx-hook="NativeTabBar"
         hidden
+        data-web-tabs={if @gaming, do: "true"}
         data-items={Enum.map_join(@mobile_destinations, ",", &to_string(&1.key)) <> ",more"}
         data-active-key={@active_key}
         data-inbox-unread={to_string(@inbox_unread?)}
@@ -323,6 +346,9 @@ defmodule PlatformWeb.Components.IconRail do
     meetings: {"hero-video-camera", "hero-video-camera-solid"},
     calendar: {"hero-calendar", "hero-calendar-solid"},
     inbox: {"hero-inbox", "hero-inbox-solid"},
+    studio: {"hero-cube", "hero-cube-solid"},
+    playtest: {"hero-play", "hero-play-solid"},
+    discover: {"hero-squares-2x2", "hero-squares-2x2-solid"},
     more: {"hero-ellipsis-horizontal", "hero-ellipsis-horizontal-solid"}
   }
 
@@ -404,6 +430,17 @@ defmodule PlatformWeb.Components.IconRail do
       |> Enum.split_while(&(&1.key in [:voice, :tasks]))
 
     lead ++ Enum.filter(visible, &(&1.key in extension_keys)) ++ rest
+  end
+
+  @doc "The game dock keeps the workspace's original tabs and tools reachable in More."
+  def gaming_more_sheet_rows(scope, root_user) do
+    workspace_tabs =
+      Enum.map(tab_destinations(scope), fn
+        %{key: :chat} = destination -> %{destination | label: "All conversations"}
+        destination -> destination
+      end)
+
+    workspace_tabs ++ more_sheet_rows(scope, root_user)
   end
 
   @doc """
@@ -537,6 +574,22 @@ defmodule PlatformWeb.Components.IconRail do
   # ------------------------------------------------------------------
   # Internals
   # ------------------------------------------------------------------
+
+  @doc "Game navigation shares the shell's docked bar, safe areas and native bridge."
+  def gaming_destinations(scope, project_id \\ nil) do
+    suffix = if project_id, do: "?project=" <> URI.encode_www_form(project_id), else: ""
+
+    studio =
+      if Platform.Access.module_access?(scope, :chat),
+        do: [
+          %{key: :studio, label: "Studio", path: "/studio" <> suffix},
+          %{key: :chat, label: "Chat", path: "/studio/chat" <> suffix},
+          %{key: :playtest, label: "Playtest", path: "/studio/playtest" <> suffix}
+        ],
+        else: []
+
+    studio ++ [%{key: :discover, label: "Discover", path: "/play?mode=discover"}]
+  end
 
   @doc """
   The tab bar's link tabs for an actor, in `mobile_tab_keys/0` order (not the

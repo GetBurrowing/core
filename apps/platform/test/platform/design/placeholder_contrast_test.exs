@@ -106,6 +106,8 @@ defmodule Platform.Design.PlaceholderContrastTest do
   # A file that gains a `placeholder:` utility cannot stay here: it moves to
   # `@template_sites`.
   @placeholder_exclusions %{
+    # Studio's idea field uses the shared input without a placeholder color override.
+    "platform_web/live/game_studio_live.ex" => :global_default,
     # Empty-room agent search uses the shared input and no placeholder:
     # utility; the guarded global ::placeholder rule paints its subtle text.
     "platform_web/live/chat/partials/mention_list.ex" => :global_default,

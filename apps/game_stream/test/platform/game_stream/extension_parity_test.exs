@@ -576,9 +576,36 @@ defmodule Platform.GameStream.ExtensionParityTest do
       end)
     end
 
+    # Studio adds one optional game-stream prop. Remove only that addition
+    # from the frozen extraction oracle; every legacy field remains pinned.
+    # The new prop is asserted separately below, not accepted by re-pinning a hash.
+    defp without_project_playtests(%_{} = value),
+      do: value |> Map.from_struct() |> without_project_playtests()
+
+    defp without_project_playtests(value) when is_map(value) do
+      value =
+        if Map.has_key?(value, "review_sha") and Map.has_key?(value, "latency_warn_ms"),
+          do: Map.delete(value, "project_id"),
+          else: value
+
+      Map.new(value, fn {key, child} -> {key, without_project_playtests(child)} end)
+    end
+
+    defp without_project_playtests(value) when is_list(value),
+      do: Enum.map(value, &without_project_playtests/1)
+
+    defp without_project_playtests(value), do: value
+
+    test "project playtests add an optional project source without replacing task review" do
+      properties = Platform.Chat.Canvas.Kinds.GameStream.schema()["properties"]
+      assert properties["project_id"]["type"] == "string"
+      assert properties["task_id"]["type"] == "string"
+    end
+
     defp digest(term),
       do:
-        :crypto.hash(:sha256, :erlang.term_to_binary(canon(term))) |> Base.encode16(case: :lower)
+        :crypto.hash(:sha256, :erlang.term_to_binary(canon(without_project_playtests(term))))
+        |> Base.encode16(case: :lower)
 
     setup do
       assert Extensions.list() == [Platform.GameStream.Extension]

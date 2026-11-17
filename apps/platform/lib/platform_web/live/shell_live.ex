@@ -1186,6 +1186,9 @@ defmodule PlatformWeb.ShellLive do
   # Derive a human-readable module name from the LiveView module atom.
   defp derive_active_module(view) do
     case view do
+      PlatformWeb.GameStudioLive ->
+        "Studio"
+
       PlatformWeb.ChatLive ->
         "Chat"
 

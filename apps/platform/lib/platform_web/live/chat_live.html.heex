@@ -282,6 +282,7 @@
         />
 
         <.message_scroller
+          embedded_context={assigns[:embedded_context] || "meeting"}
           room_agent_picker={@room_agent_picker}
           can_add_room_agents?={@can_add_room_agents?}
           streams={@streams}

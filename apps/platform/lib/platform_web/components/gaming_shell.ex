@@ -12,6 +12,7 @@ defmodule PlatformWeb.Components.GamingShell do
   attr :user, :any, default: nil
   attr :creator, :boolean, default: false
   attr :details, :boolean, default: false
+  attr :project_id, :string, default: nil
   attr :communities, :map, default: %{}
   attr :brand_name, :string, default: nil, doc: "this install's name; defaults to the branding"
   slot :inner_block, required: true
@@ -56,7 +57,7 @@ defmodule PlatformWeb.Components.GamingShell do
             <.icon name="hero-arrow-up-tray" />
           </a>
           <nav class="cg-subnav" aria-label="Game navigation">
-            <a href="/play"><.icon name="hero-home" />Tonight</a>
+            <a href="/studio"><.icon name="hero-home" />Studio</a>
             <a href="/play?mode=discover">
               <.icon name="hero-squares-2x2" />All games<span class="cg-count">{length(@games)}</span>
             </a>
@@ -125,6 +126,8 @@ defmodule PlatformWeb.Components.GamingShell do
            workspace, and app.js mounts the bar's hooks by hand. --%>
       <.bottom_rail
         :if={@workspace_nav}
+        gaming={true}
+        project_id={@project_id}
         current_path="/play"
         access_scope={@workspace_nav.scope}
         more_href={@workspace_nav.more_href}
@@ -164,9 +167,9 @@ defmodule PlatformWeb.Components.GamingShell do
 
   def modes(assigns) do
     ~H"""
-    <nav class="cg-modes" aria-label="Play, create or discover">
-      <a href="/play" aria-current={if @mode == "play", do: "page"}><.icon name="hero-play" />Play</a>
-      <a href="/play?mode=create" aria-current={if @mode == "create", do: "page"}>
+    <nav class="cg-modes" aria-label="Studio, create or discover">
+      <a href="/studio"><.icon name="hero-cube" />Studio</a>
+      <a href="/studio?new=1">
         <.icon name="hero-wrench-screwdriver" />Create
       </a>
       <a href="/play?mode=discover" aria-current={if @mode == "discover", do: "page"}>

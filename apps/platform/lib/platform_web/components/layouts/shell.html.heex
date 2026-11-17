@@ -97,6 +97,7 @@
        and desktop cannot disagree; see PlatformWeb.Components.Sidebar.
        `hidden lg:flex` inside the component. --%>
   <.sidebar
+    :if={@current_path not in ["/studio", "/studio/chat", "/studio/playtest"]}
     gaming={gaming?}
     current_path={@current_path}
     root_user={@root_user}
@@ -212,7 +213,10 @@
         />
       </div>
     </header>
-    <div :if={gaming?} class="cg-workspace-modes lg:hidden">
+    <div
+      :if={gaming? && @current_path not in ["/studio", "/studio/chat", "/studio/playtest"]}
+      class="cg-workspace-modes lg:hidden"
+    >
       <PlatformWeb.Components.GamingShell.modes mode="create" />
     </div>
     <%!-- Flash messages --%>
@@ -251,6 +255,8 @@
          while the Inbox has unread items. lg:hidden inside the component
          itself; desktop uses the sidebar. --%>
     <.bottom_rail
+      gaming={gaming?}
+      project_id={assigns[:gaming_nav_project_id]}
       current_path={@current_path}
       root_user={@root_user}
       access_scope={assigns[:access_scope]}
@@ -264,6 +270,7 @@
          Triggered by `phx-click="open_more_sheet"` on the More tab in
          <.bottom_rail>. lg:hidden inside the component itself. --%>
     <.more_sheet
+      gaming={gaming?}
       open={@more_sheet_open}
       current_user={@current_user}
       user={assigns[:current_user_record]}

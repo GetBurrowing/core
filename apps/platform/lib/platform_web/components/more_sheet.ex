@@ -71,6 +71,8 @@ defmodule PlatformWeb.Components.MoreSheet do
 
   alias PlatformWeb.Components.IconRail
 
+  attr(:gaming, :boolean, default: false)
+
   attr(:open, :boolean, default: false, doc: "whether the sheet is shown")
 
   attr(:root_user, :boolean,
@@ -101,7 +103,15 @@ defmodule PlatformWeb.Components.MoreSheet do
   )
 
   def more_sheet(assigns) do
-    rows = IconRail.more_sheet_rows(assigns[:access_scope], Map.get(assigns, :root_user, false))
+    rows =
+      if assigns[:gaming],
+        do:
+          IconRail.gaming_more_sheet_rows(
+            assigns[:access_scope],
+            Map.get(assigns, :root_user, false)
+          ),
+        else:
+          IconRail.more_sheet_rows(assigns[:access_scope], Map.get(assigns, :root_user, false))
 
     assigns =
       assigns

@@ -232,6 +232,8 @@ defmodule PlatformWeb.ChatLive.Partials.Composer do
   attr(:room_agent_picker, :map, default: nil)
   attr(:can_add_room_agents?, :boolean, default: false)
 
+  attr(:embedded_context, :string, default: "meeting")
+
   def message_scroller(assigns) do
     ~H"""
     <%!-- min-h-0 is the load-bearing class here: without it, flex items
@@ -457,8 +459,12 @@ defmodule PlatformWeb.ChatLive.Partials.Composer do
         class="px-3 py-5 text-[12.5px] leading-normal text-subtle"
         data-role="call-rail-chat-empty"
       >
-        Nothing typed yet. Messages appear here as people type them; the Transcript tab is for
-        what people say out loud.
+        <%= if @embedded_context == "studio" do %>
+          Start the conversation. Share an idea, invite your team, or @mention an agent to build together.
+        <% else %>
+          Nothing typed yet. Messages appear here as people type them; the Transcript tab is for
+          what people say out loud.
+        <% end %>
       </p>
 
       <%!-- Bottom sentinel: fires `load_newer_messages` when visible AND

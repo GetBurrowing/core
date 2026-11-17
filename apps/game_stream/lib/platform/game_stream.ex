@@ -160,16 +160,42 @@ defmodule Platform.GameStream do
   @spec start_session(String.t(), keyword()) :: {:ok, map()} | {:error, start_error()}
   def start_session(task_id, opts \\ []) do
     with :ok <- ensure_enabled(),
-         {:ok, build} <- ReviewBuild.resolve(task_id, Keyword.take(opts, [:runner])),
-         {:ok, host} <- find_free_host() do
-      {experiment_id, variant_slug, encoder} = resolve_encoder(build.task.id)
-      {roster_experiment_id, roster_variant_slug, roster} = resolve_roster(build.task.id)
-      {touch_experiment_id, touch_variant_slug, touch_tuning} = resolve_touch(build.task.id)
+         {:ok, build} <- ReviewBuild.resolve(task_id, Keyword.take(opts, [:runner])) do
+      start_build(build, opts)
+    end
+  end
+
+  @doc "Starts an authorized project's default branch, independently of task review."
+  def start_project_session(project_id, user, opts \\ []) do
+    with :ok <- ensure_enabled(),
+         {:ok, build} <- Platform.GameStream.ProjectBuild.resolve(project_id, user, opts) do
+      start_build(build, Keyword.put(opts, :started_by, {:user, user.id}))
+    end
+  end
+
+  defp start_build(build, opts) do
+    with {:ok, host} <- find_free_host() do
+      {experiment_id, variant_slug, encoder} =
+        if build.task,
+          do: resolve_encoder(build.task.id),
+          else: {nil, nil, GameStreamEncoder.control()}
+
+      {roster_experiment_id, roster_variant_slug, roster} =
+        if build.task,
+          do: resolve_roster(build.task.id),
+          else: {nil, nil, GameStreamRoster.control()}
+
+      {touch_experiment_id, touch_variant_slug, touch_tuning} =
+        if build.task,
+          do: resolve_touch(build.task.id),
+          else: {nil, nil, GameStreamTouch.control()}
+
       session_id = UUIDv7.generate()
 
       args = %{
         session_id: session_id,
-        task_id: build.task.id,
+        task_id: build.task && build.task.id,
+        project_id: Map.get(build, :project_id),
         review_sha: build.sha,
         branch: build.branch,
         repo_url: build.repo_url,

@@ -132,7 +132,7 @@ defmodule Platform.Design.BottomNavGlassGuardTest do
     {[], Enum.map_join(@hide_selectors, ", ", &(&1 <> " .bottom-nav"))},
     {[], ":root:has(#more-sheet.sheet-open) .bottom-nav"},
     # Task 01a1557b stage 3: inside the iOS app the native tab bar replaces it.
-    {[], ":root[data-native-tab-bar] .bottom-nav"},
+    {[], ":root[data-native-tab-bar] .bottom-nav:not([data-web-tabs])"},
     {["@media (prefers-reduced-motion: reduce)"], ".bottom-nav"},
     {[], ~s([data-preset="high-contrast"] .bottom-nav)},
     {["@media (prefers-reduced-transparency: reduce)"], ".bottom-nav"},
@@ -583,7 +583,10 @@ defmodule Platform.Design.BottomNavGlassGuardTest do
       native = ":root[data-native-tab-bar]:has([data-bottom-rail])"
       phone = ["@media (max-width: 1023.98px)"]
 
-      [clearance] = Enum.filter(rules, &(&1.selector == native and &1.context == phone))
+      # Already-shipped native clients cannot draw Studio/Playtest/Discover;
+      # those docks retain the web clearance instead of the hidden native bar's.
+      native_clearance = ":root[data-native-tab-bar]:has([data-bottom-rail]:not([data-web-tabs]))"
+      [clearance] = Enum.filter(rules, &(&1.selector == native_clearance and &1.context == phone))
 
       assert normalise(declaration(clearance.body, "--bottom-nav-height")) =~
                "var(--native-tab-bar-height"

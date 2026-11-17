@@ -74,6 +74,12 @@ const path = require('node:path')
       for (const state of ['gaming-visitor', 'gaming-owner', 'gaming-empty', 'gaming-three', 'gaming-create', 'gaming-discover']) {
         const gaming = await context.newPage()
         await gaming.goto(origin + '/game-page-evidence/' + state + '.html')
+        if (state === 'gaming-create') {
+          assert.equal(await gaming.locator('#game-studio').isVisible(), true)
+          await gaming.screenshot({path:path.join(process.env.GAME_PAGE_SCREENSHOTS, mobile ? 'studio-phone.png' : 'studio-desktop.png')})
+          await gaming.close()
+          continue
+        }
         assert.equal(await gaming.locator('#gaming-home').isVisible(), true)
         assert.notEqual(await gaming.evaluate(() => getComputedStyle(document.body).overflowY), 'hidden', 'gaming catalog cannot scroll')
         const bottom = gaming.locator('#gaming-home').locator('a').last()
@@ -84,7 +90,7 @@ const path = require('node:path')
         }
         await gaming.evaluate(() => window.scrollTo(0, 0))
         assert.equal(await gaming.evaluate(() => document.documentElement.scrollWidth <= innerWidth + 1), true, 'gaming home overflow')
-        if (['gaming-visitor', 'gaming-owner', 'gaming-three'].includes(state)) assert.equal(await gaming.locator('#gaming-play').isVisible(), true)
+        if (['gaming-visitor', 'gaming-three'].includes(state)) assert.equal(await gaming.locator('#gaming-play').isVisible(), true)
         if (state === 'gaming-owner') assert.equal(await gaming.locator(mobile ? '#gaming-publish-mobile' : '#gaming-create').isVisible(), true)
         if (state === 'gaming-three') {
           await gaming.locator('[data-game-tile]').first().focus()

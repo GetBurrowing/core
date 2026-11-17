@@ -112,6 +112,12 @@ defmodule Platform.RepoLookupBoundaryTest do
 
   # {relative_path, call_kind, schema_alias, call_count, classification, reason}
   @inventory [
+    {"platform/gaming/new_game.ex", :get_by!, "Chat.Participant", 1, :safe_internal,
+     "Space ID comes from Chat.create_channel in the committed provisioning transaction; user ID comes from the authenticated Accounts.User struct"},
+    {"platform/gaming/studio.ex", :get_by, "Chat.Participant", 1, :safe_internal,
+     "Space ID comes from a reauthorized Chat.Space row and user ID from the authenticated Accounts.User struct"},
+    {"platform/gaming/studio.ex", :platform_uuid_guard, "-", 1, :must_cast,
+     "Development-space references originate in operator game metadata or project config and are UUID-validated before Chat.get_space"},
     {"platform/sign_in/email_setup.ex", :platform_uuid_guard, "-", 1, :must_cast,
      "complete/2 checks the browser challenge id before the locked query; malformed ids are refused"},
     {"platform/instruction_packs/check.ex", :get, "Check", 1, :safe_internal,

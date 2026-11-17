@@ -319,9 +319,11 @@ defmodule Platform.Orchestration.TaskRouterStageIsolationTest do
 
     {:ok, pid} = TaskRouter.start_link(task_id: task.id, assignee: assignee)
 
-    # Initial dispatch arms the ack timer via LeaseManager.
+    # Attention is broadcast before the execution log and lease are written.
+    # A status call queues behind dispatch in the router, so it is a barrier
+    # for that work even when CI's database takes longer than a fixed sleep.
     await_attention!()
-    Process.sleep(100)
+    TaskRouter.current_status(task.id)
 
     # The router recorded a dispatch for stage B — this is the row the
     # no-ack timer will consult. Confirm the shape before we fire.
