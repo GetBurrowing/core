@@ -777,6 +777,7 @@ defmodule PlatformWeb.GoalsNewTest do
     {:ok, started} = Goals.start_goal_conversation(user, @yt)
     id = started.id
     assert_received {:goal_proposal_changed, ^id}
+
     assert texts(two, "[data-role='goals-new-message'][data-from='person'] .chat-markdown") == [
              @yt
            ]
