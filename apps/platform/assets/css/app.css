@@ -5157,7 +5157,7 @@ body, .font-suite {
    bar's top edge plus 8px of breathing room, so a last row ends 8px above
    the glass (`.clears-tab-bar` below).
    --bottom-nav-gap is the masters' 12px gap above the bar, for elements that
-   stack on top of it (the in-call mini bar); 0 where there is no bar.
+   stack on top of it; 0 where there is no bar.
    ──────────────────────────────────────────────────────────────────── */
 :root {
   --bottom-nav-height: 0px;
@@ -5165,13 +5165,6 @@ body, .font-suite {
   --bottom-nav-offset: max(env(safe-area-inset-bottom, 0px) - 13px, 12px);
   --bottom-nav-clearance: calc(var(--bottom-nav-height) + env(safe-area-inset-bottom, 0px));
   --phone-chrome-bottom: calc(var(--bottom-nav-clearance) + 8px);
-  /* Persistent meeting bar height. Set inline on the shell root to 3rem
-     when `@meeting_active` is true (see shell.html.heex). The :root
-     default of 0px keeps any `calc(... + var(--meeting-bar-height))`
-     consumer well-behaved when no meeting is active. Reserving this on
-     the shell's padding-bottom is what keeps the chat composer above
-     the fixed-positioned meeting bar (meeting_bar_live.ex:52). */
-  --meeting-bar-height: 0px;
 }
 /* Only where the bar exists: a document with no `[data-bottom-rail]` (the
    guest `meet.` surface, auth pages) reserves nothing. */

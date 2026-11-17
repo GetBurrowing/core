@@ -35,10 +35,7 @@
      (bar + gap + safe area); `<main>` itself is not padded. Fixed-position
      panels (e.g. tasks/skills detail) bound their bottom edge to
      `env(safe-area-inset-bottom) + var(--bottom-nav-height)`. --%>
-<div
-  class="app-shell-root flex h-[100dvh] overflow-hidden bg-base-100 safe-area-top pb-[var(--meeting-bar-height,0px)]"
-  style={"--meeting-bar-height: " <> (if @meeting_active, do: "calc(3rem + var(--bottom-nav-gap, 0px))", else: "0px")}
->
+<div class="app-shell-root flex h-[100dvh] overflow-hidden bg-base-100 safe-area-top">
   <%!-- Per-org scope colours as CSS custom properties. Rendered here, once,
        because every surface that shows a scope chip renders this shell.
        Deliberately NOT phx-update="ignore": an admin recolouring an org has
@@ -127,6 +124,26 @@
        content height, which on long chat threads pushes the bottom-tab
        nav out of the visible viewport on iOS. --%>
   <div class="flex flex-1 flex-col overflow-hidden min-w-0 min-h-0">
+    <%!-- In-call top bar (task 01a1e82a stage 1; replaced the bottom
+         ribbon). First in the main column, so at lg it spans the column
+         right of the sidebar and below lg it sits under the status bar (the
+         shell root's `safe-area-top` already clears it), above the phone top
+         strip. In flow, not fixed: it pushes the page down rather than
+         covering it, so nothing reserves an offset for it. Hidden only in
+         the call room; see `PlatformWeb.MeetingBarPresence`. --%>
+    <.live_component
+      module={PlatformWeb.MeetingBarLive}
+      id="meeting-bar"
+      meeting_active={@meeting_active}
+      meeting_space_id={@meeting_space_id}
+      meeting_space_name={@meeting_space_name}
+      meeting_space_slug={@meeting_space_slug}
+      meeting_slug={@meeting_slug}
+      meeting_started_at={@meeting_started_at}
+      in_call_room={@in_call_room}
+      meeting_roster={@meeting_roster}
+      meeting_here_count={@meeting_here_count}
+    />
     <%!-- Phone top strip (was #utility-bar; renamed in place by Burrow
          redesign 22 stage 1). `lg:hidden`: at lg the sidebar carries what
          this strip carried (the mask chip, the theme mode, the account), and
@@ -274,19 +291,6 @@
       zone={assigns[:mask_zone]}
       connected?={shell_connected?(assigns)}
       open={assigns[:mask_chip_open] == true}
-    />
-
-    <%!-- Persistent meeting bar (survives navigation) --%>
-    <.live_component
-      module={PlatformWeb.MeetingBarLive}
-      id="meeting-bar"
-      meeting_active={@meeting_active}
-      meeting_space_id={@meeting_space_id}
-      meeting_space_name={@meeting_space_name}
-      meeting_space_slug={@meeting_space_slug}
-      meeting_slug={@meeting_slug}
-      meeting_started_at={@meeting_started_at}
-      on_meeting_page={@on_meeting_page}
     />
 
     <%!-- Desktop command palette (Burrow redesign 23 stage 2; master-desktop

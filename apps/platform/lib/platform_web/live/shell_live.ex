@@ -16,6 +16,7 @@ defmodule PlatformWeb.ShellLive do
   alias Platform.Inbox
   alias Platform.Meetings
   alias Platform.Meetings.State, as: MeetingState
+  alias PlatformWeb.MeetingBarPresence
   alias Platform.Push
   alias Platform.Repo
   alias Platform.Tasks
@@ -194,7 +195,9 @@ defmodule PlatformWeb.ShellLive do
       |> assign(:meeting_space_slug, nil)
       |> assign(:meeting_slug, nil)
       |> assign(:meeting_started_at, nil)
-      |> assign(:on_meeting_page, false)
+      |> assign(:in_call_room, false)
+      |> assign(:meeting_presence_sub, nil)
+      |> MeetingBarPresence.reset()
       # Stage 4 (task 019ee06b): the no-ChatLive bar-toggle fallback caches
       # the post-toggle mic/camera state here so it can flip them on each
       # click without round-tripping. Defaults mirror MeetingBarLive's
@@ -269,19 +272,11 @@ defmodule PlatformWeb.ShellLive do
         socket =
           if params["more"] == "1", do: assign(socket, :more_sheet_open, true), else: socket
 
-        # Hide the bar on any surface that represents the active meeting:
-        # legacy chat surface (`/chat/<slug>` or `/chat/<space_id>` — the
-        # link emitter uses `space.id` for org-scoped channels per ADR 0042
-        # and `slug || id` otherwise) OR the canonical MeetingLive surface
-        # (`/meetings/<meeting_slug>`).
-        space_slug = socket.assigns[:meeting_space_slug]
-        space_id = socket.assigns[:meeting_space_id]
-        meeting_slug = socket.assigns[:meeting_slug]
-
-        on_meeting_page =
-          (space_slug && uri.path == "/chat/#{space_slug}") ||
-            (space_id && uri.path == "/chat/#{space_id}") ||
-            (meeting_slug && uri.path == "/meetings/#{meeting_slug}") || false
+        # Task 01a1e82a stage 1: the top bar hides ONLY in the call room
+        # (`/meetings/<meeting_slug>`). The meeting's own chat
+        # (`/chat/<slug>` or `/chat/<space_id>`) now shows it like every
+        # other page. One definition: `MeetingBarPresence.in_call_room?/2`.
+        in_call_room = MeetingBarPresence.in_call_room?(uri.path, socket.assigns[:meeting_slug])
 
         # Task 01a01b29 stage 1: navigating INTO a channel is what calls
         # `mark_read_at_channel_tip/2` (`chat/messages_hooks.ex`), which moves
@@ -301,7 +296,7 @@ defmodule PlatformWeb.ShellLive do
         socket =
           socket
           |> assign(:current_path, uri.path)
-          |> assign(:on_meeting_page, on_meeting_page)
+          |> assign(:in_call_room, in_call_room)
 
         if chat_surface?(uri.path) do
           {:cont, queue_chat_unread_refresh(socket)}
@@ -413,14 +408,8 @@ defmodule PlatformWeb.ShellLive do
           meeting_slug = payload[:meeting_slug]
           started_at = payload[:started_at] || DateTime.utc_now()
 
-          # See the `:track_path` hook above for the three-shapes rationale.
-          # The link the user came from could be `/chat/<slug>`,
-          # `/chat/<space_id>` (post-ADR-0042 org-scoped channels), or the
-          # canonical MeetingLive surface (`/meetings/<meeting_slug>`).
-          on_meeting_page =
-            (space_slug && path == "/chat/#{space_slug}") ||
-              (space_id && path == "/chat/#{space_id}") ||
-              (meeting_slug && path == "/meetings/#{meeting_slug}") || false
+          # See the `:track_path` hook above: only the call room hides the bar.
+          in_call_room = MeetingBarPresence.in_call_room?(path, meeting_slug)
 
           socket =
             socket
@@ -430,9 +419,32 @@ defmodule PlatformWeb.ShellLive do
             |> assign(:meeting_space_slug, space_slug)
             |> assign(:meeting_slug, meeting_slug)
             |> assign(:meeting_started_at, started_at)
-            |> assign(:on_meeting_page, on_meeting_page)
+            |> assign(:in_call_room, in_call_room)
+            |> MeetingBarPresence.assign_roster()
+            |> MeetingBarPresence.schedule_subscribe()
 
           {:halt, socket}
+
+        # Task 01a1e82a stage 1: runs after the host LV's mount, so the
+        # presence subscription can see whether the host already holds one.
+        # See `PlatformWeb.MeetingBarPresence`.
+        :meeting_bar_presence_subscribe, socket ->
+          {:halt, MeetingBarPresence.subscribe(socket)}
+
+        # The bar's avatars and "<N> here" follow the active meeting space's
+        # presence. Halt only when the shell owns the subscription; when the
+        # host (ChatLive / MeetingLive MeetingHooks) subscribed, it expects
+        # the update too.
+        {:meeting_presence_update, %{space_id: space_id}}, socket ->
+          if space_id == socket.assigns[:meeting_space_id] do
+            socket = MeetingBarPresence.assign_roster(socket)
+
+            if MeetingBarPresence.owns_update?(socket, space_id),
+              do: {:halt, socket},
+              else: {:cont, socket}
+          else
+            {:cont, socket}
+          end
 
         {:meeting_media_state, %{mic_enabled: mic, camera_enabled: camera} = payload}, socket ->
           # Stage 3 (task 019ee06b): MeetingHooks broadcasts the authoritative
@@ -476,7 +488,9 @@ defmodule PlatformWeb.ShellLive do
             |> assign(:meeting_space_slug, nil)
             |> assign(:meeting_slug, nil)
             |> assign(:meeting_started_at, nil)
-            |> assign(:on_meeting_page, false)
+            |> assign(:in_call_room, false)
+            |> MeetingBarPresence.release()
+            |> MeetingBarPresence.reset()
             # Stage 4 (task 019ee06b): reset cached bar state on leave so a
             # fresh join starts from MeetingBarLive's mount defaults again.
             |> assign(:shell_bar_mic_on, true)
@@ -522,7 +536,9 @@ defmodule PlatformWeb.ShellLive do
             |> assign(:meeting_space_slug, nil)
             |> assign(:meeting_slug, nil)
             |> assign(:meeting_started_at, nil)
-            |> assign(:on_meeting_page, false)
+            |> assign(:in_call_room, false)
+            |> MeetingBarPresence.release()
+            |> MeetingBarPresence.reset()
             |> assign(:shell_bar_mic_on, true)
             |> assign(:shell_bar_camera_on, false)
             |> assign(:shell_bar_native, nil)
@@ -1018,6 +1034,8 @@ defmodule PlatformWeb.ShellLive do
         |> assign(:meeting_space_slug, space_slug)
         |> assign(:meeting_slug, meeting_slug)
         |> assign(:meeting_started_at, started_at)
+        |> MeetingBarPresence.assign_roster()
+        |> MeetingBarPresence.schedule_subscribe()
 
       _ ->
         socket

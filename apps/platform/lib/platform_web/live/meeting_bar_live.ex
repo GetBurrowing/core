@@ -1,9 +1,10 @@
 defmodule PlatformWeb.MeetingBarLive do
   @moduledoc """
-  LiveComponent rendering the persistent meeting mini-bar.
+  LiveComponent rendering the in-call top bar (task 01a1e82a stage 1; it
+  replaced the bottom mini-bar ribbon).
 
-  Displayed in the shell layout whenever the current user is in an active
-  meeting. Manages local UI state for mic/camera toggles and the meeting
+  Displayed at the top of the shell's main column whenever the current user
+  is in an active meeting, on every page except the call room. Manages local UI state for mic/camera toggles and the meeting
   duration timer. The bar persists across page navigations because it
   lives in the shell layout, not inside any specific LiveView.
 
@@ -18,8 +19,10 @@ defmodule PlatformWeb.MeetingBarLive do
       if the meeting row hasn't been persisted yet, in which case the bar
       falls back to the chat surface via `space_slug`
     * `:meeting_started_at` — `DateTime` when the user joined
-    * `:on_meeting_page` — boolean, true when viewing the meeting's chat page
-      OR the canonical MeetingLive surface
+    * `:in_call_room` — boolean, true only on `/meetings/<meeting_slug>`
+      (computed once, by `PlatformWeb.MeetingBarPresence.in_call_room?/2`)
+    * `:meeting_roster` — up to four `%{id, name, initials}` faces
+    * `:meeting_here_count` — how many participants are in the call
   """
 
   use PlatformWeb, :live_component
@@ -64,7 +67,9 @@ defmodule PlatformWeb.MeetingBarLive do
           {:meeting_space_slug, :space_slug},
           {:meeting_slug, :meeting_slug},
           {:meeting_started_at, :started_at},
-          {:on_meeting_page, :on_meeting_page},
+          {:in_call_room, :in_call_room},
+          {:meeting_roster, :roster},
+          {:meeting_here_count, :here_count},
           {:id, :id},
           {:mic_on, :mic_on},
           {:camera_on, :camera_on},
@@ -85,110 +90,164 @@ defmodule PlatformWeb.MeetingBarLive do
   end
 
   @impl true
-  # At lg the bar starts at the desktop sidebar's right edge: 220px, 200px
-  # at or below 1100px (`--sidebar-width` in app.css, Burrow redesign 22).
+  # Task 01a1e82a stage 1, direction A of prototype 01a1e823: a green band at
+  # the top of the main column (right of the desktop sidebar) that pushes the
+  # page down, never overlays it. Below `sm` the same element is the phone
+  # strip: live dot, name, clock and "Tap to return ›", with a full-bleed
+  # link over it so the whole strip opens the call.
+  #
+  # One element for both widths, deliberately: the MeetingBar hook ticks the
+  # FIRST `[data-timer]` under its root and binds every `[data-bar-*]`, so a
+  # second copy of the clock would never tick.
+  #
+  # `data-state` is the reconnect contract for stage 2: JS sets it to
+  # "reconnecting" and the `data-[state=reconnecting]:` / `group-data-…`
+  # variants repaint the bar in warning tokens. `JS.ignore_attributes/1`
+  # keeps a server patch from resetting it to "connected".
   def render(assigns) do
+    assigns =
+      assigns
+      |> assign_new(:in_call_room, fn -> false end)
+      |> assign_new(:roster, fn -> [] end)
+      |> assign_new(:here_count, fn -> 0 end)
+      |> assign(
+        :return_path,
+        return_to_call_path(assigns[:meeting_slug], assigns[:space_slug], assigns[:space_id])
+      )
+
     ~H"""
-    <div
-      id="meeting-mini-bar"
-      phx-hook="MeetingBar"
-      data-started-at={@started_at && DateTime.to_iso8601(@started_at)}
-      class={[
-        "fixed bottom-[calc(env(safe-area-inset-bottom)+var(--bottom-nav-height,0px)+var(--bottom-nav-gap,0px))] inset-x-0 z-40 h-12 bg-base-100 border-t border-edge shadow-lg flex items-center gap-3 px-4",
-        "lg:left-[var(--sidebar-width)]",
-        if(!@meeting_active || @on_meeting_page, do: "hidden")
-      ]}
-    >
-      <%!-- Pulsing indicator + space name --%>
-      <div class="flex items-center gap-2 min-w-0">
-        <span class="bg-success rounded-full w-2 h-2 animate-pulse flex-shrink-0"></span>
-        <.link
-          navigate={"/chat/#{@space_slug || @space_id}"}
-          class="truncate font-medium text-base-content lg:hover:text-subtle transition-colors text-sm"
-        >
+    <div id="meeting-bar-mount" class="contents">
+      <div
+        :if={@meeting_active && !@in_call_room}
+        id="meeting-top-bar"
+        phx-hook="MeetingBar"
+        phx-mounted={JS.ignore_attributes(["data-state"])}
+        data-state="connected"
+        data-started-at={@started_at && DateTime.to_iso8601(@started_at)}
+        aria-label="In call"
+        class={[
+          "group relative flex shrink-0 items-center gap-2.5 px-3.5 py-2 text-sm",
+          "sm:h-11 sm:gap-3 sm:py-0 sm:pl-5 sm:pr-4",
+          "bg-success text-success-content",
+          "data-[state=reconnecting]:bg-warning data-[state=reconnecting]:text-warning-content"
+        ]}
+      >
+        <span
+          aria-hidden="true"
+          class="size-2.5 shrink-0 rounded-full bg-current motion-safe:animate-pulse"
+        />
+        <span class="hidden shrink-0 sm:inline">In call</span>
+        <span data-role="meeting-name" class="min-w-0 truncate font-bold">
           {@space_name || "Meeting"}
+        </span>
+        <%!-- Ticked by the MeetingBar hook from `data-started-at`. --%>
+        <span data-timer class="shrink-0 tabular-nums">0:00</span>
+
+        <span :if={@roster != []} data-role="meeting-faces" class="hidden shrink-0 pl-1.5 sm:flex">
+          <span
+            :for={face <- @roster}
+            aria-hidden="true"
+            title={face.name}
+            class={[
+              "-ml-1.5 grid size-[22px] place-items-center rounded-full border-2 text-[9px] font-bold",
+              "border-success bg-success-content/25 group-data-[state=reconnecting]:border-warning group-data-[state=reconnecting]:bg-warning-content/25"
+            ]}
+          >
+            {face.initials}
+          </span>
+        </span>
+        <span
+          :if={@here_count > 0}
+          data-role="meeting-here"
+          class="hidden shrink-0 opacity-85 sm:inline"
+        >
+          {@here_count} here
+        </span>
+
+        <span class="flex-1" />
+
+        <%!-- Phone strip action. The link over the strip is what you tap. --%>
+        <span aria-hidden="true" class="shrink-0 text-[13px] font-semibold opacity-95 sm:hidden">
+          Tap to return ›
+        </span>
+        <.link
+          navigate={@return_path}
+          data-role="meeting-strip-link"
+          aria-label={"Return to call: " <> (@space_name || "Meeting")}
+          class="absolute inset-0 sm:hidden"
+        >
+          <span class="sr-only">Tap to return</span>
         </.link>
+
+        <%!-- Mic. No `phx-click`: the MeetingBar hook binds `[data-bar-mic]`
+             and pushes `meeting_toggle_mic` to the active LiveView (task
+             019ee06b stage 4). In the iOS app the state is what the native
+             call CONFIRMED (task 01a13c62 stage 3): pending is disabled with
+             a warning ring, and a build whose page cannot drive the mic hides
+             it. Off is the inverted chip. --%>
+        <button
+          :if={is_nil(@native) or @native.mic}
+          type="button"
+          data-bar-mic
+          disabled={@mic_pending}
+          aria-busy={if @mic_pending, do: "true"}
+          aria-pressed={if @mic_on, do: "false", else: "true"}
+          class={[control_class(), toggle_class(@mic_on), @mic_pending && "ring-2 ring-warning"]}
+          title={if @mic_on, do: "Mute mic", else: "Unmute mic"}
+        >
+          <span><b>Mic</b> {if @mic_on, do: "on", else: "off"}</span>
+        </button>
+
+        <%!-- Camera. Same hook pathway as the mic. --%>
+        <button
+          :if={is_nil(@native) or @native.camera}
+          type="button"
+          data-bar-camera
+          aria-pressed={if @camera_on, do: "true", else: "false"}
+          class={[control_class(), toggle_class(@camera_on)]}
+          title={if @camera_on, do: "Turn off camera", else: "Turn on camera"}
+        >
+          <span>{if @camera_on, do: "Cam on", else: "Cam off"}</span>
+        </button>
+
+        <.link
+          navigate={@return_path}
+          data-role="meeting-return"
+          class={[control_class(), toggle_class(true)]}
+        >
+          Return to call ↗
+        </.link>
+
+        <button
+          type="button"
+          phx-click="leave_meeting"
+          phx-target={@myself}
+          data-bar-leave
+          class={[control_class(), "bg-error text-error-content lg:hover:opacity-90"]}
+          title="Leave meeting"
+        >
+          Leave
+        </button>
       </div>
-
-      <%!-- Duration timer (updated by MeetingTimer JS hook) --%>
-      <span class="tabular-nums text-subtle text-xs font-mono" data-timer>
-        00:00
-      </span>
-
-      <div class="flex-1" />
-
-      <%!-- Mic toggle. Stage 4 (task 019ee06b): click is bound by the
-           MeetingBar JS hook on `[data-bar-mic]` and dispatched as
-           `meeting_toggle_mic` to the active LiveView — ChatLive's
-           MeetingHooks on /chat, ShellLive's fallback elsewhere. No
-           `phx-click` so the LiveComponent doesn't intercept and create a
-           local-only state path. --%>
-      <%!-- Task 01a13c62 stage 3: in the iOS app the state is what the
-           native call CONFIRMED. Pending (a tap in flight) is disabled with
-           a warning ring; a build whose page cannot drive the mic hides it. --%>
-      <button
-        :if={is_nil(@native) or @native.mic}
-        data-bar-mic
-        disabled={@mic_pending}
-        aria-busy={if @mic_pending, do: "true"}
-        class={[
-          "rounded-lg p-1.5 transition-colors",
-          if(@mic_on,
-            do: "text-base-content lg:hover:bg-base-300",
-            else: "text-base-content bg-error/10 lg:hover:bg-error/20"
-          ),
-          @mic_pending && "ring-2 ring-warning"
-        ]}
-        title={if @mic_on, do: "Mute mic", else: "Unmute mic"}
-      >
-        <span class={[
-          "size-4",
-          if(@mic_on, do: "hero-microphone", else: "hero-microphone-slash text-error")
-        ]} />
-      </button>
-
-      <%!-- Camera toggle. Same JS-hook pathway as mic, see above. --%>
-      <button
-        :if={is_nil(@native) or @native.camera}
-        data-bar-camera
-        class={[
-          "rounded-lg p-1.5 transition-colors",
-          if(@camera_on,
-            do: "text-base-content lg:hover:bg-base-300",
-            else: "text-subtle lg:hover:bg-base-300"
-          )
-        ]}
-        title={if @camera_on, do: "Turn off camera", else: "Turn on camera"}
-      >
-        <span class={[
-          "size-4",
-          if(@camera_on, do: "hero-video-camera", else: "hero-video-camera-slash")
-        ]} />
-      </button>
-
-      <%!-- Return to call — deep links to the canonical MeetingLive surface.
-           Falls back to the chat surface if `meeting_slug` is nil (race
-           where the join broadcast fires before the Meeting row exists). --%>
-      <.link
-        navigate={return_to_call_path(@meeting_slug, @space_slug, @space_id)}
-        class="rounded-lg px-2.5 py-1 text-xs font-medium text-base-content lg:hover:bg-success/10 transition-colors hidden sm:inline-flex"
-      >
-        Return to call
-      </.link>
-
-      <%!-- Leave meeting --%>
-      <button
-        phx-click="leave_meeting"
-        phx-target={@myself}
-        data-bar-leave
-        class="rounded-lg px-2.5 py-1 text-xs font-medium text-base-content bg-error/15 lg:hover:bg-error/25 transition-colors"
-        title="Leave meeting"
-      >
-        Leave
-      </button>
     </div>
     """
   end
+
+  # Desktop-only bar controls (the phone strip carries none).
+  defp control_class,
+    do:
+      "hidden shrink-0 items-center gap-1.5 rounded-lg px-2.5 py-1 text-[13px] font-semibold transition-opacity sm:inline-flex"
+
+  # An "on" control is a soft well on the band; an "off" one is the inverted
+  # chip (the band's content colour as fill, the band colour as text), in
+  # success tokens or, while reconnecting, warning tokens.
+  defp toggle_class(true),
+    do:
+      "bg-success-content/15 group-data-[state=reconnecting]:bg-warning-content/15 lg:hover:opacity-90"
+
+  defp toggle_class(false),
+    do:
+      "bg-success-content text-success group-data-[state=reconnecting]:bg-warning-content group-data-[state=reconnecting]:text-warning lg:hover:opacity-90"
 
   # Build the Return-to-call href. Prefer the canonical MeetingLive surface
   # (`/meetings/<meeting_slug>`); fall back to the chat surface (`/chat/<slug>`)

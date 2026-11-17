@@ -1,10 +1,24 @@
 /**
- * MeetingBar hook — bridges the mini-bar controls to the LiveKit Room instance.
+ * MeetingBar hook — bridges the in-call top bar controls to the LiveKit Room instance.
  *
  * Reads initial mic/camera state from window.__livekitRoom.localParticipant,
  * handles toggle clicks via LiveKit SDK, disconnects on leave, and runs a
- * client-side mm:ss duration timer. Gracefully handles null room.
+ * client-side m:ss (h:mm:ss) duration timer. Gracefully handles null room.
  */
+/**
+ * Elapsed call time as the top bar shows it (task 01a1e82a stage 1):
+ * m:ss, then h:mm:ss past an hour ("12:04", "1:02:09").
+ */
+export function formatElapsed(totalSeconds) {
+  const s = Math.max(0, Math.floor(totalSeconds))
+  const hours = Math.floor(s / 3600)
+  const minutes = Math.floor((s % 3600) / 60)
+  const seconds = String(s % 60).padStart(2, "0")
+  return hours > 0
+    ? `${hours}:${String(minutes).padStart(2, "0")}:${seconds}`
+    : `${minutes}:${seconds}`
+}
+
 const MeetingBar = {
   mounted() {
     this._syncState()
@@ -122,9 +136,7 @@ const MeetingBar = {
 
   _tick() {
     const elapsed = Math.max(0, Math.floor((Date.now() - this._startTime) / 1000))
-    const minutes = Math.floor(elapsed / 60)
-    const seconds = elapsed % 60
-    const display = `${String(minutes).padStart(2, "0")}:${String(seconds).padStart(2, "0")}`
+    const display = formatElapsed(elapsed)
     const timerEl = this.el.querySelector("[data-timer]")
     if (timerEl) timerEl.textContent = display
   },
