@@ -7,7 +7,6 @@ defmodule Platform.Social.ApprovalAcceptanceTest do
   use Platform.DataCase, async: false
 
   import Ecto.Query
-  import Platform.SocialFixtures
   import Platform.SocialApprovalFixtures
 
   alias Platform.Social

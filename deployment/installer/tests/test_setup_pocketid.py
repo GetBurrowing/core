@@ -131,6 +131,39 @@ class PocketIdCases:
         self.assertEqual(len(secrets), 1, secrets)
         self.assertEqual(secrets[0]["prefix"], self.client_secret[:4])
 
+    def test_email_login_code_on_and_other_keys_survive(self):
+        """Core task 01a1e65e: the pocket-id step turns the email login code on."""
+        flag = pocketid.EMAIL_LOGIN_CODE_KEY
+        custom = "Pie " + uuid.uuid4().hex[:8]
+        # Start from an install whose admin customised the name and whose flag is
+        # off (the v2.18.0 default), through the API, keeping every other key.
+        _s, listed = self.api.call("GET", "/api/application-configuration/all")
+        current = {item["key"]: item.get("value", "") for item in listed}
+        self.api.call(
+            "PUT", "/api/application-configuration",
+            body=dict(current, appName=custom, **{flag: "false"}),
+        )  # fmt: skip
+        self.assertEqual(self.public_config().get(flag), "false")  # positive control
+
+        email = f"{self.username}@example.test"
+        code, doc, text = self.run_step("pocket-id", "--input", f"ADMIN_EMAIL={email}")
+        self.assertEqual((code, doc["error_code"]), (3, "awaiting_passkey"), doc)
+        self.assertEqual(doc["outputs"]["email_login_code"], "applied")
+        self.assertEqual(self.public_config().get(flag), "true")
+        _s, listed = self.api.call("GET", "/api/application-configuration/all")
+        after = {item["key"]: item.get("value", "") for item in listed}
+        self.assertEqual(after["appName"], custom)
+        self.assertNotIn(self.key, text)
+
+        # A second run writes nothing and says so.
+        code, doc, _text = self.run_step("pocket-id", "--input", f"ADMIN_EMAIL={email}")
+        self.assertEqual(doc["outputs"]["email_login_code"], "present")
+
+    def public_config(self):
+        # The public, unauthenticated list (no X-API-Key needed).
+        _s, listed = pocketid.Client(self.url, "").call("GET", "/api/application-configuration")
+        return {item["key"]: item.get("value") for item in listed}
+
     def test_bad_static_key_is_named(self):
         Install(self.dir).upsert_secret("STATIC_API_KEY", "wrong-01a0d6ab-key-000000")
         code, doc, text = self.run_step("oidc-client")

@@ -77,6 +77,7 @@ defmodule PlatformWeb.AuthController do
   # Not a route: a marker in the signed session that the callback resolves, once
   # the user exists, to the Getting started conversation (`Burrow.Starter`).
   @starter_landing "/setup/getting-started"
+  @passkey_add_landing "/settings?passkey=add"
 
   # Where the hand-over sign-in lands. With a starter key configured the first
   # screen is the Getting started conversation, whose path needs the owner and
@@ -130,6 +131,7 @@ defmodule PlatformWeb.AuthController do
       conn
       |> clear_handover_continuation(purpose)
       |> put_session(:oidc_session_params, session_params)
+      |> delete_session(:signed_in_with_email_code)
       |> put_landing(purpose)
       |> LoginOrigin.capture()
       |> redirect(external: handover_url(url, code, interaction))
@@ -163,7 +165,11 @@ defmodule PlatformWeb.AuthController do
   end
 
   defp put_landing(conn, :invite), do: delete_session(conn, :post_login_path)
-  defp put_landing(conn, {:setup_code, purpose}), do: put_landing(conn, purpose)
+
+  # Task 01a1e58b stage 3: a sign-in by emailed code (`/auth/sign-in`) is
+  # marked so the callback lands on the add-a-passkey prompt in Settings.
+  defp put_landing(conn, {:setup_code, purpose}),
+    do: conn |> put_landing(purpose) |> put_session(:signed_in_with_email_code, true)
 
   defp handover_invalid(conn) do
     conn
@@ -199,8 +205,12 @@ defmodule PlatformWeb.AuthController do
   end
 
   defp start_provider_login(conn) do
-    # An ordinary login never inherits an abandoned hand-over's landing.
-    conn = delete_session(conn, :post_login_path)
+    # An ordinary login never inherits an abandoned hand-over's landing, nor
+    # an abandoned email-code login's add-a-passkey landing.
+    conn =
+      conn
+      |> delete_session(:post_login_path)
+      |> delete_session(:signed_in_with_email_code)
 
     :telemetry.execute(
       [:platform, :auth, :login],
@@ -313,6 +323,7 @@ defmodule PlatformWeb.AuthController do
       # clearing it after would be a `put_session` on an already-sent conn.
       |> delete_session(:oidc_session_params)
       |> delete_session(:post_login_path)
+      |> delete_session(:signed_in_with_email_code)
       |> delete_session(PlatformWeb.ReturnPath.session_key())
       |> put_session(:current_user_id, user.id)
       |> maybe_put_id_token(auth)
@@ -347,11 +358,22 @@ defmodule PlatformWeb.AuthController do
   # never from a parameter, so this is not an open redirect. Without a
   # hand-over landing, the local return path `RequireAuth` stored (task
   # 01a1ccd4), re-checked by `PlatformWeb.ReturnPath.safe/1`.
+  #
+  # Task 01a1e58b stage 3: a sign-in by emailed code (the session carries
+  # `:signed_in_with_email_code`) lands on `@passkey_add_landing` instead,
+  # unless a hand-over landing applies. A game login never reaches this path's
+  # result (`land_game_or_callback/3` sends it to its game first).
   defp post_login_path(conn, user) do
-    if Platform.Gaming.enabled?() do
-      "/play"
-    else
-      workspace_post_login_path(conn, user)
+    cond do
+      get_session(conn, :signed_in_with_email_code) == true and
+          get_session(conn, :post_login_path) not in [@connect_landing, @starter_landing] ->
+        @passkey_add_landing
+
+      Platform.Gaming.enabled?() ->
+        "/play"
+
+      true ->
+        workspace_post_login_path(conn, user)
     end
   end
 
@@ -432,13 +454,19 @@ defmodule PlatformWeb.AuthController do
 
   @app_callback_url "burrow://auth/callback"
 
+  # The app's web view lands here only after an email-code sign-in (task
+  # 01a1e58b stage 3); every other app login keeps its ordinary landing.
+  defp app_landing(@passkey_add_landing), do: @passkey_add_landing
+  defp app_landing(_full_path), do: nil
+
   defp land_callback(
          conn,
          %ExternalAdmission.Result{state: :full, user: user} = result,
          full_path
        ) do
     with challenge when is_binary(challenge) <- get_session(conn, :app_challenge),
-         {:ok, code} <- Mobile.issue_exchange_code(user, challenge) do
+         {:ok, code} <-
+           Mobile.issue_exchange_code(user, challenge, landing: app_landing(full_path)) do
       conn
       |> delete_session(:app_challenge)
       |> LoginOrigin.clear()

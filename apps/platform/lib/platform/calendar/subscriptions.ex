@@ -1,5 +1,9 @@
 defmodule Platform.Calendar.Subscriptions do
-  @moduledoc "Owner-scoped external snapshots. Failed/stale coverage cannot assert availability."
+  @moduledoc """
+  Owner-scoped external snapshots. Failed, stale or partial coverage cannot
+  assert availability: a calendar whose last snapshot skipped unreadable
+  events still shows its readable entries, but never asserts free time.
+  """
   import Ecto.Query
   alias Platform.{Access, Repo}
   alias Platform.Access.Scope
@@ -47,6 +51,12 @@ defmodule Platform.Calendar.Subscriptions do
       is_nil(row.error) and not is_nil(row.refreshed_at) and
         DateTime.diff(DateTime.utc_now(), row.refreshed_at) < @fresh_seconds
 
+  @doc """
+  True when the stored snapshot left no event out. A partial calendar never
+  asserts free time: a skipped event may be busy.
+  """
+  def complete?(row), do: row.skipped_count == 0
+
   def refresh_row(%Subscription{} = row) do
     # Lock and re-read before fetching so an old job cannot overwrite newer state
     # or resurrect a deleted subscription. URL changes are intentionally unsupported.
@@ -62,9 +72,17 @@ defmodule Platform.Calendar.Subscriptions do
             case ExternalFetch.fetch(current.url) do
               {:ok, body} ->
                 case ICal.parse(body) do
-                  {:ok, snapshot} ->
-                    [snapshot: snapshot, refreshed_at: now, attempted_at: now, error: nil]
+                  {:ok, snapshot, skipped} ->
+                    [
+                      snapshot: snapshot,
+                      skipped_count: skipped,
+                      refreshed_at: now,
+                      attempted_at: now,
+                      error: nil
+                    ]
 
+                  # A failure keeps the old snapshot, so it keeps that
+                  # snapshot's skipped_count too.
                   {:error, _} ->
                     [
                       attempted_at: now,
@@ -179,7 +197,7 @@ defmodule Platform.Calendar.Subscriptions do
       DateTime.compare(from, to) != :lt or DateTime.diff(to, from) > 366 * 86400 ->
         {:error, :invalid_window}
 
-      Enum.any?(subscriptions, &(not fresh?(&1))) ->
+      Enum.any?(subscriptions, &(not fresh?(&1) or not complete?(&1))) ->
         {:error, :external_coverage_unknown}
 
       Keyword.has_key?(opts, :time_zone) and is_nil(zone) ->

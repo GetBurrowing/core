@@ -84,6 +84,10 @@ SHARING_KEYS = ("feedback", "usage_counts", "friction_reports", "help_channel_re
 # "download": the host fetches it at first boot from a pinned URL and checks
 # its sha256 (bin/burrow-fetch-model, registry.EMBEDDINGS_MODEL_SOURCE).
 MODEL_SOURCES = ("operator", "download")
+# The meeting intent classifier's install-level model (core task 01a1e5da
+# stage 4): core's Platform.Meetings.IntentModel providers. No default: unset
+# leaves meeting intent off unless the classifier's agent brings its own model.
+INTENT_PROVIDERS = ("anthropic", "openai", "ollama")
 
 # Every key the manifest may contain, at every depth. A key outside this tree
 # is `unknown_key` (or `unknown_service` under [services]), so a typo can never
@@ -198,6 +202,12 @@ SCHEMA = {
         "transcription": _bool(False),
         "stt_endpoint": _str(),
         "stt_model": _str(),
+        # Meeting intent model (core task 01a1e5da stage 4): rendered into
+        # core-platform's env as MEETINGS_INTENT_* (registry.meetings_intent_env).
+        # intent_endpoint names a [[models.endpoints]] entry, like stt_endpoint.
+        "intent_provider": _enum(INTENT_PROVIDERS),
+        "intent_endpoint": _str(),
+        "intent_model": _str(),
     },
     # Day-2 operations (ADR 0053). upgrade_channel is acted on: the host
     # updater's CHANNEL (templates.updater_settings; pinned when

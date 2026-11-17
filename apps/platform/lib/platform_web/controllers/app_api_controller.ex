@@ -54,10 +54,12 @@ defmodule PlatformWeb.AppApiController do
            app_install_id: params["app_install_id"],
            device_name: params["device_name"]
          }) do
-      {:ok, %{token: token, handoff_code: handoff_code}} ->
+      # Task 01a1e58b stage 3: the landing the exchange code was minted with
+      # (`/settings?passkey=add` after an email-code sign-in; nil otherwise).
+      {:ok, %{token: token, handoff_code: handoff_code, landing: landing}} ->
         json(conn, %{
           token: token,
-          handoff_url: handoff_url(conn, handoff_code, nil)
+          handoff_url: handoff_url(conn, handoff_code, landing)
         })
 
       {:error, :invalid_code} ->

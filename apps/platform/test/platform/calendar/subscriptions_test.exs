@@ -24,6 +24,47 @@ defmodule Platform.Calendar.SubscriptionsTest do
       "UID:external-1\r\nSUMMARY:External appointment\r\nDTSTART:20261030T190000Z\r\nDTEND:20261030T200000Z" <>
         extra
 
+  # 3 readable events (UTC, same-zone TZID, VALUE=DATE) and one RECURRENCE-ID
+  # override, which is skipped. With `bad: false` only the 3 readable ones.
+  defp mixed_feed(opts \\ []) do
+    tz =
+      "BEGIN:VTIMEZONE\r\nTZID:America/Chicago\r\nBEGIN:STANDARD\r\nTZOFFSETFROM:-0500\r\n" <>
+        "TZOFFSETTO:-0600\r\nDTSTART:20071104T020000\r\nEND:STANDARD\r\nEND:VTIMEZONE\r\n"
+
+    vevent = fn body -> "BEGIN:VEVENT\r\n" <> body <> "\r\nEND:VEVENT\r\n" end
+
+    override =
+      if Keyword.get(opts, :bad, true),
+        do:
+          vevent.(
+            "UID:override-1@example.invalid\r\nRECURRENCE-ID:20261030T190000Z\r\n" <>
+              "DTSTART:20261030T210000Z\r\nDTEND:20261030T220000Z"
+          ),
+        else: ""
+
+    "BEGIN:VCALENDAR\r\nVERSION:2.0\r\n" <>
+      tz <>
+      vevent.(
+        "UID:utc-1@example.invalid\r\nSUMMARY:Utc\r\nDTSTART:20261030T190000Z\r\nDTEND:20261030T200000Z"
+      ) <>
+      override <>
+      vevent.(
+        "UID:zone-1@example.invalid\r\nSUMMARY:Zone\r\nDTSTART;TZID=America/Chicago:20261031T090000\r\n" <>
+          "DTEND;TZID=America/Chicago:20261031T100000"
+      ) <>
+      vevent.(
+        "UID:day-1@example.invalid\r\nSUMMARY:Day\r\nDTSTART;VALUE=DATE:20261102\r\nDTEND;VALUE=DATE:20261103"
+      ) <> "END:VCALENDAR\r\n"
+  end
+
+  defp unreadable_feed,
+    do:
+      "BEGIN:VCALENDAR\r\nVERSION:2.0\r\nBEGIN:VEVENT\r\n" <>
+        event("\r\nRECURRENCE-ID:20261030T190000Z") <>
+        "\r\nEND:VEVENT\r\nBEGIN:VEVENT\r\n" <>
+        "UID:d@example.invalid\r\nDTSTART:20261030T190000Z\r\nDURATION:PT1H" <>
+        "\r\nEND:VEVENT\r\nEND:VCALENDAR\r\n"
+
   setup do
     old_resolver = Application.get_env(:platform, :calendar_subscription_resolver)
     old_opts = Application.get_env(:platform, :calendar_subscription_req_options)
@@ -103,7 +144,7 @@ defmodule Platform.Calendar.SubscriptionsTest do
     for body <- [
           "not a calendar",
           String.duplicate("x", 1_048_577),
-          feed(event("\r\nRRULE:FREQ=WEEKLY;BYDAY=MO"))
+          feed(event("\r\nDESCRIPTION:invalid " <> <<0xFF>>))
         ] do
       stub(body)
       assert {:ok, failed} = Subscriptions.refresh(owner, sub.id)
@@ -234,13 +275,13 @@ defmodule Platform.Calendar.SubscriptionsTest do
   end
 
   test "bounded recurrence, all-day, IANA zones, folding, UID update and exceptions" do
-    assert {:ok, [row]} =
+    assert {:ok, [row], 0} =
              ICal.parse(feed(event("\r\nRRULE:FREQ=DAILY;COUNT=3\r\nEXDATE;VALUE=DATE:20261031")))
 
     expanded = ICal.event(row, "sub") |> Platform.Calendar.Recurrence.occurrences(@from, @to)
     assert Enum.map(expanded, &DateTime.to_date(&1.starts_at)) == [~D[2026-10-30], ~D[2026-11-01]]
 
-    assert {:ok, [day]} =
+    assert {:ok, [day], 0} =
              ICal.parse(
                feed(
                  "UID:day\r\nDTSTART;VALUE=DATE:20261030\r\nDTEND;VALUE=DATE:20261101\r\nSUMMARY:Off\r\n site"
@@ -249,7 +290,7 @@ defmodule Platform.Calendar.SubscriptionsTest do
 
     assert day["all_day"] and day["title"] == "Offsite"
 
-    assert {:ok, [zone]} =
+    assert {:ok, [zone], 0} =
              ICal.parse(
                feed(
                  "UID:zone\r\nDTSTART;TZID=America/Chicago:20261030T140000\r\nDTEND;TZID=America/Chicago:20261030T150000"
@@ -266,31 +307,31 @@ defmodule Platform.Calendar.SubscriptionsTest do
           "\r\nRECURRENCE-ID:20261030T190000Z",
           "\r\nDURATION:PT1H"
         ] do
-      assert {:error, _} = ICal.parse(feed(event(extra)))
+      assert {:ok, [], 1} = ICal.parse(feed(event(extra)))
     end
 
-    assert {:error, _} =
+    assert {:ok, [], 1} =
              ICal.parse(
                feed(
                  "UID:floating\r\nDTSTART:20261030T140000\r\nDTEND:20261030T150000\r\nRRULE:FREQ=DAILY;COUNT=2"
                )
              )
 
-    assert {:error, _} =
+    assert {:ok, [], 1} =
              ICal.parse(
                feed(
                  "UID:boundary\r\nDTSTART:99991231T120000Z\r\nDTEND:99991231T130000Z\r\nRRULE:FREQ=MONTHLY;COUNT=1"
                )
              )
 
-    assert {:ok, [_]} = ICal.parse(feed(event("\r\nSEQUENCE:2147483647")))
-    assert {:error, _} = ICal.parse(feed(event("\r\nSEQUENCE:2147483648")))
-    assert {:error, _} = ICal.parse(feed(event("\r\nSEQUENCE:" <> String.duplicate("9", 1000))))
+    assert {:ok, [_], 0} = ICal.parse(feed(event("\r\nSEQUENCE:2147483647")))
+    assert {:ok, [], 1} = ICal.parse(feed(event("\r\nSEQUENCE:2147483648")))
+    assert {:ok, [], 1} = ICal.parse(feed(event("\r\nSEQUENCE:" <> String.duplicate("9", 1000))))
 
-    assert {:error, _} =
+    assert {:ok, [], 1} =
              ICal.parse(feed(event("\r\nRRULE:FREQ=DAILY;COUNT=" <> String.duplicate("9", 1000))))
 
-    assert {:error, _} =
+    assert {:ok, [], 1} =
              ICal.parse(
                feed(
                  event(
@@ -309,9 +350,83 @@ defmodule Platform.Calendar.SubscriptionsTest do
         newer <>
         "\r\nEND:VEVENT\r\nBEGIN:VEVENT\r\n" <> old <> "\r\nEND:VEVENT\r\nEND:VCALENDAR\r\n"
 
-    assert {:ok, [%{"title" => "Updated appointment"}]} = ICal.parse(multiple)
-    assert {:error, _} = ICal.parse(String.replace(multiple, "SEQUENCE:1", "SEQUENCE:2"))
-    assert {:error, _} = ICal.parse(feed(event("\r\nUID:duplicate")))
+    assert {:ok, [%{"title" => "Updated appointment"}], 0} = ICal.parse(multiple)
+
+    assert {:error, :unsupported_or_malformed_feed} =
+             ICal.parse(String.replace(multiple, "SEQUENCE:1", "SEQUENCE:2"))
+
+    assert {:ok, [], 1} = ICal.parse(feed(event("\r\nUID:duplicate")))
+  end
+
+  describe "partial calendars" do
+    test "a mixed feed stores its readable events and count, and availability is unknown" do
+      owner = scope()
+
+      {:ok, sub} =
+        Subscriptions.create(owner, %{name: "Work", url: "https://calendar.example/feed"})
+
+      stub(mixed_feed())
+
+      assert {:ok, %{error: nil, skipped_count: 1} = partial} =
+               Subscriptions.refresh(owner, sub.id)
+
+      assert length(partial.snapshot) == 3
+      assert Subscriptions.fresh?(partial)
+      refute Subscriptions.complete?(partial)
+
+      entries = Subscriptions.entries(owner, @from, @to, time_zone: "America/Chicago")
+      assert entries |> Enum.map(& &1.title) |> Enum.sort() == ["Day", "Utc", "Zone"]
+      assert Enum.all?(entries, &(&1.stale == false))
+
+      assert {:error, :external_coverage_unknown} =
+               Subscriptions.availability(owner, @from, @to, time_zone: "America/Chicago")
+
+      stub(mixed_feed(bad: false))
+      assert {:ok, %{error: nil, skipped_count: 0} = clean} = Subscriptions.refresh(owner, sub.id)
+      assert Subscriptions.complete?(clean)
+
+      assert {:ok, windows} =
+               Subscriptions.availability(owner, @from, @to, time_zone: "America/Chicago")
+
+      starts = Enum.map(windows, & &1.starts_at)
+      assert Enum.any?(starts, &(DateTime.compare(&1, ~U[2026-10-30 19:00:00Z]) == :eq))
+      assert Enum.any?(starts, &(DateTime.compare(&1, ~U[2026-10-31 14:00:00Z]) == :eq))
+      assert Enum.any?(starts, &(DateTime.compare(&1, ~U[2026-11-02 06:00:00Z]) == :eq))
+    end
+
+    test "an all-unreadable feed stores an empty snapshot with its count" do
+      owner = scope()
+
+      {:ok, sub} =
+        Subscriptions.create(owner, %{name: "Work", url: "https://calendar.example/feed"})
+
+      stub(unreadable_feed())
+
+      assert {:ok, %{error: nil, snapshot: [], skipped_count: 2}} =
+               Subscriptions.refresh(owner, sub.id)
+
+      assert {:error, :external_coverage_unknown} =
+               Subscriptions.availability(owner, @from, @to, time_zone: "America/Chicago")
+    end
+
+    test "a feed-level failure after a partial refresh keeps the snapshot and its count" do
+      owner = scope()
+
+      {:ok, sub} =
+        Subscriptions.create(owner, %{name: "Work", url: "https://calendar.example/feed"})
+
+      stub(mixed_feed())
+      assert {:ok, %{skipped_count: 1}} = Subscriptions.refresh(owner, sub.id)
+
+      stub(feed(event("\r\nDESCRIPTION:invalid " <> <<0xFF>>)))
+      assert {:ok, failed} = Subscriptions.refresh(owner, sub.id)
+      assert failed.error
+      assert failed.skipped_count == 1
+      assert length(failed.snapshot) == 3
+
+      assert {:error, :external_coverage_unknown} =
+               Subscriptions.availability(owner, @from, @to, time_zone: "America/Chicago")
+    end
   end
 
   # Synthetic feed shaped like a public iCloud calendar export (2026-11-04
@@ -404,7 +519,7 @@ defmodule Platform.Calendar.SubscriptionsTest do
 
   describe "iCloud-shaped feeds" do
     test "the full synthetic iCloud feed parses" do
-      assert {:ok, rows} = ICal.parse(@icloud)
+      assert {:ok, rows, 0} = ICal.parse(@icloud)
       by_uid = Map.new(rows, &{&1["uid"], &1})
 
       assert %{"starts_at" => "2026-10-30T19:00:00Z", "time_zone" => "America/Chicago"} =
@@ -449,26 +564,36 @@ defmodule Platform.Calendar.SubscriptionsTest do
                 feed(event("\r\nBEGIN:VALARM\r\nACTION:DISPLAY\r\nTRIGGER:-PT15M\r\nEND:VALARM")),
               floating: feed("UID:f\r\nDTSTART:20261030T140000\r\nDTEND:20261030T150000")
             ],
-            not match?({:ok, [_]}, ICal.parse(body)),
+            not match?({:ok, [_], 0}, ICal.parse(body)),
             do: label
 
       assert rejected == []
     end
 
-    test "truly unsupported semantics still reject the whole feed" do
-      eastern =
-        "BEGIN:VCALENDAR\r\nVERSION:2.0\r\nBEGIN:VTIMEZONE\r\nTZID:Eastern Standard Time\r\n" <>
-          "BEGIN:STANDARD\r\nTZOFFSETFROM:-0400\r\nTZOFFSETTO:-0500\r\nDTSTART:16010101T020000\r\n" <>
-          "END:STANDARD\r\nEND:VTIMEZONE\r\nBEGIN:VEVENT\r\nUID:e\r\n" <>
-          "DTSTART;TZID=Eastern Standard Time:20261030T140000\r\n" <>
-          "DTEND;TZID=Eastern Standard Time:20261030T150000\r\nEND:VEVENT\r\nEND:VCALENDAR\r\n"
-
+    test "feed-level problems still reject the whole feed" do
       nested_event =
         "BEGIN:VCALENDAR\r\nVERSION:2.0\r\nBEGIN:VTIMEZONE\r\nTZID:America/Chicago\r\n" <>
           "BEGIN:VEVENT\r\n" <> event() <> "\r\nEND:VEVENT\r\nEND:VTIMEZONE\r\nEND:VCALENDAR\r\n"
 
+      ambiguous =
+        "BEGIN:VCALENDAR\r\nVERSION:2.0\r\nBEGIN:VEVENT\r\n" <>
+          "UID:dup@example.invalid\r\nSUMMARY:One\r\nDTSTART:20261030T190000Z\r\nDTEND:20261030T200000Z" <>
+          "\r\nEND:VEVENT\r\nBEGIN:VEVENT\r\n" <>
+          "UID:dup@example.invalid\r\nSUMMARY:Two\r\nDTSTART:20261030T190000Z\r\nDTEND:20261030T200000Z" <>
+          "\r\nEND:VEVENT\r\nEND:VCALENDAR\r\n"
+
+      over_2000 =
+        "BEGIN:VCALENDAR\r\nVERSION:2.0\r\n" <>
+          Enum.map_join(1..1995, fn n ->
+            "BEGIN:VEVENT\r\nUID:good-#{n}@example.invalid\r\nDTSTART:20261030T190000Z\r\n" <>
+              "DTEND:20261030T200000Z\r\nEND:VEVENT\r\n"
+          end) <>
+          Enum.map_join(1..6, fn n ->
+            "BEGIN:VEVENT\r\nUID:bad-#{n}@example.invalid\r\nDTSTART:20261030T190000Z\r\n" <>
+              "DTEND:20261030T200000Z\r\nRECURRENCE-ID:20261030T190000Z\r\nEND:VEVENT\r\n"
+          end) <> "END:VCALENDAR\r\n"
+
       for {label, body} <- [
-            non_iana_tzid: eastern,
             event_inside_vtimezone: nested_event,
             unterminated_vtimezone:
               "BEGIN:VCALENDAR\r\nVERSION:2.0\r\nBEGIN:VTIMEZONE\r\nTZID:America/Chicago\r\nEND:VCALENDAR\r\n",
@@ -480,6 +605,33 @@ defmodule Platform.Calendar.SubscriptionsTest do
               feed(event("\r\nBEGIN:VALARM\r\nBEGIN:VEVENT\r\nEND:VEVENT\r\nEND:VALARM")),
             unknown_calendar_property:
               String.replace(feed(event()), "VERSION:2.0", "VERSION:2.0\r\nREFRESH-INTERVAL:PT1H"),
+            invalid_utf8: feed(event("\r\nDESCRIPTION:invalid " <> <<0xFF>>)),
+            not_vcalendar: "BEGIN:VEVENT\r\n" <> event() <> "\r\nEND:VEVENT\r\n",
+            unterminated_vevent:
+              "BEGIN:VCALENDAR\r\nVERSION:2.0\r\nBEGIN:VEVENT\r\n" <>
+                event() <> "\r\nEND:VCALENDAR\r\n",
+            begin_unknown_inside_vevent: feed(event("\r\nBEGIN:VJOURNAL\r\nEND:VJOURNAL")),
+            ambiguous_duplicate_uid: ambiguous,
+            over_2000: over_2000
+          ] do
+        assert {{:error, :unsupported_or_malformed_feed}, ^label} = {ICal.parse(body), label}
+      end
+    end
+
+    test "event-level problems skip that one event and count it" do
+      eastern =
+        "BEGIN:VCALENDAR\r\nVERSION:2.0\r\nBEGIN:VTIMEZONE\r\nTZID:Eastern Standard Time\r\n" <>
+          "BEGIN:STANDARD\r\nTZOFFSETFROM:-0400\r\nTZOFFSETTO:-0500\r\nDTSTART:16010101T020000\r\n" <>
+          "END:STANDARD\r\nEND:VTIMEZONE\r\nBEGIN:VEVENT\r\nUID:e\r\n" <>
+          "DTSTART;TZID=Eastern Standard Time:20261030T140000\r\n" <>
+          "DTEND;TZID=Eastern Standard Time:20261030T150000\r\nEND:VEVENT\r\nEND:VCALENDAR\r\n"
+
+      bounds = fn start, finish, extra ->
+        feed("UID:flight-1@example.invalid\r\nDTSTART" <> start <> "\r\nDTEND" <> finish <> extra)
+      end
+
+      for {label, body} <- [
+            non_iana_tzid: eastern,
             unknown_event_property: feed(event("\r\nBUSY:YES")),
             duplicate_dtstart: feed(event("\r\nDTSTART:20261030T180000Z")),
             floating_recurrence:
@@ -487,10 +639,98 @@ defmodule Platform.Calendar.SubscriptionsTest do
                 "UID:f\r\nDTSTART:20261030T140000\r\nDTEND:20261030T150000\r\nRRULE:FREQ=DAILY;COUNT=2"
               ),
             floating_mixed_with_utc:
-              feed("UID:f\r\nDTSTART:20261030T140000\r\nDTEND:20261030T150000Z")
+              feed("UID:f\r\nDTSTART:20261030T140000\r\nDTEND:20261030T150000Z"),
+            recurrence_id: feed(event("\r\nRECURRENCE-ID:20261030T190000Z")),
+            rdate: feed(event("\r\nRDATE:20261101T190000Z")),
+            duration: feed("UID:d@example.invalid\r\nDTSTART:20261030T190000Z\r\nDURATION:PT1H"),
+            colon_less_line: feed(event("\r\nNOT A PROPERTY")),
+            byday_rule: feed(event("\r\nRRULE:FREQ=WEEKLY;BYDAY=MO")),
+            date_with_tzid_end:
+              bounds.(";VALUE=DATE:20261030", ";TZID=America/Chicago:20261031T090000", ""),
+            tzid_with_date_end:
+              bounds.(";TZID=America/Chicago:20261030T090000", ";VALUE=DATE:20261031", ""),
+            floating_with_tzid_end:
+              bounds.(":20170301T100000", ";TZID=America/Denver:20170301T112800", ""),
+            cross_zone_end_before_start:
+              bounds.(
+                ";TZID=America/Denver:20170301T100000",
+                ";TZID=America/Chicago:20170301T105000",
+                ""
+              ),
+            cross_zone_recurrence:
+              bounds.(
+                ";TZID=America/Chicago:20170301T100000",
+                ";TZID=America/Denver:20170301T112800",
+                "\r\nRRULE:FREQ=DAILY;COUNT=2"
+              ),
+            utc_start_tzid_end_recurrence:
+              bounds.(
+                ":20170301T160000Z",
+                ";TZID=America/Denver:20170301T112800",
+                "\r\nRRULE:FREQ=DAILY;COUNT=2"
+              )
           ] do
-        assert {{:error, :unsupported_or_malformed_feed}, ^label} = {ICal.parse(body), label}
+        assert {{:ok, [], 1}, ^label} = {ICal.parse(body), label}
       end
+    end
+
+    test "a mixed feed keeps every readable event and counts the unreadable one" do
+      mixed = mixed_feed()
+
+      assert {:ok, rows, 1} = ICal.parse(mixed)
+      assert length(rows) == 3
+
+      assert rows |> Enum.map(& &1["uid"]) |> Enum.sort() == [
+               "day-1@example.invalid",
+               "utc-1@example.invalid",
+               "zone-1@example.invalid"
+             ]
+    end
+
+    test "a feed whose every event is unreadable is an empty snapshot, not an error" do
+      body = unreadable_feed()
+
+      assert {:ok, [], 2} = ICal.parse(body)
+    end
+
+    test "a non-recurring event may end in another zone and keeps the start zone" do
+      bounds = fn start, finish ->
+        feed("UID:flight-1@example.invalid\r\nDTSTART" <> start <> "\r\nDTEND" <> finish)
+      end
+
+      assert {:ok, [row], 0} =
+               ICal.parse(
+                 bounds.(
+                   ";TZID=America/Chicago:20170301T100000",
+                   ";TZID=America/Denver:20170301T112800"
+                 )
+               )
+
+      assert %{
+               "starts_at" => "2017-03-01T16:00:00Z",
+               "ends_at" => "2017-03-01T18:28:00Z",
+               "time_zone" => "America/Chicago",
+               "floating" => false
+             } = row
+
+      assert {:ok, [row], 0} =
+               ICal.parse(
+                 bounds.(
+                   ";TZID=America/Mexico_City:20170301T080000",
+                   ";TZID=America/Chicago:20170301T103000"
+                 )
+               )
+
+      assert %{
+               "starts_at" => "2017-03-01T14:00:00Z",
+               "ends_at" => "2017-03-01T16:30:00Z",
+               "time_zone" => "America/Mexico_City"
+             } = row
+
+      assert {:ok, [row], 0} =
+               ICal.parse(bounds.(":20170301T160000Z", ";TZID=America/Denver:20170301T112800"))
+
+      assert %{"time_zone" => "Etc/UTC", "ends_at" => "2017-03-01T18:28:00Z"} = row
     end
 
     test "floating times are placed in the reader's zone and never in an implicit UTC" do

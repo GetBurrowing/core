@@ -152,6 +152,34 @@ defmodule Platform.MobileTest do
       assert {:error, :invalid_code} = Mobile.exchange_code("", "")
       assert {:error, :invalid_code} = Mobile.exchange_code("nope", String.duplicate("a", 43))
     end
+
+    # Task 01a1e58b stage 3: the landing rides the exchange-code row.
+    test "returns the landing the code was minted with, and nil without one" do
+      user = create_user!()
+      {verifier, challenge} = pkce()
+
+      {:ok, code} = Mobile.issue_exchange_code(user, challenge, landing: "/settings?passkey=add")
+      assert {:ok, %{landing: "/settings?passkey=add"}} = Mobile.exchange_code(code, verifier)
+
+      {:ok, plain} = Mobile.issue_exchange_code(user, challenge)
+      assert {:ok, %{landing: nil}} = Mobile.exchange_code(plain, verifier)
+    end
+
+    test "a landing safe_return_path/1 refuses, or /, is stored as nil" do
+      user = create_user!()
+      {_verifier, challenge} = pkce()
+
+      for landing <- ["/auth/logout", "//evil.example", "https://evil.example/x", "/"] do
+        {:ok, code} = Mobile.issue_exchange_code(user, challenge, landing: landing)
+        row = Repo.get_by!(AppLoginCode, code_hash: Mobile.hash(code))
+        assert row.landing == nil, inspect(landing)
+      end
+
+      {:ok, code} = Mobile.issue_exchange_code(user, challenge, landing: "/settings?passkey=add")
+
+      assert Repo.get_by!(AppLoginCode, code_hash: Mobile.hash(code)).landing ==
+               "/settings?passkey=add"
+    end
   end
 
   describe "consume_handoff_code/1" do

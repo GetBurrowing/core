@@ -1004,10 +1004,17 @@ defmodule PlatformWeb.CalendarLive do
     external =
       Enum.map(
         subscriptions,
-        &%{key: "ext:" <> &1.id, label: &1.name, note: "read-only · iCal", kind: "external"}
+        &%{key: "ext:" <> &1.id, label: &1.name, note: external_note(&1), kind: "external"}
       )
 
     [native] ++ if(assigns.meetings_on, do: [meetings], else: []) ++ external
+  end
+
+  # A partial calendar must not look complete in the list pane either.
+  defp external_note(sub) do
+    if Platform.Calendar.Subscriptions.complete?(sub),
+      do: "read-only · iCal",
+      else: "read-only · iCal · " <> skipped_text(sub.skipped_count)
   end
 
   defp event_form(socket, event) do

@@ -77,6 +77,20 @@ defmodule Platform.Meetings.IntentClassifier do
        silent — the `state.seen_rooms` MapSet is the spam-suppressor).
        Emit telemetry with `%{reason: :no_assignee}`. Assignment IS
        the enable signal — no env-var double-gate.
+    2b. **No model configured** — `Platform.Meetings.IntentModel.route/1`
+       answers `{:error, :not_configured}` for the assignee: it has no
+       usable `base_url` + `model` (and `OLLAMA_BASE_URL` is unset) and no
+       install-level `:meetings_intent_model` provider is set (task
+       01a1e5da). Log ONE `:warning` per room (keyed
+       `{:not_configured, room_id}` in `state.seen_rooms`) naming the fix,
+       and emit `:skipped` with `%{reason: :not_configured}` on EVERY
+       chunk. No prompt render, no provider call, no queue write. Before
+       this guard every chunk raised inside the Ollama adapter and logged
+       its own "LLM call failed" line. A classifier started with an
+       explicit `:provider_module` opt (tests, harnesses) is PINNED: it
+       keeps today's assignee route built from the agent, whatever
+       `IntentModel` says. Production passes no opts, so it always
+       resolves.
     3. **Meeting muted** — `Platform.Meetings.intent_muted?/1` on the
        payload's `meeting_id` (task 019fbaac stage 2). Emits the SAME
        `:skipped` event as guard 1 with `%{reason: :muted}`. No prompt
@@ -223,6 +237,7 @@ defmodule Platform.Meetings.IntentClassifier do
   alias Platform.Meetings.IntentAddressee
   alias Platform.Meetings.IntentCorrections
   alias Platform.Meetings.IntentFrames
+  alias Platform.Meetings.IntentModel
   alias Platform.Meetings.IntentQueue
   alias Platform.Meetings.MeetingCandidate
   alias Platform.Meetings.OpenQuestionPilot
@@ -388,6 +403,14 @@ defmodule Platform.Meetings.IntentClassifier do
     provider_module =
       Keyword.get(opts, :provider_module, Platform.Agents.Providers.Ollama)
 
+    # Task 01a1e5da guard 2b. An EXPLICIT `:provider_module` pins the
+    # classifier to today's assignee route (base_url + model off the
+    # agent, through `provider_module`) and skips `IntentModel.route/1`,
+    # so tests and harnesses that inject a stub keep their path. The
+    # production child spec passes no opts, so production is never
+    # pinned and always resolves the install's model route.
+    provider_pinned? = Keyword.has_key?(opts, :provider_module)
+
     context_window_size =
       Keyword.get(
         opts,
@@ -428,6 +451,7 @@ defmodule Platform.Meetings.IntentClassifier do
      %{
        seen_rooms: MapSet.new(),
        provider_module: provider_module,
+       provider_pinned?: provider_pinned?,
        recent_chunks: %{},
        context_window_size: context_window_size,
        correction_exemplar_limit: correction_exemplar_limit,
@@ -675,39 +699,60 @@ defmodule Platform.Meetings.IntentClassifier do
       agent ->
         meeting_id = Map.get(payload, :meeting_id)
 
-        # Guard 3 — per-meeting mute (task 019fbaac stage 2). Checked
-        # AFTER the assignee guard so an unassigned responsibility still
-        # reports `:no_assignee` (the actionable reason) rather than
-        # being masked by a mute, and BEFORE the content gate so an
-        # explicit human "hold this meeting" always reports `:muted` —
-        # a muted meeting skips every chunk, however substantive, and
-        # never has that skip relabelled `:no_content`. It is also the
-        # cheaper check: one indexed read versus tokenising the
-        # utterance. `intent_muted?/1` is total: nil, malformed and
-        # unknown ids all answer `false`, which is the correct answer
-        # for a chunk whose space has no meeting.
-        if Meetings.intent_muted?(meeting_id) do
-          note_muted(room_id, meeting_id, state)
-        else
-          chunk_text = payload_text(payload)
+        # Guard 2b — no model configured (task 01a1e5da). After the
+        # assignee guard so an unassigned responsibility still reports
+        # `:no_assignee`, and before mute: a meeting the classifier
+        # cannot serve at all is "off" whatever its mute toggle says.
+        case resolve_route(agent, state) do
+          {:error, :not_configured} ->
+            note_not_configured(room_id, meeting_id, state)
 
-          if content_bearing?(chunk_text) do
-            # `state.recent_chunks[room_id]` is stored newest-first with
-            # the current chunk at the head; drop 1 removes the current,
-            # take N bounds the window at exactly `context_window_size`.
-            prior_chunks =
-              state.recent_chunks
-              |> Map.get(room_id, [])
-              |> Enum.drop(1)
-              |> Enum.take(state.context_window_size)
-
-            classify_and_enqueue(payload, agent, prior_chunks, state)
-            state
-          else
-            note_no_content(room_id, payload, chunk_text)
-            state
-          end
+          route ->
+            classify_routed(payload, room_id, meeting_id, agent, route, state)
         end
+    end
+  end
+
+  # Pinned (explicit `:provider_module`): today's route, from the agent.
+  defp resolve_route(agent, %{provider_pinned?: true}) do
+    {:assignee, %{base_url: Map.get(agent, :base_url), model: Map.get(agent, :model)}}
+  end
+
+  defp resolve_route(agent, _state), do: IntentModel.route(agent)
+
+  defp classify_routed(payload, room_id, meeting_id, agent, route, state) do
+    # Guard 3 — per-meeting mute (task 019fbaac stage 2). Checked
+    # AFTER the assignee guard so an unassigned responsibility still
+    # reports `:no_assignee` (the actionable reason) rather than
+    # being masked by a mute, and BEFORE the content gate so an
+    # explicit human "hold this meeting" always reports `:muted` —
+    # a muted meeting skips every chunk, however substantive, and
+    # never has that skip relabelled `:no_content`. It is also the
+    # cheaper check: one indexed read versus tokenising the
+    # utterance. `intent_muted?/1` is total: nil, malformed and
+    # unknown ids all answer `false`, which is the correct answer
+    # for a chunk whose space has no meeting.
+    if Meetings.intent_muted?(meeting_id) do
+      note_muted(room_id, meeting_id, state)
+    else
+      chunk_text = payload_text(payload)
+
+      if content_bearing?(chunk_text) do
+        # `state.recent_chunks[room_id]` is stored newest-first with
+        # the current chunk at the head; drop 1 removes the current,
+        # take N bounds the window at exactly `context_window_size`.
+        prior_chunks =
+          state.recent_chunks
+          |> Map.get(room_id, [])
+          |> Enum.drop(1)
+          |> Enum.take(state.context_window_size)
+
+        classify_and_enqueue(payload, agent, prior_chunks, Map.put(state, :route, route))
+        state
+      else
+        note_no_content(room_id, payload, chunk_text)
+        state
+      end
     end
   end
 
@@ -962,6 +1007,38 @@ defmodule Platform.Meetings.IntentClassifier do
     updated_state
   end
 
+  # Guard 2b (task 01a1e5da). Same spam-suppressor shape as
+  # `note_muted/3`, keyed `{:not_configured, room_id}`. A `:warning`, not
+  # `:info`: unlike an unassigned responsibility (the deliberate off
+  # state), an assignee with no model is a misconfiguration somebody has
+  # to fix, so the one line names the fix. Telemetry fires on every chunk.
+  defp note_not_configured(room_id, meeting_id, state) do
+    key = {:not_configured, room_id}
+
+    {log?, updated_state} =
+      if is_binary(room_id) and not MapSet.member?(state.seen_rooms, key) do
+        {true, %{state | seen_rooms: MapSet.put(state.seen_rooms, key)}}
+      else
+        {false, state}
+      end
+
+    if log? do
+      Logger.warning(
+        "[IntentClassifier] meeting intent is off: no model configured — room=#{room_id} " <>
+          "(set MEETINGS_INTENT_PROVIDER, or give the meetings.intent_classify agent a " <>
+          "base_url and model)"
+      )
+    end
+
+    :telemetry.execute(
+      [:platform, :meetings, :intent_classifier, :skipped],
+      %{count: 1},
+      %{reason: :not_configured, room_id: room_id, meeting_id: meeting_id}
+    )
+
+    updated_state
+  end
+
   # Distinct reason atom on the SAME `:skipped` event. `:no_content` is
   # not `:no_assignee` and not `:muted` — this module keeps refusal
   # reasons separable so a tuning session can tell "the classifier is
@@ -1055,15 +1132,18 @@ defmodule Platform.Meetings.IntentClassifier do
     decision =
       OpenQuestionPilot.decide_live(
         arm.arm,
-        %{
-          provider_module: state.provider_module,
-          agent: agent,
-          prompt: prompt,
-          chunk_text: chunk_text,
-          room_id: room_id,
-          roster: roster,
-          participants: participants
-        },
+        maybe_put_route(
+          %{
+            provider_module: state.provider_module,
+            agent: agent,
+            prompt: prompt,
+            chunk_text: chunk_text,
+            room_id: room_id,
+            roster: roster,
+            participants: participants
+          },
+          Map.get(state, :route)
+        ),
         state.provider_module
       )
 
@@ -1099,7 +1179,11 @@ defmodule Platform.Meetings.IntentClassifier do
             # `model_used` defaulted to nil and nothing ever overwrote
             # it, so every historical row attributes to nobody and the
             # corpus cannot be sliced by model.
-            model: Map.get(agent, :model),
+            #
+            # Task 01a1e5da: on the hosted route the agent has no model;
+            # `decide/1` reports the model that actually answered as
+            # `:model_used` (the configured one, else the adapter's).
+            model: Map.get(decided, :model_used) || Map.get(agent, :model),
             # SAME call the prompt renders `{{speaker}}` from, a few
             # lines up — one derivation, so the attribution the model
             # was shown is the attribution the row records. Task
@@ -1298,7 +1382,10 @@ defmodule Platform.Meetings.IntentClassifier do
     # `IntentAddressee.verdict/3`.
     gate_ctx = gate_ctx(args)
 
-    with {:ok, content} <- call_provider(provider_module, agent, prompt, chunk_text, room_id),
+    route = Map.get(args, :route)
+
+    with {:ok, content, model_used} <-
+           call_provider(route, provider_module, agent, prompt, chunk_text, room_id),
          # SINGLE call site for `parse_content`. Task 01a03f57 widened it
          # to /3, threading `chunk_text` through so the evidence gate can
          # check the model's citation against the chunk it classified.
@@ -1306,9 +1393,17 @@ defmodule Platform.Meetings.IntentClassifier do
          # Task 01a0e58f folded the roster, participants and the
          # utterance-gate seam into one `gate_ctx` map.
          {:ok, parsed} <- parse_content(content, room_id, chunk_text, gate_ctx) do
-      {:ok, normalise_decision(parsed)}
+      {:ok, parsed |> normalise_decision() |> put_model_used(model_used)}
     end
   end
+
+  # Only the hosted route reports a model here; without a `:route` (and
+  # on the assignee route) the decision map is exactly what it was.
+  defp put_model_used(decision, nil), do: decision
+  defp put_model_used(decision, model), do: Map.put(decision, :model_used, model)
+
+  defp maybe_put_route(args, nil), do: args
+  defp maybe_put_route(args, route), do: Map.put(args, :route, route)
 
   @doc """
   Run an ALREADY-FORMED positive answer through the SAME post-model gates
@@ -1813,16 +1908,52 @@ defmodule Platform.Meetings.IntentClassifier do
 
   # ── Provider call ─────────────────────────────────────────────────────────
 
-  defp call_provider(provider_module, agent, prompt, chunk_text, room_id) do
+  # `route` is the optional `:route` key of the `decide/1` args (task
+  # 01a1e5da). nil (every external `decide/1` caller) and `{:assignee, _}`
+  # take TODAY's path: `provider_module`, the agent's credentials, a system
+  # message, and the llama.cpp/Ollama thinking switches. `{:hosted, _}`
+  # takes the install-level provider. Returns `{:ok, content, model_used}`
+  # where `model_used` is nil except on the hosted route.
+  defp call_provider({:hosted, hosted}, _provider_module, _agent, prompt, chunk_text, room_id) do
+    # The prompt travels in the `:system` opt, not as a role "system"
+    # message: Anthropic passes a system message straight into `messages`
+    # and the Messages API rejects it. Hosted adapters ignore `think` and
+    # `chat_template_kwargs`, so neither is sent. `base_url` only means
+    # something to Ollama (Anthropic and OpenAI use fixed hosts).
+    messages = [%{role: "user", content: chunk_text}]
+
+    opts =
+      [
+        model: hosted.model,
+        base_url: if(hosted.provider == :ollama, do: hosted.base_url),
+        temperature: 0.0,
+        max_tokens: 1024,
+        system: prompt
+      ]
+      |> Enum.reject(fn {_k, v} -> is_nil(v) end)
+
+    with {:ok, content, result} <-
+           run_provider(hosted.module, hosted.credentials, messages, opts, room_id) do
+      {:ok, unfence(content), hosted.model || provider_model(result)}
+    end
+  end
+
+  defp call_provider(route, provider_module, agent, prompt, chunk_text, room_id) do
     messages = [
       %{role: "system", content: prompt},
       %{role: "user", content: chunk_text}
     ]
 
+    {base_url, model} =
+      case route do
+        {:assignee, %{base_url: base_url, model: model}} -> {base_url, model}
+        _ -> {Map.get(agent, :base_url), Map.get(agent, :model)}
+      end
+
     opts =
       [
-        base_url: Map.get(agent, :base_url),
-        model: Map.get(agent, :model),
+        base_url: base_url,
+        model: model,
         temperature: 0.0,
         max_tokens: 1024,
         # The classifier runs against a ~2B reasoning model. Left to its
@@ -1839,6 +1970,13 @@ defmodule Platform.Meetings.IntentClassifier do
 
     credentials = agent_credentials(agent)
 
+    with {:ok, content, _result} <-
+           run_provider(provider_module, credentials, messages, opts, room_id) do
+      {:ok, content, nil}
+    end
+  end
+
+  defp run_provider(provider_module, credentials, messages, opts, room_id) do
     try do
       case provider_module.chat(credentials, messages, opts) do
         {:ok, result} ->
@@ -1854,7 +1992,7 @@ defmodule Platform.Meetings.IntentClassifier do
                 emit_truncated_output(room_id, provider_finish_reason(result))
                 {:error, :empty_output}
               else
-                {:ok, content}
+                {:ok, content, result}
               end
 
             :error ->
@@ -1876,6 +2014,27 @@ defmodule Platform.Meetings.IntentClassifier do
         {:error, :model_error}
     end
   end
+
+  @doc """
+  Strip ONE surrounding Markdown code fence (```` ```json ... ``` ```` or
+  ```` ``` ... ``` ````) from a completion, else return it unchanged.
+
+  Applied on the hosted model route only (task 01a1e5da): hosted chat
+  models often wrap a JSON answer in a fence, which `Jason.decode/1`
+  would report as a `parse_error` on every positive. The assignee route
+  parses exactly what it always did.
+  """
+  @spec unfence(String.t()) :: String.t()
+  def unfence(content) when is_binary(content) do
+    case Regex.run(~r/\A\s*```[A-Za-z0-9_-]*[ \t]*\r?\n(.*?)\r?\n?```\s*\z/s, content) do
+      [_, inner] -> inner
+      nil -> content
+    end
+  end
+
+  defp provider_model(%{model: model}) when is_binary(model), do: model
+  defp provider_model(%{"model" => model}) when is_binary(model), do: model
+  defp provider_model(_), do: nil
 
   # Both provider response shapes — the atom-key map returned by
   # `Platform.Agents.Providers.Ollama.chat/3` and the string-key map a

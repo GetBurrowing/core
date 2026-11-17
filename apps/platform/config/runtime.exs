@@ -162,6 +162,46 @@ case System.get_env("STARTER_ANTHROPIC_API_KEY") do
   value -> config :platform, :starter_anthropic_api_key, String.trim(value)
 end
 
+# MEETINGS_INTENT_PROVIDER  the install-level model for the meeting intent
+#                     classifier (task 01a1e5da): `anthropic`, `openai` or
+#                     `ollama`. Used only when the meetings.intent_classify
+#                     agent has no base_url + model of its own. Unset or blank
+#                     leaves meeting intent off. Separate from the chat context
+#                     summary setting; never the starter allowance.
+# MEETINGS_INTENT_MODEL     model name; unset uses the adapter's default.
+# MEETINGS_INTENT_BASE_URL  base URL, read by the ollama provider only.
+# MEETINGS_INTENT_API_KEY   the provider API key. Only its NAME is stored in
+#                     config (`api_key_env`); the value is read at call time.
+#                     Unset falls back to the platform Vault credential.
+# See Platform.Meetings.IntentModel.
+meetings_intent_env = fn name ->
+  case System.get_env(name) do
+    nil -> nil
+    value -> if String.trim(value) == "", do: nil, else: String.trim(value)
+  end
+end
+
+case meetings_intent_env.("MEETINGS_INTENT_PROVIDER") do
+  nil ->
+    :ok
+
+  provider ->
+    config :platform, :meetings_intent_model, %{
+      # A fixed list, never String.to_atom/1: anything else reads as :none.
+      provider:
+        case String.downcase(provider) do
+          "anthropic" -> :anthropic
+          "openai" -> :openai
+          "ollama" -> :ollama
+          _ -> :none
+        end,
+      model: meetings_intent_env.("MEETINGS_INTENT_MODEL"),
+      base_url: meetings_intent_env.("MEETINGS_INTENT_BASE_URL"),
+      api_key_env:
+        if(meetings_intent_env.("MEETINGS_INTENT_API_KEY"), do: "MEETINGS_INTENT_API_KEY")
+    }
+end
+
 # ── Session cookie domain (cross-subdomain OIDC login fix) ────────────────────
 # The `_platform_session` cookie is host-only by default (no `Domain`), so a
 # login started on `chat.example.com` loses its OIDC `state` cookie when

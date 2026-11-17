@@ -542,7 +542,6 @@ defmodule Platform.Regression.BootTelemetryHandlerDetachAuditTest do
   defp on_exit_args(_node), do: nil
 
   defp call_line({_, meta, _}) when is_list(meta), do: meta[:line]
-  defp call_line({{:., _, _}, meta, _}) when is_list(meta), do: meta[:line]
   defp call_line(_), do: 0
 
   defp resolve_alias({:__aliases__, _, [head | rest]}, aliases) when is_atom(head) do

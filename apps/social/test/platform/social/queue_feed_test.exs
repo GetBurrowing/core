@@ -7,7 +7,6 @@ defmodule Platform.Social.QueueFeedTest do
   use Platform.DataCase, async: false
 
   import Ecto.Query, only: [from: 2]
-  import Platform.SocialFixtures
   import Platform.SocialApprovalFixtures
 
   alias Platform.Federation.ToolArguments

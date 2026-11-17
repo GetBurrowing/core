@@ -252,4 +252,180 @@ defmodule PlatformWeb.AuthControllerAppLoginTest do
       refute log =~ verifier
     end
   end
+
+  # Task 01a1e58b stage 3: a sign-in by code (`/auth/sign-in`: an emailed
+  # code, or a pasted invitation, both `{:setup_code, _}`) lands on the
+  # add-a-passkey prompt, in the app's web view and on the web. The code
+  # login here is the pasted-invitation route (`POST /auth/invitation`), which
+  # reaches `setup_code_login/3` with no mail rig; stage 2's tests drive the
+  # emailed-code route to the same function.
+  describe "a code sign-in lands on the add-a-passkey prompt" do
+    @code "AbCd1234EfGh"
+
+    setup do
+      keys = [:sign_in_admin_enabled, :sign_in_admin_url, :sign_in_admin_api_key]
+      saved = for key <- keys, do: {key, Application.fetch_env(:platform, key)}
+
+      on_exit(fn ->
+        for {key, old} <- saved do
+          case old do
+            {:ok, value} -> Application.put_env(:platform, key, value)
+            :error -> Application.delete_env(:platform, key)
+          end
+        end
+      end)
+
+      Application.put_env(:platform, :sign_in_admin_enabled, true)
+      Application.put_env(:platform, :sign_in_admin_url, "http://pocket-id.test")
+      Application.put_env(:platform, :sign_in_admin_api_key, "test-key-not-a-secret")
+      :ets.delete_all_objects(:sign_in_email_setup_rate)
+
+      Req.Test.stub(Platform.OIDC, fn conn ->
+        conn
+        |> Plug.Conn.put_resp_header(
+          "location",
+          "/interaction?interaction=e8a7f28d-4e78-4f21-bec0-53dc068d471f"
+        )
+        |> Plug.Conn.send_resp(302, "")
+      end)
+
+      user =
+        Platform.ExternalUserFixtures.create_user!(%{
+          oidc_sub: "app-login-subject",
+          email: "app@example.com"
+        })
+
+      Platform.ExternalUserFixtures.plain_member!(user, Platform.Tenancy.get_org_by_slug!("acme"))
+      mock_oidc!()
+      %{user: user}
+    end
+
+    defp invitation_link, do: "https://issuer.example.com/lc/" <> @code
+
+    defp handover_link,
+      do: PlatformWeb.Endpoint.url() <> "/auth/handover?" <> URI.encode_query(code: @code)
+
+    # The code login: pocket-id's /lc/<code>, then (recycled, as the browser
+    # returns) Burrow's OIDC callback with the state the login stored.
+    defp code_sign_in(conn, link) do
+      started = conn |> recycle() |> post("/auth/invitation", %{setup_link: link})
+      assert redirected_to(started) =~ "https://issuer.example.com/lc/" <> @code
+      provider_return(started)
+    end
+
+    defp passkey_sign_in(conn) do
+      started = conn |> recycle() |> post("/auth/passkey")
+      assert redirected_to(started) =~ "https://issuer.example.com/authorize?"
+      provider_return(started)
+    end
+
+    defp provider_return(started) do
+      state = get_session(started, :oidc_session_params).state
+
+      started
+      |> recycle()
+      |> get("/auth/oidc/callback?" <> URI.encode_query(%{code: "idp-code", state: state}))
+    end
+
+    defp app_login(challenge) do
+      login = get(build_conn(), ~p"/auth/login?#{[app_challenge: challenge]}")
+      assert redirected_to(login) == "/auth/sign-in"
+      login
+    end
+
+    defp exchange!(callback, verifier) do
+      location = URI.parse(redirected_to(callback, 302))
+      assert {location.scheme, location.host, location.path} == {"burrow", "auth", "/callback"}
+      %{"code" => code} = URI.decode_query(location.query)
+
+      %{"handoff_url" => handoff_url} =
+        build_conn()
+        |> post("/api/app/session", %{"code" => code, "code_verifier" => verifier})
+        |> json_response(200)
+
+      URI.parse(handoff_url)
+    end
+
+    # The web view's fresh cookie store: every 302 followed with recycle/1.
+    defp follow(%Plug.Conn{status: 302} = conn, hops) when length(hops) < 10 do
+      location = redirected_to(conn, 302)
+      refute String.starts_with?(location, "/auth/login"), "the chain reached #{location}"
+      conn |> recycle() |> get(location) |> follow([location | hops])
+    end
+
+    defp follow(conn, hops), do: {conn, Enum.reverse(hops)}
+
+    defp prompt?(conn),
+      do:
+        conn
+        |> html_response(200)
+        |> LazyHTML.from_document()
+        |> LazyHTML.query("#passkey-add-prompt")
+        |> Enum.count() == 1
+
+    test "an app code sign-in's handoff_url lands the web view on the prompt" do
+      {verifier, challenge} = pkce()
+
+      handoff =
+        challenge
+        |> app_login()
+        |> code_sign_in(invitation_link())
+        |> exchange!(verifier)
+
+      assert URI.decode_query(handoff.query)["to"] == "/settings?passkey=add"
+
+      {conn, hops} = build_conn() |> get(handoff.path <> "?" <> handoff.query) |> follow([])
+      assert hops == ["/settings?passkey=add"]
+      assert prompt?(conn)
+    end
+
+    test "an app passkey sign-in's handoff_url has no `to` and lands on /", %{user: user} do
+      {verifier, challenge} = pkce()
+
+      handoff =
+        challenge
+        |> app_login()
+        |> passkey_sign_in()
+        |> exchange!(verifier)
+
+      refute Map.has_key?(URI.decode_query(handoff.query), "to")
+
+      {conn, hops} = build_conn() |> get(handoff.path <> "?" <> handoff.query) |> follow([])
+      assert hops == ["/", "/chat"]
+      assert get_session(conn, :current_user_id) == user.id
+      refute html_response(conn, 200) =~ "passkey-add-prompt"
+    end
+
+    test "a web code sign-in redirects to /settings?passkey=add and shows the prompt" do
+      callback = get(build_conn(), "/auth/login") |> code_sign_in(invitation_link())
+
+      assert redirected_to(callback, 302) == "/settings?passkey=add"
+      assert get_session(callback, :signed_in_with_email_code) == nil
+      assert Repo.aggregate(Platform.Mobile.AppLoginCode, :count) == 0
+
+      {conn, _hops} = follow(callback, [])
+      assert prompt?(conn)
+    end
+
+    test "abandoned code login, then passkey login, lands on /" do
+      login = get(build_conn(), "/auth/login")
+      abandoned = login |> recycle() |> post("/auth/invitation", %{setup_link: invitation_link()})
+      assert get_session(abandoned, :signed_in_with_email_code) == true
+
+      callback = passkey_sign_in(abandoned)
+      assert redirected_to(callback, 302) == "/"
+    end
+
+    test "a hand-over still lands on /setup/connect-ai, by link or by pasted code" do
+      handover =
+        build_conn()
+        |> get("/auth/handover?" <> URI.encode_query(code: @code))
+        |> provider_return()
+
+      assert redirected_to(handover, 302) == "/setup/connect-ai"
+
+      pasted = get(build_conn(), "/auth/login") |> code_sign_in(handover_link())
+      assert redirected_to(pasted, 302) == "/setup/connect-ai"
+    end
+  end
 end

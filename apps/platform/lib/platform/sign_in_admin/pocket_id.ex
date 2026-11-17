@@ -30,11 +30,45 @@ defmodule Platform.SignInAdmin.PocketId do
 
   ## Sign-in link lifetime
 
-  `one_time_token/1` always asks for `ttl: "30m"`. pocket-id mints a
-  6-character code for a TTL of 15 minutes or less and a 12-character one
-  above it, and a 6-character code never auto-submits from `/lc/<code>` on
-  the default configuration, which is why the installer pins `LOGIN_TTL` to
-  30m as well (`deployment/installer/burrow_install/setup/pocketid.py`).
+  `one_time_token/2` takes a lifetime from a closed set, never a caller
+  string:
+
+    * `ttl: :short` (the default, and what `one_time_token/1` asks for) sends
+      `ttl: "30m"`. Every code that is used straight away is minted this way.
+    * `ttl: :first_invite` sends `ttl: "168h"` (7 days), for the Users page's
+      first sign-in link, which an admin hands on by hand. pocket-id parses
+      the value with Go's `time.ParseDuration`, which has no `d` unit, and
+      accepts any TTL up to 31 days.
+
+  `ttl_seconds/1` gives the same lifetime in seconds, so a caller stamping an
+  expiry cannot drift from the string sent.
+
+  Both lifetimes must stay above 15 minutes: pocket-id mints a 6-character
+  code for a TTL of 15 minutes or less and a 12-character one above it, and a
+  6-character code never auto-submits from `/lc/<code>` on the default
+  configuration, which is why the installer pins `LOGIN_TTL` to 30m as well
+  (`deployment/installer/burrow_install/setup/pocketid.py`).
+
+  ## Application configuration writes
+
+  `ensure_email_login_code/0` (task 01a1e65e) turns on
+  `emailOneTimeAccessAsUnauthenticatedEnabled`, which pocket-id v2.18.0
+  defaults to `"false"` (`backend/internal/appconfig/model.go:145`). Facts it
+  rests on, all at tag v2.18.0:
+
+    * `GET /api/application-configuration/all` and
+      `PUT /api/application-configuration` both accept the static API key as
+      an admin (`backend/internal/controller/app_config_controller.go:37-38`,
+      `middleware/auth_middleware.go:30-35`).
+    * The PUT is a full replace: `appconfig/service.go:137-138` calls the
+      actor's replace, and `appconfig/model.go:200-226` resets every missing
+      or empty key to its default. So the body is the whole `/all` map with
+      one key changed, never the one key alone.
+    * `/all` includes secrets (`smtpPassword`, `ldapBindPassword`). Under
+      `UI_CONFIG_DISABLED` they are served as `"XXXXXXXXXX"`
+      (`model.go:293-296`) and the PUT is refused (`service.go:119-121`), so
+      a placeholder in the map means no write is attempted. The map is never
+      returned or logged.
   """
 
   require Logger
@@ -48,7 +82,10 @@ defmodule Platform.SignInAdmin.PocketId do
   @max_pages 1_000
   @max_username_attempts 20
   @username_max 50
-  @token_ttl "30m"
+  @email_login_code_key "emailOneTimeAccessAsUnauthenticatedEnabled"
+  # What pocket-id serves in place of a sensitive value under
+  # UI_CONFIG_DISABLED (`backend/internal/appconfig/model.go:293-296`).
+  @redacted_value "XXXXXXXXXX"
 
   defmodule User do
     @moduledoc "A pocket-id user, as returned by `GET /api/users/:id`."
@@ -140,12 +177,122 @@ defmodule Platform.SignInAdmin.PocketId do
   end
 
   @doc """
-  Mints a one-time access token (30 minute TTL) for the user and returns it
-  wrapped in a redacting `Token`.
+  Does this install's pocket-id let an unauthenticated user email themselves a
+  login code? Reads the public `GET /api/application-configuration` list and
+  its `emailOneTimeAccessAsUnauthenticatedEnabled` entry (task 01a1e58b).
+
+  Verified against pocket-id v2.18.0, the image the installer deploys:
+  `backend/internal/appconfig/model.go:39` declares the key
+  (`json:"emailOneTimeAccessAsUnauthenticatedEnabled" ... type:"bool"
+  public:"true"`), `backend/internal/controller/app_config_controller.go:36`
+  serves the public list at `/api/application-configuration` as
+  `[%{"key", "type", "value"}]` with string values, and
+  `backend/internal/onetimeaccess/service.go:66` refuses the unauthenticated
+  email request unless the key is true.
+
+  Fails closed: any transport error, non-200, unexpected shape, missing key or
+  a value other than the string `"true"` answers `false`.
   """
-  @spec one_time_token(String.t()) :: {:ok, Token.t()} | error()
-  def one_time_token(id) when is_binary(id) do
-    case request(:post, user_path(id) <> "/one-time-access-token", json: %{"ttl" => @token_ttl}) do
+  @spec email_login_code_enabled?() :: boolean()
+  def email_login_code_enabled? do
+    case request(:get, "/api/application-configuration") do
+      {:ok, 200, list} when is_list(list) ->
+        Enum.any?(list, fn
+          %{"key" => "emailOneTimeAccessAsUnauthenticatedEnabled", "value" => "true"} -> true
+          _ -> false
+        end)
+
+      _ ->
+        false
+    end
+  end
+
+  @doc """
+  Turns on pocket-id's unauthenticated email login code
+  (`emailOneTimeAccessAsUnauthenticatedEnabled`) if it is off (task
+  01a1e65e). Answers `{:ok, :present}` when it was already on and no write
+  was sent, `{:ok, :enabled}` when this call turned it on.
+
+  Read-merge-write: `PUT /api/application-configuration` is a full replace
+  that resets any missing key to its default, so the whole `/all` map is
+  sent back with only this one key changed. A config served with the
+  redaction placeholder (`UI_CONFIG_DISABLED`) answers
+  `{:error, :config_locked}` and sends no write. A 200 whose list does not
+  carry the key as `"true"` answers `{:error, :not_saved}`.
+
+  Never returns or logs the configuration or any value in it: the map holds
+  secrets such as `smtpPassword`.
+  """
+  @spec ensure_email_login_code() :: {:ok, :present} | {:ok, :enabled} | error()
+  def ensure_email_login_code do
+    with {:ok, config} <- app_config_all() do
+      cond do
+        Enum.any?(config, fn {_key, value} -> value == @redacted_value end) ->
+          {:error, :config_locked}
+
+        config[@email_login_code_key] == "true" ->
+          {:ok, :present}
+
+        true ->
+          body = Map.put(config, @email_login_code_key, "true")
+
+          case request(:put, "/api/application-configuration", json: body) do
+            {:ok, 200, list} when is_list(list) ->
+              if email_login_code_saved?(list), do: {:ok, :enabled}, else: {:error, :not_saved}
+
+            {:ok, 200, _} ->
+              {:error, :not_saved}
+
+            {:ok, status, _} ->
+              http_error(status)
+
+            {:error, _} = error ->
+              error
+          end
+      end
+    end
+  end
+
+  defp email_login_code_saved?(list),
+    do: Enum.any?(list, &match?(%{"key" => @email_login_code_key, "value" => "true"}, &1))
+
+  # `GET /api/application-configuration/all` as a `%{key => value}` map. The
+  # map carries secrets: it never leaves this module.
+  defp app_config_all do
+    case request(:get, "/api/application-configuration/all") do
+      {:ok, 200, list} when is_list(list) ->
+        config =
+          for %{"key" => key} = entry <- list, is_binary(key), into: %{} do
+            {key, Map.get(entry, "value")}
+          end
+
+        if config == %{}, do: {:error, :bad_response}, else: {:ok, config}
+
+      {:ok, 200, _} ->
+        {:error, :bad_response}
+
+      {:ok, status, _} ->
+        http_error(status)
+
+      {:error, _} = error ->
+        error
+    end
+  end
+
+  @typedoc "A sign-in link lifetime: 30 minutes, or 7 days for a first invite."
+  @type ttl() :: :short | :first_invite
+
+  @doc """
+  Mints a one-time access token for the user and returns it wrapped in a
+  redacting `Token`. `opts` takes `ttl: :short` (30 minutes, the default) or
+  `ttl: :first_invite` (7 days). Both are above 15 minutes, so both mint a
+  12-character code that auto-submits from `/lc/<code>`.
+  """
+  @spec one_time_token(String.t(), [{:ttl, ttl()}]) :: {:ok, Token.t()} | error()
+  def one_time_token(id, opts \\ [ttl: :short]) when is_binary(id) do
+    ttl = ttl_string(Keyword.fetch!(opts, :ttl))
+
+    case request(:post, user_path(id) <> "/one-time-access-token", json: %{"ttl" => ttl}) do
       {:ok, status, %{"token" => token}} when status in [200, 201] and is_binary(token) ->
         {:ok, %Token{value: token}}
 
@@ -159,6 +306,17 @@ defmodule Platform.SignInAdmin.PocketId do
         error
     end
   end
+
+  @doc """
+  The lifetime of a `t:ttl/0` in seconds: 1_800 for `:short`, 604_800 for
+  `:first_invite`. Matches the string `one_time_token/2` sends.
+  """
+  @spec ttl_seconds(ttl()) :: pos_integer()
+  def ttl_seconds(:short), do: 30 * 60
+  def ttl_seconds(:first_invite), do: 7 * 24 * 60 * 60
+
+  defp ttl_string(:short), do: "30m"
+  defp ttl_string(:first_invite), do: "168h"
 
   @doc """
   Disables or re-enables the user. `PUT /api/users/:id` takes the full user
