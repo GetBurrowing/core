@@ -558,14 +558,6 @@ defmodule PlatformWeb.Components.IconRail do
   # Internals
   # ------------------------------------------------------------------
 
-  @doc """
-  The tab bar's link tabs for an actor, in `mobile_tab_keys/0` order (not the
-  canonical list's order). With a Scope they are filtered through it (task
-  01a1386d-fb6e stage 1); without one they render unfiltered. The phone tab
-  bar (`bottom_rail/1`) reads this; the desktop sidebar reads
-  `desktop_rail_destinations/1`.
-  """
-  @spec tab_destinations(Scope.t() | nil) :: [map()]
   @doc "Game navigation shares the shell's docked bar, safe areas and native bridge."
   def gaming_destinations(scope, project_id \\ nil) do
     suffix = if project_id, do: "?project=" <> URI.encode_www_form(project_id), else: ""
@@ -582,6 +574,14 @@ defmodule PlatformWeb.Components.IconRail do
     studio ++ [%{key: :discover, label: "Discover", path: "/play?mode=discover"}]
   end
 
+  @doc """
+  The tab bar's link tabs for an actor, in `mobile_tab_keys/0` order (not the
+  canonical list's order). With a Scope they are filtered through it (task
+  01a1386d-fb6e stage 1); without one they render unfiltered. The phone tab
+  bar (`bottom_rail/1`) reads this; the desktop sidebar reads
+  `desktop_rail_destinations/1`.
+  """
+  @spec tab_destinations(Scope.t() | nil) :: [map()]
   def tab_destinations(access_scope), do: keyed(mobile_tab_keys(), access_scope)
 
   defp keyed(keys, access_scope) do
