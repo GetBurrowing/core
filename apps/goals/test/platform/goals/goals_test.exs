@@ -273,7 +273,9 @@ defmodule Platform.Goals.GoalsTest do
        "the query inner-joins subquery(Visibility.visible_goals(actor)), so it is scoped"},
       {"platform/goals/space_updates.ex", {:claim, 4},
        "the update is restricted to gr.goal_id in subquery(visible_goals(coach)), and the " <>
-         "grant came from space_grants(coach, goal_id)"}
+         "grant came from space_grants(coach, goal_id)"},
+      {"platform/goals/space_updates.ex", {:number_now, 3},
+       "the query inner-joins subquery(Visibility.visible_goals(coach)), so it is scoped"}
     ]
 
     defp by_id_reads(source) do
