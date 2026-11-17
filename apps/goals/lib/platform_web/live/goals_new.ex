@@ -33,7 +33,8 @@ defmodule PlatformWeb.GoalsNew do
   RENDERED, carried in the click; if the agent rewrote the proposal since,
   the context answers `:proposal_changed` and nothing is written.
   PubSub messages (`{:new_message, _}` on the conversation space,
-  `{:goal_proposal_changed, _}` on the proposal) only trigger a re-read; their payload is never rendered.
+  `{:goal_proposal_changed, _}` on the proposal and on the person's own
+  `"goals:proposals:user:<user_id>"`) only trigger a re-read; their payload is never rendered.
 
   After Create the proposal is no longer open, so the page keeps the id of
   the proposal IT confirmed (a server value) and re-reads it with
@@ -73,6 +74,12 @@ defmodule PlatformWeb.GoalsNew do
 
   @doc "Sets up the screen for `user` on `socket` (assign `:new`)."
   def mount(socket, user) do
+    # A screen open before the person starts a goal (here or in another
+    # window) has no proposal to subscribe to; the person's own topic tells
+    # it one started, and `refresh/1` then subscribes to the proposal and its
+    # space (task 01a1eab6 stage 5). Mounted once per LiveView process.
+    if Phoenix.LiveView.connected?(socket), do: Goals.subscribe_proposals(user)
+
     socket
     |> Phoenix.Component.assign(:new, %{
       user: user,

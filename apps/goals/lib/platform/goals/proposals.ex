@@ -41,7 +41,12 @@ defmodule Platform.Goals.Proposals do
   Signals to the agent go through `Platform.Goals.Signals.deliver/4` and
   carry identifiers only, never the person's words, a title or a setting.
   Every write broadcasts `{:goal_proposal_changed, id}` on
-  `"goals:proposal:<id>"` (`Platform.PubSub`): the id only.
+  `"goals:proposal:<id>"` (`Platform.PubSub`): the id only. A start, which
+  no screen can be subscribed to yet, also broadcasts it on the person's
+  `"goals:proposals:user:<user_id>"` (`subscribe_proposals/1`), after the
+  transaction commits, so every New goal screen the person already has open
+  picks the new conversation up (task 01a1eab6 stage 5). A rolled-back or
+  refused start broadcasts nothing.
   """
 
   import Ecto.Query
@@ -186,7 +191,9 @@ defmodule Platform.Goals.Proposals do
         end)
 
       with {:ok, {proposal, agent}} <- result do
-        {:ok, signal_new_goal(proposal, agent)}
+        proposal = signal_new_goal(proposal, agent)
+        broadcast_user(proposal)
+        {:ok, proposal}
       end
     end
   end
@@ -332,6 +339,16 @@ defmodule Platform.Goals.Proposals do
       |> tap(&broadcast_ok/1)
     end
   end
+
+  @doc """
+  Subscribes the caller to `{:goal_proposal_changed, id}` for every proposal
+  `user` starts (`"goals:proposals:user:<user_id>"`). Only the person's own
+  topic; any other actor gets `{:error, :not_found}`.
+  """
+  def subscribe_proposals(%User{id: user_id}) when is_binary(user_id),
+    do: Phoenix.PubSub.subscribe(Platform.PubSub, user_topic(user_id))
+
+  def subscribe_proposals(_actor), do: {:error, :not_found}
 
   @doc "Subscribes the caller to `{:goal_proposal_changed, id}` for a proposal it sees."
   def subscribe_proposal(actor, proposal_id) do
@@ -783,6 +800,11 @@ defmodule Platform.Goals.Proposals do
   end
 
   defp topic(id), do: "goals:proposal:#{id}"
+  defp user_topic(user_id), do: "goals:proposals:user:#{user_id}"
+
+  defp broadcast_user(%Proposal{id: id, user_id: user_id}) do
+    Phoenix.PubSub.broadcast(Platform.PubSub, user_topic(user_id), {:goal_proposal_changed, id})
+  end
 
   defp broadcast(id),
     do: Phoenix.PubSub.broadcast(Platform.PubSub, topic(id), {:goal_proposal_changed, id})

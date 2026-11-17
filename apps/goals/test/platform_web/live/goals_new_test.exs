@@ -717,6 +717,75 @@ defmodule PlatformWeb.GoalsNewTest do
     assert has_element?(child, "[data-role='goals-new-examples']")
   end
 
+  # Task 01a1eab6 stage 5 (e2e case 01a1eabf-bd32-7007): a second window
+  # already on ?new=1 when the person starts the goal in the first one.
+  test "a screen open before the start shows the opening message and later turns live", %{
+    conn: conn,
+    user: user,
+    org_id: org_id
+  } do
+    lead = lead!(user)
+    other = person!(org_id, "Bea Other")
+    one = open(conn, user)
+    two = open(build_conn(), user)
+    theirs = open(build_conn(), other)
+    person = "[data-role='goals-new-message'][data-from='person'] .chat-markdown"
+    agent = "[data-role='goals-new-message'][data-from='agent'] .chat-markdown"
+
+    for view <- [one, two, theirs],
+        do: assert(has_element?(view, "[data-role='goals-new-examples']"))
+
+    send_text(one, @yt)
+
+    # No remount: the same view process re-reads on the person's topic.
+    assert texts(two, person) == [@yt]
+    refute has_element?(two, "[data-role='goals-new-examples']")
+    assert has_element?(two, "[data-role='goals-new-start-over']", "Start over")
+
+    send_text(one, "AMBER-KESTREL second turn")
+    turn!(lead, user, :yt)
+
+    for view <- [one, two] do
+      assert texts(view, person) == [@yt, "AMBER-KESTREL second turn"]
+      assert [reply] = texts(view, agent)
+      assert reply =~ "How big is big?"
+    end
+
+    # Another person's screen never refreshes onto this conversation.
+    html = render(theirs)
+    refute html =~ "AMBER-KESTREL"
+    refute html =~ "How big is big?"
+    refute html =~ proposal!(user).id
+    assert has_element?(theirs, "[data-role='goals-new-examples']")
+  end
+
+  test "a refused or rolled-back start broadcasts nothing on the person's topic", %{
+    user: user
+  } do
+    lead = user |> lead!() |> grant_goals_tools!(["messaging"])
+    two = open(build_conn(), user)
+    :ok = Goals.subscribe_proposals(user)
+
+    # The lead lacks the Goals tools: the transaction writes nothing.
+    assert Goals.start_goal_conversation(user, @yt) == {:error, :lead_missing_goals_tools}
+    refute_received {:goal_proposal_changed, _}
+    assert has_element?(two, "[data-role='goals-new-examples']")
+    refute render(two) =~ @yt
+
+    # Positive control: the same subscription hears a start that commits.
+    grant_goals_tools!(lead)
+    {:ok, started} = Goals.start_goal_conversation(user, @yt)
+    id = started.id
+    assert_received {:goal_proposal_changed, ^id}
+    assert texts(two, "[data-role='goals-new-message'][data-from='person'] .chat-markdown") == [
+             @yt
+           ]
+
+    # A second start rolls back (one open proposal per person): nothing more.
+    assert {:error, :conversation_open} = Goals.start_goal_conversation(user, "PLUM-ORBIT again")
+    refute_received {:goal_proposal_changed, _}
+  end
+
   test "the type scan hits a planted control" do
     assert [_] = type_controls(~s(<div><select name="type"><option>a</option></select></div>))
     assert [_] = type_controls(~s(<div><button>Goal type</button></div>))

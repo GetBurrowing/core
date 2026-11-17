@@ -434,6 +434,8 @@ defmodule Platform.Goals do
   def confirm_proposal(user, id, rev), do: proposals(:confirm_proposal, [user, id, rev])
   def cancel_proposal(user, id), do: proposals(:cancel_proposal, [user, id])
   def subscribe_proposal(user, id), do: proposals(:subscribe_proposal, [user, id])
+  @doc "Subscribes the caller to every proposal `user` starts (their own topic)."
+  def subscribe_proposals(user), do: proposals(:subscribe_proposals, [user])
 
   @doc """
   Operator command (task 01a1eab6 stage 4): re-sends `goals.new_goal` for an

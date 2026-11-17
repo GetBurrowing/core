@@ -37,7 +37,8 @@ defmodule Platform.Goals.DisabledTest do
           propose_goal: 3,
           confirm_proposal: 3,
           cancel_proposal: 2,
-          subscribe_proposal: 2
+          subscribe_proposal: 2,
+          subscribe_proposals: 1
         ],
         do: assert(f in functions, "#{inspect(f)} is not exported")
 
