@@ -488,6 +488,17 @@
          reload (stage 1 review finding). This always-mounted host
          reads/writes localStorage on `meeting_captions_persist` /
          `meeting_captions_hydrate` and has no visible UI. --%>
+      <%!-- CAPTIONS DEFAULT AND KEY ARE KEPT ON PURPOSE (task 01a1eb27
+         stage 1, "captions off with a pulse"). The server default
+         `:captions_visible` was ALREADY false, so "off by default" needed
+         no change, and this host's key `suite.meeting.captions_visible`
+         (plus ClientState `meeting:captions_visible` and its legacy
+         read-once migration in assets/js/hooks/meeting_captions.js) is
+         unchanged. No key migration: since the default did not move, a
+         stored `true` can only be the viewer's own deliberate choice, and
+         it keeps meaning "on". What changed is that "off" no longer reads
+         as "nothing is happening": the CC button's `info` pulse says the
+         meeting is being transcribed whatever this preference is. --%>
       <div
         id="meeting-captions-persist-host"
         phx-hook="MeetingCaptionsPersist"
@@ -2446,18 +2457,32 @@
              sibling pills in this row. Behaviour, event name,
              `data-role`, `data-active` and ARIA are byte-identical to the
              top-bar version this replaces -- this is a relocation, not a
-             rewrite. --%>
+             rewrite.
+
+             THE PULSE (task 01a1eb27 stage 1, canvas 01a1eb28). The
+             transcriber is auto-dispatched by LiveKit at room creation;
+             nobody starts or stops it, so there is no control here for it,
+             only a STATE: a small `bg-info` dot, shown iff
+             `@transcriber_present?`, whether captions are on OR off,
+             because captions are "just for you" and transcription is the
+             meeting record. `info` because it is a state, never `primary`
+             (an action) and never `error` (red reads as "recording
+             problem"). It breathes via `motion-safe:animate-pulse`, so
+             under prefers-reduced-motion it is a SOLID dot. aria-hidden:
+             the label carries the state for screen readers instead.
+             `phx-click`, `data-role`, `data-active` and `aria-pressed` are
+             byte-identical; only the label/title gain the suffix. --%>
             <:before_leave :if={@in_meeting}>
               <button
                 type="button"
                 phx-click="toggle_captions_meeting"
-                aria-label={if @captions_visible, do: "Hide captions", else: "Show captions"}
+                aria-label={captions_toggle_label(@captions_visible, @transcriber_present?)}
                 aria-pressed={to_string(@captions_visible)}
-                title={if @captions_visible, do: "Hide captions", else: "Show captions"}
+                title={captions_toggle_label(@captions_visible, @transcriber_present?)}
                 data-role="meeting-captions-toggle"
                 data-active={to_string(@captions_visible)}
                 class={[
-                  "btn btn-sm btn-ghost btn-square min-h-11",
+                  "btn btn-sm btn-ghost btn-square min-h-11 relative",
                   if(@captions_visible,
                     do: "bg-base-300 text-base-content shadow-[inset_0_1px_3px_var(--shade)]",
                     else: "text-base-content"
@@ -2472,6 +2497,13 @@
                 >
                   <path d="M2 5a2 2 0 012-2h16a2 2 0 012 2v10a2 2 0 01-2 2H6l-4 4V5zm5 3a1 1 0 00-1 1v1a1 1 0 001 1h2a1 1 0 001-1V9a1 1 0 00-1-1H7zm7 0a1 1 0 00-1 1v1a1 1 0 001 1h2a1 1 0 001-1V9a1 1 0 00-1-1h-2z" />
                 </svg>
+                <span
+                  :if={@transcriber_present?}
+                  data-role="meeting-captions-pulse"
+                  aria-hidden="true"
+                  class="absolute top-1 right-1 size-2 rounded-full bg-info motion-safe:animate-pulse"
+                >
+                </span>
               </button>
             </:before_leave>
           </CallShell.call_controls>

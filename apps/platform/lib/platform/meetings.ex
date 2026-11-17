@@ -5842,6 +5842,41 @@ defmodule Platform.Meetings do
     )
   end
 
+  @doc """
+  When the meeting in `space_id` started being transcribed: the earliest
+  `joined_at` among its ACTIVE transcriber rows (`transcriber_participant?/1`),
+  or `nil` when no transcriber is present (task 01a1eb27 stage 1).
+
+  The transcriber is auto-dispatched by LiveKit at room creation, so this is
+  a read of participant rows, never a record of anyone starting it. It goes
+  `nil` the moment the last transcriber row gets `left_at`, exactly as the
+  `:transcriber_present?` pill does. A non-binary `space_id` returns `nil`.
+  """
+  @spec transcription_started_at(term()) :: DateTime.t() | nil
+  def transcription_started_at(space_id) when is_binary(space_id) do
+    space_id
+    |> active_participants_for_space()
+    |> Enum.filter(&transcriber_participant?/1)
+    |> earliest_joined_at()
+  end
+
+  def transcription_started_at(_), do: nil
+
+  @doc """
+  The earliest `joined_at` in a list of participant rows, or `nil` for an
+  empty list. The caller decides which rows count (see
+  `transcription_started_at/1`), so a split it already did is not repeated.
+  """
+  @spec earliest_joined_at([Participant.t()]) :: DateTime.t() | nil
+  def earliest_joined_at([]), do: nil
+
+  def earliest_joined_at(rows) when is_list(rows) do
+    rows
+    |> Enum.map(& &1.joined_at)
+    |> Enum.reject(&is_nil/1)
+    |> Enum.min(DateTime, fn -> nil end)
+  end
+
   # ── Space-level presence queries ─────────────────────────────────────────
 
   @doc """

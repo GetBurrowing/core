@@ -688,10 +688,8 @@ defmodule PlatformWeb.MeetingLive do
   # `enter_meeting_as_guest/3` which then overrides some values. All
   # side-effect-free (no PubSub subscribes, no LiveKit calls).
   defp seed_guest_shell_tree_assigns(socket, meeting) do
-    {participants, transcriber_present?} =
-      if is_binary(meeting.chat_space_id),
-        do: meeting_presence(meeting.chat_space_id),
-        else: {[], false}
+    {participants, transcriber_present?, transcription_started_at} =
+      meeting_presence_detail(meeting.chat_space_id)
 
     socket
     |> assign(:meeting, meeting)
@@ -720,6 +718,7 @@ defmodule PlatformWeb.MeetingLive do
     |> assign(:muted_agent_ids, MapSet.new())
     |> assign(:agent_mute_errors, %{})
     |> assign(:transcriber_present?, transcriber_present?)
+    |> assign(:transcription_started_at, transcription_started_at)
     |> assign(:room_live?, room_live?(meeting.chat_space_id))
     |> assign(:room_recording?, room_recording?(meeting.chat_space_id))
     |> assign(:agents_by_id, %{})
@@ -1144,10 +1143,8 @@ defmodule PlatformWeb.MeetingLive do
             seed_ask_floor_holders(socket, meeting.id)
           end
 
-        {participants, transcriber_present?} =
-          if meeting.chat_space_id,
-            do: meeting_presence(meeting.chat_space_id),
-            else: {[], false}
+        {participants, transcriber_present?, transcription_started_at} =
+          meeting_presence_detail(meeting.chat_space_id)
 
         agents_by_id = load_agents_by_id(participants)
 
@@ -1187,6 +1184,7 @@ defmodule PlatformWeb.MeetingLive do
           |> assign(:muted_agent_ids, MapSet.new())
           |> assign(:agent_mute_errors, %{})
           |> assign(:transcriber_present?, transcriber_present?)
+          |> assign(:transcription_started_at, transcription_started_at)
           |> assign(:room_live?, room_live?(meeting.chat_space_id))
           |> assign(:room_recording?, room_recording?(meeting.chat_space_id))
           |> assign(:agents_by_id, agents_by_id)
@@ -6547,11 +6545,14 @@ defmodule PlatformWeb.MeetingLive do
 
   defp refresh_participants(%{assigns: %{meeting: %{chat_space_id: space_id}}} = socket)
        when is_binary(space_id) do
-    {participants, transcriber_present?} = meeting_presence(space_id)
+    {participants, transcriber_present?, transcription_started_at} =
+      meeting_presence_detail(space_id)
 
     socket
     |> assign(:participants, participants)
     |> assign(:transcriber_present?, transcriber_present?)
+    # Task 01a1eb27 stage 1: clears to nil with the pill when the row leaves.
+    |> assign(:transcription_started_at, transcription_started_at)
     |> assign(:room_live?, room_live?(space_id))
     |> assign(:room_recording?, room_recording?(space_id))
     |> assign(:agents_by_id, load_agents_by_id(participants))
@@ -6979,7 +6980,25 @@ defmodule PlatformWeb.MeetingLive do
   A non-binary `space_id` returns `{[], false}`.
   """
   @spec meeting_presence(term()) :: {[map()], boolean()}
-  def meeting_presence(space_id) when is_binary(space_id) do
+  def meeting_presence(space_id) do
+    {participants, transcriber_present?, _started_at} = meeting_presence_detail(space_id)
+    {participants, transcriber_present?}
+  end
+
+  # The CC button's aria-label/title (task 01a1eb27 stage 1). The pulse dot
+  # is aria-hidden, so the transcription state reaches screen readers here.
+  @doc false
+  def captions_toggle_label(captions_visible?, transcriber_present?) do
+    base = if captions_visible?, do: "Hide captions", else: "Show captions"
+    if transcriber_present?, do: base <> " (meeting is being transcribed)", else: base
+  end
+
+  # `meeting_presence/1` plus `transcription_started_at` (task 01a1eb27
+  # stage 1), from the SAME split, so the CC pulse's timestamp can never
+  # disagree with `transcriber_present?`. Kept private so the public
+  # 2-tuple contract (3 call sites + tests) is unchanged; the standalone
+  # read is `Meetings.transcription_started_at/1`.
+  defp meeting_presence_detail(space_id) when is_binary(space_id) do
     {transcribers, participants} =
       space_id
       |> Meetings.active_participants_for_space()
@@ -6987,10 +7006,11 @@ defmodule PlatformWeb.MeetingLive do
 
     visible = Enum.reject(participants, &Meetings.unresolved_agent_worker_participant?/1)
 
-    {Enum.map(visible, &meeting_participant_view_model/1), transcribers != []}
+    {Enum.map(visible, &meeting_participant_view_model/1), transcribers != [],
+     Meetings.earliest_joined_at(transcribers)}
   end
 
-  def meeting_presence(_), do: {[], false}
+  defp meeting_presence_detail(_), do: {[], false, nil}
 
   # Map a single live `Meetings.Participant` row into the rail/gallery
   # view-model. `:participant_id` is the preloaded `user.id` / `agent.id`
