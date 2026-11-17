@@ -51,8 +51,10 @@ defmodule Platform.Goals.CoachesTest do
     test "lists only active, chat-accepting agents whose runtime holds the goals bundle", c do
       b = coach!(c.person, %{name: "Bravo coach"})
       a = coach!(c.person, %{name: "Alpha coach"})
+
       no_bundle =
         c.person |> external_agent!(%{name: "Charlie"}) |> grant_goals_tools!(["messaging"])
+
       no_profile = external_agent!(c.person, %{name: "Delta"})
       inactive = coach!(c.person, %{name: "Echo", status: "paused"})
       no_chat = coach!(c.person, %{name: "Foxtrot", accepts_chat: false})
@@ -64,7 +66,7 @@ defmodule Platform.Goals.CoachesTest do
       assert ids_among(list, everyone) == [a.id, b.id]
 
       for agent <- everyone do
-        assert Coaches.eligible?(c.person, agent) == (agent.id in [a.id, b.id]),
+        assert Coaches.eligible?(c.person, agent) == agent.id in [a.id, b.id],
                "eligible?/2 disagrees with list_eligible/1 for #{agent.name}"
       end
     end
@@ -180,8 +182,10 @@ defmodule Platform.Goals.CoachesTest do
 
     test "the owner may change to an eligible coach, and back to nil", c do
       b = coach!(c.person, %{name: "Bravo"})
+
       assert {:ok, %{coach_agent_id: id}} =
                Goals.update_goal(c.person, c.goal.id, %{coach_agent_id: b.id})
+
       assert id == b.id
 
       # String keys reach the same check.

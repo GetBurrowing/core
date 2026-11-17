@@ -464,6 +464,7 @@ defmodule Platform.Goals do
       {:ok, %{coaches: coaches, default_id: Platform.Goals.Coaches.default_id(user, coaches)}}
     end
   end
+
   def current_proposal(user), do: proposals(:current_proposal, [user])
   def get_proposal(actor, id), do: proposals(:get_proposal, [actor, id])
   def list_proposals(actor), do: proposals(:list_proposals, [actor])
