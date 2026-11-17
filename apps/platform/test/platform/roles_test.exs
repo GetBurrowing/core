@@ -526,4 +526,52 @@ defmodule Platform.RolesTest do
              ]
     end
   end
+
+  # ── showrunner (task 01a1eaf6 stage 3) ──────────────────────────────
+
+  describe "the showrunner role" do
+    test "roles_key_check accepts showrunner and still rejects a non-roster key" do
+      # `setup` emptied `roles`, so this insert exercises the CHECK itself:
+      # `20261117214509_add_showrunner_role.exs` extended it to eleven keys.
+      now = DateTime.utc_now()
+
+      assert {1, _} =
+               Repo.insert_all("roles", [
+                 %{
+                   key: "showrunner",
+                   name: "Showrunner",
+                   description: "d",
+                   icon: "hero-video-camera",
+                   inserted_at: now,
+                   updated_at: now
+                 }
+               ])
+
+      error =
+        assert_raise Postgrex.Error, fn ->
+          Repo.insert_all("roles", [
+            %{
+              key: "show_runner",
+              name: "X",
+              description: "d",
+              icon: "hero-video-camera",
+              inserted_at: now,
+              updated_at: now
+            }
+          ])
+        end
+
+      assert error.postgres.constraint == "roles_key_check"
+    end
+
+    test "the seed bundles the three showrunner keys" do
+      :ok = Platform.Roles.Seeds.seed_defaults()
+
+      assert Roles.bundle_for("showrunner") == [
+               "showrunner.research_brief",
+               "showrunner.run_sheet",
+               "showrunner.weekly_pitch"
+             ]
+    end
+  end
 end

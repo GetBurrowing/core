@@ -29,6 +29,8 @@ defmodule Platform.Roles.Seeds do
     * `janitor` — weekly drain of small internal chores (added in task
       `019fa1ac-6685` stage 1). Its one bundle key, `janitor.cron_drain`,
       is a Router cron responsibility. No assignment is seeded.
+    * `showrunner` — the weekly How to Computer prep: pitch, research brief,
+      run sheet (added in task `01a1eaf6` stage 3). No assignment is seeded.
     * `security_guard` — periodic scans for CVEs, code patterns,
       deploy config drift, and leaked secrets (see ADR-0043 for the
       runtime design; the four bundled keys register as placeholders
@@ -229,6 +231,24 @@ defmodule Platform.Roles.Seeds do
       # to this role the Router resolves no assignee and the fire is a no-op.
       bundle: [
         "janitor.cron_drain"
+      ]
+    },
+    %{
+      key: "showrunner",
+      name: "Showrunner",
+      description: "Runs the weekly How to Computer show: pitch, research brief, run sheet",
+      icon: "hero-video-camera",
+      # Task 01a1eaf6 stage 3. Its own role, not a key on an existing bundle:
+      # the show's weekly prep posts into a show space and puts decisions to a
+      # named person, a trust and attention scope no existing role holds.
+      # Existing DBs pick the role and bundle up from
+      # `20261117214509_add_showrunner_role.exs`, which also extends
+      # `roles_key_check`. Stage 4 appends three more keys. NO ASSIGNMENT IS
+      # SEEDED: until an agent is pinned, every fire is `{:ok, :unfilled}`.
+      bundle: [
+        "showrunner.weekly_pitch",
+        "showrunner.research_brief",
+        "showrunner.run_sheet"
       ]
     }
   ]

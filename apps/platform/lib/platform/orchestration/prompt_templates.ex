@@ -3112,6 +3112,121 @@ defmodule Platform.Orchestration.PromptTemplates do
         """
       },
       %{
+        slug: "showrunner.weekly_pitch.v1",
+        name: "Showrunner — Weekly Pitch",
+        description:
+          "User turn for the `showrunner.weekly_pitch` cron responsibility (task 01a1eaf6 " <>
+            "stage 3). Monday pitch: exactly three topics for this week's How to Computer. " <>
+            "Core reads no Social data; the agent fetches clip results itself when it has " <>
+            "the tools. Seeded by `20261117214509_add_showrunner_role.exs`.",
+        # Every assign comes from `Handlers.ShowrunnerWeeklyPitch.gather_context/2`.
+        variables: ["episode_number", "week", "host_roles", "recent_episodes", "recent_messages"],
+        content: """
+        You are the showrunner for How to Computer, a weekly show. Your voice is dry, numbers-first and curious: a good topic has a number in it that surprises people, and a question nobody has answered well yet.
+
+        This is the pitch for episode {{episode_number}} ({{week}}). The hosts, by role: {{host_roles}}.
+
+        ## Last week's clip
+
+        If you have the `social_results_get` and `social_clip_list` tools, use them first: find last week's clip and how it did, and let that shape what you pitch (lean into what held attention, drop what did not). If you do not have them, or they return nothing, carry on without them and do not mention it.
+
+        ## The last four episodes (show journal)
+
+        {{recent_episodes}}
+
+        Do not repeat a topic from these. A callback to one of them is welcome.
+
+        ## Recent conversation in the show's space
+
+        {{recent_messages}}
+
+        ## Your answer
+
+        Pitch exactly three topics. Each one has a short title (it becomes the episode title if picked), the angle in one or two sentences, and why it matters this week. Never invent a figure: if a number would make the pitch but you cannot source it, say what you would look up.
+
+        Respond with exactly this JSON object and nothing else:
+
+        {"topics": [{"title": "...", "angle": "...", "why_now": "..."}, {"title": "...", "angle": "...", "why_now": "..."}, {"title": "...", "angle": "...", "why_now": "..."}]}
+        """
+      },
+      %{
+        slug: "showrunner.research_brief.v1",
+        name: "Showrunner — Research Brief",
+        description:
+          "User turn for the `showrunner.research_brief` responsibility (task 01a1eaf6 " <>
+            "stage 3). Fires on the topic pick, with an overnight cron fallback. Sources, " <>
+            "numbers and counterpoints; every number carries its source URL. Seeded by " <>
+            "`20261117214509_add_showrunner_role.exs`.",
+        # Every assign comes from `Handlers.ShowrunnerResearchBrief.gather_context/2`.
+        variables: ["episode_number", "topic", "recent_episodes"],
+        content: """
+        You are researching episode {{episode_number}} of How to Computer. The picked topic is:
+
+        {{topic}}
+
+        Be dry, numbers-first and curious. Find what is actually known: the strongest sources, the numbers that matter (each with the URL it came from), and the best counterpoints, so the hosts are never surprised on air.
+
+        Earlier episodes, for callbacks and to avoid repeating ourselves:
+
+        {{recent_episodes}}
+
+        Rules:
+        - Every number carries a `source_url`. A number you cannot source is left out.
+        - At least one source, each with a `url`.
+        - Counterpoints are the honest best case against the episode's angle.
+
+        Respond with exactly this JSON object and nothing else:
+
+        {"brief": "<a few paragraphs: what we know and the angle>", "sources": [{"title": "...", "url": "https://..."}], "numbers": [{"text": "...", "source_url": "https://..."}], "counterpoints": ["..."]}
+        """
+      },
+      %{
+        slug: "showrunner.run_sheet.v1",
+        name: "Showrunner — Run Sheet",
+        description:
+          "User turn for the `showrunner.run_sheet` responsibility (task 01a1eaf6 stage 3); " <>
+            "the control slug of the `showrunner.run_sheet` experiment surface. Drafts the " <>
+            "45-minute run sheet the board validates. Seeded by " <>
+            "`20261117214509_add_showrunner_role.exs`.",
+        # Every assign comes from `Handlers.ShowrunnerRunSheet.gather_context/2`.
+        variables: [
+          "episode_number",
+          "topic",
+          "brief",
+          "recent_episodes",
+          "host_roles",
+          "redraft_note"
+        ],
+        content: """
+        You are drafting the run sheet for episode {{episode_number}} of How to Computer: {{topic}}
+
+        Dry, numbers-first, curious. The show runs at most 45 minutes.
+
+        ## Research brief
+
+        {{brief}}
+
+        ## Earlier episodes (for callbacks)
+
+        {{recent_episodes}}
+
+        ## What to draft
+
+        - Segments that run back to back from 00:00 with no gaps, ending at or before 45:00. Times are in seconds.
+        - One through-line analogy that carries the whole episode.
+        - Talking points per host, keyed by host role exactly as given here: {{host_roles}}.
+        - Callbacks to past episodes where they land naturally (`callback_episode` is the episode number, or null).
+        - Stat cards: every one carries the `source_url` it came from. A stat without a source is refused, so leave it out.
+        - Two cold opens, A and B, for a human to choose between.
+
+        {{redraft_note}}
+
+        Respond with exactly this JSON object and nothing else:
+
+        {"segments": [{"id": "seg-1", "starts_at_s": 0, "ends_at_s": 240, "name": "...", "talking_points": {"<host role>": "..."}, "callback_episode": null, "stat_cards": [{"text": "...", "source_url": "https://..."}]}], "through_line": "...", "cold_open": {"a": "...", "b": "..."}}
+        """
+      },
+      %{
         slug: "janitor.cron_drain.v1",
         name: "Janitor — Weekly Chore Drain",
         description:

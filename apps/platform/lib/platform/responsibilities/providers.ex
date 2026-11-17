@@ -74,6 +74,7 @@ defmodule Platform.Responsibilities.Providers do
   alias Platform.Responsibilities.Providers.Janitor
   alias Platform.Responsibilities.Providers.Meetings
   alias Platform.Responsibilities.Providers.Memory
+  alias Platform.Responsibilities.Providers.Showrunner
   alias Platform.Responsibilities.Providers.Tasks
   alias Platform.Responsibilities.Providers.Ux
 
@@ -90,6 +91,8 @@ defmodule Platform.Responsibilities.Providers do
     "janitor" => Janitor,
     "meetings" => Meetings,
     "memory" => Memory,
+    # Task 01a1eaf6 stage 3: the How to Computer showrunner's three keys.
+    "showrunner" => Showrunner,
     "tasks" => Tasks,
     # Task 01a1af00 stage 2: `ux.friction_watch` (designer bundle).
     "ux" => Ux

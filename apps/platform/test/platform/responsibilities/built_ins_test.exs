@@ -36,6 +36,28 @@ defmodule Platform.Responsibilities.BuiltInsTest do
       assert providers == Enum.uniq(providers)
     end
 
+    test "lists the three showrunner handlers, each on the showrunner provider (task 01a1eaf6 stage 3)" do
+      providers = BuiltIns.providers()
+
+      for {handler, key} <- [
+            {Handlers.ShowrunnerWeeklyPitch, "showrunner.weekly_pitch"},
+            {Handlers.ShowrunnerResearchBrief, "showrunner.research_brief"},
+            {Handlers.ShowrunnerRunSheet, "showrunner.run_sheet"}
+          ] do
+        assert handler in providers
+        assert handler.key() == key
+        assert [%{key: ^key, feature: "showrunner", trigger_kind: "cron"}] = handler.register()
+
+        assert Platform.Responsibilities.Providers.feature_provider("showrunner") ==
+                 {:ok, Platform.Responsibilities.Providers.Showrunner}
+
+        assert Platform.Responsibilities.Providers.Showrunner.handler_for(key) == handler
+      end
+
+      assert [%{trigger_config: %{"expression" => "0 14 * * 1"}}] =
+               Handlers.ShowrunnerWeeklyPitch.register()
+    end
+
     test "lists the four Security Guard placeholder handlers (task 019f3e8e stage 1)" do
       providers = BuiltIns.providers()
 
