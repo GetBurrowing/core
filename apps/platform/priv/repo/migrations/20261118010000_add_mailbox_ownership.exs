@@ -37,6 +37,8 @@ defmodule Platform.Repo.Migrations.AddMailboxOwnership do
   """
   use Ecto.Migration
 
+  # old-code-compatible: add-only. New columns have defaults (old code inserts and reads accounts unchanged), the new table is unknown to old code, and the triggers only delete grant rows / reset ownership columns old code never reads. The `drop`/`remove`/`execute` in `down/0` run only on a local dev rollback.
+
   def up do
     alter table(:mail_accounts) do
       add(:owner_kind, :string, null: false, default: "unassigned")

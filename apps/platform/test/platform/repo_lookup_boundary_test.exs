@@ -557,6 +557,8 @@ defmodule Platform.RepoLookupBoundaryTest do
      "`space_id` is off a `%Space{}` `usable_space/1` just loaded; `participant_id` is built by `email_participant_id/1` from a sha256 hex digest formatted 8-4-4-4-12, so it is uuid-shaped by construction; `participant_type` is the literal \"system\""},
     {"platform/mail/inbound_access.ex", :platform_uuid_guard, "-", 5, :safe_internal,
      "task 01a13ba5 stage 2's agent mail reads. Every id arrives from the `mail_inbound_list` / `mail_inbound_get` MCP payload (org_id, account_id, id) or off the caller's context (agent_id), and each is guarded before it reaches `where:`: `list/3` (agent_id, org_id, and account_id when given — three calls) and `get/2` (agent_id and id — two calls). A malformed value becomes the existing miss: `{[], 0}` for the list, `:not_found` for the get, which the tool returns as the one not-found envelope"},
+    {"platform/mail/ownership.ex", :platform_uuid_guard, "-", 1, :safe_internal,
+     "task 01a1ea5b stage 1's mailbox ownership. The one call is the private `uuid?/1` helper, which guards every id before it reaches `where:`: the user and org ids in `readable_query/2`, the agent and org ids in `agent_granted_account_ids/2`, the account id in `fresh/1`, a principal id in `normalize_principal/1` and a personal owner id in `owner_allowed/3`. Stage 2-4 callers pass LiveView params and MCP payloads, so a malformed value reads nothing or answers `{:error, :unknown_principal}` / `:not_found`. Pinned by ownership_test.exs \"garbage input reads nothing and never raises\" and \"an agent grant needs an existing agent\""},
     {"platform/mail/inbound/poller.ex", :get, "Account", 2, :safe_internal,
      "both calls (the timer tick and the `:poll_now` call) reload the poller's `account_id`, its start arg, and both starters pass an `%Account{}` PK: `Inbound.sync_poller/1` (`account.id`) and `start_all_pollers/0` (ids off `Repo.all` of `mail_accounts`)"},
     {"platform/mail/mailbox.ex", :platform_uuid_guard, "-", 10, :safe_internal,
@@ -1315,6 +1317,11 @@ defmodule Platform.RepoLookupBoundaryTest do
     # behind Platform.UUID.valid?/1 in the same `with` (recorded in
     # @inventory), so a malformed one is `:not_found`, never a raise.
     "platform/mail/inbound_access.ex" => 1,
+    # Task 01a1ea5b stage 1: 0 -> 2, `Platform.Mail.Ownership`. Triaged by
+    # hand: `fresh/1` pins `a.id == ^id` only after `uuid?/1`, and `revoke/3`
+    # pins `account_id` off that fresh row and a principal id already passed
+    # through `normalize_principal/1`'s `uuid?/1` (recorded in @inventory).
+    "platform/mail/ownership.ex" => 2,
     # Task 01a11ec3 stage 2: 0 -> 1, `Feedback.Submission.existing/1`.
     # Triaged by hand: the `where:` pins `r.fingerprint == ^fingerprint`, a
     # `:string` column holding a sha256 hex digest the module computes itself
