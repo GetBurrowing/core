@@ -47,7 +47,7 @@ defmodule Platform.Goals.Proposals do
   import Ecto.Query
 
   alias Platform.Accounts.User
-  alias Platform.Agents.Agent
+  alias Platform.Agents.{Agent, AgentRuntime}
   alias Platform.Chat
   alias Platform.Goals
   alias Platform.Goals.{Clock, Goal, Limits, Proposal, Signals, Sources, Stop}
@@ -344,8 +344,8 @@ defmodule Platform.Goals.Proposals do
   @spec check_lead_tools(Agent.t()) :: :ok | {:error, :lead_missing_goals_tools}
   def check_lead_tools(%Agent{runtime_type: "external", runtime_id: runtime_id})
       when is_binary(runtime_id) do
-    with %Platform.Agents.AgentRuntime{} = runtime <-
-           Repo.get(Platform.Agents.AgentRuntime, runtime_id),
+    with %AgentRuntime{} = runtime <-
+           Repo.one(from(r in AgentRuntime, where: r.id == ^runtime_id)),
          names = runtime |> Platform.Access.Tools.effective_tools() |> Enum.map(& &1.name),
          true <- Enum.all?(@lead_tools, &(&1 in names)) do
       :ok
