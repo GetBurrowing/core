@@ -259,6 +259,8 @@ defmodule Platform.Responsibilities.ExperimentsScientistTest do
                  "meetings.open_question_classifier",
                  "memory.insight_synthesis",
                  "planner.stage_budget",
+                 # Task 01a1eaf6 stage 1: the showrunner run-sheet surface.
+                 "showrunner.run_sheet",
                  # Task 01a1af00 stage 1: the UX friction surface.
                  "ux.friction_detection"
                ]
