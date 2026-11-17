@@ -121,3 +121,50 @@ export function watchKeyboard(win = globalThis.window, doc = globalThis.document
     watcher.stop()
   }
 }
+
+// The visible viewport in CLIENT coordinates, the space getBoundingClientRect
+// returns (task 01a1c863). Every "room above the composer" measurement must
+// subtract this top, never `visualViewport.offsetTop` directly.
+//
+// Why not offsetTop. Client rects are relative to the layout viewport, and
+// offsetTop is the visual viewport's offset from it, so in Chromium (pinch
+// zoom, the CDP keyboard of #150) `offsetTop` IS the visible top in client
+// space. iOS WebKit with the keyboard up disagrees with itself: it scrolls the
+// document (scrollY 337) and reports client rects against that scrolled view,
+// so the visible band is client 0..visualViewport.height, yet it still reports
+// offsetTop 337. Subtracting it counted the pan twice and clamped the
+// @mention list to 0px (measured, iOS 26.3 Simulator Mobile Safari).
+//
+// `pageTop - scrollY` is the same quantity in both engines: pageTop is the
+// visual viewport's top in document coordinates and scrollY is the layout
+// viewport's, so their difference is the visible top in client space
+// (Chromium: scrollY + offsetTop - scrollY = offsetTop; WebKit: 337 - 337 =
+// 0). Where either is missing (older engines, the unit tests' mocks), fall
+// back to offsetTop, which is what #150 used.
+function clientOffset(page, scroll, offset) {
+  if (Number.isFinite(page) && Number.isFinite(scroll)) return page - scroll
+  return offset || 0
+}
+
+export function visibleViewportRect(win = globalThis.window) {
+  const vv = win?.visualViewport
+  const width = vv?.width ?? win?.innerWidth ?? Infinity
+  const height = vv?.height ?? win?.innerHeight ?? Infinity
+  if (!vv) return { top: 0, left: 0, width, height }
+  return {
+    top: clientOffset(vv.pageTop, win.scrollY, vv.offsetTop),
+    left: clientOffset(vv.pageLeft, win.scrollX, vv.offsetLeft),
+    width,
+    height,
+  }
+}
+
+// The room for an upward-opening list whose bottom edge sits on `anchorTop`
+// (a client y), bounded by the visible viewport's top and by `ceilingTop`
+// (a client y such as the chat zone's top, below the header), less `gap`.
+// Shared by the channel composer (ChatDock) and the thread reply
+// (ComposeInput) so the two cannot drift apart again.
+export function roomAbove(anchorTop, { win = globalThis.window, ceilingTop = -Infinity, gap = 0 } = {}) {
+  const top = Math.max(visibleViewportRect(win).top, ceilingTop)
+  return Math.max(0, Math.floor(anchorTop - top - gap))
+}

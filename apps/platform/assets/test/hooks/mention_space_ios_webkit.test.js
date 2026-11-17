@@ -40,9 +40,11 @@ import ComposeInput from "../../js/hooks/compose_input.js"
  *   3. stale measurement          -> not it: the cap after the replayed
  *                                    event sequence equals a fresh measure.
  *
- * The coordinate-space cases are `it.fails` (the repo's diagnosis idiom, see
- * meeting_captions.test.js): they assert the CORRECT behaviour, fail on the
- * current code, and so pass the suite. Stage 2's fix must flip them to `it`.
+ * Stage 1 committed the coordinate-space cases as `it.fails` (the repo's
+ * diagnosis idiom, see meeting_captions.test.js). Stage 2 fixed the cause in
+ * lib/keyboard_inset.js (`visibleViewportRect`: the visible top in client
+ * space is visualViewport.pageTop - scrollY, which is offsetTop in Chromium
+ * and 0 in panned WebKit) and flipped them to `it`.
  */
 
 // A suggestion row is 52px on the phone (measured: rows at 316, 368, 420...).
@@ -166,9 +168,9 @@ describe("iOS WebKit keyboard pan: channel @mention cap (measured, task 01a1c863
   })
 
   // CAUSE 1, coordinate space. RED on #150 / origin/main 538b19071: the cap
-  // comes out 0px, so the panel is its 10px of border and padding, the
+  // came out 0px, so the panel was its 10px of border and padding, the
   // sliver in the screenshots. The user can see 325px above the pill.
-  it.fails("keyboard open and panned: room for at least 3 full rows above the pill, inside the visible band", () => {
+  it("keyboard open and panned: room for at least 3 full rows above the pill, inside the visible band", () => {
     const { hook, apply, cap } = mountChannel(CHANNEL_KEYBOARD_CLOSED)
     apply(CHANNEL_KEYBOARD_OPEN)
     expect(cap()).toBeGreaterThanOrEqual(THREE_ROWS)
@@ -176,12 +178,75 @@ describe("iOS WebKit keyboard pan: channel @mention cap (measured, task 01a1c863
     hook.destroyed()
   })
 
-  it("pins today's value: 325 - max(offsetTop 337, zone -293) - 2 clamps to 0", () => {
-    // Documents the mechanism; stage 2 deletes or inverts this case.
+  it("pins the fixed value: 325 - max(pageTop 337 - scrollY 337, zone -293) - 2 = 323", () => {
+    // Was 0 on #150 (offsetTop 337 subtracted from a client rect).
     const { hook, apply, cap } = mountChannel(CHANNEL_KEYBOARD_CLOSED)
     apply(CHANNEL_KEYBOARD_OPEN)
+    expect(cap()).toBe(323)
+    hook.destroyed()
+  })
+
+  // The architect's condition: the LAYOUT viewport does not move (innerHeight
+  // and scrollY unchanged) while visualViewport shrinks and pans. That is how
+  // Chromium reports a pan: client rects stay layout-relative, so the visible
+  // top in client space IS offsetTop and the cap must still respect it. This
+  // fails a fix that simply ignores offsetTop.
+  it("layout unchanged, visual viewport shrunk and panned: the cap stops at the visible top", () => {
+    const { hook, apply, cap } = mountChannel(CHANNEL_KEYBOARD_CLOSED)
+    apply({
+      innerWidth: 402, innerHeight: 714, scrollY: 0,
+      vv: { width: 402, height: 377, offsetTop: 337, offsetLeft: 0, pageTop: 337, scale: 1 },
+      zoneTop: 44, anchorTop: 662,
+    })
+    // 662 - 337 - 2: the visible band is client 337..714.
+    expect(cap()).toBe(323)
+    expect(cap()).toBeGreaterThanOrEqual(THREE_ROWS)
+    hook.destroyed()
+  })
+
+  it("a visualViewport without pageTop falls back to offsetTop (the #150 formula)", () => {
+    const { hook, apply, cap } = mountChannel(CHANNEL_KEYBOARD_CLOSED)
+    apply({
+      innerWidth: 402, innerHeight: 714, scrollY: 0,
+      vv: { width: 402, height: 377, offsetTop: 337, offsetLeft: 0, pageTop: undefined, scale: 1 },
+      zoneTop: 44, anchorTop: 662,
+    })
+    expect(cap()).toBe(323)
+    hook.destroyed()
+  })
+
+  // Landscape, measured on the same simulator (iPhone 17, 874x402 pt) with
+  // the keyboard and accessory bar up: WebKit leaves a visual viewport only
+  // 20px tall (innerHeight 40, scrollY 256, pageTop 256) and the pill's top
+  // is ABOVE the visible band (client -12). Three 52px rows cannot
+  // physically fit; there is no room above the pill at all. The honest cap
+  // is 0 (reported, not hidden): the composer is not moved or hidden to make
+  // room, and the list is not given pixels the screen does not have.
+  it("landscape, keyboard open: measures no room and reports 0 rather than inventing pixels", () => {
+    const { hook, apply, cap } = mountChannel({
+      innerWidth: 874, innerHeight: 296, scrollY: 0,
+      vv: { width: 874, height: 296, offsetTop: 0, offsetLeft: 0, pageTop: 0, scale: 1 },
+      zoneTop: 44, anchorTop: 224,
+    })
+    // Keyboard closed in landscape: 224 - 44 - 2.
+    expect(cap()).toBe(178)
+    apply({
+      innerWidth: 874, innerHeight: 40, scrollY: 256,
+      vv: { width: 874, height: 20, offsetTop: 256, offsetLeft: 0, pageTop: 256, scale: 1 },
+      zoneTop: -212, anchorTop: -12,
+    })
     expect(cap()).toBe(0)
     hook.destroyed()
+  })
+
+  it("re-measures when the keyboard closes again (rotation/hide path)", () => {
+    const { hook, apply, cap } = mountChannel(CHANNEL_KEYBOARD_CLOSED)
+    apply(CHANNEL_KEYBOARD_OPEN)
+    expect(cap()).toBe(323)
+    apply(CHANNEL_KEYBOARD_CLOSED)
+    expect(cap()).toBe(616)
+    hook.destroyed()
+    expect(rootStyle.props[MENTION_MAX_H_VAR]).toBeUndefined()
   })
 
   // CAUSE 2, header bound: ruled out. With the header off screen the zone
@@ -239,17 +304,29 @@ describe("iOS WebKit keyboard pan: thread reply @mention cap (measured, task 01a
   }
 
   // CAUSE 1 again, in threadMentionPlacement/viewportBounds: 272.5 - 337 -
-  // 8 - 10 < 0 -> 0px. The user can see 272.5px above the reply field.
-  it.fails("keyboard open and panned: room for at least 3 full rows above the reply field", () => {
+  // 8 - 10 < 0 -> 0px on #150. The user can see 272.5px above the reply field.
+  it("keyboard open and panned: room for at least 3 full rows above the reply field", () => {
     const { hook, cap } = mountThread(THREAD_KEYBOARD_OPEN)
     expect(cap()).toBeGreaterThanOrEqual(THREE_ROWS)
     expect(cap()).toBeLessThanOrEqual(Math.floor(THREAD_ROOM))
     hook._threadMentionCleanup()
   })
 
-  it("pins today's value: 272.5 - offsetTop 337 - 18 clamps to 0", () => {
+  it("pins the fixed value: 272.5 - (pageTop 337 - scrollY 337) - 18 = 254", () => {
+    // Was 0 on #150.
     const { hook, cap } = mountThread(THREAD_KEYBOARD_OPEN)
-    expect(cap()).toBe(0)
+    expect(cap()).toBe(254)
+    hook._threadMentionCleanup()
+  })
+
+  it("layout unchanged, visual viewport panned: the thread cap stops at the visible top", () => {
+    const { hook, cap } = mountThread({
+      innerWidth: 402, innerHeight: 714, scrollY: 0,
+      vv: { width: 402, height: 377, offsetTop: 337, offsetLeft: 0, pageTop: 337, scale: 1 },
+      field: { top: 609.5, bottom: 651.5, left: 105, width: 205.3, height: 42 },
+    })
+    // 609.5 - 337 - 8 - 10
+    expect(cap()).toBe(254)
     hook._threadMentionCleanup()
   })
 })

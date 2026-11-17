@@ -16,7 +16,7 @@
 // ever arrives already-prefixed with `"suite:"`, we strip it before passing
 // through so ClientState's own `suite:compose:` prefix isn't doubled.
 import ClientState from "../client_state.js";
-import { watchKeyboard } from "../lib/keyboard_inset.js";
+import { visibleViewportRect, watchKeyboard } from "../lib/keyboard_inset.js";
 import { attachSendFeel, SEND_SELECTOR } from "../lib/send_feel.js";
 import {
   attachedToastText,
@@ -101,12 +101,14 @@ export function shouldHoldFocusOnSend(target, activeElement, el) {
   return target.closest('button[type="submit"]') !== null;
 }
 
-// The visible viewport in layout-viewport coordinates (what
-// getBoundingClientRect and `position: fixed` use). visualViewport shrinks
-// and pans under a phone keyboard; without it, the window is the viewport.
-function viewportBounds(vv) {
-  const width = vv?.width ?? window.innerWidth ?? Infinity;
-  return { top: vv?.offsetTop || 0, left: vv?.offsetLeft || 0, width };
+// The visible viewport in client coordinates (what getBoundingClientRect
+// and `position: fixed` use). visualViewport shrinks and pans under a phone
+// keyboard; iOS WebKit reports its offsetTop in a different space from its
+// client rects, so the shared helper converts it (task 01a1c863, see
+// lib/keyboard_inset.js). Without visualViewport, the window is the viewport.
+function viewportBounds() {
+  const { top, left, width } = visibleViewportRect(window);
+  return { top, left, width };
 }
 
 // Where a reply's @mention panel goes, given the field's rect and the
@@ -811,7 +813,7 @@ const ComposeInput = {
     this._measureThreadMentionSpace = () => {
       const place = threadMentionPlacement(
         this.el.getBoundingClientRect(),
-        viewportBounds(viewport),
+        viewportBounds(),
       );
       box.style.setProperty("--thread-mention-max-h", `${place.maxHeight}px`);
       box.style.setProperty("--thread-mention-top", `${place.top}px`);

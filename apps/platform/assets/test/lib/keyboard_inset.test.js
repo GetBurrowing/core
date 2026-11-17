@@ -1,6 +1,8 @@
 import { describe, it, expect } from "vitest"
 import {
   keyboardState,
+  roomAbove,
+  visibleViewportRect,
   watchKeyboard,
   KEYBOARD_ATTR,
   KEYBOARD_INSET_VAR,
@@ -222,5 +224,48 @@ describe("watchKeyboard is shared by reference count", () => {
     expect(state(root).open).toBe("")
     detach()
     expect(state(root).open).toBeUndefined()
+  })
+})
+
+// Task 01a1c863: the visible top must be in client coordinates in both
+// engines. Numbers are the measured iOS 26.3 WebKit pan and its Chromium
+// equivalent (layout fixed, visual viewport panned).
+describe("visibleViewportRect / roomAbove", () => {
+  const webkitPanned = {
+    innerWidth: 402, innerHeight: 377, scrollY: 337, scrollX: 0,
+    visualViewport: { width: 402, height: 377, offsetTop: 337, offsetLeft: 0, pageTop: 337, pageLeft: 0 },
+  }
+  const chromiumPanned = {
+    innerWidth: 402, innerHeight: 714, scrollY: 0, scrollX: 0,
+    visualViewport: { width: 402, height: 377, offsetTop: 337, offsetLeft: 0, pageTop: 337, pageLeft: 0 },
+  }
+
+  it("WebKit scrolled the document: the visible top is client 0, not offsetTop", () => {
+    expect(visibleViewportRect(webkitPanned)).toEqual({ top: 0, left: 0, width: 402, height: 377 })
+  })
+
+  it("Chromium panned the visual viewport: the visible top is offsetTop", () => {
+    expect(visibleViewportRect(chromiumPanned).top).toBe(337)
+  })
+
+  it("a document scroll plus a pinch pan adds up to pageTop - scrollY", () => {
+    const win = {
+      innerWidth: 402, innerHeight: 714, scrollY: 500, scrollX: 0,
+      visualViewport: { width: 201, height: 357, offsetTop: 40, offsetLeft: 30, pageTop: 540, pageLeft: 30 },
+    }
+    expect(visibleViewportRect(win)).toEqual({ top: 40, left: 30, width: 201, height: 357 })
+  })
+
+  it("falls back to offsetTop without pageTop, and to the window without visualViewport", () => {
+    expect(visibleViewportRect({ scrollY: 337, visualViewport: { width: 1, height: 2, offsetTop: 5, offsetLeft: 6 } }))
+      .toEqual({ top: 5, left: 6, width: 1, height: 2 })
+    expect(visibleViewportRect({ innerWidth: 800, innerHeight: 600 })).toEqual({ top: 0, left: 0, width: 800, height: 600 })
+  })
+
+  it("roomAbove: bounded by the visible top or the ceiling, whichever is lower on screen, never negative", () => {
+    expect(roomAbove(325, { win: webkitPanned, ceilingTop: -293, gap: 2 })).toBe(323)
+    expect(roomAbove(662, { win: chromiumPanned, ceilingTop: 44, gap: 2 })).toBe(323)
+    expect(roomAbove(662, { win: { visualViewport: null }, ceilingTop: 44, gap: 2 })).toBe(616)
+    expect(roomAbove(-12, { win: webkitPanned, gap: 2 })).toBe(0)
   })
 })

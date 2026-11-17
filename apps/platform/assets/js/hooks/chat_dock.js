@@ -27,7 +27,7 @@
 // not move: `_measure` subtracts the list's height, so opening, filtering and
 // closing the list writes no new `--chat-dock-h` (nor `--phone-chrome-bottom`,
 // which is built on it) and dispatches no `chat:dock-resized`.
-import { watchKeyboard } from "../lib/keyboard_inset.js"
+import { roomAbove, watchKeyboard } from "../lib/keyboard_inset.js"
 
 // The soft keyboard (2026-10-23): `watchKeyboard` sets `data-keyboard-open`
 // and `--keyboard-inset` on <html> while it is up, and app.css drops the
@@ -98,12 +98,19 @@ const ChatDock = {
   // that stable edge, not the dock's top (which includes the list), so a
   // keyboard resize cannot leave a 212px panel above the visible viewport.
   // The chat zone's top also excludes the header/notification prompt.
+  // Both edges are client coordinates; `roomAbove` converts the visual
+  // viewport's top into that space (iOS WebKit's offsetTop is not, see
+  // lib/keyboard_inset.js), so a keyboard pan is not counted twice.
   _measureMentionSpace() {
     const anchor = this.el.querySelector?.('[data-role="compose-mention-anchor"]')
     if (!anchor) return
     const zone = this.el.closest?.("#chat-drop-zone")
-    const top = Math.max(this._viewport?.offsetTop || 0, zone?.getBoundingClientRect().top || 0)
-    const height = Math.max(0, Math.floor(anchor.getBoundingClientRect().top - top - 2))
+    const zoneTop = zone?.getBoundingClientRect().top
+    const height = roomAbove(anchor.getBoundingClientRect().top, {
+      win: window,
+      ceilingTop: Number.isFinite(zoneTop) ? zoneTop : 0,
+      gap: 2,
+    })
     document.documentElement.style.setProperty(MENTION_MAX_H_VAR, `${height}px`)
   },
 
