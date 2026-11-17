@@ -31,6 +31,8 @@ defmodule Platform.Mail.Account do
 
   @tls_modes ~w(tls starttls none)
 
+  @owner_kinds ~w(unassigned personal shared)
+
   @type t :: %__MODULE__{}
 
   schema "mail_accounts" do
@@ -58,6 +60,13 @@ defmodule Platform.Mail.Account do
     field(:imap_secret_slug, :string)
     field(:archived_at, :utc_datetime_usec)
 
+    # Mailbox ownership (task 01a1ea5b stage 1). Set ONLY through
+    # `Platform.Mail.Ownership.set_owner/3` (audited, admin only), never cast
+    # by `changeset/2`. `"unassigned"` is readable by nobody.
+    field(:owner_kind, :string, default: "unassigned")
+    belongs_to(:owner_user, Platform.Accounts.User)
+    field(:digest_opt_in, :boolean, default: false)
+
     has_many(:senders, Platform.Mail.Sender)
 
     timestamps()
@@ -67,13 +76,36 @@ defmodule Platform.Mail.Account do
                send_enabled internal_only read_enabled read_folders inbound_space_id
                rate_limit_per_hour)a
 
+  @doc "Accepted `owner_kind` values."
+  @spec owner_kinds() :: [String.t()]
+  def owner_kinds, do: @owner_kinds
+
+  @doc """
+  Changeset for the ownership fields, used ONLY by
+  `Platform.Mail.Ownership.set_owner/3`. `owner_user_id` is set iff the kind
+  is `"personal"` (the DB check `mail_accounts_owner_user_iff_personal` holds
+  the same rule).
+  """
+  @spec ownership_changeset(t(), map()) :: Ecto.Changeset.t()
+  def ownership_changeset(%__MODULE__{} = account, attrs) do
+    account
+    |> cast(attrs, [:owner_kind, :owner_user_id])
+    |> validate_required([:owner_kind])
+    |> validate_inclusion(:owner_kind, @owner_kinds)
+    |> check_constraint(:owner_kind, name: :mail_accounts_owner_kind_check)
+    |> check_constraint(:owner_user_id, name: :mail_accounts_owner_user_iff_personal)
+    |> foreign_key_constraint(:owner_user_id)
+  end
+
   @doc "Tls modes accepted for `smtp_tls` and `imap_tls`."
   @spec tls_modes() :: [String.t()]
   def tls_modes, do: @tls_modes
 
   @doc """
   Changeset for the admin-editable fields. `org_id`, the secret slugs and
-  `archived_at` are set by `Platform.Mail`, never cast from attrs.
+  `archived_at` are set by `Platform.Mail`, never cast from attrs. The
+  ownership fields (`owner_kind`, `owner_user_id`, `digest_opt_in`) are not
+  cast here either: they change only through `Platform.Mail.Ownership`.
   """
   @spec changeset(t(), map()) :: Ecto.Changeset.t()
   def changeset(%__MODULE__{} = account, attrs) do
