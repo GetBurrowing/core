@@ -387,6 +387,31 @@ defmodule PlatformWeb.ChatLive.ComposerAncestryGuardTest do
       """)
     end
 
+    # The pill is a FUNCTION COMPONENT whose root div sits ahead of the body
+    # inside `.message-row-inner`. LiveView's client keys a component root that
+    # has no id by a "magic id" it mints on every fresh render, and a stream row
+    # reinsert (one per keystroke of an @query, `MentionsHooks`) is a fresh
+    # render. A new key means the pill is a different node, and the patch then
+    # rebuilds the body beside it: the thread region, the field and everything
+    # between are removed and re-added, and the field blurs on every letter.
+    # Measured on the dev rig on `0fc93c09`: `focusout` + `removed` per key,
+    # the body wrapper `div.flex-1.min-w-0` replaced each time.
+    #
+    # The magic id exists only in the browser, so no server render can show
+    # it. The server render CAN show the cure: a stable explicit id on every
+    # component root that precedes the body at this level.
+    test "the tap pill, a component root ahead of the body, has a stable id of its own" do
+      html = row([])
+
+      pills =
+        html
+        |> LazyHTML.from_fragment()
+        |> LazyHTML.query(~s(.message-row-inner > [data-role="message-pill"]))
+
+      assert Enum.count(pills) == 1
+      assert LazyHTML.attribute(Enum.at(pills, 0), "id") == ["message-pill-msg-1"]
+    end
+
     test "every ancestor keeps the same preceding siblings in every state that changes while replying" do
       reaction = %{emoji: "ok", count: 1, reacted_by_me: false, reactors: [], extra_count: 0}
 
