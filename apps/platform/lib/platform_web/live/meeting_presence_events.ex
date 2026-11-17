@@ -186,6 +186,28 @@ defmodule PlatformWeb.MeetingPresenceEvents do
     })
   end
 
+  @doc """
+  "End for everyone" from the phone Leave sheet. `:meeting_can_end` only
+  decides whether the sheet offers it; it was computed when the shell last
+  tracked the meeting and can be stale, so the host check runs again on the
+  meeting fetched here before anything ends.
+  """
+  @spec end_for_everyone(Phoenix.LiveView.Socket.t()) :: {:ok, %Meeting{}} | :refused
+  def end_for_everyone(socket) do
+    uid = socket.assigns[:current_user_id]
+    space_id = socket.assigns[:meeting_space_id]
+
+    with true <- socket.assigns[:meeting_can_end] == true,
+         true <- Platform.UUID.valid?(space_id),
+         %Meeting{} = meeting <- Meetings.get_live_meeting_for_space(space_id),
+         true <- host?(meeting, uid),
+         {:ok, ended} <- Meetings.end_meeting(meeting) do
+      {:ok, ended}
+    else
+      _ -> :refused
+    end
+  end
+
   defp name(socket), do: socket.assigns[:meeting_space_name] || "Meeting"
 
   # The host is a `chat_participants` row; for a user participant its

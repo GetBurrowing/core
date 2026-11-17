@@ -730,15 +730,10 @@ defmodule PlatformWeb.ShellLive do
           {:halt, %{left: left}, socket}
 
         # The phone Leave sheet's "End for everyone", offered only to the
-        # meeting's host (`:meeting_can_end`). The `{:meeting_ended, _}`
-        # broadcast then takes every shell in the call out of it.
+        # meeting's host. The `{:meeting_ended, _}` broadcast then takes
+        # every shell in the call out of it.
         "meeting_presence_end", _params, socket ->
-          with true <- socket.assigns[:meeting_can_end] == true,
-               %Meetings.Meeting{} = meeting <-
-                 Meetings.get_live_meeting_for_space(socket.assigns[:meeting_space_id]) do
-            Meetings.end_meeting(meeting)
-          end
-
+          _ = PlatformWeb.MeetingPresenceEvents.end_for_everyone(socket)
           {:halt, socket}
 
         # Mobile bottom-nav More tab → opens the long-tail sheet (task 019e1322 Stage 2)

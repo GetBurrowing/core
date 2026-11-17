@@ -13,6 +13,9 @@ const MeetingPresence = {
     this._api = {
       pushLeave: (done) => this.pushEvent("meeting_presence_leave", {}, (reply) => done(reply)),
       pushEnd: () => this.pushEvent("meeting_presence_end", {}),
+      // Stage 3: the lock screen's Mute / camera when the top bar is not on
+      // the page (the call room); the same events the bar's hook pushes.
+      push: (event) => this.pushEvent(event, {}),
       navigate: (path) => {
         if (typeof this.js === "function") this.js().navigate(path)
         else window.location.assign(path)

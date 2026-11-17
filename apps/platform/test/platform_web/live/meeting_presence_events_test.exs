@@ -268,6 +268,40 @@ defmodule PlatformWeb.MeetingPresenceEventsTest do
     assert Repo.get!(Meeting, ctx.meeting.id).status == "live"
   end
 
+  # Stage 3 rider: `:meeting_can_end` is computed when the shell tracks the
+  # meeting and can go stale (the host changed since). The end handler must
+  # re-check on the meeting it fetches, not trust the assign.
+  test "End for everyone re-checks the host when the assign is stale", ctx do
+    join!(ctx)
+    {:ok, view, _html} = live(ctx.conn, ~p"/tasks")
+    _ = render(view)
+    assert has_element?(view, ~s(#meeting-presence[data-can-end="true"]))
+
+    {:ok, _} =
+      ctx.meeting
+      |> Ecto.Changeset.change(host_participant_id: nil)
+      |> Repo.update()
+
+    # The assign still says this viewer may end it.
+    assert has_element?(view, ~s(#meeting-presence[data-can-end="true"]))
+
+    view |> element("#meeting-presence") |> render_hook("meeting_presence_end", %{})
+    _ = render(view)
+
+    assert Repo.get!(Meeting, ctx.meeting.id).status == "live"
+    refute_push_event(view, @event, %{kind: "ended"})
+  end
+
+  test "#meeting-presence carries the other names and the join time for the lock screen",
+       ctx do
+    join!(ctx)
+    {:ok, view, _html} = live(ctx.conn, ~p"/tasks")
+    _ = render(view)
+
+    assert has_element?(view, ~s(#meeting-presence[data-other-names='["Sam Example"]']))
+    assert has_element?(view, "#meeting-presence[data-started-at]")
+  end
+
   # CalendarLive takes the project topic itself; a second shell subscription
   # would hand it every lifecycle event twice.
   test "takes the project topic once, and never doubles a host's own", ctx do

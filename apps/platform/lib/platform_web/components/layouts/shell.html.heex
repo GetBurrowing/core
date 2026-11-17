@@ -339,6 +339,8 @@
       data-call-room={to_string(@in_call_room == true)}
       data-others-count={max((@meeting_here_count || 0) - 1, 0)}
       data-can-end={to_string(assigns[:meeting_can_end] == true)}
+      data-other-names={Jason.encode!(assigns[:meeting_other_names] || [])}
+      data-started-at={@meeting_started_at && DateTime.to_iso8601(@meeting_started_at)}
       data-auth-routes={PlatformWeb.MeetingPresenceEvents.auth_route_patterns_json()}
     >
     </div>

@@ -47,6 +47,7 @@ defmodule PlatformWeb.MeetingBarPresence do
     socket
     |> assign(:meeting_roster, [])
     |> assign(:meeting_here_count, 0)
+    |> assign(:meeting_other_names, [])
   end
 
   @doc """
@@ -62,9 +63,19 @@ defmodule PlatformWeb.MeetingBarPresence do
         do: Meetings.active_participants_for_space(space_id),
         else: []
 
+    uid = socket.assigns[:current_user_id]
+
+    # Everyone but the viewer, for the lock-screen card (task 01a1e82a
+    # stage 3): "Sam and Lee · mic on".
+    other_names =
+      participants
+      |> Enum.reject(&(is_binary(uid) and &1.user_id == uid))
+      |> Enum.map(&display_name/1)
+
     socket
     |> assign(:meeting_roster, participants |> Enum.take(@max_faces) |> Enum.map(&face/1))
     |> assign(:meeting_here_count, length(participants))
+    |> assign(:meeting_other_names, other_names)
   end
 
   @doc """

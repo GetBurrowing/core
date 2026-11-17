@@ -24,6 +24,7 @@
 
 import ClientState from "./client_state.js"
 import { formatElapsed } from "./hooks/meeting_bar.js"
+import { installMeetingMediaSession } from "./meeting_media_session.js"
 
 export const NS = "meeting-presence"
 export const RECONNECT_LOST_MS = 30000
@@ -220,6 +221,12 @@ export function readState(ds = {}) {
   } catch (_) {
     patterns = []
   }
+  let names = []
+  try {
+    names = JSON.parse(ds.otherNames || "[]")
+  } catch (_) {
+    names = []
+  }
   return {
     inCall: ds.callActive === "true",
     meetingId: ds.meetingId || null,
@@ -229,6 +236,8 @@ export function readState(ds = {}) {
     patterns: Array.isArray(patterns) ? patterns : [],
     othersCount: Math.max(0, parseInt(ds.othersCount || "0", 10) || 0),
     canEnd: ds.canEnd === "true",
+    names: Array.isArray(names) ? names.filter((n) => typeof n === "string") : [],
+    startedAt: ds.startedAt || null,
   }
 }
 
@@ -243,6 +252,8 @@ const NO_CALL = {
   patterns: [],
   othersCount: 0,
   canEnd: false,
+  names: [],
+  startedAt: null,
 }
 
 export function createMeetingPresence(env = {}) {
@@ -260,6 +271,8 @@ export function createMeetingPresence(env = {}) {
   const assign = env.assign || (() => {})
   const disconnectRoom = env.disconnectRoom || (() => {})
   const connectionOwner = env.connectionOwner || (() => null)
+  // Stage 3: the lock-screen card and tab title follow every state change.
+  const onChange = env.onChange || (() => {})
 
   let call = { ...NO_CALL }
   let host = null
@@ -365,7 +378,16 @@ export function createMeetingPresence(env = {}) {
     }
   }
 
+  function notify() {
+    try {
+      onChange({ ...call, conn: { ...conn }, explicitLeave })
+    } catch (_) {
+      /* a listener cannot break the bar */
+    }
+  }
+
   function syncBar() {
+    notify()
     const el = bar()
     if (!el) return
     if (conn.state === "reconnecting") {
@@ -445,6 +467,7 @@ export function createMeetingPresence(env = {}) {
       owner._leaveAfterLoss()
     }
     resetConnection()
+    notify()
   }
 
   // The explicit leave the guard and the phone sheet use: the same server
@@ -477,6 +500,44 @@ export function createMeetingPresence(env = {}) {
       /* already gone */
     }
     resetConnection()
+    notify()
+  }
+
+  // The lock screen's Leave (Media Session "hangup"): the same explicit
+  // leave as the phone sheet's "Leave call", so left_at is stamped and the
+  // "You left" toast shows.
+  function leaveNow() {
+    if (!call.inCall || explicitLeave) return
+    explicitLeaveNow((reply) => {
+      if (reply && reply.left) toast(leftToast(reply.left, isPhone()))
+    })
+  }
+
+  // The lock screen's Mute / camera: the top bar's own control when it is on
+  // the page (so a pending or native-disabled control stays disabled), else
+  // the same `meeting_toggle_*` push the bar's hook makes.
+  function toggleMedia(kind) {
+    if (!call.inCall) return
+    const btn = env.barControl ? safe(() => env.barControl(kind)) : null
+    if (btn && typeof btn.click === "function") {
+      if (!btn.disabled) btn.click()
+      return
+    }
+    if (host && typeof host.push === "function") {
+      try {
+        host.push(kind === "camera" ? "meeting_toggle_camera" : "meeting_toggle_mic")
+      } catch (_) {
+        /* no live view to take it */
+      }
+    }
+  }
+
+  function safe(fn) {
+    try {
+      return fn()
+    } catch (_) {
+      return null
+    }
   }
 
   function leaveAndGo(hit) {
@@ -525,6 +586,7 @@ export function createMeetingPresence(env = {}) {
         } else if (choice === "end" && host && typeof host.pushEnd === "function") {
           explicitLeave = true
           host.pushEnd()
+          notify()
         }
         return choice
       },
@@ -539,6 +601,7 @@ export function createMeetingPresence(env = {}) {
       explicitLeave = true
       resetConnection()
       toast({ ...leftToast(payload, phone), returnPath: payload.return_path })
+      notify()
     } else if (payload.kind === "ended") {
       explicitLeave = true
       resetConnection()
@@ -548,6 +611,7 @@ export function createMeetingPresence(env = {}) {
         /* already gone */
       }
       toast(endedToast(payload))
+      notify()
     }
   }
 
@@ -584,6 +648,8 @@ export function createMeetingPresence(env = {}) {
     onClick,
     onBeforeUnload,
     openLeaveSheet,
+    leaveNow,
+    toggleMedia,
     rejoin,
     noteBarLeave,
     showStashed,
@@ -765,6 +831,7 @@ export function installMeetingPresence(win = window, doc = document) {
   if (installed) return installed
   const phoneQuery = win.matchMedia ? win.matchMedia("(max-width: 639px)") : null
   const isPhone = () => !!(phoneQuery && phoneQuery.matches)
+  let media = null
   const presence = createMeetingPresence({
     location: win.location,
     isPhone,
@@ -776,7 +843,21 @@ export function installMeetingPresence(win = window, doc = document) {
     // MeetingClient registers itself as the owner of the (now hidden)
     // connection-state element; its Rejoin / Leave-after-loss live there.
     connectionOwner: () => doc.getElementById("meeting-connection-banner")?._owner || null,
+    barControl: (kind) =>
+      doc.querySelector?.(`#meeting-top-bar ${kind === "camera" ? "[data-bar-camera]" : "[data-bar-mic]"}`) || null,
+    onChange: (state) => media && media.update(state),
   })
+
+  // Stage 3: lock-screen card (Media Session) and the in-call tab title.
+  try {
+    media = installMeetingMediaSession(win, doc, {
+      toggleMic: () => presence.toggleMedia("mic"),
+      toggleCamera: () => presence.toggleMedia("camera"),
+      hangup: () => presence.leaveNow(),
+    })
+  } catch (_) {
+    media = null
+  }
 
   // Capture phase on window: ahead of nav_pending.js and of LiveView's own
   // bubble-phase link handler, so a guarded click never starts a navigation.

@@ -498,8 +498,11 @@ describe("readState", () => {
         othersCount: "2",
         canEnd: "true",
         authRoutes: JSON.stringify(PATTERNS),
+        otherNames: JSON.stringify(["Sam Example"]),
+        startedAt: "2026-11-17T10:00:00Z",
       }),
-    ).toEqual({ ...CALL, canEnd: true })
+    ).toEqual({ ...CALL, canEnd: true, names: ["Sam Example"], startedAt: "2026-11-17T10:00:00Z" })
     expect(readState({ authRoutes: "not json" }).patterns).toEqual([])
+    expect(readState({ otherNames: "not json" }).names).toEqual([])
   })
 })
