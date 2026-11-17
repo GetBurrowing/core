@@ -271,7 +271,7 @@ defmodule Platform.Chat.Canvas.Templates do
           starts_at_s: 0,
           ends_at_s: 270,
           name: "Cold open",
-          talking_points: %{"Jordan" => "The town analogy", "Chris" => "The $2 per worker hook"},
+          talking_points: %{"Host A" => "The town analogy", "Host B" => "The $2 per worker hook"},
           callback_episode: 9
         },
         %{
@@ -279,7 +279,7 @@ defmodule Platform.Chat.Canvas.Templates do
           starts_at_s: 270,
           ends_at_s: 900,
           name: "The town",
-          talking_points: %{"Jordan" => "Walk the savings through one street"},
+          talking_points: %{"Host A" => "Walk the savings through one street"},
           stat_cards: [
             %{
               text: "38% of tasks automatable",

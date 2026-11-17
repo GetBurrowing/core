@@ -34,7 +34,7 @@ defmodule Platform.Showrunner.EpisodeTest do
         starts_at_s: 0,
         ends_at_s: 120,
         name: "Cold open",
-        talking_points: %{"jordan" => "The sticky note on the monitor."},
+        talking_points: %{"host" => "The sticky note on the monitor."},
         callback_episode: 7,
         stat_cards: [
           %{
@@ -48,7 +48,7 @@ defmodule Platform.Showrunner.EpisodeTest do
         starts_at_s: 120,
         ends_at_s: 1800,
         name: "Main topic",
-        talking_points: %{"jordan" => "Demo the manager.", "guest" => "Threat model."},
+        talking_points: %{"host" => "Demo the manager.", "guest" => "Threat model."},
         callback_episode: nil,
         stat_cards: []
       },

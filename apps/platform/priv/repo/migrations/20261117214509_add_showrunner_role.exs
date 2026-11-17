@@ -32,6 +32,8 @@ defmodule Platform.Repo.Migrations.AddShowrunnerRole do
 
   use Ecto.Migration
 
+  # old-code-compatible: only widens roles_key_check (adds 'showrunner'); every key the previous release writes still passes, and it reads roles.key as a plain string
+
   @slugs [
     "showrunner.weekly_pitch.v1",
     "showrunner.research_brief.v1",
