@@ -216,7 +216,10 @@ defmodule PlatformWeb.GameStudioLiveTest do
 
     assert length(Tasks.list_projects_for_user(user)) == before
   end
-  test "game navigation keeps Inbox, Calendar and the full workspace tools reachable", %{conn: conn} do
+
+  test "game navigation keeps Inbox, Calendar and the full workspace tools reachable", %{
+    conn: conn
+  } do
     {:ok, view, _} = live(conn, "/studio")
     assert has_element?(view, ".studio-more a[href='/inbox']", "Inbox")
     assert has_element?(view, ".studio-more a[href='/calendar']", "Calendar")
@@ -224,5 +227,4 @@ defmodule PlatformWeb.GameStudioLiveTest do
     assert has_element?(view, "#more-sheet a[href='/inbox']", "Inbox")
     assert has_element?(view, "#more-sheet a[href='/calendar']", "Calendar")
   end
-
 end

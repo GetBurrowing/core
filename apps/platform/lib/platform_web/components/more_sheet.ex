@@ -103,9 +103,15 @@ defmodule PlatformWeb.Components.MoreSheet do
   )
 
   def more_sheet(assigns) do
-    rows = if assigns[:gaming],
-      do: IconRail.gaming_more_sheet_rows(assigns[:access_scope], Map.get(assigns, :root_user, false)),
-      else: IconRail.more_sheet_rows(assigns[:access_scope], Map.get(assigns, :root_user, false))
+    rows =
+      if assigns[:gaming],
+        do:
+          IconRail.gaming_more_sheet_rows(
+            assigns[:access_scope],
+            Map.get(assigns, :root_user, false)
+          ),
+        else:
+          IconRail.more_sheet_rows(assigns[:access_scope], Map.get(assigns, :root_user, false))
 
     assigns =
       assigns

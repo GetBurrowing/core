@@ -126,7 +126,9 @@ defmodule PlatformWeb.Components.IconRail do
 
     more_destinations =
       if assigns[:gaming],
-        do: gaming_more_sheet_rows(scope, Map.get(assigns, :root_user, false)) ++ settings_destinations(),
+        do:
+          gaming_more_sheet_rows(scope, Map.get(assigns, :root_user, false)) ++
+            settings_destinations(),
         else: more_sheet_destinations(scope, Map.get(assigns, :root_user, false))
 
     more_active? =
