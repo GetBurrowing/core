@@ -605,6 +605,72 @@ describe("ComposeInput chip field: the in-flow @mention list (stage 3)", () => {
     expect(c.el.getAttribute("aria-expanded")).toBe("false")
   })
 
+  // Measured in iOS 26.3 Simulator Safari (task 01a1c863 stage 3): with the
+  // keyboard down and the list open, tapping the pill to bring the keyboard
+  // back hides the tab bar, the pill and list slide down under the finger,
+  // and WebKit lands the click on the row that moved there.
+  function click(c, target, extra = {}) {
+    const e = { target, isTrusted: true, defaultPrevented: false, propagationStopped: false, ...extra }
+    e.preventDefault = () => (e.defaultPrevented = true)
+    e.stopPropagation = () => (e.propagationStopped = true)
+    c.form.fire("click", e)
+    return e
+  }
+
+  it("a click on a row whose press began on the field is swallowed (the reopen shift)", () => {
+    const c = richComposer({ coarse: true })
+    queryAt(c, "ask @He")
+    const rows = openList(c, ["Helper 1", "Helper 10", "Helper 11"])
+
+    c.form.fire("pointerdown", { target: c.el, preventDefault: vi.fn() })
+    const e = click(c, rows[2])
+    expect(e.defaultPrevented).toBe(true)
+    expect(e.propagationStopped).toBe(true)
+  })
+
+  it("a press that begins and ends on a row still picks it", () => {
+    const c = richComposer({ coarse: true })
+    queryAt(c, "ask @He")
+    const rows = openList(c, ["Helper 1", "Helper 10", "Helper 11"])
+
+    c.form.fire("pointerdown", { target: rows[1], preventDefault: vi.fn() })
+    const e = click(c, rows[1])
+    expect(e.defaultPrevented).toBe(false)
+    expect(e.propagationStopped).toBe(false)
+  })
+
+  it("a keyboard pick (untrusted row.click) is never swallowed, even after a press on the field", () => {
+    const c = richComposer()
+    queryAt(c, "ask @He")
+    const rows = openList(c, ["Helper 1", "Helper 10"])
+
+    c.form.fire("pointerdown", { target: c.el, preventDefault: vi.fn() })
+    const e = click(c, rows[0], { isTrusted: false })
+    expect(e.defaultPrevented).toBe(false)
+    expect(e.propagationStopped).toBe(false)
+
+    // A click with no recorded press (e.g. after the guard consumed it) passes too.
+    const again = click(c, rows[1])
+    expect(again.propagationStopped).toBe(false)
+  })
+
+  it("a click on the field itself after a press on the field is untouched", () => {
+    const c = richComposer({ coarse: true })
+    queryAt(c, "ask @He")
+    openList(c, ["Helper 1"])
+    c.form.fire("pointerdown", { target: c.el, preventDefault: vi.fn() })
+    const e = click(c, c.el)
+    expect(e.defaultPrevented).toBe(false)
+    expect(e.propagationStopped).toBe(false)
+  })
+
+  it("destroyed() removes the press-origin and click guards", () => {
+    const c = richComposer()
+    c.hook.destroyed()
+    expect(c.form.listeners.click || []).toHaveLength(0)
+    expect(c.form.listeners.pointerdown || []).toHaveLength(0)
+  })
+
   it("aria-activedescendant tracks the highlight, and survives a server patch, clamped", () => {
     const c = richComposer()
     queryAt(c, "ask @")
