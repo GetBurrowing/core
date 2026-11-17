@@ -29,6 +29,13 @@ defmodule Platform.Agents.ToollessChat do
 
   `base_url` and `model` come from the agent, never from opts.
 
+  ## Credentials
+
+  The provider's `:api_key` is the SECRET the agent's `vault_key` resolves
+  to through `Platform.ExternalAgents.resolve_credential/1`, never the slug.
+  An agent with no `vault_key`, or one that does not resolve, gets `%{}` and
+  the provider sends no Authorization header. See `agent_credentials/1`.
+
   ## Candidates, not migrated here
 
   Similar private helpers exist in `Platform.Meetings.IntentClassifier`
@@ -106,12 +113,31 @@ defmodule Platform.Agents.ToollessChat do
     |> Enum.reject(fn {_k, v} -> is_nil(v) end)
   end
 
-  # Same "no auth by default" shape IntentClassifier uses — the Ollama
-  # provider inspects `:api_key` on the credentials map only.
-  defp agent_credentials(agent) do
-    case Map.get(agent, :vault_key) do
-      key when is_binary(key) and key != "" -> %{api_key: key}
-      _ -> %{}
+  @doc """
+  The credentials map `call/4` hands the provider: `%{api_key: secret}` when
+  the agent's `vault_key` resolves through
+  `Platform.ExternalAgents.resolve_credential/1`, else `%{}`.
+
+  A nil or blank `vault_key` is `%{}` WITHOUT calling `resolve_credential/1`:
+  its nil-key branch reads `EphemeralCredentials`, which is not where a
+  tool-less caller's key lives. A key that does not resolve (missing row, no
+  access) is also `%{}`, so the provider sends no Authorization header. The
+  `vault_key` slug itself is never sent (task 01a1e670: it used to be).
+  """
+  @spec agent_credentials(map()) :: map()
+  def agent_credentials(%{id: id, vault_key: key} = agent)
+      when is_binary(id) and is_binary(key) do
+    if String.trim(key) == "" do
+      %{}
+    else
+      case Platform.ExternalAgents.resolve_credential(agent) do
+        {:ok, secret} when is_binary(secret) and secret != "" -> %{api_key: secret}
+        _ -> %{}
+      end
     end
+  rescue
+    _ -> %{}
   end
+
+  def agent_credentials(_agent), do: %{}
 end

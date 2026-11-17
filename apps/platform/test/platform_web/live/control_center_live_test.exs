@@ -2035,4 +2035,193 @@ defmodule PlatformWeb.ControlCenterLiveTest do
       assert html =~ "already filled"
     end
   end
+
+  # Task 01a1e670 stage 3: the feedback.intake classifier's health, on the
+  # role card chip and on the advanced row. C1-C4 of the plan.
+  describe "feedback.intake classifier health (task 01a1e670 stage 3)" do
+    setup do
+      saved = System.get_env("OLLAMA_BASE_URL")
+      System.delete_env("OLLAMA_BASE_URL")
+
+      on_exit(fn -> if saved, do: System.put_env("OLLAMA_BASE_URL", saved) end)
+
+      n = System.unique_integer([:positive])
+      holder = create_agent(%{name: "Octo Holder #{n}"})
+      Platform.Roles.clear_override("feedback.intake")
+      Platform.Roles.unassign_role("triage_officer")
+      {:ok, _} = Platform.Roles.assign_role("triage_officer", holder.id)
+
+      endpoint =
+        create_agent(%{
+          name: "Qw Endpoint #{n}",
+          kind: "external",
+          runtime_type: "external",
+          endpoint_kind: "openai_compat",
+          base_url: "http://c3-base-url-#{n}.example.local/v1",
+          model: "c3-model-#{n}",
+          vault_key: "c3-vault-key-#{n}",
+          model_config: %{}
+        })
+
+      %{holder: holder, endpoint: endpoint}
+    end
+
+    defp triage_assignment do
+      Repo.get_by!(Platform.Roles.RoleAssignment, role_key: "triage_officer")
+    end
+
+    defp exhausted_record!(attempts) do
+      Repo.insert!(%Platform.Feedback.IntakeRecord{
+        repository_identity: "GetBurrowing/core",
+        issue_number: System.unique_integer([:positive]),
+        status: "pending",
+        note: "provider_failed",
+        attempts: attempts,
+        last_delivered_at: DateTime.utc_now()
+      })
+    end
+
+    test "C1: a native holder warns on the chip at first load and names itself in the row",
+         %{conn: conn, holder: holder} do
+      {:ok, view, _html} = live(authenticated_conn(conn), ~p"/control")
+
+      assert has_element?(
+               view,
+               ~s([data-role="responsibility-health-chip"][title*="no model endpoint"]),
+               "feedback.intake"
+             )
+
+      render_click(view, "toggle_role_advanced", %{})
+      line = view |> element(~s([data-role="responsibility-health"])) |> render()
+      assert line =~ "Not deciding: #{holder.name} has no model endpoint"
+      assert line =~ "the role stays with #{holder.name}"
+      assert line =~ "0 pending, 0 stopped retrying"
+    end
+
+    test "C2: an endpoint override flips to ready without a reload and leaves the role alone",
+         %{conn: conn, holder: holder, endpoint: endpoint} do
+      before = triage_assignment()
+      {:ok, view, _html} = live(authenticated_conn(conn), ~p"/control")
+      render_click(view, "toggle_role_advanced", %{})
+
+      render_change(view, "set_responsibility_override", %{
+        "responsibility_key" => "feedback.intake",
+        "agent_id" => endpoint.id
+      })
+
+      assert has_element?(
+               view,
+               ~s([data-role="responsibility-health"]),
+               "Classifier ready: #{endpoint.name}"
+             )
+
+      render_click(view, "toggle_role_advanced", %{})
+      refute has_element?(view, ~s([data-role="responsibility-health-chip"]))
+      assert render(view) =~ holder.name
+
+      after_override = triage_assignment()
+
+      assert {after_override.agent_id, after_override.updated_at} ==
+               {before.agent_id, before.updated_at}
+    end
+
+    test "C3: the roles panel renders no base_url, model or vault_key of the agent",
+         %{conn: conn, endpoint: endpoint} do
+      {:ok, _} = Platform.Roles.set_override("feedback.intake", endpoint.id)
+      {:ok, view, _html} = live(authenticated_conn(conn), ~p"/control")
+      render_click(view, "toggle_role_advanced", %{})
+
+      panel = view |> element("#roles-advanced-panel") |> render()
+      assert panel =~ "Classifier ready: #{endpoint.name}"
+      refute panel =~ endpoint.base_url
+      refute panel =~ endpoint.model
+      refute panel =~ endpoint.vault_key
+    end
+
+    test "C4: the retry button shows only for an admin with stopped records, and re-arms them",
+         %{conn: conn} do
+      {:ok, view, _html} = live(authenticated_conn(conn), ~p"/control")
+      render_click(view, "toggle_role_advanced", %{})
+      refute has_element?(view, ~s([data-role="feedback-intake-retry"]))
+
+      record = exhausted_record!(Platform.Feedback.Intake.max_attempts())
+      {:ok, view, _html} = live(authenticated_conn(conn), ~p"/control")
+      render_click(view, "toggle_role_advanced", %{})
+      assert has_element?(view, ~s([data-role="responsibility-health"]), "1 stopped retrying")
+      assert has_element?(view, ~s([data-role="feedback-intake-retry"]), "Retry stopped records")
+
+      view |> element(~s([data-role="feedback-intake-retry"])) |> render_click()
+
+      assert Repo.get!(Platform.Feedback.IntakeRecord, record.id).attempts == 0
+      refute has_element?(view, ~s([data-role="feedback-intake-retry"]))
+      assert has_element?(view, ~s([data-role="responsibility-health"]), "0 stopped retrying")
+    end
+
+    test "C4: a phone user reaches the Roles panel from /control through a visible entry",
+         %{conn: conn} do
+      exhausted_record!(Platform.Feedback.Intake.max_attempts())
+      {:ok, view, _html} = live(authenticated_conn(conn), ~p"/control")
+
+      # Before the tap the main panel is hidden below lg (desktop-only).
+      main = view |> element("#control-main-panel") |> render()
+      assert classes_of(main) |> Enum.member?("hidden")
+      assert classes_of(main) |> Enum.member?("lg:block")
+
+      # The entry point is visible at the base breakpoint, and only there.
+      entry = view |> element("#mobile-roles-btn") |> render()
+      assert entry =~ "Roles"
+      assert "lg:hidden" in classes_of(entry)
+      refute "hidden" in classes_of(entry)
+
+      view |> element("#mobile-roles-btn") |> render_click()
+
+      main = view |> element("#control-main-panel") |> render()
+      refute "hidden" in classes_of(main)
+      # Below lg the panel's bottom control must scroll clear of the fixed
+      # bottom nav: the shared phone-chrome inset, as #agent-list uses.
+      assert "clears-tab-bar" in classes_of(main)
+      assert "clears-tab-bar" in classes_of(view |> element("#agent-list") |> render())
+      assert "hidden" in classes_of(view |> element("#agent-directory") |> render())
+      assert "lg:flex" in classes_of(view |> element("#agent-directory") |> render())
+
+      render_click(view, "toggle_role_advanced", %{})
+
+      assert has_element?(
+               view,
+               ~s(#control-main-panel [data-role="responsibility-health"]),
+               "1 stopped retrying"
+             )
+
+      view |> element("#mobile-roles-back") |> render_click()
+      assert "hidden" in classes_of(view |> element("#control-main-panel") |> render())
+      refute "hidden" in classes_of(view |> element("#agent-directory") |> render())
+    end
+
+    defp classes_of(html) do
+      [{_tag, attrs, _children}] = html |> Floki.parse_fragment!() |> Enum.take(1)
+      attrs |> List.keyfind("class", 0, {"class", ""}) |> elem(1) |> String.split()
+    end
+
+    test "C4: a non-admin sees no retry button and cannot fire the event", %{conn: conn} do
+      record = exhausted_record!(Platform.Feedback.Intake.max_attempts())
+      n = System.unique_integer([:positive])
+
+      member =
+        Repo.insert!(%User{
+          email: "feedback-member-#{n}@example.com",
+          name: "Feedback Member #{n}",
+          oidc_sub: "oidc-feedback-member-#{n}"
+        })
+
+      {:ok, view, _html} =
+        conn |> init_test_session(current_user_id: member.id) |> live(~p"/control")
+
+      render_click(view, "toggle_role_advanced", %{})
+      assert has_element?(view, ~s([data-role="responsibility-health"]), "1 stopped retrying")
+      refute has_element?(view, ~s([data-role="feedback-intake-retry"]))
+
+      render_click(view, "feedback_intake_retry", %{})
+      assert Repo.get!(Platform.Feedback.IntakeRecord, record.id).attempts == record.attempts
+    end
+  end
 end

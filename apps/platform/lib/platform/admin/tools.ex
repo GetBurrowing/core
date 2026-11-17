@@ -190,7 +190,8 @@ defmodule Platform.Admin.Tools do
          profile: host && host[:profile],
          description: AgentHost.describe()
        },
-       meeting_intent: meeting_intent_health()
+       meeting_intent: meeting_intent_health(),
+       feedback_intake: Platform.Feedback.ClassifierRoute.health()
      }}
   end
 

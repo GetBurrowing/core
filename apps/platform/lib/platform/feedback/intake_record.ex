@@ -18,8 +18,13 @@ defmodule Platform.Feedback.IntakeRecord do
   `status` is one of:
 
     * `"pending"` — no verdict yet. `note` names why with a bounded value
-      (`unassigned`, `provider_failed`, `rejected_output`, `no_project`). A
+      (`unassigned`, `no_endpoint`, `provider_failed`, `rejected_output`,
+      `no_project`). A
       later delivery of the same issue tries again.
+      `Platform.Feedback.Intake.retry_pending/1` re-fetches and re-classifies
+      it on a bounded backoff: `attempts` counts sweep attempts since the
+      last delivery (a redelivery resets it), `next_attempt_at` is the
+      backoff deadline and `last_attempt_at` the last try.
     * `"decided"` — terminal. A verdict is recorded and is never revised by
       a redelivery; an accepted verdict carries `task_id`.
   """
@@ -33,7 +38,7 @@ defmodule Platform.Feedback.IntakeRecord do
   @timestamps_opts [type: :utc_datetime_usec]
 
   @statuses ~w(pending decided)
-  @notes ~w(unassigned provider_failed rejected_output no_project)
+  @notes ~w(unassigned no_endpoint provider_failed rejected_output no_project)
   @disposition_statuses ~w(applied skipped failed)
 
   schema "feedback_intake_records" do
@@ -51,6 +56,9 @@ defmodule Platform.Feedback.IntakeRecord do
     field(:content_sha256, :string)
     field(:last_delivered_at, :utc_datetime_usec)
     field(:decided_at, :utc_datetime_usec)
+    field(:attempts, :integer, default: 0)
+    field(:next_attempt_at, :utc_datetime_usec)
+    field(:last_attempt_at, :utc_datetime_usec)
 
     timestamps()
   end

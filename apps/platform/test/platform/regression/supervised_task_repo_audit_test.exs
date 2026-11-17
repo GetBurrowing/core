@@ -331,6 +331,11 @@ defmodule Platform.Regression.SupervisedTaskRepoAuditTest do
     # named instance with `start_supervised!/1`.
     :start_candidate_sweeper,
 
+    # Task 01a1e670 stage 2 — the feedback IntakeSweeper claims pending
+    # intake records from its own process. Tests call
+    # `Intake.retry_pending/1` directly or start their own named instance.
+    :start_feedback_intake_sweeper,
+
     # Completion retries belong to explicit lifecycle fixtures; the ambient
     # singleton must never query another DataCase sandbox.
     :start_meeting_completion_sweeper

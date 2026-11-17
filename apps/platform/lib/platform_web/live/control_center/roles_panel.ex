@@ -31,6 +31,7 @@ defmodule PlatformWeb.ControlCenter.RolesPanel do
   attr(:role_assignments_by_key, :map, required: true)
   attr(:show_role_advanced, :boolean, default: false)
   attr(:responsibility_rows, :list, default: [])
+  attr(:role_bundle_health, :map, default: %{})
   attr(:selectable_agents, :list, default: [])
   attr(:access_scope, :any, default: nil)
   attr(:can_create_ownerless?, :boolean, default: false)
@@ -77,12 +78,11 @@ defmodule PlatformWeb.ControlCenter.RolesPanel do
             </div>
 
             <div class="flex flex-wrap items-center gap-1.5">
-              <code
+              <.bundle_chip
                 :for={key <- Map.get(@role_bundles, role.key, [])}
-                class="rounded bg-base-200 px-1.5 py-0.5 text-xs font-mono text-base-content"
-              >
-                {key}
-              </code>
+                key={key}
+                health={Map.get(@role_bundle_health, key)}
+              />
             </div>
 
             <div class="mt-1 flex flex-wrap items-center gap-3 text-xs text-subtle">
@@ -142,6 +142,12 @@ defmodule PlatformWeb.ControlCenter.RolesPanel do
                   <span class="text-xs text-subtle">unassigned</span>
                 <% end %>
               </div>
+              <.health_line
+                :if={row[:health]}
+                health={row.health}
+                holder={row[:role_holder]}
+                can_retry?={AgentAccess.may_release?(@access_scope, nil)}
+              />
             </div>
 
             <div class="flex shrink-0 items-center gap-2">
@@ -197,6 +203,89 @@ defmodule PlatformWeb.ControlCenter.RolesPanel do
     </div>
     """
   end
+
+  # A bundle key chip on the default role card. A responsibility whose
+  # health is not ok wears the warning palette (task 01a1e670 stage 3), so
+  # the stuck state is visible without opening Show advanced.
+  attr(:key, :string, required: true)
+  attr(:health, :map, default: nil)
+
+  defp bundle_chip(%{health: %{status: status}} = assigns) when status != "ok" do
+    ~H"""
+    <code
+      data-role="responsibility-health-chip"
+      title={health_title(@health)}
+      class="inline-flex items-center gap-1 rounded bg-warning/15 px-1.5 py-0.5 text-xs font-mono text-warning"
+    >
+      <span class="hero-exclamation-triangle h-3 w-3" aria-hidden="true" />
+      {@key}
+    </code>
+    """
+  end
+
+  defp bundle_chip(assigns) do
+    ~H"""
+    <code class="rounded bg-base-200 px-1.5 py-0.5 text-xs font-mono text-base-content">
+      {@key}
+    </code>
+    """
+  end
+
+  defp health_title(%{reason: "no_endpoint", agent_name: name}),
+    do: "Not deciding: #{name} has no model endpoint"
+
+  defp health_title(%{reason: "no_assignee"}),
+    do: "Not deciding: nobody holds this responsibility"
+
+  defp health_title(_), do: "Not deciding"
+
+  # The advanced row's status line. Copy is fixed by the plan; it names
+  # agents only, never an endpoint, model or credential.
+  attr(:health, :map, required: true)
+  attr(:holder, :any, default: nil)
+  attr(:can_retry?, :boolean, default: false)
+
+  defp health_line(assigns) do
+    ~H"""
+    <div
+      data-role="responsibility-health"
+      class={[
+        "flex flex-col gap-1 text-xs sm:flex-row sm:flex-wrap sm:items-center sm:gap-2",
+        if(@health.status == "ok", do: "text-subtle", else: "text-warning")
+      ]}
+    >
+      <span class="min-w-0 break-words">{health_sentence(@health, @holder)}</span>
+      <span class="text-subtle">
+        {@health.pending} pending, {@health.exhausted} stopped retrying
+      </span>
+      <button
+        :if={@health.exhausted > 0 and @can_retry?}
+        type="button"
+        data-role="feedback-intake-retry"
+        phx-click="feedback_intake_retry"
+        class="btn btn-outline btn-warning btn-xs self-start"
+      >
+        <span class="hero-arrow-path h-3.5 w-3.5" aria-hidden="true" /> Retry stopped records
+      </button>
+    </div>
+    """
+  end
+
+  defp health_sentence(%{status: "ok", agent_name: name}, _holder),
+    do: "Classifier ready: #{name}"
+
+  defp health_sentence(%{reason: "no_endpoint", agent_name: name}, holder),
+    do:
+      "Not deciding: #{name} has no model endpoint. Pick an endpoint agent in the override " <>
+        "below; the role stays with #{holder_name(holder)}."
+
+  defp health_sentence(%{reason: "no_assignee"}, _holder),
+    do: "Not deciding: nobody holds this responsibility."
+
+  defp health_sentence(_health, _holder), do: "Not deciding."
+
+  defp holder_name(%{name: name}) when is_binary(name), do: name
+  defp holder_name(_), do: "nobody"
 
   attr(:role_key, :string, required: true)
   attr(:agent, :any, default: nil)

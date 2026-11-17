@@ -79,7 +79,7 @@ defmodule Platform.Meetings.IntentClassifier do
        the enable signal — no env-var double-gate.
     2b. **No model configured** — `Platform.Meetings.IntentModel.route/1`
        answers `{:error, :not_configured}` for the assignee: it has no
-       usable `base_url` + `model` (and `OLLAMA_BASE_URL` is unset) and no
+       usable endpoint (`Platform.Agents.ModelRoute.endpoint/1`) and no
        install-level `:meetings_intent_model` provider is set (task
        01a1e5da). Log ONE `:warning` per room (keyed
        `{:not_configured, room_id}` in `state.seen_rooms`) naming the fix,
@@ -1968,7 +1968,9 @@ defmodule Platform.Meetings.IntentClassifier do
       ]
       |> Enum.reject(fn {_k, v} -> is_nil(v) end)
 
-    credentials = agent_credentials(agent)
+    # The resolved Vault secret, never the vault_key slug (task 01a1e670,
+    # Moore's audit: this helper used to send the slug as the bearer).
+    credentials = Platform.Agents.ToollessChat.agent_credentials(agent)
 
     with {:ok, content, _result} <-
            run_provider(provider_module, credentials, messages, opts, room_id) do
@@ -2086,17 +2088,6 @@ defmodule Platform.Meetings.IntentClassifier do
       %{count: 1},
       %{room_id: room_id, reason: inspect(reason)}
     )
-  end
-
-  # Agents may or may not carry a bearer credential. The Ollama
-  # provider only inspects `:api_key` on the credentials map, so we
-  # pass an empty map when nothing is set — mirrors the "no auth by
-  # default" contract in `Platform.Agents.Providers.Ollama.request_headers/1`.
-  defp agent_credentials(agent) do
-    case Map.get(agent, :vault_key) do
-      key when is_binary(key) and key != "" -> %{api_key: key}
-      _ -> %{}
-    end
   end
 
   # ── Response parsing ──────────────────────────────────────────────────────

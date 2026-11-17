@@ -190,6 +190,7 @@ defmodule Platform.RoleTest do
                Platform.Lifecycle.StepRegistry,
                Platform.Meetings.SummarizerSweeper,
                Platform.Meetings.CandidateSweeper,
+               Platform.Feedback.IntakeSweeper,
                Platform.Security.Sweeper,
                Platform.Chat.SpacePurger,
                Platform.Experiments.Signals.MailSubscriber,
