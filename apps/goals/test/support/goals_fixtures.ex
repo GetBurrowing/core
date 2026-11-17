@@ -136,11 +136,12 @@ defmodule Platform.GoalsFixtures do
   @doc """
   An agent that passes `Platform.Goals.Coaches`'s rule for an internal
   user (task 01a1eab7): active, accepts chat, and an external runtime owned
-  by `owner` (a `goals.use` holder) with the `goals` bundle. A goal's coach
-  set through `Platform.Goals.update_goal/3` must be one. Call after
-  `enable_goals!/1`.
+  by `owner` with the `goals` bundle. The owner must be an internal org
+  member holding `goals.use`, or core's caps take the bundle away (the
+  default is a fresh one). A goal's coach set through
+  `Platform.Goals.update_goal/3` must be one. Call after `enable_goals!/1`.
   """
-  def coach_agent!(owner \\ user!()) do
+  def coach_agent!(owner \\ member!(org_id!())) do
     runtime =
       Repo.insert!(%Platform.Agents.AgentRuntime{
         owner_user_id: owner.id,
