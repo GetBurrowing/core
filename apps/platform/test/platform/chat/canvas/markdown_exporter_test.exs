@@ -284,7 +284,8 @@ defmodule Platform.Chat.Canvas.MarkdownExporterTest do
       # Guards against future kinds landing without exporter coverage: every
       # registered kind must be either handled explicitly or in the skipped set.
       handled =
-        ~w(stack row card heading text markdown badge checklist checklist_item table code)
+        ~w(stack row card heading text markdown badge checklist checklist_item table code
+           production_rail needs_you run_sheet)
 
       skipped = ~w(form action_row embed image mermaid prototype)
 

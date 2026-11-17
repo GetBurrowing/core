@@ -35,7 +35,7 @@ defmodule Platform.GameStream.ExtensionParityTest do
   alias Platform.Repo
   alias PlatformWeb.Components.IconRail
 
-  @core_kinds ~w(stack row card text markdown heading badge image code mermaid embed form action_row checklist checklist_item table prototype)
+  @core_kinds ~w(stack row card text markdown heading badge image code mermaid embed form action_row checklist checklist_item table prototype production_rail needs_you run_sheet)
 
   setup do
     previous_flag = Application.fetch_env(:game_stream, :enabled)
@@ -436,14 +436,21 @@ defmodule Platform.GameStream.ExtensionParityTest do
     # stage's branch.
     # Task 01a1b6e1 deploy integration: voice return metadata plus sharing
     # definitions measured by CI 42440127890 at 3dd284545; exact names remain pinned.
-    @previous_tool_digest_off "17bc6b45b27b5d985ca8c687e1fea60d6181ed1c0cc236a858059b32381f6252"
-    @previous_tool_digest_on "db5cda14ecad14478c043c614b37e7631e71bcb793612f2b98a271f49be99ec5"
-    @main_tool_digest_off "41af4df76e6eeb969153b5d520a42ac7ff7900981bd7df4f66e580f12fcdd2b6"
-    @main_tool_digest_on "7524e2543c29d0a46a8f759f9828b5c6ea9b89a6735a1de48252ee55742433ae"
-    @main_kinds_summaries_digest_off "1b337c131bca3720e1158e67d9fa1374ce4b08c60987f9d5f0ff10e5ffc6104a"
-    @main_kinds_summaries_digest_on "e99a61e52a6858f0e97255683ebdc33d58c0fd56b4ada613946dc6a99ab2004e"
-    @main_kinds_tool_schemas_digest_off "61843c26d260fdb0ca751f9106a1b4d1f7c0a68cbfca79425c6f03e02bcc96a8"
-    @main_kinds_tool_schemas_digest_on "d5525de283443869efe51122adc1649e78e95da27bab2b2adc1deee59855878d"
+    # Re-pinned by task 01a1eaf6 stage 2: the core canvas kinds
+    # `production_rail`, `needs_you` and `run_sheet` enter canvas_create/patch's
+    # document schema, the kind summaries and the tool schemas, so every
+    # tool-definition and kind digest moves (flag off and on). Names, bundles
+    # and the metrics catalog are unchanged. Measured locally at the stage's
+    # branch. Stage 1's core surface `showrunner.run_sheet` joins both surface
+    # lists after habits.learned_defaults.
+    @previous_tool_digest_off "5976a72c4fea2969704f91ac51da93dc80a3351a27a511b8df51ca7ba1cae40b"
+    @previous_tool_digest_on "3f2f3d246b473a800a5b238ba0bcfad08239c8cb8cc85c568e67a28ea4b4ed07"
+    @main_tool_digest_off "d3135897984c1c07a35fe10b195e11ddee71db2b541ecd5a099ae9bd44f1ab9e"
+    @main_tool_digest_on "39f65904806f27357a8f969ee013d34111f8c5891631e61344809d48057ee8a1"
+    @main_kinds_summaries_digest_off "5c9857dfe4ee0ea14d427072988cb574b74aba8bf8fe458030961cd96fd85564"
+    @main_kinds_summaries_digest_on "2fc4005890d690f0d25da590378066518bf925ce91a7b865065d02fc8ab2163f"
+    @main_kinds_tool_schemas_digest_off "cebd9c6810c617499002b615a3e0bdf9e058cd1ca9d5b2bcaa471b2b04e20b82"
+    @main_kinds_tool_schemas_digest_on "aeef1d944c7cc1bc060460c43918b92e58420c91feaa11c59216b66a15732011"
     # Task 01a13867 adds the core metric insight_acceptance_rate to the catalog.
     # Task 01a16974 stage 3 adds meeting_synthesis_resolution_rate. Removing
     # only that catalog entry recovers the previous 3a5e4c9b... pin exactly.
@@ -504,8 +511,8 @@ defmodule Platform.GameStream.ExtensionParityTest do
     # Task 01a1b6a1 stage 1 adds habits.learned_defaults, a core surface
     # appended after hr.profile, so it precedes the Play keys as well; it
     # also adds the core metric habits.prefill_accept_rate.
-    @main_surfaces ~w(dispatch.prompt mail.draft.generator planner.stage_budget chat.context_summary meetings.brief_synthesis game_stream.encoder_preset game_stream.roster meetings.open_question_classifier game_stream.touch dispatch.product_docs_preamble dispatch.code_mode agents.tool_profile memory.insight_synthesis hr.profile ux.friction_detection habits.learned_defaults)
-    @branch_surfaces ~w(dispatch.prompt mail.draft.generator planner.stage_budget chat.context_summary meetings.brief_synthesis meetings.open_question_classifier dispatch.product_docs_preamble dispatch.code_mode agents.tool_profile memory.insight_synthesis hr.profile ux.friction_detection habits.learned_defaults game_stream.encoder_preset game_stream.roster game_stream.touch)
+    @main_surfaces ~w(dispatch.prompt mail.draft.generator planner.stage_budget chat.context_summary meetings.brief_synthesis game_stream.encoder_preset game_stream.roster meetings.open_question_classifier game_stream.touch dispatch.product_docs_preamble dispatch.code_mode agents.tool_profile memory.insight_synthesis hr.profile ux.friction_detection habits.learned_defaults showrunner.run_sheet)
+    @branch_surfaces ~w(dispatch.prompt mail.draft.generator planner.stage_budget chat.context_summary meetings.brief_synthesis meetings.open_question_classifier dispatch.product_docs_preamble dispatch.code_mode agents.tool_profile memory.insight_synthesis hr.profile ux.friction_detection habits.learned_defaults showrunner.run_sheet game_stream.encoder_preset game_stream.roster game_stream.touch)
 
     defp without_triage_item_schema(definitions) do
       Enum.map(definitions, fn
@@ -618,7 +625,7 @@ defmodule Platform.GameStream.ExtensionParityTest do
              ] == [
                @previous_tool_digest_off,
                @main_tool_digest_off,
-               "71d759178eded8c73d5e02e6fede0c0370f42c0e39f882dea95830d169eb5623"
+               "10637c3ef958f36ab40ec19585f67613fa6135000a5d25b85669481267c1e389"
              ]
     end
 
@@ -641,7 +648,7 @@ defmodule Platform.GameStream.ExtensionParityTest do
              ] == [
                @previous_tool_digest_on,
                @main_tool_digest_on,
-               "21cfcf95e2a7933460d4bf8a70b268d13780597a60f484b77e3064f88191af73"
+               "f1cab2dd11ff9e7e9d4e25a8c05308888bdb2824edd4ec83ff9f086f9a194d1b"
              ]
     end
 

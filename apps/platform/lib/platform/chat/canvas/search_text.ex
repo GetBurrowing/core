@@ -25,7 +25,7 @@ defmodule Platform.Chat.Canvas.SearchText do
   is bytes behind a URL, not document text) do not appear in the output. That gap is inherited
   deliberately from the one extractor rather than forked into a second, divergent
   one. `test/platform/chat/canvas/search_text_test.exs` pins the full
-  17-kind registry classification, so the boundary is a written decision that has
+  20-kind registry classification, so the boundary is a written decision that has
   to be revisited on purpose — not a silent hole.
   """
 

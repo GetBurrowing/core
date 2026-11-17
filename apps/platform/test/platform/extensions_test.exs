@@ -40,7 +40,7 @@ defmodule Platform.ExtensionsTest do
   alias Platform.Repo
   alias PlatformWeb.Components.IconRail
 
-  @core_kinds ~w(stack row card text markdown heading badge image code mermaid embed form action_row checklist checklist_item table prototype)
+  @core_kinds ~w(stack row card text markdown heading badge image code mermaid embed form action_row checklist checklist_item table prototype production_rail needs_you run_sheet)
 
   setup do
     on_exit(fn -> Application.delete_env(:platform, :fixture_extension_test_pid) end)
@@ -1023,9 +1023,15 @@ defmodule Platform.ExtensionsTest do
     # stage's branch.
     # Task 01a1b6e1 deploy integration: voice return metadata plus sharing
     # definitions measured by CI 42440127890 at 3dd284545; exact names remain pinned.
-    @main_tool_digest_off "5dec67a60eacd337c89a4bde2d0b465ed1486f4d6ef1593a2b7476c1800e5470"
-    @main_kinds_summaries_digest_off "514cb7a62dea7ea34226d7b60d2f243d5bb9a940bc1f5d44fd2e0e27e8074c52"
-    @main_kinds_tool_schemas_digest_off "45c4c34283c8da212f6ab061ae43d1582e41b7192e8f8a442bfd45b3dd6f8e86"
+    #
+    # Re-pinned by task 01a1eaf6 stage 2: the core canvas kinds
+    # `production_rail`, `needs_you` and `run_sheet`, appended after
+    # `prototype`, enter canvas_create/patch's document schema, the kind
+    # summaries and the tool schemas, so all four values move. Names and
+    # bundles are unchanged. Measured locally at the stage's branch.
+    @main_tool_digest_off "1dc302b9db79557169c373ce6c445e34a052be6c0a692bded650653db79bc00e"
+    @main_kinds_summaries_digest_off "cdfa332e00934d0fc7ab3288d73b2506f57abde6d47848626dd090f7c948a66f"
+    @main_kinds_tool_schemas_digest_off "7200834a166530d83aecfb8c4b5c0a37d23035b91da696f78dc4c4a04e092797"
     # main's lists minus exactly `play`.
     @core_bundles ~w(canvas messaging task plan review space context_read federation memory skill attachment files meetings mail experiments code_mode prototype access admin voice_ask)
     @core_valid_bundles ~w(federation space context_read messaging review canvas task plan memory skill attachment files meetings mail experiments code_mode prototype access admin voice_ask)
@@ -1246,7 +1252,7 @@ defmodule Platform.ExtensionsTest do
                digest(without_instruction_updates(legacy_kind_props(legacy)))
              ] == [
                @main_tool_digest_off,
-               "e3de24d4f3ab6b916a5456fa107f904b6ed78bae182e201ff017eaf3ba229c50"
+               "d5d9ccd62d07ce3ed4b9547862baa46df2b067d75939f01193db6b2a9a1d26e7"
              ]
     end
 

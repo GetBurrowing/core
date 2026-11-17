@@ -344,6 +344,68 @@ defmodule Platform.Showrunner.Episode do
   def from_document(doc) when is_map(doc), do: {:error, {:missing, "root"}}
   def from_document(_doc), do: {:error, :document_must_be_a_map}
 
+  # ── Node props validation (the stage 2 kinds call these) ──
+
+  @doc """
+  Validates `production_rail` node props exactly as `from_document/1` reads
+  them, so the kind's patch validation and the round-trip cannot disagree.
+  """
+  @spec validate_rail_props(map()) :: :ok | {:error, term()}
+  def validate_rail_props(props) when is_map(props) do
+    with {:ok, _} <- number(Map.get(props, "number")),
+         {:ok, _} <- non_blank(Map.get(props, "title"), :title),
+         {:ok, _} <- records_at(Map.get(props, "records_at")),
+         {:ok, _} <- optional_string(Map.get(props, "room_status"), :room_status),
+         {:ok, _} <- lookup(@stage_by_name, Map.get(props, "stage"), :stage),
+         {:ok, _} <- stages_from_doc(Map.get(props, "stages")) do
+      :ok
+    end
+  end
+
+  def validate_rail_props(_props), do: {:error, {:bad_prop, :props}}
+
+  @doc "Validates `needs_you` node props (`items`) as `from_document/1` reads them."
+  @spec validate_needs_you_props(map()) :: :ok | {:error, term()}
+  def validate_needs_you_props(props) when is_map(props) do
+    with {:ok, _} <- needs_you_from_doc(Map.get(props, "items")), do: :ok
+  end
+
+  def validate_needs_you_props(_props), do: {:error, {:bad_prop, :props}}
+
+  @doc """
+  Validates `run_sheet` node props (`segments`, optional `total_s`) as
+  `from_document/1` reads them: contiguous from 00:00, at most 45:00, and
+  every stat card sourced.
+  """
+  @spec validate_run_sheet_props(map()) :: :ok | {:error, term()}
+  def validate_run_sheet_props(props) when is_map(props) do
+    with {:ok, segments} <- segments_from_doc(Map.get(props, "segments")),
+         :ok <- check_total(Map.get(props, "total_s"), segments),
+         do: :ok
+  end
+
+  def validate_run_sheet_props(_props), do: {:error, {:bad_prop, :props}}
+
+  defp check_total(nil, _segments), do: :ok
+
+  defp check_total(total, segments),
+    do: check(total == total_s(segments), {:bad_prop, :total_s})
+
+  @doc "A one-line, human-readable reason for a validation error term."
+  @spec error_message(term()) :: String.t()
+  def error_message({:unsourced_stat, id}),
+    do:
+      "has a stat card without a source_url in segment #{inspect(id)}: every stat needs a source"
+
+  def error_message({:not_contiguous, id, at}),
+    do: "segment #{inspect(id)} must start at #{at}s, where the previous one ended"
+
+  def error_message({:run_too_long, total, max}),
+    do: "run sheet runs #{total}s, over the #{max}s limit"
+
+  def error_message({:bad_prop, field}), do: "has an invalid prop: #{inspect(field)}"
+  def error_message(other), do: "is invalid: #{inspect(other)}"
+
   defp node(type, props), do: %{"id" => type, "type" => type, "props" => props, "children" => []}
 
   defp segment_to_doc(segment) do

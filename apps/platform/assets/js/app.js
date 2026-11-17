@@ -26,6 +26,9 @@ import {Socket} from "phoenix"
 import {LiveSocket} from "phoenix_live_view"
 import topbar from "../vendor/topbar"
 import Hooks from "./hooks"
+// Colocated hooks (`<script :type={Phoenix.LiveView.ColocatedHook}>`), extracted
+// at compile time into the build path; the episode board's kinds use them.
+import {hooks as colocatedHooks} from "phoenix-colocated/platform"
 import {installNativeDonations} from "./native_donations"
 import {installMeetingPresence} from "./meeting_presence"
 import {uploadManager} from "./hooks/large_upload"
@@ -85,7 +88,7 @@ const liveSocket = new LiveSocket("/live", Socket, {
     timezone: Intl.DateTimeFormat().resolvedOptions().timeZone,
     viewport_lg: window.matchMedia("(min-width: 64rem)").matches,
   }),
-  hooks: Hooks,
+  hooks: {...Hooks, ...colocatedHooks},
 })
 
 // LiveView recovers from some failures by reloading the page
