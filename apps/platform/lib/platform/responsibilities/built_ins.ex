@@ -88,7 +88,11 @@ defmodule Platform.Responsibilities.BuiltIns do
       # Task 01a1eaf6 stage 3: the How to Computer showrunner (showrunner role).
       Handlers.ShowrunnerWeeklyPitch,
       Handlers.ShowrunnerResearchBrief,
-      Handlers.ShowrunnerRunSheet
+      Handlers.ShowrunnerRunSheet,
+      # Task 01a1eaf6 stage 4: logistics, post and retro.
+      Handlers.ShowrunnerRecordingPrep,
+      Handlers.ShowrunnerPostShow,
+      Handlers.ShowrunnerRetro
     ]
   end
 end

@@ -91,10 +91,11 @@ defmodule Platform.Responsibilities.Handlers.ShowrunnerResearchBrief do
   episode with it, advances the rail to Research and fires this key. Called
   when a human answers "Pick this topic". `{:ok, canvas}` or `{:error, reason}`;
   an unreadable board takes the Needs-you path and returns
-  `{:error, {:board_unreadable, reason}}`. Never raises.
+  `{:error, {:board_unreadable, reason}}`. Never raises. `opts[:fire]` is
+  the fire function (`Platform.Showrunner.Runtime.fire/3`).
   """
-  @spec pick_topic(Canvas.t(), String.t()) :: {:ok, Canvas.t()} | {:error, term()}
-  def pick_topic(%Canvas{} = canvas, choice) when is_binary(choice) do
+  @spec pick_topic(Canvas.t(), String.t(), keyword()) :: {:ok, Canvas.t()} | {:error, term()}
+  def pick_topic(%Canvas{} = canvas, choice, opts \\ []) when is_binary(choice) do
     with %Responsibility{} = row <-
            Platform.Responsibilities.get_by_key(@key) || {:error, :not_registered},
          {:ok, ctx, _config} <- Runtime.context(row),
@@ -102,7 +103,7 @@ defmodule Platform.Responsibilities.Handlers.ShowrunnerResearchBrief do
          {:ok, episode} <- Episode.resolve_needs_you(episode, pick_id(), choice),
          {:ok, episode} <- Episode.advance(%{episode | title: choice}, :research),
          {:ok, canvas} <- Board.write(ctx, canvas, document, episode) do
-      Runtime.fire(@key, %{kind: :topic_pick, canvas_id: canvas.id})
+      Runtime.fire(@key, %{kind: :topic_pick, canvas_id: canvas.id}, Runtime.fire_fun(opts))
       {:ok, canvas}
     end
   rescue
@@ -149,13 +150,13 @@ defmodule Platform.Responsibilities.Handlers.ShowrunnerResearchBrief do
   def handle_output(responsibility, output), do: handle_output(responsibility, output, %{})
 
   @impl true
-  def handle_output(%Responsibility{} = responsibility, output, trigger_meta) do
+  def handle_output(%Responsibility{} = responsibility, output, trigger_meta, opts \\ []) do
     with {:ok, brief} <- brief(output),
          {:ok, ctx, _config} <- Runtime.context(responsibility),
          %Canvas{} = canvas <- Runtime.board(ctx.space_id, trigger_meta) || {:error, :no_board},
          {:ok, episode, document} <- read(ctx, canvas),
          :ok <- due(episode) do
-      write_brief(ctx, canvas, document, episode, brief)
+      write_brief(ctx, canvas, document, episode, brief, opts)
     else
       {:error, {:board_unreadable, _}} ->
         :ok
@@ -226,7 +227,7 @@ defmodule Platform.Responsibilities.Handlers.ShowrunnerResearchBrief do
   defp due(%Episode{stage: :research, brief: nil}), do: :ok
   defp due(%Episode{stage: stage}), do: {:error, {:not_due, stage}}
 
-  defp write_brief(ctx, canvas, document, episode, brief) do
+  defp write_brief(ctx, canvas, document, episode, brief, opts) do
     text = render(brief)
     episode = %{episode | brief: text}
 
@@ -249,7 +250,11 @@ defmodule Platform.Responsibilities.Handlers.ShowrunnerResearchBrief do
       )
 
       if episode.stage == :run_sheet do
-        Runtime.fire(@run_sheet_key, %{kind: :brief_written, canvas_id: canvas.id})
+        Runtime.fire(
+          @run_sheet_key,
+          %{kind: :brief_written, canvas_id: canvas.id},
+          Runtime.fire_fun(opts)
+        )
       end
 
       :ok

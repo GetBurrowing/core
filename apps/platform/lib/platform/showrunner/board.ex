@@ -289,7 +289,91 @@ defmodule Platform.Showrunner.Board do
       :ok
   end
 
+  @doc """
+  Raises one human decision on the board, once (task 01a1eaf6 stage 4): when
+  `episode` has no open item with `item.id`, the item is added, the board is
+  written and the decision escalated (one message, one inbox row). An item
+  already open is left alone, so a repeated fire never piles up items or
+  inbox rows. Returns `{:ok, :raised}`, `{:ok, :already_open}` or
+  `{:error, reason}`; never raises.
+  """
+  @spec raise_needs_you(ctx(), Canvas.t(), map(), Episode.t(), map(), keyword()) ::
+          {:ok, :raised | :already_open} | {:error, term()}
+  def raise_needs_you(ctx, %Canvas{} = canvas, document, %Episode{} = episode, item, opts \\ []) do
+    if Enum.any?(episode.needs_you, &(&1.id == item.id)) do
+      {:ok, :already_open}
+    else
+      with {:ok, episode} <- Episode.add_needs_you(episode, item),
+           {:ok, _canvas} <- write(ctx, canvas, document, episode) do
+        escalate(ctx, item, opts)
+        {:ok, :raised}
+      end
+    end
+  rescue
+    error -> {:error, {:raised, Exception.message(error)}}
+  end
+
+  @doc """
+  Sets a collapsed `<details>` section on the board document: node `node_id`
+  is rewritten when the board has it, else a markdown node is appended to the
+  template's collapsed stack (or the root when that is gone).
+  """
+  @spec put_section(map(), String.t(), String.t(), String.t()) :: map()
+  def put_section(document, node_id, summary, body) do
+    if find_id(document["root"], node_id) do
+      set_details(document, node_id, summary, body)
+    else
+      node = %{
+        "id" => node_id,
+        "type" => "markdown",
+        "props" => %{
+          "content" => "<details>\n<summary>#{summary}</summary>\n\n#{body}\n\n</details>"
+        },
+        "children" => []
+      }
+
+      parent = if find_id(document["root"], "episode-collapsed"), do: "episode-collapsed"
+
+      case parent do
+        nil ->
+          update_in(document, ["root", "children"], &((&1 || []) ++ [node]))
+
+        id ->
+          update_node(document, id, fn stack ->
+            Map.put(stack, "children", (stack["children"] || []) ++ [node])
+          end)
+      end
+    end
+  end
+
+  @doc "A showrunner bookkeeping map under `document[\"meta\"][key]`, or `%{}`."
+  @spec meta(map(), String.t()) :: map()
+  def meta(document, key) when is_map(document) do
+    case document["meta"] do
+      %{^key => %{} = value} -> value
+      _ -> %{}
+    end
+  end
+
+  def meta(_document, _key), do: %{}
+
+  @doc "Merges `values` into `document[\"meta\"][key]`."
+  @spec put_meta(map(), String.t(), map()) :: map()
+  def put_meta(document, key, values) when is_map(values) do
+    Map.update(document, "meta", %{key => values}, fn meta ->
+      meta = meta || %{}
+      Map.put(meta, key, Map.merge(Map.get(meta, key) || %{}, values))
+    end)
+  end
+
   # ── internals ──
+
+  defp find_id(%{"id" => id} = node, id), do: node
+
+  defp find_id(%{"children" => children}, id) when is_list(children),
+    do: Enum.find_value(children, &(is_map(&1) && find_id(&1, id)))
+
+  defp find_id(_node, _id), do: nil
 
   defp live_document(%Canvas{id: id, document: stored}) do
     case CanvasServer.describe(id) do

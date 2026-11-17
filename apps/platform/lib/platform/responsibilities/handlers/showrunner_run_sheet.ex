@@ -185,12 +185,12 @@ defmodule Platform.Responsibilities.Handlers.ShowrunnerRunSheet do
   def handle_output(responsibility, output), do: handle_output(responsibility, output, %{})
 
   @impl true
-  def handle_output(%Responsibility{} = responsibility, output, trigger_meta) do
+  def handle_output(%Responsibility{} = responsibility, output, trigger_meta, opts \\ []) do
     with {:ok, ctx, _config} <- Runtime.context(responsibility),
          %Canvas{} = canvas <- Runtime.board(ctx.space_id, trigger_meta) || {:error, :no_board},
          {:ok, episode, document} <- read(ctx, canvas),
          :ok <- due(episode) do
-      draft(ctx, canvas, document, episode, output, trigger_meta)
+      draft(ctx, canvas, document, episode, output, trigger_meta, opts)
     else
       {:error, {:board_unreadable, _}} ->
         :ok
@@ -213,7 +213,7 @@ defmodule Platform.Responsibilities.Handlers.ShowrunnerRunSheet do
 
   # ── internals ──
 
-  defp draft(ctx, canvas, document, episode, output, trigger_meta) do
+  defp draft(ctx, canvas, document, episode, output, trigger_meta, opts) do
     decoded =
       case Runtime.decode(output) do
         {:ok, decoded} -> decoded
@@ -225,7 +225,7 @@ defmodule Platform.Responsibilities.Handlers.ShowrunnerRunSheet do
         accept(ctx, canvas, document, drafted, decoded)
 
       {:error, reason} ->
-        reject(ctx, canvas, document, episode, reason, attempt(trigger_meta))
+        reject(ctx, canvas, document, episode, reason, attempt(trigger_meta), opts)
     end
   end
 
@@ -277,22 +277,27 @@ defmodule Platform.Responsibilities.Handlers.ShowrunnerRunSheet do
     end
   end
 
-  defp reject(_ctx, canvas, _document, _episode, reason, attempt) when attempt < @max_redrafts do
+  defp reject(_ctx, canvas, _document, _episode, reason, attempt, opts)
+       when attempt < @max_redrafts do
     Logger.info(
       "[showrunner.run_sheet] draft invalid (#{inspect(reason)}); redraft #{attempt + 1}"
     )
 
-    Runtime.fire(@key, %{
-      kind: :redraft,
-      canvas_id: canvas.id,
-      redraft_attempt: attempt + 1,
-      redraft_error: Episode.error_message(reason)
-    })
+    Runtime.fire(
+      @key,
+      %{
+        kind: :redraft,
+        canvas_id: canvas.id,
+        redraft_attempt: attempt + 1,
+        redraft_error: Episode.error_message(reason)
+      },
+      Runtime.fire_fun(opts)
+    )
 
     :ok
   end
 
-  defp reject(ctx, canvas, document, episode, reason, _attempt) do
+  defp reject(ctx, canvas, document, episode, reason, _attempt, _opts) do
     message = Episode.error_message(reason)
     Logger.warning("[showrunner.run_sheet] redraft still invalid (#{message}); escalating")
 

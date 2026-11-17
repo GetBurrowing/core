@@ -564,11 +564,14 @@ defmodule Platform.RolesTest do
       assert error.postgres.constraint == "roles_key_check"
     end
 
-    test "the seed bundles the three showrunner keys" do
+    test "the seed bundles the six showrunner keys (three from stage 3, three from stage 4)" do
       :ok = Platform.Roles.Seeds.seed_defaults()
 
       assert Roles.bundle_for("showrunner") == [
+               "showrunner.post_show",
+               "showrunner.recording_prep",
                "showrunner.research_brief",
+               "showrunner.retro",
                "showrunner.run_sheet",
                "showrunner.weekly_pitch"
              ]

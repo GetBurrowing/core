@@ -7,6 +7,9 @@ defmodule Platform.Responsibilities.Providers.Showrunner do
     * `showrunner.weekly_pitch` → `Handlers.ShowrunnerWeeklyPitch`
     * `showrunner.research_brief` → `Handlers.ShowrunnerResearchBrief`
     * `showrunner.run_sheet` → `Handlers.ShowrunnerRunSheet`
+    * `showrunner.recording_prep` → `Handlers.ShowrunnerRecordingPrep` (stage 4)
+    * `showrunner.post_show` → `Handlers.ShowrunnerPostShow` (stage 4)
+    * `showrunner.retro` → `Handlers.ShowrunnerRetro` (stage 4)
 
   The Router probes `build_prompt/1` and `output_meta/2` on the PROVIDER, so
   this shim dispatches both by the fired key (`context[:__responsibility__]`).
@@ -16,12 +19,26 @@ defmodule Platform.Responsibilities.Providers.Showrunner do
   """
   @behaviour Platform.Responsibilities.Provider
 
+  alias Platform.Responsibilities.Handlers.ShowrunnerPostShow
+  alias Platform.Responsibilities.Handlers.ShowrunnerRecordingPrep
   alias Platform.Responsibilities.Handlers.ShowrunnerResearchBrief
+  alias Platform.Responsibilities.Handlers.ShowrunnerRetro
   alias Platform.Responsibilities.Handlers.ShowrunnerRunSheet
   alias Platform.Responsibilities.Handlers.ShowrunnerWeeklyPitch
   alias Platform.Responsibilities.Responsibility
 
-  @handlers [ShowrunnerWeeklyPitch, ShowrunnerResearchBrief, ShowrunnerRunSheet]
+  @handlers [
+    ShowrunnerWeeklyPitch,
+    ShowrunnerResearchBrief,
+    ShowrunnerRunSheet,
+    ShowrunnerRecordingPrep,
+    ShowrunnerPostShow,
+    ShowrunnerRetro
+  ]
+
+  @doc "The six handlers, in the weekly loop's order."
+  @spec handlers() :: [module()]
+  def handlers, do: @handlers
 
   @impl true
   def register, do: Enum.flat_map(@handlers, & &1.register())

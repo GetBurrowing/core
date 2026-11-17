@@ -3,8 +3,9 @@ defmodule Platform.Responsibilities.ShowrunnerHandlersTest do
   The three `showrunner.*` handlers (task 01a1eaf6 stage 3), driven through
   their provider callbacks against a real space, canvas, inbox and journal.
 
-  `:showrunner_fire` is pointed at this process so a step that starts the
-  next one (a written brief, a redraft) is observed instead of dispatched.
+  A fire function that messages this process is passed as `opts[:fire]`, so
+  a step that starts the next one (a written brief, a redraft) is observed
+  instead of dispatched. It is an argument, not app config (stage 4).
   """
   use Platform.DataCase, async: false
 
@@ -38,12 +39,11 @@ defmodule Platform.Responsibilities.ShowrunnerHandlersTest do
 
   setup do
     test_pid = self()
-    previous = Application.get_env(:platform, :showrunner_fire)
 
-    Application.put_env(:platform, :showrunner_fire, fn key, meta ->
+    fire = fn key, meta ->
       send(test_pid, {:fired, key, meta})
       {:ok, :observed}
-    end)
+    end
 
     :ok = Seeds.seed_defaults(only_keys: ["showrunner"])
 
@@ -69,13 +69,7 @@ defmodule Platform.Responsibilities.ShowrunnerHandlersTest do
         {handler, row}
       end
 
-    on_exit(fn ->
-      if previous,
-        do: Application.put_env(:platform, :showrunner_fire, previous),
-        else: Application.delete_env(:platform, :showrunner_fire)
-    end)
-
-    %{agent: agent, user: user, space: space, rows: rows}
+    %{agent: agent, user: user, space: space, rows: rows, opts: [fire: fire]}
   end
 
   # ── fixtures ──
@@ -136,9 +130,9 @@ defmodule Platform.Responsibilities.ShowrunnerHandlersTest do
   end
 
   # Pitch -> pick -> brief: a board at Run sheet with no run sheet.
-  defp at_run_sheet!(%{rows: rows} = ctx) do
+  defp at_run_sheet!(%{rows: rows, opts: opts} = ctx) do
     canvas = pitch!(ctx)
-    assert {:ok, canvas} = Brief.pick_topic(canvas, "The 3% rule for backups")
+    assert {:ok, canvas} = Brief.pick_topic(canvas, "The 3% rule for backups", opts)
     assert_received {:fired, "showrunner.research_brief", %{canvas_id: id}} when id == canvas.id
 
     brief = %{
@@ -148,7 +142,7 @@ defmodule Platform.Responsibilities.ShowrunnerHandlersTest do
       "counterpoints" => ["Cloud sync is not backup, but it helps."]
     }
 
-    assert :ok = Brief.handle_output(rows[Brief], brief, %{canvas_id: canvas.id})
+    assert :ok = Brief.handle_output(rows[Brief], brief, %{canvas_id: canvas.id}, opts)
     assert_received {:fired, "showrunner.run_sheet", %{canvas_id: _}}
     canvas
   end
@@ -254,7 +248,8 @@ defmodule Platform.Responsibilities.ShowrunnerHandlersTest do
       }
 
       # First invalid draft: one redraft is requested, nothing is escalated.
-      assert :ok = RunSheet.handle_output(rows[RunSheet], draft, %{canvas_id: canvas.id})
+      assert :ok =
+               RunSheet.handle_output(rows[RunSheet], draft, %{canvas_id: canvas.id}, ctx.opts)
 
       assert_received {:fired, "showrunner.run_sheet",
                        %{redraft_attempt: 1, redraft_error: error, canvas_id: id}}
@@ -278,10 +273,12 @@ defmodule Platform.Responsibilities.ShowrunnerHandlersTest do
 
       # Still invalid on the redraft: a Needs-you item and one inbox row; no third draft.
       assert :ok =
-               RunSheet.handle_output(rows[RunSheet], draft, %{
-                 canvas_id: canvas.id,
-                 redraft_attempt: 1
-               })
+               RunSheet.handle_output(
+                 rows[RunSheet],
+                 draft,
+                 %{canvas_id: canvas.id, redraft_attempt: 1},
+                 ctx.opts
+               )
 
       refute_received {:fired, "showrunner.run_sheet", _}
       assert {:ok, episode, _} = Board.read(canvas)
@@ -308,7 +305,9 @@ defmodule Platform.Responsibilities.ShowrunnerHandlersTest do
         "cold_open" => %{"a" => "Open on a dead laptop.", "b" => "Open on the 3%."}
       }
 
-      assert :ok = RunSheet.handle_output(rows[RunSheet], draft, %{canvas_id: canvas.id})
+      assert :ok =
+               RunSheet.handle_output(rows[RunSheet], draft, %{canvas_id: canvas.id}, ctx.opts)
+
       assert {:ok, episode, document} = Board.read(canvas)
       assert Enum.map(episode.run_sheet, & &1.id) == ["s1", "s2"]
       assert [%{id: "cold-open", options: ["Cold open A", "Cold open B"]}] = episode.needs_you
@@ -393,13 +392,19 @@ defmodule Platform.Responsibilities.ShowrunnerHandlersTest do
 
       # Handlers asked again on the same board do not raise or pile up items.
       assert :ok =
-               RunSheet.handle_output(rows[RunSheet], %{"segments" => []}, %{canvas_id: canvas.id})
+               RunSheet.handle_output(
+                 rows[RunSheet],
+                 %{"segments" => []},
+                 %{canvas_id: canvas.id},
+                 ctx.opts
+               )
 
       assert :ok =
                Brief.handle_output(
                  rows[Brief],
                  %{"brief" => "x", "sources" => [%{"url" => "https://e.x"}]},
-                 %{canvas_id: canvas.id}
+                 %{canvas_id: canvas.id},
+                 ctx.opts
                )
 
       {:ok, %{document: live}} = CanvasServer.describe(canvas.id)

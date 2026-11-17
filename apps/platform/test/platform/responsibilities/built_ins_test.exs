@@ -58,6 +58,37 @@ defmodule Platform.Responsibilities.BuiltInsTest do
                Handlers.ShowrunnerWeeklyPitch.register()
     end
 
+    test "lists the three stage-4 showrunner handlers on the same provider (task 01a1eaf6 stage 4)" do
+      providers = BuiltIns.providers()
+
+      for {handler, key, kind} <- [
+            {Handlers.ShowrunnerRecordingPrep, "showrunner.recording_prep", "cron"},
+            {Handlers.ShowrunnerPostShow, "showrunner.post_show", "event_topic"},
+            {Handlers.ShowrunnerRetro, "showrunner.retro", "cron"}
+          ] do
+        assert handler in providers
+        assert handler.key() == key
+        assert [%{key: ^key, feature: "showrunner", trigger_kind: ^kind}] = handler.register()
+        assert Platform.Responsibilities.Providers.Showrunner.handler_for(key) == handler
+      end
+
+      assert length(Platform.Responsibilities.Providers.Showrunner.handlers()) == 6
+
+      # The retro runs before the Monday pitch so the pitch reads a retro'd journal.
+      assert [%{trigger_config: %{"expression" => "0 12 * * 1"}}] =
+               Handlers.ShowrunnerRetro.register()
+
+      assert [
+               %{
+                 trigger_config: %{
+                   "topic" => "meeting:finished",
+                   "event_match" => "meeting_finished"
+                 }
+               }
+             ] =
+               Handlers.ShowrunnerPostShow.register()
+    end
+
     test "lists the four Security Guard placeholder handlers (task 019f3e8e stage 1)" do
       providers = BuiltIns.providers()
 

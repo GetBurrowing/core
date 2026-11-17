@@ -115,7 +115,11 @@ config :platform, Platform.Responsibilities,
     # Task 01a1eaf6 stage 3: the How to Computer showrunner (showrunner role).
     Platform.Responsibilities.Handlers.ShowrunnerWeeklyPitch,
     Platform.Responsibilities.Handlers.ShowrunnerResearchBrief,
-    Platform.Responsibilities.Handlers.ShowrunnerRunSheet
+    Platform.Responsibilities.Handlers.ShowrunnerRunSheet,
+    # Task 01a1eaf6 stage 4: logistics, post and retro.
+    Platform.Responsibilities.Handlers.ShowrunnerRecordingPrep,
+    Platform.Responsibilities.Handlers.ShowrunnerPostShow,
+    Platform.Responsibilities.Handlers.ShowrunnerRetro
   ]
 
 # Meeting-triage guardrails (task 019f5e2b-8d29). Two independent caps:

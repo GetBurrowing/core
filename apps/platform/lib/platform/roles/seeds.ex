@@ -236,19 +236,25 @@ defmodule Platform.Roles.Seeds do
     %{
       key: "showrunner",
       name: "Showrunner",
-      description: "Runs the weekly How to Computer show: pitch, research brief, run sheet",
+      description:
+        "Runs the weekly How to Computer show: pitch, research, run sheet, logistics, post, retro",
       icon: "hero-video-camera",
       # Task 01a1eaf6 stage 3. Its own role, not a key on an existing bundle:
       # the show's weekly prep posts into a show space and puts decisions to a
       # named person, a trust and attention scope no existing role holds.
       # Existing DBs pick the role and bundle up from
       # `20261117214509_add_showrunner_role.exs`, which also extends
-      # `roles_key_check`. Stage 4 appends three more keys. NO ASSIGNMENT IS
-      # SEEDED: until an agent is pinned, every fire is `{:ok, :unfilled}`.
+      # `roles_key_check`. Stage 4 appended the last three keys; existing DBs
+      # pick them up from `20261117231742_add_showrunner_loop_keys.exs`. NO
+      # ASSIGNMENT IS SEEDED: until an agent is pinned (`mix
+      # platform.showrunner.provision`), every fire is `{:ok, :unfilled}`.
       bundle: [
         "showrunner.weekly_pitch",
         "showrunner.research_brief",
-        "showrunner.run_sheet"
+        "showrunner.run_sheet",
+        "showrunner.recording_prep",
+        "showrunner.post_show",
+        "showrunner.retro"
       ]
     }
   ]

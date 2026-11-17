@@ -6,11 +6,14 @@ defmodule Platform.Showrunner.Runtime do
 
   ## The fire seam
 
-  `fire/2` is how one step starts the next (a written brief fires the run
-  sheet; an invalid run sheet fires its one redraft). It calls
-  `Platform.Responsibilities.Router.fire/2` unless
-  `Application.get_env(:platform, :showrunner_fire)` names a 2-arity function,
-  which tests use to observe the request without running a dispatch.
+  `fire/3` is how one step starts the next (a written brief fires the run
+  sheet; an invalid run sheet fires its one redraft; a failed post-show
+  retries once). It calls `Platform.Responsibilities.Router.fire/2` unless
+  the caller passes another 2-arity function. The function is an ARGUMENT,
+  threaded down from each handler's `opts[:fire]`, never application
+  config: a stray config value would silently stop the chain (task 01a1eaf6
+  stage 4 replaced stage 3's `:showrunner_fire` app-env hook for that
+  reason).
   """
 
   require Logger
@@ -37,17 +40,28 @@ defmodule Platform.Showrunner.Runtime do
     end
   end
 
-  @doc "Starts `key` with `meta` through the Router (or the configured test seam)."
-  @spec fire(String.t(), map()) :: term()
-  def fire(key, meta) when is_binary(key) and is_map(meta) do
-    case Application.get_env(:platform, :showrunner_fire) do
-      fun when is_function(fun, 2) -> fun.(key, meta)
-      _ -> Router.fire(key, meta)
-    end
+  @doc """
+  Starts `key` with `meta` through `fire_fun` (default
+  `Platform.Responsibilities.Router.fire/2`). A raise is logged and returned
+  as `{:error, :fire_failed}`.
+  """
+  @spec fire(String.t(), map(), (String.t(), map() -> term())) :: term()
+  def fire(key, meta, fire_fun \\ &Router.fire/2)
+      when is_binary(key) and is_map(meta) and is_function(fire_fun, 2) do
+    fire_fun.(key, meta)
   rescue
     error ->
       Logger.warning("[showrunner] fire #{key} raised: #{Exception.message(error)}")
       {:error, :fire_failed}
+  end
+
+  @doc "The fire function in a handler's `opts` (`opts[:fire]`), else the Router's."
+  @spec fire_fun(keyword()) :: (String.t(), map() -> term())
+  def fire_fun(opts) when is_list(opts) do
+    case Keyword.get(opts, :fire) do
+      fun when is_function(fun, 2) -> fun
+      _ -> &Router.fire/2
+    end
   end
 
   @doc """

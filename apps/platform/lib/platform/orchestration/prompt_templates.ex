@@ -3227,6 +3227,104 @@ defmodule Platform.Orchestration.PromptTemplates do
         """
       },
       %{
+        slug: "showrunner.recording_prep.v1",
+        name: "Showrunner — Recording Day Seed",
+        description:
+          "Posted by the server-side `showrunner.recording_prep` responsibility (task " <>
+            "01a1eaf6 stage 4) into the recording's meeting space on recording day, so the " <>
+            "meeting voice agent has the run sheet and the showrunner can cohost with " <>
+            "`meeting_say`. Seeded by `20261117231742_add_showrunner_loop_keys.exs`.",
+        # Every assign comes from `Handlers.ShowrunnerRecordingPrep`.
+        variables: ["episode_number", "title", "records_at", "host_roles", "run_sheet"],
+        content: """
+        Showrunner here, cohosting episode {{episode_number}} of How to Computer: {{title}}
+
+        Recording {{records_at}}. Hosts, by role: {{host_roles}}.
+
+        I keep time against the run sheet below and speak in the room with `meeting_say` only to call a segment change, land a callback, or put a sourced number on the table. Dry, numbers-first, curious; never a figure without its source.
+
+        ## Run sheet
+
+        {{run_sheet}}
+        """
+      },
+      %{
+        slug: "showrunner.post_show.v1",
+        name: "Showrunner — Post Show",
+        description:
+          "User turn for the `showrunner.post_show` responsibility (task 01a1eaf6 stage 4). " <>
+            "The agent proposes clips and drafts posts with its own social_* tools, all left " <>
+            "in approval; it never publishes or submits. Core records the ids it reports. " <>
+            "Seeded by `20261117231742_add_showrunner_loop_keys.exs`.",
+        # Every assign comes from `Handlers.ShowrunnerPostShow.gather_context/2`.
+        variables: [
+          "episode_number",
+          "title",
+          "run_sheet",
+          "host_roles",
+          "meeting_id",
+          "transcript_id",
+          "retry_note"
+        ],
+        content: """
+        Episode {{episode_number}} of How to Computer ({{title}}) has finished recording.
+
+        Meeting: {{meeting_id}}. Transcript: {{transcript_id}}. Hosts, by role: {{host_roles}}.
+
+        ## Run sheet as planned
+
+        {{run_sheet}}
+
+        ## What to prepare (all of it waits for a human)
+
+        1. Show notes: a short summary, the sources we cited, and chapters with timestamps from the transcript.
+        2. Clip Studio picks: call `social_clip_propose` for the two to four strongest moments, each with its segment.
+        3. Drafts: call `social_draft_create` for the episode title options, the description, the chapters, thumbnail options, and one social post per platform. Leave every draft in approval.
+
+        Never publish, schedule or submit anything. Do not call `social_clip_submit` or any publish or submit tool: humans click publish.
+
+        If the recording's audio is missing or an upload fails, stop and report it instead of guessing.
+
+        {{retry_note}}
+
+        Respond with exactly this JSON object and nothing else:
+
+        {"show_notes": "...", "clip_ids": ["<id from social_clip_propose>"], "draft_ids": ["<id from social_draft_create>"]}
+
+        or, when the audio is missing or an upload failed:
+
+        {"error": "missing_audio" | "upload_failed", "detail": "..."}
+        """
+      },
+      %{
+        slug: "showrunner.retro.v1",
+        name: "Showrunner — Retro",
+        description:
+          "User turn for the weekly `showrunner.retro` cron responsibility (task 01a1eaf6 " <>
+            "stage 4). The agent reads results with its own social_* tools; core records " <>
+            "kept and cut segments and emits the run-sheet kept share. Seeded by " <>
+            "`20261117231742_add_showrunner_loop_keys.exs`.",
+        # Every assign comes from `Handlers.ShowrunnerRetro.gather_context/2`.
+        variables: ["episode_number", "title", "segments", "clip_ids", "draft_ids"],
+        content: """
+        Retro for episode {{episode_number}} of How to Computer: {{title}}
+
+        ## Run sheet segments (id: name)
+
+        {{segments}}
+
+        Clips proposed after the show: {{clip_ids}}. Drafts: {{draft_ids}}.
+
+        Read how the episode and its clips did with `social_results_get` and `social_clip_list`. Then decide, segment by segment, which made the final cut and which were cut, using the published episode's chapters when you can see them.
+
+        Numbers first, and only numbers the results show you.
+
+        Respond with exactly this JSON object and nothing else (every id from the list above; a segment is kept or cut, never both):
+
+        {"kept_segment_ids": ["seg-1"], "cut_segment_ids": ["seg-2"], "clip_results": [{"clip_id": "...", "segment_id": "seg-1", "views": 0, "watch_through": 0.0}]}
+        """
+      },
+      %{
         slug: "janitor.cron_drain.v1",
         name: "Janitor — Weekly Chore Drain",
         description:

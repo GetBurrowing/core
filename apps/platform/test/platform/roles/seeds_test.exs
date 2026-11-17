@@ -109,7 +109,7 @@ defmodule Platform.Roles.SeedsTest do
   end
 
   describe "seed_defaults/0" do
-    test "inserts eleven roles and thirty-eight bundle rows on a fresh DB" do
+    test "inserts eleven roles and forty-one bundle rows on a fresh DB" do
       assert :ok = Seeds.seed_defaults()
 
       # 10 roles: designer, historian, meeting_producer, meeting_scribe,
@@ -175,7 +175,11 @@ defmodule Platform.Roles.SeedsTest do
       # `showrunner.research_brief` and `showrunner.run_sheet`. Its own role:
       # the show's prep posts into a show space and puts decisions to a named
       # person, a scope no existing role was chosen for.
-      assert Repo.aggregate(RoleResponsibility, :count, :id) == 38
+      # 38 -> 41 in task 01a1eaf6 stage 4: the loop's second half,
+      # `showrunner.recording_prep`, `showrunner.post_show` and
+      # `showrunner.retro`, joined the SAME `showrunner` bundle; the role
+      # count stays at 11.
+      assert Repo.aggregate(RoleResponsibility, :count, :id) == 41
     end
 
     test "is idempotent — calling twice does not duplicate rows" do
@@ -184,11 +188,11 @@ defmodule Platform.Roles.SeedsTest do
 
       assert Repo.aggregate(Role, :count, :key) == 11
 
-      # Same 38 as the fresh-DB case above — the point of this test is
+      # Same 41 as the fresh-DB case above — the point of this test is
       # that the SECOND `seed_defaults/0` adds nothing, so the number
       # must be read off the same breakdown rather than drifting into
       # an independent literal.
-      assert Repo.aggregate(RoleResponsibility, :count, :id) == 38
+      assert Repo.aggregate(RoleResponsibility, :count, :id) == 41
     end
 
     test "each role's bundle round-trips via Platform.Roles.bundle_for/1" do
