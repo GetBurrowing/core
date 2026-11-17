@@ -1206,8 +1206,8 @@ defmodule Platform.RepoLookupBoundaryTest do
     {"platform/showrunner/config.ex", :platform_uuid_guard, "-", 1, :must_cast,
      "uuid/1 reads id fields out of a responsibility's operator-written `trigger_config` JSON; a malformed value becomes nil (the unconfigured path) before any lookup uses it"},
     {"platform/responsibilities/handlers/showrunner_recording_prep.ex", :get, "Agent", 1,
-     :safe_internal,
-     "runtime_scope/1 takes ctx.agent_id, built by Showrunner.Board.context/3 from the %Agent{} that Roles.assignee_for/1 loads through role_assignments.agent_id (a :binary_id FK to agents); no params, MCP payload or URL segment reaches it"},
+     :flagged_sibling_owned,
+     "under the responsibilities/ sibling prefix, so flagged rather than classified; the id is internal regardless: runtime_scope/1 takes ctx.agent_id, built by Showrunner.Board.context/3 from the %Agent{} that Roles.assignee_for/1 loads through role_assignments.agent_id (a :binary_id FK to agents); no params, MCP payload or URL segment reaches it"},
     {"platform/showrunner/social_bundle.ex", :get, "Agent", 1, :safe_internal,
      "guard/4 takes ctx.agent_id, built by Showrunner.Board.context/3 from the %Agent{} that Roles.assignee_for/1 loads through role_assignments.agent_id (a :binary_id FK to agents); no params, MCP payload or URL segment reaches it"}
   ]
