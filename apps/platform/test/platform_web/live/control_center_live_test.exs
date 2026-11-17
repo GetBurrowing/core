@@ -2177,6 +2177,10 @@ defmodule PlatformWeb.ControlCenterLiveTest do
 
       main = view |> element("#control-main-panel") |> render()
       refute "hidden" in classes_of(main)
+      # Below lg the panel's bottom control must scroll clear of the fixed
+      # bottom nav: the shared phone-chrome inset, as #agent-list uses.
+      assert "clears-tab-bar" in classes_of(main)
+      assert "clears-tab-bar" in classes_of(view |> element("#agent-list") |> render())
       assert "hidden" in classes_of(view |> element("#agent-directory") |> render())
       assert "lg:flex" in classes_of(view |> element("#agent-directory") |> render())
 

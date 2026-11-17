@@ -1164,10 +1164,12 @@ defmodule PlatformWeb.ControlCenterLive do
         </aside>
 
         <%!-- ── Main panel ─────────────────────────────────────────── --%>
+        <%!-- clears-tab-bar: below lg its last control (the Roles panel's
+             Show advanced) must scroll clear of the fixed bottom nav. --%>
         <main
           id="control-main-panel"
           class={[
-            "min-h-0 flex-1 overflow-y-auto",
+            "min-h-0 flex-1 overflow-y-auto clears-tab-bar",
             is_nil(@selected_agent) && !@mobile_roles_open? && "hidden lg:block"
           ]}
         >
