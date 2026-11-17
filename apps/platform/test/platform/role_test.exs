@@ -155,6 +155,7 @@ defmodule Platform.RoleTest do
                Platform.CodeMode.Store,
                Platform.Push.RelayRateLimit,
                Platform.Calendar.BookingRateLimit,
+               Platform.SignIn.EmailSetupRateLimit,
                Platform.Feedback.BrokerRateLimit,
                Platform.Push.APNsFinch,
                Platform.Chat.ContextPlane,
@@ -192,6 +193,8 @@ defmodule Platform.RoleTest do
                Platform.Security.Sweeper,
                Platform.Chat.SpacePurger,
                Platform.Experiments.Signals.MailSubscriber,
+               Platform.Sharing.UsageBatcher,
+               Platform.InstructionPacks.Poller,
                Platform.Tenancy.ContainerPurger,
                Platform.Files.Purger,
                Platform.Prototypes.Purger,
@@ -210,7 +213,8 @@ defmodule Platform.RoleTest do
                Platform.Meetings.CompletionSweeper,
                :canvas_search_backfill,
                :burrow_docs_seed,
-               :default_space_seed
+               :default_space_seed,
+               :pocket_id_email_login_code
              ]
     end
 

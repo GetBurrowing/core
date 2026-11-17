@@ -8,7 +8,11 @@ defmodule Platform.Agents.Burrow do
 
   Burrow is created when the owner connects their first AI on
   `/setup/connect-ai` (`PlatformWeb.ConnectAiLive`), on the provider they
-  choose. Nothing creates it at boot or at login.
+  choose. Nothing creates it at boot. The one other path is the starter
+  allowance (`ensure_starter/1`, `Platform.Agents.Burrow.Starter`): on an
+  install configured with a starter key, the first hand-over sign-in creates
+  it on that key, and the owner's later choice on `/setup/connect-ai` goes
+  through `ensure/2`, which retires the starter.
 
   `ensure/2` creates, or reuses, the ONE native agent named "Burrow" (slug
   `burrow`) and starts it. The harness follows the connect option
@@ -53,6 +57,7 @@ defmodule Platform.Agents.Burrow do
 
   alias Platform.AgentHost
   alias Platform.Agents.{Agent, AgentRuntime, NativeAgents}
+  alias Platform.Agents.Burrow.Starter
   alias Platform.Roles
 
   @name "Burrow"
@@ -97,12 +102,66 @@ defmodule Platform.Agents.Burrow do
   start it. A Burrow that is already running keeps its harness; one that is
   not running and runs a different harness is switched. Returns `{:ok, agent}`
   or `{:error, reason}`.
+
+  This is the owner's own choice, so it also ends the starter allowance: a
+  Burrow marked as running on the starter key (`Starter.active?/1`) is retired
+  first, then stopped, moved to `harness` (a running one too) and started, so
+  its next `agent.start` carries no starter key. That is why a running starter
+  Burrow, unlike any other running Burrow, is restarted here.
   """
   @spec ensure(binary(), String.t()) :: {:ok, Agent.t()} | {:error, term()}
   def ensure(owner_id, harness) when is_binary(owner_id) and harness in ~w(claude_code codex) do
     owner_id
-    |> ensure_agent(harness)
+    |> ensure_or_leave_starter(harness, get())
     |> assign_default_roles()
+  end
+
+  defp ensure_or_leave_starter(owner_id, harness, agent) do
+    if Starter.active?(agent),
+      do: leave_starter(agent, harness),
+      else: ensure_agent(owner_id, harness)
+  end
+
+  @doc """
+  Create Burrow on the starter key for `owner_id`, mark it, and start it.
+  `{:ok, agent}` for the one that exists when any Burrow already does (nothing
+  is changed), `{:error, :no_starter_key}` without a configured key.
+  """
+  @spec ensure_starter(binary()) :: {:ok, Agent.t()} | {:error, term()}
+  def ensure_starter(owner_id) when is_binary(owner_id) do
+    with true <- Starter.configured?() || {:error, :no_starter_key},
+         nil <- get() do
+      # The mark goes on before the first start, so that start carries the key.
+      with {:ok, agent, _runtime} <-
+             NativeAgents.create(owner_id, %{name: @name, harness: harness_for(:api_key)}),
+           {:ok, agent} <- Starter.activate(agent),
+           {:ok, agent} <- start(agent) do
+        assign_default_roles({:ok, agent})
+      else
+        # Lost a race with another sign-in: the winner's Burrow is ours.
+        {:error, reason} -> existing_or_error(reason)
+      end
+    else
+      %Agent{} = agent -> {:ok, agent}
+      {:error, reason} -> {:error, reason}
+    end
+  end
+
+  defp existing_or_error(reason) do
+    case get() do
+      %Agent{} = agent -> {:ok, agent}
+      nil -> {:error, reason}
+    end
+  end
+
+  defp leave_starter(agent, harness) do
+    {:ok, _} = Starter.retire(agent)
+    _ = AgentHost.stop_agent(agent)
+
+    case NativeAgents.set_harness(agent, harness) do
+      {:ok, _runtime} -> start(agent)
+      {:error, reason} -> {:error, reason}
+    end
   end
 
   defp ensure_agent(owner_id, harness) do
@@ -280,6 +339,13 @@ defmodule Platform.Agents.Burrow do
          instructions file is edited by the owner on your config page in Burrow
          (/control/burrow/config); give them the link and say what to add there.
 
+      If your "Your allowance" section (at the end of this file) says you are running
+      on a starter allowance, then in this first conversation ask the owner once, in
+      plain words, whether they already use ChatGPT or Claude. If they do, say that
+      until they connect it you run on a limited starter allowance Burrow provides, and
+      give them the link /setup/connect-ai, where connecting their own plan swaps you
+      over. If they do not, carry on and do not ask again.
+
       If anyone (owner or member) says they want to start a project, help them create one the same way.
 
       Burrow is where their team chats, meets, plans and tracks work, and where that
@@ -311,6 +377,25 @@ defmodule Platform.Agents.Burrow do
          they give a different name, call `space_rename` with theirs.
       3. If they ignore the suggestion, do not ask again.
       4. Never rename a channel nobody agreed to rename.
+
+      ## The Help & feedback channel
+
+      You watch the "Help & feedback" channel: posts there come to you without a
+      mention. Answer what you can yourself, in plain words.
+
+      When a post describes a real bug in Burrow, or asks for a concrete change to
+      Burrow, call `feedback_submit` once, with `space_id` set to that channel's id.
+      Write the report in your own words: what they expected, what happened, and the
+      steps. Leave out names, emails and anything private. Then reply in the post's
+      thread with the issue link from the result. If the result says `duplicate`,
+      say it is already reported and give the same link.
+
+      If `feedback_submit` refuses because help channel reports are off, say the
+      install is not sharing bug reports with Burrow and an install admin can turn
+      "Help channel bug reports" on in Settings. Do not retry.
+
+      `sharing_list` shows what this install shares with Burrow and `sharing_set`
+      turns one part on or off. Use them only when an install admin asks you to.
       """
   end
 end

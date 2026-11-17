@@ -44,7 +44,7 @@ defmodule PlatformWeb.ChatLive.MentionsHooks do
   """
 
   import Phoenix.Component, only: [assign: 3]
-  import Phoenix.LiveView, only: [attach_hook: 4]
+  import Phoenix.LiveView, only: [attach_hook: 4, put_flash: 3]
 
   alias Platform.Chat
   alias PlatformWeb.ChatLive.MessagesHooks
@@ -61,6 +61,8 @@ defmodule PlatformWeb.ChatLive.MentionsHooks do
     |> assign(:mention_source, @default_source)
     |> assign(:mention_query, nil)
     |> assign(:mention_addable_agents, [])
+    |> assign(:room_agent_picker, nil)
+    |> assign(:can_add_room_agents?, false)
     |> attach_hook(:mention_events, :handle_event, &handle_event/3)
   end
 
@@ -80,6 +82,8 @@ defmodule PlatformWeb.ChatLive.MentionsHooks do
     |> assign(:mention_source, @default_source)
     |> assign(:mention_query, nil)
     |> assign(:mention_addable_agents, addable_agents_for(socket.assigns))
+    |> assign(:room_agent_picker, nil)
+    |> assign(:can_add_room_agents?, room_agent_space(socket) != nil)
   end
 
   defp addable_agents_for(%{external?: true}), do: []
@@ -87,6 +91,39 @@ defmodule PlatformWeb.ChatLive.MentionsHooks do
   defp addable_agents_for(_assigns), do: []
 
   # ── Hook callbacks ────────────────────────────────────────────────────
+
+  defp handle_event("open_room_agent_picker", _params, socket) do
+    {:halt, open_room_picker(socket, "")}
+  end
+
+  defp handle_event("room_agent_query", %{"query" => query}, socket) when is_binary(query) do
+    {:halt, open_room_picker(socket, query)}
+  end
+
+  defp handle_event("close_room_agent_picker", _params, socket) do
+    {:halt, assign(socket, :room_agent_picker, nil)}
+  end
+
+  defp handle_event("room_add_agent", _params, %{assigns: %{room_agent_picker: nil}} = socket),
+    do: {:halt, socket}
+
+  defp handle_event("room_add_agent", %{"agent_id" => agent_id}, socket) do
+    with %{space_id: space_id} <- socket.assigns[:room_agent_picker],
+         %Space{id: ^space_id} = space <- room_agent_space(socket),
+         {:ok, participant} <- Chat.admin_add_agent(space, socket.assigns[:user_id], agent_id) do
+      {:halt,
+       socket
+       |> reset_for_space()
+       |> put_flash(:info, "#{participant.display_name} added.")}
+    else
+      _ -> {:halt, put_flash(socket, :error, "Could not add that agent to this space.")}
+    end
+  end
+
+  defp handle_event(event, _params, socket)
+       when event in ["room_agent_query", "room_add_agent"] do
+    {:halt, socket}
+  end
 
   defp handle_event("mention_query", %{"query" => query} = params, socket) do
     source = Map.get(params, "source", @default_source)
@@ -132,6 +169,37 @@ defmodule PlatformWeb.ChatLive.MentionsHooks do
   end
 
   defp handle_event(_event, _params, socket), do: {:cont, socket}
+
+  defp open_room_picker(socket, query) do
+    case room_agent_space(socket) do
+      %Space{} = space ->
+        suggestions =
+          build_suggestions(query, %{}, addable_agents: Chat.list_addable_agents(space))
+          |> Enum.filter(&(&1.participant_type == "agent"))
+
+        assign(socket, :room_agent_picker, %{
+          space_id: space.id,
+          query: query,
+          suggestions: suggestions
+        })
+
+      _ ->
+        assign(socket, :room_agent_picker, nil)
+    end
+  end
+
+  # Re-read at the action boundary: switching rooms, archiving, or losing
+  # admin rights while the picker is open must not grant a stale add.
+  defp room_agent_space(socket) do
+    with false <- socket.assigns[:external?] == true,
+         %{id: id} <- socket.assigns[:active_space],
+         %Space{kind: kind, archived_at: nil} = space <- Chat.get_space(id),
+         true <- kind != "dm" and Chat.can_summon_agents?(space, socket.assigns[:user_id]) do
+      space
+    else
+      _ -> nil
+    end
+  end
 
   @thread_source_prefix "inline-thread-compose-form-"
 

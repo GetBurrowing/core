@@ -44,6 +44,7 @@ defmodule PlatformWeb.ControlCenter.NativeLogin do
   Pure rendering: no socket, no DB.
   """
   use Phoenix.Component
+  use PlatformWeb, :verified_routes
 
   alias Platform.Agents.NativeLogin, as: Login
 
@@ -67,6 +68,10 @@ defmodule PlatformWeb.ControlCenter.NativeLogin do
   attr :step, :atom, required: true
   # NativeLogin.login_mode/0
   attr :mode, :atom, default: :api_key
+  # True for the one agent `/setup/connect-ai` signs in with a Claude Pro or
+  # Max plan (Burrow, task 01a1b365). Its step 1 links there; every other
+  # agent's step 1 says the plan sign-in is Burrow's only.
+  attr :connect_ai?, :boolean, default: false
 
   @doc """
   The login steps. Shown in place of "Agent files" while the agent waits for
@@ -120,9 +125,13 @@ defmodule PlatformWeb.ControlCenter.NativeLogin do
       <h2 class="text-[22px] font-semibold leading-7 text-base-content">
         Log {@agent.name} in to Claude
       </h2>
-      <p class="mt-1 max-w-prose text-sm text-base-content">
-        {@agent.name} runs Claude Code on this server. Logging in with a Claude subscription
-        is not available yet, so {@agent.name} uses an Anthropic API key. You do this once.
+      <p :if={@connect_ai?} class="mt-1 max-w-prose text-sm text-base-content">
+        {@agent.name} runs Claude Code on this server. Sign in with your Claude Pro or Max plan,
+        or use an Anthropic API key. You do this once.
+      </p>
+      <p :if={!@connect_ai?} class="mt-1 max-w-prose text-sm text-base-content">
+        {@agent.name} runs Claude Code on this server. Only Burrow can sign in with a Claude
+        plan, so {@agent.name} uses an Anthropic API key. You do this once.
       </p>
 
       <p
@@ -136,7 +145,26 @@ defmodule PlatformWeb.ControlCenter.NativeLogin do
       </p>
 
       <ol class="mt-5 space-y-5">
-        <li id="native-login-subscription" class="flex items-start gap-3">
+        <li :if={@connect_ai?} id="native-login-subscription" class="flex items-start gap-3">
+          <span class="flex h-6 w-6 shrink-0 items-center justify-center rounded-full bg-base-content text-xs font-semibold text-base-100">
+            1
+          </span>
+          <div class="min-w-0 flex-1">
+            <h3 class="text-sm font-semibold text-base-content">Use your Claude Pro or Max plan</h3>
+            <p class="mt-0.5 text-sm text-subtle">
+              Sign in on Anthropic's page and paste the code it shows you. No API key needed.
+            </p>
+            <.link
+              :if={@can_manage?}
+              id="native-login-connect-ai"
+              navigate={~p"/setup/connect-ai"}
+              class="btn btn-primary btn-sm mt-2"
+            >
+              Sign in to Claude
+            </.link>
+          </div>
+        </li>
+        <li :if={!@connect_ai?} id="native-login-subscription" class="flex items-start gap-3">
           <span class="flex h-6 w-6 shrink-0 items-center justify-center rounded-full bg-base-200 text-xs font-semibold text-subtle">
             1
           </span>
@@ -148,7 +176,7 @@ defmodule PlatformWeb.ControlCenter.NativeLogin do
               </span>
             </p>
             <p class="mt-0.5 text-sm text-subtle">
-              Burrow can't log an agent in to a Claude subscription yet.
+              Only Burrow can sign in with a Claude plan today. Other agents use an API key.
             </p>
           </div>
         </li>
@@ -177,6 +205,8 @@ defmodule PlatformWeb.ControlCenter.NativeLogin do
   attr :step, :atom, required: true
   # NativeLogin.login_mode/0
   attr :mode, :atom, default: :api_key
+  # See `panel/1`.
+  attr :connect_ai?, :boolean, default: false
 
   @doc """
   The compact "Claude login" card shown under "Agent files" when the agent is
@@ -230,8 +260,14 @@ defmodule PlatformWeb.ControlCenter.NativeLogin do
           do: "#{@agent.name} logs in with the Anthropic API key saved here.",
           else: "No API key saved. #{@agent.name} will ask for a login when it starts."}
       </p>
-      <p class="mt-1 text-sm text-subtle">
-        Claude subscription login: {String.downcase(subscription_unavailable())}.
+      <p :if={@connect_ai?} class="mt-1 text-sm text-subtle">
+        Claude plan sign-in:
+        <.link navigate={~p"/setup/connect-ai"} class="underline underline-offset-2">
+          Connect your AI
+        </.link>
+      </p>
+      <p :if={!@connect_ai?} class="mt-1 text-sm text-subtle">
+        Claude plan sign-in: Burrow only. Other agents use an API key.
       </p>
 
       <details :if={@can_manage?} class="mt-3">

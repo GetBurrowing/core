@@ -10,9 +10,12 @@ defmodule PlatformWeb.Plugs.FeedbackBrokerGate do
       the current hour -> 429 `{"error": "rate_limited"}` with `retry-after`.
 
   The IP is `conn.remote_ip`, which `PlatformWeb.Plugs.RewriteRemoteIp` (in
-  the endpoint, before the router) has already set from `X-Forwarded-For`
-  when `TRUST_PROXY_HEADERS` is on. Behind Cloudflare and Caddy that flag
-  must be on, or every request shares the proxy's bucket.
+  the endpoint, before the router) has already resolved when
+  `TRUST_PROXY_HEADERS` is on: the rightmost `X-Forwarded-For` hop past the
+  `TRUSTED_PROXIES` chain (or `CF-Connecting-IP` when that hop is a Cloudflare
+  edge), and only when the immediate peer is itself a trusted proxy. A forged
+  leading `X-Forwarded-For` entry does not buy a fresh bucket. With the flag
+  off every request shares the proxy's bucket.
   """
 
   import Plug.Conn

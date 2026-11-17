@@ -68,7 +68,10 @@ def _classify(exc):
 def request(method, url, headers=None, body=None, timeout=30, follow_redirects=True):
     data = None
     hdrs = dict(headers or {})
-    if body is not None:
+    if isinstance(body, bytes | bytearray):
+        # A pre-encoded body (a multipart upload): the caller sets Content-Type.
+        data = bytes(body)
+    elif body is not None:
         data = json.dumps(body).encode("utf-8")
         hdrs.setdefault("Content-Type", "application/json")
     hdrs.setdefault("Accept", "application/json")

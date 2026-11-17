@@ -31,7 +31,8 @@ defmodule Platform.FakeAgentHost do
 
   @impl true
   def init(opts) do
-    :ok = Reconciler.host_joined(self(), %{"profile" => "contained"})
+    :ok =
+      Reconciler.host_joined(self(), %{"profile" => "contained", "features" => ["claude_login"]})
 
     {:ok,
      %{

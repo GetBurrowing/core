@@ -105,6 +105,7 @@ function makeCtx(scrollEl) {
     // shipped logic, not a restatement of it.
     distanceFromBottom: ScrollToBottom.distanceFromBottom,
     honourAnchor: ScrollToBottom.honourAnchor,
+    _keepThreadEntryVisible: ScrollToBottom._keepThreadEntryVisible,
     scrollToBottom: ScrollToBottom.scrollToBottom,
     _armSettleTimer: ScrollToBottom._armSettleTimer,
     _endInitialPhase: ScrollToBottom._endInitialPhase,

@@ -184,7 +184,15 @@ defmodule PlatformWeb.SettingsLive do
      socket
      |> assign(:page_title, "Settings")
      |> assign(:app_name, Platform.Branding.app_name())
+     |> assign(
+       :passkey_settings_url,
+       if(Platform.SignIn.EmailSetup.enabled?(),
+         do: String.trim_trailing(Platform.OIDC.issuer(), "/") <> "/settings/account",
+         else: nil
+       )
+     )
      |> assign(:sheet, nil)
+     |> assign(:passkey_add?, false)
      |> assign(:time_zone, zone)
      |> assign(:mask_error, nil)
      |> assign(:level_error, nil)
@@ -202,8 +210,34 @@ defmodule PlatformWeb.SettingsLive do
      |> assign(:usage_row, if(ModuleGate.mounts?(scope, @usage_row.view), do: @usage_row))
      |> assign(:admin_rows, visible_admin_rows(scope))
      |> assign(:feedback_enabled, Policy.enabled?())
+     |> assign(
+       :install_owner?,
+       Platform.InstructionPacks.Owner.authorize(socket.assigns[:current_user_record]) == :ok
+     )
      |> reset_feedback()
+     |> assign_switcher_keys()
      |> open_from_params(params)}
+  end
+
+  # Task 01a1e58b stage 3: `?passkey=add` is where an email-code sign-in
+  # lands (`AuthController`), prompting the person to add a passkey for this
+  # device. The callout also needs `@passkey_settings_url`.
+  @impl true
+  def handle_params(params, _uri, socket),
+    do: {:noreply, assign(socket, :passkey_add?, params["passkey"] == "add")}
+
+  # Task 01a1ccd4 stage 2: the badge keys other installs' switchers hold for
+  # this one (`Platform.Switcher`). Minimal rows; stage 3 styles them.
+  defp assign_switcher_keys(socket) do
+    keys =
+      case socket.assigns[:current_user_record] do
+        %Accounts.User{} = user -> Platform.Switcher.list_for_user(user)
+        _ -> []
+      end
+
+    socket
+    |> assign(:switcher_key_count, length(keys))
+    |> stream(:switcher_keys, keys, reset: true)
   end
 
   # `?sheet=` (the command palette's Settings items, Burrow redesign 23):
@@ -218,6 +252,9 @@ defmodule PlatformWeb.SettingsLive do
 
   defp open_from_params(%{assigns: %{feedback_enabled: true}} = socket, %{"sheet" => "feedback"}),
     do: assign(socket, :sheet, :feedback)
+
+  defp open_from_params(%{assigns: %{install_owner?: true}} = socket, %{"sheet" => "sharing"}),
+    do: assign(socket, :sheet, :sharing)
 
   defp open_from_params(socket, %{"sheet" => "appearance"}),
     do: assign(socket, :theme_picker_open, true)
@@ -290,6 +327,25 @@ defmodule PlatformWeb.SettingsLive do
   end
 
   @impl true
+  def handle_event("revoke_switcher_key", %{"id" => id}, socket) do
+    case socket.assigns[:current_user_record] do
+      %Accounts.User{} = user ->
+        case Platform.Switcher.revoke(user, id) do
+          {:ok, key} ->
+            {:noreply,
+             socket
+             |> stream_delete(:switcher_keys, key)
+             |> update(:switcher_key_count, &max(&1 - 1, 0))}
+
+          {:error, :not_found} ->
+            {:noreply, assign_switcher_keys(socket)}
+        end
+
+      _ ->
+        {:noreply, socket}
+    end
+  end
+
   def handle_event("set_mask_names", params, socket) do
     masked? = params["masked"] in ["true", true]
     # The shell's one web writer refreshes `:current_user_record` on success
@@ -365,6 +421,12 @@ defmodule PlatformWeb.SettingsLive do
 
   def handle_event("open_admin_sheet", _params, socket),
     do: {:noreply, assign(socket, :sheet, :admin)}
+
+  def handle_event("open_sharing_sheet", _params, socket) do
+    if Platform.InstructionPacks.Owner.authorize(socket.assigns[:current_user_record]) == :ok,
+      do: {:noreply, assign(socket, :sheet, :sharing)},
+      else: {:noreply, socket}
+  end
 
   def handle_event("open_learned_defaults_sheet", _params, socket),
     do: {:noreply, assign(socket, :sheet, :learned_defaults)}
@@ -478,6 +540,27 @@ defmodule PlatformWeb.SettingsLive do
           >
             {@email}
           </p>
+        </div>
+
+        <div
+          :if={@passkey_add? and @passkey_settings_url}
+          id="passkey-add-prompt"
+          data-role="passkey-add-prompt"
+          class="mx-4 mt-4 rounded-xl border border-edge bg-base-100 px-[18px] py-4 text-base-content"
+        >
+          <p class="text-[15px] font-semibold text-base-content">Add a passkey for this device</p>
+          <p class="mt-1 text-[13px] text-subtle">
+            You signed in with an email code. Add a passkey so next time is one tap.
+          </p>
+          <a
+            href={@passkey_settings_url}
+            target="_blank"
+            rel="noopener"
+            data-role="passkey-add-prompt-link"
+            class="btn btn-primary mt-3 w-full sm:w-auto"
+          >
+            Add a passkey <.icon name="hero-arrow-top-right-on-square" class="size-4" />
+          </a>
         </div>
 
         <p class={section_label_class()}>Appearance</p>
@@ -625,6 +708,62 @@ defmodule PlatformWeb.SettingsLive do
           </span>
         </button>
 
+        <div :if={@switcher_key_count > 0} data-role="settings-switcher-keys">
+          <p class={section_label_class()}>Unread shown in other installs</p>
+          <div id="settings-switcher-keys" phx-update="stream">
+            <div
+              :for={{dom_id, key} <- @streams.switcher_keys}
+              id={dom_id}
+              data-role="settings-switcher-key"
+              class={row_class()}
+            >
+              <span class="min-w-0">
+                <span class="block truncate">{key.label || key.bound_origin}</span>
+                <span class="block truncate text-xs text-subtle">{key.bound_origin}</span>
+              </span>
+              <button
+                type="button"
+                phx-click="revoke_switcher_key"
+                phx-value-id={key.id}
+                data-role="settings-switcher-key-revoke"
+                class="shrink-0 rounded-md border border-edge px-2 py-1 text-sm text-base-content active:bg-base-100 focus-visible-ring"
+              >
+                Remove
+              </button>
+            </div>
+          </div>
+        </div>
+
+        <a
+          :if={@passkey_settings_url}
+          href={@passkey_settings_url}
+          target="_blank"
+          rel="noopener"
+          data-role="settings-passkeys"
+          class={row_class()}
+        >
+          <span class="min-w-0">
+            <span class="block">Passkeys and sign-in</span>
+            <span class="block text-xs text-subtle">
+              Set up Face ID, Touch ID or a passkey on this device.
+            </span>
+          </span>
+          <.icon name="hero-arrow-top-right-on-square" class="size-4 shrink-0 text-subtle" />
+        </a>
+
+        <p :if={@install_owner?} class={section_label_class()}>Sharing with Burrow</p>
+        <button
+          :if={@install_owner?}
+          type="button"
+          phx-click="open_sharing_sheet"
+          data-role="settings-sharing"
+          class={row_class()}
+        >
+          <span>Sharing with Burrow</span><span
+            class="hero-chevron-right size-4 text-subtle"
+            aria-hidden="true"
+          ></span>
+        </button>
         <%= if @feedback_enabled do %>
           <p class={section_label_class()} data-role="settings-help-label">Help</p>
           <button
@@ -875,6 +1014,16 @@ defmodule PlatformWeb.SettingsLive do
         </.form>
       </.sheet>
 
+      <.sheet id="settings-sharing-sheet" open={@sheet == :sharing} on_close="close_settings_sheet">
+        <:title>Sharing with Burrow</:title>
+        <div :if={@sheet == :sharing} class="px-4 pb-6">
+          <.live_component
+            module={PlatformWeb.InstructionPacksComponent}
+            id="settings-instruction-packs"
+            actor={@current_user_record}
+          />
+        </div>
+      </.sheet>
       <.sheet
         id="settings-sign-out-sheet"
         open={@sheet == :sign_out}

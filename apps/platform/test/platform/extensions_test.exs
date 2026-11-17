@@ -592,6 +592,83 @@ defmodule Platform.ExtensionsTest do
       assert length(messages) == 2
     end
 
+    defmodule FeedbackNameClash do
+      @moduledoc false
+      @behaviour Platform.Extension
+      def canvas_kinds, do: []
+
+      def mcp_tool_bundles,
+        do: [
+          %{
+            name: "feedback_clash",
+            definitions: [],
+            tool_names: ["feedback_submit"],
+            execute: fn _, _, _ -> :ok end
+          }
+        ]
+
+      def runtime_channel_events, do: []
+      def handle_runtime_event(_e, _r, _p), do: :ok
+      def runtime_disconnected(_r), do: :ok
+      def live_hooks, do: []
+      def live_pages, do: []
+      def experiment_surfaces, do: []
+      def experiment_metrics, do: %{}
+      def migrations_path, do: nil
+    end
+
+    defp with_feedback_policy(policy, fun) do
+      previous = Application.fetch_env(:platform, :feedback_policy)
+      Application.put_env(:platform, :feedback_policy, policy)
+
+      try do
+        fun.()
+      after
+        case previous do
+          {:ok, value} -> Application.put_env(:platform, :feedback_policy, value)
+          :error -> Application.delete_env(:platform, :feedback_policy)
+        end
+      end
+    end
+
+    # `validate!/0` runs in `Platform.Application.start/2` before
+    # `Platform.Repo` starts, so it must not query. With the feedback mode on,
+    # listing the `federation` bundle reads `install_sharing`; on 2026-11-08
+    # that crash-looped an install with extensions configured at boot. The
+    # handler is global, so it counts only queries from this process.
+    test "validate runs no database query, even with the feedback mode on" do
+      FixtureExtension.register([FixtureExtension])
+      test_pid = self()
+      handler_id = "extensions-validate-queries-#{unique()}"
+
+      :ok =
+        :telemetry.attach(
+          handler_id,
+          [:platform, :repo, :query],
+          fn _event, _measurements, meta, _config ->
+            if self() == test_pid, do: send(test_pid, {:repo_query, Map.get(meta, :query)})
+          end,
+          nil
+        )
+
+      try do
+        with_feedback_policy("trusted", fn -> assert Extensions.validate() == :ok end)
+      after
+        :telemetry.detach(handler_id)
+      end
+
+      refute_received {:repo_query, _}
+    end
+
+    test "a gated core tool keeps its name while its capability is off" do
+      with_feedback_policy("disabled", fn ->
+        FixtureExtension.register([FeedbackNameClash])
+        assert {:error, messages} = Extensions.validate()
+
+        assert ~s(tool name "feedback_submit" is claimed by core and by #{inspect(FeedbackNameClash)}) in messages
+      end)
+    end
+
     defmodule CoreInboxClash do
       @moduledoc false
       @behaviour Platform.Extension
@@ -755,6 +832,9 @@ defmodule Platform.ExtensionsTest do
       {"federation_status", "federation"},
       {"vault_fetch", "federation"},
       {"vault_list", "federation"},
+      # Task 01a1b678 stage 3: always listed, gated in the handler.
+      {"sharing_list", "federation"},
+      {"sharing_set", "federation"},
       {"memory_view", "memory"},
       {"memory_create", "memory"},
       {"memory_str_replace", "memory"},
@@ -941,7 +1021,9 @@ defmodule Platform.ExtensionsTest do
     # agent can tell a Voice tab record in its DM. Names, bundles, summaries
     # and parameter schemas are unchanged. Measured on the test rig at the
     # stage's branch.
-    @main_tool_digest_off "557dba2378186c61e36b356459448cb5fabaf6b6e4e7ad46d0522dade251c8c1"
+    # Task 01a1b6e1 deploy integration: voice return metadata plus sharing
+    # definitions measured by CI 42440127890 at 3dd284545; exact names remain pinned.
+    @main_tool_digest_off "5dec67a60eacd337c89a4bde2d0b465ed1486f4d6ef1593a2b7476c1800e5470"
     @main_kinds_summaries_digest_off "514cb7a62dea7ea34226d7b60d2f243d5bb9a940bc1f5d44fd2e0e27e8074c52"
     @main_kinds_tool_schemas_digest_off "45c4c34283c8da212f6ab061ae43d1582e41b7192e8f8a442bfd45b3dd6f8e86"
     # main's lists minus exactly `play`.
@@ -986,6 +1068,52 @@ defmodule Platform.ExtensionsTest do
 
     defp canon(f) when is_function(f), do: {:fun, inspect(f)}
     defp canon(x), do: x
+
+    # Preserve the previous byte oracle after removing ONLY this task's
+    # independently named enum values and generated disclosure suffixes.
+    # Stage 4 adds precisely one common-transport switch. Its complete enum
+    # is pinned literally in SharingToolsTest; preserve the older byte oracle
+    # after removing only that independently approved additive field/copy.
+    defp without_learned_shapes(definitions) do
+      Enum.map(definitions, fn
+        %{name: "sharing_set"} = tool ->
+          update_in(tool, [:parameters, :key], fn key ->
+            key
+            |> update_in([:schema, :enum], &List.delete(&1, "learned_default_shapes"))
+            |> Map.update!(
+              :description,
+              &String.replace_suffix(&1, ", learned_default_shapes", "")
+            )
+          end)
+
+        tool ->
+          tool
+      end)
+    end
+
+    defp without_instruction_updates(definitions) do
+      Enum.map(definitions, fn
+        %{name: "sharing_set"} = tool ->
+          update_in(tool, [:parameters, :key], fn key ->
+            key
+            |> update_in(
+              [:schema, :enum],
+              &Enum.reject(&1, fn value ->
+                value in ~w(instruction_updates learned_default_shapes)
+              end)
+            )
+            |> Map.update!(
+              :description,
+              &(&1
+                |> String.replace_suffix(", learned_default_shapes", "")
+                |> String.replace_suffix(", instruction_updates", ""))
+            )
+          end)
+
+        tool ->
+          tool
+      end)
+    end
 
     defp digest(term),
       do:
@@ -1113,7 +1241,13 @@ defmodule Platform.ExtensionsTest do
       assert Enum.map(legacy, &{&1.name, &1.bundle}) == @main_tool_names_off
       # canvas_create embeds the kind union. Strip only the two additive
       # consent-card properties, preserving the legacy definition oracle.
-      assert digest(legacy_kind_props(legacy)) == @main_tool_digest_off
+      assert [
+               digest(without_learned_shapes(legacy_kind_props(legacy))),
+               digest(without_instruction_updates(legacy_kind_props(legacy)))
+             ] == [
+               @main_tool_digest_off,
+               "e3de24d4f3ab6b916a5456fa107f904b6ed78bae182e201ff017eaf3ba229c50"
+             ]
     end
 
     test "bundles, kinds, metrics, surfaces and rail are main's minus the module's entries" do

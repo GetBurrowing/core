@@ -1356,6 +1356,7 @@ defmodule PlatformWeb.CalendarLive.Components do
       sub={Enum.join(@detail.invitees, ", ")}
       data-role="calendar-detail-people"
     />
+    <.rsvp_control :if={@detail[:my_rsvp] && !@detail[:cancelled?]} rsvp={@detail.my_rsvp} />
     <.invite_list
       :if={!@detail[:invitee_view?]}
       mode={:live}
@@ -1394,6 +1395,42 @@ defmodule PlatformWeb.CalendarLive.Components do
     <p :if={@detail.stale} class="m-0 text-xs font-[550] text-error" role="status">
       Refresh required; availability unknown.
     </p>
+    """
+  end
+
+  attr(:rsvp, :string, required: true)
+
+  # The viewer's own answer to their invite. The pressed button is the
+  # current answer; "invited" means none yet.
+  defp rsvp_control(assigns) do
+    assigns =
+      assign(assigns, :choices, [
+        {"accepted", "Accept"},
+        {"tentative", "Maybe"},
+        {"declined", "Decline"}
+      ])
+
+    ~H"""
+    <div class="cal-dl" data-role="meeting-rsvp" data-rsvp={@rsvp}>
+      <.icon name="hero-envelope-open" class="size-3.5" />
+      <span class="min-w-0 flex-1">
+        Going?
+        <span class="mt-1 flex flex-wrap gap-1.5" role="group" aria-label="Your answer">
+          <button
+            :for={{value, label} <- @choices}
+            type="button"
+            class={[if(@rsvp == value, do: primary_btn(), else: ghost_btn())]}
+            aria-pressed={to_string(@rsvp == value)}
+            data-role="meeting-rsvp-choice"
+            data-value={value}
+            phx-click="meeting_rsvp"
+            phx-value-status={value}
+          >
+            {label}
+          </button>
+        </span>
+      </span>
+    </div>
     """
   end
 
@@ -2093,10 +2130,17 @@ defmodule PlatformWeb.CalendarLive.Components do
             {sub.name}
             <span class="cal-pill"><.icon name="hero-lock-closed" class="size-3" />Read-only</span>
             <small class="truncate cal-mono">{masked_url(sub)}</small>
-            <small :if={is_nil(sub.error)}>
+            <small :if={sub.error} class="!text-error">{sub.error}</small>
+            <small :if={is_nil(sub.error) and Platform.Calendar.Subscriptions.complete?(sub)}>
               Synced {synced(sub.refreshed_at)} · blocks availability
             </small>
-            <small :if={sub.error} class="!text-error">{sub.error}</small>
+            <small
+              :if={is_nil(sub.error) and not Platform.Calendar.Subscriptions.complete?(sub)}
+              class="!text-warning"
+              data-role="ext-skipped"
+            >
+              Synced {synced(sub.refreshed_at)} · {skipped_text(sub.skipped_count)} · availability unknown
+            </small>
           </span>
           <button
             type="button"
@@ -2279,6 +2323,10 @@ defmodule PlatformWeb.CalendarLive.Components do
   end
 
   defp masked_url(_), do: "••••••"
+
+  @doc "How many events a partial external calendar left out, in words."
+  def skipped_text(1), do: "1 event couldn't be read"
+  def skipped_text(n), do: "#{n} events couldn't be read"
 
   defp synced(nil), do: "not yet"
 

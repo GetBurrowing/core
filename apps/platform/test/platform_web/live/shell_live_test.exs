@@ -378,6 +378,16 @@ defmodule PlatformWeb.ShellLiveTest do
       assert bare == []
     end
 
+    # The More tab on the Burrow Play dead views (GamingShell) is a link to
+    # `<first tab>?more=1`; the shell arrives with the sheet up.
+    test "?more=1 arrives with the sheet open", %{conn: conn} do
+      {:ok, view, _html} = live(authenticated_conn(conn), ~p"/chat?more=1")
+      assert more_open?(view)
+
+      {:ok, view, _html} = live(authenticated_conn(conn), ~p"/chat")
+      refute more_open?(view)
+    end
+
     test "More tapped again closes the sheet", %{conn: conn} do
       {:ok, view, _html} = live(authenticated_conn(conn), ~p"/tasks")
       more = ~s([data-bottom-rail] button[data-destination="more"])

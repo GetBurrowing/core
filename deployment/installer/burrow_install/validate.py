@@ -70,6 +70,14 @@ MAC_ERROR_CODES = (
     "vapid_requires_single_host",
 )
 
+# [meetings] intent_* rules (core task 01a1e5da stage 4). Kept apart from
+# ERROR_CODES because their fixtures need meetings on, which good.toml is not;
+# tests/test_meetings_intent_render.py covers each one.
+MEETINGS_INTENT_ERROR_CODES = (
+    "intent_endpoint_unknown",
+    "intent_endpoint_required",
+)
+
 # The [agents] table is absent from every manifest written before task
 # 01a10322; absent means no native agents at all.
 AGENTS_ABSENT_PROFILE = "off"
@@ -347,6 +355,16 @@ def _rules(m, bad, errors, present=frozenset()):
             )
     elif services["meetings"]:
         _single_host_meetings(m, bad, add)
+    if not services["meetings"] and not _is_bad("services.meetings", bad):
+        # The rest of [meetings] is silently ignored while meetings are off; an
+        # intent model there would read as configured and is not.
+        for key in INTENT_KEYS:
+            if m["meetings"][key] is not None:
+                add(
+                    "field_not_applicable",
+                    f"meetings.{key}",
+                    "only used with services.meetings = true",
+                )
     if not mac:
         for key in ("mode", "tunnel_token_ref", "tailscale_authkey_ref"):
             if f"access.{key}" in present:
@@ -495,6 +513,21 @@ def _rules(m, bad, errors, present=frozenset()):
         check_ref("backup.access_key_ref", backup["access_key_ref"])
         check_ref("backup.secret_key_ref", backup["secret_key_ref"])
 
+    # [system_mail]: optional; smtp_host switches it on.
+    sm = m["system_mail"]
+    if sm["smtp_host"] is not None:
+        if sm["from"] is None and not _is_bad("system_mail.from", bad):
+            add("missing_required", "system_mail.from", "smtp_host needs from, the sender address")
+        check_ref("system_mail.smtp_password_ref", sm["smtp_password_ref"])
+        if sm["smtp_password_ref"] is not None and sm["smtp_username"] is None:
+            add("invalid_value", "system_mail.smtp_username", "smtp_password_ref needs a username")
+        if type(sm["smtp_port"]) is int and not 1 <= sm["smtp_port"] <= 65535:
+            add("invalid_value", "system_mail.smtp_port", "must be 1-65535")
+    elif not _is_bad("system_mail.smtp_host", bad):
+        for key in ("from", "smtp_port", "smtp_username", "smtp_password_ref"):
+            if sm[key] is not None:
+                add("field_not_applicable", f"system_mail.{key}", "only used with smtp_host set")
+
     # [images]: exactly one of `registry` and the legacy `image_namespace`,
     # with no default (tasks 01a14b9e, 01a14dd8).
     images = m["images"]
@@ -546,6 +579,16 @@ def _rules(m, bad, errors, present=frozenset()):
     for container, ref in m["images"]["refs"].items():
         if ref is not None and not ref.strip():
             add("invalid_value", f"images.refs.{container}", "an image ref cannot be empty")
+
+    # [agents] starter_api_key_ref: a secret ref, and only with native agents on.
+    check_ref("agents.starter_api_key_ref", m["agents"]["starter_api_key_ref"])
+    if m["agents"]["profile"] == AGENTS_ABSENT_PROFILE:
+        not_applicable(
+            "agents",
+            "profile",
+            ["starter_api_key_ref"],
+            'only used when native agents are on (profile is not "off")',
+        )
 
     # [agents] (task 01a10322): packaged for single-host only in v1.
     # An [agents] table that omits `profile` means full_machine, so it counts.
@@ -663,6 +706,7 @@ def _mac_access_and_meetings(m, bad, present, add, check_ref):
     if meetings["node_ip"] is not None and not _IPV4_RE.match(meetings["node_ip"]):
         add("invalid_value", "meetings.node_ip", "must be an IPv4 address")
     _stt_endpoint_rule(m, bad, add)
+    _intent_endpoint_rule(m, bad, add)
 
 
 def _single_host_meetings(m, bad, add):
@@ -695,6 +739,7 @@ def _single_host_meetings(m, bad, add):
             'target = "single-host" discovers its public IP by STUN',
         )
     _stt_endpoint_rule(m, bad, add)
+    _intent_endpoint_rule(m, bad, add)
 
 
 def _stt_endpoint_rule(m, bad, add):
@@ -707,6 +752,40 @@ def _stt_endpoint_rule(m, bad, add):
                 "meetings.stt_endpoint",
                 f"{meetings['stt_endpoint']!r} names no [[models.endpoints]] entry",
             )
+
+
+INTENT_KEYS = ("intent_provider", "intent_endpoint", "intent_model")
+
+
+def _intent_endpoint_rule(m, bad, add):
+    """``[meetings] intent_*`` with meetings on (core task 01a1e5da stage 4)."""
+    meetings = m["meetings"]
+    if _is_bad("meetings.intent_provider", bad):
+        return  # one wrong field, one error line
+    if meetings["intent_provider"] is None:
+        for key in ("intent_endpoint", "intent_model"):
+            if meetings[key] is not None:
+                add(
+                    "field_not_applicable",
+                    f"meetings.{key}",
+                    "only used with intent_provider set",
+                )
+        return
+    endpoint = meetings["intent_endpoint"]
+    if _is_bad("meetings.intent_endpoint", bad):
+        return
+    if endpoint is None:
+        add(
+            "intent_endpoint_required",
+            "meetings.intent_endpoint",
+            "intent_provider needs intent_endpoint: the name of a [[models.endpoints]] entry",
+        )
+    elif endpoint not in {e["name"] for e in m["models"]["endpoints"]}:
+        add(
+            "intent_endpoint_unknown",
+            "meetings.intent_endpoint",
+            f"{endpoint!r} names no [[models.endpoints]] entry",
+        )
 
 
 def _runs(m, container):

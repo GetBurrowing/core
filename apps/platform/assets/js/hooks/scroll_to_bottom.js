@@ -292,6 +292,11 @@ const ScrollToBottom = {
       });
     };
     this.scrollEl.addEventListener("scroll", this._onScroll, { passive: true });
+    this._onThreadFocus = () => this._keepThreadEntryVisible();
+    this.scrollEl.addEventListener("focusin", this._onThreadFocus);
+    this._threadViewport = typeof window !== "undefined" ? window.visualViewport : null;
+    this._threadViewport?.addEventListener("resize", this._onThreadFocus);
+    this._threadViewport?.addEventListener("scroll", this._onThreadFocus);
 
     // The phone chat dock (task 01a15f2e stage 3, `hooks/chat_dock.js`). Below
     // lg the composer, typing and streaming rows float OVER the timeline, so
@@ -687,6 +692,7 @@ const ScrollToBottom = {
     // The arrival phase already holds the reader at the live edge on every
     // resize and ends by its own rules. Two owners of `scrollTop` inside that
     // window is how earlier passes over this file undid each other.
+    if (this._keepThreadEntryVisible()) return;
     if (this._initialScroll) return;
 
     // A WIDTH change rewraps every message, so `scrollHeight` moved in the
@@ -1081,6 +1087,11 @@ const ScrollToBottom = {
     }
     this._clearSettleTimers();
     if (this._observer) this._observer.disconnect();
+    if (this._onThreadFocus) {
+      this.scrollEl.removeEventListener("focusin", this._onThreadFocus);
+      this._threadViewport?.removeEventListener("resize", this._onThreadFocus);
+      this._threadViewport?.removeEventListener("scroll", this._onThreadFocus);
+    }
     if (this._onScroll) {
       this.scrollEl.removeEventListener("scroll", this._onScroll);
       this._onScroll = null;
@@ -1214,7 +1225,30 @@ const ScrollToBottom = {
     this._endInitialPhase("anchored");
     return true;
   },
+  // While composing a reply, the active entry owns the visible position,
+  // rather than the latest message below it. Keep this in the scroll owner:
+  // a keyboard resize or mention patch must not pin the reply off-screen.
+  _keepThreadEntryVisible() {
+    const field = typeof document !== "undefined" ? document.activeElement : null;
+    if (!field?.matches?.(".thread-input") || !this.el.contains?.(field)) return false;
+    if (window.innerWidth >= 1024) return false;
+    const viewport = window.visualViewport;
+    const bounds = this.scrollEl.getBoundingClientRect();
+    const dock = this.el.closest?.("#chat-drop-zone")?.querySelector("#chat-dock");
+    const top = Math.max(bounds.top, viewport?.offsetTop || 0);
+    const bottom = Math.min(bounds.bottom, (viewport?.offsetTop || 0) + (viewport?.height || window.innerHeight),
+      dock?.getBoundingClientRect().top ?? Infinity) - 4;
+    const rect = field.getBoundingClientRect();
+    // Leave room for a result above the entry, even in a short landscape
+    // viewport. Longer lists scroll inside their own measured cap.
+    const entryTop = top + Math.max(0, Math.min(60, bottom - top - rect.height));
+    const delta = rect.top < entryTop ? rect.top - entryTop : Math.max(0, rect.bottom - bottom);
+    if (delta !== 0) this.scrollEl.scrollBy({ top: delta, behavior: "instant" });
+    this._lastScrollHeight = this.scrollEl.scrollHeight;
+    return true;
+  },
   scrollToBottom(preDistance) {
+    if (this._keepThreadEntryVisible()) return;
     if (this.honourAnchor()) return;
 
     if (this._initialScroll) {

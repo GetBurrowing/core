@@ -23,10 +23,17 @@ defmodule Platform.Meetings.Invite do
   authoritative. Storing it here would create a second source of truth that
   drifts the moment the membership changes. Use `kind/1`.
 
-  There is deliberately **no `status` column**. `invited` / `accepted` /
-  `declined` has no reader in v1 — no member of this stack exposes an RSVP
-  action, and the notifier notifies every non-revoked invitee regardless.
-  `revoked_at` exists because it *is* read: a signed `Platform.Meetings.GuestInvite`
+  ## RSVP: `rsvp_status` / `rsvp_at`
+
+  The invitee's own answer: `invited` (no answer yet), `accepted`,
+  `tentative` or `declined`, set only by `Platform.Meetings.respond_to_invite/3`
+  (never cast). It was once rejected for having no reader; it now has two:
+  the invite list in the meeting details, and the ATTENDEE `PARTSTAT` the
+  calendar feed and the emailed invite carry (`rsvp_partstat/1`), which is
+  what a calendar client shows next to each invitee. The notifier still
+  notifies every non-revoked invitee regardless of it.
+
+  `revoked_at` is a separate fact: a signed `Platform.Meetings.GuestInvite`
   token cannot be un-issued, so revocation has to be a row fact.
 
   ## `meeting_participants` does not reference invites
@@ -96,6 +103,10 @@ defmodule Platform.Meetings.Invite do
     field(:expires_at, :utc_datetime_usec)
     field(:revoked_at, :utc_datetime_usec)
 
+    # Set only by `Platform.Meetings.respond_to_invite/3`; never cast.
+    field(:rsvp_status, :string, default: "invited")
+    field(:rsvp_at, :utc_datetime_usec)
+
     # Set only by `Platform.Meetings` internals; never cast. See the
     # `short_code` section of the moduledoc.
     field(:short_code, :string)
@@ -147,6 +158,23 @@ defmodule Platform.Meetings.Invite do
     |> foreign_key_constraint(:meeting_id)
     |> foreign_key_constraint(:user_id)
   end
+
+  @rsvp_statuses ~w(invited accepted tentative declined)
+
+  @doc "The values `rsvp_status` may hold."
+  @spec rsvp_statuses() :: [String.t()]
+  def rsvp_statuses, do: @rsvp_statuses
+
+  @doc """
+  The RFC 5545 §3.2.12 `PARTSTAT` for an invite's `rsvp_status`. Anything
+  unrecognised (a struct built without the column) is `NEEDS-ACTION`.
+  """
+  @spec rsvp_partstat(%__MODULE__{} | String.t() | nil) :: String.t()
+  def rsvp_partstat(%__MODULE__{rsvp_status: status}), do: rsvp_partstat(status)
+  def rsvp_partstat("accepted"), do: "ACCEPTED"
+  def rsvp_partstat("tentative"), do: "TENTATIVE"
+  def rsvp_partstat("declined"), do: "DECLINED"
+  def rsvp_partstat(_status), do: "NEEDS-ACTION"
 
   @doc """
   Derives the invite kind from the row rather than reading a stored column.

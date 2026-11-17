@@ -28,7 +28,8 @@
  * master key: black on dark fills, white on light fills, each measured by the
  * guard.
  *
- * AGENT SLOTS (rung 3): each block declares the ten agTeal ... agLime slots as
+ * AGENT SLOTS (rung 3): each block declares the ten agTeal ... agLime slots, and
+ * the six appended 2026-11-11 (magenta ... cocoa, no theme.js master), as
  * --ag-<id> and --ag-<id>-text plus --ag-tint-pct, in its agent-slots region; app.css derives the opaque tints. The ids are
  * Platform.Agents.ColorPalette's.
  *
@@ -136,6 +137,23 @@
   --ag-indigo-text: var(--ag-indigo);
   --ag-lime: #9fd959;
   --ag-lime-text: var(--ag-lime);
+  /* Six slots appended 2026-11-11 (magenta..cocoa). No theme.js master:
+     one OKLCH family per slot, the same value in every Burrow-family
+     block of this mode, chosen so the rail is also its own text (it
+     clears 4.5:1 on the painted 8% tint, base-100 and base-200) and sits at least delta E 5.5
+     (OKLab x100) from every other rail and status colour of the block. */
+  --ag-magenta: #ea60cf;
+  --ag-magenta-text: var(--ag-magenta);
+  --ag-violet: #a878fc;
+  --ag-violet-text: var(--ag-violet);
+  --ag-jade: #5fdfb4;
+  --ag-jade-text: var(--ag-jade);
+  --ag-mustard: #c0ac23;
+  --ag-mustard-text: var(--ag-mustard);
+  --ag-slate: #b1b6cb;
+  --ag-slate-text: var(--ag-slate);
+  --ag-cocoa: #b99683;
+  --ag-cocoa-text: var(--ag-cocoa);
   /* agent-slots:end */
   --radius-box: 10px;
   --radius-field: 7px;
@@ -232,6 +250,23 @@
   /* theme.js #4f7b00 measures 4.3545:1 on the painted 8% tint;
      this value, on the same oklch hue line, measures 4.5314:1. */
   --ag-lime-text: #4d7802;
+  /* Six slots appended 2026-11-11 (magenta..cocoa). No theme.js master:
+     one OKLCH family per slot, the same value in every Burrow-family
+     block of this mode, chosen so the rail is also its own text (it
+     clears 4.5:1 on the painted 8% tint, base-100 and base-200) and sits at least delta E 5.5
+     (OKLab x100) from every other rail and status colour of the block. */
+  --ag-magenta: #93147f;
+  --ag-magenta-text: var(--ag-magenta);
+  --ag-violet: #5c2ab4;
+  --ag-violet-text: var(--ag-violet);
+  --ag-jade: #17634e;
+  --ag-jade-text: var(--ag-jade);
+  --ag-mustard: #5e5700;
+  --ag-mustard-text: var(--ag-mustard);
+  --ag-slate: #505469;
+  --ag-slate-text: var(--ag-slate);
+  --ag-cocoa: #704734;
+  --ag-cocoa-text: var(--ag-cocoa);
   /* agent-slots:end */
   --radius-box: 10px;
   --radius-field: 7px;
@@ -312,6 +347,23 @@
   --ag-indigo-text: var(--ag-indigo);
   --ag-lime: #9fd959;
   --ag-lime-text: var(--ag-lime);
+  /* Six slots appended 2026-11-11 (magenta..cocoa). No theme.js master:
+     one OKLCH family per slot, the same value in every Burrow-family
+     block of this mode, chosen so the rail is also its own text (it
+     clears 4.5:1 on the painted 8% tint, base-100 and base-200) and sits at least delta E 5.5
+     (OKLab x100) from every other rail and status colour of the block. */
+  --ag-magenta: #ea60cf;
+  --ag-magenta-text: var(--ag-magenta);
+  --ag-violet: #a878fc;
+  --ag-violet-text: var(--ag-violet);
+  --ag-jade: #5fdfb4;
+  --ag-jade-text: var(--ag-jade);
+  --ag-mustard: #c0ac23;
+  --ag-mustard-text: var(--ag-mustard);
+  --ag-slate: #b1b6cb;
+  --ag-slate-text: var(--ag-slate);
+  --ag-cocoa: #b99683;
+  --ag-cocoa-text: var(--ag-cocoa);
   /* agent-slots:end */
   --radius-box: 14px;
   --radius-field: 10px;
@@ -427,6 +479,23 @@
   /* theme.js #4f7b00 measures 4.0790:1 on the painted 8% tint;
      this value, on the same oklch hue line, measures 4.5380:1. */
   --ag-lime-text: #4a7302;
+  /* Six slots appended 2026-11-11 (magenta..cocoa). No theme.js master:
+     one OKLCH family per slot, the same value in every Burrow-family
+     block of this mode, chosen so the rail is also its own text (it
+     clears 4.5:1 on the painted 8% tint, base-100 and base-200) and sits at least delta E 5.5
+     (OKLab x100) from every other rail and status colour of the block. */
+  --ag-magenta: #93147f;
+  --ag-magenta-text: var(--ag-magenta);
+  --ag-violet: #5c2ab4;
+  --ag-violet-text: var(--ag-violet);
+  --ag-jade: #17634e;
+  --ag-jade-text: var(--ag-jade);
+  --ag-mustard: #5e5700;
+  --ag-mustard-text: var(--ag-mustard);
+  --ag-slate: #505469;
+  --ag-slate-text: var(--ag-slate);
+  --ag-cocoa: #704734;
+  --ag-cocoa-text: var(--ag-cocoa);
   /* agent-slots:end */
   --radius-box: 14px;
   --radius-field: 10px;
@@ -514,6 +583,23 @@
   --ag-indigo-text: var(--ag-indigo);
   --ag-lime: #9fd959;
   --ag-lime-text: var(--ag-lime);
+  /* Six slots appended 2026-11-11 (magenta..cocoa). No theme.js master:
+     one OKLCH family per slot, the same value in every Burrow-family
+     block of this mode, chosen so the rail is also its own text (it
+     clears 4.5:1 on the painted 8% tint, base-100 and base-200) and sits at least delta E 5.5
+     (OKLab x100) from every other rail and status colour of the block. */
+  --ag-magenta: #ea60cf;
+  --ag-magenta-text: var(--ag-magenta);
+  --ag-violet: #a878fc;
+  --ag-violet-text: var(--ag-violet);
+  --ag-jade: #5fdfb4;
+  --ag-jade-text: var(--ag-jade);
+  --ag-mustard: #c0ac23;
+  --ag-mustard-text: var(--ag-mustard);
+  --ag-slate: #b1b6cb;
+  --ag-slate-text: var(--ag-slate);
+  --ag-cocoa: #b99683;
+  --ag-cocoa-text: var(--ag-cocoa);
   /* agent-slots:end */
   --radius-box: 12px;
   --radius-field: 9px;
@@ -613,6 +699,23 @@
   /* theme.js #4f7b00 measures 4.3383:1 on the painted 8% tint;
      this value, on the same oklch hue line, measures 4.5145:1. */
   --ag-lime-text: #4d7802;
+  /* Six slots appended 2026-11-11 (magenta..cocoa). No theme.js master:
+     one OKLCH family per slot, the same value in every Burrow-family
+     block of this mode, chosen so the rail is also its own text (it
+     clears 4.5:1 on the painted 8% tint, base-100 and base-200) and sits at least delta E 5.5
+     (OKLab x100) from every other rail and status colour of the block. */
+  --ag-magenta: #93147f;
+  --ag-magenta-text: var(--ag-magenta);
+  --ag-violet: #5c2ab4;
+  --ag-violet-text: var(--ag-violet);
+  --ag-jade: #17634e;
+  --ag-jade-text: var(--ag-jade);
+  --ag-mustard: #5e5700;
+  --ag-mustard-text: var(--ag-mustard);
+  --ag-slate: #505469;
+  --ag-slate-text: var(--ag-slate);
+  --ag-cocoa: #704734;
+  --ag-cocoa-text: var(--ag-cocoa);
   /* agent-slots:end */
   --radius-box: 12px;
   --radius-field: 9px;
@@ -692,6 +795,23 @@
   --ag-indigo-text: var(--ag-indigo);
   --ag-lime: #b8f070;
   --ag-lime-text: var(--ag-lime);
+  /* Six slots appended 2026-11-11 (magenta..cocoa). No theme.js master:
+     one OKLCH family per slot, the same value in every Burrow-family
+     block of this mode, chosen so the rail is also its own text (it
+     clears 7:1 on base-100, its tint at 0%, and on base-200) and sits at least delta E 5.5
+     (OKLab x100) from every other rail and status colour of the block. */
+  --ag-magenta: #ff8ef0;
+  --ag-magenta-text: var(--ag-magenta);
+  --ag-violet: #c29fff;
+  --ag-violet-text: var(--ag-violet);
+  --ag-jade: #7dd2ad;
+  --ag-jade-text: var(--ag-jade);
+  --ag-mustard: #d2ca34;
+  --ag-mustard-text: var(--ag-mustard);
+  --ag-slate: #d6ddf6;
+  --ag-slate-text: var(--ag-slate);
+  --ag-cocoa: #eacab6;
+  --ag-cocoa-text: var(--ag-cocoa);
   /* agent-slots:end */
   --radius-box: 6px;
   --radius-field: 4px;
@@ -786,6 +906,23 @@
   --ag-indigo-text: var(--ag-indigo);
   --ag-lime: #396300;
   --ag-lime-text: var(--ag-lime);
+  /* Six slots appended 2026-11-11 (magenta..cocoa). No theme.js master:
+     one OKLCH family per slot, the same value in every Burrow-family
+     block of this mode, chosen so the rail is also its own text (it
+     clears 7:1 on base-100, its tint at 0%, and on base-200) and sits at least delta E 5.5
+     (OKLab x100) from every other rail and status colour of the block. */
+  --ag-magenta: #690a5a;
+  --ag-magenta-text: var(--ag-magenta);
+  --ag-violet: #500c94;
+  --ag-violet-text: var(--ag-violet);
+  --ag-jade: #024633;
+  --ag-jade-text: var(--ag-jade);
+  --ag-mustard: #434301;
+  --ag-mustard-text: var(--ag-mustard);
+  --ag-slate: #343952;
+  --ag-slate-text: var(--ag-slate);
+  --ag-cocoa: #532d18;
+  --ag-cocoa-text: var(--ag-cocoa);
   /* agent-slots:end */
   --radius-box: 6px;
   --radius-field: 4px;
@@ -905,6 +1042,23 @@
   --ag-indigo-text: var(--ag-indigo);
   --ag-lime: #9fd959;
   --ag-lime-text: var(--ag-lime);
+  /* Six slots appended 2026-11-11 (magenta..cocoa). No theme.js master:
+     one OKLCH family per slot, the same value in every Burrow-family
+     block of this mode, chosen so the rail is also its own text (it
+     clears 4.5:1 on the painted 8% tint, base-100 and base-200) and sits at least delta E 5.5
+     (OKLab x100) from every other rail and status colour of the block. */
+  --ag-magenta: #ea60cf;
+  --ag-magenta-text: var(--ag-magenta);
+  --ag-violet: #a878fc;
+  --ag-violet-text: var(--ag-violet);
+  --ag-jade: #5fdfb4;
+  --ag-jade-text: var(--ag-jade);
+  --ag-mustard: #c0ac23;
+  --ag-mustard-text: var(--ag-mustard);
+  --ag-slate: #b1b6cb;
+  --ag-slate-text: var(--ag-slate);
+  --ag-cocoa: #b99683;
+  --ag-cocoa-text: var(--ag-cocoa);
   /* agent-slots:end */
   --radius-box: 12px;
   --radius-field: 9px;
@@ -1007,6 +1161,23 @@
   --ag-lime: #4f7b00;
   /* Forest's #4d7802 measures 4.4797:1 on this tint; this measures 4.5339:1. */
   --ag-lime-text: #4d7702;
+  /* Six slots appended 2026-11-11 (magenta..cocoa). No theme.js master:
+     one OKLCH family per slot, the same value in every Burrow-family
+     block of this mode, chosen so the rail is also its own text (it
+     clears 4.5:1 on the painted 8% tint, base-100 and base-200) and sits at least delta E 5.5
+     (OKLab x100) from every other rail and status colour of the block. */
+  --ag-magenta: #93147f;
+  --ag-magenta-text: var(--ag-magenta);
+  --ag-violet: #5c2ab4;
+  --ag-violet-text: var(--ag-violet);
+  --ag-jade: #17634e;
+  --ag-jade-text: var(--ag-jade);
+  --ag-mustard: #5e5700;
+  --ag-mustard-text: var(--ag-mustard);
+  --ag-slate: #505469;
+  --ag-slate-text: var(--ag-slate);
+  --ag-cocoa: #704734;
+  --ag-cocoa-text: var(--ag-cocoa);
   /* agent-slots:end */
   --radius-box: 12px;
   --radius-field: 9px;

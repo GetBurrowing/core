@@ -10,6 +10,7 @@ defmodule PlatformWeb.Layouts do
   # and the utility bar at lg (Burrow redesign 22 stage 1).
   import PlatformWeb.Components.IconRail, only: [bottom_rail: 1]
   import PlatformWeb.Components.Sidebar, only: [sidebar: 1]
+  import PlatformWeb.Components.InstallSwitch, only: [install_switch: 1]
   import PlatformWeb.Components.MoreSheet
   import PlatformWeb.Components.ThemePicker
   import PlatformWeb.Components.MaskNamesChip

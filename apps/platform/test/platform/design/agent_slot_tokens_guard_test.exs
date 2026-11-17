@@ -1,7 +1,8 @@
 defmodule Platform.Design.AgentSlotTokensGuardTest do
   @moduledoc """
   Guards the agent identity slots (task 01a1557a, Burrow redesign 3, stage 1):
-  for each of the ten `Platform.Agents.ColorPalette` slots, `--ag-<id>` (rail,
+  for each `Platform.Agents.ColorPalette` slot (the masters' ten and the six
+  appended after them), `--ag-<id>` (rail,
   avatar ring, pill border) and `--ag-<id>-text` (name and pill text) in every
   theme block, the per-block `--ag-tint-pct`, and app.css's one opaque tint
   declaration per slot. There is no hover tint (Saru's ruling, a recorded
@@ -10,7 +11,7 @@ defmodule Platform.Design.AgentSlotTokensGuardTest do
   What is held:
 
     * DECLARED. Every block (app.css's two Burrow daisyUI blocks and the eight
-      in theme_presets.css) declares all 20 slot tokens and its strength
+      in theme_presets.css) declares both tokens of every slot and its strength
       itself; tints are declared once, in app.css, in the one opaque form;
       no hover strength or hover tint exists anywhere.
     * NAME ON TINT, PAINTED. `--ag-<id>-text` against the worst pixel two
@@ -49,6 +50,13 @@ defmodule Platform.Design.AgentSlotTokensGuardTest do
       restore `[data-theme="dark"] .msg-agent { background: #1c2531 }`; (b)
       drop the teal pointer; (c) `.msg-agent-name` to `var(--ag)`; (d) put
       the inline legacy accent variable back (also red in chat_message_test.exs).
+
+  NO MASTER: THE APPENDED SLOTS (2026-11-11). Magenta, violet, jade, mustard,
+  slate and cocoa were appended to ColorPalette when ten slots ran out; no
+  theme.js master names them, so `@no_master_slots` holds them out of the
+  masters' maps and the deviations test, and their hue is held against each
+  preset's OWN dark block, as Sage's is. Every other floor measures them as
+  it measures the ten.
 
   NO MASTER: SAGE (task 01a19555 stage 2). `sage` has no theme.js master
   (direction canvas 01a19556 is provisional and its values are measured), so
@@ -101,6 +109,9 @@ defmodule Platform.Design.AgentSlotTokensGuardTest do
 
   # Presets with no theme.js master (see NO MASTER in the moduledoc).
   @no_master ["sage"]
+
+  # Slots with no theme.js master, appended after the ten (see NO MASTER).
+  @no_master_slots ~w(magenta violet jade mustard slate cocoa)
 
   # theme.js (prototype 01a137f2 v3): BURROW_DARK / BURROW_LIGHT give all ten,
   # midnight overrides four, sand and forest override orange, high contrast
@@ -201,10 +212,13 @@ defmodule Platform.Design.AgentSlotTokensGuardTest do
     expected = Map.keys(@masters) ++ for(id <- @no_master, mode <- @modes, do: {id, mode})
     assert length(expected) == 12
     assert Enum.map(blocks, &{&1.id, &1.mode}) |> Enum.sort() == Enum.sort(expected)
-    assert Enum.sort(ColorPalette.ids()) == Enum.sort(Map.keys(@burrow_dark))
+    assert Enum.sort(ColorPalette.ids()) == Enum.sort(Map.keys(@burrow_dark) ++ @no_master_slots)
+
+    # Appended, never interleaved: the masters' ten keep their places.
+    assert Enum.take(ColorPalette.ids(), -length(@no_master_slots)) == @no_master_slots
   end
 
-  test "every block declares all 20 slot tokens and its strength itself", %{blocks: blocks} do
+  test "every block declares both tokens of every slot and its strength itself", %{blocks: blocks} do
     missing =
       for b <- blocks,
           token <- ["--ag-tint-pct" | slot_tokens()],
@@ -265,7 +279,7 @@ defmodule Platform.Design.AgentSlotTokensGuardTest do
     end
 
     decls = Regex.scan(~r/^\s*--ag-[a-z]+-tint\s*:/m, T.strip_comments(app_css))
-    assert length(decls) == 10, "a tint is declared outside the one rule"
+    assert length(decls) == length(ColorPalette.ids()), "a tint is declared outside the one rule"
     refute T.strip_comments(presets) =~ ~r/--ag-[a-z]+-tint\s*:/
   end
 
@@ -543,7 +557,7 @@ defmodule Platform.Design.AgentSlotTokensGuardTest do
 
   # ── the table ────────────────────────────────────────────────────────────
 
-  test "the 14-row x 10-slot table: every master variant, and Sage, passes", %{blocks: blocks} do
+  test "the 14-row x every-slot table: every master variant, and Sage, passes", %{blocks: blocks} do
     rows =
       for(
         master <- ["burrow-dark", "burrow-light"],
@@ -571,7 +585,7 @@ defmodule Platform.Design.AgentSlotTokensGuardTest do
           "#{fixed2(target(b))} | pass |"
       end
 
-    assert length(lines) == 140
+    assert length(lines) == 14 * length(ColorPalette.ids())
 
     drift =
       for id <- ColorPalette.ids() do
@@ -907,12 +921,23 @@ defmodule Platform.Design.AgentSlotTokensGuardTest do
   # The slot's value in this preset's own dark block: theme.js's, unless the
   # dark block moved it (`@dark_moved`).
   defp reference(%{id: preset}, id) when preset in @no_master, do: own_dark_rail(preset, id)
+  defp reference(%{id: preset}, id) when id in @no_master_slots, do: own_dark_rail(preset, id)
 
   defp reference(b, id),
     do:
       Map.get(@dark_moved, {b.id, id}) || @masters |> Map.fetch!({b.id, "dark"}) |> Map.fetch!(id)
 
-  # A no-master preset's slot as its own dark block declares it.
+  # A no-master preset's (or slot's) value as its own dark block declares it.
+  defp own_dark_rail("burrow", id) do
+    @css_dir
+    |> Path.join("app.css")
+    |> File.read!()
+    |> T.burrow_block("dark")
+    |> Map.fetch!(:decls)
+    |> T.declaration("--ag-#{id}")
+    |> String.downcase()
+  end
+
   defp own_dark_rail(preset, id) do
     blocks = @css_dir |> Path.join("theme_presets.css") |> File.read!() |> T.preset_blocks()
 
@@ -929,6 +954,7 @@ defmodule Platform.Design.AgentSlotTokensGuardTest do
   end
 
   defp deviation_problems(%{id: preset}, _id) when preset in @no_master, do: []
+  defp deviation_problems(_b, id) when id in @no_master_slots, do: []
 
   defp deviation_problems(b, id) do
     master = @masters |> Map.fetch!({b.id, b.mode}) |> Map.fetch!(id)

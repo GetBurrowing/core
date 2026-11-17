@@ -54,11 +54,13 @@ defmodule PlatformWeb.Components.Sidebar do
   import PlatformWeb.AvatarComponents, only: [human_avatar: 1]
   import PlatformWeb.Components.ThemePicker, only: [theme_picker: 1]
   import PlatformWeb.Components.MaskNamesChip, only: [mask_names_chip: 1]
+  import PlatformWeb.Components.InstallSwitch, only: [install_switch: 1]
 
   alias Phoenix.LiveView.JS
   alias Platform.Accounts
   alias PlatformWeb.Components.IconRail
 
+  attr :gaming, :boolean, default: false
   attr :current_path, :string, default: "/"
   attr :root_user, :boolean, default: false, doc: "legacy filter, used only without a Scope"
   attr :access_scope, :any, default: nil, doc: "the actor's `%Platform.Access.Scope{}`"
@@ -83,6 +85,14 @@ defmodule PlatformWeb.Components.Sidebar do
 
   def sidebar(assigns) do
     {tabs, more} = rows(assigns[:access_scope], Map.get(assigns, :root_user, false))
+
+    {tabs, more} =
+      if assigns.gaming do
+        Enum.split_with(tabs ++ more, &(&1.key in [:chat, :voice, :tasks, :meetings]))
+      else
+        {tabs, more}
+      end
+
     resolved = resolved_mode(assigns[:user])
 
     assigns =
@@ -109,10 +119,15 @@ defmodule PlatformWeb.Components.Sidebar do
         class="flex h-9 shrink-0 items-center gap-2 px-2 pb-1"
         data-role="sidebar-brand"
       >
-        <img src={~p"/images/burrow-mark.svg"} alt={@brand_name} class="size-5 shrink-0" />
-        <span class="min-w-0 truncate text-sm font-semibold text-base-content">
-          {@brand_name}
-        </span>
+        <%!-- Task 01a1ccd4 stage 3: the install switcher replaces the bare
+             mark + name, the same component as the phone top bar's
+             #native-install-switch (canvas 01a1cd29-e313). --%>
+        <.install_switch
+          id="sidebar-install-switch"
+          variant={:sidebar}
+          brand_name={@brand_name}
+          current_unread={@chat_unread_count}
+        />
         <span class="flex-1"></span>
         <%!-- masters #cmdk-btn (L570, .icon-btn L65): opens the palette
              mounted once in the shell (CommandPaletteLive, #command-palette). --%>
@@ -127,6 +142,8 @@ defmodule PlatformWeb.Components.Sidebar do
           <.icon name="hero-magnifying-glass" class="size-4" />
         </button>
       </div>
+
+      <PlatformWeb.Components.GamingShell.modes :if={@gaming} mode="create" />
 
       <nav
         id="sidebar-nav"
@@ -161,7 +178,7 @@ defmodule PlatformWeb.Components.Sidebar do
         </.row>
 
         <div
-          :if={@more != []}
+          :if={@more != [] && !@gaming}
           class="px-2 pt-3 pb-1 text-xs font-[650] uppercase tracking-[.08em] text-subtle"
           data-role="sidebar-more-label"
         >
@@ -170,11 +187,27 @@ defmodule PlatformWeb.Components.Sidebar do
 
         <.row
           :for={dest <- @more}
+          :if={!@gaming}
           dest={dest}
           icon={Map.get(dest, :hero_icon) || "hero-puzzle-piece"}
           current?={dest.key == @current_key}
           inbox_count={if dest.key == :inbox, do: @inbox_unread_count}
         />
+        <details
+          :if={@gaming && @more != []}
+          id="gaming-more-modules"
+          class="cg-module-more"
+          open={Enum.any?(@more, &(&1.key == @current_key))}
+        >
+          <summary>More<.icon name="hero-chevron-down" class="size-4" /></summary>
+          <.row
+            :for={dest <- @more}
+            dest={dest}
+            icon={Map.get(dest, :hero_icon) || "hero-puzzle-piece"}
+            current?={dest.key == @current_key}
+            inbox_count={if dest.key == :inbox, do: @inbox_unread_count}
+          />
+        </details>
       </nav>
 
       <div class="flex shrink-0 flex-col gap-0.5 pt-2">
@@ -184,7 +217,7 @@ defmodule PlatformWeb.Components.Sidebar do
           current?={@current_key == :settings}
         />
 
-        <div class="relative">
+        <div :if={!@gaming} class="relative">
           <button
             id="mode-toggle"
             type="button"

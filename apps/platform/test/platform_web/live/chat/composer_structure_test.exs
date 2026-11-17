@@ -288,6 +288,7 @@ defmodule PlatformWeb.ChatLive.ComposerStructureTest do
       wrapper = ~s(form#compose-form > [data-role="mention-list"])
       assert count(html, wrapper) == 1
       assert count(html, wrapper <> " ~ .compose-pill-bar") == 1
+      assert count(html, wrapper <> ~s( ~ [data-role="compose-mention-anchor"])) == 1
       assert count(html, wrapper <> " [role=listbox]") == 0
 
       assert count(html, wrapper <> ~s( > [data-role="mention-list-status"][aria-live=polite])) ==

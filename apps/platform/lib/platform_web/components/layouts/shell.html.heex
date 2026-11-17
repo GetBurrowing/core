@@ -1,3 +1,4 @@
+<% gaming? = assigns[:gaming_experience?] == true %>
 <%!-- PWA app-shell scroll lock: the shell occupies exactly the full
      viewport, matching the `html, body` height rules in app.css for
      both display modes:
@@ -99,6 +100,7 @@
        and desktop cannot disagree; see PlatformWeb.Components.Sidebar.
        `hidden lg:flex` inside the component. --%>
   <.sidebar
+    gaming={gaming?}
     current_path={@current_path}
     root_user={@root_user}
     access_scope={assigns[:access_scope]}
@@ -161,30 +163,17 @@
              unread; slot `bg-primary`, the chat rail's
              `.channel-row-unread-pill` slot in dot form. The logo resolves
              through `/branding/current/apple_touch`, which redirects to the
-             shipped Burrow mark when the install has uploaded none. --%>
-        <button
+             shipped Burrow mark when the install has uploaded none.
+             Task 01a1ccd4 stage 3: rendered by the shared
+             `PlatformWeb.Components.InstallSwitch` (the desktop sidebar's
+             `#sidebar-install-switch` is the same component), and in a
+             browser the same hook reveals it and runs the web switcher. --%>
+        <.install_switch
           id="native-install-switch"
-          type="button"
-          data-role="native-install-switch"
-          phx-hook="NativeInstallSwitch"
-          aria-label={"Switch install, current: #{@brand_name}"}
-          class="hidden -ml-1 shrink-0 items-center gap-1.5 rounded-md px-1 py-0.5 hover:bg-base-300/60"
-        >
-          <img
-            src="/branding/current/apple_touch"
-            alt=""
-            class="size-5 shrink-0 rounded"
-            data-role="install-logo"
-          />
-          <span class="max-w-[7rem] truncate text-sm font-semibold">{@brand_name}</span>
-          <span class="hero-chevron-down size-4 shrink-0 text-subtle" aria-hidden="true"></span>
-          <span
-            data-role="install-unread-dot"
-            class="hidden size-2 shrink-0 rounded-full bg-primary"
-            aria-hidden="true"
-          >
-          </span>
-        </button>
+          variant={:phone}
+          brand_name={@brand_name}
+          current_unread={@chat_unread_count}
+        />
         <span class="min-w-0 truncate text-sm font-semibold" data-role="phone-top-bar-title">
           {@active_module}
         </span>
@@ -205,6 +194,9 @@
         />
       </div>
     </header>
+    <div :if={gaming?} class="cg-workspace-modes lg:hidden">
+      <PlatformWeb.Components.GamingShell.modes mode="create" />
+    </div>
     <%!-- Flash messages --%>
     <.flash_group flash={@flash} connection_status={false} />
     <%!-- Surface. `flex-1` claims the remaining vertical space inside

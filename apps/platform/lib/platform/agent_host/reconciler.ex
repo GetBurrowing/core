@@ -168,10 +168,13 @@ defmodule Platform.AgentHost.Reconciler do
   Record a pending Claude login for `agent_id`, bound to `actor_id` and
   `caller`, and ask the host to start one, answered under `ref`. `:ok`, or
   `{:error, :busy}` while someone else's login is pending for that agent, or
-  `{:error, :not_connected}`.
+  `{:error, :not_connected}`, or `{:error, :host_outdated}` when the connected
+  host's hello does not list the `claude_login` feature: a host built before
+  Claude login ignores the push, so nothing is pushed and the caller hears so
+  at once rather than after its whole timeout.
   """
   @spec claude_login_start(binary(), binary(), pid(), String.t()) ::
-          :ok | {:error, :busy | :not_connected}
+          :ok | {:error, :busy | :not_connected | :host_outdated}
   def claude_login_start(agent_id, actor_id, caller, ref),
     do: GenServer.call(server(), {:claude_login_start, agent_id, actor_id, caller, ref})
 
@@ -353,6 +356,14 @@ defmodule Platform.AgentHost.Reconciler do
        ),
        do: {:reply, {:error, :not_connected}, state}
 
+  defp do_call(
+         {:claude_login_start, _agent_id, _actor, _caller, _ref},
+         _from,
+         %{host: %{features: features}} = state
+       )
+       when not is_map_key(features, "claude_login"),
+       do: {:reply, {:error, :host_outdated}, state}
+
   defp do_call({:claude_login_start, agent_id, actor_id, caller, ref}, _from, state) do
     case live_login(state, agent_id) do
       %{actor_id: other_actor, caller: other_caller}
@@ -455,6 +466,9 @@ defmodule Platform.AgentHost.Reconciler do
       profile: string_or_nil(meta["profile"]),
       # The host's hello says whether the install enabled `[agents] full_root`.
       full_root: meta["full_root"] == true,
+      # Commands the host handles beyond the original set (agent-host
+      # host.ts HOST_FEATURES). A host older than the list sends none.
+      features: features(meta["features"]),
       connected_at: DateTime.utc_now()
     }
 
@@ -463,6 +477,11 @@ defmodule Platform.AgentHost.Reconciler do
     broadcast(:host_connected)
     {:reply, :ok, %{state | host: host}}
   end
+
+  defp features(list) when is_list(list),
+    do: for(f <- list, is_binary(f), into: %{}, do: {f, true})
+
+  defp features(_), do: %{}
 
   defp drop_host(%{host: host} = state) do
     Process.demonitor(host.ref, [:flush])

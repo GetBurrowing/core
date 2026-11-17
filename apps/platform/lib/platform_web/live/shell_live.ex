@@ -138,6 +138,7 @@ defmodule PlatformWeb.ShellLive do
     # reconciling there would turn one badge broadcast into a scan-and-write
     # storm that can re-enter itself via `{:inbox_changed, …}`.
     reconcile_inbox(raw_user_id)
+    branding = Platform.Branding.get()
 
     socket =
       socket
@@ -152,7 +153,8 @@ defmodule PlatformWeb.ShellLive do
       # The install's app name, read once per mount from the branding row:
       # the alt text of the Burrow mark (task 01a120c5 stage 2) and the label
       # text (stage 3) in the sidebar header, never a compiled product name.
-      |> assign(:brand_name, Platform.Branding.app_name())
+      |> assign(:brand_name, branding.app_name)
+      |> assign(:gaming_experience?, branding.experience == "gaming")
       |> assign(:tasks_count, compute_tasks_count(raw_user_id))
       |> assign(:inbox_unread_count, compute_inbox_count(raw_user_id))
       # Task 01a01b29 stage 1: one chat-unread total for the whole viewer, so
@@ -258,8 +260,14 @@ defmodule PlatformWeb.ShellLive do
       # the event.
       |> push_app_badge()
       |> maybe_seed_meeting_state(raw_user_id)
-      |> attach_hook(:track_path, :handle_params, fn _params, url, socket ->
+      |> attach_hook(:track_path, :handle_params, fn params, url, socket ->
         uri = URI.parse(url)
+
+        # `?more=1` arrives with the More sheet up: the More tab on the
+        # Burrow Play pages (dead views, `GamingShell`) is a link here, as
+        # there is no ShellLive there to take `open_more_sheet`.
+        socket =
+          if params["more"] == "1", do: assign(socket, :more_sheet_open, true), else: socket
 
         # Hide the bar on any surface that represents the active meeting:
         # legacy chat surface (`/chat/<slug>` or `/chat/<space_id>` — the
@@ -1067,6 +1075,9 @@ defmodule PlatformWeb.ShellLive do
       # Task 01a10315 stage 5: "Connect your AI", not the module name.
       PlatformWeb.ConnectAiLive ->
         "Connect your AI"
+
+      PlatformWeb.GettingStartedLive ->
+        "Getting started"
 
       # Task 01a19554-fd07 stage 2: the first-run goal box at /start; the
       # fallback below would print "FirstRun" in the mobile header.

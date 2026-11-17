@@ -112,3 +112,7 @@ config :phoenix_live_view,
 # `:chat_async_fault` env (a list of segment atoms, e.g. [:history_backfill]).
 # Never set in prod, so a prod build has no fault path.
 config :platform, :chat_async_fault_injection, true
+
+# Usage counts batcher (task 01a1b678 stage 2): a dev server never sends usage
+# counts unless a developer sets this to true.
+config :platform, :start_usage_batcher, false

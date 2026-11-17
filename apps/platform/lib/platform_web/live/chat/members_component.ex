@@ -234,7 +234,7 @@ defmodule PlatformWeb.ChatLive.MembersComponent do
           {:error, :unauthorized} ->
             send(
               self(),
-              {:members_flash, :error, "Only a channel admin can bring agents into this channel."}
+              {:members_flash, :error, agent_authority_error(space, :add)}
             )
 
             {:noreply, socket}
@@ -288,8 +288,7 @@ defmodule PlatformWeb.ChatLive.MembersComponent do
           {:error, :unauthorized} ->
             send(
               self(),
-              {:members_flash, :error,
-               "Only a channel admin can remove agents from this channel."}
+              {:members_flash, :error, agent_authority_error(space, :remove)}
             )
 
             {:noreply, socket}
@@ -335,8 +334,20 @@ defmodule PlatformWeb.ChatLive.MembersComponent do
     end
   end
 
+  defp agent_authority_error(%{kind: "channel"}, :add),
+    do: "Only a channel, org, or root admin can bring agents into this channel."
+
+  defp agent_authority_error(%{kind: "channel"}, :remove),
+    do: "Only a channel, org, or root admin can remove agents from this channel."
+
+  defp agent_authority_error(%{kind: "execution"}, _action),
+    do: "Only a conversation admin or the task's sponsor can manage agents in this space."
+
+  defp agent_authority_error(_space, _action),
+    do: "Only an admin of this conversation can manage its agents."
+
   defp add_person_error(:unauthorized, _socket, _user_id),
-    do: "Only a channel admin can add people to this channel."
+    do: "Only a channel, org, or root admin can add people to this channel."
 
   defp add_person_error(:external, _socket, _user_id),
     do: "External people are added by a root admin."

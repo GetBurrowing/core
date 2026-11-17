@@ -41,7 +41,11 @@ defmodule Platform.Federation.ToolAuthorizationTest do
       assert ToolAuthorization.tool_names(runtime) == [
                "federation_status",
                "vault_fetch",
-               "vault_list"
+               "vault_list",
+               # Task 01a1b678 stage 3: always listed; the handlers gate on
+               # an install-admin owner.
+               "sharing_list",
+               "sharing_set"
              ]
     end
 
@@ -69,7 +73,11 @@ defmodule Platform.Federation.ToolAuthorizationTest do
       assert ToolAuthorization.tool_names(runtime) == [
                "federation_status",
                "vault_fetch",
-               "vault_list"
+               "vault_list",
+               # Task 01a1b678 stage 3: always listed; the handlers gate on
+               # an install-admin owner.
+               "sharing_list",
+               "sharing_set"
              ]
     end
 
@@ -79,7 +87,11 @@ defmodule Platform.Federation.ToolAuthorizationTest do
       assert ToolAuthorization.tool_names(runtime) == [
                "federation_status",
                "vault_fetch",
-               "vault_list"
+               "vault_list",
+               # Task 01a1b678 stage 3: always listed; the handlers gate on
+               # an install-admin owner.
+               "sharing_list",
+               "sharing_set"
              ]
     end
   end

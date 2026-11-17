@@ -894,12 +894,88 @@ class Service:
         return self.mem_limit(ctx) if callable(self.mem_limit) else self.mem_limit
 
 
+# [sharing] key -> the core env name that seeds that switch (core task
+# 01a1b678 stage 1, Platform.Sharing.seed_env_names/0). `feedback` is not
+# here: it renders FEEDBACK_POLICY through feedback_enabled/1.
+SHARING_ENV = {
+    "learned_default_shapes": "LEARNED_DEFAULT_SHAPES",
+    "instruction_updates": "INSTRUCTION_UPDATES",
+    "usage_counts": "USAGE_COUNTS",
+    "friction_reports": "FRICTION_REPORTS",
+    "help_channel_reports": "HELP_CHANNEL_REPORTS",
+}
+
+
 def feedback_enabled(m):
-    """``[feedback] enabled`` if set, otherwise ``install.hosted``."""
+    """``[sharing] feedback`` if set, else ``[feedback] enabled`` if set,
+    otherwise ``install.hosted``."""
+    shared = m.get("sharing", {}).get("feedback")
+    if shared is not None:
+        return shared is True
     explicit = m.get("feedback", {}).get("enabled")
     if explicit is not None:
         return explicit is True
     return m["install"]["hosted"] is True
+
+
+def sharing_env(m):
+    """The core env for each ``[sharing]`` key the manifest sets explicitly.
+    An absent key renders nothing (core reads unset as off)."""
+    sharing = m.get("sharing", {})
+    return {
+        name: "true" if sharing[key] is True else "false"
+        for key, name in SHARING_ENV.items()
+        if sharing.get(key) is not None
+    }
+
+
+def system_mail_env(m):
+    """The core env for ``[system_mail]`` (Platform.Mail.System). Nothing
+    unless ``smtp_host`` is set, which is exactly how core reads it. The
+    password is a ``{customer:REF}`` marker, so it lands in the 0600
+    secrets.env, never in compose.yaml."""
+    sm = m["system_mail"]
+    if not sm["smtp_host"]:
+        return {}
+    env = {
+        "SYSTEM_SMTP_HOST": sm["smtp_host"],
+        "SYSTEM_SMTP_TLS": sm["smtp_tls"],
+    }
+    if sm["from"]:
+        env["SYSTEM_MAIL_FROM"] = sm["from"]
+    if sm["smtp_port"] is not None:
+        env["SYSTEM_SMTP_PORT"] = str(sm["smtp_port"])
+    if sm["smtp_username"]:
+        env["SYSTEM_SMTP_USERNAME"] = sm["smtp_username"]
+    if sm["smtp_password_ref"]:
+        env["SYSTEM_SMTP_PASSWORD"] = f"{{customer:{sm['smtp_password_ref']}}}"
+    return env
+
+
+def meetings_intent_env(m):
+    """core-platform's MEETINGS_INTENT_* lines (core task 01a1e5da stage 4).
+
+    Names match apps/platform/config/runtime.exs. Empty unless meetings are on
+    and ``[meetings] intent_provider`` is set, so every manifest without it
+    renders byte-unchanged. The API key is a ``{customer:REF}`` marker: it
+    lands in secrets.env (never compose.yaml) and is never printed.
+    """
+    meetings = m["meetings"]
+    provider = meetings["intent_provider"]
+    if not m["services"]["meetings"] or provider is None:
+        return {}
+    endpoint = next(
+        e for e in m["models"]["endpoints"] if e["name"] == meetings["intent_endpoint"]
+    )
+    env = {"MEETINGS_INTENT_PROVIDER": provider}
+    if meetings["intent_model"]:
+        env["MEETINGS_INTENT_MODEL"] = meetings["intent_model"]
+    if provider == "ollama":
+        # The anthropic and openai adapters call fixed API hosts and ignore it.
+        env["MEETINGS_INTENT_BASE_URL"] = endpoint["base_url"]
+    if endpoint["api_key_ref"]:
+        env["MEETINGS_INTENT_API_KEY"] = f"{{customer:{endpoint['api_key_ref']}}}"
+    return env
 
 
 def _core_env(ctx):
@@ -916,8 +992,11 @@ def _core_env(ctx):
         "OIDC_PKCE_ENABLED": "true",
     }
     if ctx.mac:
-        # cloudflared / tailscale -> Caddy -> core: the client address is in
-        # X-Forwarded-For (lib/platform_web/plugs/rewrite_remote_ip.ex).
+        # cloudflared / tailscale -> Caddy -> core. Core walks X-Forwarded-For
+        # right to left past TRUSTED_PROXIES (default loopback + private
+        # ranges) and keys on the first untrusted hop
+        # (lib/platform_web/plugs/rewrite_remote_ip.ex). Caddy and the edge
+        # sidecar are private peers, so this chain renders no TRUSTED_PROXIES.
         env["TRUST_PROXY_HEADERS"] = "true"
     if ctx.m["install"].get("org_name") is not None:
         # Task 01a10315: read once, by the first migrate (seed_root_orgs).
@@ -929,6 +1008,12 @@ def _core_env(ctx):
         env["AGENT_HOST_TOKEN"] = "{secret:AGENT_HOST_TOKEN}"
         # Task 01a17b10: how native agents log in ([agents] login).
         env["NATIVE_AGENT_LOGIN"] = ctx.m["agents"]["login"]
+        if ctx.m["agents"]["starter_api_key_ref"]:
+            # A customer-supplied value, so it lands in secrets.env (never in
+            # compose.yaml) and is never printed. Core's Burrow.Starter reads it.
+            env["STARTER_ANTHROPIC_API_KEY"] = (
+                f"{{customer:{ctx.m['agents']['starter_api_key_ref']}}}"
+            )
     if ctx.agents == "contained":
         # Agents in the agent-host container reach core on the agents network,
         # not through the public URL (AgentHost.core_url/0's default).
@@ -939,6 +1024,10 @@ def _core_env(ctx):
         # and an install never holds a GitHub or broker credential, so this
         # is the ONE feedback variable an install is ever rendered.
         env["FEEDBACK_POLICY"] = "quarantined"
+    # Core task 01a1b678 stage 1: seeds the install's sharing switches once.
+    env.update(sharing_env(ctx.m))
+    env.update(system_mail_env(ctx.m))
+    env.update(meetings_intent_env(ctx.m))
     auth = ctx.m["auth"]
     if not ctx.bundled_auth:
         env["OIDC_ISSUER"] = auth["issuer"]

@@ -1,5 +1,5 @@
 import { describe, it, expect, vi, beforeEach, afterEach } from "vitest"
-import ChatDock, { DOCK_VAR, DOCK_EVENT, MENTION_LIST_SELECTOR } from "../../js/hooks/chat_dock.js"
+import ChatDock, { DOCK_VAR, DOCK_EVENT, MENTION_LIST_SELECTOR, MENTION_MAX_H_VAR } from "../../js/hooks/chat_dock.js"
 import ScrollToBottom from "../../js/hooks/scroll_to_bottom.js"
 
 /**
@@ -167,6 +167,77 @@ describe("ChatDock writes the dock height on <html>", () => {
     window.addEventListener(DOCK_EVENT, (e) => seen.push(e.detail))
     hook._observer.cb()
     expect(seen).toEqual([])
+  })
+})
+
+describe("ChatDock fits channel suggestions above the entry", () => {
+  beforeEach(stubGlobals)
+  afterEach(restoreGlobals)
+
+  function mountWithViewport() {
+    const listeners = {}
+    const attrs = {}
+    document.documentElement.setAttribute = (k, v) => { attrs[k] = v }
+    document.documentElement.removeAttribute = (k) => { delete attrs[k] }
+    window.innerWidth = 812
+    window.innerHeight = 375
+    const viewport = window.visualViewport = {
+      height: 375, offsetTop: 0,
+      addEventListener(type, fn) { (listeners[type] ||= []).push(fn) },
+      removeEventListener(type, fn) { listeners[type] = listeners[type].filter(f => f !== fn) },
+    }
+    const el = dockEl(58)
+    const anchor = { top: 149 }
+    const zone = { top: 94 }
+    el.querySelector = (selector) => selector === '[data-role="compose-mention-anchor"]'
+      ? { getBoundingClientRect: () => anchor } : null
+    el.closest = () => ({ getBoundingClientRect: () => zone })
+    const hook = Object.create(ChatDock)
+    hook.el = el
+    hook.mounted()
+    return { hook, viewport, listeners, anchor, zone, attrs }
+  }
+
+  it("caps the panel to space above the pill, excluding header and panel border", () => {
+    const { hook } = mountWithViewport()
+    expect(rootStyle.props[MENTION_MAX_H_VAR]).toBe("53px")
+    expect(rootStyle.props[DOCK_VAR]).toBe("58px")
+    hook.destroyed()
+  })
+
+  it("recomputes on keyboard resize and pan even when dock clearance stays the same", () => {
+    const { hook, viewport, listeners, anchor, attrs } = mountWithViewport()
+    const seen = []
+    window.addEventListener(DOCK_EVENT, e => seen.push(e.detail))
+    viewport.height = 195
+    listeners.resize.forEach(fn => fn())
+    expect(attrs["data-keyboard-open"]).toBe("")
+    viewport.offsetTop = 120
+    anchor.top = 171
+    listeners.scroll.forEach(fn => fn())
+    expect(rootStyle.props[MENTION_MAX_H_VAR]).toBe("49px")
+    expect(seen).toEqual([])
+    hook.destroyed()
+  })
+
+  it("handles multiline growth and notification clearance, clamping negative space", () => {
+    const { hook, anchor, zone } = mountWithViewport()
+    anchor.top = 122
+    hook.updated()
+    expect(rootStyle.props[MENTION_MAX_H_VAR]).toBe("26px")
+    zone.top = 140
+    hook._observer.cb()
+    expect(rootStyle.props[MENTION_MAX_H_VAR]).toBe("0px")
+    hook.destroyed()
+  })
+
+  it("removes viewport listeners and the height cap on destroy", () => {
+    const { hook, listeners } = mountWithViewport()
+    hook.destroyed()
+    expect(listeners.resize).toEqual([])
+    expect(listeners.scroll).toEqual([])
+    expect(windowListeners.resize).toEqual([])
+    expect(rootStyle.props[MENTION_MAX_H_VAR]).toBeUndefined()
   })
 })
 

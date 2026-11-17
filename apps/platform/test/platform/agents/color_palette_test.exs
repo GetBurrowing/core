@@ -26,9 +26,12 @@ defmodule Platform.Agents.ColorPaletteTest do
   end
 
   describe "slots and tokens" do
-    test "the ten slot ids are the masters' ten, one token each" do
-      assert Enum.sort(ColorPalette.ids()) ==
-               Enum.sort(~w(teal green amber orange blue purple brick rose indigo lime))
+    test "the sixteen slot ids: the masters' ten, then the six appended, one token each" do
+      # Append only: an existing slot never moves, so no picker reorders
+      # under an agent and the masters' ten stay first.
+      assert ColorPalette.ids() ==
+               ~w(blue purple orange brick green rose amber teal indigo lime) ++
+                 ~w(magenta violet jade mustard slate cocoa)
 
       for color <- ColorPalette.all() do
         assert color.token == "--ag-" <> color.id
@@ -39,14 +42,14 @@ defmodule Platform.Agents.ColorPaletteTest do
     test "slot_for/1 keeps a known id and resolves nil, blank and unknown to blue" do
       for id <- ColorPalette.ids(), do: assert(ColorPalette.slot_for(id) == id)
 
-      for stored <- [nil, "", "  ", "magenta", "Purple", 42] do
+      for stored <- [nil, "", "  ", "chartreuse", "Purple", 42] do
         assert ColorPalette.slot_for(stored) == "blue", "stored #{inspect(stored)}"
       end
     end
 
     test "token/1 falls back to the blue slot's token" do
       assert ColorPalette.token(nil) == "--ag-blue"
-      assert ColorPalette.token("magenta") == "--ag-blue"
+      assert ColorPalette.token("chartreuse") == "--ag-blue"
     end
   end
 

@@ -295,6 +295,7 @@ function makeCtx(scroller) {
     _onRealignMutations: ScrollToBottom._onRealignMutations,
     _repairRealignedScroll: ScrollToBottom._repairRealignedScroll,
     _applyPendingRealign: ScrollToBottom._applyPendingRealign,
+    _keepThreadEntryVisible: ScrollToBottom._keepThreadEntryVisible,
     _onViewportResize: ScrollToBottom._onViewportResize,
   };
 }

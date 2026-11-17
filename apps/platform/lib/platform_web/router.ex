@@ -42,6 +42,7 @@ defmodule PlatformWeb.Router do
     plug(:put_root_layout, html: {PlatformWeb.Layouts, :root})
     plug(:protect_from_forgery)
     plug(:put_secure_browser_headers)
+    plug(PlatformWeb.Plugs.GamingLanding)
   end
 
   # Task 01a09415: content-negotiation variant of `:browser` used by ONE
@@ -170,6 +171,15 @@ defmodule PlatformWeb.Router do
   pipeline :app_api do
     plug(:accepts, ["json"])
     plug(PlatformWeb.Plugs.AppBearerAuth)
+  end
+
+  # Web install switcher unread (task 01a1ccd4 stage 2). A badge key in the
+  # Authorization header, CORS bound to the key's origin. NO `fetch_session`
+  # and NO `:accepts` (a preflight's Accept is the browser's, and the only
+  # body is JSON): `SwitcherBadgeAuth` answers the preflight and refuses
+  # everything else without a key whose origin matches.
+  pipeline :switcher_api do
+    plug(PlatformWeb.Plugs.SwitcherBadgeAuth)
   end
 
   # Push relay (task 01a1261e stage 2): 404 unless relay mode is on, 401
@@ -316,6 +326,24 @@ defmodule PlatformWeb.Router do
     # install (or a hostile caller) sends may reach the broker's log.
     post("/issues", FeedbackBrokerController, :create, log: false)
     get("/issues/:fingerprint", FeedbackBrokerController, :show, log: false)
+    get("/instruction-packs", InstructionPackController, :index, log: false)
+    get("/instruction-packs/:pack_id/latest", InstructionPackController, :latest, log: false)
+    get("/instruction-packs/:pack_id/:version", InstructionPackController, :show, log: false)
+    # Anonymous usage counts (task 01a1b678 stage 2).
+    post("/usage", FeedbackBrokerController, :usage, log: false)
+  end
+
+  # HOST-AGNOSTIC (`/api/*` machine caller): another install's switcher page
+  # calls this cross-origin with a badge key, never a cookie.
+  scope "/api/switcher", PlatformWeb do
+    pipe_through(:switcher_api)
+
+    get("/unread", SwitcherUnreadController, :show)
+    options("/unread", SwitcherUnreadController, :show)
+    # Stage 3: "Remove" in A's Manage installs revokes the key it holds
+    # (best effort, from the browser, with that same key).
+    delete("/key", SwitcherKeyController, :delete)
+    options("/key", SwitcherKeyController, :delete)
   end
 
   scope "/api/app", PlatformWeb do
@@ -490,7 +518,12 @@ defmodule PlatformWeb.Router do
     # Published game pages deliberately answer on every host, like auth.
     # Only operator-published manifests are exposed; downloads authenticate
     # separately and never widen chat attachment permissions.
+    # Gaming home is public like the published game pages, and install-opt-in.
+    get("/play", GamingController, :home)
     get("/games/:slug", GamePageController, :show)
+    get("/games/:slug/player", GamePageController, :player)
+    get("/games/:slug/updates", GamePageController, :updates)
+    get("/games/:slug/player/releases/:version", GamePageController, :player_release)
     get("/games/:slug/sign-in", GamePageController, :sign_in)
     get("/games/:slug/create-account", GamePageController, :create_account)
     post("/games/:slug/community", GamePageController, :join_community)
@@ -498,6 +531,11 @@ defmodule PlatformWeb.Router do
 
     get("/health", HealthController, :index)
     get("/auth/login", AuthController, :login)
+    get("/auth/sign-in", SignInSetupController, :show)
+    post("/auth/passkey", AuthController, :passkey)
+    post("/auth/email/setup", SignInSetupController, :request)
+    post("/auth/email/complete", SignInSetupController, :complete)
+    post("/auth/invitation", SignInSetupController, :invitation)
     get("/auth/oidc/callback", AuthController, :callback)
     get("/auth/logout", AuthController, :logout)
 
@@ -517,6 +555,12 @@ defmodule PlatformWeb.Router do
     # pocket-id, so the owner lands back in Burrow at /setup/connect-ai.
     # The code rides the query string for the same log-filter reason.
     get("/auth/handover", AuthController, :handover)
+
+    # Durable form of the same hand-over: a signed token that mints a fresh
+    # one-time code on each click (`Platform.SignIn.DurableLink`), so the
+    # "ready" and invite emails keep working for days. Token in the query
+    # string for the same log-filter reason (`token` is filtered).
+    get("/auth/link", AuthController, :link)
 
     # T7 stage 2 (task 019e41da-3610-7972-8573-54121ea1f3f5): retired
     # `/org-context[/:file_key]` paths 301-redirect to the new
@@ -943,6 +987,9 @@ defmodule PlatformWeb.Router do
 
     get("/artifacts/preview", ArtifactPreviewController, :show)
     get("/api/transcripts/:id/download", TranscriptController, :show)
+    # Task 01a1ccd4 stage 2: the web install switcher's consent hop.
+    get("/switcher/connect", SwitcherConnectController, :show)
+    post("/switcher/connect", SwitcherConnectController, :allow)
 
     live_session :authenticated,
       on_mount: [
@@ -951,6 +998,8 @@ defmodule PlatformWeb.Router do
         {PlatformWeb.ModuleGate, :default}
       ],
       layout: {PlatformWeb.Layouts, :shell} do
+      # Task 01a1ccd4 stage 3: where another install's consent hop lands.
+      live("/switcher/connected", SwitcherConnectedLive, :show)
       live("/access/view-as/role/:id/:key", AccessViewAsLive, :show)
       live("/access/view-as/:type/:id", AccessViewAsLive, :show)
       live("/access", AccessLive, :index)
@@ -1128,6 +1177,7 @@ defmodule PlatformWeb.Router do
       # context function re-checks the actor itself
       # (`Lifecycle.with_root_admin_authz/2`) so neither half is load-bearing
       # alone.
+      live("/admin/games", AdminGamesLive, :index)
       live("/admin/orgs", AdminOrgsLive, :index)
       # Task 01a0879a stage 4: this install's PWA identity (name, colours,
       # icon source). Install-wide, NOT per-org — an org is a client, and
@@ -1163,6 +1213,9 @@ defmodule PlatformWeb.Router do
       # Task 01a10315 stage 5: "Connect your AI", where a new install's
       # hand-over lands ("Open Burrow"). The view re-checks root admin.
       live("/setup/connect-ai", ConnectAiLive, :index)
+      # Starter hand-over: "Burrow is getting ready" while the starter key
+      # provisions Burrow in a task; navigates on by itself. Re-checks root admin.
+      live("/setup/getting-started", GettingStartedLive, :index)
       live("/admin/federation", AdminFederationLive, :index)
     end
   end
@@ -1236,6 +1289,15 @@ defmodule PlatformWeb.Router do
   scope "/api/internal", PlatformWeb do
     pipe_through(:api)
     post("/usage-events", UsageEventController, :create)
+  end
+
+  # Installer bootstrap (durable sign-in link): returns the owner's
+  # `/auth/link` URL. HOST-AGNOSTIC and sessionless like the other `/api/*`
+  # machine callers; it authenticates on the install's STATIC_API_KEY bearer
+  # inside the controller and answers 404 to anyone else.
+  scope "/api/install", PlatformWeb do
+    pipe_through(:api)
+    post("/handover-link", InstallHandoverLinkController, :create, log: false)
   end
 
   # Editable-messages API (task 019df568-97a4). PATCH for author-only

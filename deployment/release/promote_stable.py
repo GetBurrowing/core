@@ -133,7 +133,14 @@ def canary_rollback_from(body):
 class Refs:
     """The soak state on origin, read once with ls-remote."""
 
-    def __init__(self, lines):
+    def __init__(self, lines, mode="both"):
+        self.mode = mode
+        self.soak_kind = "soak" if mode == "both" else "soak-canary"
+        self.fail_kind = "soak-fail" if mode == "both" else "soak-fail-canary"
+        self.candidate = None
+        self.cuts = set()
+        soak_re = re.compile(r"^refs/" + self.soak_kind + r"/([0-9a-f]{40})/(\d{8}T\d{2}Z)$")
+        fail_re = re.compile(r"^refs/" + self.fail_kind + r"/([0-9a-f]{40})/(\d{8}T\d{2}Z)$")
         self.soak = {}  # S -> set(hours)
         self.fail = {}  # S -> set(hours)
         self.seen = {}  # install -> S
@@ -143,9 +150,13 @@ class Refs:
             if len(parts) != 2:
                 continue
             sha, ref = parts[0].strip(), parts[1].strip()
-            if m := SOAK_RE.match(ref):
+            if ref == "refs/release-candidate/current":
+                self.candidate = sha
+            elif ref.startswith("refs/release-candidate/cut/"):
+                self.cuts.add(ref.rsplit("/", 1)[1])
+            elif m := soak_re.match(ref):
                 self.soak.setdefault(m[1], set()).add(m[2])
-            elif m := FAIL_RE.match(ref):
+            elif m := fail_re.match(ref):
                 self.fail.setdefault(m[1], set()).add(m[2])
             elif m := SEEN_RE.match(ref):
                 self.seen[m[1]] = sha
@@ -154,11 +165,11 @@ class Refs:
                 self.stable_tags.append(stamp)
 
 
-def list_refs():
+def list_refs(mode="both"):
     rc, out, err = git("ls-remote", "--refs", "origin")
     if rc != 0:
         raise SystemExit(f"error: git ls-remote failed: {err.strip()}")
-    return Refs(out.splitlines())
+    return Refs(out.splitlines(), mode)
 
 
 def known_commit(sha):
@@ -170,7 +181,8 @@ def observe(refs, prod_url, canary_url, hour):
     """Probe both installs; return the push refspecs and update `refs` in place."""
     specs = []
     results = {}
-    for install, url in (("prod", prod_url), ("canary", canary_url)):
+    targets = (("prod", prod_url), ("canary", canary_url)) if refs.mode == "both" else (("canary", canary_url),)
+    for install, url in targets:
         healthy, commit, body = probe(url)
         results[install] = (healthy, commit, body)
         log(f"{install}: healthy={healthy} commit={commit or '-'}")
@@ -182,7 +194,7 @@ def observe(refs, prod_url, canary_url, hour):
         specs.append(f"{sha}:{ref}")
         return True
 
-    for install in INSTALLS:
+    for install in results:
         healthy, commit, _ = results[install]
         if commit and refs.seen.get(install) != commit and add(f"refs/soak-seen/{install}", commit):
             refs.seen[install] = commit
@@ -190,13 +202,19 @@ def observe(refs, prod_url, canary_url, hour):
             blamed = commit or refs.seen.get(install)
             if blamed is None:
                 log(f"warning: {install} failed its probe and has never reported a commit")
-            elif add(f"refs/soak-fail/{blamed}/{hour}", blamed):
+            elif add(f"refs/{refs.fail_kind}/{blamed}/{hour}", blamed):
                 refs.fail.setdefault(blamed, set()).add(hour)
 
     rolled_from = canary_rollback_from(results["canary"][2])
-    if rolled_from and add(f"refs/soak-fail/{rolled_from}/{hour}", rolled_from):
+    if rolled_from and add(f"refs/{refs.fail_kind}/{rolled_from}/{hour}", rolled_from):
         log(f"canary rolled back from {rolled_from}")
         refs.fail.setdefault(rolled_from, set()).add(hour)
+
+    if refs.mode == "canary":
+        c_ok, c_sha, _ = results["canary"]
+        if c_ok and c_sha and add(f"refs/{refs.soak_kind}/{c_sha}/{hour}", c_sha):
+            refs.soak.setdefault(c_sha, set()).add(hour)
+        return specs
 
     (p_ok, p_sha, _), (c_ok, c_sha, _) = results["prod"], results["canary"]
     if p_ok and c_ok and p_sha and p_sha == c_sha:
@@ -210,7 +228,7 @@ def observe(refs, prod_url, canary_url, hour):
 def prune_specs(refs, now):
     cutoff = now - dt.timedelta(days=PRUNE_DAYS)
     specs = []
-    for kind, table in (("soak", refs.soak), ("soak-fail", refs.fail)):
+    for kind, table in ((refs.soak_kind, refs.soak), (refs.fail_kind, refs.fail)):
         for sha, hours in table.items():
             for hour in sorted(hours):
                 if parse_hour(hour) < cutoff:
@@ -310,7 +328,12 @@ def main():
         return 0
     prod_url = (os.environ.get("STABLE_PROD_HEALTH_URL") or "").strip()
     canary_url = (os.environ.get("STABLE_CANARY_HEALTH_URL") or "").strip()
-    if not prod_url or not canary_url:
+    mode = os.environ.get("STABLE_SOAK_MODE") or "both"
+    if mode not in ("both", "canary"):
+        log("error: STABLE_SOAK_MODE must be both or canary")
+        return 1
+    batch = truthy(os.environ.get("STABLE_BATCH_ENABLED"))
+    if (mode == "both" and not prod_url) or not canary_url:
         log(
             "error: not configured: set the STABLE_PROD_HEALTH_URL and "
             "STABLE_CANARY_HEALTH_URL repository variables; nothing promotes until both are set"
@@ -321,6 +344,9 @@ def main():
     except ValueError:
         log("error: STABLE_SOAK_HOURS is not an integer")
         return 1
+    if soak_hours < 1 or (batch and soak_hours < 24):
+        log("error: batch releases need at least 24 observed soak hours")
+        return 1
     force = truthy(os.environ.get("PROMOTE_FORCE"))
     forced_sha = (os.environ.get("PROMOTE_SHA") or "").strip()
     if force and not SHA_RE.match(forced_sha):
@@ -330,7 +356,7 @@ def main():
     now = now_utc()
     hour = now.strftime(HOUR_FMT)
 
-    refs = list_refs()
+    refs = list_refs(mode)
     specs = observe(refs, prod_url, canary_url, hour) + prune_specs(refs, now)
     if specs:
         rc, _, err = git("push", "--atomic", "origin", *specs)
@@ -350,6 +376,12 @@ def main():
         log(f"force: promoting {forced_sha} without the soak count")
         return promote(repo, forced_sha, current, now)
 
+    if batch:
+        if not refs.candidate:
+            log("no batch candidate has been cut; nothing promotes")
+            return 0
+        # Never promote an arbitrary historical revision in batch mode.
+        refs.soak = {sha: hours for sha, hours in refs.soak.items() if sha == refs.candidate}
     sha = choose(refs, soak_hours, current)
     if sha is None:
         log("no commit is eligible for stable this hour")

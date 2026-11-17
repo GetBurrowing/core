@@ -9,6 +9,22 @@ re-checked at v2.18.0, the version the renderer pins
 (``ghcr.io/pocket-id/pocket-id:v2.18.0``, registry.py; ``:v2`` resolved to the
 same image digest on 2026-10-05):
 
+- Appearance, verified at v2.18.0 (task: pocket-id sign-in page wearing Burrow's
+  look): ``GET /api/application-configuration/all`` lists every setting as
+  ``{key, value}``; ``PUT /api/application-configuration`` REPLACES the whole
+  config (every required field), so ``ensure_branding`` reads, changes
+  ``appName`` / ``accentColor`` and writes back everything else untouched.
+  ``appName`` is 1..30 characters. ``UI_CONFIG_DISABLED=true`` would make the
+  PUT fail and reset every other setting to its default, so it is NOT used.
+  The logo has no setting: ``PUT /api/application-images/logo?light=true|false``
+  (multipart, field ``file``; the type comes from the file name's extension).
+- Email login code, verified at v2.18.0 (core task 01a1e65e):
+  ``ensure_email_login_code`` turns on
+  ``emailOneTimeAccessAsUnauthenticatedEnabled`` (default ``"false"``,
+  backend/internal/appconfig/model.go:145) with the same read-merge-write as
+  ``ensure_branding``: one key changed, every other setting written back as
+  read. Core repeats this once per existing install at boot
+  (``Platform.SignInAdmin.EmailLoginCodeBoot``).
 - ``STATIC_API_KEY`` (backend/internal/common/env_config.go:64, min 16 chars)
   creates the synthetic admin "Static API User" (id 0000...0000,
   apikey/service.go:221); requests authenticate with the ``X-API-Key`` header
@@ -41,7 +57,9 @@ is never printed: the CLI opens it in the browser itself and writes it to a
 """
 
 import re
+import unicodedata
 import urllib.parse
+import uuid
 
 from . import web
 from .state import SetupError
@@ -53,12 +71,16 @@ CLIENT_NAME = "Burrow"
 # The one-time sign-in code's lifetime. It MUST stay above 15 minutes.
 # pocket-id v2.18.0 backend/internal/onetimeaccess/service.go:271-274 mints a
 # 6-character code when ttl <= 15m and a 12-character code otherwise. Its
-# frontend (routes/login/alternative/code/+page.svelte:24-29) expects 12
-# characters whenever emailOneTimeAccessAsUnauthenticatedEnabled is false,
-# which is the default and what this installer leaves it at. A 6-character
-# code therefore never auto-submits from /lc/<code>, and Submit stays disabled:
-# the first admin cannot sign in. "15m" sits exactly on that boundary and was
-# the bug that task 01a0d6ab's behavioural gate caught. Pinned by
+# frontend (routes/login/alternative/code/+page.svelte:21-29) computes
+# longCodeRequested = code.length > 6 || !emailOneTimeAccessAsUnauthenticatedEnabled.
+# This installer now turns that flag ON (ensure_email_login_code, core task
+# 01a1e65e), and a 12-character code arriving through /lc/<code> still selects
+# long mode and auto-submits (+page.svelte:24-26), so these links keep working.
+# The 30m pin is still required: an admin can turn the flag off again (core
+# turns it on once per install and never forces it back), and with the flag
+# off the page always expects 12 characters, so a 6-character code never
+# auto-submits and Submit stays disabled. "15m" sits exactly on that boundary
+# and was the bug that task 01a0d6ab's behavioural gate caught. Pinned by
 # tests/test_setup_pocketid.py LoginTtlTest.
 LOGIN_TTL = "30m"
 CALLBACK_PATH = "/auth/oidc/callback"  # core router.ex:332
@@ -73,10 +95,13 @@ class Client:
         self.base = base.rstrip("/")
         self.api_key = api_key
 
-    def call(self, method, path, body=None, allow=()):
+    def call(self, method, path, body=None, allow=(), headers=None):
         try:
             resp = web.request(
-                method, self.base + path, headers={"X-API-Key": self.api_key}, body=body
+                method,
+                self.base + path,
+                headers={"X-API-Key": self.api_key, **(headers or {})},
+                body=body,
             )
         except web.WebError as exc:
             raise SetupError(
@@ -251,3 +276,147 @@ def ensure_secret(client, secret, known_id=None):
         "POST", f"/api/oidc/clients/{CLIENT_ID}/secrets", body={"secret": secret}
     )
     return created["id"], "registered"
+
+
+# ---------------------------------------------------------------------------
+# Appearance: the sign-in page wearing Burrow's name and logo (API only)
+
+APP_NAME_MAX = 30  # pocket-id v2.18.0 dto.AppConfigUpdateDto: appName min=1,max=30
+LOGO_EXTENSIONS = (".svg", ".png", ".jpg", ".jpeg", ".webp")
+LOGO_MAX_BYTES = 1_000_000
+# pocket-id shows this in place of a secret when UI_CONFIG_DISABLED redacts it;
+# writing it back would store the placeholder as the real value.
+REDACTED = "XXXXXXXXXX"
+# "default" or any CSS colour: a hex colour or a plain colour name. Functions such
+# as rgb() are left out, so nothing here can carry markup or a quote.
+_ACCENT_RE = re.compile(r"^(?:default|#(?:[0-9a-fA-F]{3}|[0-9a-fA-F]{4}|[0-9a-fA-F]{6}|[0-9a-fA-F]{8})|[a-z]{3,20})$")
+
+
+def valid_app_name(value):
+    return (
+        isinstance(value, str)
+        and 1 <= len(value) <= APP_NAME_MAX
+        and value == unicodedata.normalize("NFC", value)
+        and value.isprintable()
+        and value == value.strip()
+    )
+
+
+def valid_accent_color(value):
+    return isinstance(value, str) and _ACCENT_RE.match(value) is not None
+
+
+def _settings(listed):
+    if not isinstance(listed, list):
+        return {}
+    return {
+        item["key"]: item.get("value", "")
+        for item in listed
+        if isinstance(item, dict) and isinstance(item.get("key"), str)
+    }
+
+
+def _writable_settings(client):
+    """Every setting from ``/all``, refusing a config that is unreadable or locked.
+
+    The map carries secrets (smtpPassword, ldapBindPassword): never print it.
+    """
+    _s, listed = client.call("GET", "/api/application-configuration/all")
+    current = _settings(listed)
+    if not current:
+        raise SetupError(
+            "pocketid_config_unreadable",
+            "GET /api/application-configuration/all returned no settings",
+            "check that pocket-id is the v2 release the renderer pins, then re-run",
+        )
+    if REDACTED in current.values():
+        raise SetupError(
+            "pocketid_config_locked",
+            "pocket-id is redacting its settings (UI_CONFIG_DISABLED is on)",
+            "remove UI_CONFIG_DISABLED from the pocket-id environment; settings are made "
+            "through the API and a locked config cannot be updated",
+        )
+    return current
+
+
+EMAIL_LOGIN_CODE_KEY = "emailOneTimeAccessAsUnauthenticatedEnabled"
+
+
+def ensure_email_login_code(client):
+    """Turn on pocket-id's unauthenticated email login code. Returns "present" or "applied".
+
+    Idempotent: nothing is written when it is already "true". Otherwise the whole
+    config is written back with only this key changed, because the update replaces
+    the config (appconfig/model.go:200-226 resets a missing key to its default).
+    """
+    current = _writable_settings(client)
+    if current.get(EMAIL_LOGIN_CODE_KEY) == "true":
+        return "present"
+    desired = dict(current)
+    desired[EMAIL_LOGIN_CODE_KEY] = "true"
+    _s, saved = client.call("PUT", "/api/application-configuration", body=desired)
+    if _settings(saved).get(EMAIL_LOGIN_CODE_KEY) != "true":
+        raise SetupError(
+            "pocketid_email_login_code_not_saved",
+            f"pocket-id did not keep {EMAIL_LOGIN_CODE_KEY}",
+            "see pocket-id's logs: docker compose logs pocket-id",
+        )
+    return "applied"
+
+
+def ensure_branding(client, app_name=None, accent_color=None):
+    """Set pocket-id's app name and accent colour. Returns "skipped", "present" or "applied".
+
+    Idempotent: nothing is written when both already match. Every other setting is
+    read and written back exactly as it was, because the update replaces the config.
+    """
+    if app_name is None and accent_color is None:
+        return "skipped"
+    current = _writable_settings(client)
+    desired = dict(current)
+    if app_name is not None:
+        desired["appName"] = app_name
+    if accent_color is not None:
+        desired["accentColor"] = accent_color
+    if desired == current:
+        return "present"
+    _s, saved = client.call("PUT", "/api/application-configuration", body=desired)
+    after = _settings(saved)
+    for key in ("appName", "accentColor"):
+        if key in desired and desired[key] != current.get(key) and after.get(key) != desired[key]:
+            raise SetupError(
+                "pocketid_branding_not_saved",
+                f"pocket-id did not keep {key}",
+                "see pocket-id's logs: docker compose logs pocket-id",
+            )
+    return "applied"
+
+
+def multipart(field, filename, content, boundary=None):
+    """A multipart/form-data body with one file part. Returns (content_type, bytes)."""
+    boundary = boundary or uuid.uuid4().hex
+    safe = filename.replace('"', "").replace("\r", "").replace("\n", "")
+    head = (
+        f"--{boundary}\r\n"
+        f'Content-Disposition: form-data; name="{field}"; filename="{safe}"\r\n'
+        "Content-Type: application/octet-stream\r\n\r\n"
+    ).encode()
+    tail = f"\r\n--{boundary}--\r\n".encode()
+    return f"multipart/form-data; boundary={boundary}", head + content + tail
+
+
+def ensure_logo(client, filename, content):
+    """Upload ``content`` as the light and the dark logo. Returns "applied".
+
+    pocket-id strips image metadata on upload, so the stored bytes differ from
+    ``content`` and cannot be compared; the upload simply repeats on every run.
+    """
+    ctype, body = multipart("file", filename, content)
+    for light in ("true", "false"):
+        client.call(
+            "PUT",
+            f"/api/application-images/logo?light={light}",
+            body=body,
+            headers={"Content-Type": ctype},
+        )
+    return "applied"

@@ -67,8 +67,7 @@ defmodule Platform.Accounts.UserAvatarCache do
   alias Platform.Accounts.User
   alias Platform.Agents.AvatarStorage
   alias Platform.Chat.AttachmentStorage
-  alias Platform.Federation.Peers.Client
-  alias Platform.Federation.Peers.PinnedAdapter
+  alias Platform.Net.GuardedFetch
   alias Vix.Vips.Image, as: VImage
   alias Vix.Vips.Operation
 
@@ -285,73 +284,38 @@ defmodule Platform.Accounts.UserAvatarCache do
   # ── fetch ──────────────────────────────────────────────────────────────
 
   defp fetch(source) do
-    with {:ok, %{url: target, hostname: hostname}} <- pin(source),
-         {:ok, %Req.Response{} = resp} <- request(target, hostname),
-         :ok <- check_status(resp),
-         {:ok, content_type} <- check_content_type(resp) do
-      {:ok, resp.body, content_type}
-    end
-  end
-
-  defp request(target, hostname) do
-    opts =
-      [
-        method: :get,
-        url: target,
-        headers: [{"accept", "image/*"}],
-        redirect: false,
-        retry: false,
-        # Never inflated: the byte cap counts the bytes actually kept.
-        raw: true,
-        compressed: false,
-        decode_body: false,
-        adapter:
-          PinnedAdapter.adapter(hostname,
-            connect_timeout: @connect_timeout,
-            receive_timeout: @receive_timeout,
-            max_body: @max_source_bytes
-          ),
-        # Only the `Req.Test` plug path streams through `:into`; PinnedAdapter
-        # applies the same cap itself.
-        into: &collect_capped/2
-      ]
+    req_opts =
+      [method: :get, headers: [{"accept", "image/*"}]]
       |> Keyword.merge(Application.get_env(:platform, :user_avatar_req_options, []))
 
-    case Req.request(opts) do
-      {:ok, %Req.Response{} = resp} ->
-        if Req.Response.get_private(resp, :peer_too_large),
-          do: {:error, :too_large},
-          else: {:ok, resp}
+    guard_opts = [
+      schemes: [:https],
+      resolver: Application.get_env(:platform, :user_avatar_resolver),
+      max_body: @max_source_bytes,
+      max_redirects: 0,
+      connect_timeout: @connect_timeout,
+      receive_timeout: @receive_timeout,
+      timeout: @receive_timeout
+    ]
 
-      {:error, _} ->
-        {:error, :transport}
-    end
-  rescue
-    _ -> {:error, :transport}
-  catch
-    _, _ -> {:error, :transport}
-  end
-
-  defp collect_capped({:data, data}, {req, resp}) do
-    body = if is_binary(resp.body), do: resp.body <> data, else: data
-
-    if byte_size(body) > @max_source_bytes do
-      {:halt,
-       {req, resp |> Req.Response.put_private(:peer_too_large, true) |> Map.put(:body, "")}}
+    with {:ok, response} <- GuardedFetch.request(source, req_opts, guard_opts),
+         :ok <- check_status(response),
+         {:ok, content_type} <- check_content_type(response) do
+      {:ok, response.body, content_type}
     else
-      {:cont, {req, %{resp | body: body}}}
+      # Preserve the pre-GuardedFetch refusal reason returned by app_variant/1.
+      {:error, {:refused, :forbidden_address}} -> {:error, :forbidden_address}
+      error -> error
     end
   end
 
-  defp check_status(%Req.Response{status: 200, body: body}) when is_binary(body) and body != "",
-    do: :ok
+  defp check_status(%{status: 200, body: body}) when is_binary(body) and body != "", do: :ok
+  defp check_status(%{status: status}), do: {:error, {:status, status}}
 
-  defp check_status(%Req.Response{status: status}), do: {:error, {:status, status}}
-
-  defp check_content_type(resp) do
+  defp check_content_type(%{headers: headers}) do
     reported =
-      resp
-      |> Req.Response.get_header("content-type")
+      headers
+      |> Map.get("content-type", [])
       |> List.first("")
       |> String.split(";")
       |> List.first()
@@ -361,65 +325,5 @@ defmodule Platform.Accounts.UserAvatarCache do
     if reported in AvatarStorage.allowed_content_types(),
       do: {:ok, reported},
       else: {:error, :not_an_image_type}
-  end
-
-  # https, a host, no userinfo; every resolved address public; the request
-  # pinned to the address that was checked, with the name kept for Host, SNI
-  # and certificate verification.
-  defp pin(source) do
-    with {:ok, %URI{scheme: "https", host: host, userinfo: nil} = uri}
-         when is_binary(host) and host != "" <- URI.new(source),
-         {:ok, [ip | _] = addresses} <- resolve(host) do
-      case Enum.find(addresses, &Client.forbidden_address?/1) do
-        nil ->
-          {:ok,
-           %{
-             url: URI.to_string(%URI{uri | host: ip |> :inet.ntoa() |> to_string()}),
-             hostname: host
-           }}
-
-        _bad ->
-          {:error, :forbidden_address}
-      end
-    else
-      # URI.new's own error carries part of the url; never pass that on.
-      {:error, :unresolvable} = error -> error
-      _ -> {:error, :malformed_url}
-    end
-  end
-
-  defp resolve(host) do
-    literal =
-      host
-      |> String.trim_leading("[")
-      |> String.trim_trailing("]")
-      |> String.to_charlist()
-      |> :inet.parse_strict_address()
-
-    result =
-      case {literal, Application.get_env(:platform, :user_avatar_resolver, &dns_resolve/1)} do
-        {{:ok, ip}, _} -> {:ok, [ip]}
-        {_, fun} when is_function(fun, 1) -> fun.(host)
-        {_, %{} = static} -> {:ok, Map.get(static, host, [])}
-      end
-
-    case result do
-      {:ok, [_ | _] = ips} -> {:ok, ips}
-      _ -> {:error, :unresolvable}
-    end
-  end
-
-  defp dns_resolve(host) do
-    name = String.to_charlist(host)
-
-    ips =
-      Enum.flat_map([:inet, :inet6], fn family ->
-        case :inet.getaddrs(name, family) do
-          {:ok, list} -> list
-          {:error, _} -> []
-        end
-      end)
-
-    {:ok, ips}
   end
 end

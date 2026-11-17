@@ -152,6 +152,8 @@ defmodule Platform.Chat.AgentResponder do
     )
 
     with {:ok, context} <- load_context(signal) do
+      _ = observe_question(reason, context)
+
       Logger.info(
         "[AgentResponder] context loaded, agent=#{context.agent.slug} runtime_type=#{context.agent.runtime_type} runtime_id=#{inspect(context.agent.runtime_id)}"
       )
@@ -209,6 +211,15 @@ defmodule Platform.Chat.AgentResponder do
   end
 
   def respond(_signal), do: :ok
+
+  # A person's question addressed to an agent is one friction occurrence (task
+  # 01a1b678 stage 3). Only a hash of the normalized question is kept; the
+  # recorder never raises and is a no-op unless friction reports are on.
+  defp observe_question(reason, %{agent: %Agent{} = agent, message: %Message{} = message})
+       when reason in @addressed_reasons,
+       do: Platform.Sharing.Friction.record_question(agent, message)
+
+  defp observe_question(_reason, _context), do: :ok
 
   # ── Chat opt-out (task 01a1b20f) ────────────────────────────────────
 

@@ -10674,6 +10674,90 @@ defmodule PlatformWeb.MeetingLiveTest do
     end
   end
 
+  describe "meeting-intent-off chip (task 01a1e5da stage 3)" do
+    # The chip reads install-level state: the `meetings.intent_classify`
+    # assignee (the meeting_producer role's bundle) and the
+    # `:meetings_intent_model` app env. Both env sources are saved and
+    # cleared here so a developer's OLLAMA_BASE_URL cannot make the
+    # "nothing configured" case pass or fail by accident.
+    @intent_app_keys [:meetings_intent_model, :meetings_intent_provider]
+
+    setup %{conn: conn} do
+      saved_app = Map.new(@intent_app_keys, &{&1, Application.fetch_env(:platform, &1)})
+      saved_ollama = System.get_env("OLLAMA_BASE_URL")
+      Enum.each(@intent_app_keys, &Application.delete_env(:platform, &1))
+      System.delete_env("OLLAMA_BASE_URL")
+
+      on_exit(fn ->
+        Enum.each(saved_app, fn
+          {key, {:ok, value}} -> Application.put_env(:platform, key, value)
+          {key, :error} -> Application.delete_env(:platform, key)
+        end)
+
+        if saved_ollama,
+          do: System.put_env("OLLAMA_BASE_URL", saved_ollama),
+          else: System.delete_env("OLLAMA_BASE_URL")
+      end)
+
+      {meeting, _space} = create_meeting(%{slug: "intent-off", name: "Intent Off"})
+      {conn, _user} = authenticated_conn(conn)
+      on_exit(fn -> IntentQueue.stop(meeting.id) end)
+      {:ok, conn: conn, meeting: meeting}
+    end
+
+    defp mount_top_bar(conn, meeting) do
+      {:ok, view, _} = live(conn, ~p"/meetings/#{meeting.slug}?tab=canvas")
+      render_hook(view, "meeting_viewport", %{"below" => true})
+      view
+    end
+
+    test "native assignee and nothing configured renders the chip", %{
+      conn: conn,
+      meeting: meeting
+    } do
+      # assign_producer!/0 inserts a native agent: no base_url, no model.
+      assign_producer!()
+      view = mount_top_bar(conn, meeting)
+
+      assert has_element?(view, "[data-role=meeting-intent-off-badge]")
+      # Not colour alone, and not width-hidden: the glyph is always
+      # painted and the word is sr-only below sm, never removed.
+      assert has_element?(
+               view,
+               "[data-role=meeting-intent-off-badge] .hero-bolt-slash[aria-hidden=true]"
+             )
+
+      assert has_element?(
+               view,
+               "[data-role=meeting-intent-off-badge] span.sr-only.sm\\:not-sr-only",
+               "Intent off"
+             )
+
+      refute has_element?(view, "[data-role=meeting-intent-off-badge].hidden")
+    end
+
+    test "a configured install renders no chip", %{conn: conn, meeting: meeting} do
+      assign_producer!()
+      Application.put_env(:platform, :meetings_intent_model, %{provider: :anthropic})
+      view = mount_top_bar(conn, meeting)
+
+      # Presence half: the bar itself rendered, so the absence is the gate.
+      assert has_element?(view, "[data-role=chat-panel-toggle]")
+      refute has_element?(view, "[data-role=meeting-intent-off-badge]")
+    end
+
+    test "no assignee renders no chip (unassigned is the deliberate off state)", %{
+      conn: conn,
+      meeting: meeting
+    } do
+      :ok = Platform.Roles.unassign_role("meeting_producer")
+      view = mount_top_bar(conn, meeting)
+
+      assert has_element?(view, "[data-role=chat-panel-toggle]")
+      refute has_element?(view, "[data-role=meeting-intent-off-badge]")
+    end
+  end
+
   # ── Intents-collapse test helpers ──────────────────────────────────────────
 
   defp assign_producer! do

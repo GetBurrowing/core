@@ -381,9 +381,13 @@ defmodule Platform.AgentHost do
   Claude Code.
 
   One pending login per agent (`Platform.AgentHost.Reconciler`): it is bound
-  to `actor` and to the calling process, and a start by anyone else while it
-  is pending is `{:error, :busy}`. Otherwise `{:error, :not_connected}`,
-  `{:error, :timeout}`, or `{:error, :refused}` when the host printed no URL.
+  to `actor` and to the calling process (or `opts[:caller]`, for a screen
+  that waits for the host in a task of its own and must stay the login's
+  owner), and a start by anyone else while it is pending is `{:error,
+  :busy}`. Otherwise `{:error, :not_connected}`, `{:error, :timeout}`,
+  `{:error, :refused}` when the host printed no URL, or
+  `{:error, :host_outdated}` at once when the connected host predates Claude
+  login (its hello lists no `claude_login` feature) and would never answer.
 
   The URL is returned to the caller only: it is never put in
   `Platform.AgentHost.State`, broadcast on the status topic, audited or
@@ -391,16 +395,19 @@ defmodule Platform.AgentHost do
   """
   @spec claude_login_start(map() | binary() | nil, Agent.t(), keyword()) ::
           {:ok, String.t()}
-          | {:error, login_refusal() | :busy | :not_connected | :timeout | :refused}
+          | {:error,
+             login_refusal() | :busy | :not_connected | :host_outdated | :timeout | :refused}
   def claude_login_start(actor, %Agent{} = agent, opts \\ []) do
     timeout = Keyword.get(opts, :timeout, @login_start_timeout_ms)
 
     with {:ok, actor_id} <- login_gate(actor, agent) do
       ref = new_ref()
 
+      caller = Keyword.get(opts, :caller, self())
+
       result =
         await_claude_login(ref, timeout, fn ->
-          Reconciler.claude_login_start(agent.id, actor_id, self(), ref)
+          Reconciler.claude_login_start(agent.id, actor_id, caller, ref)
         end)
 
       case result do
@@ -454,14 +461,19 @@ defmodule Platform.AgentHost do
 
     with {:ok, actor_id} <- login_gate(actor, agent) do
       ref = new_ref()
+      caller = Keyword.get(opts, :caller, self())
 
       result =
         await_claude_login(ref, timeout, fn ->
-          Reconciler.claude_login_code(agent.id, actor_id, self(), ref, code)
+          Reconciler.claude_login_code(agent.id, actor_id, caller, ref, code)
         end)
 
       case result do
         {:ok, %{"result" => "ok", "account" => account, "plan" => plan}} ->
+          # The host restarts the unit so it starts logged in; a logout left
+          # the agent desired `stopped` (`claude_logout/3`), so the desire is
+          # set back to running here, or the reconciler would stop it again.
+          _ = start_agent(agent)
           {:ok, %{account: account, plan: plan}}
 
         {:ok, %{"result" => r}} when r in ["bad_code", "no_subscription", "no_session"] ->
@@ -482,9 +494,15 @@ defmodule Platform.AgentHost do
   `claude auth status` reads logged out, else `{:error, :failed | :timeout |
   :not_connected}`, or refused like `claude_login_start/3`.
 
-  Logout does not restart the agent's unit on the host, so a running agent
-  keeps its session until it restarts. With `restart: true` (the default) a
-  successful logout is followed by `restart_agent/1`.
+  Logout does not touch the agent's unit on the host, so a running agent
+  keeps its session until it restarts. With `stop: true` (the default) a
+  successful logout is followed by `stop_agent/1`: the agent stays stopped
+  until the next sign-in (`claude_login_submit/4` sets it running again).
+
+  Not a restart: a logged-out Claude Code agent whose unit is up reads
+  `running` to the host (the login prompt sits in its pane and nothing
+  observes it), so a restart here made Connect your AI show "connected" and
+  never offer the sign-in, and the chat found out only at the next reply.
   """
   @spec claude_logout(map() | binary() | nil, Agent.t(), keyword()) ::
           :ok | {:error, login_refusal() | :failed | :timeout | :not_connected | term()}
@@ -496,7 +514,7 @@ defmodule Platform.AgentHost do
 
       case await_claude_login(ref, timeout, fn -> Reconciler.claude_logout(agent.id, ref) end) do
         {:ok, %{"result" => "ok"}} ->
-          if Keyword.get(opts, :restart, true), do: restart_agent(agent), else: :ok
+          if Keyword.get(opts, :stop, true), do: stop_agent(agent), else: :ok
 
         {:ok, _} ->
           {:error, :failed}

@@ -186,7 +186,7 @@ defmodule PlatformWeb.FirstRunLiveTest do
       |> render_submit(%{"goal" => "Start a project with my team"})
 
     assert view |> element("[data-role=first-run-no-agent]") |> render() =~
-             "Burrow isn&#39;t set up on this workspace yet. Your admin can connect it."
+             "Burrow isn&#39;t set up yet. Ask the person who manages Burrow to connect it."
 
     assert view |> element("textarea[data-role=first-run-input]") |> render() =~
              "Start a project with my team"

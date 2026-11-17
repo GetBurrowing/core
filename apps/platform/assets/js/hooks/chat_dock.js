@@ -36,16 +36,24 @@ import { watchKeyboard } from "../lib/keyboard_inset.js"
 export const MENTION_LIST_SELECTOR = '[data-role="mention-list"]'
 export const DOCK_VAR = "--chat-dock-h"
 export const DOCK_EVENT = "chat:dock-resized"
+export const MENTION_MAX_H_VAR = "--compose-mention-max-h"
 
 const ChatDock = {
   mounted() {
     this._height = null
+    this._unwatchKeyboard = watchKeyboard()
+    this._viewportChanged = () => this._measure()
+    this._viewport = window.visualViewport
+    this._viewport?.addEventListener("resize", this._viewportChanged)
+    this._viewport?.addEventListener("scroll", this._viewportChanged)
+    window.addEventListener("resize", this._viewportChanged)
     if (typeof ResizeObserver !== "undefined") {
       this._observer = new ResizeObserver(() => this._measure())
       this._observer.observe(this.el, { box: "border-box" })
+      const zone = this.el.closest?.("#chat-drop-zone")
+      if (zone) this._observer.observe(zone, { box: "border-box" })
     }
     this._measure()
-    this._unwatchKeyboard = watchKeyboard()
   },
 
   updated() {
@@ -53,6 +61,9 @@ const ChatDock = {
   },
 
   destroyed() {
+    this._viewport?.removeEventListener("resize", this._viewportChanged)
+    this._viewport?.removeEventListener("scroll", this._viewportChanged)
+    window.removeEventListener("resize", this._viewportChanged)
     if (this._unwatchKeyboard) {
       this._unwatchKeyboard()
       this._unwatchKeyboard = null
@@ -62,11 +73,13 @@ const ChatDock = {
       this._observer = null
     }
     document.documentElement.style.removeProperty(DOCK_VAR)
+    document.documentElement.style.removeProperty(MENTION_MAX_H_VAR)
     this._height = null
   },
 
   _measure() {
     const root = document.documentElement
+    this._measureMentionSpace()
     if (getComputedStyle(this.el).display === "contents") {
       root.style.removeProperty(DOCK_VAR)
       this._height = null
@@ -79,6 +92,19 @@ const ChatDock = {
     root.style.setProperty(DOCK_VAR, `${height}px`)
     const delta = previous === null ? 0 : height - previous
     window.dispatchEvent(new CustomEvent(DOCK_EVENT, { detail: { height, delta } }))
+  },
+
+  // The pill stays put when its in-flow list opens upward. Measure from
+  // that stable edge, not the dock's top (which includes the list), so a
+  // keyboard resize cannot leave a 212px panel above the visible viewport.
+  // The chat zone's top also excludes the header/notification prompt.
+  _measureMentionSpace() {
+    const anchor = this.el.querySelector?.('[data-role="compose-mention-anchor"]')
+    if (!anchor) return
+    const zone = this.el.closest?.("#chat-drop-zone")
+    const top = Math.max(this._viewport?.offsetTop || 0, zone?.getBoundingClientRect().top || 0)
+    const height = Math.max(0, Math.floor(anchor.getBoundingClientRect().top - top - 2))
+    document.documentElement.style.setProperty(MENTION_MAX_H_VAR, `${height}px`)
   },
 
   _listHeight() {

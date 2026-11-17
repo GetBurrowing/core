@@ -88,11 +88,6 @@ defmodule PlatformWeb.SocialLiveQueueTest do
   defp v(post), do: "#queue-#{post.id}"
   defp in_v(post, sel), do: "#{v(post)} #{sel}"
 
-  defp approve_all!(child, key) do
-    child |> element("#{card(key)} [data-role='queue-approve-all']") |> render_click()
-    child |> element("#{card(key)} [data-role='queue-approve-all-go']") |> render_click()
-  end
-
   defp human_approved_events(post_id) do
     Repo.all(
       from(e in PostEvent,

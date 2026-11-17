@@ -706,6 +706,14 @@ def pocket_id(ctx):
     user, action = pocketid.ensure_admin(client, email, username)
     ctx.state["ids"]["pocketid_admin_id"] = user["id"]
     outputs = {"admin_username": username, "admin": action}
+    # Non-fatal (core task 01a1e65e): before the passkey branch, so both the
+    # done and the awaiting_passkey outputs carry it. Core's boot step turns
+    # the flag on later if this fails.
+    try:
+        outputs["email_login_code"] = pocketid.ensure_email_login_code(client)
+    except SetupError as exc:
+        outputs["email_login_code"] = "failed"
+        outputs["email_login_code_error"] = exc.code
     count = pocketid.passkey_count(client, user["id"])
     outputs["passkeys"] = count
     if count:

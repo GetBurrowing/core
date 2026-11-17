@@ -7,7 +7,7 @@ defmodule Platform.Branding.InstallBranding do
   a unique index; see the migration for why that is enforced in storage
   rather than by convention here.
 
-  `identity_changeset/2` casts app name and colours ONLY. The icon columns
+  `identity_changeset/2` casts app name, colours and the opt-in presentation ONLY. The icon columns
   (`source_storage_key`, `derived`, `version`) are written by the upload and
   derivation paths in later stages, never by the identity form — an admin
   editing the app name must not be able to blank the uploaded artwork by
@@ -49,6 +49,7 @@ defmodule Platform.Branding.InstallBranding do
   schema "install_branding" do
     field(:singleton, :boolean, default: true)
     field(:app_name, :string)
+    field(:experience, :string, default: "workspace")
     field(:theme_color, :string)
     field(:background_color, :string)
     field(:source_storage_key, :string)
@@ -74,7 +75,8 @@ defmodule Platform.Branding.InstallBranding do
   @spec identity_changeset(t(), map()) :: Ecto.Changeset.t()
   def identity_changeset(%__MODULE__{} = branding, attrs) do
     branding
-    |> cast(attrs, [:app_name, :theme_color, :background_color])
+    |> cast(attrs, [:app_name, :theme_color, :background_color, :experience])
+    |> validate_inclusion(:experience, ["workspace", "gaming"])
     |> validate_required([:app_name, :theme_color, :background_color])
     |> validate_length(:app_name, min: 1, max: 60)
     |> validate_format(:theme_color, @hex_colour, message: "must be a 6-digit hex colour")

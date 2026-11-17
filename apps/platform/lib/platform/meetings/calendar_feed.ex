@@ -109,6 +109,21 @@ defmodule Platform.Meetings.CalendarFeed do
   `STATUS:CANCELLED` plus an advanced `SEQUENCE`, which is what Google
   and Apple key on for a fetched (non-iTIP) feed.
 
+  ## Attendees — only for a reader entitled to the invitee list
+
+  `render/1` (the bearer `invite.ics`) never carries them, for the reason
+  above. `render/2` with `parties: %{organizer:, attendees:, updated_at:}`
+  adds `ORGANIZER`, one `ATTENDEE` per invitee with its `PARTSTAT`
+  (`Platform.Meetings.IcsAttendees`) and `LAST-MODIFIED`. Only the
+  per-user subscription feed (`Platform.Calendar.Feed`) passes it: its
+  reader is the account the feed belongs to, who already sees the invite
+  list and every answer in the meeting details.
+
+  An RSVP bumps `ical_sequence` and `updated_at`
+  (`Platform.Meetings.respond_to_invite/3`), so SEQUENCE, DTSTAMP and
+  LAST-MODIFIED all advance and a subscribed client replaces the event it
+  holds.
+
   ## Line mechanics
 
   Content lines are joined with CRLF and the document ends with a
@@ -117,6 +132,7 @@ defmodule Platform.Meetings.CalendarFeed do
   UTF-8 sequence. `SUMMARY` is escaped per §3.3.11.
   """
 
+  alias Platform.Meetings.IcsAttendees
   alias Platform.Meetings.Meeting
 
   @prodid "-//Burrow//Meetings//EN"
@@ -152,11 +168,12 @@ defmodule Platform.Meetings.CalendarFeed do
       emitting a `DTSTART` with no `DTEND` (legal RFC, renders as a
       zero-length blip) or inventing a `DURATION` the author never chose.
   """
-  @spec render(%Meeting{}) :: {:ok, binary()} | {:error, :unscheduled}
-  def render(%Meeting{scheduled_start_at: nil}), do: {:error, :unscheduled}
-  def render(%Meeting{scheduled_end_at: nil}), do: {:error, :unscheduled}
+  @spec render(%Meeting{}, keyword()) :: {:ok, binary()} | {:error, :unscheduled}
+  def render(meeting, opts \\ [])
+  def render(%Meeting{scheduled_start_at: nil}, _opts), do: {:error, :unscheduled}
+  def render(%Meeting{scheduled_end_at: nil}, _opts), do: {:error, :unscheduled}
 
-  def render(%Meeting{} = meeting) do
+  def render(%Meeting{} = meeting, opts) do
     # The three cancellation-sensitive properties are chosen together,
     # from one predicate, in one place. Scattering three separate
     # `if cancelled?` branches through the list is how a document ends up
@@ -170,7 +187,7 @@ defmodule Platform.Meetings.CalendarFeed do
         {"PUBLISH", "CONFIRMED", Integer.to_string(sequence(meeting))}
       end
 
-    document =
+    lines =
       [
         "BEGIN:VCALENDAR",
         "VERSION:2.0",
@@ -182,17 +199,43 @@ defmodule Platform.Meetings.CalendarFeed do
         "DTSTAMP:" <> utc_stamp(meeting.updated_at),
         "DTSTART:" <> utc_stamp(meeting.scheduled_start_at),
         "DTEND:" <> utc_stamp(meeting.scheduled_end_at),
-        "SUMMARY:" <> escape(meeting.name),
-        "STATUS:" <> status,
-        "SEQUENCE:" <> sequence,
-        "TRANSP:OPAQUE",
-        "END:VEVENT",
-        "END:VCALENDAR"
-      ]
+        "SUMMARY:" <> escape(meeting.name)
+      ] ++
+        party_lines(Keyword.get(opts, :parties)) ++
+        [
+          "STATUS:" <> status,
+          "SEQUENCE:" <> sequence,
+          "TRANSP:OPAQUE",
+          "END:VEVENT",
+          "END:VCALENDAR"
+        ]
+
+    document =
+      lines
       |> Enum.map(&[fold(&1), "\r\n"])
       |> IO.iodata_to_binary()
 
     {:ok, document}
+  end
+
+  # The invitee list, for a reader entitled to it (`render/2` moduledoc
+  # section "Attendees"). `LAST-MODIFIED` rides along: an RSVP change
+  # advances `updated_at`, and some clients key a refresh on it.
+  defp party_lines(nil), do: []
+
+  defp party_lines(%{} = parties) do
+    organizer =
+      case Map.get(parties, :organizer) do
+        {_name, address} = person when is_binary(address) and address != "" ->
+          [IcsAttendees.organizer_line(person)]
+
+        _ ->
+          []
+      end
+
+    attendees = Enum.map(Map.get(parties, :attendees, []), &IcsAttendees.attendee_line/1)
+
+    organizer ++ attendees ++ ["LAST-MODIFIED:" <> utc_stamp(Map.fetch!(parties, :updated_at))]
   end
 
   # The ONE place the cancelled state is read. `status` is authoritative,

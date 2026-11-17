@@ -42,10 +42,11 @@ sys.path.insert(0, INSTALLER)
 
 from identity_terms import identity_hits, planted_term
 from migrate_embed import cut_migrate_script, expand_compressed
+from render_identity_scan import identity_scan_text
 
 from burrow_install import registry, templates
 from burrow_install.__main__ import main
-from burrow_install.manifest import load
+from burrow_install.manifest import SHARING_KEYS, load
 from burrow_install.render import TARGETS, RenderError, build, plan, render
 from burrow_install.secrets import parse_env_file
 from burrow_install.validate import validate
@@ -76,6 +77,9 @@ GOLDEN_CASES = {
     "do-droplet": os.path.join(RENDER_FIXTURES, "do-droplet.toml"),
     # The s-4vcpu-8gb droplet (task 01a18f76): size_tier = "medium".
     "do-droplet-8gb": os.path.join(RENDER_FIXTURES, "do-droplet-8gb.toml"),
+    # A NEW install's manifest (core task 01a1b678): [sharing] all true.
+    "single-host-sharing-on": os.path.join(RENDER_FIXTURES, "single-host-sharing-on.toml"),
+
     # Meetings on the droplet (task 01a19505); test_droplet.py covers the rest.
     "do-droplet-meetings": os.path.join(RENDER_FIXTURES, "do-droplet-meetings.toml"),
 }
@@ -227,6 +231,9 @@ class GoldenTest(PositiveControlMixin, unittest.TestCase):
 
     def test_golden_do_droplet_8gb(self):
         self.check_golden("do-droplet-8gb")
+
+    def test_golden_single_host_sharing_on(self):
+        self.check_golden("single-host-sharing-on")
 
     def test_golden_do_droplet_meetings(self):
         self.check_golden("do-droplet-meetings")
@@ -538,7 +545,7 @@ class NoBakedEndpointsTest(PositiveControlMixin, TempDirMixin, unittest.TestCase
                 self.assertEqual(m["models"]["endpoints"], [])
                 rendered = build(m)
                 self.assertNotIn("models.json", rendered.files)
-                text = all_text(rendered)
+                text = identity_scan_text(rendered)
                 # The image namespace is the manifest's own input (task
                 # 01a14b9e), so image refs are searched like everything else.
                 self.assertEqual([f for f in FORBIDDEN if f in text], [])
@@ -556,7 +563,9 @@ class NoBakedEndpointsTest(PositiveControlMixin, TempDirMixin, unittest.TestCase
         raw = load(BYO)
         raw["models"]["endpoints"][0]["base_url"] = f"http://llm.{planted_term()}.example/v1"
         raw["models"]["endpoints"][0].pop("api_key_ref")
-        hits = identity_hits(all_text(build(valid(raw))))
+        # identity_scan_text redacts generated secrets: a random token split on
+        # camelCase can spell a denied term by chance.
+        hits = identity_hits(identity_scan_text(build(valid(raw))))
         # the endpoint is rendered more than once (models.json and user-data)
         self.assertGreater(len(hits), 0)
         self.assertEqual(set(hits), {planted_term()})
@@ -888,7 +897,7 @@ def _ci_main_build_steps():
     Since task 01a0d6ab the `core` flavour is built per arch by digest and
     tagged by publish-manifest's `Create manifest list (main)` step
     (`docker buildx imagetools create -t ...`); the `play` flavour is still
-    tagged by its `Build and push play (main)` step.
+    tagged by its `Tag verified Play (main)` step.
     """
     with open(CI_WORKFLOW, encoding="utf-8") as handle:
         text = handle.read()
@@ -896,7 +905,7 @@ def _ci_main_build_steps():
     return [
         s
         for s in steps
-        if re.match(r"      - name: (Build and push \S+|Create manifest list) \(main\)", s)
+        if re.match(r"      - name: (Tag verified Play|Create manifest list) \(main\)", s)
     ]
 
 
@@ -1025,7 +1034,7 @@ class ModuleFlavourTest(PositiveControlMixin, unittest.TestCase):
         # step's whole GHCR tag set as raw literals, mirroring
         # ci_build_identity_test.exs's @ghcr_play_main_tags (task 01a14afe
         # stage 4: deleting `:latest` used to leave this test green).
-        play = [s for s in steps if s.startswith("      - name: Build and push play (main)")]
+        play = [s for s in steps if s.startswith("      - name: Tag verified Play (main)")]
         self.assertEqual(len(play), 1, "expected exactly one play main build step")
         self.assertIn("ghcr.io/getburrowing/core:latest", _ci_publish_refs(play[0]))
         self.assertEqual(
@@ -1428,3 +1437,195 @@ class FeedbackRenderTest(PositiveControlMixin, unittest.TestCase):
                         text = all_text(self.render(hosted, feedback, path))
                         for name in self.NEVER:
                             self.assertNotIn(name, text)
+
+
+# ---------------------------------------------------------------------------
+# [sharing] (core task 01a1b678 stage 1)
+
+
+class SharingRenderTest(PositiveControlMixin, unittest.TestCase):
+    """A NEW manifest's [sharing] table renders one seed env name per switch
+    into core-platform's environment; an absent key renders exactly what it
+    rendered before the table existed."""
+
+    ON = (
+        'FEEDBACK_POLICY: "quarantined"',
+        'USAGE_COUNTS: "true"',
+        'FRICTION_REPORTS: "true"',
+        'HELP_CHANNEL_REPORTS: "true"',
+        'INSTRUCTION_UPDATES: "true"',
+        'LEARNED_DEFAULT_SHAPES: "true"',
+    )
+    NAMES = ("USAGE_COUNTS", "FRICTION_REPORTS", "HELP_CHANNEL_REPORTS", "INSTRUCTION_UPDATES", "LEARNED_DEFAULT_SHAPES")
+    SHARING_ON = os.path.join(RENDER_FIXTURES, "single-host-sharing-on.toml")
+
+    def render(self, sharing=None, hosted=False, path=EXAMPLE):
+        raw = copy.deepcopy(load(path))
+        raw["install"]["hosted"] = hosted
+        if hosted:
+            raw.setdefault("backup", {})["hosted_opt_out"] = True
+        if sharing is not None:
+            raw["sharing"] = sharing
+        return build(valid(raw))
+
+    def core_block(self, rendered):
+        return _compose_services(rendered.files["compose.yaml"][0])["core-platform"]
+
+    def test_positive_control_a_new_manifest_renders_all_four(self):
+        block = self.core_block(self.render(path=self.SHARING_ON))
+        for line in self.ON:
+            self.assertIn(line, block)
+
+    def test_the_fixture_differs_from_the_example_in_sharing_only(self):
+        example = load(EXAMPLE)
+        fixture = load(self.SHARING_ON)
+        self.assertEqual(fixture.pop("sharing"), dict.fromkeys(SHARING_KEYS, True))
+        self.assertEqual(fixture, example)
+
+    def test_an_absent_table_renders_byte_identically(self):
+        before = self.render()
+        after = self.render(sharing={})
+        # redacted(): secrets are generated per render.
+        self.assertEqual(before.redacted(), after.redacted())
+        for name in self.NAMES:
+            self.assertNotIn(name, all_text(before))
+
+    def test_a_new_manifest_adds_exactly_the_four_lines(self):
+        old = self.render().files["compose.yaml"][0].splitlines()
+        new = self.render(path=self.SHARING_ON).files["compose.yaml"][0].splitlines()
+        added = [line.strip() for line in new if line not in old]
+        removed = [line for line in old if line not in new]
+        self.assertEqual(sorted(added), sorted(self.ON))
+        self.assertEqual(removed, [])
+
+    def test_explicit_false_renders_false_and_no_feedback_policy(self):
+        off = dict.fromkeys(SHARING_KEYS, False)
+        block = self.core_block(self.render(sharing=off))
+        for name in self.NAMES:
+            self.assertIn(f'{name}: "false"', block)
+        self.assertNotIn("FEEDBACK_POLICY", block)
+
+    def test_sharing_feedback_wins_over_hosted_and_the_feedback_table(self):
+        self.assertNotIn(
+            "FEEDBACK_POLICY", all_text(self.render(sharing={"feedback": False}, hosted=True))
+        )
+        raw = copy.deepcopy(load(EXAMPLE))
+        raw["feedback"] = {"enabled": False}
+        raw["sharing"] = {"feedback": True}
+        self.assertIn('FEEDBACK_POLICY: "quarantined"', self.core_block(build(valid(raw))))
+
+    def test_an_absent_feedback_key_keeps_todays_rule(self):
+        hosted = self.render(sharing={"usage_counts": True}, hosted=True)
+        self.assertIn('FEEDBACK_POLICY: "quarantined"', self.core_block(hosted))
+        self_host = self.render(sharing={"usage_counts": True})
+        self.assertNotIn("FEEDBACK_POLICY", all_text(self_host))
+
+    def test_the_names_land_only_in_core_platform(self):
+        rendered = self.render(path=self.SHARING_ON)
+        self.assertNotIn("USAGE_COUNTS", rendered.files["secrets.env"][0])
+        for service, block in _compose_services(rendered.files["compose.yaml"][0]).items():
+            if service != "core-platform":
+                for name in self.NAMES:
+                    self.assertNotIn(name, block, f"{service} carries {name}")
+
+    def test_every_golden_without_sharing_renders_no_sharing_name(self):
+        for case, path in GOLDEN_CASES.items():
+            if "sharing" in load(path):
+                continue
+            with self.subTest(case=case):
+                kwargs = FeedbackRenderTest.build_kwargs(self, path)
+                text = all_text(build(valid(load(path)), **kwargs))
+                for name in self.NAMES:
+                    self.assertNotIn(name, text)
+
+
+# ---------------------------------------------------------------------------
+# [system_mail] (core Platform.Mail.System)
+
+
+class SystemMailRenderTest(unittest.TestCase):
+    """``[system_mail]`` renders the SYSTEM_MAIL_* / SYSTEM_SMTP_* names into
+    core-platform's environment; the password is a customer secret that lands
+    in the 0600 secrets.env and not in compose.yaml. An absent table renders
+    nothing."""
+
+    SECRET = "smtp-pass-value-9f3a"
+    TABLE = {
+        "from": "Burrow <noreply@example.test>",
+        "smtp_host": "smtp.example.test",
+        "smtp_port": 587,
+        "smtp_username": "mailer",
+        "smtp_password_ref": "SYSTEM_SMTP_PASSWORD_VALUE",
+        "smtp_tls": "starttls",
+    }
+
+    def setUp(self):
+        self.tmp = tempfile.mkdtemp()
+        self.addCleanup(shutil.rmtree, self.tmp, ignore_errors=True)
+        self.supplied = os.path.join(self.tmp, "customer.env")
+        with open(self.supplied, "w") as handle:
+            handle.write(f"SYSTEM_SMTP_PASSWORD_VALUE={self.SECRET}\n")
+
+    def render(self, table=None):
+        raw = copy.deepcopy(load(EXAMPLE))
+        if table is not None:
+            raw["system_mail"] = table
+        return build(valid(raw), customer_secrets=self.supplied)
+
+    def core_block(self, rendered):
+        return _compose_services(rendered.files["compose.yaml"][0])["core-platform"]
+
+    def test_renders_every_name_into_core(self):
+        block = self.core_block(self.render(self.TABLE))
+        for line in (
+            'SYSTEM_MAIL_FROM: "Burrow <noreply@example.test>"',
+            'SYSTEM_SMTP_HOST: "smtp.example.test"',
+            'SYSTEM_SMTP_PORT: "587"',
+            'SYSTEM_SMTP_USERNAME: "mailer"',
+            'SYSTEM_SMTP_TLS: "starttls"',
+        ):
+            self.assertIn(line, block)
+
+    def test_password_is_in_secrets_env_only(self):
+        rendered = self.render(self.TABLE)
+        text, mode = rendered.files["secrets.env"]
+        self.assertIn(f"SYSTEM_SMTP_PASSWORD={self.SECRET}", text)
+        self.assertEqual(mode, 0o600)
+        self.assertNotIn(self.SECRET, rendered.files["compose.yaml"][0])
+
+    def test_an_absent_table_renders_nothing(self):
+        text = all_text(self.render())
+        self.assertNotIn("SYSTEM_SMTP", text)
+        self.assertNotIn("SYSTEM_MAIL", text)
+
+    def test_tls_defaults_to_starttls_and_optional_keys_are_omitted(self):
+        block = self.core_block(
+            self.render({"from": "n@example.test", "smtp_host": "smtp.example.test"})
+        )
+        self.assertIn('SYSTEM_SMTP_TLS: "starttls"', block)
+        for name in ("SYSTEM_SMTP_PORT", "SYSTEM_SMTP_USERNAME", "SYSTEM_SMTP_PASSWORD"):
+            self.assertNotIn(name, block)
+
+    def invalid(self, table):
+        raw = copy.deepcopy(load(EXAMPLE))
+        raw["system_mail"] = table
+        errors, _ = validate(raw)
+        return [(e.code, e.path) for e in errors]
+
+    def test_validation(self):
+        # Positive control: the full table is valid.
+        self.assertEqual(self.invalid(self.TABLE), [])
+        self.assertIn(
+            ("missing_required", "system_mail.from"),
+            self.invalid({"smtp_host": "smtp.example.test"}),
+        )
+        self.assertIn(
+            ("field_not_applicable", "system_mail.smtp_username"), self.invalid({"smtp_username": "x"})
+        )
+        self.assertIn(
+            ("invalid_value", "system_mail.smtp_password_ref"),
+            self.invalid({**self.TABLE, "smtp_password_ref": "not a name"}),
+        )
+        self.assertIn(
+            ("invalid_enum", "system_mail.smtp_tls"), self.invalid({**self.TABLE, "smtp_tls": "ssl"})
+        )

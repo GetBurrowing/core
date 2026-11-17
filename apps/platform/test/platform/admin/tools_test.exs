@@ -11,7 +11,7 @@ defmodule Platform.Admin.ToolsTest do
 
   alias Platform.Accounts.User
   alias Platform.AgentHost.Reconciler
-  alias Platform.Agents.{AgentRuntime, Burrow}
+  alias Platform.Agents.{Agent, AgentRuntime, Burrow}
   alias Platform.Audit.Event
   alias Platform.Federation.{AdminTools, ToolSurface}
   alias Platform.Repo
@@ -173,6 +173,92 @@ defmodule Platform.Admin.ToolsTest do
 
       assert {:ok, %{backup_status: %{configured: true, error: "invalid"}}} =
                ToolSurface.execute("admin_health", %{}, ctx)
+    end
+  end
+
+  describe "admin_health meeting_intent (task 01a1e5da stage 3)" do
+    @intent_app_keys [:meetings_intent_model, :meetings_intent_provider]
+    @intent_os_keys ["OLLAMA_BASE_URL", "MEETINGS_INTENT_API_KEY"]
+
+    setup do
+      saved_app = Map.new(@intent_app_keys, &{&1, Application.fetch_env(:platform, &1)})
+      saved_os = Map.new(@intent_os_keys, &{&1, System.get_env(&1)})
+      Enum.each(@intent_app_keys, &Application.delete_env(:platform, &1))
+      Enum.each(@intent_os_keys, &System.delete_env/1)
+
+      on_exit(fn ->
+        Enum.each(saved_app, fn
+          {key, {:ok, value}} -> Application.put_env(:platform, key, value)
+          {key, :error} -> Application.delete_env(:platform, key)
+        end)
+
+        Enum.each(saved_os, fn
+          {name, nil} -> System.delete_env(name)
+          {name, value} -> System.put_env(name, value)
+        end)
+      end)
+
+      :ok
+    end
+
+    defp intent_assignee!(attrs) do
+      agent =
+        %Agent{}
+        |> Agent.changeset(
+          Map.merge(
+            %{
+              slug: "intent-health-#{System.unique_integer([:positive])}",
+              name: "Intent Health Agent",
+              status: "active"
+            },
+            attrs
+          )
+        )
+        |> Repo.insert!()
+
+      {:ok, _} = Platform.Roles.set_override("meetings.intent_classify", agent.id)
+      agent
+    end
+
+    test "native assignee and nothing configured reads off / no model configured", %{ctx: ctx} do
+      intent_assignee!(%{})
+
+      assert {:ok, %{meeting_intent: intent}} = ToolSurface.execute("admin_health", %{}, ctx)
+      assert intent == %{status: "off", reason: "no model configured", route: nil}
+    end
+
+    test "external assignee with base_url + model reads ok via the assignee route", %{ctx: ctx} do
+      intent_assignee!(%{
+        kind: "external",
+        endpoint_kind: "openai_compat",
+        base_url: "http://intent-health.example:11434",
+        model: "qwen-intent-health"
+      })
+
+      assert {:ok, %{meeting_intent: intent}} = ToolSurface.execute("admin_health", %{}, ctx)
+      assert intent == %{status: "ok", reason: nil, route: "assignee"}
+    end
+
+    test "a hosted provider reads ok with the provider name and leaks no secret", %{ctx: ctx} do
+      intent_assignee!(%{})
+      secret = "sk-intent-health-#{System.unique_integer([:positive])}"
+      System.put_env("MEETINGS_INTENT_API_KEY", secret)
+
+      Application.put_env(:platform, :meetings_intent_model, %{
+        provider: :anthropic,
+        model: "claude-intent-health",
+        base_url: "https://intent-health.example",
+        api_key_env: "MEETINGS_INTENT_API_KEY"
+      })
+
+      assert {:ok, result} = ToolSurface.execute("admin_health", %{}, ctx)
+      assert result.meeting_intent == %{status: "ok", reason: nil, route: "anthropic"}
+
+      encoded = Jason.encode!(result)
+      refute encoded =~ secret
+      refute encoded =~ "MEETINGS_INTENT_API_KEY"
+      refute encoded =~ "intent-health.example"
+      refute encoded =~ "claude-intent-health"
     end
   end
 

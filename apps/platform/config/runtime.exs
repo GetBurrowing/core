@@ -150,6 +150,58 @@ case System.get_env("NATIVE_AGENT_LOGIN") do
   value -> config :platform, :native_agent_login, value |> String.trim() |> String.downcase()
 end
 
+# STARTER_ANTHROPIC_API_KEY  Burrow's starter allowance: an Anthropic API key
+#                     that lets Burrow speak before the owner connects their own
+#                     plan. Optional; rendered from the installer manifest's
+#                     `agents.starter_api_key_ref`. Its spend cap lives at
+#                     Anthropic's console, not in core. See
+#                     Platform.Agents.Burrow.Starter.
+case System.get_env("STARTER_ANTHROPIC_API_KEY") do
+  nil -> :ok
+  "" -> :ok
+  value -> config :platform, :starter_anthropic_api_key, String.trim(value)
+end
+
+# MEETINGS_INTENT_PROVIDER  the install-level model for the meeting intent
+#                     classifier (task 01a1e5da): `anthropic`, `openai` or
+#                     `ollama`. Used only when the meetings.intent_classify
+#                     agent has no base_url + model of its own. Unset or blank
+#                     leaves meeting intent off. Separate from the chat context
+#                     summary setting; never the starter allowance.
+# MEETINGS_INTENT_MODEL     model name; unset uses the adapter's default.
+# MEETINGS_INTENT_BASE_URL  base URL, read by the ollama provider only.
+# MEETINGS_INTENT_API_KEY   the provider API key. Only its NAME is stored in
+#                     config (`api_key_env`); the value is read at call time.
+#                     Unset falls back to the platform Vault credential.
+# See Platform.Meetings.IntentModel.
+meetings_intent_env = fn name ->
+  case System.get_env(name) do
+    nil -> nil
+    value -> if String.trim(value) == "", do: nil, else: String.trim(value)
+  end
+end
+
+case meetings_intent_env.("MEETINGS_INTENT_PROVIDER") do
+  nil ->
+    :ok
+
+  provider ->
+    config :platform, :meetings_intent_model, %{
+      # A fixed list, never String.to_atom/1: anything else reads as :none.
+      provider:
+        case String.downcase(provider) do
+          "anthropic" -> :anthropic
+          "openai" -> :openai
+          "ollama" -> :ollama
+          _ -> :none
+        end,
+      model: meetings_intent_env.("MEETINGS_INTENT_MODEL"),
+      base_url: meetings_intent_env.("MEETINGS_INTENT_BASE_URL"),
+      api_key_env:
+        if(meetings_intent_env.("MEETINGS_INTENT_API_KEY"), do: "MEETINGS_INTENT_API_KEY")
+    }
+end
+
 # ── Session cookie domain (cross-subdomain OIDC login fix) ────────────────────
 # The `_platform_session` cookie is host-only by default (no `Domain`), so a
 # login started on `chat.example.com` loses its OIDC `state` cookie when
@@ -329,9 +381,19 @@ if config_env() != :test do
         nil
     end
 
-  # Only enable when behind a trusted reverse proxy (Traefik, nginx, etc.).
-  # See PlatformWeb.Plugs.RewriteRemoteIp for security notes.
+  # TRUST_PROXY_HEADERS turns on client-IP resolution from forwarding headers.
+  # Headers are believed only from a TRUSTED_PROXIES peer (CIDR list; unset
+  # means loopback + RFC 1918 + fc00::/7, an explicit value replaces that), and
+  # the client is the rightmost X-Forwarded-For hop past those proxies, never
+  # the client-supplied leftmost one. A bad TRUSTED_PROXIES entry raises here.
+  # See PlatformWeb.Plugs.RewriteRemoteIp (task 01a1b2df).
   config :platform, :trust_proxy_headers, System.get_env("TRUST_PROXY_HEADERS") in ["true", "1"]
+
+  config :platform,
+         :trusted_proxies,
+         PlatformWeb.Plugs.RewriteRemoteIp.parse_trusted_proxies(
+           System.get_env("TRUSTED_PROXIES")
+         )
 
   config :platform, :oidc,
     client_id: System.get_env("OIDC_CLIENT_ID"),
@@ -419,6 +481,27 @@ if config_env() != :test do
   config :platform, Platform.Mail.Mailer, adapter: Platform.Mail.SmtpAdapter
 end
 
+# Install-wide system sender (Platform.Mail.System): invite and sign-in mail
+# sent by the install itself, not by an agent mail account. Off while
+# SYSTEM_SMTP_HOST is unset. SYSTEM_SMTP_TLS is tls | starttls | none (the same
+# vocabulary as a mail account's smtp_tls; default starttls). Never set under
+# :test, which injects its own values with Application.put_env.
+if config_env() != :test and System.get_env("SYSTEM_SMTP_HOST") not in [nil, ""] do
+  system_smtp_port =
+    case System.get_env("SYSTEM_SMTP_PORT") do
+      v when v in [nil, ""] -> nil
+      v -> String.to_integer(v)
+    end
+
+  config :platform, Platform.Mail.System,
+    from: System.get_env("SYSTEM_MAIL_FROM"),
+    host: System.get_env("SYSTEM_SMTP_HOST"),
+    port: system_smtp_port,
+    username: System.get_env("SYSTEM_SMTP_USERNAME"),
+    password: System.get_env("SYSTEM_SMTP_PASSWORD"),
+    tls: System.get_env("SYSTEM_SMTP_TLS", "starttls")
+end
+
 # ── External feedback (task 01a11ec3 stage 2) ─────────────────────────────────
 # FEEDBACK_POLICY is the ONE capability value: disabled | quarantined | trusted.
 # Feedback is OPT-IN (task 01a1a6a5): FEEDBACK_POLICY=quarantined|trusted
@@ -477,6 +560,57 @@ if config_env() != :test do
   config :platform, Platform.Feedback.Intake,
     project_id: System.get_env("FEEDBACK_INTAKE_PROJECT_ID"),
     disposition_mode: System.get_env("FEEDBACK_INTAKE_DISPOSITION", "comment")
+end
+
+# ── Sharing with Burrow (task 01a1b678 stage 1) ───────────────────────────────
+# USAGE_COUNTS, FRICTION_REPORTS and HELP_CHANNEL_REPORTS seed the owner's
+# switches in the `install_sharing` row ONCE, on its first read; the
+# `feedback` switch is seeded from FEEDBACK_POLICY above. After that the row
+# wins, so changing these later never flips a switch. Unset means off, so an
+# existing install that never gets these names shares nothing new. The
+# self-host installer renders them for NEW manifests only; hosted installs
+# get them from the hosted renderer.
+#
+# FRICTION_REPORT_THRESHOLD, FRICTION_REPORT_WINDOW_DAYS and
+# FRICTION_REPORTS_MAX_PER_WEEK override the friction-report knobs whose
+# defaults live in config/config.exs.
+#
+# Skipped under :test, which seeds nothing (every switch off) and keeps the
+# config.exs knob defaults.
+if config_env() != :test do
+  sharing_on? = fn name ->
+    String.downcase(String.trim(System.get_env(name, ""))) in ~w(true 1 yes on)
+  end
+
+  config :platform, :sharing_seed,
+    instruction_updates: sharing_on?.("INSTRUCTION_UPDATES"),
+    learned_default_shapes: sharing_on?.("LEARNED_DEFAULT_SHAPES"),
+    usage_counts: sharing_on?.("USAGE_COUNTS"),
+    friction_reports: sharing_on?.("FRICTION_REPORTS"),
+    help_channel_reports: sharing_on?.("HELP_CHANNEL_REPORTS")
+
+  friction_int = fn name, default ->
+    case Integer.parse(System.get_env(name, "")) do
+      {n, ""} when n > 0 -> n
+      _ -> default
+    end
+  end
+
+  friction_defaults = Application.get_env(:platform, :friction_reports, [])
+
+  config :platform, :friction_reports,
+    threshold:
+      friction_int.("FRICTION_REPORT_THRESHOLD", Keyword.get(friction_defaults, :threshold, 3)),
+    window_days:
+      friction_int.(
+        "FRICTION_REPORT_WINDOW_DAYS",
+        Keyword.get(friction_defaults, :window_days, 7)
+      ),
+    max_reports_per_install_per_week:
+      friction_int.(
+        "FRICTION_REPORTS_MAX_PER_WEEK",
+        Keyword.get(friction_defaults, :max_reports_per_install_per_week, 5)
+      )
 end
 
 # :attachment_signing_key is set by dev.exs/test.exs for local envs; prod
@@ -981,6 +1115,32 @@ end
 if config_env() == :dev and System.get_env("BURROW_FAKE_AGENT_HOST") == "1" do
   config :platform, :fake_agent_host, true
 end
+
+# Instruction packs use the existing feedback broker host. These values come
+# from trusted owner/installer configuration, never a downloaded manifest.
+# Public keys only: the publisher private key must never be installed here.
+instruction_roots =
+  case System.get_env("INSTRUCTION_PACK_TRUST_ROOTS") do
+    nil ->
+      %{}
+
+    raw ->
+      raw
+      |> Jason.decode!()
+      |> Map.new(fn {key, encoded} ->
+        public = Base.decode64!(encoded)
+        if byte_size(public) != 32, do: raise("invalid instruction pack public key")
+        {key, public}
+      end)
+  end
+
+config :platform, :instruction_packs,
+  packs: System.get_env("INSTRUCTION_PACKS", "") |> String.split(",", trim: true),
+  trust_roots: instruction_roots
+
+config :platform,
+       :start_instruction_pack_poller,
+       config_env() != :test and System.get_env("INSTRUCTION_PACK_POLLER", "true") != "false"
 
 # Explicitly published game pages; absence exposes no games. Release URLs
 # remain stable while retained manifests keep their version entries.

@@ -232,8 +232,12 @@ if Process.whereis(Platform.Repo) do
       "priv/repo/migrations/20260921190000_add_color_lightness_to_orgs.exs"
     ])
 
-  Code.require_file(color_migration_path)
-  color_migration = Platform.Repo.Migrations.AddColorLightnessToOrgs
+  # On a database that has just been created, `prepare_test_database/0` has just run
+  # this very migration, so its module is already in memory. Requiring the file
+  # again redefines the module (a compiler warning, an error under
+  # `--warnings-as-errors`). Load the file only when nothing has loaded it.
+  color_migration = Module.concat(Platform.Repo.Migrations, AddColorLightnessToOrgs)
+  unless Code.ensure_loaded?(color_migration), do: Code.require_file(color_migration_path)
 
   # The migration keys the shipped tenant rows by slug digest; the seeded
   # tenants above carry placeholder slugs, so relabel the rows onto them.

@@ -316,9 +316,21 @@ defmodule Platform.Federation.ToolArguments do
   @spec dispatch(String.t(), map(), map()) :: {:ok, term()} | {:error, term()}
   def dispatch(tool_name, args, context) when is_binary(tool_name) and is_map(args) do
     with :ok <- validate(tool_name, args) do
-      ToolSurface.execute(tool_name, args, context)
+      tool_name
+      |> ToolSurface.execute(args, context)
+      |> observe_failure(tool_name, context)
     end
   end
+
+  # A failed call is one friction occurrence (task 01a1b678 stage 3). Only the
+  # tool name and a bounded code are read, the result is returned unchanged,
+  # and the recorder never raises; it is a no-op unless friction reports are on.
+  defp observe_failure({:error, error} = result, tool_name, context) do
+    _ = Platform.Sharing.Friction.record_tool_failure(tool_name, error, context)
+    result
+  end
+
+  defp observe_failure(result, _tool_name, _context), do: result
 
   @doc """
   Is every declared-required parameter of `tool_name` named in `args`?

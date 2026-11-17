@@ -79,7 +79,24 @@ const ASSETS = resolve(HERE, "..");
 // hooks/copy_to_clipboard.js gained the copied/failed result classes and
 // the aria-live announcement as first-party hook code with no new
 // dependency. 1008 KB still catches the ~8.2 MB leak.
-const MAX_BYTES = 1008 * 1024;
+//
+// Raised from 1008 KB to 1024 KB by the meetings reconnect fix (GetBurrowing
+// core PR #142, kite/meetings-reconnect): the WITH-Play app.js measured
+// 1,035,455 bytes in CI run 42745078039, 3,263 over 1008 KB, after
+// hooks/meeting_client.js gained the reconnect state machine (Reconnecting
+// banner, one automatic rejoin, the lost state with Rejoin/Leave, and the
+// deliberate-leave guard on meeting_left). Measured with esbuild --minify:
+// the hook grew from 29,405 to 33,193 bytes, first-party code with no new
+// dependency. 1024 KB still catches the ~8.2 MB leak.
+//
+// Raised from 1024 KB to 1056 KB by task 01a1ccd4 (install switcher at the
+// Burrow icon): the WITH-Play app.js measured 1,068,465 bytes in CI run
+// 43147207267 (PR #157), 19,889 over 1024 KB, after hooks/install_switch_web.js,
+// hooks/switcher_connected.js and lib/install_switch_store.js (the shared web
+// switcher dropdown, browser-held install list, CORS unread). Main measured
+// 1,041,163 before it. First-party hook code with no new dependency; the
+// overage is past one 16 KB step, so two. 1056 KB still catches the ~8.2 MB leak.
+const MAX_BYTES = 1056 * 1024;
 
 // The profile also sets `env: %{"NODE_PATH" => [.../deps, build_path]}`, and
 // that half was missing here until this commit. js/app.js has exactly three

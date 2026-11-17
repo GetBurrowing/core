@@ -79,7 +79,7 @@ defmodule PlatformWeb.ControlCenter.NativeLoginLiveTest do
         host_loop(test, pane)
       end)
 
-    :ok = Reconciler.host_joined(pid, %{"profile" => "contained"})
+    :ok = Reconciler.host_joined(pid, %{"profile" => "contained", "features" => ["claude_login"]})
     pid
   end
 

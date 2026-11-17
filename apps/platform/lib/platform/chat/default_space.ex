@@ -18,6 +18,11 @@ defmodule Platform.Chat.DefaultSpace do
     * a concurrent insert loses on the space slug's unique index and is
       reported as `:exists`.
 
+  In the same branch, and only there, it also creates "Help & feedback"
+  (`Platform.Sharing.HelpChannel.create/1`, task 01a1b678 stage 3), so a new
+  install gets both and an install with any channel gets neither. The
+  per-agent Getting started space is not made here.
+
   `run_at_boot/0` is the supervised entry point (see `Platform.Application`):
   it never raises, so it can never crash-loop the tree.
   """
@@ -29,6 +34,7 @@ defmodule Platform.Chat.DefaultSpace do
   alias Platform.Chat
   alias Platform.Chat.Space
   alias Platform.Repo
+  alias Platform.Sharing.HelpChannel
   alias Platform.Tenancy
 
   @name "General"
@@ -48,9 +54,26 @@ defmodule Platform.Chat.DefaultSpace do
 
   defp create_in_root(root) do
     case Chat.create_space(%{name: @name, slug: @slug, kind: "channel", org_id: root.id}) do
-      {:ok, space} -> {:ok, space}
-      {:error, %Ecto.Changeset{} = cs} -> if channels?(), do: :exists, else: {:error, cs}
-      {:error, reason} -> {:error, reason}
+      {:ok, space} ->
+        create_help_channel(root)
+        {:ok, space}
+
+      {:error, %Ecto.Changeset{} = cs} ->
+        if channels?(), do: :exists, else: {:error, cs}
+
+      {:error, reason} ->
+        {:error, reason}
+    end
+  end
+
+  # A failure here leaves General in place and is logged; it never undoes it.
+  defp create_help_channel(root) do
+    case HelpChannel.create(root) do
+      {:ok, _space} ->
+        :ok
+
+      {:error, reason} ->
+        Logger.warning("[DefaultSpace] Help & feedback not seeded: #{inspect(reason)}")
     end
   end
 

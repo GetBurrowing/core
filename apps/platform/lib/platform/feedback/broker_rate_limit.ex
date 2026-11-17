@@ -12,8 +12,10 @@ defmodule Platform.Feedback.BrokerRateLimit do
   database-backed caps in `Platform.Feedback.Submission` still apply.
 
   The key is `conn.remote_ip` AFTER `PlatformWeb.Plugs.RewriteRemoteIp`, so
-  behind a trusted proxy (`TRUST_PROXY_HEADERS`) each client has its own
-  bucket instead of every request sharing the proxy's.
+  behind a trusted proxy (`TRUST_PROXY_HEADERS`, `TRUSTED_PROXIES`) each real
+  client has its own bucket instead of every request sharing the proxy's. The
+  plug takes the rightmost untrusted forwarded hop, so a client cannot pick
+  its key by forging the leading `X-Forwarded-For` entry.
   """
   use GenServer
 

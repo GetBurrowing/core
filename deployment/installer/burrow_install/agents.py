@@ -208,6 +208,19 @@ def setup_unit(plan):
 
 def setup_script(plan, image):
     pull = "never" if plan.images_preloaded else "missing"
+    # Core's updater moves core only; this script is what moves the daemon. It
+    # used to take any local copy of the image (`--pull missing` alone), so a
+    # reboot or a restart of this unit reinstalled the boot-day daemon: one
+    # install's host was still the 31 Oct build when its core started asking
+    # for Claude logins, which that build silently ignores. Pull first; a
+    # failed pull (an offline boot) keeps the local image rather than leaving
+    # the install with no agent host.
+    refresh = ""
+    if not plan.images_preloaded:
+        refresh = (
+            'docker pull "$image" >/dev/null'
+            f' || echo "{SETUP_SCRIPT}: pull failed; using the local $image" >&2\n'
+        )
     trust = ""
     if plan.tls == "internal":
         trust = f"""\
@@ -227,7 +240,7 @@ getent group {AGENTS_GROUP} >/dev/null || groupadd --system {AGENTS_GROUP}
 {trust}# Agents reach core at its public URL, through Caddy on this host.
 grep -q ' {plan.primary}$' /etc/hosts || printf '127.0.0.1 {plan.primary}\\n' >> /etc/hosts
 # The daemon ships in the agent-host image, the artefact `contained` runs.
-ctr="$(docker create --pull {pull} "$image")"
+{refresh}ctr="$(docker create --pull {pull} "$image")"
 trap 'docker rm -f "$ctr" >/dev/null 2>&1 || true' EXIT
 rm -rf "$dest.incoming"
 docker cp "$ctr:{INSTALL_ROOT}/agent-host" "$dest.incoming"

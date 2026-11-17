@@ -35,6 +35,15 @@ defmodule Platform.Feedback.Policy do
   ask it and nothing else, so the advertised set and the callable set cannot
   disagree.
 
+  ## The owner's switch
+
+  `FEEDBACK_POLICY` is the operator's capability. The install owner's
+  "Feedback you send" switch (`Platform.Sharing`, task 01a1b678) sits on top:
+  `enabled?/0` also requires it. That switch is seeded once from this same
+  value, so an install whose policy was already on keeps feedback on, and one
+  whose policy is unset stays off. `mode/0` and `initial_trust/0` read the
+  env value alone.
+
   ## Injection
 
   `config/runtime.exs` writes `config :platform, :feedback_policy` from
@@ -62,10 +71,14 @@ defmodule Platform.Feedback.Policy do
 
   @doc """
   The capability predicate: true exactly when the mode is `:quarantined` or
-  `:trusted`.
+  `:trusted` AND the owner's "Feedback you send" switch is on
+  (`Platform.Sharing.enabled?(:feedback)`, task 01a1b678 stage 1).
+
+  The mode is checked first, so a disabled install never reads the
+  `install_sharing` row.
   """
   @spec enabled?() :: boolean()
-  def enabled?, do: mode() != :disabled
+  def enabled?, do: mode() != :disabled and Platform.Sharing.enabled?(:feedback)
 
   @doc """
   The trust stamp an accepted intake writes onto the task it files, or

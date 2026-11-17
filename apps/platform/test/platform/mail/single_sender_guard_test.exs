@@ -6,9 +6,10 @@ defmodule Platform.Mail.SingleSenderGuardTest do
       gen_smtp.
     * Exactly one file under `lib/` does `use Swoosh.Mailer`:
       `lib/platform/mail/mailer.ex`.
-    * Exactly one file under `lib/` calls `Mailer.deliver`:
+    * Exactly two files under `lib/` call `Mailer.deliver`:
       `lib/platform/mail/deliverer.ex`, the post-commit step of
-      `Platform.Mail.Dispatch`.
+      `Platform.Mail.Dispatch` (agent accounts), and
+      `lib/platform/mail/system.ex`, the install-wide sender for invites.
 
   The detector is also run on a planted fixture below, so a green result here
   is shown to be a detector that CAN fire, not one that cannot see.
@@ -56,8 +57,11 @@ defmodule Platform.Mail.SingleSenderGuardTest do
     assert matching(sources(), @use_mailer) == ["lib/platform/mail/mailer.ex"]
   end
 
-  test "exactly one file calls Mailer.deliver, and it is the Deliverer" do
-    assert matching(sources(), @mailer_deliver) == ["lib/platform/mail/deliverer.ex"]
+  test "only the Deliverer and Mail.System call Mailer.deliver" do
+    assert matching(sources(), @mailer_deliver) == [
+             "lib/platform/mail/deliverer.ex",
+             "lib/platform/mail/system.ex"
+           ]
   end
 
   test "POSITIVE CONTROL: the detector fires on a planted violation" do

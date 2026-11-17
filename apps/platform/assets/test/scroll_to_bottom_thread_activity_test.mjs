@@ -97,6 +97,7 @@ function makeCtx(scrollEl, { withRows = true } = {}) {
     _safeUpdate: ScrollToBottom._safeUpdate,
     _applyPendingRealign: ScrollToBottom._applyPendingRealign,
     _hasMeasurableBox: ScrollToBottom._hasMeasurableBox,
+    _keepThreadEntryVisible: ScrollToBottom._keepThreadEntryVisible,
     scrollToBottom: ScrollToBottom.scrollToBottom,
     distanceFromBottom: ScrollToBottom.distanceFromBottom,
     honourAnchor: ScrollToBottom.honourAnchor,

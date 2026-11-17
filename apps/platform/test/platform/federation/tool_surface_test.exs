@@ -198,7 +198,8 @@ defmodule Platform.Federation.ToolSurfaceTest do
       # +1 `project_create` in `task` (task 01a19aa4 stage 1).
       # +1 `space_rename` in `space` (task 01a19948 stage 2).
       # +1 write-free `calendar_draft` in `context_read` (task 01a1b8a5 stage 3).
-      assert length(tools) == 156
+      # +2 `sharing_list` and `sharing_set` in `federation` (task 01a1b678 stage 3).
+      assert length(tools) == 158
 
       tool_names = Enum.map(tools, & &1.name)
       assert "calendar_list" in tool_names

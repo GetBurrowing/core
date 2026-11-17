@@ -655,7 +655,7 @@ defmodule PlatformWeb.ControlCenter.CharacterBuilder do
       </label>
     </form>
     <p class="ba-sub" style="margin-top:16px;font-size:12px">
-      Ten slots, same as the platform's agent palette. Shared colours are fine; small initials show who else wears one.
+      Sixteen slots, same as the platform's agent palette. Shared colours are fine; small initials show who else wears one.
     </p>
     """
   end

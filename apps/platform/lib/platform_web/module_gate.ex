@@ -45,6 +45,7 @@ defmodule PlatformWeb.ModuleGate do
     # Custom roles (task 01a1a2e4-9265 stage 4). access.manage held anywhere
     # admits the page; every write re-checks manages_org? in RoleAdmin.
     PlatformWeb.AccessRolesLive => {:admin, "access.manage"},
+    PlatformWeb.AdminGamesLive => {:admin, nil},
     PlatformWeb.AdminOrgsLive => {:admin, nil},
     PlatformWeb.AdminBrandingLive => {:admin, nil},
     PlatformWeb.AdminThemesLive => {:admin, nil},
@@ -54,6 +55,7 @@ defmodule PlatformWeb.ModuleGate do
     PlatformWeb.AdminUpdatesLive => {:admin, nil},
     PlatformWeb.AdminVaultLive => {:admin, nil},
     PlatformWeb.ConnectAiLive => {:admin, nil},
+    PlatformWeb.GettingStartedLive => {:admin, nil},
     PlatformWeb.AdminPromptsLive => {:prompts, "prompts.manage"},
     PlatformWeb.AdminFederationLive => {:admin, nil},
     PlatformWeb.PipelineLive => {:tasks, "tasks.manage"},
@@ -71,7 +73,15 @@ defmodule PlatformWeb.ModuleGate do
   # signed-in user has one, so no module permission can sensibly gate it.
   # Each row on the page checks its own destination through `mounts?/2`
   # instead, so the page reveals nothing its viewer could not already open.
-  @ungated [PlatformWeb.AccessViewAsLive, PlatformWeb.SettingsLive]
+  #
+  # `/switcher/connected` (task 01a1ccd4 stage 3) only finishes adding an
+  # install to THIS browser's switcher list: it reads and writes nothing on
+  # the server, so it is every signed-in user's, like Settings.
+  @ungated [
+    PlatformWeb.AccessViewAsLive,
+    PlatformWeb.SettingsLive,
+    PlatformWeb.SwitcherConnectedLive
+  ]
 
   @doc "The explicit module mapping used by the mount gate and its route sweep."
   def view_modules, do: @view_modules

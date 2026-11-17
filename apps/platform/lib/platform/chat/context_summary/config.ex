@@ -42,11 +42,21 @@ defmodule Platform.Chat.ContextSummary.Config do
 
   @doc "The resolved config as a map with atom keys."
   @spec summary() :: map()
-  def summary do
-    case Application.get_env(:platform, :chat_context_summary) do
-      injected when is_map(injected) -> Map.merge(@default_summary, atomize(injected))
-      injected when is_list(injected) -> Map.merge(@default_summary, atomize(Map.new(injected)))
-      _ -> @default_summary
+  def summary, do: read(:chat_context_summary, @default_summary)
+
+  @doc """
+  Read `config :platform, app_env_key` the way `summary/0` does: an injected
+  map (or keyword list) is merged over `defaults`, keys not in `defaults` are
+  dropped, and `provider` is parsed through `parse_provider/1` (an unknown
+  provider reads as `:none`). Shared with `Platform.Meetings.IntentModel`
+  (task 01a1e5da) so the install-level model settings keep one shape.
+  """
+  @spec read(atom(), map()) :: map()
+  def read(app_env_key, defaults) when is_atom(app_env_key) and is_map(defaults) do
+    case Application.get_env(:platform, app_env_key) do
+      injected when is_map(injected) -> Map.merge(defaults, atomize(injected, defaults))
+      injected when is_list(injected) -> Map.merge(defaults, atomize(Map.new(injected), defaults))
+      _ -> defaults
     end
   end
 
@@ -58,8 +68,8 @@ defmodule Platform.Chat.ContextSummary.Config do
   @spec default_system_prompt() :: String.t()
   def default_system_prompt, do: @default_summary.system_prompt
 
-  defp atomize(map) do
-    known = Map.keys(@default_summary)
+  defp atomize(map, defaults) do
+    known = Map.keys(defaults)
 
     Enum.reduce(map, %{}, fn {k, v}, acc ->
       key = if is_binary(k), do: Enum.find(known, &(Atom.to_string(&1) == k)), else: k

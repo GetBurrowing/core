@@ -212,6 +212,7 @@ defmodule Platform.Role do
     Platform.CodeMode.Store,
     Platform.Push.RelayRateLimit,
     Platform.Calendar.BookingRateLimit,
+    Platform.SignIn.EmailSetupRateLimit,
     Platform.Feedback.BrokerRateLimit,
     Platform.Push.APNsFinch,
     Platform.Chat.ContextSummaryCache,
@@ -281,6 +282,10 @@ defmodule Platform.Role do
     Platform.Memory.Insights.Disseminator,
     Platform.Files.CatalogEmitter,
     Platform.Tasks.DeployMergeReconciler,
+    # Hourly outbound POST of usage counts (task 01a1b678 stage 2).
+    Platform.Sharing.UsageBatcher,
+    # Scheduled pack application belongs to the full node only.
+    Platform.InstructionPacks.Poller,
     Platform.Orchestration.TaskRouterWatcher,
     Platform.Federation.NodeClient,
     :meetings_sender_seed,
@@ -288,7 +293,9 @@ defmodule Platform.Role do
     Platform.Mail.Outbox,
     :canvas_search_backfill,
     :burrow_docs_seed,
-    :default_space_seed
+    :default_space_seed,
+    # Once-per-install pocket-id email login code switch (task 01a1e65e).
+    :pocket_id_email_login_code
   ]
 
   # Web children that `Platform.Application.children/2` adds only under :web,
@@ -306,7 +313,10 @@ defmodule Platform.Role do
     Platform.Agents.SystemEventScheduler,
     Platform.Responsibilities.Router,
     Platform.Mail.Outbox,
-    Platform.Memory.Insights.Disseminator
+    Platform.Memory.Insights.Disseminator,
+    # Each node would send its own batch under one install id.
+    Platform.Sharing.UsageBatcher,
+    Platform.InstructionPacks.Poller
   ]
 
   # ── stage 4 tables ─────────────────────────────────────────────────────
@@ -396,7 +406,13 @@ defmodule Platform.Role do
       kind: :mail,
       file: "lib/platform/mail/deliverer.ex",
       class: :wire,
-      note: "the one Swoosh call site"
+      note: "the Swoosh call site for agent mail accounts"
+    },
+    %{
+      kind: :mail,
+      file: "lib/platform/mail/system.ex",
+      class: :wire,
+      note: "the install-wide system sender (invites, sign-in mail): the other Swoosh call site"
     },
     # :agent_dispatch.
     %{
@@ -436,16 +452,10 @@ defmodule Platform.Role do
     },
     %{
       kind: :http,
-      file: "lib/platform/accounts/user_avatar_cache.ex",
-      class: :request,
-      note: "read-only avatar GET on render"
-    },
-    %{
-      kind: :http,
-      file: "lib/platform/chat/link_unfurls/fetcher.ex",
+      file: "lib/platform/net/guarded_fetch.ex",
       class: :follows_caller,
       note:
-        "SSRF-guarded GET of an outside link's page or fixed oEmbed endpoint; caller is LinkUnfurls.ensure/2's supervised fetch (task 01a1a944 stage 2)"
+        "the one SSRF-guarded Req.request site, shared by UserAvatarCache (avatar GET on render, request path) and LinkUnfurls fetch (supervised, follows caller)"
     },
     %{
       kind: :http,
@@ -506,6 +516,13 @@ defmodule Platform.Role do
       file: "lib/platform/feedback/disposition/broker.ex",
       class: :request,
       note: "feedback disposition through the broker"
+    },
+    %{
+      kind: :http,
+      file: "lib/platform/instruction_packs/download.ex",
+      class: :follows_caller,
+      note:
+        "bounded signed-pack transport with no trigger of its own; runs only where its caller fetches a release"
     },
     %{
       kind: :http,

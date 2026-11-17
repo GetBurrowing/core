@@ -28,6 +28,8 @@ defmodule Platform.Feedback.GithubPublisher.Broker do
       created.
     * `GET <base>/issues/<fingerprint>` answers the issue a
       fingerprint produced (200) or 404.
+    * `POST <base>/usage` carries an anonymous usage-count batch
+      (`post_usage/1`, task 01a1b678 stage 2).
     * A 200/201 body must carry `repository` and `issue_number`; everything
       else in it is ignored. `GithubPublisher.publish/2` rebuilds the
       identity from those two validated values.
@@ -80,6 +82,48 @@ defmodule Platform.Feedback.GithubPublisher.Broker do
         status -> GithubPublisher.http_error(status)
       end
     end
+  end
+
+  @doc """
+  `POST <base>/usage` with an anonymous usage-count batch (task 01a1b678
+  stage 2), to the same base as every feedback request. `body` is built and
+  scrubbed by `Platform.Sharing.UsageEvents`; this adapter only carries it.
+  `:ok` on 200/201/202.
+  """
+  @spec post_usage(map()) :: :ok | {:error, atom()}
+  def post_usage(body) when is_map(body) do
+    with :ok <- usage_consent(body),
+         {:ok, base} <- base_url(),
+         {:ok, status, _response} <- request(:post, base <> "/usage", "post_usage", json: body) do
+      case status do
+        status when status in [200, 201, 202] -> :ok
+        status -> GithubPublisher.http_error(status)
+      end
+    end
+  end
+
+  defp usage_consent(body) do
+    cond do
+      not Platform.Sharing.enabled?(:usage_counts) ->
+        {:error, :sharing_disabled}
+
+      Map.has_key?(body, "instruction_outcomes") and
+          Platform.Sharing.enabled?(:instruction_updates_stopped) ->
+        {:error, :sharing_disabled}
+
+      Map.has_key?(body, "learned_default_shapes") and
+          (not Platform.Sharing.enabled?(:learned_default_shapes) or
+             Platform.Sharing.enabled?(:instruction_updates_stopped)) ->
+        {:error, :sharing_disabled}
+
+      Platform.Sharing.UsageEvents.refusal(body) != nil ->
+        {:error, :invalid_usage}
+
+      true ->
+        :ok
+    end
+  rescue
+    _ -> {:error, :sharing_disabled}
   end
 
   defp installation_label do

@@ -42,7 +42,7 @@ defmodule Platform.Updates do
                    deferred_meeting_live held_irreversible rolled_back rollback_failed
                    failed_rollback_blocked pinned not_pinnable refused checked)
 
-  @channels ~w(stable edge pinned)
+  @channels ~w(stable edge candidate pinned)
 
   @actions %{check: "check", update: "update", rollback: "rollback"}
 

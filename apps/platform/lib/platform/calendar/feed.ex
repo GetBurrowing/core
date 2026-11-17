@@ -19,9 +19,16 @@ defmodule Platform.Calendar.Feed do
 
     events = Enum.flat_map(events, &series_lines/1)
 
+    # This feed's reader is the account it belongs to, who already sees
+    # the invite list in the meeting details, so each meeting carries
+    # ORGANIZER and one ATTENDEE (with PARTSTAT) per invitee.
+    parties = Platform.Meetings.calendar_parties(meetings)
+
     meetings =
       Enum.flat_map(meetings, fn meeting ->
-        case Platform.Meetings.CalendarFeed.render(meeting) do
+        case Platform.Meetings.CalendarFeed.render(meeting,
+               parties: Map.get(parties, meeting.id)
+             ) do
           {:ok, document} ->
             # The meeting serializer owns UID, cancellation and invite privacy.
             [_before, event] = String.split(document, "BEGIN:VEVENT\r\n", parts: 2)

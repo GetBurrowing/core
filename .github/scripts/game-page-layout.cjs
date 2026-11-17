@@ -6,7 +6,7 @@ const path = require('node:path')
   const origin = 'http://127.0.0.1:8765'
   try {
     for (const mobile of [false, true]) {
-      const context = await browser.newContext({viewport: mobile ? {width:390,height:844} : {width:1280,height:900},
+      const context = await browser.newContext({viewport: mobile ? {width:390,height:844} : {width:1440,height:900},
         userAgent: mobile ? 'Mozilla/5.0 (iPhone; CPU iPhone OS 18_0 like Mac OS X) AppleWebKit/605.1.15 Version/18.0 Mobile/15E148 Safari/604.1' : 'Mozilla/5.0 (Windows NT 10.0; Win64; x64) AppleWebKit/537.36 Chrome/131.0.0.0 Safari/537.36'})
       await context.grantPermissions(['clipboard-read', 'clipboard-write'], {origin})
       const page = await context.newPage()
@@ -45,6 +45,93 @@ const path = require('node:path')
         await community.setViewportSize({width:390, height:844})
       }
       await community.screenshot({path:path.join(process.env.GAME_PAGE_SCREENSHOTS, mobile ? 'community-phone.png' : 'community-desktop.png'), fullPage:true})
+      // Screenshot gallery in Console Glass: keyboard reachable, white ring, viewer steps and returns focus.
+      const gallery = await context.newPage()
+      const galleryErrors = []
+      gallery.on('pageerror', error => galleryErrors.push(error.message))
+      await gallery.goto(origin + '/game-page-evidence/gallery-glass.html')
+      await gallery.waitForFunction(() => document.getElementById('public-game')?.dataset.gamePageReady === 'true')
+      assert.equal(await gallery.evaluate(() => document.documentElement.scrollWidth <= innerWidth + 1), true, 'gallery horizontal overflow')
+      await gallery.locator('#game-shot-1').scrollIntoViewIfNeeded()
+      assert.equal(await gallery.locator('#game-screenshots img').evaluateAll(images => images.every(img => img.complete && img.naturalWidth > 0)), true, 'missing screenshot')
+      await gallery.locator('#game-shot-1').focus()
+      await gallery.keyboard.press('ArrowRight')
+      assert.equal(await gallery.evaluate(() => document.activeElement.id), 'game-shot-2', 'arrow keys move between screenshots')
+      await gallery.waitForTimeout(400) // the ring eases in with the tile lift
+      assert.match(await gallery.evaluate(() => getComputedStyle(document.activeElement).boxShadow), /rgb\(255, 255, 255\) 0px 0px 0px 3px/, 'screenshot focus ring')
+      await gallery.screenshot({path:path.join(process.env.GAME_PAGE_SCREENSHOTS, mobile ? 'gallery-phone.png' : 'gallery-desktop.png'), fullPage:true})
+      await gallery.keyboard.press('Enter')
+      assert.equal(await gallery.locator('#game-lightbox').evaluate(dialog => dialog.open), true, 'viewer opens from the keyboard')
+      assert.equal(await gallery.locator('[data-game-lightbox-count]').textContent(), '2 / 3')
+      await gallery.keyboard.press('ArrowRight')
+      assert.equal(await gallery.locator('[data-game-lightbox-count]').textContent(), '3 / 3')
+      await gallery.waitForFunction(() => document.querySelector('[data-game-lightbox-image]').complete)
+      await gallery.screenshot({path:path.join(process.env.GAME_PAGE_SCREENSHOTS, mobile ? 'gallery-viewer-phone.png' : 'gallery-viewer-desktop.png')})
+      await gallery.keyboard.press('Escape')
+      assert.equal(await gallery.locator('#game-lightbox').evaluate(dialog => dialog.open), false, 'Escape closes the viewer')
+      await gallery.waitForFunction(() => document.activeElement.id === 'game-shot-3', null, {timeout: 2000}) // focus returns to the screenshot shown
+      assert.deepEqual(galleryErrors, [], 'gallery JavaScript errors')
+      for (const state of ['gaming-visitor', 'gaming-owner', 'gaming-empty', 'gaming-three', 'gaming-create', 'gaming-discover']) {
+        const gaming = await context.newPage()
+        await gaming.goto(origin + '/game-page-evidence/' + state + '.html')
+        assert.equal(await gaming.locator('#gaming-home').isVisible(), true)
+        assert.notEqual(await gaming.evaluate(() => getComputedStyle(document.body).overflowY), 'hidden', 'gaming catalog cannot scroll')
+        const bottom = gaming.locator('#gaming-home').locator('a').last()
+        if (await bottom.count()) {
+          await bottom.scrollIntoViewIfNeeded()
+          const box = await bottom.boundingBox()
+          assert.ok(box.y >= 0 && box.y + box.height <= (mobile ? 844 : 900) + 1, 'catalog footer action unreachable')
+        }
+        await gaming.evaluate(() => window.scrollTo(0, 0))
+        assert.equal(await gaming.evaluate(() => document.documentElement.scrollWidth <= innerWidth + 1), true, 'gaming home overflow')
+        if (['gaming-visitor', 'gaming-owner', 'gaming-three'].includes(state)) assert.equal(await gaming.locator('#gaming-play').isVisible(), true)
+        if (state === 'gaming-owner') assert.equal(await gaming.locator(mobile ? '#gaming-publish-mobile' : '#gaming-create').isVisible(), true)
+        if (state === 'gaming-three') {
+          await gaming.locator('[data-game-tile]').first().focus()
+          await gaming.keyboard.press('ArrowRight')
+          assert.equal(await gaming.locator('#game-tile-sky-haulers').evaluate(el => document.activeElement === el), true, 'arrow navigation failed')
+          assert.equal(await gaming.locator('#game-tile-sky-haulers').evaluate(el => document.documentElement.style.getPropertyValue('--cg-tint') === el.dataset.gameTint), true, 'focus should tint the game backdrop')
+          await gaming.keyboard.press('ArrowRight')
+          assert.equal(await gaming.locator('#game-tile-tiny-tactics').evaluate(el => document.activeElement === el), true)
+          await gaming.keyboard.press('ArrowLeft')
+          assert.equal(await gaming.locator('#game-tile-sky-haulers').evaluate(el => document.activeElement === el), true)
+          await gaming.locator('[data-game-tile]').first().focus()
+          await gaming.locator('.cg-shelf').evaluate(el => el.scrollLeft = 0)
+          assert.equal(await gaming.locator('[data-game-tile]').first().evaluate(el => document.activeElement === el && getComputedStyle(el).outlineStyle === 'solid' && parseFloat(getComputedStyle(el).outlineWidth) >= 3), true, 'selected tile must have a visible white focus ring')
+          await gaming.evaluate(() => window.scrollTo(0, 0))
+        }
+        await gaming.screenshot({path:path.join(process.env.GAME_PAGE_SCREENSHOTS, state + (mobile ? '-phone.png' : '-desktop.png')), fullPage:true})
+      }
+      for (const slug of ['voltron', 'sky-haulers', 'tiny-tactics']) {
+        const game = await context.newPage()
+        await game.goto(origin + '/game-page-evidence/gaming-game-' + slug + '.html')
+        assert.equal(await game.locator('#console-glass-shell').isVisible(), true)
+        assert.equal(await game.locator('#community-tab').isVisible(), true, 'game community tab must remain reachable')
+        assert.equal(await game.locator('#game-tab').isVisible(), true)
+        assert.equal(await game.evaluate(() => document.documentElement.scrollWidth <= innerWidth + 1), true, 'game page overflow')
+        await game.locator('.gp-foot').scrollIntoViewIfNeeded()
+        await game.evaluate(() => window.scrollTo(0,0))
+        await game.screenshot({path:path.join(process.env.GAME_PAGE_SCREENSHOTS, 'gaming-game-' + slug + (mobile ? '-phone.png' : '-desktop.png')),fullPage:true})
+      }
+      for (const slug of ['voltron', 'sky-haulers', 'tiny-tactics']) {
+        const signin = await context.newPage()
+        await signin.goto(origin + '/game-page-evidence/gaming-signin-' + slug + '.html')
+        assert.equal(await signin.locator('#continue-sign-in').isVisible(), true, 'sign-in action missing')
+        assert.equal(await signin.evaluate(() => document.documentElement.scrollWidth <= innerWidth + 1), true, 'sign-in overflow')
+        await signin.screenshot({path:path.join(process.env.GAME_PAGE_SCREENSHOTS, 'gaming-signin-' + slug + (mobile ? '-phone.png' : '-desktop.png')), fullPage:true})
+      }
+      const workspace = await context.newPage()
+      await workspace.goto(origin + '/game-page-evidence/gaming-workspace.html')
+      assert.equal(await workspace.locator('#chat-panes').isVisible(), true, 'existing chat workspace missing')
+      if (!mobile) {
+        assert.equal(await workspace.locator('#gaming-project-context').isVisible(), true, 'game project context missing')
+        assert.equal(await workspace.locator('#gaming-more-modules a[href="/files"]').isVisible(), false, 'secondary modules should start collapsed')
+        await workspace.locator('#gaming-more-modules summary').click()
+        assert.equal(await workspace.locator('#gaming-more-modules a[href="/files"]').isVisible(), true, 'secondary modules must remain accessible')
+        await workspace.locator('#gaming-more-modules summary').click()
+      }
+      assert.equal(await workspace.evaluate(() => document.documentElement.scrollWidth <= innerWidth + 1), true, 'workspace overflow')
+      await workspace.screenshot({path:path.join(process.env.GAME_PAGE_SCREENSHOTS, 'gaming-workspace' + (mobile ? '-phone.png' : '-desktop.png')), fullPage:true})
       await context.close()
     }
   } finally { await browser.close() }

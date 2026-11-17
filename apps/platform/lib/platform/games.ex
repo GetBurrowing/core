@@ -12,12 +12,34 @@ defmodule Platform.Games do
   alias Platform.Chat.Attachment
   alias Platform.Repo
 
+  def list_published do
+    stored = Repo.all(Platform.Games.Publication)
+    slugs = MapSet.new(stored, & &1.slug)
+    configured = List.wrap(Application.get_env(:platform, :game_publications, []))
+
+    (Enum.map(stored, & &1.manifest) ++
+       Enum.reject(configured, &MapSet.member?(slugs, &1["slug"])))
+    |> Enum.filter(&(valid?(&1) and &1["published"] == true))
+    |> Enum.sort_by(&{position(&1), &1["title"]})
+  end
+
+  # Optional manifest "position" (lower first); unpositioned games follow, by title.
+  defp position(%{"position" => position}) when is_integer(position), do: position
+  defp position(_game), do: :infinity
+
   def get(slug) when is_binary(slug) do
-    Application.get_env(:platform, :game_publications, [])
-    |> List.wrap()
-    |> Enum.find(fn game ->
-      valid?(game) and game["slug"] == slug and game["published"] == true
-    end)
+    stored = Repo.get(Platform.Games.Publication, slug)
+
+    game =
+      if stored,
+        do: stored.manifest,
+        else:
+          Enum.find(
+            List.wrap(Application.get_env(:platform, :game_publications, [])),
+            &(&1["slug"] == slug)
+          )
+
+    if valid?(game) and game["published"] == true, do: game
   end
 
   def get(_), do: nil
@@ -33,19 +55,91 @@ defmodule Platform.Games do
       Enum.any?(releases, &(&1["version"] == game["current_version"])) and
       (is_nil(game["community_space_id"]) or
          match?({:ok, _}, Platform.UUID.cast(game["community_space_id"]))) and
-      (is_nil(game["image_path"]) or
-         (is_binary(game["image_path"]) and String.starts_with?(game["image_path"], "/images/") and
-            not String.contains?(game["image_path"], ["..", "?", "#", "\\"])))
+      (is_nil(game["project_id"]) or Platform.UUID.valid?(game["project_id"])) and
+      (is_nil(game["placeholder"]) or is_boolean(game["placeholder"])) and
+      (is_nil(game["image_path"]) or local_image?(game["image_path"])) and
+      (is_nil(game["launch_path"]) or launch_path?(game["launch_path"])) and
+      (is_nil(game["screenshots"]) or screenshots?(game["screenshots"]))
   end
 
   def valid?(_), do: false
+
+  defp local_image?(path),
+    do:
+      is_binary(path) and String.starts_with?(path, "/images/") and
+        not String.contains?(path, ["..", "?", "#", "\\"])
+
+  @max_screenshots 8
+
+  defp screenshots?(shots) when is_list(shots) and length(shots) <= @max_screenshots,
+    do: Enum.all?(shots, &screenshot?/1)
+
+  defp screenshots?(_), do: false
+
+  # `path` and `alt` are required; `caption` is the optional visible label
+  # (falls back to `alt`), held to the same rule as `alt`. Nothing else.
+  defp screenshot?(%{"path" => path, "alt" => alt} = shot) do
+    Enum.all?(Map.keys(shot), &(&1 in ["path", "alt", "caption"])) and local_image?(path) and
+      screenshot_text?(alt) and
+      (not Map.has_key?(shot, "caption") or screenshot_text?(shot["caption"]))
+  end
+
+  defp screenshot?(_), do: false
+
+  defp screenshot_text?(text), do: is_binary(text) and String.length(text) in 1..200
+
+  @doc """
+  True for a launcher the Windows player may start from a release root: one
+  plain file name (`Play Voltron.bat`), never a path, never `..`, and nothing
+  a command shell would interpret.
+  """
+  def launch_path?(path) when is_binary(path) do
+    Regex.match?(~r/\A[A-Za-z0-9][A-Za-z0-9 ._-]{0,62}\.(bat|cmd|exe)\z/i, path) and
+      not String.contains?(path, "..")
+  end
+
+  def launch_path?(_), do: false
+
+  # Voltron releases published before launchers were named all shipped this file.
+  @legacy_launch_path "Play Voltron.bat"
+
+  @doc """
+  The file the player starts from `release`'s root, or nil when none is named.
+
+  Resolved per release, so a rollback serves the launcher the rolled-back ZIP
+  actually ships: the release's own `launch_path`, then the game-level one
+  (manifests from before launchers were pinned per release), then Voltron's
+  historical launcher. A game-level value is only ever a legacy fallback.
+  """
+  def launch_path(game, release) when is_map(game) do
+    cond do
+      is_map(release) and launch_path?(release["launch_path"]) -> release["launch_path"]
+      launch_path?(game["launch_path"]) -> game["launch_path"]
+      game["slug"] == "voltron" -> @legacy_launch_path
+      true -> nil
+    end
+  end
+
+  @doc "Gallery screenshots, each a local `/images/` asset with alt text and an optional caption."
+  def screenshots(%{"screenshots" => shots}) do
+    if screenshots?(shots), do: shots, else: []
+  end
+
+  def screenshots(_), do: []
+
+  @doc "The visible label under a screenshot: its `caption`, else its `alt` text."
+  def screenshot_caption(%{"caption" => caption}) when is_binary(caption) and caption != "",
+    do: caption
+
+  def screenshot_caption(%{"alt" => alt}), do: alt
 
   defp valid_release?(release) when is_map(release) do
     is_binary(release["version"]) and
       Regex.match?(~r/^[a-zA-Z0-9][a-zA-Z0-9._-]{0,63}$/, release["version"]) and
       match?({:ok, _}, Platform.UUID.cast(release["attachment_id"])) and
       is_binary(release["sha256"]) and Regex.match?(~r/^[a-f0-9]{64}$/, release["sha256"]) and
-      is_integer(release["byte_size"]) and release["byte_size"] > 0
+      is_integer(release["byte_size"]) and release["byte_size"] > 0 and
+      (is_nil(release["launch_path"]) or launch_path?(release["launch_path"]))
   end
 
   defp valid_release?(_), do: false

@@ -26,8 +26,10 @@ defmodule PlatformWeb.ConnectAiLive do
       cleared in the browser (`ConnectAiCode` hook), and
       `AgentHost.claude_login_submit/4` hands it to the pending login.
       The pending login is bound to the process that started it, so start and
-      submit both run in this view's own process, each after the screen has
-      rendered its "waiting" line (`send(self(), ...)`). Every submit ends the
+      submit both name this view as the login's owner (`caller:`), each after
+      the screen has rendered its "waiting" line (`send(self(), ...)`), while
+      the wait for the host's answer (up to 35 s) runs in a `start_async`
+      task: the view keeps answering clicks meanwhile. Every submit ends the
       pending login, so a failure fetches a fresh sign-in link. An agent with
       a saved API key stays on the key (`NativeLogin.login_view/2` answers
       `:api_key`).
@@ -45,6 +47,14 @@ defmodule PlatformWeb.ConnectAiLive do
   provider_order:` (the experiment surface; default ChatGPT first). An
   `:api_key` entry is accepted and ignored for the choices.
   `claude_login_timeout_ms:` there shortens the waits on the agent host.
+
+  While Burrow runs on the install's starter allowance
+  (`Burrow.Starter.active?/1`) this page still shows the choices with none
+  selected, and a link back to the conversation, and does NOT start anything
+  on mount: only an
+  explicit choice (`select`, `save_api_key`) calls `Burrow.ensure/2`, which
+  retires the starter. Opening the page from the conversation must not swap
+  Burrow off the allowance by itself.
 
   When the agent is first seen running,
   `Burrow.GettingStarted.ensure_getting_started/2`
@@ -66,7 +76,7 @@ defmodule PlatformWeb.ConnectAiLive do
   alias Platform.AgentHost
   alias Platform.AgentHost.LoginCode
   alias Platform.Agents.{Burrow, NativeLogin}
-  alias Platform.Agents.Burrow.GettingStarted
+  alias Platform.Agents.Burrow.{GettingStarted, Starter}
   alias Platform.Tenancy
 
   @default_order [:codex, :api_key, :claude_subscription]
@@ -80,10 +90,11 @@ defmodule PlatformWeb.ConnectAiLive do
   }
 
   # The Claude card's state. `link`: :idle (no sign-in link asked for yet),
-  # :loading, :ready or :unavailable. `status`: :idle, :connecting,
+  # :loading, :ready or :unavailable, and `why` it is unavailable (:server,
+  # or :host_outdated when the agent host predates Claude login). `status`: :idle, :connecting,
   # {:failed, :bad_code | :no_subscription | :server} or :connected. `login`
   # is a submit's `%{account, plan}`. Never the code.
-  @claude_idle %{url: nil, link: :idle, opened?: false, status: :idle, login: nil}
+  @claude_idle %{url: nil, link: :idle, why: :server, opened?: false, status: :idle, login: nil}
 
   @doc "The configured option order, unknown entries dropped, missing ones appended."
   @spec provider_order() :: [atom()]
@@ -157,7 +168,13 @@ defmodule PlatformWeb.ConnectAiLive do
   # wins over a subscription.
   defp initial_selection(nil, order), do: hd(order)
 
+  # On the starter allowance nothing is selected: a pre-checked radio would
+  # swallow the owner's click on it (no change event), and nothing may start.
   defp initial_selection(agent, order) do
+    if Starter.active?(agent), do: nil, else: selection_for_harness(agent, order)
+  end
+
+  defp selection_for_harness(agent, order) do
     case Burrow.harness(agent) do
       "codex" ->
         :codex
@@ -355,38 +372,78 @@ defmodule PlatformWeb.ConnectAiLive do
      |> maybe_start_claude()}
   end
 
+  # The host takes up to 35 s to answer a login start or a code (it runs
+  # `claude auth login` as the agent). Waiting here blocked this process, so
+  # the page could answer nothing meanwhile: picking another option did
+  # nothing, and a reload restarted the wait (legacypie, 2026-11-12). The
+  # wait runs in a task; this view stays the login's owner (`caller:`).
   def handle_info(
         :claude_login_start,
         %{assigns: %{selected: :claude_subscription, agent: %{} = agent}} = socket
       ) do
-    claude = socket.assigns.claude
+    user = socket.assigns.current_user_record
+    opts = [{:caller, self()} | login_opts()]
 
-    claude =
-      case AgentHost.claude_login_start(socket.assigns.current_user_record, agent, login_opts()) do
-        {:ok, url} -> %{claude | url: url, link: :ready}
-        {:error, _reason} -> %{claude | url: nil, link: :unavailable}
-      end
-
-    {:noreply, assign(socket, :claude, claude)}
+    {:noreply,
+     start_async(socket, :claude_link, fn -> AgentHost.claude_login_start(user, agent, opts) end)}
   end
 
   def handle_info(
         {:claude_submit, %LoginCode{} = code},
         %{assigns: %{selected: :claude_subscription, agent: %{} = agent}} = socket
       ) do
-    claude = socket.assigns.claude
+    user = socket.assigns.current_user_record
+    opts = [{:caller, self()} | login_opts()]
 
-    case AgentHost.claude_login_submit(
-           socket.assigns.current_user_record,
-           agent,
-           code,
-           login_opts()
-         ) do
-      {:ok, login} ->
+    {:noreply,
+     start_async(socket, :claude_submit, fn ->
+       AgentHost.claude_login_submit(user, agent, code, opts)
+     end)}
+  end
+
+  def handle_info(_msg, socket), do: {:noreply, socket}
+
+  # A link answer lands only on a card still waiting for one: a switch to
+  # another option (or a retry) in the meantime made it stale.
+  @impl true
+  def handle_async(
+        :claude_link,
+        result,
+        %{assigns: %{selected: :claude_subscription, claude: %{link: :loading} = claude}} = socket
+      ) do
+    claude =
+      case result do
+        {:ok, {:ok, url}} ->
+          %{claude | url: url, link: :ready}
+
+        {:ok, {:error, :host_outdated}} ->
+          %{claude | url: nil, link: :unavailable, why: :host_outdated}
+
+        _error_or_exit ->
+          %{claude | url: nil, link: :unavailable, why: :server}
+      end
+
+    {:noreply, assign(socket, :claude, claude)}
+  end
+
+  def handle_async(
+        :claude_submit,
+        result,
+        %{assigns: %{selected: :claude_subscription, claude: %{status: :connecting} = claude}} =
+          socket
+      ) do
+    case result do
+      {:ok, {:ok, login}} ->
         claude = %{claude | status: :connected, login: login}
         {:noreply, socket |> assign(:claude, claude) |> refresh()}
 
-      {:error, reason} ->
+      other ->
+        reason =
+          case other do
+            {:ok, {:error, reason}} -> reason
+            {:exit, _} -> :server
+          end
+
         # The submit ended the pending login: fetch a fresh link for "Open
         # Claude sign-in again".
         send(self(), :claude_login_start)
@@ -403,7 +460,9 @@ defmodule PlatformWeb.ConnectAiLive do
     end
   end
 
-  def handle_info(_msg, socket), do: {:noreply, socket}
+  # Stale: the card moved on (another option picked, a retry started) before
+  # the host answered.
+  def handle_async(_name, _result, socket), do: {:noreply, socket}
 
   # `claude_login_timeout_ms:` in this module's config shortens the wait on
   # the agent host (tests); otherwise `AgentHost`'s own defaults apply.
@@ -458,6 +517,10 @@ defmodule PlatformWeb.ConnectAiLive do
   defp maybe_getting_started(socket, agent, true) do
     case socket.assigns[:space] do
       nil ->
+        # Seat Burrow in Help & feedback once it runs (task 01a1b678 stage 3).
+        # A no-op on an install without that channel.
+        _ = Platform.Sharing.HelpChannel.ensure_agent(agent)
+
         case GettingStarted.ensure_getting_started(agent, socket.assigns.current_user_record) do
           {:ok, space} -> assign(socket, :space, space)
           {:error, _} -> socket
@@ -475,7 +538,14 @@ defmodule PlatformWeb.ConnectAiLive do
     assigns =
       assigns
       |> assign(:agent_name, (assigns.agent && assigns.agent.name) || Burrow.name())
-      |> assign(:done?, assigns.running? and not is_nil(assigns.space))
+      |> assign(:starter?, Starter.active?(assigns.agent))
+
+    assigns =
+      assign(
+        assigns,
+        :done?,
+        assigns.running? and not is_nil(assigns.space) and not assigns.starter?
+      )
 
     ~H"""
     <div class="h-full overflow-y-auto bg-base-100">
@@ -486,10 +556,10 @@ defmodule PlatformWeb.ConnectAiLive do
           class="mb-6 space-y-2 rounded-box border border-edge p-4"
         >
           <p class="flex items-center gap-2 text-base font-semibold text-base-content">
-            <span class="hero-finger-print size-5 shrink-0" /> Add a passkey
+            <span class="hero-finger-print size-5 shrink-0" /> Sign in faster next time
           </p>
           <p class="text-sm text-subtle">
-            You signed in with a one-time link. Add a passkey so you can sign in again.
+            Use Face ID, Touch ID or your device unlock to sign in next time.
           </p>
           <a
             id="connect-ai-passkey-link"
@@ -498,7 +568,7 @@ defmodule PlatformWeb.ConnectAiLive do
             rel="noopener noreferrer"
             class="btn btn-outline min-h-11"
           >
-            Add a passkey
+            Set up Face ID or device unlock
           </a>
         </div>
         <div :if={@done?} id="connect-ai-connected" class="space-y-4">
@@ -533,6 +603,14 @@ defmodule PlatformWeb.ConnectAiLive do
 
         <div :if={!@done?} class="space-y-6">
           <h1 class="text-base font-semibold text-base-content">Which subscription do you use?</h1>
+          <.link
+            :if={@starter? and @space}
+            id="connect-ai-back-to-getting-started"
+            navigate={~p"/chat/#{@space.slug}"}
+            class="text-sm text-base-content underline underline-offset-2 hover:no-underline"
+          >
+            Back to Getting started
+          </.link>
 
           <div class="space-y-2">
             <form id="connect-ai-options" phx-change="select" class="space-y-3">
@@ -657,7 +735,7 @@ defmodule PlatformWeb.ConnectAiLive do
               <p :if={@key_error} id="connect-ai-api-key-error" class="text-sm text-error">
                 {@key_error}
               </p>
-              <p class="text-xs text-subtle">Stored encrypted in this install's vault.</p>
+              <p class="text-xs text-subtle">Stored encrypted.</p>
               <button id="connect-ai-api-key-save" type="submit" class="btn btn-primary min-h-11">
                 Save and connect
               </button>
@@ -691,10 +769,6 @@ defmodule PlatformWeb.ConnectAiLive do
               <% :api_key -> %>
                 <p id="connect-ai-claude-uses-key" class="text-base text-base-content">
                   {@agent_name} is using the API key you saved, so it doesn't need your Claude plan.
-                </p>
-              <% :subscription_terminal_only -> %>
-                <p id="connect-ai-claude-operator" class="text-base text-base-content">
-                  The person who runs this server connects Claude Pro or Max for this install.
                 </p>
               <% _ -> %>
                 <p id="connect-ai-claude-preparing" class="text-sm text-subtle">
@@ -781,7 +855,7 @@ defmodule PlatformWeb.ConnectAiLive do
             <% @claude.link == :unavailable -> %>
               <p id="connect-ai-claude-link-error" class="flex items-start gap-2 text-sm text-error">
                 <span class="hero-exclamation-circle mt-0.5 size-4 shrink-0" />
-                <span>{claude_failure_text(:server)}</span>
+                <span>{claude_failure_text(@claude.why)}</span>
               </p>
               <button
                 id="connect-ai-claude-retry-link"
@@ -856,7 +930,7 @@ defmodule PlatformWeb.ConnectAiLive do
               </button>
             </div>
             <p id="connect-ai-claude-reassurance" class="text-sm text-base-content">
-              The code goes straight to your Burrow's assistant on your server. Burrow doesn't keep it.
+              The code goes straight to your Burrow and is not kept.
             </p>
           </form>
           <p
@@ -964,7 +1038,7 @@ defmodule PlatformWeb.ConnectAiLive do
 
   @doc false
   def failure_text(:host_offline, _name),
-    do: "This server's agent service isn't answering right now, so your AI can't connect yet."
+    do: "Burrow isn't answering right now, so your AI can't connect yet."
 
   def failure_text(:not_created, _name), do: "Your AI couldn't be set up. Try again."
 
@@ -980,8 +1054,12 @@ defmodule PlatformWeb.ConnectAiLive do
     do: "This account doesn't have Claude Pro or Max. Sign in with the account that does."
 
   def claude_failure_text(:server),
+    do: "Burrow didn't answer. Try again in a minute. If it keeps happening, ask Burrow support."
+
+  def claude_failure_text(:host_outdated),
     do:
-      "Your server didn't answer. Try again in a minute; if it keeps happening, ask Burrow support."
+      "This install's agent host is older than Claude sign-in, so it can't make a sign-in link yet. " <>
+        "Ask whoever runs this install to update its agent host, then try again."
 
   @doc "The Claude card's connected line: the account and plan when a submit returned them."
   def claude_connected_text(%{account: account} = login) when is_binary(account) do

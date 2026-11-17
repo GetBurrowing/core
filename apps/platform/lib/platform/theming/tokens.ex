@@ -48,6 +48,12 @@ defmodule Platform.Theming.Tokens do
   alias Platform.Design.WcagContrast, as: W
   alias Platform.Theming.ContrastPairs
 
+  # The masters' ten slots only, on purpose. ColorPalette's six appended slots
+  # (magenta .. cocoa, 2026-11-11) are not org-theme keys: `color_keys/0` is
+  # required of every stored palette, so a new key would make each stored org
+  # theme invalid. Under an org theme the six fall through to the Burrow block
+  # of the same mode (`[data-theme]`), measured on Burrow's grounds, not the
+  # org's. Making them editable means optional keys with that fallback.
   @agent_ids ~w(teal green amber orange blue purple brick rose indigo lime)
 
   # master key => the slots it drives. The first slot is the one a preset

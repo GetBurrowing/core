@@ -454,7 +454,7 @@ defmodule PlatformWeb.Components.ChatMessageTest do
   test "an agent missing from the slot map, or with an unknown id, is the blue slot" do
     assert row_attr(agent_row_html(nil, []), "data-agent-slot") == ["blue"]
 
-    for stored <- [nil, "", "magenta"] do
+    for stored <- [nil, "", "chartreuse"] do
       html = agent_row_html(nil, slots: %{"p-agent" => stored})
       assert row_attr(html, "data-agent-slot") == ["blue"], inspect(stored)
     end

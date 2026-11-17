@@ -72,6 +72,130 @@ defmodule PlatformWeb.GamePageControllerTest do
     %{game: game, artifact: artifact, community: community, org: org}
   end
 
+  test "Windows player is personal, download-only and scoped to the game", %{
+    conn: conn,
+    game: game
+  } do
+    user =
+      Repo.insert!(
+        User.changeset(%User{}, %{
+          name: "Player grant",
+          email: "player-grant@example.net",
+          oidc_sub: "player-grant"
+        })
+      )
+
+    assert conn |> get("/games/voltron/player") |> redirected_to() == "/games/voltron/sign-in"
+    grant = Games.Player.token(game, user)
+
+    response =
+      conn
+      |> put_req_header("authorization", "Bearer " <> grant)
+      |> get("/games/voltron/player/releases/one")
+
+    assert response(response, 200) == "PK-game-fixture"
+    assert conn |> get("/games/voltron/player/releases/one") |> response(401)
+    assert {:error, :unauthorized} = Games.Player.authorize(Map.put(game, "slug", "other"), grant)
+    assert {:error, :unauthorized} = Games.Player.authorize(game, grant <> "bad")
+
+    expired =
+      Phoenix.Token.sign(PlatformWeb.Endpoint, "game-player-download-v1", {"voltron", user.id},
+        signed_at: System.system_time(:second) - 604_801
+      )
+
+    assert {:error, :unauthorized} = Games.Player.authorize(game, expired)
+    conn = init_test_session(conn, current_user_id: user.id)
+    zip = conn |> get("/games/voltron/player") |> response(200)
+    {:ok, files} = :zip.extract(zip, [:memory])
+    assert {~c"Play.bat", _} = List.keyfind(files, ~c"Play.bat", 0)
+    {_, config} = List.keyfind(files, ~c"player.json", 0)
+    assert %{"slug" => "voltron", "token" => token} = Jason.decode!(config)
+    assert {:ok, _} = Games.Player.authorize(game, token)
+    refute config =~ user.email
+    Repo.update!(Ecto.Changeset.change(user, archived_at: DateTime.utc_now()))
+    assert {:error, :unauthorized} = Games.Player.authorize(game, grant)
+  end
+
+  test "updates describe the pinned current artifact without granting download", %{
+    conn: conn,
+    game: game
+  } do
+    update = conn |> get("/games/voltron/updates") |> json_response(200)
+    assert update["version"] == "one"
+    assert update["sha256"] == Games.current_release(game)["sha256"]
+    refute Map.has_key?(update, "token")
+    assert conn |> get("/games/unknown/updates") |> response(404)
+  end
+
+  test "admin publishes from Burrow without env changes, creates player room, updates and rolls back",
+       %{conn: conn, game: game, org: org, artifact: artifact} do
+    actor =
+      Repo.insert!(
+        User.changeset(%User{}, %{
+          name: "Publisher",
+          email: "publisher@example.net",
+          oidc_sub: "publisher"
+        })
+      )
+
+    attrs = %{
+      "slug" => "test-published",
+      "title" => "Test game",
+      "summary" => "Physics fun",
+      "org_id" => org.id,
+      "version" => "one",
+      "attachment_id" => artifact.id,
+      "published" => "true"
+    }
+
+    assert {:error, _} = Games.Publishing.publish_release(actor, attrs)
+    root_org = Tenancy.get_org_by_slug!("acme")
+
+    Repo.insert!(
+      OrgMembership.changeset(%OrgMembership{}, %{
+        user_id: actor.id,
+        org_id: root_org.id,
+        role: "admin"
+      })
+    )
+
+    signed_in = init_test_session(conn, current_user_id: actor.id)
+    {:ok, view, _} = live(signed_in, "/admin/games")
+    assert has_element?(view, "#game-publication-form")
+    view |> form("#game-publication-form", game: attrs) |> render_submit()
+    assert has_element?(view, "#publication-test-published")
+    assert {:ok, publication} = Games.Publishing.publish_release(actor, attrs)
+    published = Games.get("test-published")
+    assert published == publication.manifest
+    assert Games.community(published, actor).joined?
+    assert published["community_space_id"] != game["community_space_id"]
+
+    {:ok, stored} =
+      AttachmentStorage.persist_binary_upload("PK-new-release", "new.zip", "application/zip")
+
+    next = Repo.insert!(Attachment.changeset(%Attachment{}, stored))
+
+    assert {:error, :immutable_release} =
+             Games.Publishing.publish_release(actor, Map.put(attrs, "attachment_id", next.id))
+
+    assert {:ok, _} =
+             Games.Publishing.publish_release(
+               actor,
+               Map.merge(attrs, %{"version" => "two", "attachment_id" => next.id})
+             )
+
+    assert Games.get("test-published")["current_version"] == "two"
+    assert {:ok, _} = Games.Publishing.publish_release(actor, attrs)
+    assert Games.get("test-published")["current_version"] == "one"
+    assert length(Games.get("test-published")["releases"]) == 2
+
+    assert {:ok, _} =
+             Games.Publishing.publish_release(actor, Map.put(attrs, "published", "false"))
+
+    refute Games.get("test-published")
+    assert conn |> get("/games/test-published/updates") |> response(404)
+  end
+
   test "anonymous visitor sees the game and sign-in; no chat membership is required", %{
     conn: conn
   } do
@@ -158,6 +282,59 @@ defmodule PlatformWeb.GamePageControllerTest do
     refute Tenancy.root_admin?(user)
     assert Repo.all(from(p in Chat.Participant, where: p.participant_id == ^user.id)) == []
     assert get_session(conn, :game_login) == nil
+  end
+
+  # Task 01a1e58b stage 3: a code sign-in (`/auth/sign-in`) lands on the
+  # add-a-passkey prompt, except when it began at a game login.
+  test "a code sign-in that began at a game login still lands on the game", %{conn: conn} do
+    keys = [:sign_in_admin_enabled, :sign_in_admin_url, :sign_in_admin_api_key]
+    saved = for key <- keys, do: {key, Application.fetch_env(:platform, key)}
+
+    on_exit(fn ->
+      for {key, old} <- saved do
+        case old do
+          {:ok, value} -> Application.put_env(:platform, key, value)
+          :error -> Application.delete_env(:platform, key)
+        end
+      end
+    end)
+
+    Application.put_env(:platform, :sign_in_admin_enabled, true)
+    Application.put_env(:platform, :sign_in_admin_url, "http://pocket-id.test")
+    Application.put_env(:platform, :sign_in_admin_api_key, "test-key-not-a-secret")
+    :ets.delete_all_objects(:sign_in_email_setup_rate)
+
+    Req.Test.stub(Platform.OIDC, fn conn ->
+      conn
+      |> Plug.Conn.put_resp_header("location", "/interaction?interaction=game-code-login")
+      |> Plug.Conn.send_resp(302, "")
+    end)
+
+    login = get(conn, "/auth/login?game=voltron")
+    assert redirected_to(login) == "/auth/sign-in"
+
+    started =
+      login
+      |> recycle()
+      |> post("/auth/invitation", %{setup_link: "https://issuer.example.com/lc/AbCd1234EfGh"})
+
+    assert get_session(started, :signed_in_with_email_code) == true
+    %{state: state} = get_session(started, :oidc_session_params)
+
+    claims = %{"sub" => "code-game-player", "email" => "code@example.net", "name" => "Code"}
+
+    Application.put_env(
+      :platform,
+      :oidc_mock_response,
+      {:ok, %{user: claims, userinfo: claims, id_token: claims, token: %{"id_token" => "test"}}}
+    )
+
+    callback =
+      started
+      |> recycle()
+      |> get("/auth/oidc/callback?" <> URI.encode_query(%{state: state, code: "test"}))
+
+    assert redirected_to(callback) == "/games/voltron"
   end
 
   test "joining is explicit, idempotent, and limited to the tagged community", %{
@@ -505,5 +682,498 @@ defmodule PlatformWeb.GamePageControllerTest do
     assert html =~ "StarPilot"
     refute html =~ user.name
     refute html =~ user.email
+  end
+
+  describe "per-game launcher" do
+    test "Voltron without a launch_path keeps its historical launcher", %{conn: conn} do
+      assert conn |> get("/games/voltron/updates") |> json_response(200) |> Map.get("launch_path") ==
+               "Play Voltron.bat"
+
+      page = conn |> get("/games/voltron") |> html_response(200) |> LazyHTML.from_document()
+      assert LazyHTML.text(LazyHTML.query(page, "#game-launch-path")) == "Play Voltron.bat"
+    end
+
+    test "a game's own launch_path is what the player and the page name", %{
+      conn: conn,
+      game: game
+    } do
+      sky =
+        Map.merge(game, %{
+          "slug" => "sky-haulers",
+          "title" => "Sky Haulers",
+          "launch_path" => "Play Sky Haulers.cmd"
+        })
+
+      Application.put_env(:platform, :game_publications, [
+        Map.put(game, "launch_path", "Start Voltron.exe"),
+        sky
+      ])
+
+      assert conn
+             |> get("/games/sky-haulers/updates")
+             |> json_response(200)
+             |> Map.get("launch_path") ==
+               "Play Sky Haulers.cmd"
+
+      assert conn |> get("/games/voltron/updates") |> json_response(200) |> Map.get("launch_path") ==
+               "Start Voltron.exe"
+
+      page = conn |> get("/games/sky-haulers") |> html_response(200) |> LazyHTML.from_document()
+      assert LazyHTML.text(LazyHTML.query(page, "#game-launch-path")) == "Play Sky Haulers.cmd"
+      refute LazyHTML.text(LazyHTML.query(page, "#game-setup")) =~ "Voltron"
+    end
+
+    test "a game with no launch_path names no file and says so", %{conn: conn, game: game} do
+      Application.put_env(:platform, :game_publications, [
+        Map.merge(game, %{"slug" => "tiny-tactics", "title" => "Tiny Tactics"})
+      ])
+
+      update = conn |> get("/games/tiny-tactics/updates") |> json_response(200)
+      assert Map.has_key?(update, "launch_path")
+      assert update["launch_path"] == nil
+
+      page = conn |> get("/games/tiny-tactics") |> html_response(200) |> LazyHTML.from_document()
+      assert Enum.count(LazyHTML.query(page, "#game-launch-instructions")) == 1
+      assert Enum.empty?(LazyHTML.query(page, "#game-launch-path"))
+      assert LazyHTML.text(LazyHTML.query(page, "#game-launch-instructions")) =~ "no launcher yet"
+      refute LazyHTML.text(page) =~ "Voltron.bat"
+    end
+
+    test "launch_path is one plain file name; anything else rejects the manifest", %{game: game} do
+      for ok <- ["Play Voltron.bat", "start.cmd", "Game_v2-final.EXE"] do
+        assert Games.launch_path?(ok), ok
+        assert Games.valid?(Map.put(game, "launch_path", ok))
+      end
+
+      for bad <- [
+            "../Play.bat",
+            "..\\Play.bat",
+            "a..b.bat",
+            "/usr/bin/play.bat",
+            "C:\\Windows\\play.bat",
+            "bin/play.bat",
+            "bin\\play.bat",
+            "play.bat & calc.exe",
+            "play|x.bat",
+            "play;x.bat",
+            "play%PATH%.bat",
+            "play$(x).bat",
+            "play`x`.bat",
+            "\"play\".bat",
+            "play.ps1",
+            "play",
+            ".play.bat",
+            " play.bat",
+            "play.bat\n",
+            "",
+            42
+          ] do
+        refute Games.launch_path?(bad), inspect(bad)
+        refute Games.valid?(Map.put(game, "launch_path", bad)), inspect(bad)
+      end
+    end
+  end
+
+  describe "per-release launcher" do
+    defp root_publisher(name) do
+      actor =
+        Repo.insert!(
+          User.changeset(%User{}, %{
+            name: name,
+            email: "#{name}@example.net",
+            oidc_sub: name
+          })
+        )
+
+      Repo.insert!(
+        OrgMembership.changeset(%OrgMembership{}, %{
+          user_id: actor.id,
+          org_id: Tenancy.get_org_by_slug!("acme").id,
+          role: "admin"
+        })
+      )
+
+      actor
+    end
+
+    defp zip_attachment(body) do
+      {:ok, stored} =
+        AttachmentStorage.persist_binary_upload(body, "build.zip", "application/zip")
+
+      Repo.insert!(Attachment.changeset(%Attachment{}, stored))
+    end
+
+    defp served_launcher(conn, slug),
+      do: conn |> get("/games/#{slug}/updates") |> json_response(200) |> Map.get("launch_path")
+
+    defp page_launcher(conn, slug) do
+      page = conn |> get("/games/#{slug}") |> html_response(200) |> LazyHTML.from_document()
+      LazyHTML.text(LazyHTML.query(page, "#game-launch-path"))
+    end
+
+    test "a rollback serves the launcher of the release it rolls back to", %{
+      conn: conn,
+      org: org,
+      artifact: artifact
+    } do
+      actor = root_publisher("launcher-publisher")
+      next = zip_attachment("PK-renamed-entrypoint")
+
+      v1 = %{
+        "slug" => "renamer",
+        "title" => "Renamer",
+        "summary" => "Renames its entrypoint",
+        "org_id" => org.id,
+        "version" => "one",
+        "attachment_id" => artifact.id,
+        "launch_path" => "A.bat",
+        "published" => "true"
+      }
+
+      v2 =
+        Map.merge(v1, %{"version" => "two", "attachment_id" => next.id, "launch_path" => "B.bat"})
+
+      assert {:ok, _} = Games.Publishing.publish_release(actor, v1)
+      assert served_launcher(conn, "renamer") == "A.bat"
+      assert {:ok, _} = Games.Publishing.publish_release(actor, v2)
+      assert served_launcher(conn, "renamer") == "B.bat"
+      assert page_launcher(conn, "renamer") == "B.bat"
+
+      # Roll back by republishing v1 without naming a launcher: its own pin wins.
+      assert {:ok, _} = Games.Publishing.publish_release(actor, Map.delete(v1, "launch_path"))
+      assert Games.get("renamer")["current_version"] == "one"
+      assert served_launcher(conn, "renamer") == "A.bat"
+      assert page_launcher(conn, "renamer") == "A.bat"
+      refute Map.has_key?(Games.get("renamer"), "launch_path")
+
+      assert Enum.map(Games.get("renamer")["releases"], &{&1["version"], &1["launch_path"]}) ==
+               [{"one", "A.bat"}, {"two", "B.bat"}]
+
+      # A published release's launcher never changes, through either path.
+      assert {:error, :immutable_release} =
+               Games.Publishing.publish_release(actor, Map.put(v1, "launch_path", "B.bat"))
+
+      manifest = Games.get("renamer")
+      renamed = put_in(manifest, ["releases", Access.at(0), "launch_path"], "B.bat")
+      assert {:error, _} = Games.Publishing.save(actor, renamed)
+
+      assert {:error, :immutable_release} =
+               Games.Publishing.pin_launch_path(actor, "renamer", "one", "B.bat")
+
+      assert served_launcher(conn, "renamer") == "A.bat"
+    end
+
+    test "a legacy release gains a pin once, keeping its bytes and current version", %{
+      conn: conn,
+      org: org,
+      artifact: artifact
+    } do
+      actor = root_publisher("launcher-pinner")
+
+      attrs = %{
+        "slug" => "legacy-pin",
+        "title" => "Legacy pin",
+        "org_id" => org.id,
+        "version" => "one",
+        "attachment_id" => artifact.id,
+        "published" => "true"
+      }
+
+      assert {:ok, _} = Games.Publishing.publish_release(actor, attrs)
+      refute Map.has_key?(hd(Games.get("legacy-pin")["releases"]), "launch_path")
+      assert served_launcher(conn, "legacy-pin") == nil
+
+      assert {:error, :invalid_publication} =
+               Games.Publishing.pin_launch_path(actor, "legacy-pin", "one", "../x.bat")
+
+      assert {:error, :invalid_publication} =
+               Games.Publishing.pin_launch_path(actor, "legacy-pin", "missing", "Play.bat")
+
+      before = Games.get("legacy-pin")
+      assert {:ok, _} = Games.Publishing.pin_launch_path(actor, "legacy-pin", "one", "Play.bat")
+      after_pin = Games.get("legacy-pin")
+      assert served_launcher(conn, "legacy-pin") == "Play.bat"
+
+      assert hd(after_pin["releases"]) ==
+               Map.put(hd(before["releases"]), "launch_path", "Play.bat")
+
+      assert Map.delete(after_pin, "releases") == Map.delete(before, "releases")
+
+      # Idempotent: the same pin again is a no-op.
+      assert {:ok, _} = Games.Publishing.pin_launch_path(actor, "legacy-pin", "one", "Play.bat")
+      assert Games.get("legacy-pin") == after_pin
+    end
+
+    test "resolution order: release, then game (legacy), then Voltron's historical launcher", %{
+      conn: conn,
+      game: game
+    } do
+      release = Games.current_release(game)
+
+      # A legacy manifest with only the game-level value.
+      legacy = Map.put(game, "launch_path", "Start.cmd")
+      assert Games.launch_path(legacy, release) == "Start.cmd"
+      Application.put_env(:platform, :game_publications, [legacy])
+      assert served_launcher(conn, "voltron") == "Start.cmd"
+      assert page_launcher(conn, "voltron") == "Start.cmd"
+
+      # The release's own value beats the game-level one.
+      pinned = put_in(legacy, ["releases", Access.at(0), "launch_path"], "Play Pinned.exe")
+      assert Games.launch_path(pinned, Games.current_release(pinned)) == "Play Pinned.exe"
+      Application.put_env(:platform, :game_publications, [pinned])
+      assert served_launcher(conn, "voltron") == "Play Pinned.exe"
+
+      # Voltron with neither keeps its historical launcher; any other game names none.
+      assert Games.launch_path(game, release) == "Play Voltron.bat"
+      assert Games.launch_path(Map.put(game, "slug", "other"), release) == nil
+    end
+
+    test "a release's launch_path follows the same rules as the game's", %{
+      game: game,
+      org: org,
+      artifact: artifact
+    } do
+      for ok <- ["Play Voltron.bat", "start.cmd", "Game_v2-final.EXE"] do
+        assert Games.valid?(put_in(game, ["releases", Access.at(0), "launch_path"], ok)), ok
+      end
+
+      actor = root_publisher("launcher-validator")
+
+      for bad <- [
+            "../Play.bat",
+            "a..b.bat",
+            "bin/play.bat",
+            "bin\\play.bat",
+            "C:\\Windows\\play.bat",
+            "play.bat & calc.exe",
+            "play|x.bat",
+            "play%PATH%.bat",
+            "play.ps1",
+            "play",
+            ".play.bat",
+            "play.bat\n",
+            42,
+            nil
+          ] do
+        unless is_nil(bad) do
+          refute Games.valid?(put_in(game, ["releases", Access.at(0), "launch_path"], bad)),
+                 inspect(bad)
+        end
+
+        attrs = %{
+          "slug" => "bad-launcher",
+          "title" => "Bad launcher",
+          "org_id" => org.id,
+          "version" => "one",
+          "attachment_id" => artifact.id,
+          "launch_path" => bad,
+          "published" => "true"
+        }
+
+        if is_nil(bad) do
+          # An omitted launcher is fine; nothing is stored on the release.
+          assert {:ok, publication} = Games.Publishing.publish_release(actor, attrs)
+          refute Map.has_key?(hd(publication.manifest["releases"]), "launch_path")
+        else
+          assert {:error, :invalid_publication} =
+                   Games.Publishing.publish_release(actor, attrs),
+                 inspect(bad)
+        end
+      end
+
+      refute Games.get("bad-launcher")["releases"] |> hd() |> Map.has_key?("launch_path")
+    end
+  end
+
+  test "the community header pluralises its member count", %{
+    conn: conn,
+    community: community
+  } do
+    header = fn ->
+      conn
+      |> get("/games/voltron?tab=community")
+      |> html_response(200)
+      |> LazyHTML.from_document()
+      |> LazyHTML.query("#game-community .gp-room header div > span")
+      |> LazyHTML.text()
+      |> String.trim()
+    end
+
+    assert header.() == "0 members"
+
+    for n <- 1..2 do
+      member =
+        Repo.insert!(
+          User.changeset(%User{}, %{
+            name: "Pilot #{n}",
+            email: "pilot-#{n}@example.net",
+            oidc_sub: "pilot-#{n}"
+          })
+        )
+
+      {:ok, _} =
+        Chat.add_participant(community.id, %{
+          participant_type: "user",
+          participant_id: member.id,
+          joined_at: DateTime.utc_now()
+        })
+
+      assert header.() == if(n == 1, do: "1 member", else: "2 members")
+    end
+  end
+
+  describe "screenshot gallery" do
+    @shots [
+      %{
+        "path" => "/images/play/voltron-shot-1.png",
+        "alt" => "Gameplay: the robot in the street"
+      },
+      %{"path" => "/images/play/voltron-shot-2.png", "alt" => "Concept art: the lions at dusk"},
+      %{"path" => "/images/play/voltron-shot-3.png", "alt" => "Concept art: the city skyline"}
+    ]
+
+    test "renders each screenshot as a keyboard-reachable link with a viewer", %{
+      conn: conn,
+      game: game
+    } do
+      Application.put_env(:platform, :game_publications, [Map.put(game, "screenshots", @shots)])
+      html = conn |> get("/games/voltron") |> html_response(200)
+      browser_evidence("gallery", html)
+      page = LazyHTML.from_document(html)
+
+      assert Enum.count(LazyHTML.query(page, "#game-screenshots")) == 1
+      assert Enum.count(LazyHTML.query(page, "#game-screenshots a.gp-shot[href]")) == 3
+
+      for {shot, n} <- Enum.with_index(@shots, 1) do
+        link = LazyHTML.query(page, "#game-shot-#{n}")
+        assert LazyHTML.attribute(link, "href") == [shot["path"]]
+        assert [label] = LazyHTML.attribute(link, "aria-label")
+        assert label =~ shot["alt"]
+        assert label =~ "#{n} of 3"
+        assert LazyHTML.attribute(LazyHTML.query(link, "img"), "src") == [shot["path"]]
+      end
+
+      assert Enum.count(LazyHTML.query(page, "dialog#game-lightbox[data-game-lightbox]")) == 1
+      assert Enum.count(LazyHTML.query(page, "#game-lightbox [data-game-lightbox-step]")) == 2
+      assert Enum.count(LazyHTML.query(page, "#game-lightbox [data-game-lightbox-close]")) == 1
+
+      # The same gallery inside the Console Glass shell (browser layout evidence).
+      admin =
+        Repo.insert!(
+          User.changeset(%User{}, %{
+            name: "Gallery admin",
+            email: "gallery-admin@example.net",
+            oidc_sub: "gallery-admin"
+          })
+        )
+
+      Repo.insert!(
+        OrgMembership.changeset(%OrgMembership{}, %{
+          user_id: admin.id,
+          org_id: Tenancy.get_org_by_slug!("acme").id,
+          role: "admin"
+        })
+      )
+
+      {:ok, _} = Platform.Branding.update_identity(admin, %{experience: "gaming"})
+      glass = conn |> get("/games/voltron") |> html_response(200)
+      browser_evidence("gallery-glass", glass)
+      glass = LazyHTML.from_document(glass)
+      assert Enum.count(LazyHTML.query(glass, "html.console-glass #game-screenshots")) == 1
+      assert Enum.count(LazyHTML.query(glass, "#game-screenshots a.gp-shot")) == 3
+      # The brand opens the install switcher here too, clear of the iOS top inset.
+      assert Enum.count(LazyHTML.query(glass, ".cg-side button#gaming-install-switch")) == 1
+
+      assert [viewport] =
+               LazyHTML.attribute(LazyHTML.query(glass, "meta[name='viewport']"), "content")
+
+      assert viewport =~ "viewport-fit=cover"
+    end
+
+    test "shows a visible caption under each shot and in the viewer, falling back to alt", %{
+      conn: conn,
+      game: game
+    } do
+      shots = [
+        Map.put(hd(@shots), "caption", "In-game"),
+        Map.put(Enum.at(@shots, 1), "caption", "Concept art"),
+        Enum.at(@shots, 2)
+      ]
+
+      Application.put_env(:platform, :game_publications, [Map.put(game, "screenshots", shots)])
+      page = conn |> get("/games/voltron") |> html_response(200) |> LazyHTML.from_document()
+
+      caption = fn n ->
+        page |> LazyHTML.query("#game-shot-caption-#{n}") |> LazyHTML.text() |> String.trim()
+      end
+
+      assert caption.(1) == "In-game"
+      assert caption.(2) == "Concept art"
+      assert caption.(3) == "Concept art: the city skyline"
+
+      # A caption that repeats the link's alt is hidden from assistive tech.
+      assert LazyHTML.attribute(LazyHTML.query(page, "#game-shot-caption-1"), "aria-hidden") == []
+
+      assert LazyHTML.attribute(LazyHTML.query(page, "#game-shot-caption-3"), "aria-hidden") == [
+               "true"
+             ]
+
+      assert LazyHTML.attribute(LazyHTML.query(page, "#game-shot-1"), "data-game-shot-caption") ==
+               ["In-game"]
+
+      assert LazyHTML.attribute(LazyHTML.query(page, "#game-shot-3"), "data-game-shot-caption") ==
+               ["Concept art: the city skyline"]
+
+      assert page |> LazyHTML.query("#game-lightbox-caption") |> LazyHTML.text() |> String.trim() ==
+               "In-game"
+
+      assert LazyHTML.attribute(LazyHTML.query(page, "[data-game-lightbox-image]"), "alt") ==
+               [hd(@shots)["alt"]]
+    end
+
+    test "is hidden when a game has no screenshots", %{conn: conn, game: game} do
+      for manifest <- [game, Map.put(game, "screenshots", [])] do
+        Application.put_env(:platform, :game_publications, [manifest])
+        page = conn |> get("/games/voltron") |> html_response(200) |> LazyHTML.from_document()
+        assert Enum.empty?(LazyHTML.query(page, "#game-screenshots"))
+        assert Enum.empty?(LazyHTML.query(page, "#game-lightbox"))
+      end
+    end
+
+    test "a single screenshot gets a viewer without previous and next", %{conn: conn, game: game} do
+      Application.put_env(:platform, :game_publications, [
+        Map.put(game, "screenshots", Enum.take(@shots, 1))
+      ])
+
+      page = conn |> get("/games/voltron") |> html_response(200) |> LazyHTML.from_document()
+      assert Enum.count(LazyHTML.query(page, "#game-shot-1")) == 1
+      assert Enum.empty?(LazyHTML.query(page, "#game-lightbox [data-game-lightbox-step]"))
+    end
+
+    test "screenshots must be local images with alt text and an optional caption", %{game: game} do
+      assert Games.valid?(Map.put(game, "screenshots", @shots))
+
+      assert Games.valid?(
+               Map.put(game, "screenshots", [Map.put(hd(@shots), "caption", "In-game")])
+             )
+
+      for bad <- [
+            "/images/a.png",
+            [%{"path" => "https://elsewhere/a.png", "alt" => "x"}],
+            [%{"path" => "/images/../secret.png", "alt" => "x"}],
+            [%{"path" => "/uploads/a.png", "alt" => "x"}],
+            [%{"path" => "/images/a.png?x=1", "alt" => "x"}],
+            [%{"path" => "/images/a.png"}],
+            [%{"path" => "/images/a.png", "alt" => ""}],
+            [%{"path" => "/images/a.png", "alt" => "x", "onclick" => "x"}],
+            [%{"path" => "/images/a.png", "alt" => "x", "caption" => ""}],
+            [%{"path" => "/images/a.png", "alt" => "x", "caption" => nil}],
+            [%{"path" => "/images/a.png", "alt" => "x", "caption" => 7}],
+            [%{"path" => "/images/a.png", "alt" => "x", "caption" => String.duplicate("c", 201)}],
+            List.duplicate(hd(@shots), 9)
+          ] do
+        refute Games.valid?(Map.put(game, "screenshots", bad)), inspect(bad)
+      end
+    end
   end
 end

@@ -411,7 +411,14 @@ defmodule Platform.Agents.NativeAgents do
   @spec start_files(Agent.t()) :: [map()]
   def start_files(%Agent{} = agent) do
     burrow? = Platform.Agents.Burrow.burrow?(agent)
-    section = if burrow?, do: Platform.Agents.Burrow.admins_section(), else: ""
+
+    section =
+      if burrow?,
+        do:
+          Platform.Agents.Burrow.admins_section() <>
+            Platform.Agents.Burrow.Starter.instructions_section(agent),
+        else: ""
+
     # The instructions file of the harness the agent actually runs (task 01a19505).
     key = runtime_instructions_key(agent)
 

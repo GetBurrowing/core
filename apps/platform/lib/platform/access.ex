@@ -652,6 +652,21 @@ defmodule Platform.Access do
 
   def fenced_ids(_scope, _type), do: :unfenced
 
+  @doc """
+  Is the ONE space `space_id` inside `scope`'s fence? The point form of
+  `fenced_ids(scope, :space)`: true when the scope is `:unfenced`, when the
+  space's org lineage meets the scope's org fence, or when the user holds a
+  participant row in the space. Costs a lineage walk and one `exists?`
+  instead of loading every space id in the user's orgs.
+  """
+  @spec space_in_fence?(Scope.t() | term(), binary()) :: boolean()
+  def space_in_fence?(scope, space_id) when is_binary(space_id) do
+    case fence_of(scope) do
+      :unfenced -> true
+      {org_ids, user_id} -> in_fence?({:space, space_id}, org_ids, user_id)
+    end
+  end
+
   # The fence a decision applies: a capped runtime scope is fenced through
   # its owner, every other scope through itself. `{org_ids, user_id}`, the
   # user being whose `chat_participants` rows keep a space inside.

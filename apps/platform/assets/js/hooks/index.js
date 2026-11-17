@@ -66,6 +66,7 @@ import MeetingWhiteboard from "./meeting_whiteboard"
 import MermaidDiagram from "./mermaid_diagram"
 import MessageEditor from "./message_editor"
 import NativeInstallSwitch from "./native_install_switch"
+import SwitcherConnected from "./switcher_connected"
 import NativeTabBar from "./native_tab_bar"
 import PinnedReorder from "./pinned_reorder"
 import PushSubscribe from "./push_subscribe"
@@ -161,6 +162,7 @@ export default {
   MermaidDiagram,
   MessageEditor,
   NativeInstallSwitch,
+  SwitcherConnected,
   NativeTabBar,
   PinnedReorder,
   PushSubscribe,

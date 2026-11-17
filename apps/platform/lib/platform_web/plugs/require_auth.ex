@@ -12,7 +12,9 @@ defmodule PlatformWeb.Plugs.RequireAuth do
       `text/html` nor `*/*`) -> `401` with a JSON body (see "JSON error
       envelope" below).
     * otherwise (a browser navigation) -> `302` redirect to `/auth/login`,
-      exactly as before.
+      exactly as before. A `GET` first stores its local path and query in
+      the session (`PlatformWeb.ReturnPath`, task 01a1ccd4), which the OIDC
+      callback lands on.
 
   JSON error envelope (task 01a0ac9c). The API-client arm emits
 
@@ -115,10 +117,24 @@ defmodule PlatformWeb.Plugs.RequireAuth do
       |> halt()
     else
       conn
+      |> remember_return_path()
       |> redirect(to: "/auth/login")
       |> halt()
     end
   end
+
+  # Task 01a1ccd4 stage 2: a browser GET remembers where it was going, so the
+  # OIDC callback can land there instead of `/`. Only a path that passes
+  # `PlatformWeb.ReturnPath.safe/1` is stored (the callback checks it again);
+  # anything else clears a stale value. The OIDC request itself is unchanged.
+  defp remember_return_path(%Plug.Conn{method: "GET"} = conn) do
+    case PlatformWeb.ReturnPath.safe(PlatformWeb.ReturnPath.of_conn(conn)) do
+      {:ok, path} -> put_session(conn, PlatformWeb.ReturnPath.session_key(), path)
+      :error -> delete_session(conn, PlatformWeb.ReturnPath.session_key())
+    end
+  end
+
+  defp remember_return_path(conn), do: conn
 
   # Same human messages as `PlatformWeb.Plugs.RequireAuthAPI`, so one reason
   # reads identically whichever of the two plugs denied it.

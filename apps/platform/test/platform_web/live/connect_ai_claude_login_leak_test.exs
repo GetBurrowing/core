@@ -75,7 +75,7 @@ defmodule PlatformWeb.ConnectAiClaudeLoginLeakTest.RecordingHost do
 
   @impl true
   def init(opts) do
-    :ok = Reconciler.host_joined(self(), %{"profile" => "fake"})
+    :ok = Reconciler.host_joined(self(), %{"profile" => "fake", "features" => ["claude_login"]})
     :ok = Reconciler.inventory(self(), %{"profile" => "fake", "agents" => []})
 
     {:ok,

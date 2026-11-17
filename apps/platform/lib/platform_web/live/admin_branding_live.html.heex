@@ -162,6 +162,18 @@
             </p>
           </div>
 
+          <div class="mt-4">
+            <.input
+              field={@form[:experience]}
+              type="select"
+              label="App experience"
+              options={[{"Workspace", "workspace"}, {"Gaming", "gaming"}]}
+            />
+            <p class="mt-1 text-xs text-subtle">
+              Gaming opens the game home and player communities. Creator tools remain available to admins.
+            </p>
+          </div>
+
           <div class="mt-4 grid grid-cols-1 gap-4 sm:grid-cols-2">
             <.input
               field={@form[:background_color]}

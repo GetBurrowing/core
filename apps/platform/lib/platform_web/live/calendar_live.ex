@@ -585,6 +585,22 @@ defmodule PlatformWeb.CalendarLive do
   def handle_event("meeting_edit_" <> _ = event, params, socket),
     do: Editor.people(socket, event, params)
 
+  # The viewer's own answer to their invite: Accept / Maybe / Decline in the
+  # meeting details. The meeting is the open selection, never a client
+  # value; `respond_to_invite/3` refuses a viewer holding no live invite.
+  def handle_event("meeting_rsvp", %{"status" => status}, socket) do
+    meeting = selected_meeting!(socket)
+
+    case Platform.Meetings.respond_to_invite(
+           meeting,
+           socket.assigns.current_user_record,
+           status
+         ) do
+      {:ok, _status} -> {:noreply, refresh_selected(socket)}
+      {:error, _reason} -> {:noreply, put_flash(socket, :error, "Couldn’t save your answer.")}
+    end
+  end
+
   # One guest row's link expiry, and a new link for a lapsed row (task
   # 01a19ea6), under the same rule as staging: the meeting is the open
   # selection, and `LiveInvites` checks the invite id against it.
@@ -1005,6 +1021,7 @@ defmodule PlatformWeb.CalendarLive do
         base
         |> Map.merge(meeting_info(entry.meeting, user))
         |> Map.merge(meeting_cancel_info(entry.meeting, user))
+        |> Map.put(:my_rsvp, Platform.Meetings.invite_rsvp(entry.meeting, user))
         |> Map.put(:time_zone, zone)
         |> Map.put(:call, call_info(entry.meeting, user))
         |> put_invitee_view(user)
@@ -1413,10 +1430,17 @@ defmodule PlatformWeb.CalendarLive do
     external =
       Enum.map(
         subscriptions,
-        &%{key: "ext:" <> &1.id, label: &1.name, note: "read-only · iCal", kind: "external"}
+        &%{key: "ext:" <> &1.id, label: &1.name, note: external_note(&1), kind: "external"}
       )
 
     [native] ++ if(assigns.meetings_on, do: [meetings], else: []) ++ external
+  end
+
+  # A partial calendar must not look complete in the list pane either.
+  defp external_note(sub) do
+    if Platform.Calendar.Subscriptions.complete?(sub),
+      do: "read-only · iCal",
+      else: "read-only · iCal · " <> skipped_text(sub.skipped_count)
   end
 
   def where_options(spaces, projects),

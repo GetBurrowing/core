@@ -19,13 +19,17 @@ Absent configuration means no published games. Keep install-specific manifests i
   "summary": "A little chaos with friends.",
   "image_path": "/images/my-game.png",
   "image_alt": "Gameplay screenshot",
+  "screenshots": [
+    {"path": "/images/play/my-game-shot-1.png", "alt": "Gameplay: the crew lines up a jump"}
+  ],
   "multiplayer_note": "Describe the verified launch and admission instructions here.",
   "current_version": "v1",
   "releases": [{
     "version": "v1",
     "attachment_id": "<approved-release-attachment-uuid>",
     "sha256": "<64-lowercase-hex-sha256-of-zip>",
-    "byte_size": 89458340
+    "byte_size": 89458340,
+    "launch_path": "Play My Game.bat"
   }]
 }]
 ```
@@ -38,6 +42,33 @@ same digest and size. Never put a room code, OIDC credential, user config or
 server secret in a manifest. The public page's version and checksum refer to
 the ZIP, not its embedded PCK. Retain older version entries when changing the
 current pointer; do not repoint a version to different bytes.
+
+`launch_path` on a release names the file the Windows player starts from that
+release's ZIP root. It is pinned with the release, so a version that renames its
+entrypoint (`A.bat` to `B.bat`) does not break a rollback: rolling back to the
+older version serves `A.bat` again. It must be a single file name ending in
+`.bat`, `.cmd` or `.exe`, with no folders, no `..` and no shell characters; a
+manifest with anything else is rejected. Like the bytes, a release's launcher
+never changes once set.
+
+For a release with no `launch_path`, the player falls back to the older
+game-level `launch_path` (manifests written before launchers were pinned per
+release), then for `voltron` its historical `Play Voltron.bat`, and otherwise
+installs normally and opens the folder instead of launching. The `/updates`
+metadata, the game page's portable-ZIP hint and the player's remembered
+launcher all resolve against the release being served, not the game.
+
+The admin publish form (`/admin/games`) takes the launcher with each release.
+To pin a launcher on a release published before this, without touching its
+bytes or the current version, call
+`Platform.Games.Publishing.pin_launch_path(actor, slug, version, launch_path)`
+as a root admin. It refuses to change a launcher that is already set.
+
+`screenshots` is optional: at most eight `{"path", "alt"}` entries, each path a
+local `/images/` asset like `image_path`, each alt 1 to 200 characters. The game
+page shows them as a gallery with a viewer and hides the gallery when the list
+is empty or absent. Published games can change either field without a new
+release through `Platform.Games.Publishing.save/2`.
 
 ## Community identity
 
@@ -110,3 +141,91 @@ link will require a configured sender and the existing audited mail outbox.
 
 UI checks use the actual controller-rendered fixture and compiled CSS/JS on a
 GitHub-hosted browser, never a Core browser session on the personal workstation.
+
+## In-app publishing prototype
+
+Root admins can now use **Admin → Games** (`/admin/games`) instead of setting
+`GAME_PUBLICATIONS_JSON`. Upload a portable Windows ZIP in Burrow chat first.
+Enter its attachment ID, the game org, version, title and summary; save the
+release. Its digest and size come from the stored attachment. Publication
+creates a fresh, tagged player channel and seats the publisher as admin.
+The existing community join, player display-name projection and message
+permissions still apply. Existing environment manifests remain fallback only;
+a database publication, including an unpublished one, takes precedence.
+
+Versions retain their original bytes. Publish another version to update;
+select an older version with its original attachment to roll back. A save
+checks all retained attachments and refuses unavailable artifacts or attempts
+to change the game org. An archived org cannot receive a new release. This is
+install-admin publication for the prototype, not an open game-upload store.
+
+### Windows player
+
+The signed-in game page downloads a **personal** Burrow Player ZIP. Extract it
+and run `Play.bat`. Play downloads the current portable release, verifies the
+size and SHA-256, stages extraction, and switches the installed version only
+on success. Old versions remain installed. A failed update leaves the previous
+version playable through **Play installed version**. **Chat / renew sign-in**
+opens the same Burrow community in the browser. The first version uses Windows
+PowerShell and requires no administrator installation. No native chat or voice
+SDK is claimed; browser chat uses the existing signed-in session.
+
+The personal `player.json` contains a game-scoped, download-only bearer grant
+valid for seven days. Do not redistribute it; friends get their own player
+from the signed-in page. It grants neither account/profile nor chat access,
+is rejected for other games, and checks that the identity remains active.
+It is never passed to the game. Renew by downloading a fresh player in the
+browser. This is not OS isolation from arbitrary code on the same PC.
+
+`/games/:slug/updates` exposes only published release metadata. Native release
+downloads require the scoped grant in the Authorization header. Unpublishing
+stops new updates and downloads. Already installed copies remain usable.
+The release ZIP currently must contain `Play Voltron.bat` at its root.
+
+Hosting here means Burrow-hosted release files plus the existing public ENet
+match server. Publishing does not deploy a matching server pack. Coordinate
+that separately before advertising public multiplayer; local play works
+without it. Fresh-account provider registration still needs to be tested on
+the serving install. The publisher does not change the identity provider.
+
+## Gaming presentation for a separate install
+
+The install branding record has an opt-in `experience` value: `workspace`
+(default) or `gaming`. Root admins can change it under Admin → Branding.
+Only enable it on the gaming install after its owner and initial game are
+configured. Existing installs retain their current presentation.
+
+Gaming mode sends the primary app-host root and the installed PWA to `/play`.
+The public home uses real published releases and community counts, with a
+player-facing identity and an admin-only creator entry. Game pages link back
+to that home. Ordinary login and owner handover land in the gaming home;
+explicit game login, native login, chat-host and meeting deep links retain
+their own routing. An empty publication list has an honest empty state.
+
+This is a presentation choice, not a permission boundary or an identity-sync
+service. Existing resource authorization remains in force. A separate
+instance has its own database, users and memberships. Reusing an OIDC provider
+requires a dedicated client and correct owner binding before first login;
+persona, friends and voice preferences do not synchronize automatically.
+Do not copy development conversations into the player community.
+
+Voltron's release attachment must be imported into the new install's own
+storage and published against a local game org. The original install's
+attachment, org and room IDs are not portable database references. Verify the
+imported ZIP against its approved digest before publishing. The native match
+server can stay shared when the PCK matches; a new web instance does not
+require another game-server droplet.
+
+
+### Console Glass game spaces
+
+The Gaming experience keeps Play, Create and Discover navigation around the published catalog and applies the same visual tokens to the existing workspace. The regular Workspace profile is unchanged. The production shell does not import the prototype’s fictional friends, activity, matchmaking, ratings or voice states.
+
+Optional publication metadata:
+
+- `placeholder: true` labels a test game and its download clearly.
+- `project_id` links a real Create project. Only viewers with project access see the link, and its org must match the publication.
+- `development_space_id` identifies a separate development channel whose `metadata.goal_project_id` matches that project. It must share its org, be active, and pass the viewer’s `chat.read` check; player community channels cannot double as development channels. If no valid readable development channel exists, Create opens the authorised project’s files instead.
+- `theme_color` can provide a six-digit hex color for focus tint; other values are ignored.
+
+The development chat remains the existing chat workspace. Its game context panel shows the configured engine and actual assigned agents; it does not claim an engine connection or install specialist agents implicitly. Player rooms keep their existing publication-scoped membership and persona protections.

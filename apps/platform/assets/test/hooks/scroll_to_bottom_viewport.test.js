@@ -470,3 +470,37 @@ describe("ScrollToBottom — a sibling resizes the scroller's viewport", () => {
     expect(hook._viewportObserver).toBe(null);
   });
 });
+
+
+describe("active thread entry rather than latest message", () => {
+  afterEach(() => vi.unstubAllGlobals())
+  function fixture(rect) {
+    const field = { matches: s => s === ".thread-input", getBoundingClientRect: () => rect }
+    vi.stubGlobal("document", { activeElement: field })
+    vi.stubGlobal("window", { visualViewport: { offsetTop: 0, height: 195 } })
+    const hook = Object.assign(Object.create(ScrollToBottom), {
+      el: { contains: e => e === field, closest: () => ({ querySelector: () => ({ getBoundingClientRect: () => ({ top: 143 }) }) }) },
+      scrollEl: { getBoundingClientRect: () => ({ top: 92, bottom: 195 }), scrollBy: vi.fn(), scrollHeight: 800 },
+      honourAnchor: vi.fn(),
+    })
+    return { hook, field }
+  }
+  it("brings a reply hidden by the keyboard back above the dock", () => {
+    const { hook } = fixture({ top: -22, bottom: 20, height: 42 })
+    hook.scrollToBottom(0)
+    expect(hook.scrollEl.scrollBy).toHaveBeenCalledWith({ top: -119, behavior: "instant" })
+    expect(hook.honourAnchor).not.toHaveBeenCalled()
+  })
+  it("leaves an already visible reply in place instead of snapping to newer messages", () => {
+    const { hook } = fixture({ top: 97, bottom: 139, height: 42 })
+    hook.scrollToBottom(0)
+    expect(hook.scrollEl.scrollBy).not.toHaveBeenCalled()
+    expect(hook.honourAnchor).not.toHaveBeenCalled()
+  })
+  it("does not change the follow rule for another focused field", () => {
+    const { hook } = fixture({ top: 97, bottom: 139, height: 42 })
+    document.activeElement = { matches: () => false }
+    expect(hook._keepThreadEntryVisible()).toBe(false)
+    expect(hook.scrollEl.scrollBy).not.toHaveBeenCalled()
+  })
+})

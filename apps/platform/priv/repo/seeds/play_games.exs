@@ -1,0 +1,456 @@
+# Seeds the three Burrow Play games: Voltron (featured, first) and two clearly
+# labelled placeholder games, each as a complete game record set.
+#
+# Run with:
+#   cd apps/platform && mix run priv/repo/seeds/play_games.exs
+#
+# Needs a writable CHAT_ATTACHMENTS_ROOT for the build zips and the root org.
+# The owner is resolved at run time: the earliest internal root admin, or on a
+# dev DB with none, the same local user /dev/login creates.
+#
+# Everything goes through context functions:
+#
+#   * Create project      Platform.Tasks.create_project/1, slug "game-<slug>",
+#                         with one epic and a few unassigned backlog tasks
+#   * development space   Platform.Chat.create_channel/1, slug "game-<slug>-dev",
+#                         metadata %{"game_slug", "project_id", "goal_project_id"}
+#                         (goal_project_id scopes the channel to the project in
+#                         Create); separate from the players room
+#   * release build       Platform.Chat.AttachmentStorage.persist_binary_upload/3
+#                         and Platform.Chat.create_attachment/1, a small zip
+#   * publication         Platform.Games.Publishing.publish_release/2, which
+#                         also creates the tagged players room (community_space_id)
+#   * presentation        Platform.Games.Publishing.save/2 adds image_path,
+#                         image_alt, portrait_path, theme_color, project_id, development_space_id,
+#                         position, featured, placeholder and screenshots (with
+#                         captions; an existing shot gains a missing caption) to
+#                         the manifest, and pins each release's launch_path
+#                         (the launcher is pinned per release, not per game)
+#
+# Re-running adds nothing: projects, spaces and epics are found by slug or
+# name, tasks by (project, title), and a release version that is already
+# published is never re-uploaded. When a game already has a publication (an
+# install where the real Voltron build is published), its releases are kept
+# and only the missing records and presentation fields are filled in.
+#
+# The builds are tiny zips (README plus a minimal HTML5 page). Placeholder
+# builds say TEST BUILD in the file name, README and page. Nothing here holds a
+# room code, server address or credential, and no player or online counts are
+# recorded.
+
+import Ecto.Query
+
+alias Platform.{Chat, Repo, Tasks, Tenancy}
+alias Platform.Chat.AttachmentStorage
+alias Platform.Games.{Publication, Publishing}
+alias Platform.Tasks.{Epic, Project, Task}
+
+games = [
+  %{
+    slug: "voltron",
+    theme_color: "#4a7aa6",
+    title: "Voltron",
+    summary: "Pilot a lion, form Voltron, and smash things with your crew.",
+    position: 0,
+    featured: true,
+    placeholder: false,
+    version: "dev-stub",
+    image_path: "/images/voltron-game.png",
+    image_alt: "Voltron gameplay",
+    portrait_path: "/images/play/voltron-portrait.png",
+    launch_path: "Play Voltron.bat",
+    screenshots: [
+      %{
+        "path" => "/images/play/voltron-shot-1.png",
+        "alt" => "Gameplay: the assembled robot strides down a city street",
+        "caption" => "In-game"
+      },
+      %{
+        "path" => "/images/play/voltron-shot-2.png",
+        "alt" => "Concept art: the four pilots and their lion over the skyline",
+        "caption" => "Concept art"
+      },
+      %{
+        "path" => "/images/play/voltron-shot-3.png",
+        "alt" => "Concept art: close on the lion and its four pilot seats",
+        "caption" => "Concept art"
+      }
+    ],
+    build_label: "DEV STUB",
+    tasks: [
+      "Playtest the current Windows release with the crew",
+      "Match server pack for the published release",
+      "Capture store screenshots from a real session"
+    ]
+  },
+  %{
+    slug: "sky-haulers",
+    theme_color: "#7fb8f0",
+    title: "Placeholder: Sky Haulers",
+    summary:
+      "Placeholder test build: a cargo-hauling co-op between floating islands, used to test downloads and player rooms. Not a real game.",
+    position: 1,
+    featured: false,
+    placeholder: true,
+    version: "0.1.0-test",
+    image_path: "/images/play/sky-haulers-cover.png",
+    image_alt: "Placeholder cover: floating islands and kites",
+    portrait_path: "/images/play/sky-haulers-portrait.png",
+    launch_path: "Play Sky Haulers.bat",
+    screenshots: [
+      %{
+        "path" => "/images/play/sky-haulers-shot-1.png",
+        "alt" => "Placeholder art: floating islands with kites",
+        "caption" => "Placeholder art"
+      },
+      %{
+        "path" => "/images/play/sky-haulers-shot-2.png",
+        "alt" => "Placeholder art: a cottage on a floating island",
+        "caption" => "Placeholder art"
+      },
+      %{
+        "path" => "/images/play/sky-haulers-shot-3.png",
+        "alt" => "Placeholder art: islands drifting at sunset",
+        "caption" => "Placeholder art"
+      }
+    ],
+    build_label: "TEST BUILD",
+    tasks: [
+      "Download the test build from the game page and check its SHA-256",
+      "Join the players room from the game page",
+      "Publish a second test version and confirm the update path"
+    ]
+  },
+  %{
+    slug: "tiny-tactics",
+    theme_color: "#8d54c2",
+    title: "Placeholder: Tiny Tactics",
+    summary:
+      "Placeholder test build: a tiny turn-based hex skirmish, used to test releases, updates and Create projects. Not a real game.",
+    position: 2,
+    featured: false,
+    placeholder: true,
+    version: "0.1.0-test",
+    image_path: "/images/play/tiny-tactics-cover.png",
+    image_alt: "Placeholder cover: a hex board with a star",
+    portrait_path: "/images/play/tiny-tactics-portrait.png",
+    launch_path: "Play Tiny Tactics.bat",
+    screenshots: [
+      %{
+        "path" => "/images/play/tiny-tactics-shot-1.png",
+        "alt" => "Placeholder art: a hex board with a star",
+        "caption" => "Placeholder art"
+      },
+      %{
+        "path" => "/images/play/tiny-tactics-shot-2.png",
+        "alt" => "Placeholder art: close on the star and coloured hexes",
+        "caption" => "Placeholder art"
+      },
+      %{
+        "path" => "/images/play/tiny-tactics-shot-3.png",
+        "alt" => "Placeholder art: the hex board in blue",
+        "caption" => "Placeholder art"
+      }
+    ],
+    build_label: "TEST BUILD",
+    tasks: [
+      "Download the test build from the game page and check its SHA-256",
+      "Join the players room from the game page",
+      "Unpublish and republish to check the store page hides and returns"
+    ]
+  }
+]
+
+org =
+  Tenancy.get_root_org() ||
+    raise "play_games.exs: no root org. Run `mix ecto.migrate` first."
+
+actor =
+  Repo.all(
+    from(m in Tenancy.OrgMembership,
+      join: u in Platform.Accounts.User,
+      on: u.id == m.user_id,
+      where:
+        m.org_id == ^org.id and m.role == "admin" and m.external == false and
+          is_nil(u.archived_at),
+      order_by: u.inserted_at,
+      select: u
+    )
+  )
+  |> List.first() ||
+    (fn ->
+       # No owner yet: create the same local user /dev/login does. Dev only.
+       if Mix.env() != :dev, do: raise("play_games.exs: no root admin user on this database.")
+
+       result =
+         Platform.Accounts.ExternalAdmission.admit(
+           %{sub: "dev-local-user", email: "dev@localhost", name: "Dev User"},
+           surface: :app
+         )
+
+       if Tenancy.root_admin?(result.user),
+         do: result.user,
+         else: raise("play_games.exs: the dev user is not a root admin; visit /dev/login first.")
+     end).()
+
+ok! = fn
+  {:ok, value}, _what -> value
+  other, what -> raise "play_games.exs: #{what} failed: #{inspect(other)}"
+end
+
+build_zip = fn game ->
+  label = game.build_label
+  name = String.replace_prefix(game.title, "Placeholder: ", "")
+
+  readme = """
+  #{name} (#{label}, version #{game.version})
+
+  #{if game.placeholder, do: "This is a PLACEHOLDER game: a test fixture for Burrow Play.\nIt is not a real game and has no gameplay.\n", else: "Development stub for a local Burrow Play database. It is not the real release.\n"}
+  Open index.html in a browser to see the test page.
+  """
+
+  page = """
+  <!doctype html>
+  <html lang="en">
+  <head><meta charset="utf-8"><title>#{name}: #{label}</title></head>
+  <body style="font-family:sans-serif;background:#111;color:#eee;padding:2rem">
+  <h1>#{name}</h1>
+  <p><strong>#{label}</strong> · version #{game.version}</p>
+  <p>#{if game.placeholder, do: "Placeholder game for testing Burrow Play. Nothing to play here.", else: "Development stub. Not the real release."}</p>
+  </body>
+  </html>
+  """
+
+  # The Windows player starts the release's launch_path from its root.
+  launcher =
+    "@echo off\r\nrem #{name} #{label}: opens the test page.\r\nstart \"\" \"%~dp0index.html\"\r\n"
+
+  files = [
+    {~c"README.txt", readme},
+    {~c"index.html", page},
+    {String.to_charlist(game.launch_path), launcher}
+  ]
+
+  {:ok, {_, bytes}} = :zip.create(~c"build.zip", files, [:memory])
+  bytes
+end
+
+# Builds from before per-game launchers carry only the "Play Voltron.bat" shim.
+# Name whichever launcher this release really ships, or none.
+launcher_in_release = fn manifest, version, wanted ->
+  names =
+    with {:ok, attachment} <- Platform.Games.artifact(manifest, version),
+         path = AttachmentStorage.path_for(attachment.storage_key),
+         {:ok, entries} <- :zip.list_dir(String.to_charlist(path)) do
+      for {:zip_file, name, _info, _comment, _offset, _size} <- entries, do: to_string(name)
+    else
+      _ -> []
+    end
+
+  Enum.find([wanted, "Play Voltron.bat"], &(&1 in names))
+end
+
+# Published screenshots stay as they are; a shot this seed also lists (same
+# path) gains the seed's caption when it has none yet.
+with_captions = fn
+  nil, seeded ->
+    seeded
+
+  published, seeded ->
+    captions = Map.new(seeded, &{&1["path"], &1["caption"]})
+
+    Enum.map(published, fn shot ->
+      case captions[shot["path"]] do
+        caption when is_binary(caption) -> Map.put_new(shot, "caption", caption)
+        _ -> shot
+      end
+    end)
+end
+
+for game <- games do
+  project =
+    Repo.get_by(Project, slug: "game-" <> game.slug) ||
+      ok!.(
+        Tasks.create_project(%{
+          name: game.title,
+          slug: "game-" <> game.slug,
+          org_id: org.id
+        }),
+        "project #{game.slug}"
+      )
+
+  dev_space =
+    Repo.one(from(s in Chat.Space, where: s.slug == ^"game-#{game.slug}-dev")) ||
+      ok!.(
+        Chat.create_channel(%{
+          name: game.title <> " dev",
+          slug: "game-#{game.slug}-dev",
+          org_id: org.id,
+          created_by: actor.id,
+          description:
+            if(game.placeholder,
+              do: "Development space for a placeholder test game.",
+              else: "Development space for #{game.title}."
+            ),
+          metadata: %{
+            "game_slug" => game.slug,
+            "project_id" => project.id,
+            "goal_project_id" => project.id
+          }
+        }),
+        "dev space #{game.slug}"
+      )
+
+  dev_space =
+    if dev_space.metadata["goal_project_id"] == project.id do
+      dev_space
+    else
+      ok!.(
+        Chat.update_space(dev_space, %{
+          metadata:
+            Map.merge(dev_space.metadata || %{}, %{
+              "game_slug" => game.slug,
+              "project_id" => project.id,
+              "goal_project_id" => project.id
+            })
+        }),
+        "dev space metadata #{game.slug}"
+      )
+    end
+
+  unless Repo.exists?(
+           from(p in Chat.Participant,
+             where:
+               p.space_id == ^dev_space.id and p.participant_type == "user" and
+                 p.participant_id == ^actor.id
+           )
+         ) do
+    ok!.(
+      Chat.add_participant(dev_space.id, %{
+        participant_id: actor.id,
+        participant_type: "user",
+        role: "admin",
+        joined_at: DateTime.utc_now()
+      }),
+      "dev space participant #{game.slug}"
+    )
+  end
+
+  epic =
+    Repo.get_by(Epic, project_id: project.id, name: "Release and store page") ||
+      ok!.(
+        Tasks.create_epic(%{project_id: project.id, name: "Release and store page"}),
+        "epic #{game.slug}"
+      )
+
+  for title <- game.tasks do
+    unless Repo.exists?(from(t in Task, where: t.project_id == ^project.id and t.title == ^title)) do
+      ok!.(
+        Tasks.create_task(%{project_id: project.id, epic_id: epic.id, title: title}),
+        "task #{game.slug}"
+      )
+    end
+  end
+
+  stored = Repo.get(Publication, game.slug)
+
+  if is_nil(stored) do
+    bytes = build_zip.(game)
+
+    filename =
+      "#{game.slug}-#{game.version}-#{String.downcase(String.replace(game.build_label, " ", "-"))}.zip"
+
+    upload =
+      ok!.(
+        AttachmentStorage.persist_binary_upload(bytes, filename, "application/zip"),
+        "build upload #{game.slug}"
+      )
+
+    attachment =
+      ok!.(
+        Chat.create_attachment(
+          Map.merge(upload, %{
+            space_id: dev_space.id,
+            uploaded_by_user_id: actor.id,
+            state: "ready",
+            metadata: %{"origin" => "play_games_seed", "build" => game.build_label}
+          })
+        ),
+        "build attachment #{game.slug}"
+      )
+
+    ok!.(
+      Publishing.publish_release(actor, %{
+        "slug" => game.slug,
+        "org_id" => org.id,
+        "title" => game.title,
+        "summary" => game.summary,
+        "version" => game.version,
+        "attachment_id" => attachment.id,
+        "published" => "true",
+        "launch_path" => game.launch_path,
+        "multiplayer_note" =>
+          if(game.placeholder,
+            do: "Placeholder test build. There is no multiplayer.",
+            else: nil
+          )
+      }),
+      "publish #{game.slug}"
+    )
+  end
+
+  manifest = Repo.get!(Publication, game.slug).manifest
+
+  # Placeholders own their copy; a real game's title and summary stay as published.
+  copy =
+    if game.placeholder,
+      do: %{"title" => game.title, "summary" => game.summary},
+      else: %{}
+
+  # Each release carries the launcher its own ZIP ships, so a rollback starts
+  # the right file. A pin is added where missing and never changed.
+  releases =
+    Enum.map(manifest["releases"], fn release ->
+      case release["launch_path"] ||
+             launcher_in_release.(manifest, release["version"], game.launch_path) do
+        nil -> release
+        launcher -> Map.put(release, "launch_path", launcher)
+      end
+    end)
+
+  presentation = %{
+    "releases" => releases,
+    "screenshots" => with_captions.(manifest["screenshots"], game.screenshots),
+    "image_path" => manifest["image_path"] || game.image_path,
+    "image_alt" => manifest["image_alt"] || game.image_alt,
+    "portrait_path" => game.portrait_path,
+    "project_id" => project.id,
+    "development_space_id" => dev_space.id,
+    "position" => game.position,
+    "featured" => game.featured,
+    "placeholder" => game.placeholder,
+    "theme_color" => game.theme_color
+  }
+
+  # Fields with no value stay unset rather than nil.
+  presentation =
+    presentation
+    |> Map.merge(copy)
+    |> Map.reject(fn {_key, value} -> is_nil(value) end)
+
+  publication =
+    if Map.take(manifest, Map.keys(presentation)) == presentation and
+         not Map.has_key?(manifest, "dev_space_id") do
+      Repo.get!(Publication, game.slug)
+    else
+      ok!.(
+        Publishing.save(actor, manifest |> Map.delete("dev_space_id") |> Map.merge(presentation)),
+        "presentation #{game.slug}"
+      )
+    end
+
+  IO.puts(
+    "#{game.slug}: project #{project.id}, dev space #{dev_space.id}, players room " <>
+      "#{publication.manifest["community_space_id"]}, current #{publication.manifest["current_version"]}"
+  )
+end

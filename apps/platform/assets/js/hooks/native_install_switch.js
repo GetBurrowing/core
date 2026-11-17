@@ -25,7 +25,15 @@
  * LiveView re-renders of the shell patch this element back to the server's
  * `hidden` classes, so `updated()` re-applies the revealed state and the
  * last known dot.
+ *
+ * WEB PATH (task 01a1ccd4 stage 3): when `installBadgesPlugin()` is null and
+ * the page is not on a Capacitor native platform (a browser, a PWA, the
+ * desktop app), the hook hands the button to `install_switch_web.js`, which
+ * reveals it and runs the browser-held install list. When the plugin exists,
+ * nothing below the `if (!this.plugin)` branches changed.
  */
+
+import { mountWebSwitch } from "./install_switch_web.js"
 
 const DOT_SELECTOR = "[data-role='install-unread-dot']"
 
@@ -54,7 +62,10 @@ const NativeInstallSwitch = {
   mounted() {
     this.plugin = installBadgesPlugin()
     this.othersUnread = false
-    if (!this.plugin) return
+    if (!this.plugin) {
+      this.web = mountWebSwitch(this)
+      return
+    }
 
     this.reveal()
 
@@ -77,13 +88,19 @@ const NativeInstallSwitch = {
   },
 
   updated() {
-    if (!this.plugin) return
+    if (!this.plugin) {
+      this.web?.updated()
+      return
+    }
     this.reveal()
     this.paintDot()
   },
 
   destroyed() {
-    if (!this.plugin) return
+    if (!this.plugin) {
+      this.web?.destroyed()
+      return
+    }
     this.el.removeEventListener("click", this.onClick)
     window.removeEventListener("burrowInstallBadges", this.onBadges)
     document.removeEventListener("visibilitychange", this.onVisibility)

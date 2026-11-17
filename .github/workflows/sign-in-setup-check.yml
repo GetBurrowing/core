@@ -1,0 +1,90 @@
+name: Same-device sign-in checks
+on:
+  push:
+    branches: [fix/mobile-first-signin]
+  workflow_dispatch:
+permissions:
+  contents: read
+jobs:
+  smoke:
+    runs-on: ubuntu-latest
+    container:
+      image: ghcr.io/getburrowing/elixir:1.20.4-otp-28-slim@sha256:a61672ebbafaf93ec6baeee14657fa73407e4f7fe57e92b2e3f063d25d0d3244
+      credentials:
+        username: ${{ github.actor }}
+        password: ${{ secrets.GITHUB_TOKEN }}
+    services:
+      postgres:
+        image: ghcr.io/getburrowing/postgres:16-alpine@sha256:0cefaabd882e42bcb2a2f3dc56d3ce4770560ba62fd7f197f1a2e008fd5731ab
+        credentials:
+          username: ${{ github.actor }}
+          password: ${{ secrets.GITHUB_TOKEN }}
+        env:
+          POSTGRES_USER: postgres
+          POSTGRES_PASSWORD: postgres
+        options: >-
+          --health-cmd pg_isready
+          --health-interval 10s
+          --health-timeout 5s
+          --health-retries 5
+    env:
+      MIX_ENV: test
+      PGHOST: postgres
+      PGUSER: postgres
+      PGPASSWORD: postgres
+      SIGN_IN_SETUP_EVIDENCE: /tmp/sign-in-setup-evidence
+    defaults:
+      run:
+        working-directory: apps/platform
+    steps:
+      - name: Tools
+        working-directory: /
+        run: |
+          apt-get update
+          apt-get install -y --no-install-recommends build-essential ca-certificates curl git
+          update-ca-certificates
+      - uses: actions/checkout@v5
+      - name: Hex
+        run: |
+          mix local.hex --force
+          mix local.rebar --force
+      - uses: actions/cache@v5
+        id: cache
+        with:
+          path: |
+            apps/platform/deps
+            apps/platform/_build
+          key: game-page-${{ runner.os }}-${{ hashFiles('apps/platform/mix.lock') }}
+      - name: Dependencies
+        run: |
+          mix deps.get
+          sh "$GITHUB_WORKSPACE/scripts/fetch-github-release-binaries.sh" nifs .
+      - name: Format changed Elixir and HEEx
+        run: |
+          mix format lib/platform/sign_in/email_setup.ex lib/platform/sign_in/email_setup_rate_limit.ex lib/platform/sign_in/setup_link.ex lib/platform/sign_in/setup_challenge.ex priv/repo/migrations/20261112150000_create_sign_in_setup_challenges.exs config/config.exs lib/platform/application.ex lib/platform/role.ex test/platform/role_test.exs lib/platform_web/live/settings_live.ex lib/platform_web/controllers/auth_controller.ex lib/platform_web/controllers/sign_in_setup_controller.ex lib/platform_web/controllers/sign_in_setup_html.ex lib/platform_web/controllers/sign_in_setup_html/show.html.heex lib/platform_web/router.ex test/platform_web/controllers/sign_in_setup_controller_test.exs test/platform/repo_lookup_boundary_test.exs test/platform_web/live/settings_live_test.exs
+          tar -czf "$GITHUB_WORKSPACE/sign-in-setup-format.tar.gz" lib/platform/sign_in/email_setup.ex lib/platform/sign_in/email_setup_rate_limit.ex lib/platform/sign_in/setup_link.ex lib/platform/sign_in/setup_challenge.ex priv/repo/migrations/20261112150000_create_sign_in_setup_challenges.exs config/config.exs lib/platform/application.ex lib/platform/role.ex test/platform/role_test.exs lib/platform_web/live/settings_live.ex lib/platform_web/controllers/auth_controller.ex lib/platform_web/controllers/sign_in_setup_controller.ex lib/platform_web/controllers/sign_in_setup_html.ex lib/platform_web/controllers/sign_in_setup_html/show.html.heex lib/platform_web/router.ex test/platform_web/controllers/sign_in_setup_controller_test.exs test/platform/repo_lookup_boundary_test.exs test/platform_web/live/settings_live_test.exs
+      - uses: actions/upload-artifact@v4
+        with:
+          name: sign-in-setup-format
+          path: sign-in-setup-format.tar.gz
+      - name: Exercise setup, invite and existing native/web authentication
+        run: |
+          mix ecto.create
+          mix ecto.migrate
+          mix precommit test/platform_web/controllers/sign_in_setup_controller_test.exs test/platform_web/controllers/auth_controller_test.exs test/platform_web/controllers/auth_controller_app_login_test.exs test/platform_web/controllers/auth_controller_handover_test.exs test/platform_web/controllers/auth_controller_link_test.exs test/platform/sign_in_admin_test.exs test/platform/sign_in/durable_link_test.exs test/platform_web/live/settings_live_test.exs test/platform/repo_lookup_boundary_test.exs test/platform/regression/supervised_task_repo_audit_test.exs test/platform/release/irreversible_migrations_test.exs test/platform/role_test.exs test/platform/org/wiki/context_t4_e2e_test.exs
+      - uses: actions/setup-node@v5
+        with:
+          node-version: 24
+      - name: Render the real setup screen on phone and desktop
+        run: |
+          sh "$GITHUB_WORKSPACE/scripts/fetch-github-release-binaries.sh" tailwind .
+          mix tailwind platform --minify
+          cp -r priv/static/assets priv/static/images priv/static/fonts /tmp/sign-in-setup-evidence/
+          npm install --prefix /tmp/sign-in-setup-playwright playwright@1.58.2
+          /tmp/sign-in-setup-playwright/node_modules/.bin/playwright install --with-deps chromium
+          node "$GITHUB_WORKSPACE/.github/scripts/sign-in-setup-browser.cjs"
+      - uses: actions/upload-artifact@v4
+        if: always()
+        with:
+          name: sign-in-setup-screens
+          path: /tmp/sign-in-setup-evidence/*png

@@ -13,6 +13,7 @@
  *        agent.claude_logout          {agent_id, ref}                     `claude auth logout` as the agent
  *        host.env_names               {agent_id?, ref}                    env NAMES only, never values
  *        host.admin                   {op, service, tag?, ref}            restart|deploy|rollback, full_root only
+ *   join hello                        {profile, full_root, features}      features: HOST_FEATURES
  *   out  host.inventory               {profile, agents: [observation]}   on every join
  *        agent.state                  observation                         on every change
  *        agent.log                    {ref, agent_id, lines}
@@ -79,6 +80,18 @@ export interface Transport {
 
 export const WATCH_MS = 5_000;
 
+/**
+ * Commands this host handles that a host built before them silently ignores.
+ * Core reads the list from the hello and refuses a command the connected host
+ * does not list, at once and by name, instead of pushing it into a host that
+ * will never answer. A full_machine host's daemon is installed at boot from the
+ * agent-host image and is not moved by core's updater, so it can be older than
+ * core: a hosted install's ran 31 Oct code with no Claude login while its
+ * core asked for one, and every "Connect AI" waited out core's 35 s for
+ * nothing and showed "Burrow didn't answer".
+ */
+export const HOST_FEATURES = ["claude_login"] as const;
+
 export class Host {
   private readonly last = new Map<string, string>();
   private readonly queues = new Map<string, Promise<void>>();
@@ -112,9 +125,12 @@ export class Host {
   private readonly restartDeps: RestartDeps;
   private readonly claude: ClaudeLogin;
 
-  /** The host's hello: its profile, and whether full root is on. */
+  /**
+   * The host's hello: its profile, whether full root is on, and the commands
+   * it understands beyond the original set ({@link HOST_FEATURES}).
+   */
   hello(): Payload {
-    return { profile: this.profile, full_root: this.fullRoot };
+    return { profile: this.profile, full_root: this.fullRoot, features: [...HOST_FEATURES] };
   }
 
   /** Env names (never values) of one agent's env file. Answered as `host.reply`. */

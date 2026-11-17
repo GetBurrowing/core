@@ -184,7 +184,7 @@ defmodule PlatformWeb.FirstRunLive do
           role="status"
           class="rounded-[var(--radius-field)] bg-base-200 px-3 py-2 text-sm text-base-content"
         >
-          Burrow isn't set up on this workspace yet. Your admin can connect it.
+          Burrow isn't set up yet. Ask the person who manages Burrow to connect it.
         </p>
 
         <div class="flex flex-wrap gap-2">

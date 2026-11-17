@@ -6,6 +6,7 @@ defmodule PlatformWeb.ControlCenterLive do
   alias Platform.Agents.{
     Agent,
     AgentServer,
+    Burrow,
     Config,
     MemoryContext
   }
@@ -1204,6 +1205,7 @@ defmodule PlatformWeb.ControlCenterLive do
                 key_set?={@native_header.key_set?}
                 step={@native_header.login_step}
                 mode={@native_header.login_mode}
+                connect_ai?={Burrow.burrow?(@selected_agent)}
               />
 
               <NativeFiles.summary
@@ -1223,6 +1225,7 @@ defmodule PlatformWeb.ControlCenterLive do
                 key_set?={@native_header.key_set?}
                 step={@native_header.login_step}
                 mode={@native_header.login_mode}
+                connect_ai?={Burrow.burrow?(@selected_agent)}
               />
 
               <NativeLoginPanel.logs
