@@ -247,6 +247,7 @@ defmodule PlatformWeb.GoalsLive do
       |> assign(
         share_open: false,
         settings_open: false,
+        coach_picker: nil,
         share_tab: "people",
         share_snapshot: [],
         audience_options: %{people: [], teams: [], spaces: []},
@@ -548,6 +549,36 @@ defmodule PlatformWeb.GoalsLive do
     end
   end
 
+  # ── Change coach (task 01a1eab7 stage 3) ───────────────────────────────
+  #
+  # The cards list `Goals.list_coaches/1` only. The LiveView makes no owner
+  # check of its own: the Change control and the sheet render for the owner
+  # only, and `Goals.update_goal/3` is the guard (it drops a non-owner's
+  # `coach_agent_id` and refuses an ineligible one with
+  # `:lead_missing_goals_tools`).
+  def handle_event("open_coach", _params, socket) do
+    {:noreply, assign(socket, :coach_picker, coach_picker(socket))}
+  end
+
+  def handle_event("coach_pick", %{"agent_id" => id}, %{assigns: %{coach_picker: %{}}} = socket)
+      when is_binary(id),
+      do: {:noreply, update_picker(socket, selected_id: id, refused?: false)}
+
+  def handle_event("coach_more", _params, %{assigns: %{coach_picker: %{}}} = socket),
+    do: {:noreply, update_picker(socket, expanded?: true)}
+
+  def handle_event("close_coach", _params, socket),
+    do: {:noreply, assign(socket, :coach_picker, nil)}
+
+  def handle_event("coach_save", params, socket) do
+    picker = socket.assigns.coach_picker
+
+    case params["agent_id"] || (picker && picker.selected_id) do
+      id when is_binary(id) and id != "" -> save_coach(socket, id)
+      _ -> {:noreply, socket}
+    end
+  end
+
   def handle_event("goal_status", %{"status" => status}, socket)
       when status in ~w(active paused finished) do
     with {:ok, card} <- owner_card(socket),
@@ -678,6 +709,50 @@ defmodule PlatformWeb.GoalsLive do
     end
   end
 
+  defp coach_picker(socket) do
+    current = socket.assigns.card && socket.assigns.card.goal.coach_agent_id
+
+    coaches =
+      case Goals.list_coaches(socket.assigns.user) do
+        {:ok, %{coaches: coaches}} -> coaches
+        _ -> []
+      end
+
+    %{
+      coaches: coaches,
+      current_id: current,
+      selected_id: current,
+      expanded?: false,
+      refused?: false
+    }
+  end
+
+  defp update_picker(socket, changes),
+    do: assign(socket, :coach_picker, Map.merge(socket.assigns.coach_picker, Map.new(changes)))
+
+  defp save_coach(socket, id) do
+    case Goals.update_goal(socket.assigns.user, goal_id(socket), %{coach_agent_id: id}) do
+      {:ok, %{coach_agent_id: ^id}} ->
+        {:noreply, socket |> reload() |> assign(:coach_picker, nil)}
+
+      {:error, :lead_missing_goals_tools} ->
+        picker = socket.assigns.coach_picker || coach_picker(socket)
+
+        {:noreply,
+         assign(socket, :coach_picker, %{
+           picker
+           | selected_id: picker.current_id,
+             refused?: true
+         })}
+
+      # A non-owner's coach_agent_id was dropped by update_goal/3 (the goal
+      # came back unchanged) or the actor may not edit at all: nothing new
+      # to show and nothing changed.
+      _ ->
+        {:noreply, socket}
+    end
+  end
+
   defp audience_keys(%{audience: audience}) when is_list(audience),
     do: Enum.map(audience, &{&1.type, &1.id})
 
@@ -783,6 +858,7 @@ defmodule PlatformWeb.GoalsLive do
           from_brief={@from_brief}
           log_error={@log_error}
           audience_options={@audience_options}
+          coach_picker={@coach_picker}
         />
       </section>
       <GoalsOpenUp.audience_sheet

@@ -106,18 +106,38 @@ defmodule Platform.Goals do
 
   @doc """
   Changes a goal's settings or status: the owner or the coach agent only.
-  `coach_agent_id` is the owner's to change; `owner_user_id` and `org_id`
-  never change. Back to kind "personal" is refused while any grant exists.
+  `coach_agent_id` is the owner's to change, and only to an eligible coach
+  (`Platform.Goals.Coaches`; else `{:error, :lead_missing_goals_tools}`) or
+  nil; `owner_user_id` and `org_id` never change. Back to kind "personal"
+  is refused while any grant exists.
   """
   @spec update_goal(actor(), term(), map()) :: {:ok, Goal.t()} | {:error, term()}
-  def update_goal(actor, goal_id, attrs) when is_map(attrs) do
+  def update_goal(actor, goal_id, attrs) when is_map(attrs),
+    do: do_update_goal(actor, goal_id, attrs, &check_coach_change/3)
+
+  @doc """
+  The hand-off's coach write (`hand_goal_to_space/3`, through
+  `Platform.Goals.Handoff`): sets the coach of a COACHLESS goal to the
+  space's leader by the same path as `update_goal/3`, without the
+  eligible-coach check `update_goal/3` makes (task 01a1eab7 kept the
+  hand-off's behaviour unchanged; whether the leader must be an eligible
+  coach is a follow-up). A goal that already has a coach is
+  `{:error, :forbidden}`.
+  """
+  @spec hand_off_coach(actor(), term(), term()) :: {:ok, Goal.t()} | {:error, term()}
+  def hand_off_coach(actor, goal_id, agent_id),
+    do: do_update_goal(actor, goal_id, %{coach_agent_id: agent_id}, &check_coachless/3)
+
+  defp do_update_goal(actor, goal_id, attrs, check_coach) do
     with :ok <- check_enabled() do
       in_transaction(fn ->
         with {:ok, visible_goal} <- fetch_visible(actor, goal_id, false),
              :ok <- lock_clock(actor, visible_goal),
              {:ok, goal} <- fetch_visible(actor, goal_id, true),
              :ok <- check_can_edit(actor, goal),
-             changeset = Goal.changeset(goal, editable_attrs(actor, goal, attrs)),
+             attrs = editable_attrs(actor, goal, attrs),
+             :ok <- check_coach.(actor, goal, attrs),
+             changeset = Goal.changeset(goal, attrs),
              :ok <- check_kind_change(changeset, goal) do
           with {:ok, updated} <- Repo.update(changeset) do
             Platform.Goals.Clock.sync(goal, updated, Platform.Goals.Clock.now())
@@ -131,6 +151,32 @@ defmodule Platform.Goals do
   # The coach may not reassign the coach: only the owner casts it.
   defp editable_attrs(actor, goal, attrs) do
     if owner?(actor, goal), do: attrs, else: Map.drop(attrs, [:coach_agent_id, "coach_agent_id"])
+  end
+
+  # A changed, non-nil coach must be an eligible coach for the owner
+  # (`Platform.Goals.Coaches`, task 01a1eab7); nil keeps the coachless goal
+  # `hand_goal_to_space/3` relies on. Runs after `editable_attrs/3`, so only
+  # the owner's change reaches it.
+  defp check_coach_change(actor, goal, attrs) do
+    case coach_attr(attrs) do
+      {:ok, id} when not is_nil(id) and id != goal.coach_agent_id ->
+        if Platform.Goals.Coaches.eligible?(actor, id),
+          do: :ok,
+          else: {:error, :lead_missing_goals_tools}
+
+      _ ->
+        :ok
+    end
+  end
+
+  defp check_coachless(_actor, %Goal{coach_agent_id: nil}, _attrs), do: :ok
+  defp check_coachless(_actor, _goal, _attrs), do: {:error, :forbidden}
+
+  defp coach_attr(attrs) do
+    case Map.fetch(attrs, :coach_agent_id) do
+      {:ok, id} -> {:ok, id}
+      :error -> Map.fetch(attrs, "coach_agent_id")
+    end
   end
 
   defp check_kind_change(changeset, goal) do
@@ -418,15 +464,40 @@ defmodule Platform.Goals do
   def lead_agent(user), do: proposals(:lead_agent, [user])
 
   @doc """
-  Starts a New goal conversation with the lead agent. Answers
+  Starts a New goal conversation with the lead agent, or with
+  `opts[:coach_agent_id]` when the person picked one. Answers
   `{:error, :lead_missing_goals_tools}`, writing nothing, when the lead's
-  runtime lacks the Goals tools (`Platform.Goals.Proposals.check_lead_tools/1`).
+  runtime lacks the Goals tools (`Platform.Goals.Proposals.check_lead_tools/1`)
+  or the picked agent is not an eligible coach (`Platform.Goals.Coaches`).
   """
-  def start_goal_conversation(user, text), do: proposals(:start_goal_conversation, [user, text])
+  def start_goal_conversation(user, text, opts \\ []),
+    do: proposals(:start_goal_conversation, [user, text, opts])
+
+  @doc """
+  The agents `user` may pick as a goal's coach and the one a picker
+  preselects (task 01a1eab7): `{:ok, %{coaches: [...], default_id: id | nil}}`.
+  The rule lives in `Platform.Goals.Coaches`.
+  """
+  def list_coaches(user) do
+    with :ok <- check_enabled(), :ok <- check_use(user) do
+      coaches = Platform.Goals.Coaches.list_eligible(user)
+      {:ok, %{coaches: coaches, default_id: Platform.Goals.Coaches.default_id(user, coaches)}}
+    end
+  end
+
   def current_proposal(user), do: proposals(:current_proposal, [user])
   def get_proposal(actor, id), do: proposals(:get_proposal, [actor, id])
   def list_proposals(actor), do: proposals(:list_proposals, [actor])
   def conversation(user, id), do: proposals(:conversation, [user, id])
+
+  @doc """
+  The proposal's opening message for `actor` (task 01a1ebab): `{:ok, %{text,
+  sent_at, from: "person", note}}`, `{:ok, nil}` when it is gone, or
+  `{:error, :not_found}` when the actor does not see the proposal. Actor
+  first; answers `{:error, :goals_disabled}` before any read while the switch
+  is off. Nothing is read from attrs.
+  """
+  def opening_message(actor, id), do: proposals(:opening_message, [actor, id])
   def say_in_conversation(user, id, text), do: proposals(:say_in_conversation, [user, id, text])
   @doc "The conversation's agent records the proposal; it creates nothing."
   def propose_goal(agent, id, attrs), do: proposals(:propose_goal, [agent, id, attrs])
@@ -436,17 +507,6 @@ defmodule Platform.Goals do
   def subscribe_proposal(user, id), do: proposals(:subscribe_proposal, [user, id])
   @doc "Subscribes the caller to every proposal `user` starts (their own topic)."
   def subscribe_proposals(user), do: proposals(:subscribe_proposals, [user])
-
-  @doc """
-  Operator command (task 01a1eab6 stage 4): re-sends `goals.new_goal` for an
-  open proposal after `20261117220000_move_goal_proposals_out_of_dms` moved
-  it into its own space. No actor; see
-  `Platform.Goals.Proposals.resend_start_signal/1` for the release-eval
-  command and the errors, including `{:error, :lead_missing_goals_tools}`.
-  """
-  def resend_start_signal(proposal_id) do
-    with :ok <- check_enabled(), do: Platform.Goals.Proposals.resend_start_signal(proposal_id)
-  end
 
   # A proposal is not a goal, so `visible_goals/1` does not gate it: the
   # actor (the first argument) is checked here (task 01a1e229).

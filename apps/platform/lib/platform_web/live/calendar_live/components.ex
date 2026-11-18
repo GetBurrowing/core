@@ -1111,10 +1111,16 @@ defmodule PlatformWeb.CalendarLive.Components do
 
     ~H"""
     <div class="cal-sheet-scrim" phx-click="close_details" data-role="calendar-details-scrim"></div>
+    <%!-- `data-covers-tab-bar`: below lg this is a bottom sheet whose footer
+         holds Join now / Open call room. On the web it covers the tab bar
+         (z 60 over 30); the iOS app's native bar cannot be covered, so
+         `native_tab_bar.js` hides it while this is in the DOM. Without the
+         marker the native bar sat over the footer and hid Join. --%>
     <aside
       class="cal-details"
       aria-label="Event details"
       data-role="calendar-details"
+      data-covers-tab-bar
       data-kind={@detail.kind}
     >
       <div class="cal-dhead">
@@ -1691,6 +1697,7 @@ defmodule PlatformWeb.CalendarLive.Components do
       id="calendar-editor-scrim"
       class="cal-modal-scrim"
       data-role="calendar-editor-scrim"
+      data-covers-tab-bar
       phx-hook="CalendarEditorFocus"
     >
       <.focus_wrap
@@ -2287,7 +2294,7 @@ defmodule PlatformWeb.CalendarLive.Components do
       </div>
     </div>
 
-    <div :if={@feed_modal} class="cal-modal-scrim" data-role="feed-modal">
+    <div :if={@feed_modal} class="cal-modal-scrim" data-role="feed-modal" data-covers-tab-bar>
       <.focus_wrap
         id="calendar-feed-modal"
         class="cal-modal"

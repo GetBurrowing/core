@@ -14,6 +14,9 @@ protocol MeetingMediaControl: AnyObject {
     /// The page's CONFIRMED companion camera, reported to CallKit as
     /// `hasVideo` (task 01a13ca2 stage 4).
     func setVideoActive(_ active: Bool)
+    /// The page's Speaker button: prefer the loudspeaker (or not) for the
+    /// rest of the call. A connected headset or car still wins.
+    func setSpeaker(_ on: Bool)
 }
 
 /// The media state the page draws, derived from `CallState`. Only confirmed
@@ -21,6 +24,8 @@ protocol MeetingMediaControl: AnyObject {
 struct MeetingMediaSnapshot: Equatable {
     let mic: Bool
     let camera: Bool
+    /// The call is playing through the built-in loudspeaker.
+    let speaker: Bool
     /// LiveKit identities (`user:<uuid>`, `agent:...`), ours included, sorted.
     let speaking: [String]
 
@@ -30,6 +35,7 @@ struct MeetingMediaSnapshot: Equatable {
         // the page's companion connection (`video:user:`), and the page owns
         // its state; it reports it back through `setVideoActive`.
         camera = false
+        speaker = state.speakerOn
         speaking = state.speakingIdentities.sorted()
     }
 
@@ -42,6 +48,7 @@ struct MeetingMediaSnapshot: Equatable {
         var events: [(name: String, data: [String: Any])] = []
         if old.mic != new.mic || old.camera != new.camera { events.append(("mediaChanged", new.media)) }
         if old.speaking != new.speaking { events.append(("activeSpeakers", ["identities": new.speaking])) }
+        if old.speaker != new.speaker { events.append(("audioRouteChanged", ["speaker": new.speaker])) }
         return events
     }
 }
@@ -67,14 +74,17 @@ public class BurrowMeetingsPlugin: CAPPlugin, CAPBridgedPlugin {
         CAPPluginMethod(name: "capabilities", returnType: CAPPluginReturnPromise),
         CAPPluginMethod(name: "setMuted", returnType: CAPPluginReturnPromise),
         CAPPluginMethod(name: "setVideoActive", returnType: CAPPluginReturnPromise),
+        CAPPluginMethod(name: "setSpeaker", returnType: CAPPluginReturnPromise),
     ]
 
     /// What this build can do. Prod web is served to every installed build
     /// and Capacitor rejects an unknown method, so the page feature-detects
     /// with this. `camera` (task 01a13ca2 stage 4): the page may open its
     /// video-only companion connection, and this build has `setVideoActive`
-    /// and the `appStateChanged` event.
-    static let capabilities: [String: Any] = ["mic": true, "camera": true, "activeSpeakers": true]
+    /// and the `appStateChanged` event. `speaker`: this build has
+    /// `setSpeaker` and the `audioRouteChanged` event, so the page shows
+    /// its Speaker button (WKWebView has no `setSinkId`).
+    static let capabilities: [String: Any] = ["mic": true, "camera": true, "activeSpeakers": true, "speaker": true]
 
     /// How long the app keeps running after it resigns active, so the page
     /// can turn the companion camera off before the web view is suspended.
@@ -113,26 +123,38 @@ public class BurrowMeetingsPlugin: CAPPlugin, CAPBridgedPlugin {
     }
 
     /// The `appStateChanged` payload for an application notification, or nil
-    /// for any other notification.
+    /// for any other notification. `background` is true only when the app
+    /// has really gone to the background.
+    ///
+    /// willResignActive alone is not leaving: the camera permission alert,
+    /// Control Center, the notification shade and a call banner all fire
+    /// it. The page used to turn the camera off on it, so the first Camera
+    /// tap was undone by its own permission alert.
     static func appStateEvent(_ name: Notification.Name) -> [String: Any]? {
         switch name {
-        case UIApplication.willResignActiveNotification: return ["active": false]
+        case UIApplication.willResignActiveNotification: return ["active": false, "background": false]
+        case UIApplication.didEnterBackgroundNotification: return ["active": false, "background": true]
         case UIApplication.didBecomeActiveNotification: return ["active": true]
         default: return nil
         }
     }
 
-    /// `appStateChanged {active}`. willResignActive arrives before the web
-    /// view is suspended: the page turns the companion camera off on
-    /// `active: false`, under a background task of at most `resignGrace`.
+    /// `appStateChanged {active, background}`. didEnterBackground arrives
+    /// before the web view is suspended: the page turns the companion
+    /// camera off on `background: true`, under a background task of at most
+    /// `resignGrace`.
     private func observeAppState() {
         let center = NotificationCenter.default
-        for name in [UIApplication.willResignActiveNotification, UIApplication.didBecomeActiveNotification] {
+        let names = [
+            UIApplication.willResignActiveNotification, UIApplication.didEnterBackgroundNotification,
+            UIApplication.didBecomeActiveNotification,
+        ]
+        for name in names {
             appStateObservers.append(
                 center.addObserver(forName: name, object: nil, queue: .main) { [weak self] note in
                     guard let self, let data = BurrowMeetingsPlugin.appStateEvent(note.name) else { return }
                     MainActor.assumeIsolated {
-                        if data["active"] as? Bool == false { self.holdBackgroundTask() }
+                        if data["background"] as? Bool == true { self.holdBackgroundTask() }
                         self.notifyListeners("appStateChanged", data: data)
                     }
                 })
@@ -157,9 +179,23 @@ public class BurrowMeetingsPlugin: CAPPlugin, CAPBridgedPlugin {
         backgroundTask = .invalid
     }
 
-    /// `{mic: true, camera: true, activeSpeakers: true}`.
+    /// `{mic: true, camera: true, activeSpeakers: true, speaker: true}`.
     @objc func capabilities(_ call: CAPPluginCall) {
         call.resolve(Self.capabilities)
+    }
+
+    /// `{on}` -> `{speaker}`: the speaker preference. `speaker` in the reply
+    /// is the preference just set; the real output follows as
+    /// `audioRouteChanged {speaker}` (a headset keeps the audio).
+    @objc func setSpeaker(_ call: CAPPluginCall) {
+        guard let on = call.getBool("on") else {
+            call.reject("on is required")
+            return
+        }
+        Task { @MainActor in
+            self.media().setSpeaker(on)
+            call.resolve(["speaker": on])
+        }
     }
 
     /// `{muted}` -> `{mic}` once the native call CONFIRMED the change, through
@@ -212,7 +248,7 @@ public class BurrowMeetingsPlugin: CAPPlugin, CAPBridgedPlugin {
     }
 
     /// `{meetingId: string | null, phase: string, mic: bool, camera: bool,
-    /// speaking: [identity]}`. `mic` is the CONFIRMED state; `camera` is
+    /// speaker: bool, speaking: [identity]}`. `mic` is the CONFIRMED state; `camera` is
     /// the native call's, always false (the page owns the camera).
     @objc func state(_ call: CAPPluginCall) {
         Task { @MainActor in
@@ -227,6 +263,7 @@ public class BurrowMeetingsPlugin: CAPPlugin, CAPBridgedPlugin {
         data["meetingId"] = media.meetingID ?? NSNull()
         data["mic"] = snapshot.mic
         data["camera"] = snapshot.camera
+        data["speaker"] = snapshot.speaker
         data["speaking"] = snapshot.speaking
         return data
     }

@@ -18,7 +18,7 @@ defmodule Platform.Goals.DescribeTest do
   end
 
   defp coached_goal!(owner, org_id, attrs \\ %{}) do
-    coach = agent!()
+    coach = coach_agent!()
     goal = goal!(owner, org_id, attrs)
     {:ok, goal} = Goals.update_goal(owner, goal.id, %{coach_agent_id: coach.id})
     {goal, coach}
@@ -263,8 +263,14 @@ defmodule Platform.Goals.DescribeTest do
 
     test "a viewer and the coach are :forbidden, a stranger :not_found", ctx do
       {:ok, _} = Goals.open_goal(ctx.owner, ctx.goal.id, {:user, ctx.teammate.id})
+      # This owner is external in another org, so core's DM gate offers them
+      # no agent and update_goal/3 refuses every coach (task 01a1eab7); the
+      # coach is set on the row directly, as a fixture.
       coach = agent!()
-      {:ok, _} = Goals.update_goal(ctx.owner, ctx.goal.id, %{coach_agent_id: coach.id})
+
+      ctx.goal
+      |> Ecto.Changeset.change(coach_agent_id: coach.id)
+      |> Platform.Repo.update!()
 
       assert Goals.list_audience_options(ctx.teammate, ctx.goal.id) == {:error, :forbidden}
       assert Goals.list_audience_options(coach, ctx.goal.id) == {:error, :forbidden}

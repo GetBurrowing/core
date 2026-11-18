@@ -275,6 +275,11 @@ defmodule PlatformWeb.GoalsPage do
 
   attr(:from_brief, :boolean, default: false)
 
+  attr(:coach_picker, :map,
+    default: nil,
+    doc: "the open Change coach sheet's state (`PlatformWeb.GoalsLive`), or nil"
+  )
+
   def goal_page(assigns) do
     assigns = assign(assigns, :goal, assigns.page.card.goal)
 
@@ -291,12 +296,19 @@ defmodule PlatformWeb.GoalsPage do
         ‹ Goals
       </.link>
       <header>
-        <h2 class="text-2xl font-bold text-base-content" data-role="goal-title">
-          {@goal.title}
-          <span :if={@goal.status != "active"} class="chip-soft chip-neutral" data-role="goal-status">
-            {String.capitalize(@goal.status)}
-          </span>
-        </h2>
+        <div class="flex flex-wrap items-start justify-between gap-x-4 gap-y-2">
+          <h2 class="min-w-0 text-2xl font-bold text-base-content" data-role="goal-title">
+            {@goal.title}
+            <span
+              :if={@goal.status != "active"}
+              class="chip-soft chip-neutral"
+              data-role="goal-status"
+            >
+              {String.capitalize(@goal.status)}
+            </span>
+          </h2>
+          <.coach_row :if={@page.coach} page={@page} picker={@coach_picker} />
+        </div>
         <p :if={present?(@goal.why)} class="mt-1 text-sm text-subtle" data-role="goal-why">
           {@goal.why}
         </p>
@@ -600,6 +612,132 @@ defmodule PlatformWeb.GoalsPage do
   defp up_next_label(_), do: "Open your briefing"
 
   defp notebook_tags, do: @notebook_tags
+
+  # ── the coach (task 01a1eab7 stage 3) ─────────────────────────────────
+
+  # "Coach (avatar) Name · Change" beside the title (canvas 01a1eab7-ddae
+  # node `md`, goal page header). Change is the owner's only, by the same
+  # gate as the Edit button; a non-owner sees the name and nothing else.
+  # The row is the popover's `relative` anchor at lg.
+  attr(:page, :map, required: true)
+  attr(:picker, :map, default: nil)
+
+  defp coach_row(assigns) do
+    ~H"""
+    <div class="relative flex min-h-11 items-center gap-2 text-sm" data-role="goal-coach">
+      <span class="text-subtle">Coach</span>
+      <span
+        data-agent-slot={@page.coach.slot}
+        class="shrink-0 rounded-full ring-2 ring-(--ag) ring-offset-1 ring-offset-base-200"
+        data-role="goal-coach-avatar"
+      >
+        <AvatarComponents.agent_avatar
+          name={@page.coach.name || ""}
+          avatar_url={Map.get(@page.coach, :avatar_url)}
+          size="xs"
+        />
+      </span>
+      <span class="shrink-0 font-semibold text-base-content" data-role="goal-coach-name">
+        {@page.coach.name}
+      </span>
+      <%= if @page.card.role == :owner do %>
+        <span class="text-subtle" aria-hidden="true">·</span>
+        <button
+          type="button"
+          phx-click="open_coach"
+          aria-haspopup="dialog"
+          aria-expanded={to_string(not is_nil(@picker))}
+          class={[link_class(), "inline-flex min-h-11 items-center gap-0.5 lg:min-h-0"]}
+          data-role="goal-coach-change"
+        >
+          Change <.icon name="hero-chevron-down" class="size-4 shrink-0" />
+        </button>
+        <.coach_sheet :if={@picker} picker={@picker} coach={@page.coach} />
+      <% end %>
+    </div>
+    """
+  end
+
+  # The Change sheet: the New goal screen's coach cards with the current
+  # coach selected, the confirm line once another is picked, and Save. A
+  # bottom sheet on phones (`GoalsOpenUp.sheet_class/0`, as the settings
+  # sheet), a side panel at md, and at lg a popover anchored under the
+  # coach row (the Voice pickers' `voice-popover` recipe, as utilities).
+  attr(:picker, :map, required: true)
+  attr(:coach, :map, required: true)
+
+  defp coach_sheet(assigns) do
+    picked = Enum.find(assigns.picker.coaches, &(&1.id == assigns.picker.selected_id))
+    changed? = assigns.picker.selected_id != assigns.picker.current_id and not is_nil(picked)
+    assigns = assign(assigns, picked: picked, changed?: changed?)
+
+    ~H"""
+    <PlatformWeb.Components.Sheet.sheet
+      id="goals-coach-sheet"
+      open
+      placement={:right}
+      on_close="close_coach"
+      class={coach_sheet_class()}
+      data-role="goal-coach-sheet"
+    >
+      <:title>Change coach</:title>
+      <GoalsComponents.coach_cards
+        id="goal-coach-cards"
+        coaches={@picker.coaches}
+        selected_id={@picker.selected_id}
+        keep_id={@picker.current_id}
+        expanded?={@picker.expanded?}
+        event="coach_pick"
+        more_event="coach_more"
+        label="Who should coach this goal?"
+        layout={:sheet}
+      />
+      <p
+        :if={@changed?}
+        class="mt-4 text-sm text-base-content"
+        data-role="goal-coach-confirm"
+      >
+        {@picked.name} will take the next check-in. {@coach.name} stops coaching this goal.
+      </p>
+      <p
+        :if={@picker.refused?}
+        class="mt-4 flex items-center gap-2 text-sm text-warning"
+        role="status"
+        data-role="goal-coach-refused"
+      >
+        <.icon name="hero-exclamation-triangle" class="size-4 shrink-0" />
+        <span>That agent can't coach goals</span>
+      </p>
+      <:actions>
+        <button
+          type="button"
+          phx-click="coach_save"
+          disabled={not @changed?}
+          class="btn btn-primary"
+          data-role="goal-coach-save"
+        >
+          Save
+        </button>
+      </:actions>
+    </PlatformWeb.Components.Sheet.sheet>
+    """
+  end
+
+  @doc false
+  def coach_sheet_class,
+    do:
+      Enum.join(
+        [
+          PlatformWeb.GoalsOpenUp.sheet_class(),
+          "lg:absolute lg:inset-auto lg:right-0 lg:top-[calc(100%+0.375rem)] lg:w-[34rem]",
+          "lg:[&_.sheet-backdrop]:fixed lg:[&_.sheet-backdrop]:bg-transparent",
+          "lg:[&_.sheet-panel]:relative lg:[&_.sheet-panel]:inset-auto lg:[&_.sheet-panel]:w-full",
+          "lg:[&_.sheet-panel]:max-h-[min(36rem,75vh)] lg:[&_.sheet-panel]:transform-none",
+          "lg:[&_.sheet-panel]:rounded-box lg:[&_.sheet-panel]:border lg:[&_.sheet-panel]:border-edge",
+          "lg:[&_.sheet-panel]:shadow-xl"
+        ],
+        " "
+      )
 
   # The meta line. Personal: "{Owner}'s goal · {Coach} leads · {source}".
   # Shared: "Shared by {Owner} and {Coach} · {source}".

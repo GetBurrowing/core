@@ -136,7 +136,7 @@ defmodule PlatformWeb.GoalsSpaceCardTest do
     h = html(c, c.owner)
     assert h =~ "Pick a coach on the goal page first"
     refute h =~ " and " <> c.coach.name
-    other = agent!()
+    other = coach_agent!()
     {:ok, _} = Goals.update_goal(c.owner, c.goal.id, %{coach_agent_id: other.id, source_key: nil})
     h = html(c, c.owner)
     assert h =~ "Add #{other.name} to this space first"

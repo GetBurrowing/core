@@ -34,7 +34,8 @@ defmodule Platform.Repo.Migrations.MoveGoalProposalsOutOfDms do
   updated or deleted. Plain SQL only (no application schema, no
   `Platform.Chat.post_message/2`), so nothing is broadcast, no telemetry
   fires and nothing routes to the agent. The agent is re-signalled once,
-  separately, by `Platform.Goals.Proposals.resend_start_signal/1`.
+  separately, by the operator command
+  `Platform.Goals.Ops.resend_start_signal/1`.
 
   Idempotent: a moved proposal points at a space that is not `is_direct`, so
   a second run matches nothing. `down/0` is a documented no-op: undoing it
