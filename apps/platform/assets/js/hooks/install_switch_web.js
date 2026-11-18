@@ -188,7 +188,7 @@ export function createWebSwitch(env = {}) {
     if (result.kind === "ok" && next.as_of === result.as_of) {
       if (!S.patchEntry(local, origin, { unread: next.unread, as_of: next.as_of })) return
     } else if (result.kind === "reconnect") {
-      if (!S.patchEntry(local, origin, { key: null, unread: null, as_of: null })) return
+      if (!S.patchEntry(local, origin, { key: null, unread: null, as_of: null, paused: true })) return
     } else if (result.kind === "rejected") {
       if (!S.patchEntry(local, origin, { unread: null, as_of: null })) return
     }
@@ -634,21 +634,31 @@ export function createWebSwitch(env = {}) {
     win.location.assign(origin + "/")
   }
 
-  function startHop(origin, label) {
+  // `then: "open"` (Add an install): once B has answered, the browser goes ON
+  // to B, so adding an install is also switching to it. `then: "return"`
+  // (Reconnect, Show unread): back to the page here. Either way the answer
+  // first lands on this origin's /switcher/connected, the only page that can
+  // write this origin's list.
+  function startHop(origin, label, then = "return") {
     const target = S.allowedOrigin(origin)
     if (!target) return
     const here = win.location
     try {
       session?.setItem(
         S.PENDING_KEY,
-        JSON.stringify({ origin: target, return: S.safeReturnPath(here.pathname + (here.search || "")), at: now() })
+        JSON.stringify({
+          origin: target,
+          return: S.safeReturnPath(here.pathname + (here.search || "")),
+          then: then === "open" ? "open" : "return",
+          at: now()
+        })
       )
     } catch {
       // A browser without sessionStorage cannot finish the add; the
       // connected page says so.
     }
     close()
-    showModal({ kind: "hop", origin: target, label: label || S.hostOf(target) })
+    showModal({ kind: "hop", origin: target, label: label || S.hostOf(target), then })
     setTimeout(() => {
       dropReferrer(doc)
       win.location.assign(`${target}/switcher/connect?origin=${encodeURIComponent(win.location.origin)}`)
@@ -704,7 +714,7 @@ export function createWebSwitch(env = {}) {
       m.phase = "notfound"
       return renderModal()
     }
-    startHop(origin)
+    startHop(origin, null, "open")
   }
 
   function removeInstall(origin) {
@@ -861,7 +871,7 @@ export function createWebSwitch(env = {}) {
         [
           title("Add an install", "install-switch-add-title"),
           body(
-            "Enter the address your team uses for Burrow. We'll open it so you can sign in there, then bring you back.",
+            "Enter the address your team uses for Burrow. We'll open it so you can sign in there, and add it to this switcher.",
             "install-switch-add-body"
           ),
           el(doc, "label", {
@@ -924,12 +934,18 @@ export function createWebSwitch(env = {}) {
               el(doc, "p", {
                 class: "mb-2.5 text-[13px] leading-[1.55] text-subtle",
                 "data-role": "install-switch-hop-body",
-                text: `${host} needs to say it's OK to show its unread here. If you're not signed in there yet, it will ask you to sign in first, with its own sign-in.`
+                text:
+                  m.then === "open"
+                    ? `If you're not signed in to ${host} yet, it asks you to sign in first, with its own sign-in. Then it asks once whether ${here.name} may show its unread count.`
+                    : `${host} needs to say it's OK to show its unread here. If you're not signed in there yet, it will ask you to sign in first, with its own sign-in.`
               }),
               el(doc, "p", {
                 class: "text-[13px] leading-[1.55] text-subtle",
                 "data-role": "install-switch-hop-back",
-                text: `You'll come back to ${here.name} when that's done.`
+                text:
+                  m.then === "open"
+                    ? `Allow or Not now, you end up in ${m.label}, and it stays in this switcher.`
+                    : `You'll come back to ${here.name} when that's done.`
               })
             ]
           )
@@ -978,6 +994,18 @@ export function createWebSwitch(env = {}) {
                 class: TEXT_BTN,
                 "data-role": "install-manage-reconnect",
                 text: "Reconnect",
+                onclick: () => startHop(row.origin, row.name)
+              })
+            )
+          } else if (status === "plain") {
+            // Added with "Not now": unread is opt-in from here, never a nag
+            // on the dropdown row.
+            actions.push(
+              el(doc, "button", {
+                type: "button",
+                class: TEXT_BTN,
+                "data-role": "install-manage-show-unread",
+                text: "Show unread",
                 onclick: () => startHop(row.origin, row.name)
               })
             )

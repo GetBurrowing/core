@@ -52,7 +52,11 @@ defmodule PlatformWeb.SwitcherConnectControllerTest do
                "Signed in to #{name} as #{user.name}"
 
       assert text(html, "[data-role=switcher-consent-allow]") == "Allow"
-      assert text(html, "[data-role=switcher-consent-cancel]") == "Cancel"
+      assert text(html, "[data-role=switcher-consent-cancel]") == "Not now"
+
+      assert text(html, "[data-role=switcher-consent-either-way]") ==
+               "Either answer keeps #{name} in a.example's switcher. " <>
+                 "Not now only leaves out the unread count."
 
       [form] = query(html, "#switcher-consent-form") |> Enum.to_list()
       assert LazyHTML.attribute(form, "method") == ["post"]

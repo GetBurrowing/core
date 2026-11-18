@@ -296,6 +296,15 @@ describe("the web path", () => {
     expect(row.querySelector("[data-role='install-row-count']")).toBe(null)
     expect(panel.querySelector("[data-role='install-row-reconnect']").textContent).toBe("Reconnect")
     expect(readList(ctx.local)[0].key).toBe(null)
+    expect(readList(ctx.local)[0].paused).toBe(true)
+  })
+
+  it("a key lost to a 401 still asks to Reconnect after a reload", async () => {
+    const ctx = setup({ entries: [entry("https://b.example", { key: null, paused: true })] })
+    await flush()
+    const panel = await open(ctx)
+    expect(rowFor(panel, "https://b.example").getAttribute("data-status")).toBe("reconnect")
+    expect(panel.querySelector("[data-role='install-row-reconnect']")).not.toBe(null)
   })
 
   it("a network failure keeps the last count, marks it stale, and the stale count still lights the dot", async () => {
@@ -561,6 +570,49 @@ describe("entries and rendering", () => {
   })
 })
 
+describe("an install added with Not now (no unread)", () => {
+  const plain = () => entry("https://b.example", { name: "Bravo", key: null })
+
+  it("is a plain row: its host, no Unread paused, no Reconnect, never fetched", async () => {
+    const ctx = setup({ entries: [plain()] })
+    await flush()
+    expect(ctx.win.fetch).not.toHaveBeenCalled()
+    const panel = await open(ctx)
+    const row = rowFor(panel, "https://b.example")
+    expect(row.getAttribute("data-status")).toBe("plain")
+    expect(row.querySelector("[data-role='install-row-sub']").textContent).toBe("b.example")
+    expect(panel.querySelector("[data-role='install-row-reconnect']")).toBe(null)
+    expect(visible(ctx.dot)).toBe(false)
+  })
+
+  it("a click switches straight to it: no hop, no consent page", async () => {
+    const ctx = setup({ entries: [plain()] })
+    const panel = await open(ctx)
+    rowFor(panel, "https://b.example").click()
+    expect(ctx.location.assign).toHaveBeenCalledWith("https://b.example/")
+    expect(ctx.sess.getItem(PENDING_KEY)).toBe(null)
+  })
+
+  it("unread is opt-in from Manage installs, and that hop returns here", async () => {
+    vi.useFakeTimers()
+    const ctx = setup({ entries: [plain()] })
+    ctx.button.click()
+    ctx.menu.querySelector("[data-role='install-switch-manage']").click()
+    const show = ctx.doc.body.querySelector("[data-role='install-manage-show-unread']")
+    expect(show.textContent).toBe("Show unread")
+    expect(ctx.doc.body.querySelector("[data-role='install-manage-reconnect']")).toBe(null)
+    show.click()
+    expect(ctx.doc.body.querySelector("[data-role='install-switch-modal']").textContent).toContain(
+      "You'll come back to Acme when that's done."
+    )
+    await vi.advanceTimersByTimeAsync(1000)
+    expect(ctx.location.assign).toHaveBeenCalledWith(
+      "https://b.example/switcher/connect?origin=https%3A%2F%2Fa.example"
+    )
+    expect(JSON.parse(ctx.sess.getItem(PENDING_KEY)).then).toBe("return")
+  })
+})
+
 describe("add and remove", () => {
   function fakeImage(ok) {
     return class {
@@ -603,7 +655,9 @@ describe("add and remove", () => {
     const modal = ctx.doc.body.querySelector("[data-role='install-switch-modal']")
     expect(modal.getAttribute("data-kind")).toBe("hop")
     expect(modal.textContent).toContain("Opening burrow.team.example")
-    expect(modal.textContent).toContain("You'll come back to Acme when that's done.")
+    // Add an install ends IN the added install, whatever B's answer.
+    expect(modal.textContent).toContain("you end up in burrow.team.example")
+    expect(modal.textContent).not.toContain("You'll come back to")
 
     expect(ctx.doc.head.querySelector("meta[name='referrer']")).toBe(null)
     await vi.advanceTimersByTimeAsync(1000)
@@ -615,6 +669,7 @@ describe("add and remove", () => {
     const pending = JSON.parse(ctx.sess.getItem(PENDING_KEY))
     expect(pending.origin).toBe("https://burrow.team.example")
     expect(pending.return).toBe("/chat/general?x=1")
+    expect(pending.then).toBe("open")
   })
 
   it("Remove deletes the entry and its key, best-effort revokes on B, and toasts", async () => {
@@ -682,6 +737,27 @@ describe("/switcher/connected", () => {
     expect(readList(local)[0].key).toBe(null)
   })
 
+  it("after Add an install, either answer goes ON to B, with no toast left on A", () => {
+    for (const hash of [`#host=b.example&key=${KEY_B}&name=Bravo`, "#host=b.example&name=Bravo"]) {
+      const local = fakeStorage()
+      const r = completeConnect({ hash, session: pending({ then: "open" }), local, now: 2000 })
+      expect(r.ok).toBe(true)
+      expect(r.returnTo).toBe("https://b.example/")
+      expect(r.toast).toBe(null)
+      expect(readList(local)).toMatchObject([{ origin: "https://b.example", name: "Bravo" }])
+    }
+  })
+
+  it("the place it goes on to is the hop's own origin, never the fragment's", () => {
+    const r = completeConnect({
+      hash: "#host=b.example&name=Bravo&origin=https%3A%2F%2Fevil.example&return=https%3A%2F%2Fevil.example",
+      session: pending({ then: "open" }),
+      local: fakeStorage(),
+      now: 2000
+    })
+    expect(r.returnTo).toBe("https://b.example/")
+  })
+
   it("refuses with no pending hop, a host that is not the hop's, a bad key, or an old hop", () => {
     const local = fakeStorage()
     const hash = `#host=b.example&key=${KEY_B}&name=B`
@@ -733,6 +809,17 @@ describe("/switcher/connected", () => {
     expect(calls.map(c => c[0])).toEqual(["replaceState", "replace"])
     expect(calls.flat().join(" ")).not.toContain(KEY_B)
     expect(root.getAttribute("data-state")).toBe("added")
+  })
+
+  it("Not now after Add an install lands in B, not back on A", () => {
+    const session = pending({ at: Date.now(), then: "open" })
+    const { calls, root } = mountConnected({ hash: "#host=b.example&name=Bravo", session })
+    expect(calls).toEqual([
+      ["replaceState", "/switcher/connected"],
+      ["replace", "https://b.example/"]
+    ])
+    expect(root.getAttribute("data-state")).toBe("added")
+    expect(session.getItem(TOAST_KEY)).toBe(null)
   })
 
   it("strips the fragment even when it refuses the link (M11)", () => {

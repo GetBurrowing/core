@@ -9,11 +9,18 @@
  * the fragment's `host` must be that origin's host. So a link someone sends
  * cannot plant an entry. It saves `{origin, name, host, key, added_at}` to
  * `burrow.installs.v1`, strips the fragment with `history.replaceState`, and
- * returns to the page the person started from, where the switcher shows the
- * "Added <B>" toast.
+ * then:
+ *   - after Add an install (`then: "open"` in the pending hop), goes ON to
+ *     B's root, whichever answer the person gave on B. Adding an install is
+ *     switching to it; landing back on A after "Not now" read as the
+ *     switcher bouncing you home. The destination is the hop's own origin
+ *     from this browser's sessionStorage, never anything in the fragment.
+ *   - after Reconnect or Show unread, returns to the page the person started
+ *     from, where the switcher shows the "Added <B>" toast.
  */
 
 import * as S from "../lib/install_switch_store.js"
+import { dropReferrer } from "./install_switch_web.js"
 
 function storageOf(win, name) {
   try {
@@ -58,11 +65,16 @@ export function completeConnect({ hash, session, local, now = Date.now() }) {
   })
   if (!entry) return { ok: false, reason: "not_saved" }
 
+  if (pending.then === "open") {
+    return { ok: true, entry, toast: null, returnTo: origin + "/", leaves: true }
+  }
+
   return {
     ok: true,
     entry,
     toast: entry.key ? `Added ${entry.name}` : `Added ${entry.name} without its unread`,
-    returnTo: S.safeReturnPath(pending.return)
+    returnTo: S.safeReturnPath(pending.return),
+    leaves: false
   }
 }
 
@@ -92,11 +104,16 @@ const SwitcherConnected = {
     }
 
     this.el.setAttribute("data-state", "added")
-    try {
-      session?.setItem(S.TOAST_KEY, result.toast)
-    } catch {
-      // no toast, still added
+    if (result.toast) {
+      try {
+        session?.setItem(S.TOAST_KEY, result.toast)
+      } catch {
+        // no toast, still added
+      }
     }
+    // Going on to another install: no Referer, as every other cross-install
+    // navigation of the switcher.
+    if (result.leaves) dropReferrer(globalThis.document)
     win.location.replace(result.returnTo)
   }
 }
