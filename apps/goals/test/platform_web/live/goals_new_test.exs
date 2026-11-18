@@ -957,6 +957,19 @@ defmodule PlatformWeb.GoalsNewTest do
       assert lead.id in shown
       assert has_element?(child, "[data-role='goals-coach-more']", "More coaches")
 
+      # Picking another card keeps the Default card in view too.
+      [alpha | _] = others
+
+      child
+      |> element("[data-role='goals-coach-card'][data-agent-id='#{alpha.id}']")
+      |> render_click()
+
+      shown = card_ids(child)
+      assert length(shown) == 3
+      assert lead.id in shown
+      assert alpha.id in shown
+      assert has_element?(child, "[data-agent-id='#{lead.id}'] [data-role='goals-coach-default']")
+
       child |> element("[data-role='goals-coach-more']") |> render_click()
 
       assert Enum.sort(card_ids(child)) == Enum.sort([lead.id | Enum.map(others, & &1.id)])

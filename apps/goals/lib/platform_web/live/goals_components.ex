@@ -83,7 +83,8 @@ defmodule PlatformWeb.GoalsComponents do
   attr :label, :string, default: "Who should coach you?"
 
   def coach_cards(assigns) do
-    {shown, hidden} = visible_coaches(assigns.coaches, assigns.selected_id, assigns.expanded?)
+    {shown, hidden} =
+      visible_coaches(assigns.coaches, assigns.selected_id, assigns.expanded?, assigns.default_id)
     assigns = assign(assigns, shown: shown, hidden: hidden)
 
     ~H"""
@@ -176,29 +177,28 @@ defmodule PlatformWeb.GoalsComponents do
           data-role="goals-coach-more"
           class="focus-visible-ring flex min-h-11 cursor-pointer items-center justify-center gap-2 rounded-xl border border-dashed border-edge bg-base-200 p-3 text-sm text-subtle transition-colors lg:hover:text-base-content"
         >
-          <.icon name="hero-chevron-down" class="size-4 shrink-0" /> More coaches
-          <span class="font-mono text-[11px]">+{@hidden}</span>
+          <.icon name="hero-chevron-down" class="size-4 shrink-0" />
+          <span class="flex flex-col items-start">
+            <span class="whitespace-nowrap">More coaches</span>
+            <span class="font-mono text-[11px]">+{@hidden}</span>
+          </span>
         </button>
       </div>
     </div>
     """
   end
 
-  # More than 4 and collapsed: 3 cards, the selected one always among them.
+  # More than 4 and collapsed: 3 cards, in list order, the default and the
+  # selected one always among them; the rest fill up from the top.
   @doc false
-  def visible_coaches(coaches, selected_id, expanded?) do
+  def visible_coaches(coaches, selected_id, expanded?, default_id \\ nil) do
     if expanded? or length(coaches) <= 4 do
       {coaches, 0}
     else
-      first = Enum.take(coaches, 3)
+      pinned = Enum.filter(coaches, &(&1.id in [selected_id, default_id]))
+      keep = MapSet.new(Enum.take(pinned ++ (coaches -- pinned), 3), & &1.id)
 
-      shown =
-        case Enum.find(coaches, &(&1.id == selected_id)) do
-          nil -> first
-          selected -> if selected in first, do: first, else: Enum.take(first, 2) ++ [selected]
-        end
-
-      {shown, length(coaches) - 3}
+      {Enum.filter(coaches, &MapSet.member?(keep, &1.id)), length(coaches) - 3}
     end
   end
 
