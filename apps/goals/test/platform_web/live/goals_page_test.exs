@@ -738,7 +738,6 @@ defmodule PlatformWeb.GoalsPageTest do
         node |> Floki.attribute("class") |> Enum.join(" ") |> String.split()
       end
 
-
       [header_row] = Floki.find(doc, "[data-role='goal-header-row']")
       assert "relative" in classes.(header_row)
       assert [_] = Floki.find(header_row, "[data-role='goal-title']")
