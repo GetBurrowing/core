@@ -129,8 +129,9 @@ defmodule Platform.Repo.Migrations.SeedHrProfileTemplateAndBundleTest do
 
     # 10 -> 11: task 01a1eaf6 stage 3 admitted `showrunner`; 11 -> 10: the
     # super agents restructure merged `meeting_producer` into the scribe.
+    # 10 -> 12: the super agents `doctor` and `relationship_steward`.
     # This file's down/0 still removes no role.
-    assert Repo.aggregate(Platform.Roles.Role, :count, :key) == 10
+    assert Repo.aggregate(Platform.Roles.Role, :count, :key) == 12
   end
 
   test "seed_defaults/0 alone does not repair a stale row — the migration is load-bearing" do

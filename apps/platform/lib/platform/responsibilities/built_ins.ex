@@ -92,7 +92,11 @@ defmodule Platform.Responsibilities.BuiltIns do
       # Task 01a1eaf6 stage 4: logistics, post and retro.
       Handlers.ShowrunnerRecordingPrep,
       Handlers.ShowrunnerPostShow,
-      Handlers.ShowrunnerRetro
+      Handlers.ShowrunnerRetro,
+      # Super agents: the doctor (install health, safe heals) and the
+      # relationship steward (follow-ups owed; drafts only).
+      Handlers.DoctorCheckup,
+      Handlers.RelationshipsFollowUpSweep
     ]
   end
 end

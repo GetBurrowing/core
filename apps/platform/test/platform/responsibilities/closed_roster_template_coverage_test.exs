@@ -112,6 +112,11 @@ defmodule Platform.Responsibilities.ClosedRosterTemplateCoverageTest do
     "design.reflect.v1",
     "design.scout.v1",
     "design.task_direction.v1",
+    # Super agents: `doctor.checkup` (doctor role) and
+    # `relationships.follow_up_sweep` (relationship_steward role); both
+    # descriptors in `default_templates/0`, rows seeded by
+    # `20261118230000_add_doctor_and_relationship_steward_roles.exs`.
+    "doctor.checkup.v1",
     # Task 01a0d415 stage 3: `experiments.label_signal` (the scientist
     # role's blind labeler) points at this slug, seeded by
     # `20260924190000_seed_experiments_labeler_prompt.exs`.
@@ -143,6 +148,7 @@ defmodule Platform.Responsibilities.ClosedRosterTemplateCoverageTest do
     "memory.daily_summary.v1",
     "memory.dreaming.v1",
     "memory.propose_long_term.v1",
+    "relationships.follow_up_sweep.v1",
     "security.code_audit.v1",
     "security.cve_scan.v1",
     "security.deploy_audit.v1",
