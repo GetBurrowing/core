@@ -1190,7 +1190,12 @@ defmodule PlatformWeb.CalendarLive.Components do
       <p :if={@call.records.summary} class="!text-base-content" data-record="summary">
         <span class="whitespace-pre-line">{@call.records.summary}</span>
       </p>
-      <p :if={!@call.records.summary} data-record="summary-none">No summary was saved.</p>
+      <p :if={!@call.records.summary and !@call.records.transcript_id} data-record="summary-none">
+        No summary was saved.
+      </p>
+      <p :if={!@call.records.summary and @call.records.transcript_id} data-record="summary-missing">
+        Summary missing. The transcript was saved, but no summary was written for it.
+      </p>
       <p :if={@call.records.transcript_id} data-record="transcript">
         <a
           href={~p"/api/transcripts/#{@call.records.transcript_id}/download"}

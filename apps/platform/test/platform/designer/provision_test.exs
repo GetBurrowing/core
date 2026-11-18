@@ -156,14 +156,42 @@ defmodule Platform.Designer.ProvisionTest do
     assert {:ok, report} = Designer.provision(attrs)
     assert report.runtime == %{kind: :no_runtime}
     assert Enum.any?(report.warnings, &(&1 =~ "no runtime"))
-    assert Enum.any?(report.warnings, &(&1 =~ "design.critique is degraded"))
+    refute Enum.any?(report.warnings, &(&1 =~ "design.critique"))
 
     runtime!(agent, user, ["context_read"])
 
-    assert {:ok, report} = Designer.provision(attrs)
+    assert {:ok, report} = Designer.provision(Map.put(attrs, :apply_grants, false))
     assert report.runtime.kind == :federated
     assert "prototype_publish" in report.runtime.missing_tools
+    assert "prototypes.publish" in report.runtime.grants_needed.permissions
+    assert "prototype" in report.runtime.grants_needed.bundles
     assert Enum.any?(report.warnings, &(&1 =~ "missing designer tools"))
+    assert Enum.any?(report.warnings, &(&1 =~ "prototypes.publish"))
+  end
+
+  test "provision adds the bundles and restrict-grants a native runtime needs, once",
+       %{agent: agent, attrs: attrs} do
+    owner = Platform.TenancyFixtures.root_admin!()
+    runtime = runtime!(agent, owner, ["context_read", "canvas"]) |> Map.fetch!(:runtime_id)
+    runtime = Repo.get!(AgentRuntime, runtime)
+
+    # The hand-fixed state on a live agent: bundles on, restriction stale.
+    {:ok, _} = RuntimeProfiles.set_tool_profile(runtime, ["context_read", "canvas", "prototype"])
+    refute Map.has_key?(RuntimeProfiles.restrictions(runtime), "prototypes.publish")
+
+    assert {:ok, report} = Designer.provision(attrs)
+    assert "prototypes.publish" in report.runtime.granted.permissions
+    assert "memory" in report.runtime.granted.bundles
+    assert report.runtime.missing_tools == [], inspect(report.runtime)
+    assert report.warnings == []
+
+    restriction = RuntimeProfiles.restrictions(runtime)
+    assert restriction["prototypes.publish"] == "all"
+    refute Map.has_key?(restriction, "prompts.manage")
+
+    assert {:ok, again} = Designer.provision(attrs)
+    assert again.runtime.grants_needed == %{bundles: [], permissions: []}
+    refute Map.has_key?(again.runtime, :granted)
   end
 
   test "an external agent is warned that it cannot be the lead", %{attrs: attrs} do
@@ -235,10 +263,18 @@ defmodule Platform.Designer.ProvisionTest do
       assert {:error, :forbidden} = Designer.install_files(stranger, agent.id)
     end
 
-    test "rename the MCP server in subagent tool lists" do
-      files = Map.new(Designer.template_files(mcp_server: "burrow"))
+    test "subagent tool lists use the burrow MCP prefix a native agent's .mcp.json names" do
+      files = Map.new(Designer.template_files())
       assert files[".claude/agents/critic.md"] =~ "mcp__burrow__canvas_get"
-      refute files[".claude/agents/critic.md"] =~ "mcp__startup-suite__"
+      assert files[".claude/agents/scout.md"] =~ "mcp__burrow__memory_create"
+
+      for {_path, content} <- files, do: refute(content =~ "mcp__startup-suite__")
+    end
+
+    test "rename the MCP server in subagent tool lists" do
+      files = Map.new(Designer.template_files(mcp_server: "suite"))
+      assert files[".claude/agents/critic.md"] =~ "mcp__suite__canvas_get"
+      refute files[".claude/agents/critic.md"] =~ "mcp__burrow__"
     end
   end
 

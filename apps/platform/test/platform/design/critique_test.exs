@@ -180,12 +180,24 @@ defmodule Platform.Design.CritiqueTest do
       refute_receive {:outbound, _body}
     end
 
-    test "a native assignee is refused rather than silently no-opped" do
+    # Task 01a1eb2f: a native assignee used to be refused here. It is now
+    # dispatched (and returns through `design_critique_complete`; see
+    # `design_critique_return_test.exs`), never sent over HTTP.
+    test "a native assignee is dispatched, not refused, and no endpoint is called" do
       %{canvas: canvas} = wire_everything(agent_kind: "native")
       stub_reply!(issues_json())
 
-      assert {:error, {:assignee_not_external, "native"}} =
-               Critique.request(%{canvas_id: canvas.id})
+      Application.put_env(
+        :platform,
+        :responsibility_router_native_dispatcher,
+        {__MODULE__, :ignore_signal}
+      )
+
+      on_exit(fn ->
+        Application.delete_env(:platform, :responsibility_router_native_dispatcher)
+      end)
+
+      assert {:ok, %{pending?: true, issues: []}} = Critique.request(%{canvas_id: canvas.id})
 
       refute_receive {:outbound, _body}
     end
@@ -299,6 +311,9 @@ defmodule Platform.Design.CritiqueTest do
   end
 
   # ── Fixtures ──────────────────────────────────────────────────────────────
+
+  @doc false
+  def ignore_signal(_signal), do: :ok
 
   defp wire_everything(opts \\ []) do
     [spec] = DesignCritique.register()

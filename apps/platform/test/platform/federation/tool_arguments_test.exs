@@ -243,7 +243,13 @@ defmodule Platform.Federation.ToolArgumentsTest do
   # `key` and `on` are read under their declared names only; a missing or
   # invalid value is refused with :invalid_argument, never defaulted.
   # 234 after merging both.
-  @surveyed_required_count 234
+  # +2 adds meeting_summary_complete's transcript_id and summary. HONEST:
+  # MeetingSummarize.complete_from_agent/2 reads each under its declared key
+  # only and refuses a missing one (:transcript_not_found / :blank_summary).
+  # +2 adds design_critique_complete's critique_ref and issues. HONEST:
+  # DesignCritique.complete_from_agent/2 reads each under its declared key
+  # only and refuses a missing one (:invalid_critique_ref / :invalid_issues).
+  @surveyed_required_count 238
 
   defp read_source(relative) do
     # Resolved from __DIR__ (apps/platform/test/platform/federation) rather

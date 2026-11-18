@@ -66,6 +66,9 @@ defmodule PlatformWeb.BookingLiveTest do
 
     {:ok, view, html} = live(conn, "/book/#{link.token}")
     refute html =~ "Confidential board discussion"
+    # The page has no app shell (layout: false), so its root is its own
+    # scroll container (app.css `.cal-guest-wrap`, task 01a1eff0 stage 3).
+    assert has_element?(view, "main.cal-guest-wrap[data-page=public-booking]")
     # v4's guest card shows the link title and owner (booking.js hostHTML).
     assert has_element?(view, ".cal-guest-host h1", "Private owner policy")
     assert has_element?(view, ".cal-guest-who", "Booking owner")
@@ -335,6 +338,103 @@ defmodule PlatformWeb.BookingLiveTest do
 
     assert %{duration_minutes: 30, buffer_after_minutes: 0, minimum_notice_minutes: 0} =
              Enum.find(BookingLinks.list(scope), &(&1.id == link.id))
+  end
+
+  describe "bookable dates" do
+    defp stored_range(link) do
+      row = Repo.get!(Platform.Calendar.BookingLink, link.id)
+      {row.start_date, row.end_date}
+    end
+
+    test "start and end on the same day persist from the dates form", %{auth: conn, link: link} do
+      today = Date.utc_today()
+      {:ok, view, _} = live(conn, "/calendar/booking?link=#{link.id}")
+
+      html =
+        view
+        |> element("#booking-link-dates")
+        |> render_change(%{
+          "start_date" => Date.to_iso8601(today),
+          "end_date" => Date.to_iso8601(today)
+        })
+
+      assert html =~ "Bookable dates saved"
+      assert stored_range(link) == {today, today}
+      assert has_element?(view, "#booking-link-start-date[value='#{today}']")
+      assert has_element?(view, "#booking-link-end-date[value='#{today}']")
+    end
+
+    # A browser change event can carry only the input that changed.
+    test "a payload with only end_date saves it and keeps the stored start", %{
+      auth: conn,
+      link: link
+    } do
+      {:ok, view, _} = live(conn, "/calendar/booking?link=#{link.id}")
+      last = Date.add(link.start_date, 3)
+
+      assert render_change(view, "dates", %{"end_date" => Date.to_iso8601(last)}) =~
+               "Bookable dates saved"
+
+      assert stored_range(link) == {link.start_date, last}
+
+      first = Date.add(link.start_date, 1)
+      render_change(view, "dates", %{"_target" => ["start_date"], "start_date" => "#{first}"})
+      assert stored_range(link) == {first, last}
+    end
+
+    test "an end before the start is an error and leaves the row unchanged", %{
+      auth: conn,
+      link: link
+    } do
+      {:ok, view, _} = live(conn, "/calendar/booking?link=#{link.id}")
+      before = stored_range(link)
+
+      html =
+        view
+        |> element("#booking-link-dates")
+        |> render_change(%{"end_date" => Date.to_iso8601(Date.add(link.start_date, -1))})
+
+      assert html =~ "Until must be on or after Bookable from."
+      refute html =~ "Bookable dates saved"
+      assert stored_range(link) == before
+    end
+
+    test "a blank date is an error and leaves the row unchanged", %{auth: conn, link: link} do
+      {:ok, view, _} = live(conn, "/calendar/booking?link=#{link.id}")
+      before = stored_range(link)
+
+      html = view |> element("#booking-link-dates") |> render_change(%{"end_date" => ""})
+      assert html =~ "Until needs a date."
+      assert stored_range(link) == before
+
+      assert render_change(view, "dates", %{"start_date" => "  "}) =~
+               "Bookable from needs a date."
+
+      assert stored_range(link) == before
+    end
+
+    test "the link card shows the stored range, and a one-day range by name", %{
+      auth: conn,
+      link: link
+    } do
+      {:ok, view, _} = live(conn, "/calendar/booking?link=#{link.id}")
+      first = link.start_date
+      last = link.end_date
+
+      range =
+        Elixir.Calendar.strftime(first, "%-d %b") <>
+          " – " <>
+          Elixir.Calendar.strftime(last, "%-d %b %Y")
+
+      assert has_element?(view, ".cal-linkcard small", "30 min · 1 day a week · " <> range)
+
+      view
+      |> element("#booking-link-dates")
+      |> render_change(%{"start_date" => "#{first}", "end_date" => "#{first}"})
+
+      one_day = Elixir.Calendar.strftime(first, "%a %-d %b") <> " only"
+      assert has_element?(view, ".cal-linkcard small", "30 min · 1 day a week · " <> one_day)
+    end
   end
 
   test "the slot preview lists the next open days, or the v4 empty hint", %{

@@ -205,7 +205,8 @@ defmodule Platform.Responsibilities.Handlers.DesignCritique do
     %{
       canvas_snapshot: render_snapshot(canvas),
       grounding_notes: grounding_notes(ctx),
-      canvas_id: canvas.id
+      canvas_id: canvas.id,
+      critique_ref: fetch(ctx, :critique_ref) || mint_ref(ctx, canvas)
     }
   end
 
@@ -258,7 +259,135 @@ defmodule Platform.Responsibilities.Handlers.DesignCritique do
     #{grounding_block(Map.get(context, :grounding_notes))}
     """
 
-    {:ok, %{system: system, user: String.trim_trailing(user)}}
+    {:ok, %{system: system, user: String.trim_trailing(user) <> return_instructions(context)}}
+  end
+
+  # ── Agent return path (`design_critique_complete`) ────────────────────────
+
+  @ref_salt "design.critique.return"
+  # A critique answers a review that is waiting on it; a week covers a
+  # runtime that was offline when the dispatch arrived.
+  @ref_max_age 7 * 86_400
+
+  @doc """
+  Whether a dispatch rendered from `context` must return its verdict
+  through the `design_critique_complete` tool rather than as the reply.
+
+  An external (HTTP) agent's response IS the output: the Router hands it to
+  `handle_output/3`. Every other runtime receives a one-way signal
+  (`Router.dispatch_native/6`), so its reply is never read. `nil` (a caller
+  that did not classify the agent) keeps the reply-is-the-output prompt.
+  Same rule as `Handlers.MeetingSummarize.returns_via_tool?/1`.
+  """
+  @spec returns_via_tool?(map()) :: boolean()
+  def returns_via_tool?(context) when is_map(context),
+    do: Map.get(context, :agent_kind) in [:fed_conversational, :loc_built_in]
+
+  def returns_via_tool?(_), do: false
+
+  @doc """
+  Accept a critique an agent returns through the `design_critique_complete`
+  MCP tool and land it through `handle_output/3`, the same landing the
+  external (HTTP) path and the synchronous `Platform.Design.Critique.request/1`
+  use.
+
+  `critique_ref` is the signed reference the dispatch prompt named. It
+  carries where the verdict lands (review request, task, space), so a
+  caller cannot redirect a verdict anywhere the dispatch did not name.
+
+  Refusals: `:not_critique_assignee` (the caller does not hold
+  `design.critique`), `:invalid_critique_ref` (forged, malformed or older
+  than a week), `:invalid_issues` (not a list of objects). A refusal lands
+  nothing.
+  """
+  @spec complete_from_agent(String.t(), map()) :: {:ok, map()} | {:error, atom()}
+  def complete_from_agent(agent_id, args) when is_binary(agent_id) and is_map(args) do
+    with :ok <- check_assignee(agent_id),
+         {:ok, meta} <- verify_ref(Map.get(args, "critique_ref")),
+         {:ok, issues} <- check_issues(Map.get(args, "issues")) do
+      parsed = Verdict.parse(%{"issues" => issues})
+
+      item_id =
+        Critique.land_verdict(parsed, %{
+          task_id: meta["task_id"],
+          review_request_id: meta["review_request_id"],
+          space_id: meta["space_id"]
+        })
+
+      Logger.info(
+        "[design.critique] agent returned critique via tool (issues=#{length(parsed.issues)})"
+      )
+
+      {:ok,
+       %{
+         canvas_id: meta["canvas_id"],
+         issues: length(parsed.issues),
+         review_item_id: item_id,
+         landed: true
+       }}
+    end
+  end
+
+  def complete_from_agent(_agent_id, _args), do: {:error, :invalid_arguments}
+
+  @doc false
+  # Public for tests: the reference a dispatch for `ctx` and `canvas` names.
+  @spec mint_ref(map(), Canvas.t()) :: String.t() | nil
+  def mint_ref(ctx, %Canvas{id: canvas_id}) do
+    Phoenix.Token.sign(PlatformWeb.Endpoint, @ref_salt, %{
+      "canvas_id" => canvas_id,
+      "task_id" => blank_to_nil(fetch(ctx, :task_id)),
+      "review_request_id" => blank_to_nil(fetch(ctx, :review_request_id)),
+      "space_id" => blank_to_nil(fetch(ctx, :space_id))
+    })
+  rescue
+    # No endpoint secret (a bare script context): the dispatch still goes
+    # out, it just cannot name a return reference.
+    _ -> nil
+  end
+
+  defp verify_ref(ref) when is_binary(ref) and ref != "" do
+    case Phoenix.Token.verify(PlatformWeb.Endpoint, @ref_salt, ref, max_age: @ref_max_age) do
+      {:ok, %{"canvas_id" => _} = meta} -> {:ok, meta}
+      _ -> {:error, :invalid_critique_ref}
+    end
+  rescue
+    _ -> {:error, :invalid_critique_ref}
+  end
+
+  defp verify_ref(_ref), do: {:error, :invalid_critique_ref}
+
+  defp check_assignee(agent_id) do
+    case Platform.Roles.assignee_for(@key) do
+      %{id: ^agent_id} -> :ok
+      _ -> {:error, :not_critique_assignee}
+    end
+  end
+
+  defp check_issues(issues) when is_list(issues) do
+    if Enum.all?(issues, &is_map/1), do: {:ok, issues}, else: {:error, :invalid_issues}
+  end
+
+  defp check_issues(_issues), do: {:error, :invalid_issues}
+
+  defp blank_to_nil(value) when is_binary(value) and value != "", do: value
+  defp blank_to_nil(_value), do: nil
+
+  defp return_instructions(context) do
+    ref = Map.get(context, :critique_ref)
+
+    if returns_via_tool?(context) and is_binary(ref) do
+      """
+
+
+      ## Returning the critique
+
+      This job reached you as a dispatch signal, so a chat reply or a final message is NOT read by anyone. When the critique is ready, call the MCP tool `design_critique_complete` with critique_ref="#{ref}" and issues set to the list of {severity, location, issue, suggestion} objects (an empty list when the canvas is sound). The review has no design critique until that call succeeds. If it returns an error, read it, fix the call and try again; do not post the critique as a chat message instead.
+      """
+      |> String.trim_trailing()
+    else
+      ""
+    end
   end
 
   @impl true

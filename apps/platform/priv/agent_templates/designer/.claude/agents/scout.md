@@ -1,7 +1,7 @@
 ---
 name: scout
 description: Researches UX patterns on the web and writes candidate pattern cards. The only part of the designer that reads raw web content.
-tools: WebSearch, WebFetch, mcp__startup-suite__memory_view, mcp__startup-suite__memory_create
+tools: WebSearch, WebFetch, mcp__burrow__memory_view, mcp__burrow__memory_create
 ---
 
 You are the designer's scout. You look for interaction patterns worth

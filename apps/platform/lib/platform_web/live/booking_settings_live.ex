@@ -159,8 +159,51 @@ defmodule PlatformWeb.BookingSettingsLive do
     end
   end
 
-  def handle_event("dates", %{"start_date" => first, "end_date" => last}, socket),
-    do: save(socket, %{"start_date" => first, "end_date" => last})
+  # The bookable range. The clause used to match only a payload carrying
+  # both keys, so any other payload raised a FunctionClauseError and the
+  # LiveView remounted with the stored range; nothing on the page showed the
+  # stored range or confirmed a save. Whichever date is present is merged
+  # with the stored one, a blank or unordered date is reported (never
+  # ignored), and a save says so. Typing a year into a date input sends each
+  # partial year (0002, 0020, 0202) as its own change, so those transient
+  # errors are cleared by the save that follows.
+  def handle_event("dates", params, socket) do
+    with %BookingLink{} = link <- selected_link(socket) do
+      given = Map.take(params, ["start_date", "end_date"])
+
+      case Enum.find(given, fn {_, value} -> not is_binary(value) or String.trim(value) == "" end) do
+        {field, _} ->
+          {:noreply, put_flash(socket, :error, "#{date_label(field)} needs a date.")}
+
+        nil when given == %{} ->
+          {:noreply, put_flash(socket, :error, "Choose a date.")}
+
+        nil ->
+          attrs =
+            Map.merge(
+              %{
+                "start_date" => Date.to_iso8601(link.start_date),
+                "end_date" => Date.to_iso8601(link.end_date)
+              },
+              Map.new(given, fn {field, value} -> {field, String.trim(value)} end)
+            )
+
+          with {:ok, first} <- Date.from_iso8601(attrs["start_date"]),
+               {:ok, last} <- Date.from_iso8601(attrs["end_date"]),
+               true <- Date.compare(last, first) != :lt do
+            save(socket, attrs, "Bookable dates saved")
+          else
+            false ->
+              {:noreply, put_flash(socket, :error, "Until must be on or after Bookable from.")}
+
+            _ ->
+              {:noreply, put_flash(socket, :error, "That is not a valid date.")}
+          end
+      end
+    else
+      _ -> {:noreply, socket}
+    end
+  end
 
   def handle_event("project", %{"project_id" => id}, socket),
     do: save(socket, %{"project_id" => if(id == "", do: nil, else: id)})
@@ -275,7 +318,9 @@ defmodule PlatformWeb.BookingSettingsLive do
     with %BookingLink{id: id} <- selected_link(socket),
          {:ok, _} <- BookingLinks.update(socket.assigns.access_scope, id, attrs) do
       socket = socket |> reload() |> load_preview()
-      {:noreply, if(flash, do: put_flash(socket, :info, flash), else: socket)}
+
+      {:noreply,
+       if(flash, do: socket |> clear_flash(:error) |> put_flash(:info, flash), else: socket)}
     else
       {:error, %Ecto.Changeset{errors: errors}} ->
         message =
@@ -293,6 +338,9 @@ defmodule PlatformWeb.BookingSettingsLive do
          |> put_flash(:error, "Could not save this link. Check Meetings is on for its project.")}
     end
   end
+
+  defp date_label("start_date"), do: "Bookable from"
+  defp date_label("end_date"), do: "Until"
 
   defp seg_label("duration_minutes"), do: "Length"
   defp seg_label("buffer_before_minutes"), do: "Buffer before"
@@ -379,12 +427,24 @@ defmodule PlatformWeb.BookingSettingsLive do
     |> Enum.map(&{&1["start"], &1["end"]})
   end
 
-  @doc "`30 min · 5 days a week · with Burrow meeting` (app.js link card)."
+  @doc """
+  The link card's summary line (app.js link card) plus the stored bookable
+  range, so the owner can see what was saved:
+  `30 min · 5 days a week · with Burrow meeting · 18 Nov – 18 Nov 2027`,
+  or `· Wed 18 Nov only` when the range is a single day.
+  """
   def summary(%BookingLink{} = link, meetings_on) do
     days = link.windows |> Enum.map(& &1["weekday"]) |> Enum.uniq() |> length()
 
     "#{link.duration_minutes} min · #{days} #{if days == 1, do: "day", else: "days"} a week" <>
-      if(meetings_on and link.create_meeting, do: " · with Burrow meeting", else: "")
+      if(meetings_on and link.create_meeting, do: " · with Burrow meeting", else: "") <>
+      " · " <> range_label(link.start_date, link.end_date)
+  end
+
+  defp range_label(%Date{} = first, %Date{} = last) do
+    if first == last,
+      do: Calendar.strftime(first, "%a %-d %b") <> " only",
+      else: Calendar.strftime(first, "%-d %b") <> " – " <> Calendar.strftime(last, "%-d %b %Y")
   end
 
   # 06:00–22:00 in 30-minute steps (app.js `timeOpts`), plus the current
@@ -653,6 +713,7 @@ defmodule PlatformWeb.BookingSettingsLive do
                 <form phx-change="dates" class="cal-formgrid2" id="booking-link-dates">
                   <label class="cal-field">
                     Bookable from<input
+                      id="booking-link-start-date"
                       type="date"
                       name="start_date"
                       value={@link.start_date}
@@ -660,7 +721,13 @@ defmodule PlatformWeb.BookingSettingsLive do
                     />
                   </label>
                   <label class="cal-field">
-                    Until<input type="date" name="end_date" value={@link.end_date} class="cal-input" />
+                    Until<input
+                      id="booking-link-end-date"
+                      type="date"
+                      name="end_date"
+                      value={@link.end_date}
+                      class="cal-input"
+                    />
                   </label>
                 </form>
                 <div class="cal-field" data-role="booking-preview">

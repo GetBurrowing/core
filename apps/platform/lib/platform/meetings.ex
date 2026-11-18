@@ -6653,12 +6653,31 @@ defmodule Platform.Meetings do
   Returns the row even when its status is `failed` or `complete` — whether
   a terminal row should be re-summarised is the caller's decision, not
   this query's.
+
+  ## A `recording` row holding content comes first
+
+  The room name is per SPACE (`room_name_for_space/1`), so one room holds
+  the transcripts of every call ever made in that space. Ranking by segment
+  count alone let an EARLIER call's larger, already-`complete` row win the
+  `room_finished` of a later call: the webhook then answered "already
+  finalized" and the later call's row stayed `recording` forever, never
+  finalized and never summarised. The row still being written is the one
+  this `room_finished` is about, so a `recording` row with segments
+  outranks every other; the segment-count rule still decides among the
+  rest (and still keeps an empty rejoin shadow from winning, since an
+  empty row does not qualify).
   """
   @spec get_summarizable_transcript_for_room(String.t()) :: Transcript.t() | nil
   def get_summarizable_transcript_for_room(room_id) when is_binary(room_id) do
     from(t in Transcript,
       where: t.room_id == ^room_id,
       order_by: [
+        desc:
+          fragment(
+            "(? = 'recording' AND jsonb_array_length(?) > 0)",
+            t.status,
+            t.segments
+          ),
         desc: fragment("jsonb_array_length(?)", t.segments),
         asc: t.inserted_at
       ],
@@ -8218,7 +8237,8 @@ defmodule Platform.Meetings do
     * `:previously_assigned_agent` — agent slug string or `nil`
     * `:stalled_for_ms` — non-negative integer milliseconds; formatted to
       human-readable ("47 seconds", "12 minutes", "1 hour", "2 hours")
-    * `:mode` — `:completed` (default) or `:also_failed`
+    * `:mode` — `:completed` (default), `:also_failed`, or `:timed_out`
+      (the agent never answered and no fallback summarizer is configured)
 
   Task 019f2566 stage 5.
   """
@@ -8283,6 +8303,17 @@ defmodule Platform.Meetings do
     ⚠️ **Summary fallback also failed**
 
     #{assignee_phrase} did not respond within #{window}, and the legacy LLM path also errored. Manual attention needed — visit [Agents → Roles](/control-center/roles) to reassign `meetings.summarize`.
+    """
+  end
+
+  defp fallback_notice_content(:timed_out, previously_assigned_agent, stalled_for_ms) do
+    assignee_phrase = fallback_notice_assignee_phrase(previously_assigned_agent)
+    window = humanize_ms(stalled_for_ms)
+
+    """
+    ⚠️ **Summary timed out**
+
+    #{assignee_phrase} did not return a summary within #{window}, and no fallback summarizer is configured, so this transcript was marked failed. The transcript is kept and the summary can be requested again. To reassign the `meetings.summarize` responsibility, visit [Agents → Roles](/control-center/roles).
     """
   end
 

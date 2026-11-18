@@ -35,21 +35,36 @@ defmodule Platform.Designer do
     * `meetings.visual_adjust` / `meetings.interaction_design`: the recipient
       writes the canvas with tools; `handle_output/2` is a no-op. Works
       natively, and CANNOT work on an external endpoint, which has no tools.
-    * `design.critique`: the synchronous `design_critique_request` tool
-      (`Platform.Design.Critique.request/1`) refuses a non-external assignee,
-      and the async `@designer critique` verdict only lands on a review
-      request through `handle_output/3`. Degraded natively; reported as a
-      warning.
+    * `design.critique`: an external assignee answers the
+      `design_critique_request` tool synchronously; a native one is
+      dispatched and returns its verdict with `design_critique_complete`,
+      which lands through the same `Critique.land_verdict/2` (task 01a1eb2f).
+      Works natively.
     * `design.spec_writer` / `design.brand_check` were placeholders on every
       runtime and were removed in the super agents restructure.
 
   An external endpoint has no tools, no subagents and no web, so it cannot be
   the lead. `provision/1` therefore accepts a native or federated runtime and
-  returns the critique gap as a warning instead of refusing.
+  reports what it found instead of refusing.
+
+  ## Tool grants
+
+  A runtime created with an explicit module list carries a
+  `restricted_permissions` map fixed at creation
+  (`Platform.Federation.register_runtime`). Turning a bundle on later does
+  not widen it, so the designer tools stayed hidden on a native agent whose
+  bundles were on. `provision/1` adds the missing bundles AND the missing
+  permissions of `required_tools/0` to the runtime's profile
+  (`apply_grants: false` only reports them). It never adds
+  `prompts.manage`, `admin.use` or `access.manage`, and it cannot lift the
+  owner cap: a permission the runtime's owner lacks is reported, not granted.
   """
 
   import Ecto.Query
 
+  alias Platform.Access.RuntimeProfile
+  alias Platform.Access.RuntimeProfiles
+  alias Platform.Access.ToolPermissions
   alias Platform.Access.Tools
   alias Platform.Accounts
   alias Platform.Agents.Agent
@@ -58,6 +73,7 @@ defmodule Platform.Designer do
   alias Platform.Chat
   alias Platform.Experiments.Goal
   alias Platform.Federation
+  alias Platform.Federation.ToolSurface
   alias Platform.Repo
   alias Platform.Responsibilities
   alias Platform.Responsibilities.Handlers.UxFrictionWatch
@@ -73,7 +89,9 @@ defmodule Platform.Designer do
   @goal_statement "Raise the UX finding keep rate: the share of the designer's UX decisions " <>
                     "a human keeps rather than dismisses."
   @template_dir "agent_templates/designer"
-  @template_mcp_server "startup-suite"
+  # The name a native agent's `.mcp.json` gives the Burrow server
+  # (`Platform.Agents.Harness.Config.burrow_server_names/0`).
+  @template_mcp_server "burrow"
   @template_files ~w(
     CLAUDE.md
     .claude/settings.json
@@ -85,14 +103,13 @@ defmodule Platform.Designer do
 
   # The tools the lead needs on its runtime. Missing ones are a warning.
   @required_tools ~w(
-    canvas_create task_attach_canvas task_design_decline task_get task_create
-    prototype_publish memory_view memory_create experiment_goal_list
+    canvas_create canvas_patch canvas_get task_attach_canvas task_design_decline task_get
+    task_create prototype_publish prototype_versions memory_view memory_create memory_search
+    memory_str_replace experiment_goal_list design_critique_complete
   )
 
-  @critique_warning "design.critique is degraded on a native or federated runtime: the synchronous " <>
-                      "design_critique_request tool needs a kind: \"external\" assignee, and an " <>
-                      "async @designer critique verdict does not land on the review request " <>
-                      "(task 01a1eb2f). Direction, meeting changes and friction watch are unaffected."
+  # Never granted by provisioning, whatever a future required tool maps to.
+  @never_grant ~w(prompts.manage admin.use access.manage)
   @external_warning "this agent is kind: \"external\" (an HTTP endpoint with no tools): " <>
                       "meetings.visual_adjust and meetings.interaction_design cannot write " <>
                       "canvases, and there is no swarm or web. Use a Claude Code runtime for the lead."
@@ -180,7 +197,10 @@ defmodule Platform.Designer do
     * `set_goal` (default true) — ensure ONE active goal raising
       `ux_finding_keep_rate`;
     * `reassign: true` — move the role from another agent; without it a role
-      held by someone else is refused.
+      held by someone else is refused;
+    * `apply_grants` (default true) — add the bundles and permissions the
+      runtime needs for `required_tools/0` (see "Tool grants"); false only
+      reports them under `runtime.grants_needed`.
 
   Returns `{:ok, report}` or `{:error, reason}`. Writes nothing when a
   required id is missing or unknown.
@@ -203,7 +223,8 @@ defmodule Platform.Designer do
          {:ok, goal} <- goal(Map.get(attrs, "set_goal", true)) do
       Phoenix.PubSub.broadcast(Platform.PubSub, @changed_topic, {:responsibilities_changed, :all})
 
-      runtime = runtime_report(agent)
+      grants = grant_tools(agent, Map.get(attrs, "apply_grants", true))
+      runtime = agent |> runtime_report() |> Map.merge(grants)
 
       {:ok,
        %{
@@ -224,8 +245,8 @@ defmodule Platform.Designer do
   @doc """
   The agent-side template files (`priv/agent_templates/designer`), as
   `[{path, content}]`. `opts[:mcp_server]` renames the Burrow MCP server in
-  subagent tool lists (default `"startup-suite"`), for a runtime whose
-  `.mcp.json` names it differently.
+  subagent tool lists (default `"burrow"`, the name a native agent's
+  `.mcp.json` uses), for a runtime whose `.mcp.json` names it differently.
   """
   @spec template_files(keyword()) :: [{String.t(), String.t()}]
   def template_files(opts \\ []) do
@@ -504,25 +525,118 @@ defmodule Platform.Designer do
     _ -> []
   end
 
+  # ── tool grants ──
+
+  # The bundles and permissions `required_tools/0` need on this agent's
+  # runtime that its profile does not carry. With `apply?` they are added
+  # (`granted`), else reported (`grants_needed`). An external agent or one
+  # with no runtime has nothing to grant.
+  defp grant_tools(%Agent{kind: "external"}, _apply?), do: %{}
+
+  defp grant_tools(%Agent{} = agent, apply?) do
+    with %AgentRuntime{} = runtime <- runtime(agent),
+         %RuntimeProfile{} = profile <- RuntimeProfiles.get(runtime) do
+      needed = grants_needed(runtime, profile)
+
+      cond do
+        needed == %{bundles: [], permissions: []} ->
+          %{grants_needed: needed}
+
+        apply? ->
+          case apply_grants(runtime, profile, needed) do
+            :ok -> %{granted: needed}
+            {:error, reason} -> %{grants_needed: needed, grant_error: inspect(reason)}
+          end
+
+        true ->
+          %{grants_needed: needed}
+      end
+    else
+      _ -> %{}
+    end
+  end
+
+  defp grants_needed(runtime, profile) do
+    bundles = RuntimeProfiles.tool_profile(runtime, profile)
+    restriction = RuntimeProfiles.restrictions(runtime, profile)
+    by_name = Map.new(ToolSurface.tool_definitions(), &{&1.name, &1.bundle})
+
+    missing_bundles =
+      @required_tools
+      |> Enum.map(&Map.get(by_name, &1))
+      |> Enum.reject(&(is_nil(&1) or &1 in bundles))
+      |> Enum.uniq()
+
+    missing_permissions =
+      case restriction do
+        nil ->
+          []
+
+        restriction ->
+          @required_tools
+          |> Enum.map(&ToolPermissions.for_tool/1)
+          |> Enum.reject(&(is_nil(&1) or &1 in @never_grant or Map.has_key?(restriction, &1)))
+          |> Enum.uniq()
+      end
+
+    %{bundles: Enum.sort(missing_bundles), permissions: Enum.sort(missing_permissions)}
+  end
+
+  defp apply_grants(runtime, profile, %{bundles: bundles, permissions: permissions}) do
+    with {:ok, _} <- maybe_add_bundles(runtime, profile, bundles),
+         {:ok, _} <- maybe_add_permissions(runtime, profile, permissions) do
+      :ok
+    end
+  end
+
+  defp maybe_add_bundles(_runtime, _profile, []), do: {:ok, :unchanged}
+
+  defp maybe_add_bundles(runtime, profile, bundles) do
+    RuntimeProfiles.set_tool_profile(
+      runtime,
+      RuntimeProfiles.tool_profile(runtime, profile) ++ bundles
+    )
+  end
+
+  defp maybe_add_permissions(_runtime, _profile, []), do: {:ok, :unchanged}
+
+  defp maybe_add_permissions(runtime, _profile, permissions) do
+    # Re-read: the bundle write above replaced the profile row.
+    current = RuntimeProfiles.restrictions(runtime) || %{}
+    RuntimeProfiles.restrict(runtime, Map.merge(current, Map.new(permissions, &{&1, "all"})))
+  end
+
   defp warnings(_agent, %{kind: :external}), do: [@external_warning]
 
   defp warnings(_agent, %{kind: :no_runtime}) do
     [
       "the agent has no runtime yet: create a Claude Code runtime for it, then re-run " <>
-        "provision/1 to check its tools",
-      @critique_warning
+        "provision/1 to grant and check its tools"
     ]
   end
 
-  defp warnings(_agent, %{missing_tools: missing}) do
+  defp warnings(_agent, %{missing_tools: missing} = runtime) do
     tools =
       if missing == [],
         do: [],
         else: [
-          "the runtime is missing designer tools: #{Enum.join(missing, ", ")}; add their " <>
-            "bundles (canvas, task, prototype, memory, experiments) to its tool profile"
+          "the runtime is missing designer tools: #{Enum.join(missing, ", ")}; " <>
+            missing_hint(runtime)
         ]
 
-    tools ++ [@critique_warning]
+    tools ++ grant_error(runtime)
   end
+
+  defp missing_hint(%{grants_needed: %{bundles: b, permissions: p}}) when b != [] or p != [],
+    do:
+      "grant bundles [#{Enum.join(b, ", ")}] and permissions [#{Enum.join(p, ", ")}] " <>
+        "(re-run provision/1 without apply_grants: false)"
+
+  defp missing_hint(_runtime),
+    do:
+      "the bundles and restrict-grants are in place, so the runtime's owner lacks the " <>
+        "permission; use an owner who holds it"
+
+  defp grant_error(%{grant_error: reason}), do: ["applying tool grants failed: #{reason}"]
+  defp grant_error(_runtime), do: []
 end

@@ -105,12 +105,27 @@ defmodule Platform.Design.Critique do
 
   Returns `{:ok, %{issues: [...], raw: binary(), unparseable?: boolean(),
   review_item_id: binary() | nil}}` or `{:error, term()}`.
+
+  With a native or federated assignee the critique is DISPATCHED instead:
+  the result carries `pending?: true` and no issues, and the verdict lands
+  on the review request (and in the space) when the assignee returns it
+  through `design_critique_complete`.
   """
   @spec request(map()) :: {:ok, map()} | {:error, term()}
   def request(args) when is_map(args) do
     with {:ok, responsibility} <- load_responsibility(),
-         {:ok, agent} <- resolve_external_assignee(),
-         {:ok, context} <- DesignCritique.gather_context(responsibility, args),
+         {:ok, agent} <- resolve_assignee() do
+      case agent do
+        %{kind: "external"} -> request_sync(responsibility, agent, args)
+        _ -> request_async(responsibility, args)
+      end
+    end
+  end
+
+  def request(_args), do: {:error, :invalid_arguments}
+
+  defp request_sync(responsibility, agent, args) do
+    with {:ok, context} <- DesignCritique.gather_context(responsibility, args),
          {:ok, prompt} <- DesignCritique.build_prompt(context),
          {:ok, output} <- dispatch(responsibility, agent, context, prompt) do
       parsed = Verdict.parse(output)
@@ -119,7 +134,41 @@ defmodule Platform.Design.Critique do
     end
   end
 
-  def request(_args), do: {:error, :invalid_arguments}
+  # A native or federated assignee (a Claude Code runtime) cannot answer
+  # synchronously: it is sent a one-way signal through the Router, and its
+  # prompt names `design_critique_complete` and a signed `critique_ref`. The
+  # verdict lands later, through the same `land_verdict/2`, on the review
+  # request and in the space this call named (task 01a1eb2f). The canvas is
+  # resolved HERE first, so an unresolvable canvas is still refused to the
+  # caller rather than dispatched.
+  defp request_async(responsibility, args) do
+    with {:ok, context} <- DesignCritique.gather_context(responsibility, args) do
+      trigger_meta =
+        args
+        |> Map.take([:canvas_id, :note, :task_id, :review_request_id, :space_id])
+        |> Map.put(:canvas_id, context.canvas_id)
+        |> Map.put(:critique_ref, context.critique_ref)
+        |> Map.put(:kind, :agent_request)
+
+      case Platform.Responsibilities.Router.fire_trigger(responsibility, trigger_meta) do
+        {:ok, :dispatched} ->
+          {:ok,
+           %{
+             issues: [],
+             raw: nil,
+             unparseable?: false,
+             review_item_id: nil,
+             pending?: true
+           }}
+
+        {:ok, other} ->
+          {:error, {:dispatch_not_sent, other}}
+
+        {:error, reason} ->
+          {:error, reason}
+      end
+    end
+  end
 
   @doc """
   Deliver a parsed critique to the two places a human might read it.
@@ -157,20 +206,10 @@ defmodule Platform.Design.Critique do
   # Override-aware (`responsibility_overrides` first, then the role
   # bundle), so a Control Center override reaches this path exactly as it
   # reaches the Router's.
-  defp resolve_external_assignee do
+  defp resolve_assignee do
     case Roles.assignee_for(@key) do
-      nil ->
-        {:error, :responsibility_unfilled}
-
-      %{kind: "external"} = agent ->
-        {:ok, agent}
-
-      %{kind: kind} ->
-        # Not a silent no-op. The native path is the Router's
-        # fire-and-forget signal business; this function promised its
-        # caller a verdict and a native assignee cannot supply one
-        # synchronously.
-        {:error, {:assignee_not_external, kind}}
+      nil -> {:error, :responsibility_unfilled}
+      agent -> {:ok, agent}
     end
   end
 

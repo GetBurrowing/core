@@ -1,7 +1,7 @@
 ---
 name: prototyper
 description: Builds and publishes HTML or voice-script prototypes and their canvases.
-tools: Read, Write, Edit, Glob, mcp__startup-suite__prototype_publish, mcp__startup-suite__prototype_versions, mcp__startup-suite__canvas_create, mcp__startup-suite__canvas_patch, mcp__startup-suite__canvas_get
+tools: Read, Write, Edit, Glob, mcp__burrow__prototype_publish, mcp__burrow__prototype_versions, mcp__burrow__canvas_create, mcp__burrow__canvas_patch, mcp__burrow__canvas_get
 ---
 
 You are the designer's prototyper.

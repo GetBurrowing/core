@@ -13,7 +13,8 @@ defmodule Platform.Access.ToolPermissions do
               {"calendar.write", ~w(calendar_propose calendar_draft)},
               {"canvas.read",
                ~w(canvas_describe canvas_list_kinds canvas_template canvas_versions canvas_get canvas_list)},
-              {"canvas.write", ~w(canvas_create canvas_patch canvas_restore)},
+              {"canvas.write",
+               ~w(canvas_create canvas_patch canvas_restore design_critique_complete)},
               {"chat.read",
                ~w(space_get_context space_get_messages space_list space_search_messages)},
               {"chat.write", ~w(react send_media)},
@@ -30,7 +31,7 @@ defmodule Platform.Access.ToolPermissions do
               {"mail.use",
                ~w(mail_digest mail_draft_create mail_draft_update mail_inbound_get mail_inbound_list)},
               {"meetings.join",
-               ~w(intent_ack meeting_activity_push meeting_create meeting_say meeting_scribe_complete meeting_triage_file voice_ask_agent voice_ask_poll)},
+               ~w(intent_ack meeting_activity_push meeting_create meeting_say meeting_scribe_complete meeting_summary_complete meeting_triage_file voice_ask_agent voice_ask_poll)},
               {"memory.journal", ~w(memory_create)},
               {"memory.read",
                ~w(memory_search memory_view org_memory_feedback_at_path org_memory_recently_deleted org_memory_recently_edited)},
@@ -70,7 +71,7 @@ defmodule Platform.Access.ToolPermissions do
     "mail" =>
       ~w(mail_draft_create mail_draft_update mail_inbound_list mail_inbound_get mail_digest),
     "meetings" =>
-      ~w(meeting_create meeting_say meeting_scribe_complete meeting_triage_file meeting_activity_push intent_ack),
+      ~w(meeting_create meeting_say meeting_scribe_complete meeting_triage_file meeting_summary_complete meeting_activity_push intent_ack),
     "memory" =>
       ~w(memory_view memory_create memory_str_replace memory_insert memory_delete memory_rename memory_search org_memory_recently_edited org_memory_recently_deleted org_memory_feedback_at_path),
     "messaging" => ~w(send_media react),
@@ -78,7 +79,7 @@ defmodule Platform.Access.ToolPermissions do
       ~w(plan_create plan_update plan_get plan_submit plan_approve plan_reject validation_payload_amend plan_architecture_verdict stage_architecture_audit stage_start stage_list validation_evaluate validation_pass stage_complete report_blocker validation_list prompt_template_list prompt_template_update),
     "prototype" => ~w(prototype_publish prototype_versions prototype_rollback),
     "review" =>
-      ~w(review_request_create review_request_get review_item_list design_critique_request),
+      ~w(review_request_create review_request_get review_item_list design_critique_request design_critique_complete),
     "skill" => ~w(skill_list skill_get skill_upsert),
     "space" => ~w(space_create space_list space_list_agents space_leave space_rename dm_create),
     "task" =>

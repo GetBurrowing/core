@@ -61,6 +61,7 @@ defmodule Platform.Responsibilities.Handlers.UxFrictionWatch do
   alias Platform.Roles
   alias Platform.Ux.Digest
   alias Platform.Ux.FrictionWatch
+  alias Platform.Ux.MorningReview
 
   @key "ux.friction_watch"
   @feature "ux"
@@ -109,17 +110,19 @@ defmodule Platform.Responsibilities.Handlers.UxFrictionWatch do
   def gather_context(%Responsibility{key: @key} = row, ctx) when is_map(ctx) do
     agent = safe_assignee()
     opts = run_opts(ctx, row)
+    started_at = DateTime.utc_now()
     {:ok, summary} = FrictionWatch.run(agent, opts)
     digest = maybe_digest(agent, ctx, opts)
+    morning = maybe_morning_review(agent, ctx, row, opts, started_at)
 
     Logger.info(
       "[ux.friction_watch] status=#{summary.status} signals=#{summary.signals} " <>
         "created=#{length(summary.created)} deduped=#{length(summary.deduped)} " <>
         "below_threshold=#{length(summary.below_threshold)} failed=#{length(summary.failed)} " <>
-        "digest=#{digest_tag(digest)}"
+        "digest=#{digest_tag(digest)} morning_review=#{morning_tag(morning)}"
     )
 
-    {:handled, Map.put(summary, :digest, digest)}
+    {:handled, summary |> Map.put(:digest, digest) |> Map.put(:morning_review, morning)}
   end
 
   def gather_context(_responsibility, _ctx), do: {:ok, %{}}
@@ -148,6 +151,25 @@ defmodule Platform.Responsibilities.Handlers.UxFrictionWatch do
   defp maybe_digest(agent, ctx, opts) do
     if cron?(ctx), do: Digest.post(agent, Keyword.take(opts, [:now, :org_id])), else: :not_run
   end
+
+  # The morning canvas (`Platform.Ux.MorningReview`): cron fires only, and
+  # only when the row's trigger_config opts in with `"morning_review" => true`.
+  defp maybe_morning_review(nil, _ctx, _row, _opts, _started_at), do: :not_run
+
+  defp maybe_morning_review(agent, ctx, row, opts, started_at) do
+    if cron?(ctx) and MorningReview.config(row.trigger_config).enabled? do
+      MorningReview.post(agent, Keyword.get(opts, :recipient_user_id), started_at,
+        now: Keyword.get(opts, :now)
+      )
+    else
+      :not_run
+    end
+  end
+
+  defp morning_tag({:ok, _}), do: "posted"
+  defp morning_tag({:skipped, reason}), do: "skipped:#{reason}"
+  defp morning_tag({:error, _}), do: "failed"
+  defp morning_tag(:not_run), do: "not_run"
 
   defp cron?(ctx), do: (Map.get(ctx, :kind) || Map.get(ctx, "kind")) in [:cron, "cron"]
 

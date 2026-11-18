@@ -65,6 +65,10 @@ defmodule Platform.Federation.PlayToolsTest do
   # 144 with `project_create` after `project_update` (task 01a19aa4 stage 1).
   # 146 with write-free calendar_draft after calendar_propose (task 01a1b8a5 stage 3).
   # 148 with `sharing_list` and `sharing_set` after `vault_list` (task 01a1b678 stage 3).
+  # 149 with `meeting_summary_complete` after `meeting_triage_file` (the
+  # delegated meeting-summary return path).
+  # 150 with `design_critique_complete` after `design_critique_request` (the
+  # native Designer's critique return path, task 01a1eb2f).
   @main_tool_names ~w(
     canvas_create canvas_patch canvas_describe canvas_list_kinds canvas_template canvas_versions
     canvas_restore send_media react blocker_recheck blocker_verify project_list org_list_descendants project_update project_create
@@ -79,7 +83,7 @@ defmodule Platform.Federation.PlayToolsTest do
     plan_architecture_verdict stage_architecture_audit stage_start stage_list validation_evaluate
     validation_pass stage_complete report_blocker validation_list prompt_template_list
     prompt_template_update review_request_create review_request_get review_item_list
-    design_critique_request space_create space_list space_list_agents space_leave space_rename dm_create
+    design_critique_request design_critique_complete space_create space_list space_list_agents space_leave space_rename dm_create
     space_get_context space_search_messages space_get_messages canvas_list canvas_get
     principal_search calendar_list calendar_propose calendar_draft federation_status vault_fetch vault_list sharing_list sharing_set memory_view memory_create
     memory_str_replace memory_insert
@@ -87,7 +91,7 @@ defmodule Platform.Federation.PlayToolsTest do
     org_memory_recently_deleted org_memory_feedback_at_path skill_list skill_get skill_upsert
     attachment_upload_inline attachment_get_inline attachment_upload_start file_list
     file_get_text file_get_metadata file_search file_add file_delete meeting_scribe_complete
-    meeting_triage_file meeting_create meeting_say
+    meeting_triage_file meeting_summary_complete meeting_create meeting_say
     meeting_activity_push intent_ack experiment_surface_list experiment_list experiment_get
     experiment_create experiment_variant_add experiment_start experiment_stop experiment_conclude
     experiment_results experiment_signals_list experiment_exclude experiment_goal_set
@@ -177,7 +181,7 @@ defmodule Platform.Federation.PlayToolsTest do
 
   describe "GUARD: with GAME_STREAM_ENABLED unset the tool list is main's" do
     test "tool_definitions/0 names include the two Calendar tools in order" do
-      assert length(@main_tool_names) == 148
+      assert length(@main_tool_names) == 150
       assert catalogue_names() == @main_tool_names
     end
 
