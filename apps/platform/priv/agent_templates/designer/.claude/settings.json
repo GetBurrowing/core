@@ -1,0 +1,6 @@
+{
+  "permissions": {
+    "allow": ["WebSearch", "WebFetch"],
+    "deny": ["Bash(git:*)"]
+  }
+}

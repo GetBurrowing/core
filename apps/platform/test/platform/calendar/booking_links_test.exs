@@ -866,4 +866,166 @@ defmodule Platform.Calendar.BookingLinksTest do
     assert [confirmed] = Enum.filter(deliveries, &(&1.recipients == ["guest@example.com"]))
     assert confirmed.body =~ "With Ryan Milvenan and Jordan Coombs."
   end
+
+  # Task 01a1eff0 stage 1: the bookable-date range is a server-side contract.
+  # Slot generation, open_days/2, preview/4 and book/3 all honour
+  # start_date..end_date; a one-day link offers exactly that day.
+
+  # The first date on or after `from` whose ISO weekday is `weekday`.
+  defp next_weekday(from, weekday),
+    do: Date.add(from, rem(weekday - Date.day_of_week(from) + 7, 7))
+
+  defp local_date(slot, zone),
+    do: slot.starts_at |> DateTime.shift_zone!(zone) |> DateTime.to_date()
+
+  defp owner_event_count(owner),
+    do:
+      Repo.aggregate(
+        from(e in Calendar.Event, where: e.owner_id == ^owner.actor.id),
+        :count
+      )
+
+  defp one_day_link(owner, date, extra \\ %{}) do
+    create(
+      owner,
+      Map.merge(
+        %{
+          start_date: date,
+          end_date: date,
+          windows: [%{"weekday" => Date.day_of_week(date), "start" => "09:00", "end" => "12:00"}]
+        },
+        extra
+      )
+    )
+  end
+
+  test "a one-day link offers only that day" do
+    Platform.Calendar.BookingRateLimit.reset()
+    owner = scope()
+    today = Date.utc_today()
+    # Ten days out: clear of minimum notice and "now", and D-7 is still future.
+    day = Date.add(today, 10)
+    link = one_day_link(owner, day)
+
+    assert {:ok, [_ | _] = offered} = BookingLinks.slots(link.token, day)
+    assert Enum.all?(offered, &(local_date(&1, "Etc/UTC") == day))
+    assert {:ok, []} = BookingLinks.slots(link.token, Date.add(day, 7))
+
+    if Date.compare(Date.add(day, -7), today) != :lt,
+      do: assert({:ok, []} = BookingLinks.slots(link.token, Date.add(day, -7)))
+
+    assert {:ok, open} = BookingLinks.open_days(link.token, day)
+    assert Map.keys(open) == [day]
+    assert open[day] == length(offered)
+
+    next_month = Date.add(Date.end_of_month(day), 1)
+    assert {:ok, %{} = later} = BookingLinks.open_days(link.token, next_month)
+    assert later == %{}
+
+    assert {:ok, preview} = BookingLinks.preview(owner, link.id, today, 62)
+    assert preview == offered
+    assert Enum.map(preview, &local_date(&1, "Etc/UTC")) |> Enum.uniq() == [day]
+  end
+
+  test "time-zone boundary: a Chicago evening slot that is Thursday in UTC stays on its Wednesday" do
+    Platform.Calendar.BookingRateLimit.reset()
+    owner = scope()
+    zone = "America/Chicago"
+    wednesday = next_weekday(Date.add(Date.utc_today(), 8), 3)
+
+    # 17:00-20:00 rather than 17:00-19:00 so a slot crosses UTC midnight in
+    # both CST (UTC-6, 18:00 -> 00:00Z) and CDT (UTC-5, 19:00 -> 00:00Z).
+    link =
+      create(owner, %{
+        time_zone: zone,
+        start_date: wednesday,
+        end_date: wednesday,
+        windows: [%{"weekday" => 3, "start" => "17:00", "end" => "20:00"}]
+      })
+
+    assert {:ok, offered} = BookingLinks.slots(link.token, wednesday)
+
+    assert Enum.map(
+             offered,
+             &(&1.starts_at |> DateTime.shift_zone!(zone) |> Elixir.Calendar.strftime("%H:%M"))
+           ) ==
+             ~w(17:00 17:30 18:00 18:30 19:00 19:30)
+
+    six_pm = DateTime.new!(wednesday, ~T[18:00:00], zone)
+    assert Enum.any?(offered, &(DateTime.compare(&1.starts_at, six_pm) == :eq))
+    assert Enum.all?(offered, &(local_date(&1, zone) == wednesday))
+
+    thursday_utc = Date.add(wednesday, 1)
+    assert Enum.any?(offered, &(DateTime.to_date(&1.starts_at) == thursday_utc))
+
+    assert {:ok, open} = BookingLinks.open_days(link.token, wednesday)
+    assert open == %{wednesday => length(offered)}
+    assert {:ok, []} = BookingLinks.slots(link.token, thursday_utc)
+  end
+
+  test "an out-of-range start is refused server-side and creates nothing" do
+    Platform.Calendar.BookingRateLimit.reset()
+    owner = scope()
+    day = Date.add(Date.utc_today(), 10)
+    link = one_day_link(owner, day, %{time_zone: "America/Chicago"})
+    bookings = Repo.aggregate(Booking, :count)
+    events = owner_event_count(owner)
+
+    forge = fn date, time, key ->
+      start = DateTime.new!(date, time, link.time_zone)
+
+      BookingLinks.book(
+        link.token,
+        %{"name" => "Forger", "email" => "", "starts_at" => DateTime.to_iso8601(start)},
+        key
+      )
+    end
+
+    assert {:error, :slot_unavailable} =
+             forge.(Date.add(day, 7), ~T[09:00:00], "forged-after-range-01")
+
+    assert {:error, :slot_unavailable} =
+             forge.(Date.add(day, -7), ~T[09:00:00], "forged-before-range-1")
+
+    # In range, but one minute off the 30-minute grid.
+    assert {:error, :slot_unavailable} = forge.(day, ~T[09:01:00], "forged-off-grid-0001")
+
+    assert Repo.aggregate(Booking, :count) == bookings
+    assert owner_event_count(owner) == events
+
+    # Positive control: the on-grid in-range start books and the counts move.
+    assert {:ok, booked} = forge.(day, ~T[09:00:00], "in-range-on-grid-001")
+    assert booked.event_id
+    assert Repo.aggregate(Booking, :count) == bookings + 1
+    assert owner_event_count(owner) == events + 1
+  end
+
+  test "a three-week link has open days on exactly its three Wednesdays" do
+    Platform.Calendar.BookingRateLimit.reset()
+    owner = scope()
+    first = next_weekday(Date.add(Date.utc_today(), 8), 3)
+    last = Date.add(first, 20)
+
+    link =
+      create(owner, %{
+        start_date: first,
+        end_date: last,
+        windows: [%{"weekday" => 3, "start" => "09:00", "end" => "12:00"}]
+      })
+
+    # Every month that holds a Wednesday just outside the range on either
+    # side, so a lost clamp shows up whichever month it lands in.
+    months =
+      [Date.add(first, -7), first, last, Date.add(first, 21)]
+      |> Enum.map(&Date.beginning_of_month/1)
+      |> Enum.uniq()
+
+    days =
+      Enum.flat_map(months, fn month ->
+        {:ok, open} = BookingLinks.open_days(link.token, month)
+        Map.keys(open)
+      end)
+
+    assert Enum.sort(days, Date) == [first, Date.add(first, 7), Date.add(first, 14)]
+  end
 end

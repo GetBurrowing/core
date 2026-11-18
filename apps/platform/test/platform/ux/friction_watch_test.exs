@@ -411,6 +411,26 @@ defmodule Platform.Ux.FrictionWatchTest do
       assert id == first.id
     end
 
+    test "a Router fire files the decision to the designer's escalate_user_id when one is set",
+         %{row: row} do
+      agent = assign_designer!()
+      readable_channel!(agent, 3)
+      expect_one_group(times: 1)
+      escalate = user!()
+
+      {:ok, _} =
+        Responsibilities.update_responsibility(row, %{
+          trigger_config:
+            row.trigger_config
+            |> Map.put("escalate_user_id", escalate.id)
+            |> Map.put("operator_set", true)
+        })
+
+      assert Router.fire("ux.friction_watch", %{}) == {:ok, :handled}
+      assert [%{kind: "decision", recipient_user_id: recipient}] = findings()
+      assert recipient == escalate.id
+    end
+
     test "an fyi is held as one open row; a re-run does not add a second", %{owner: _owner} do
       agent = assign_designer!()
       readable_channel!(agent, 3)

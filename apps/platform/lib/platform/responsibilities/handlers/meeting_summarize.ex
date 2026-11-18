@@ -313,6 +313,116 @@ defmodule Platform.Responsibilities.Handlers.MeetingSummarize do
     end
   end
 
+  # ── Agent return path (`meeting_summary_complete`) ────────────────────────
+
+  @doc """
+  Accept a summary an agent returns through the `meeting_summary_complete`
+  MCP tool and run it through `handle_output/3` — the same persistence the
+  external (HTTP) path uses.
+
+  ## Why this exists
+
+  A native or federated assignee (a Claude Code runtime, say) is sent a
+  one-way signal by `Router.dispatch_native/6`; nothing ever reads its
+  reply, so before this tool a summary it wrote was simply lost and the
+  transcript sat in `processing` holding the router claim.
+
+  ## What is checked
+
+    * the caller is the agent currently holding `meetings.summarize`
+      (`:not_summary_assignee` otherwise);
+    * the transcript exists and is still `processing` with a router claim
+      (`:not_awaiting_summary`; `:already_complete` when it already has
+      one);
+    * `summary` is a non-blank string (`:blank_summary`);
+    * when `summary_input_hash` is given, it still matches the transcript
+      (`:stale_summary_input` — new speech arrived after the dispatch, so
+      this summary describes an older transcript).
+
+  None of the refusals touch the row: a malformed call must not fail a
+  transcript the agent can still complete with a corrected call.
+  """
+  @spec complete_from_agent(String.t(), map()) :: {:ok, map()} | {:error, atom()}
+  def complete_from_agent(agent_id, args) when is_binary(agent_id) and is_map(args) do
+    transcript_id = Map.get(args, "transcript_id")
+    summary = Map.get(args, "summary")
+    supplied_hash = Map.get(args, "summary_input_hash")
+
+    with :ok <- check_assignee(agent_id),
+         {:ok, text} <- check_summary(summary),
+         {:ok, transcript} <- check_awaiting(transcript_id),
+         {:ok, input_hash} <- check_input_hash(transcript, supplied_hash) do
+      responsibility = responsibility_row()
+
+      meta = %{
+        kind: :agent_tool,
+        payload: %{transcript_id: transcript.id, space_id: transcript.space_id},
+        summary_input_hash: input_hash
+      }
+
+      case handle_output(responsibility, %{"summary" => text}, meta) do
+        :ok ->
+          {:ok, %{transcript_id: transcript.id, status: "complete", posted: true}}
+
+        # Persisted; only the chat post failed. The summary is saved.
+        {:error, {:post_failed, _}} ->
+          {:ok, %{transcript_id: transcript.id, status: "complete", posted: false}}
+
+        {:error, {:complete_failed, :stale_summary}} ->
+          {:error, :stale_summary_input}
+
+        {:error, _reason} ->
+          {:error, :persist_failed}
+      end
+    end
+  end
+
+  def complete_from_agent(_agent_id, _args), do: {:error, :invalid_arguments}
+
+  defp check_assignee(agent_id) do
+    case Platform.Roles.assignee_for(@key) do
+      %{id: ^agent_id} -> :ok
+      _ -> {:error, :not_summary_assignee}
+    end
+  end
+
+  defp check_summary(summary) when is_binary(summary) do
+    if String.trim(summary) == "", do: {:error, :blank_summary}, else: {:ok, summary}
+  end
+
+  defp check_summary(_), do: {:error, :blank_summary}
+
+  defp check_awaiting(transcript_id) do
+    case Meetings.get_transcript(transcript_id) do
+      nil ->
+        {:error, :transcript_not_found}
+
+      %{status: "complete"} ->
+        {:error, :already_complete}
+
+      %{status: "processing", router_dispatched_at: %DateTime{}} = transcript ->
+        {:ok, transcript}
+
+      _ ->
+        {:error, :not_awaiting_summary}
+    end
+  end
+
+  defp check_input_hash(transcript, supplied) do
+    current = Platform.Meetings.Transcript.summary_fingerprint(transcript)
+
+    cond do
+      supplied in [nil, ""] -> {:ok, current}
+      supplied == current -> {:ok, current}
+      true -> {:error, :stale_summary_input}
+    end
+  end
+
+  defp responsibility_row do
+    Platform.Responsibilities.get_by_key(@key) ||
+      %Responsibility{key: @key, feature: @feature}
+  end
+
   # ── Prompt construction ───────────────────────────────────────────────────
 
   @doc """
@@ -340,7 +450,9 @@ defmodule Platform.Responsibilities.Handlers.MeetingSummarize do
       {:ok,
        %{
          system: system_prompt_with_grounding(context),
-         user: "Please summarize the following meeting transcript:\n\n#{transcript_text}"
+         user:
+           "Please summarize the following meeting transcript:\n\n#{transcript_text}" <>
+             return_instructions(context)
        }}
     else
       {:error, :no_transcript_text}
@@ -426,14 +538,59 @@ defmodule Platform.Responsibilities.Handlers.MeetingSummarize do
   # summarization in a subagent, while an external agent like Hermione
   # is single responsibility and thus shouldn't need additional
   # instructions besides the normal prompt".
+  #
+  # The preamble used to end "Return the summary as plain text in the
+  # subagent's final message." That instruction is what lost every summary
+  # a federated runtime wrote: a native/federated dispatch is a one-way
+  # signal (`Router.dispatch_native/6` never reaches `handle_output/3`), so
+  # plain text went to a chat turn nothing reads. The return path is now
+  # the `meeting_summary_complete` tool — see `return_instructions/1`.
   defp kind_preamble(:fed_conversational) do
     """
-    You are running inside a conversational Claude runtime. IMPORTANT: fire off the summarization work to a dedicated subagent (Task tool) so the main thread stays responsive to the user. Return the summary as plain text in the subagent's final message.
+    You are running inside a conversational Claude runtime. IMPORTANT: fire off the summarization work to a dedicated subagent (Task tool) so the main thread stays responsive to the user.
     """
     |> String.trim_trailing()
   end
 
   defp kind_preamble(_), do: ""
+
+  @doc """
+  Whether a dispatch rendered from `context` must return its summary
+  through the `meeting_summary_complete` tool rather than as the reply.
+
+  An external (OpenAI-compatible) agent's HTTP response IS the output —
+  `Router.run_external_dispatch/5` hands it to `handle_output/3`. Every
+  other runtime receives a one-way signal, so its reply is never read.
+  `nil` (a caller that did not classify the agent) keeps the old,
+  reply-is-the-output prompt.
+  """
+  @spec returns_via_tool?(map()) :: boolean()
+  def returns_via_tool?(context) when is_map(context),
+    do: Map.get(context, :agent_kind) in [:fed_conversational, :loc_built_in]
+
+  def returns_via_tool?(_), do: false
+
+  defp return_instructions(context) do
+    transcript = Map.get(context, :meeting_transcript) || %{}
+    transcript_id = Map.get(transcript, :transcript_id)
+    input_hash = Map.get(transcript, :summary_input_hash)
+
+    if returns_via_tool?(context) and is_binary(transcript_id) do
+      hash_arg =
+        if is_binary(input_hash), do: ", summary_input_hash=\"#{input_hash}\"", else: ""
+
+      """
+
+
+      ## Returning the summary
+
+      This job reached you as a dispatch signal, so a chat reply or a final message is NOT saved anywhere. When the summary is written, call the MCP tool `meeting_summary_complete` with transcript_id="#{transcript_id}"#{hash_arg} and summary set to the full markdown summary. The meeting has no summary until that call succeeds. If it returns an error, read it, fix the call and try again; do not post the summary as a chat message instead.
+      """
+      |> String.trim_trailing()
+    else
+      ""
+    end
+  end
 
   # ── internals ─────────────────────────────────────────────────────────────
 

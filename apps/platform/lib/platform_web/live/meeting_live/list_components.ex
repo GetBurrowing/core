@@ -57,18 +57,7 @@ defmodule PlatformWeb.MeetingLive.ListComponents do
           )
           |> Enum.group_by(&elem(&1, 0), &{elem(&1, 1), elem(&1, 2)})
 
-    transcripts =
-      if ids == [],
-        do: %{},
-        else:
-          Repo.all(
-            from(t in Platform.Meetings.Transcript,
-              where: t.meeting_id in ^ids,
-              order_by: [asc: t.inserted_at],
-              select: {t.meeting_id, t.summary, t.segments}
-            )
-          )
-          |> Enum.group_by(&elem(&1, 0), &{elem(&1, 1), elem(&1, 2)})
+    transcripts = transcripts_by_meeting(meetings, ids, space_ids)
 
     recordings =
       if space_ids == [],
@@ -120,6 +109,62 @@ defmodule PlatformWeb.MeetingLive.ListComponents do
          }
        end)}
     end)
+  end
+
+  # A transcript is linked to its meeting by `meeting_id`, but that is only
+  # stamped when a live/ended meeting already covered the capture start
+  # (`Meetings.create_transcript/1`). A row captured without one keeps
+  # `meeting_id: nil`, and matching on `meeting_id` alone told the viewer
+  # "No transcript was saved" beside a transcript of hundreds of segments.
+  # Such a row is attributed here the way `Meetings.Completion` does: same
+  # chat space, capture start inside the meeting's window.
+  defp transcripts_by_meeting(_meetings, [], _space_ids), do: %{}
+
+  defp transcripts_by_meeting(meetings, ids, space_ids) do
+    rows =
+      Repo.all(
+        from(t in Platform.Meetings.Transcript,
+          where: t.meeting_id in ^ids or (is_nil(t.meeting_id) and t.space_id in ^space_ids),
+          order_by: [asc: t.inserted_at],
+          select: %{
+            meeting_id: t.meeting_id,
+            space_id: t.space_id,
+            started_at: t.started_at,
+            inserted_at: t.inserted_at,
+            summary: t.summary,
+            segments: t.segments
+          }
+        )
+      )
+
+    rows
+    |> Enum.flat_map(fn row ->
+      case row.meeting_id || unowned_transcript_meeting(row, meetings) do
+        nil -> []
+        meeting_id -> [{meeting_id, {row.summary, row.segments}}]
+      end
+    end)
+    |> Enum.group_by(&elem(&1, 0), &elem(&1, 1))
+  end
+
+  defp unowned_transcript_meeting(row, meetings) do
+    captured = row.started_at || row.inserted_at
+    in_space = Enum.filter(meetings, &(&1.chat_space_id == row.space_id))
+
+    Enum.find_value(in_space, fn m ->
+      from = m.started_at || m.scheduled_start_at
+      to = m.ended_at || m.scheduled_end_at
+
+      covers? =
+        match?(%DateTime{}, from) and DateTime.compare(captured, from) != :lt and
+          (is_nil(to) or DateTime.compare(captured, to) != :gt)
+
+      covers? && m.id
+    end) ||
+      case in_space do
+        [only] -> only.id
+        _ -> nil
+      end
   end
 
   # v4 sections by time: a still-`scheduled` meeting whose window has
@@ -380,7 +425,12 @@ defmodule PlatformWeb.MeetingLive.ListComponents do
                 </p>
               <% _ -> %>
                 <h3>Summary</h3>
-                <p :if={!@row.summary}>No summary was saved for this meeting.</p>
+                <p :if={!@row.summary and @row.segments == []}>
+                  No summary was saved for this meeting.
+                </p>
+                <p :if={!@row.summary and @row.segments != []} data-role="summary-missing">
+                  Summary missing. The transcript was saved, but no summary was written for it.
+                </p>
                 <p :if={@row.summary} class="!text-base-content">
                   <span class="whitespace-pre-line">{@row.summary}</span>
                 </p>

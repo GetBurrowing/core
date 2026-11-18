@@ -10624,13 +10624,34 @@ textarea.cal-input {
 }
 /* Guest booking page (booking.html `.wrap`/`.card`/`.host`/`.picker`/
    `.cal`/`.times`/`.slot`/`.form`/`.done`/`.invite`/`.foot`). */
+/* /book/:token mounts with `layout: false`, so it has no app-shell inner
+   scroller while the global `html, body { overflow: hidden }` lock above
+   still applies. `.cal-guest-wrap` is therefore the page's own scroll
+   container (task 01a1eff0 stage 3): a fixed viewport height, its own
+   overflow, contained overscroll and a bottom pad that clears the home
+   indicator. Its children must not shrink: the card is `overflow: hidden`,
+   so as a flex item its automatic minimum height is 0 and it would be
+   squeezed to the viewport and clip the times instead of scrolling. */
 .cal-guest-wrap {
-  min-height: 100dvh;
+  height: 100dvh;
+  overflow-y: auto;
+  overscroll-behavior: contain;
+  -webkit-overflow-scrolling: touch;
   display: flex;
   flex-direction: column;
   align-items: center;
-  padding: 16px 12px 32px;
+  padding: 16px 12px calc(32px + env(safe-area-inset-bottom, 0px));
   gap: 20px;
+}
+.cal-guest-wrap > * {
+  flex-shrink: 0;
+}
+/* Installed web app: html/body grow by the top inset (rule near the top of
+   this file); match it so no strip of body shows below the scroller. */
+@media all and (display-mode: standalone) {
+  .cal-guest-wrap {
+    height: min(100vh, calc(100dvh + env(safe-area-inset-top, 0px)));
+  }
 }
 .cal-guest-card {
   width: 960px;
@@ -10645,7 +10666,7 @@ textarea.cal-input {
 }
 @media (min-width: 1024px) {
   .cal-guest-wrap {
-    padding: 48px 16px 32px;
+    padding: 48px 16px calc(32px + env(safe-area-inset-bottom, 0px));
   }
   .cal-guest-card {
     grid-template-columns: 280px 1fr 240px;
