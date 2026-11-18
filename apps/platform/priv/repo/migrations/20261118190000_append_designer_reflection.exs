@@ -2,7 +2,8 @@ defmodule Platform.Repo.Migrations.AppendDesignerReflection do
   use Ecto.Migration
 
   @moduledoc """
-  UX super agent phase 1: appends the end-of-job reflection instruction
+  UX super agent phase 1 (PR #218, designer role from task 01a1af00): appends
+  the end-of-job reflection instruction
   (`Platform.Designer.reflection_instruction/0`) to the stored
   `design.task_direction.v1` row.
 

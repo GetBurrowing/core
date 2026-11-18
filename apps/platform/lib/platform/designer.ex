@@ -177,7 +177,6 @@ defmodule Platform.Designer do
     * `watch_space_ids` (optional list) — spaces the friction watch reads; the
       agent is joined to each;
     * `digest_space_id` (optional) — where the weekly digest posts; joined too;
-    * `goal_org_id` (optional) — scopes the experiment goal to an org;
     * `set_goal` (default true) — ensure ONE active goal raising
       `ux_finding_keep_rate`;
     * `reassign: true` — move the role from another agent; without it a role
@@ -196,13 +195,12 @@ defmodule Platform.Designer do
          {:ok, user_id} <- user(attrs["escalate_user_id"]),
          {:ok, watch} <- spaces(attrs["watch_space_ids"] || [], :watch_space_ids),
          {:ok, digest} <- digest_space(attrs["digest_space_id"]),
-         {:ok, org_id} <- optional_uuid(attrs["goal_org_id"], :goal_org_id),
          :ok <- Seeds.seed_defaults(only_keys: [@role]),
          {:ok, role} <- assign(agent, attrs["reassign"] == true),
          :ok <- join_all(Enum.uniq(watch ++ List.wrap(digest)), agent.id),
          {:ok, agent} <- put_digest_space(agent, digest),
          {:ok, _row} <- configure(user_id),
-         {:ok, goal} <- goal(Map.get(attrs, "set_goal", true), org_id) do
+         {:ok, goal} <- goal(Map.get(attrs, "set_goal", true)) do
       Phoenix.PubSub.broadcast(Platform.PubSub, @changed_topic, {:responsibilities_changed, :all})
 
       runtime = runtime_report(agent)
@@ -367,12 +365,6 @@ defmodule Platform.Designer do
     end
   end
 
-  defp optional_uuid(nil, _field), do: {:ok, nil}
-
-  defp optional_uuid(id, field) do
-    if is_binary(id) and Platform.UUID.valid?(id), do: {:ok, id}, else: {:error, {:bad_id, field}}
-  end
-
   defp assign(agent, reassign?) do
     case Roles.agent_id_for_role(@role) do
       id when id == agent.id ->
@@ -452,9 +444,11 @@ defmodule Platform.Designer do
     end
   end
 
-  defp goal(false, _org_id), do: {:ok, :skipped}
+  # Install-wide (org_id nil): one active goal on the metric, whatever its org,
+  # is enough; an operator who scoped one to an org keeps it.
+  defp goal(false), do: {:ok, :skipped}
 
-  defp goal(_set?, org_id) do
+  defp goal(_set?) do
     existing =
       from(g in Goal,
         where: g.status == "active",
@@ -462,7 +456,6 @@ defmodule Platform.Designer do
         order_by: [asc: g.inserted_at],
         limit: 1
       )
-      |> scope_org(org_id)
       |> Repo.one()
 
     case existing do
@@ -474,8 +467,7 @@ defmodule Platform.Designer do
         |> Goal.changeset(%{
           "statement" => @goal_statement,
           "metric_spec" => %{"kind" => "registered", "slug" => @goal_metric},
-          "status" => "active",
-          "org_id" => org_id
+          "status" => "active"
         })
         |> Repo.insert()
         |> case do
@@ -484,9 +476,6 @@ defmodule Platform.Designer do
         end
     end
   end
-
-  defp scope_org(query, nil), do: where(query, [g], is_nil(g.org_id))
-  defp scope_org(query, org_id), do: where(query, [g], g.org_id == ^org_id)
 
   defp runtime_report(%Agent{kind: "external"}), do: %{kind: :external}
 
