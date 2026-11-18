@@ -66,6 +66,9 @@ defmodule PlatformWeb.BookingLiveTest do
 
     {:ok, view, html} = live(conn, "/book/#{link.token}")
     refute html =~ "Confidential board discussion"
+    # The page has no app shell (layout: false), so its root is its own
+    # scroll container (app.css `.cal-guest-wrap`, task 01a1eff0 stage 3).
+    assert has_element?(view, "main.cal-guest-wrap[data-page=public-booking]")
     # v4's guest card shows the link title and owner (booking.js hostHTML).
     assert has_element?(view, ".cal-guest-host h1", "Private owner policy")
     assert has_element?(view, ".cal-guest-who", "Booking owner")
