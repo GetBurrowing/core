@@ -58,6 +58,10 @@ defmodule Platform.Responsibilities.BuiltIns do
       Handlers.MeetingOpenQuestion,
       Handlers.DesignCritique,
       Handlers.DesignTaskDirection,
+      # Task 01a1f048: the UX super agent loop (reflect, scout, prototype eval).
+      Handlers.DesignReflect,
+      Handlers.DesignScout,
+      Handlers.DesignPrototypeEval,
       Handlers.TaskTriage,
       Handlers.SecurityCveScan,
       Handlers.SecurityCodeAudit,

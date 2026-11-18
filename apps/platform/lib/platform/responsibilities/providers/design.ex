@@ -10,14 +10,15 @@ defmodule Platform.Responsibilities.Providers.Design do
   `Platform.Responsibilities.Providers.Design` — **this module** — for
   its Provider callbacks.
 
-  The `design` feature owns two responsibilities in the Designer role
-  bundle (`design.spec_writer` and `design.brand_check` were
-  registration-only stubs and were removed in the super agents
-  restructure):
+  The `design` feature owns the Designer role bundle's `design.*` keys
+  (`design.spec_writer` and `design.brand_check` were registration-only
+  stubs and were removed in the super agents restructure):
 
     * `design.critique` → handled by `Handlers.DesignCritique`
     * `design.task_direction` → handled by `Handlers.DesignTaskDirection`
       (ADR-0046 stack member 7, task `019f9b29-5ecd` stage 3)
+    * `design.reflect`, `design.scout`, `design.prototype_eval` → the super
+      agent loop handlers (task 01a1f048)
 
   So this shim dispatches on `responsibility.key` via `handler_for/1`
   and hands off to the concrete handler module. Any unmapped key logs a
@@ -63,7 +64,11 @@ defmodule Platform.Responsibilities.Providers.Design do
 
   @impl true
   def register do
-    DesignCritique.register() ++ DesignTaskDirection.register()
+    DesignCritique.register() ++
+      DesignTaskDirection.register() ++
+      Handlers.DesignReflect.register() ++
+      Handlers.DesignScout.register() ++
+      Handlers.DesignPrototypeEval.register()
   end
 
   @doc """
@@ -81,6 +86,10 @@ defmodule Platform.Responsibilities.Providers.Design do
   def handler_for(%{key: key}), do: handler_for(key)
   def handler_for("design.critique"), do: Handlers.DesignCritique
   def handler_for("design.task_direction"), do: Handlers.DesignTaskDirection
+  # The UX super agent loop (task 01a1f048).
+  def handler_for("design.reflect"), do: Handlers.DesignReflect
+  def handler_for("design.scout"), do: Handlers.DesignScout
+  def handler_for("design.prototype_eval"), do: Handlers.DesignPrototypeEval
   def handler_for(_), do: nil
 
   @impl true

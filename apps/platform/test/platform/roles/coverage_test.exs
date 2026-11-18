@@ -115,6 +115,10 @@ defmodule Platform.Roles.CoverageTest do
       # the super agents restructure.
       assert bundle == [
                "design.critique",
+               # Task 01a1f048: the UX super agent loop.
+               "design.prototype_eval",
+               "design.reflect",
+               "design.scout",
                "design.task_direction",
                "meetings.interaction_design",
                "meetings.visual_adjust",
@@ -296,6 +300,9 @@ defmodule Platform.Roles.CoverageTest do
       assert Roles.responsibilities_for("designer", exclude_overridden: true) ==
                [
                  "design.critique",
+                 "design.prototype_eval",
+                 "design.reflect",
+                 "design.scout",
                  "design.task_direction",
                  "meetings.interaction_design",
                  "meetings.visual_adjust"
@@ -314,6 +321,10 @@ defmodule Platform.Roles.CoverageTest do
       {:ok, _} = Roles.set_override("design.task_direction", override_agent.id)
       {:ok, _} = Roles.set_override("meetings.interaction_design", override_agent.id)
       {:ok, _} = Roles.set_override("meetings.visual_adjust", override_agent.id)
+      # Eight since the stubs left; ten since task 01a1f048 (the super agent loop).
+      {:ok, _} = Roles.set_override("design.prototype_eval", override_agent.id)
+      {:ok, _} = Roles.set_override("design.reflect", override_agent.id)
+      {:ok, _} = Roles.set_override("design.scout", override_agent.id)
 
       assert Roles.responsibilities_for("designer", exclude_overridden: true) == []
 

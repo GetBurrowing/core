@@ -138,6 +138,20 @@ defmodule Platform.Responsibilities.ArchitectureContextBridgeTest do
   # twelve are stated, not fixed — the original nine plus the three
   # `design.task_direction` declares (ADR-0046 stack member 7 stage 3).
   @unresolved_slots %{
+    "budget" =>
+      "the UX super agent loop (task 01a1f048) builds this in its own gather_context/2; no ContextProviders clause",
+    "card_moves" =>
+      "the UX super agent loop (task 01a1f048) builds this in its own gather_context/2; no ContextProviders clause",
+    "card_prefix" =>
+      "the UX super agent loop (task 01a1f048) builds this in its own gather_context/2; no ContextProviders clause",
+    "friction_drop" =>
+      "the UX super agent loop (task 01a1f048) builds this in its own gather_context/2; no ContextProviders clause",
+    "job" =>
+      "the UX super agent loop (task 01a1f048) builds this in its own gather_context/2; no ContextProviders clause",
+    "prototype" =>
+      "the UX super agent loop (task 01a1f048) builds this in its own gather_context/2; no ContextProviders clause",
+    "scorecard" =>
+      "the UX super agent loop (task 01a1f048) builds this in its own gather_context/2; no ContextProviders clause",
     "experiments" =>
       "experiments.scientist assembles this itself in gather_context/1 " <>
         "(task 01a0d415 stage 5) from the experimentation tables; no " <>

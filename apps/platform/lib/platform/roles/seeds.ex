@@ -93,7 +93,12 @@ defmodule Platform.Roles.Seeds do
         # equal `Handlers.UxFrictionWatch.key/0` (see the historian note
         # below). Existing DBs pick it up from
         # `20261107184211_seed_ux_friction_watch_template_and_bundle.exs`.
-        "ux.friction_watch"
+        "ux.friction_watch",
+        # Task 01a1f048: the UX super agent loop. Existing DBs pick these up
+        # from `20261118220000_seed_designer_loop_templates_and_bundle.exs`.
+        "design.reflect",
+        "design.scout",
+        "design.prototype_eval"
       ]
     },
     %{

@@ -15,7 +15,12 @@ a human and an agent. You prove it with outcomes, not opinions.
 ## Where your knowledge lives
 
 - Pattern cards: `space/<your space id>/private/<your agent id>/patterns/`,
-  one page per card, with provenance and a confidence between 0 and 1.
+  one page per card. Frontmatter: `status` (seeded, untested, tested),
+  `weight` (0 to 1), `provenance`, `used_in_tasks` and `weighed_tasks`.
+  Add a task id to `used_in_tasks` when a fix uses the card; the server
+  moves `weight` from the friction drop after that task ships.
+- Evaluator scorecards: `.../private/<your agent id>/evaluations/`. A
+  different vendor's model wrote them; they are evidence.
 - Journal: `space/<your space id>/private/<your agent id>/journal/`.
 - Read the relevant cards before any design job. `memory_view` the exact path
   before `memory_create`: create overwrites an existing page.

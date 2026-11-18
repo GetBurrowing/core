@@ -42,6 +42,10 @@ defmodule Platform.Designer do
       Works natively.
     * `design.spec_writer` / `design.brand_check` were placeholders on every
       runtime and were removed in the super agents restructure.
+    * `design.reflect`, `design.scout`, `design.prototype_eval` (the super
+      agent loop, task 01a1f048): native dispatches fired by
+      `Platform.Designer.Loop`; prototype evaluation runs server-side on an
+      OpenAI model when `Platform.Designer.Evaluator` is configured.
 
   An external endpoint has no tools, no subagents and no web, so it cannot be
   the lead. `provision/1` therefore accepts a native or federated runtime and
@@ -71,6 +75,7 @@ defmodule Platform.Designer do
   alias Platform.Agents.AgentRuntime
   alias Platform.Agents.ConfigFiles
   alias Platform.Chat
+  alias Platform.Designer.Cards
   alias Platform.Experiments.Goal
   alias Platform.Federation
   alias Platform.Federation.ToolSurface
@@ -85,9 +90,16 @@ defmodule Platform.Designer do
   @role "designer"
   @config_key "ux.friction_watch"
   @changed_topic "responsibilities:changed"
-  @goal_metric "ux_finding_keep_rate"
-  @goal_statement "Raise the UX finding keep rate: the share of the designer's UX decisions " <>
-                    "a human keeps rather than dismisses."
+  # The north star (spec decision 3). Phase 1 set the goal on keep rate,
+  # which is now the fast secondary; `goal/1` retargets the goal phase 1
+  # created (matched by its statement) instead of adding a second one.
+  @goal_metric "ux_friction_drop"
+  @goal_statement "Raise post-ship friction drop: how much less a shipped UX finding's " <>
+                    "friction recurs in the 4 weeks after its task ships than in the 4 " <>
+                    "weeks before. Fast secondary: ux_finding_keep_rate."
+  @keep_rate_metric "ux_finding_keep_rate"
+  @keep_rate_statement "Raise the UX finding keep rate: the share of the designer's UX " <>
+                         "decisions a human keeps rather than dismisses."
   @template_dir "agent_templates/designer"
   # The name a native agent's `.mcp.json` gives the Burrow server
   # (`Platform.Agents.Harness.Config.burrow_server_names/0`).
@@ -121,7 +133,8 @@ defmodule Platform.Designer do
           escalate_user_id: String.t(),
           watch_space_ids: [String.t()],
           digest_space_id: String.t() | nil,
-          goal: {:created | :exists, String.t()} | :skipped,
+          goal: {:created | :exists | :retargeted, String.t()} | :skipped,
+          cards: %{written: non_neg_integer(), kept: non_neg_integer()} | :skipped | term(),
           runtime: map(),
           warnings: [String.t()]
         }
@@ -135,8 +148,9 @@ defmodule Platform.Designer do
 
   @doc """
   The end-of-job reflection instruction appended to the designer's
-  tool-bearing prompt templates until a real `design.reflect`
-  responsibility exists. Starts with `reflection_marker/0`.
+  tool-bearing prompt templates (phase 1). `design.reflect`
+  (`Handlers.DesignReflect`) now fires after each job too, and tells the
+  designer not to journal a job twice. Starts with `reflection_marker/0`.
   """
   @spec reflection_instruction() :: String.t()
   def reflection_instruction, do: @reflection
@@ -149,9 +163,17 @@ defmodule Platform.Designer do
   @spec role() :: String.t()
   def role, do: @role
 
-  @doc "The metric the L1 experiment goal raises."
+  @doc "The metric the designer's goal raises (the north star)."
   @spec goal_metric() :: String.t()
   def goal_metric, do: @goal_metric
+
+  @doc "The fast secondary metric, which phase 1's goal raised."
+  @spec keep_rate_metric() :: String.t()
+  def keep_rate_metric, do: @keep_rate_metric
+
+  @doc "The statement phase 1 wrote on the keep-rate goal it created."
+  @spec keep_rate_statement() :: String.t()
+  def keep_rate_statement, do: @keep_rate_statement
 
   @doc "The tools the designer's runtime must expose."
   @spec required_tools() :: [String.t()]
@@ -195,7 +217,13 @@ defmodule Platform.Designer do
       agent is joined to each;
     * `digest_space_id` (optional) — where the weekly digest posts; joined too;
     * `set_goal` (default true) — ensure ONE active goal raising
-      `ux_finding_keep_rate`;
+      `ux_friction_drop` (the north star). The keep-rate goal phase 1 wrote
+      is retargeted in place, so its id is kept;
+    * `seed_cards` (default true) — write the ~20 starter pattern cards
+      into the designer's card namespace, create-only
+      (`Platform.Designer.Cards`). The namespace's home space is the digest
+      space, else the first watch space; with neither, cards are skipped
+      and a warning says so;
     * `reassign: true` — move the role from another agent; without it a role
       held by someone else is refused;
     * `apply_grants` (default true) — add the bundles and permissions the
@@ -219,11 +247,13 @@ defmodule Platform.Designer do
          {:ok, role} <- assign(agent, attrs["reassign"] == true),
          :ok <- join_all(Enum.uniq(watch ++ List.wrap(digest)), agent.id),
          {:ok, agent} <- put_digest_space(agent, digest),
+         {:ok, agent} <- put_home_space(agent, digest || List.first(watch)),
          {:ok, _row} <- configure(user_id),
          {:ok, goal} <- goal(Map.get(attrs, "set_goal", true)) do
       Phoenix.PubSub.broadcast(Platform.PubSub, @changed_topic, {:responsibilities_changed, :all})
 
       grants = grant_tools(agent, Map.get(attrs, "apply_grants", true))
+      cards = seed_cards(agent, Map.get(attrs, "seed_cards", true))
       runtime = agent |> runtime_report() |> Map.merge(grants)
 
       {:ok,
@@ -234,8 +264,9 @@ defmodule Platform.Designer do
          watch_space_ids: watch,
          digest_space_id: digest,
          goal: goal,
+         cards: cards,
          runtime: runtime,
-         warnings: warnings(agent, runtime)
+         warnings: warnings(agent, runtime, cards)
        }}
     end
   end
@@ -470,31 +501,81 @@ defmodule Platform.Designer do
   defp goal(false), do: {:ok, :skipped}
 
   defp goal(_set?) do
-    existing =
-      from(g in Goal,
-        where: g.status == "active",
-        where: fragment("?->>'slug' = ?", g.metric_spec, ^@goal_metric),
-        order_by: [asc: g.inserted_at],
-        limit: 1
-      )
-      |> Repo.one()
-
-    case existing do
+    case active_goal(@goal_metric, nil) do
       %Goal{id: id} ->
         {:ok, {:exists, id}}
 
       nil ->
-        %Goal{}
-        |> Goal.changeset(%{
-          "statement" => @goal_statement,
-          "metric_spec" => %{"kind" => "registered", "slug" => @goal_metric},
-          "status" => "active"
-        })
-        |> Repo.insert()
-        |> case do
-          {:ok, goal} -> {:ok, {:created, goal.id}}
-          {:error, changeset} -> {:error, {:goal, changeset.errors}}
+        case active_goal(@keep_rate_metric, @keep_rate_statement) do
+          %Goal{} = goal -> retarget(goal)
+          nil -> create_goal()
         end
+    end
+  end
+
+  defp active_goal(metric, statement) do
+    query =
+      from(g in Goal,
+        where: g.status == "active",
+        where: fragment("?->>'slug' = ?", g.metric_spec, ^metric),
+        order_by: [asc: g.inserted_at],
+        limit: 1
+      )
+
+    query = if statement, do: where(query, [g], g.statement == ^statement), else: query
+    Repo.one(query)
+  end
+
+  defp retarget(%Goal{} = goal) do
+    goal
+    |> Goal.changeset(%{
+      "statement" => @goal_statement,
+      "metric_spec" => %{"kind" => "registered", "slug" => @goal_metric}
+    })
+    |> Repo.update()
+    |> case do
+      {:ok, goal} -> {:ok, {:retargeted, goal.id}}
+      {:error, changeset} -> {:error, {:goal, changeset.errors}}
+    end
+  end
+
+  defp create_goal do
+    %Goal{}
+    |> Goal.changeset(%{
+      "statement" => @goal_statement,
+      "metric_spec" => %{"kind" => "registered", "slug" => @goal_metric},
+      "status" => "active"
+    })
+    |> Repo.insert()
+    |> case do
+      {:ok, goal} -> {:ok, {:created, goal.id}}
+      {:error, changeset} -> {:error, {:goal, changeset.errors}}
+    end
+  end
+
+  # The card namespace's home space (`Platform.Designer.Cards`). Set once:
+  # an existing home is kept so a later provision with different spaces
+  # never orphans the cards already written.
+  defp put_home_space(%Agent{} = agent, nil), do: {:ok, agent}
+
+  defp put_home_space(%Agent{} = agent, space_id) do
+    metadata = agent.metadata || %{}
+
+    if is_binary(Map.get(metadata, Cards.home_key())) do
+      {:ok, agent}
+    else
+      agent
+      |> Agent.changeset(%{metadata: Map.put(metadata, Cards.home_key(), space_id)})
+      |> Repo.update()
+    end
+  end
+
+  defp seed_cards(_agent, false), do: :skipped
+
+  defp seed_cards(%Agent{} = agent, _seed?) do
+    case Cards.seed(agent) do
+      {:ok, counts} -> counts
+      {:error, reason} -> reason
     end
   end
 
@@ -605,6 +686,20 @@ defmodule Platform.Designer do
     current = RuntimeProfiles.restrictions(runtime) || %{}
     RuntimeProfiles.restrict(runtime, Map.merge(current, Map.new(permissions, &{&1, "all"})))
   end
+
+  defp warnings(agent, runtime, cards),
+    do: warnings(agent, runtime) ++ card_warnings(cards)
+
+  defp card_warnings(:no_home_space),
+    do: [
+      "no pattern cards were seeded: the designer has no home space; re-run with a " <>
+        "digest_space_id or watch_space_ids"
+    ]
+
+  defp card_warnings({:seed_failed, slug, reason}),
+    do: ["seeding pattern card #{slug} failed: #{inspect(reason)}"]
+
+  defp card_warnings(_cards), do: []
 
   defp warnings(_agent, %{kind: :external}), do: [@external_warning]
 
