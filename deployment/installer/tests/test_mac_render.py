@@ -24,6 +24,7 @@ import shutil
 import sys
 import tempfile
 import unittest
+from unittest import mock
 
 HERE = os.path.dirname(os.path.abspath(__file__))
 INSTALLER = os.path.dirname(HERE)
@@ -80,6 +81,17 @@ def mac_build(manifest, **kwargs):
 
 def all_text(rendered):
     return "\n".join(text for text, _mode in rendered.files.values())
+
+
+def planted_like(sample, index):
+    """A value of ``sample``'s length and alphabet holding 4080, 7881 and 7882.
+
+    Digits and a-f are in the hex, urlsafe and base64 alphabets alike; base64
+    '=' padding is kept. A leading 4080 makes ':4080' appear in a DB URL.
+    """
+    pad = len(sample) - len(sample.rstrip("="))
+    body = f"4080{index:02x}7881{index:02x}7882" + "abcdef" * len(sample)
+    return body[: len(sample) - pad] + "=" * pad
 
 
 def compose_block(compose, service):
@@ -226,11 +238,44 @@ class MacKnobTest(PositiveControlMixin, unittest.TestCase):
     MEETINGS_LITERALS = ("livekit", "LIVEKIT_", "7881", "7882", "meeting-transcriber")
 
     def test_mac_contains_every_meetings_literal_and_mac_lite_none(self):
-        on = all_text(mac_build(manifest_from(MAC)))
-        off = all_text(mac_build(manifest_from(MAC_LITE)))
+        # Both sides scan with generated values redacted: a random hex password
+        # holds '7881' or '7882' in about 0.4% of renders (task 01a1ef1b).
+        on = identity_scan_text(mac_build(manifest_from(MAC)))
+        off = identity_scan_text(mac_build(manifest_from(MAC_LITE)))
         # Positive control first: the same search hits the meetings render.
         self.assertEqual([s for s in self.MEETINGS_LITERALS if s not in on], [])
         self.assertEqual([s for s in self.MEETINGS_LITERALS if s in off], [])
+
+    def test_mac_lite_literal_search_ignores_generated_values_that_contain_them(self):
+        # Plant same-length, same-alphabet values holding every literal in each
+        # generated secret mac-lite uses; the scans must not see them.
+        names = sorted(mac_build(manifest_from(MAC_LITE)).generated)
+        self.assertGreater(len(names), 0)
+        planted = {}
+        with contextlib.ExitStack() as stack:
+            for index, name in enumerate(names):
+                secret = registry.SECRETS[name]
+                planted[name] = planted_like(secret.generate(), index)
+                stack.enter_context(
+                    mock.patch.object(secret, "generate", lambda v=planted[name]: v)
+                )
+            rendered = mac_build(manifest_from(MAC_LITE))
+        # Positive control: the planted values reached the rendered text.
+        # assertTrue, not assertIn: a failure must not print the render.
+        self.assertTrue(rendered.generated == planted, "patched generators not used")
+        raw = all_text(rendered)
+        for literal in ("7881", "7882", ":4080"):
+            self.assertTrue(literal in raw, f"planted {literal!r} absent from the raw render")
+        off = identity_scan_text(rendered)
+        self.assertEqual([s for s in self.MEETINGS_LITERALS if s in off], [])
+        self.assertNotIn(":4080", off)
+
+    def test_mac_lite_scan_text_is_identical_across_renders(self):
+        first = mac_build(manifest_from(MAC_LITE))
+        second = mac_build(manifest_from(MAC_LITE))
+        # Positive control: the raw renders differ (fresh secrets each time).
+        self.assertTrue(all_text(first) != all_text(second), "renders did not regenerate")
+        self.assertEqual(identity_scan_text(first), identity_scan_text(second))
 
     def pair(self, mutate):
         on = load(MAC)
@@ -365,7 +410,7 @@ class MacEdgeTest(PositiveControlMixin, unittest.TestCase):
         text = all_text(rendered)
         self.assertNotIn("core-platform:4000/api", text)
         # mac-lite runs nothing that calls core, so it has no such listener.
-        self.assertNotIn(":4080", all_text(mac_build(manifest_from(MAC_LITE))))
+        self.assertNotIn(":4080", identity_scan_text(mac_build(manifest_from(MAC_LITE))))
 
     def test_only_livekit_publishes_host_ports_and_only_7881_7882(self):
         compose = mac_build(manifest_from(MAC)).files["compose.yaml"][0]
