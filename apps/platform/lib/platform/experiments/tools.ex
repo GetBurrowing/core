@@ -274,17 +274,21 @@ defmodule Platform.Experiments.Tools do
           _ -> []
         end
 
+      listed = Signals.list(experiment, opts)
+      readable_mail = readable_mail_sources(listed, caller)
+
       signals =
-        experiment
-        |> Signals.list(opts)
-        |> Enum.map(fn signal ->
+        Enum.map(listed, fn signal ->
           # These five fields ONLY. The source row (an inbound mail) is never
-          # read or returned: the Scientist acts on labels, not content.
+          # read or returned: the Scientist acts on labels, not content. A
+          # mail signal's model-written `reason` is about the mail, so it is
+          # returned only when the caller is granted the source mailbox
+          # (task 01a1ea5b stage 2); otherwise `nil`.
           %{
             label: signal.label,
             subject_id: signal.subject_id,
             confidence: signal.confidence,
-            reason: signal.reason,
+            reason: signal_reason(signal, readable_mail),
             status: signal.status
           }
         end)
@@ -998,4 +1002,22 @@ defmodule Platform.Experiments.Tools do
        suggestion: "Fix the listed fields and call again."
      }}
   end
+
+  defp readable_mail_sources(signals, caller) do
+    ids =
+      for %{source_type: "mail_inbound", source_id: id} <- signals, is_binary(id), do: id
+
+    principal =
+      case caller do
+        %{agent: %{id: id}} when is_binary(id) -> {:agent, id}
+        _ -> :nobody
+      end
+
+    Platform.Mail.Ownership.readable_inbound_ids(principal, ids)
+  end
+
+  defp signal_reason(%{source_type: "mail_inbound", source_id: id} = signal, readable),
+    do: if(MapSet.member?(readable, id), do: signal.reason)
+
+  defp signal_reason(signal, _readable), do: signal.reason
 end

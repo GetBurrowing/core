@@ -53,9 +53,11 @@ defmodule Platform.Test.ExperimentsMailFixtures do
     {:ok, space} =
       Chat.create_space(%{name: "ExpMail #{n}", slug: "exp-mail-#{n}", kind: "channel"})
 
+    admin = admin!(org_id)
+
     {:ok, account} =
       Mail.create_account(
-        admin!(org_id),
+        admin,
         org_id,
         %{
           "name" => "jobs-#{n}",
@@ -70,6 +72,8 @@ defmodule Platform.Test.ExperimentsMailFixtures do
         %{imap: "imap-pass"}
       )
 
+    # Only SHARED mailboxes feed experiments (task 01a1ea5b stage 2).
+    {:ok, account} = Platform.Mail.Ownership.set_owner(admin, account, %{kind: "shared"})
     account
   end
 

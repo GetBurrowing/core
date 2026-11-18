@@ -41,7 +41,7 @@ defmodule Platform.Federation.MailDraftTools do
             type: "string",
             required: false,
             description:
-              "UUID of one of the org's mail accounts to send from. Optional — the person can pick it. Must belong to org_id and not be archived."
+              "UUID of one of the org's mail accounts to send from: one you were GRANTED by its owner (or an admin, for a shared mailbox). Must belong to org_id and not be archived. Name this, on_behalf_of_user_id, or both."
           },
           sender_key: %{
             type: "string",
@@ -68,7 +68,8 @@ defmodule Platform.Federation.MailDraftTools do
           on_behalf_of_user_id: %{
             type: "string",
             required: false,
-            description: "The org member this email is on behalf of, if any."
+            description:
+              "The org member this email is on behalf of. When account_id is also given, this person must be able to read that mailbox. Name this, account_id, or both."
           },
           responsibility: %{
             type: "string",
@@ -85,7 +86,7 @@ defmodule Platform.Federation.MailDraftTools do
         returns:
           "%{draft_id, org_id, account_id, sender_key, to_addresses, to_user_ids, subject, body_length, status: \"draft\", review_path} — review_path is the Email module path a person opens it at.",
         limitations:
-          "Drafts only; nothing is sent and no send tool exists. Refused with a recoverable error when the Email module is not enabled. A tenant-pinned agent drafting into a sibling org gets an `unauthorized: …` envelope. An unknown account, a sender key not on the account, an unknown recipient user id, a malformed address, an on-behalf-of user who is not an org member, or a task outside the org is refused and nothing is written.",
+          "Drafts only; nothing is sent and no send tool exists. Refused with a recoverable error when the Email module is not enabled. A tenant-pinned agent drafting into a sibling org gets an `unauthorized: …` envelope. An unknown account, a mailbox you are not granted (the same `account_not_found`), a sender key not on the account, an unknown recipient user id, a malformed address, an on-behalf-of user who is not an org member or cannot read the named mailbox (`on_behalf_cannot_read_account`), a task outside the org, or a draft naming neither account_id nor on_behalf_of_user_id (`account_or_on_behalf_required`, recoverable) is refused and nothing is written. The draft is visible to the mailbox's readers and the on-behalf person.",
         when_to_use:
           "When a task calls for an email to go out and a person should review and send it."
       },
@@ -127,7 +128,7 @@ defmodule Platform.Federation.MailDraftTools do
         },
         returns: "The same shape as mail_draft_create.",
         limitations:
-          "Refused with a recoverable error when the Email module is not enabled. Only drafts you created, only while their status is draft (a sent or discarded draft is not editable). Tenant-pinned agents cannot reach a sibling org's draft (`unauthorized: …`). Same validation as mail_draft_create.",
+          "Refused with a recoverable error when the Email module is not enabled. Only drafts you created, only while their status is draft (a sent or discarded draft is not editable). Tenant-pinned agents cannot reach a sibling org's draft (`unauthorized: …`). Same validation as mail_draft_create, applied to the draft as it will be after the update, so a revoked mailbox grant also refuses an update.",
         when_to_use:
           "When you need to correct or revise a draft you wrote before a person sends it."
       }

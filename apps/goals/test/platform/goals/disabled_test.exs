@@ -41,7 +41,9 @@ defmodule Platform.Goals.DisabledTest do
           subscribe_proposals: 1,
           # Task 01a1eab7: the coach picker.
           start_goal_conversation: 3,
-          list_coaches: 1
+          list_coaches: 1,
+          # Task 01a1ebab: the opening message for goal_proposal_get.
+          opening_message: 2
         ],
         do: assert(f in functions, "#{inspect(f)} is not exported")
 

@@ -53,7 +53,11 @@ defmodule PlatformWeb.TasksLiveSwitchBudgetTest do
   # Main's numbers for the same arrivals (see the moduledoc), main ea157a735.
   @main_s1_queries 60
   @main_s2_queries 48
-  @main_chat_queries 76
+  # 76 -> 78 with task 01a1ea5b stage 2 (measured 78 on that branch): the
+  # Access restriction-provider hook adds one query (mail-bound spaces,
+  # `Platform.Mail.Ownership.restricted_space_ids/2`) to each restriction
+  # read the chat arrival makes. No board work changed.
+  @main_chat_queries 78
 
   defp u, do: System.unique_integer([:positive])
 

@@ -184,7 +184,11 @@ defmodule Platform.Files.Browser do
 
     files =
       ctx.project_ids
-      |> Files.list_recent_files_for_projects(since: since, limit: limit + 1)
+      |> Files.list_recent_files_for_projects(
+        since: since,
+        limit: limit + 1,
+        exclude: mail_exclude(viewer)
+      )
       |> Enum.map(&file_item(&1, ctx))
 
     canvases =
@@ -217,7 +221,11 @@ defmodule Platform.Files.Browser do
       project ->
         items =
           project.id
-          |> Files.list_files_for_project(limit: @project_limit, preload: :uploaded_by_user)
+          |> Files.list_files_for_project(
+            limit: @project_limit,
+            preload: :uploaded_by_user,
+            exclude: mail_exclude(viewer)
+          )
           |> Enum.map(&file_item(&1, ctx))
 
         {:ok, items}
@@ -289,7 +297,11 @@ defmodule Platform.Files.Browser do
     ctx = context(viewer)
 
     ctx.project_ids
-    |> Files.list_recent_files_for_projects(type: type, limit: limit + 1)
+    |> Files.list_recent_files_for_projects(
+      type: type,
+      limit: limit + 1,
+      exclude: mail_exclude(viewer)
+    )
     |> Enum.map(&file_item(&1, ctx))
     |> cap(limit)
   end
@@ -336,7 +348,7 @@ defmodule Platform.Files.Browser do
 
       files =
         ctx.project_ids
-        |> Files.search_files_by_name(query, limit: @search_limit)
+        |> Files.search_files_by_name(query, limit: @search_limit, exclude: mail_exclude(viewer))
         |> Enum.map(&file_item(&1, ctx))
 
       canvases ++ files
@@ -409,7 +421,7 @@ defmodule Platform.Files.Browser do
 
         if project && is_nil(project.archived_at) && (include_deleted || is_nil(file.deleted_at)) &&
              Platform.Access.check(viewer.access_scope, "files.read", {:project, file.project_id}) ==
-               :ok,
+               :ok && readable_mail_file?(viewer, file.id),
            do: {:ok, file},
            else: {:error, :not_found}
 
@@ -441,6 +453,57 @@ defmodule Platform.Files.Browser do
     else
       _ -> {:error, :not_found}
     end
+  end
+
+  @doc """
+  The query of mail-derived file ids `viewer` may not read
+  (`Platform.Mail.Ownership.unreadable_mail_file_ids_query/1`, task 01a1ea5b
+  stage 2), for a listing's `:exclude`. A file that mail was added to is
+  readable only by people who can read that mail's account.
+  """
+  @spec mail_exclude(viewer()) :: Ecto.Query.t()
+  def mail_exclude(viewer),
+    do: Platform.Mail.Ownership.unreadable_mail_file_ids_query(viewer.user)
+
+  @doc "Is `file_id` readable to `viewer` as far as mail ownership goes?"
+  @spec readable_mail_file?(viewer(), binary()) :: boolean()
+  def readable_mail_file?(viewer, file_id),
+    do:
+      not MapSet.member?(
+        Platform.Mail.Ownership.mail_file_ids_unreadable_by(viewer.user, [file_id]),
+        file_id
+      )
+
+  @doc """
+  `file` when `readable_mail_file?/2`, else `nil` (FilesLive's single-file
+  read, task 01a1ea5b stage 2). Anything that is not a file passes through.
+  """
+  @spec mail_readable(viewer(), Files.File.t() | term()) :: Files.File.t() | term()
+  def mail_readable(viewer, %Files.File{id: id} = file),
+    do: if(readable_mail_file?(viewer, id), do: file)
+
+  def mail_readable(_viewer, other), do: other
+
+  @doc """
+  The files of `project_id` FilesLive lists (newest first, at most 200),
+  without the mail-derived files `viewer` may not read, excluded in the
+  query (`mail_exclude/1`). The caller has already admitted the project.
+  """
+  @spec project_files(viewer(), binary()) :: [Files.File.t()]
+  def project_files(viewer, project_id),
+    do: Files.list_files_for_project(project_id, limit: 200, exclude: mail_exclude(viewer))
+
+  @doc """
+  `results` (memory-service hits) without a hit on a mail-derived file
+  `viewer` may not read, snippet and all (task 01a1ea5b stage 2). `id_fun`
+  reads a hit's file id. Memory hits come from the index, not the database,
+  so they can only be filtered after the search.
+  """
+  @spec drop_mail_hits(viewer(), [map()], (map() -> term())) :: [map()]
+  def drop_mail_hits(viewer, results, id_fun) do
+    ids = results |> Enum.map(id_fun) |> Enum.filter(&is_binary/1)
+    unreadable = Platform.Mail.Ownership.mail_file_ids_unreadable_by(viewer.user, ids)
+    Enum.reject(results, &MapSet.member?(unreadable, id_fun.(&1)))
   end
 
   @doc "One freshly authorized row in the same shape as the browser listings."

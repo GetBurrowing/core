@@ -88,6 +88,12 @@ defmodule PlatformWeb.EmailLiveTest do
     account
   end
 
+  defp shared_with!(admin, account, members) do
+    {:ok, shared} = Platform.Mail.Ownership.set_owner(admin, account, %{kind: "shared"})
+    for m <- members, do: {:ok, _} = Platform.Mail.Ownership.grant(admin, shared, {:user, m.id})
+    shared
+  end
+
   defp sender!(admin, account, key, address) do
     {:ok, sender} = Mail.put_sender(admin, account, %{"key" => key, "address" => address})
     sender
@@ -189,6 +195,9 @@ defmodule PlatformWeb.EmailLiveTest do
 
     account = account!(admin, org_id, "ops")
     sender!(admin, account, "ops", admin.email)
+    # A SHARED mailbox both people read (task 01a1ea5b stage 2): every
+    # account is unassigned, so readable by nobody, until it has an owner.
+    shared_with!(admin, account, [admin, member])
 
     %{
       org_id: org_id,
@@ -337,6 +346,7 @@ defmodule PlatformWeb.EmailLiveTest do
           %{imap: imap_pass}
         )
 
+      shared_with!(ctx.admin, reader, [ctx.admin])
       %{reader: reader, host: host, imap_pass: imap_pass}
     end
 
@@ -813,6 +823,460 @@ defmodule PlatformWeb.EmailLiveTest do
       })
 
       assert Repo.reload!(ctx.account).name == "ops"
+    end
+  end
+
+  # ── Mailbox ownership (task 01a1ea5b stage 2) ───────────────────────────
+
+  describe "mailbox ownership" do
+    setup ctx do
+      owner = user!("owner") |> member!(ctx.org_id, "member")
+      personal = account!(ctx.admin, ctx.org_id, "personal-#{System.unique_integer([:positive])}")
+
+      {:ok, personal} =
+        Platform.Mail.Ownership.set_owner(ctx.admin, personal, %{
+          kind: "personal",
+          owner_user_id: owner.id
+        })
+
+      row = inbound!(personal, %{subject: "SUBJ-P-#{System.unique_integer([:positive])}"})
+      %{owner: owner, personal: personal, row: row}
+    end
+
+    test "the owner's inbox lists the mail; a member's and an org admin's do not",
+         %{conn: conn} = ctx do
+      {:ok, view, html} = live(login(conn, ctx.owner), "/email")
+      assert has_element?(view, ~s([data-role="mail-inbox-row"][data-message-id="#{ctx.row.id}"]))
+      assert html =~ ctx.row.subject
+
+      for viewer <- [ctx.member, ctx.admin] do
+        {:ok, view, html} = live(login(conn, viewer), "/email")
+        refute has_element?(view, ~s([data-message-id="#{ctx.row.id}"]))
+        refute html =~ ctx.row.subject
+      end
+    end
+
+    test "a crafted ?account= for an unreadable mailbox lists nothing", %{conn: conn} = ctx do
+      {:ok, view, html} = live(login(conn, ctx.owner), "/email?account=#{ctx.personal.id}")
+      assert has_element?(view, ~s([data-message-id="#{ctx.row.id}"]))
+      assert html =~ ctx.row.subject
+
+      {:ok, view, html} = live(login(conn, ctx.member), "/email?account=#{ctx.personal.id}")
+      refute has_element?(view, ~s([data-role="mail-inbox-row"]))
+      refute html =~ ctx.row.subject
+    end
+
+    test "a deep link to an unreadable message takes the unknown-id path", %{conn: conn} = ctx do
+      {:ok, view, _} = live(login(conn, ctx.owner), "/email/messages/#{ctx.row.id}")
+      assert has_element?(view, ~s([data-role="mail-message-detail"]))
+
+      {:ok, unknown_view, _} =
+        live(login(conn, ctx.member), "/email/messages/#{Ecto.UUID.generate()}")
+
+      {:ok, view, _} = live(login(conn, ctx.member), "/email/messages/#{ctx.row.id}")
+      refute has_element?(view, ~s([data-role="mail-message-detail"]))
+      refute render(view) =~ ctx.row.subject
+      assert render(view) =~ "That email is not in this org"
+      assert render(unknown_view) =~ "That email is not in this org"
+    end
+
+    test "the switcher offers only readable mailboxes; the admin's Accounts pane lists all",
+         %{conn: conn} = ctx do
+      filter = ~s([data-role="mailbox-switcher-row"][data-account-id="#{ctx.personal.id}"])
+
+      {:ok, view, _} = live(login(conn, ctx.owner), "/email")
+      assert has_element?(view, filter)
+
+      for viewer <- [ctx.member, ctx.admin] do
+        {:ok, view, _} = live(login(conn, viewer), "/email")
+        refute has_element?(view, filter)
+      end
+
+      card = ~s([data-role="mail-account-card"][data-account-id="#{ctx.personal.id}"])
+      {:ok, view, _} = live(login(conn, ctx.admin), "/email/accounts")
+      assert has_element?(view, card)
+      {:ok, view, _} = live(login(conn, ctx.member), "/email/accounts")
+      refute has_element?(view, card)
+    end
+
+    test "Add to files is refused for a crafted event on an unreadable message",
+         %{conn: conn} = ctx do
+      {:ok, project} =
+        Tasks.create_project(%{
+          name: "Own #{System.unique_integer([:positive])}",
+          org_id: ctx.org_id
+        })
+
+      {:ok, view, _} = live(login(conn, ctx.member), "/email/messages/#{ctx.row.id}")
+      render_hook(view, "add_to_files", %{"project_id" => project.id})
+      assert is_nil(Repo.reload!(ctx.row).file_id)
+    end
+  end
+
+  # ── Switcher, access line, Access panel (task 01a1ea5b stage 4) ─────────
+
+  describe "mailbox switcher, access line and Access panel" do
+    alias Platform.Agents.Agent
+    alias Platform.Mail.AccountGrant
+    alias Platform.Mail.Ownership
+
+    defp agent!(name) do
+      %Agent{}
+      |> Agent.changeset(%{
+        slug: "email-lv-#{System.unique_integer([:positive])}",
+        name: name,
+        status: "active"
+      })
+      |> Repo.insert!()
+    end
+
+    defp agent_grants(account_id) do
+      Repo.all(
+        from(g in AccountGrant,
+          where: g.account_id == ^account_id and g.principal_type == "agent",
+          select: g.principal_id
+        )
+      )
+    end
+
+    setup ctx do
+      owner = user!("owner") |> member!(ctx.org_id, "member")
+      personal = account!(ctx.admin, ctx.org_id, "p#{System.unique_integer([:positive])}")
+
+      {:ok, personal} =
+        Ownership.set_owner(ctx.admin, personal, %{kind: "personal", owner_user_id: owner.id})
+
+      # The owner is also a member of the setup's shared mailbox.
+      {:ok, _} = Ownership.grant(ctx.admin, ctx.account, {:user, owner.id})
+
+      unassigned = account!(ctx.admin, ctx.org_id, "u#{System.unique_integer([:positive])}")
+      row = inbound!(personal, %{subject: "SUBJ-P-#{System.unique_integer([:positive])}"})
+
+      %{owner: owner, personal: personal, unassigned: unassigned, row: row}
+    end
+
+    defp row_sel(account),
+      do: ~s([data-role="mailbox-switcher-row"][data-account-id="#{account.id}"])
+
+    test "the switcher groups My mailboxes and Shared with me, with Private and Shared chips",
+         %{conn: conn} = ctx do
+      {:ok, view, _} = live(login(conn, ctx.owner), "/email")
+
+      assert has_element?(view, ~s([data-role="mailbox-switcher-group-mine"]), "My mailboxes")
+      assert has_element?(view, ~s([data-role="mailbox-switcher-group-shared"]), "Shared with me")
+
+      assert has_element?(
+               view,
+               row_sel(ctx.personal) <> ~s( [data-role="mailbox-switcher-chip"]),
+               "Private"
+             )
+
+      assert has_element?(
+               view,
+               row_sel(ctx.account) <> ~s( [data-role="mailbox-switcher-chip"]),
+               "Shared"
+             )
+
+      assert has_element?(view, ~s([data-role="mailbox-switcher-all"]))
+
+      # The personal row comes before the shared one: mine, then shared.
+      html = render(view)
+      {mine_at, _} = :binary.match(html, ~s(data-account-id="#{ctx.personal.id}"))
+      {shared_at, _} = :binary.match(html, ~s(data-account-id="#{ctx.account.id}"))
+      assert mine_at < shared_at
+    end
+
+    test "an empty group is hidden; with no mailbox the switcher says so",
+         %{conn: conn} = ctx do
+      # The member reads only the shared mailbox.
+      {:ok, view, _} = live(login(conn, ctx.member), "/email")
+      assert has_element?(view, ~s([data-role="mailbox-switcher-group-shared"]))
+      refute has_element?(view, ~s([data-role="mailbox-switcher-group-mine"]))
+      refute has_element?(view, ~s([data-role="mailbox-switcher-all"]))
+
+      nobody = user!("nobody") |> member!(ctx.org_id, "member")
+      {:ok, view, _} = live(login(conn, nobody), "/email")
+      assert has_element?(view, ~s([data-role="mailbox-switcher-empty"]), "No mailboxes yet")
+      refute has_element?(view, ~s([data-role="mailbox-switcher-row"]))
+      refute has_element?(view, ~s([data-role="access-line"]))
+    end
+
+    test "an unreadable mailbox is absent from the HTML, not greyed", %{conn: conn} = ctx do
+      # Positive control: the owner's page carries the address.
+      {:ok, _view, html} = live(login(conn, ctx.owner), "/email")
+      assert html =~ ctx.personal.username
+      assert html =~ ctx.personal.id
+
+      for viewer <- [ctx.member, ctx.admin] do
+        {:ok, view, html} = live(login(conn, viewer), "/email")
+        refute has_element?(view, row_sel(ctx.personal))
+        refute html =~ ctx.personal.id
+        refute html =~ ctx.personal.username
+        refute html =~ ctx.row.subject
+      end
+
+      # An unassigned account: the admin's Accounts pane only, never the switcher.
+      {:ok, view, _} = live(login(conn, ctx.admin), "/email/accounts")
+      refute has_element?(view, row_sel(ctx.unassigned))
+
+      assert has_element?(
+               view,
+               ~s([data-role="mail-account-card"][data-account-id="#{ctx.unassigned.id}"] [data-role="mail-account-settings-only"])
+             )
+    end
+
+    test "the header names the owner and the access line lists the granted agents",
+         %{conn: conn} = ctx do
+      [a, b, c] = for name <- ["Alpha agent", "Bravo agent", "Charlie agent"], do: agent!(name)
+
+      for agent <- [a, b, c],
+          do: {:ok, _} = Ownership.grant(ctx.owner, ctx.personal, {:agent, agent.id})
+
+      {:ok, view, _} = live(login(conn, ctx.owner), "/email?account=#{ctx.personal.id}")
+
+      assert has_element?(view, ~s([data-role="mailbox-title"]), "owner's mailbox")
+      assert has_element?(view, ~s([data-role="mailbox-address"]), ctx.personal.username)
+      assert has_element?(view, ~s([data-role="access-line-who"]), "Visible to you")
+      assert has_element?(view, ~s([data-role="access-line-agents"]), "Alpha agent")
+      assert has_element?(view, ~s([data-role="access-line-agents"]), "Bravo agent")
+      refute has_element?(view, ~s([data-role="access-line-agents"]), "Charlie agent")
+      assert has_element?(view, ~s([data-role="access-line-more"]), "+1")
+
+      # A shared mailbox counts its people.
+      {:ok, view, _} = live(login(conn, ctx.owner), "/email?account=#{ctx.account.id}")
+      assert has_element?(view, ~s([data-role="mailbox-title"]), ctx.account.name)
+      assert has_element?(view, ~s([data-role="access-line-who"]), "Visible to 3 people")
+      refute has_element?(view, ~s([data-role="access-line-agents"]))
+    end
+
+    test "grant and revoke through the Access panel update the panel and the grants",
+         %{conn: conn} = ctx do
+      agent = agent!("Delta agent")
+      {:ok, view, _} = live(login(conn, ctx.owner), "/email?account=#{ctx.personal.id}")
+
+      view |> element(~s([data-role="access-line-open"])) |> render_click()
+      assert has_element?(view, ~s([data-role="access-panel"][data-mode="manage"]))
+
+      assert has_element?(
+               view,
+               ~s([data-role="access-no-agents"]),
+               "No agents can read this mailbox"
+             )
+
+      assert has_element?(view, ~s([data-role="access-people"]), "People: you (owner)")
+
+      assert has_element?(
+               view,
+               ~s([data-role="access-admin-note"]),
+               "Admins can change connection settings. They cannot read this mail."
+             )
+
+      view |> element(~s([data-role="access-grant-open"])) |> render_click()
+
+      view
+      |> form("#access-grant-form", %{"account_id" => ctx.personal.id, "agent_id" => agent.id})
+      |> render_submit()
+
+      assert agent_grants(ctx.personal.id) == [agent.id]
+      assert has_element?(view, ~s([data-role="access-agent-row"][data-agent-id="#{agent.id}"]))
+      assert has_element?(view, ~s([data-role="access-agent-granted"]), "granted ")
+      assert has_element?(view, ~s([data-role="access-line-agents"]), "Delta agent")
+
+      view |> element(~s([data-role="access-revoke"])) |> render_click()
+
+      assert has_element?(
+               view,
+               ~s([data-role="access-revoke-confirm"]),
+               "Revoke Delta agent's access? This takes effect on its next read."
+             )
+
+      # Cancel writes nothing.
+      view |> element(~s([data-role="access-revoke-cancel"])) |> render_click()
+      refute has_element?(view, ~s([data-role="access-revoke-confirm"]))
+      assert agent_grants(ctx.personal.id) == [agent.id]
+
+      view |> element(~s([data-role="access-revoke"])) |> render_click()
+      view |> element(~s([data-role="access-revoke-yes"])) |> render_click()
+
+      assert agent_grants(ctx.personal.id) == []
+      refute has_element?(view, ~s([data-role="access-agent-row"]))
+      refute has_element?(view, ~s([data-role="access-line-agents"]))
+    end
+
+    test "a non-manager's crafted grant, revoke and set_owner events write nothing",
+         %{conn: conn} = ctx do
+      agent = agent!("Echo agent")
+      kept = agent!("Foxtrot agent")
+      {:ok, _} = Ownership.grant(ctx.owner, ctx.personal, {:agent, kept.id})
+
+      # The member reads the shared mailbox but manages nothing; the admin
+      # manages the shared one but not the owner's personal one.
+      {:ok, view, _} = live(login(conn, ctx.member), "/email")
+
+      for account <- [ctx.personal, ctx.account] do
+        render_hook(view, "grant_agent", %{"account_id" => account.id, "agent_id" => agent.id})
+      end
+
+      render_hook(view, "revoke_agent", %{"account_id" => ctx.personal.id, "agent_id" => kept.id})
+
+      render_hook(view, "set_owner", %{
+        "owner" => %{
+          "account_id" => ctx.personal.id,
+          "kind" => "personal",
+          "owner_user_id" => ctx.member.id
+        }
+      })
+
+      outsider = user!("outsider") |> member!(ctx.org_id, "member")
+
+      render_hook(view, "grant_member", %{
+        "account_id" => ctx.account.id,
+        "user_id" => outsider.id
+      })
+
+      render_hook(view, "revoke_member", %{
+        "account_id" => ctx.account.id,
+        "user_id" => ctx.owner.id
+      })
+
+      {:ok, admin_view, _} = live(login(conn, ctx.admin), "/email")
+
+      render_hook(admin_view, "grant_agent", %{
+        "account_id" => ctx.personal.id,
+        "agent_id" => agent.id
+      })
+
+      render_hook(admin_view, "revoke_agent", %{
+        "account_id" => ctx.personal.id,
+        "agent_id" => kept.id
+      })
+
+      assert agent_grants(ctx.personal.id) == [kept.id]
+      assert agent_grants(ctx.account.id) == []
+      assert Repo.reload!(ctx.personal).owner_user_id == ctx.owner.id
+      refute ctx.account.id in Ownership.readable_account_ids(outsider, ctx.org_id)
+      assert ctx.account.id in Ownership.readable_account_ids(ctx.owner, ctx.org_id)
+      assert render(view) =~ "You cannot change who reads this mailbox."
+    end
+
+    test "the owner turns the briefing digest on and off; a crafted toggle by anyone else writes nothing (stage 5)",
+         %{conn: conn} = ctx do
+      {:ok, view, _} = live(login(conn, ctx.owner), "/email?account=#{ctx.personal.id}")
+      view |> element(~s([data-role="access-line-open"])) |> render_click()
+      assert has_element?(view, ~s([data-role="access-digest-opt-in"]))
+
+      view
+      |> form("#access-digest-form", %{"digest_opt_in" => "true"})
+      |> render_change()
+
+      assert Repo.reload!(ctx.personal).digest_opt_in
+      assert render(view) =~ "This mailbox now feeds the morning briefing."
+
+      view
+      |> form("#access-digest-form", %{"digest_opt_in" => "false"})
+      |> render_change()
+
+      refute Repo.reload!(ctx.personal).digest_opt_in
+
+      # Not shown on a shared mailbox, even to the admin who manages it.
+      {:ok, admin_view, _} = live(login(conn, ctx.admin), "/email")
+      render_hook(admin_view, "open_access", %{"account_id" => ctx.account.id})
+      refute has_element?(admin_view, ~s([data-role="access-digest-opt-in"]))
+
+      for viewer <- [ctx.member, ctx.admin] do
+        {:ok, crafted, _} = live(login(conn, viewer), "/email")
+
+        render_hook(crafted, "set_digest_opt_in", %{
+          "account_id" => ctx.personal.id,
+          "digest_opt_in" => "true"
+        })
+
+        refute Repo.reload!(ctx.personal).digest_opt_in
+      end
+    end
+
+    test "a member who cannot manage gets the read-only panel", %{conn: conn} = ctx do
+      agent = agent!("Golf agent")
+      {:ok, _} = Ownership.grant(ctx.admin, ctx.account, {:agent, agent.id})
+
+      {:ok, view, _} = live(login(conn, ctx.member), "/email?account=#{ctx.account.id}")
+      view |> element(~s([data-role="access-line-open"])) |> render_click()
+
+      assert has_element?(view, ~s([data-role="access-panel"][data-mode="read-only"]))
+      assert has_element?(view, ~s([data-role="access-agent-row"][data-agent-id="#{agent.id}"]))
+      refute has_element?(view, ~s([data-role="access-revoke"]))
+      refute has_element?(view, ~s([data-role="access-grant-open"]))
+      refute has_element?(view, ~s([data-role="access-agent-granted"]))
+      assert has_element?(view, ~s([data-role="access-read-only"]))
+
+      # A crafted open_access for a mailbox the member cannot read opens nothing.
+      render_hook(view, "close_access", %{})
+      render_hook(view, "open_access", %{"account_id" => ctx.personal.id})
+      refute has_element?(view, ~s([data-role="access-panel"]))
+    end
+
+    test "the admin sees the settings-only note and no inbox for a mailbox they cannot read",
+         %{conn: conn} = ctx do
+      {:ok, view, html} = live(login(conn, ctx.admin), "/email/accounts/#{ctx.personal.id}")
+
+      assert has_element?(
+               view,
+               ~s([data-role="settings-only-note"]),
+               "Settings only; reading this mailbox needs the owner's grant"
+             )
+
+      assert has_element?(view, ~s([data-role="mail-account-form"]))
+      refute has_element?(view, ~s([data-role="mail-inbox-row"]))
+      refute html =~ ctx.row.subject
+
+      # Positive control: a mailbox the admin reads carries no note.
+      {:ok, view, _} = live(login(conn, ctx.admin), "/email/accounts/#{ctx.account.id}")
+      assert has_element?(view, ~s([data-role="mail-account-form"]))
+      refute has_element?(view, ~s([data-role="settings-only-note"]))
+    end
+
+    test "an admin adds and removes a shared mailbox's members from the Access panel",
+         %{conn: conn} = ctx do
+      newcomer = user!("newcomer") |> member!(ctx.org_id, "member")
+      {:ok, view, _} = live(login(conn, ctx.admin), "/email/accounts/#{ctx.account.id}")
+      view |> element(~s([data-role="mail-account-manage-access"])) |> render_click()
+      assert has_element?(view, ~s([data-role="access-panel"][data-mode="manage"]))
+
+      view
+      |> form("#access-member-form", %{"account_id" => ctx.account.id, "user_id" => newcomer.id})
+      |> render_submit()
+
+      assert ctx.account.id in Ownership.readable_account_ids(newcomer, ctx.org_id)
+
+      assert has_element?(
+               view,
+               ~s([data-role="access-member-row"][data-user-id="#{newcomer.id}"])
+             )
+
+      view
+      |> element(~s([data-role="access-member-row"][data-user-id="#{newcomer.id}"] button))
+      |> render_click()
+
+      refute ctx.account.id in Ownership.readable_account_ids(newcomer, ctx.org_id)
+    end
+
+    test "an admin assigns an owner from the account editor", %{conn: conn} = ctx do
+      {:ok, view, _} = live(login(conn, ctx.admin), "/email/accounts/#{ctx.unassigned.id}")
+
+      view
+      |> form("#mail-account-owner-form", %{
+        "owner" => %{
+          "account_id" => ctx.unassigned.id,
+          "kind" => "personal",
+          "owner_user_id" => ctx.member.id
+        }
+      })
+      |> render_submit()
+
+      account = Repo.reload!(ctx.unassigned)
+      assert account.owner_kind == "personal"
+      assert account.owner_user_id == ctx.member.id
+      assert has_element?(view, ~s([data-role="settings-only-note"]))
     end
   end
 end

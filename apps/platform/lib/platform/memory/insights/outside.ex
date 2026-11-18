@@ -27,9 +27,12 @@ defmodule Platform.Memory.Insights.Outside do
 
   Nothing is drafted when the Email module is off
   (`Platform.Mail.Config.enabled?/0`) or the org has no non-archived mail
-  account (`Platform.Mail.list_accounts/1`); the insight still renders as an
-  outside message, with no draft. When an account exists, the draft is put
-  on the org's first one, so it opens ready to review.
+  account the `memory.dreaming` agent is GRANTED
+  (`Platform.Mail.list_accounts/1` filtered by
+  `Platform.Mail.Ownership.agent_granted_account_ids/2`, task 01a1ea5b
+  stage 3: an agent drafts only from a mailbox it was granted); the insight
+  still renders as an outside message, with no draft. Otherwise the draft is
+  put on the first granted account, so it opens ready to review.
 
   NOTHING HERE SENDS. `Platform.Mail.Dispatch` is the only way a draft
   becomes mail, it refuses an agent actor, and no code path of the insights
@@ -121,7 +124,9 @@ defmodule Platform.Memory.Insights.Outside do
           id
 
         %Insight{} = insight ->
-          case Platform.Mail.list_accounts(org_id) do
+          granted = Platform.Mail.Ownership.agent_granted_account_ids(agent_id, org_id)
+
+          case Enum.filter(Platform.Mail.list_accounts(org_id), &(&1.id in granted)) do
             [] -> :skip
             [account | _] -> create(insight, org_id, agent_id, account.id)
           end

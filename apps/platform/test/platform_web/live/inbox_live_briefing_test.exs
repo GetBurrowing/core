@@ -610,8 +610,8 @@ defmodule PlatformWeb.InboxLiveBriefingTest do
          %{conn: conn} do
       admin = person!("admin")
       mail_on!()
-      account!(acme_org_id())
       agent = dreaming_agent!()
+      account!(acme_org_id(), agent)
 
       outside =
         insight!(
@@ -728,7 +728,9 @@ defmodule PlatformWeb.InboxLiveBriefingTest do
     end)
   end
 
-  defp account!(org_id) do
+  # An account the dreaming `agent` is granted (task 01a1ea5b stage 3: an
+  # agent drafts only from a granted mailbox), or an ungranted one.
+  defp account!(org_id, agent \\ nil) do
     admin = person!("admin")
     name = "inboxbrief#{n()}"
 
@@ -741,6 +743,12 @@ defmodule PlatformWeb.InboxLiveBriefingTest do
         "username" => "#{name}-relay"
       })
 
-    account
+    if agent do
+      {:ok, account} = Platform.Mail.Ownership.set_owner(admin, account, %{kind: "shared"})
+      {:ok, _} = Platform.Mail.Ownership.grant(admin, account, {:agent, agent.id})
+      account
+    else
+      account
+    end
   end
 end

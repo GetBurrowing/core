@@ -38,6 +38,7 @@ defmodule PlatformWeb.ChatLive.SearchHooks do
   import Phoenix.Component, only: [assign: 3]
   import Phoenix.LiveView, only: [attach_hook: 4]
 
+  alias Platform.Access
   alias Platform.Chat
   alias PlatformWeb.ChatLive.MessagesHooks
 
@@ -124,7 +125,9 @@ defmodule PlatformWeb.ChatLive.SearchHooks do
     results =
       case socket.assigns.active_space do
         %{id: space_id} when trimmed != "" ->
-          Chat.search_messages(space_id, trimmed, limit: 12)
+          if restricted?(socket, space_id),
+            do: [],
+            else: Chat.search_messages(space_id, trimmed, limit: 12)
 
         _ ->
           []
@@ -136,6 +139,22 @@ defmodule PlatformWeb.ChatLive.SearchHooks do
     |> assign(:highlighted_message_id, nil)
     |> reinsert_for_highlight_change(old_id, nil)
   end
+
+  # Asked on EVERY search, not at mount: a restriction provider (a
+  # mail-bound space, task 01a1ea5b stage 2) reads the database each call, so
+  # a revoked reader's next search in an already-open space finds nothing.
+  defp restricted?(socket, space_id) do
+    scope =
+      case socket.assigns[:access_scope] do
+        %Access.Scope{} = scope -> scope
+        _ -> socket.assigns[:user_id] |> viewer() |> Access.Scope.for_user()
+      end
+
+    MapSet.member?(Access.restricted_space_ids(scope, [space_id]), space_id)
+  end
+
+  defp viewer(user_id) when is_binary(user_id), do: Platform.Accounts.get_user(user_id)
+  defp viewer(_user_id), do: nil
 
   defp clear(socket) do
     old_id = socket.assigns[:highlighted_message_id]

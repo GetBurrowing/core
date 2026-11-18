@@ -397,8 +397,17 @@ defmodule Platform.Meetings.Synthesis.ContextTest do
         name: "Checkout",
         smtp_host: "smtp.example.com",
         smtp_port: 587,
-        smtp_tls: "starttls"
+        smtp_tls: "starttls",
+        owner_kind: "shared"
       })
+
+    # A shared mailbox the allowed user reads (task 01a1ea5b stage 2: an
+    # unassigned account is read by nobody).
+    Repo.insert!(%Platform.Mail.AccountGrant{
+      account_id: account.id,
+      principal_type: "user",
+      principal_id: c.allowed.id
+    })
 
     mail =
       Repo.insert!(%Platform.Mail.InboundMessage{

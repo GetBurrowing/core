@@ -3629,6 +3629,10 @@ defmodule Platform.Chat do
 
   Accepts the same `:include_kinds` / `:content_types` / `:include_archived`
   / `:scope` options as `list_messages_since/2`, with the same defaults.
+
+  Every space a restriction provider withholds from an actor who reads
+  nothing (`Platform.Access.provider_restricted_space_ids/2`; a mail-bound
+  space, task 01a1ea5b stage 2) is excluded, whatever the options.
   """
   @spec digest_eligible_messages_query(keyword()) :: Ecto.Query.t()
   def digest_eligible_messages_query(opts \\ []) do
@@ -3648,7 +3652,10 @@ defmodule Platform.Chat do
             s.kind in ^include_kinds
       )
 
-    query = apply_digest_scope(query, scope)
+    query =
+      query
+      |> apply_digest_scope(scope)
+      |> exclude_provider_restricted()
 
     if include_archived do
       # Deletion-flagged spaces must vanish from search immediately even
@@ -3726,6 +3733,18 @@ defmodule Platform.Chat do
   # `external_space_ids/0` and `participant_space_ids_for_user/1` supply the
   # two id-sets; `list_messages_since/2` and `Meetings.list_transcripts_since/2`
   # thread the `:scope` opt.
+
+  # A space a restriction provider withholds from an actor who can read
+  # nothing (a mail-bound space, task 01a1ea5b stage 2: an inbound space, or
+  # one holding a mail post) never reaches a digest. The digest feeds agents
+  # and org memory, which no mailbox's owner chose to share with.
+  defp exclude_provider_restricted(query) do
+    case Platform.Access.provider_restricted_space_ids(%Platform.Access.Scope{}, :all)
+         |> MapSet.to_list() do
+      [] -> query
+      ids -> where(query, [m, s], s.id not in ^ids)
+    end
+  end
 
   defp apply_digest_scope(query, :internal) do
     exclude = external_space_ids()

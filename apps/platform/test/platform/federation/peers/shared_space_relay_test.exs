@@ -313,7 +313,9 @@ defmodule Platform.Federation.Peers.SharedSpaceRelayTest do
       refute Relay.relayable?(%{base | content_type: "canvas"})
       refute Relay.relayable?(%{base | content: ""})
       refute Relay.relayable?(%{base | metadata: %{"source" => "federation_inbound"}})
-      assert Relay.relayable?(%{base | metadata: %{"source" => "email_inbound"}})
+      # Inbound mail belongs to a mailbox and never crosses to a peer
+      # (task 01a1ea5b stage 2; it was relayable before mailbox ownership).
+      refute Relay.relayable?(%{base | metadata: %{"source" => "email_inbound"}})
     end
   end
 
