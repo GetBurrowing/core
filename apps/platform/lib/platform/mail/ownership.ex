@@ -132,6 +132,16 @@ defmodule Platform.Mail.Ownership do
   never returns a `document` hit (`Platform.Org.Wiki.Search.semantic_corpus/1`
   refuses the tag; tool_surface_files_test.exs holds it).
 
+  ## Agents (stage 3)
+
+  An agent reads a mailbox only through a grant row; inbound-space
+  participation confers nothing. The agent mail tools read through
+  `audience_account_ids_query/3`: the agent's grants intersected with what
+  every human in the space the agent names may read. Who that audience is,
+  the withheld notice, the audit row and the four places this cannot be
+  enforced are `Platform.Mail.InboundAccess`'s. Agent drafts
+  (`Platform.Mail.Drafts`) may name only a granted account.
+
   ## Deleting a principal
 
   `principal_id` has no FK (it names a user or an agent). DB triggers
@@ -215,6 +225,84 @@ defmodule Platform.Mail.Ownership do
       []
     end
   end
+
+  @doc """
+  The agent-side read rule of stage 3, as a query selecting account ids of
+  `org_id`: the accounts agent `agent_id` holds a grant on (the GRANT term),
+  intersected with the accounts EVERY user in `audience_user_ids` may read
+  by `readable_account_ids/2`'s rule (the AUDIENCE term). One SQL query, one
+  subquery per audience member, for a read to constrain IN ITS QUERY.
+
+  An empty audience matches nothing: there is no person to answer, so the
+  rule fails closed. So does a malformed agent, org or audience id.
+  `Platform.Mail.InboundAccess` is the caller; it derives the audience from
+  the space the agent names (see its moduledoc for what that can and cannot
+  enforce).
+  """
+  @spec audience_account_ids_query(any(), any(), [any()]) :: Ecto.Query.t()
+  def audience_account_ids_query(agent_id, org_id, audience_user_ids)
+      when is_list(audience_user_ids) do
+    if uuid?(agent_id) and uuid?(org_id) and audience_user_ids != [] and
+         Enum.all?(audience_user_ids, &uuid?/1) do
+      granted = readable_ids_query({:agent, agent_id})
+
+      base =
+        from(a in Account,
+          where: a.org_id == ^org_id,
+          where: a.id in subquery(granted),
+          select: a.id
+        )
+
+      Enum.reduce(audience_user_ids, base, fn user_id, query ->
+        where(query, [a], a.id in subquery(readable_ids_query({:user, user_id})))
+      end)
+    else
+      none_query()
+    end
+  end
+
+  def audience_account_ids_query(_agent_id, _org_id, _audience), do: none_query()
+
+  @doc """
+  `agent_granted_account_ids/2` as a query selecting account ids, for a read
+  to constrain in its query. Matches nothing for a malformed id.
+  """
+  @spec agent_granted_account_ids_query(any(), any()) :: Ecto.Query.t()
+  def agent_granted_account_ids_query(agent_id, org_id) do
+    if uuid?(agent_id) and uuid?(org_id) do
+      from(a in Account,
+        where: a.org_id == ^org_id,
+        where: a.id in subquery(readable_ids_query({:agent, agent_id})),
+        select: a.id
+      )
+    else
+      none_query()
+    end
+  end
+
+  @doc """
+  `%{account_id => [agent display name]}` for the agents granted each of
+  `account_ids`, sorted by name. Metadata for the stage 3 `access_line`; it
+  reads grants, never mail. One query.
+  """
+  @spec granted_agent_names([binary()]) :: %{binary() => [String.t()]}
+  def granted_agent_names([]), do: %{}
+
+  def granted_agent_names(account_ids) when is_list(account_ids) do
+    ids = Enum.filter(account_ids, &uuid?/1)
+
+    from(g in AccountGrant,
+      join: ag in Agent,
+      on: ag.id == g.principal_id,
+      where: g.account_id in ^ids and g.principal_type == "agent",
+      order_by: [asc: ag.name, asc: ag.id],
+      select: {g.account_id, ag.name}
+    )
+    |> Repo.all()
+    |> Enum.group_by(&elem(&1, 0), &elem(&1, 1))
+  end
+
+  defp none_query, do: from(a in Account, where: false, select: a.id)
 
   @doc """
   May `user` manage who reads `account` (grant and revoke)? The owner for a

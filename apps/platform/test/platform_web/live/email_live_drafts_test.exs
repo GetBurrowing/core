@@ -160,6 +160,14 @@ defmodule PlatformWeb.EmailLiveDraftsTest do
       })
       |> Repo.insert!()
 
+    # The drafting agent is granted the mailbox (task 01a1ea5b stage 3).
+    {:ok, _} =
+      Platform.Mail.Ownership.grant(
+        admin,
+        Mail.get_account(org_id, account.id),
+        {:agent, agent.id}
+      )
+
     %{
       org_id: org_id,
       admin: admin,

@@ -32,7 +32,14 @@ defmodule Platform.Mail.Drafts do
       own org) is checked by the tool surface with the same rule the files
       tools use; this module checks that the agent exists and, on update,
       that the draft is one THAT agent created. An agent never edits a
-      person's draft.
+      person's draft. Since task 01a1ea5b stage 3 an agent's draft also
+      follows mailbox ownership, checked on the draft as it will be after
+      the write: it must name an `account_id` or an `on_behalf_of_user_id`
+      (`:account_or_on_behalf_required` otherwise; existing drafts naming
+      neither are left in place), a named account must be one the agent is
+      GRANTED (`:account_not_found` otherwise, the answer for an unknown
+      account), and a named on-behalf person must be able to read that
+      account (`:on_behalf_cannot_read_account`). Agents still never send.
 
   Every write re-checks the actor against the org read from the database,
   never from a struct the caller handed in.
@@ -87,6 +94,8 @@ defmodule Platform.Mail.Drafts do
           | :sender_key_not_found
           | :sender_key_without_account
           | :on_behalf_of_not_member
+          | :account_or_on_behalf_required
+          | :on_behalf_cannot_read_account
           | :task_not_found
           | {:invalid_addresses, [String.t()]}
           | {:unknown_recipient_user_ids, [String.t()]}
@@ -104,7 +113,8 @@ defmodule Platform.Mail.Drafts do
          {:ok, org_id} <- fetch_org(org_id),
          :ok <- authorize_create(actor, org_id),
          {:ok, changes} <- validate(org_id, %{}, normalize(attrs)),
-         :ok <- user_account_readable(actor, org_id, changes) do
+         :ok <- user_account_readable(actor, org_id, changes),
+         :ok <- agent_draft_scope(actor, org_id, %{}, changes) do
       {type, id} = actor
 
       %Draft{}
@@ -181,7 +191,8 @@ defmodule Platform.Mail.Drafts do
          :ok <- authorize_edit(actor, draft),
          :ok <- editable(draft),
          {:ok, changes} <- validate(draft.org_id, draft, normalize(attrs)),
-         :ok <- user_account_readable(actor, draft.org_id, changes) do
+         :ok <- user_account_readable(actor, draft.org_id, changes),
+         :ok <- agent_draft_scope(actor, draft.org_id, draft, changes) do
       draft |> Draft.changeset(changes) |> Repo.update()
     end
   end
@@ -418,6 +429,47 @@ defmodule Platform.Mail.Drafts do
   end
 
   defp user_account_readable(_actor, _org_id, _changes), do: :ok
+
+  # An agent's draft follows mailbox ownership (task 01a1ea5b stage 3),
+  # checked on the draft AS IT WILL BE (the change merged over the stored
+  # draft), so a revoked grant also stops an update:
+  #   * it names an account, or an on-behalf person, or both;
+  #   * a named account is one the agent is GRANTED (an ungranted account is
+  #     `:account_not_found`, the same answer as an unknown one);
+  #   * a named on-behalf person can read that account.
+  defp agent_draft_scope({:agent, agent_id}, org_id, existing, changes) do
+    account_id = effective(changes, existing, :account_id)
+    on_behalf = effective(changes, existing, :on_behalf_of_user_id)
+
+    cond do
+      is_nil(account_id) and is_nil(on_behalf) ->
+        {:error, :account_or_on_behalf_required}
+
+      is_nil(account_id) ->
+        :ok
+
+      account_id not in Ownership.agent_granted_account_ids(agent_id, org_id) ->
+        {:error, :account_not_found}
+
+      is_nil(on_behalf) ->
+        :ok
+
+      Ownership.can_read_account?(%{id: on_behalf}, %Account{id: account_id, org_id: org_id}) ->
+        :ok
+
+      true ->
+        {:error, :on_behalf_cannot_read_account}
+    end
+  end
+
+  defp agent_draft_scope(_actor, _org_id, _existing, _changes), do: :ok
+
+  defp effective(changes, existing, key) do
+    case Map.fetch(changes, key) do
+      {:ok, value} -> value
+      :error -> Map.get(existing, key)
+    end
+  end
 
   defp agent_exists?(id) do
     Platform.UUID.valid?(id) and

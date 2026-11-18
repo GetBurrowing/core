@@ -1,17 +1,27 @@
 defmodule Platform.Federation.ToolSurfaceMailInboundTest do
   @moduledoc """
-  `mail_inbound_list` / `mail_inbound_get` (task
-  01a13ba5-42a7-7000-8f2b-4c63003f3f92 stage 2): backfilled mail reaches the
-  agents of an account's inbound space by PULL, never by post.
+  `mail_inbound_list` / `mail_inbound_get`: the pull reads of task
+  01a13ba5 stage 2, scoped by task 01a1ea5b stage 3 (Email privacy) to the
+  agent's mailbox GRANT intersected with what every human in the named
+  `space_id` (the AUDIENCE) may read, with the agent a current PARTICIPANT
+  of that space.
 
-    * an insider (participant of the account's live inbound space) lists and
-      reads a backfilled row, rendered exactly as the chat post would be:
-      SECURITY NOTICE wrapper, 32_768-byte cap with its note, mentions
-      escaped;
-    * an outsider, a sibling-org agent, an account with no inbound space, an
-      archived space, a history bound, an unknown id and a malformed id all
-      get ONE identical not-found envelope;
-    * no call writes a chat message or broadcasts on `"mail:inbound"`.
+    * a granted agent answering the owner (DM D) lists and reads, rendered
+      exactly as the chat post would be: SECURITY NOTICE wrapper,
+      32_768-byte cap with its note, mentions escaped;
+    * the same agent answering a space that also holds a non-owner (X)
+      reads nothing and gets the verbatim `withheld_notice`, never a count,
+      a subject or a placeholder;
+    * an ungranted participant agent (even of the inbound space), a revoked
+      agent, a missing / foreign / archived space, an empty audience, a
+      sibling org and an unknown id all read nothing, with ONE not-found
+      envelope;
+    * every list and get writes one audit row with no content; nothing
+      else is written or broadcast.
+
+  Mutation controls (stage 3 report): dropping the grant term, the
+  audience intersection or the participant check each turns a named test
+  here red.
 
   async: false — flips `:mail_enabled` in application env.
   """
@@ -21,6 +31,7 @@ defmodule Platform.Federation.ToolSurfaceMailInboundTest do
 
   alias Platform.Accounts.User
   alias Platform.Agents.Agent
+  alias Platform.Audit.Event
   alias Platform.Chat
   alias Platform.Chat.Message
   alias Platform.Federation.ToolSurface
@@ -29,26 +40,28 @@ defmodule Platform.Federation.ToolSurfaceMailInboundTest do
   alias Platform.Mail.Imap.FakeClient
   alias Platform.Mail.Inbound
   alias Platform.Mail.InboundMessage
+  alias Platform.Mail.Ownership
   alias Platform.Tenancy
   alias Platform.Tenancy.OrgMembership
 
   @tools ~w(mail_inbound_list mail_inbound_get)
   @to "ops@initech.test"
   @cap 32_768
+  @notice "I can't share mail from a mailbox you don't have access to"
 
   # ── fixtures ──────────────────────────────────────────────────────────────
 
   defp u, do: System.unique_integer([:positive])
 
-  defp admin!(org_id) do
+  defp person!(org_id, role, label \\ "person") do
     n = u()
 
     user =
       %User{}
       |> User.changeset(%{
-        email: "inbound-tool-#{n}@example.com",
-        name: "Inbound tool #{n}",
-        oidc_sub: "oidc-inbound-tool-#{n}"
+        email: "inbound-tool-#{label}-#{n}@example.com",
+        name: "#{String.capitalize(label)} #{n}",
+        oidc_sub: "oidc-inbound-tool-#{label}-#{n}"
       })
       |> Repo.insert!()
 
@@ -56,13 +69,15 @@ defmodule Platform.Federation.ToolSurfaceMailInboundTest do
     |> OrgMembership.changeset(%{
       user_id: user.id,
       org_id: org_id,
-      role: "admin",
+      role: role,
       external: false
     })
     |> Repo.insert!()
 
     user
   end
+
+  defp admin!(org_id), do: person!(org_id, "admin", "admin")
 
   defp agent!(label, org_id) do
     %Agent{}
@@ -82,6 +97,19 @@ defmodule Platform.Federation.ToolSurfaceMailInboundTest do
       Chat.create_space(%{name: "Inbound #{n}", slug: "inbound-#{n}", kind: "channel"})
 
     space
+  end
+
+  defp join_user!(space, user) do
+    {:ok, participant} =
+      Chat.add_participant(space.id, %{
+        participant_type: "user",
+        participant_id: user.id,
+        display_name: user.name,
+        role: "member",
+        joined_at: DateTime.utc_now()
+      })
+
+    participant
   end
 
   defp join!(space, agent, extra \\ %{}) do
@@ -125,6 +153,18 @@ defmodule Platform.Federation.ToolSurfaceMailInboundTest do
     account
   end
 
+  defp personal!(admin, account, owner) do
+    {:ok, account} =
+      Ownership.set_owner(admin, account, %{kind: "personal", owner_user_id: owner.id})
+
+    account
+  end
+
+  defp grant!(actor, account, agent) do
+    {:ok, _} = Ownership.grant(actor, account, {:agent, agent.id})
+    :ok
+  end
+
   defp raw(message_id, opts \\ []) do
     subject = Keyword.get(opts, :subject, "Re: your application")
     body = Keyword.get(opts, :body, "Thanks, we received it.")
@@ -149,13 +189,29 @@ defmodule Platform.Federation.ToolSurfaceMailInboundTest do
     )
   end
 
-  defp list(agent, args),
-    do: ToolSurface.execute("mail_inbound_list", args, %{agent_id: agent.id})
+  defp sid(nil), do: nil
+  defp sid(%{id: id}), do: id
+  defp sid(id) when is_binary(id), do: id
 
-  defp get(agent, id),
-    do: ToolSurface.execute("mail_inbound_get", %{"id" => id}, %{agent_id: agent.id})
+  defp list(agent, space, args) do
+    args = if space == :omit, do: args, else: Map.put(args, "space_id", sid(space))
+    ToolSurface.execute("mail_inbound_list", args, %{agent_id: agent.id})
+  end
+
+  defp get(agent, space, id) do
+    args = if space == :omit, do: %{"id" => id}, else: %{"id" => id, "space_id" => sid(space)}
+    ToolSurface.execute("mail_inbound_get", args, %{agent_id: agent.id})
+  end
 
   defp chat_count, do: Repo.aggregate(Message, :count)
+
+  defp audit_rows(agent) do
+    from(e in Event,
+      where: e.event_type == "platform.mail.agent_read" and e.actor_id == ^agent.id,
+      order_by: [asc: e.inserted_at, asc: e.id]
+    )
+    |> Repo.all()
+  end
 
   # `ExternalContent.marker_id/0` is 16 lowercase hex characters.
   defp mask_marker_ids(content),
@@ -163,9 +219,16 @@ defmodule Platform.Federation.ToolSurfaceMailInboundTest do
 
   # The envelope for a well-formed id that names no row.
   defp unknown_envelope(ctx) do
-    assert {:error, envelope} = get(ctx.insider, Ecto.UUID.generate())
+    assert {:error, envelope} = get(ctx.insider, ctx.dm, Ecto.UUID.generate())
     assert envelope.code == :not_found
     assert envelope.recoverable == false
+    envelope
+  end
+
+  # The list envelope for a space the agent may not answer in.
+  defp list_not_found(ctx) do
+    assert {:error, envelope} = list(ctx.insider, Ecto.UUID.generate(), %{"org_id" => ctx.org_id})
+    assert envelope.code == :not_found
     envelope
   end
 
@@ -186,20 +249,44 @@ defmodule Platform.Federation.ToolSurfaceMailInboundTest do
     org_id = Tenancy.get_org_by_slug!("initech").id
     other_org_id = Tenancy.get_org_by_slug!("globex").id
     admin = admin!(org_id)
-    space = space!()
-    account = account!(admin, org_id, space.id)
+    owner = person!(org_id, "member", "owner")
+    other = person!(org_id, "member", "other")
 
+    # The mailbox P, owned by `owner`, with an inbound channel C.
+    inbound = space!()
+    account = admin |> account!(org_id, inbound.id) |> then(&personal!(admin, &1, owner))
+
+    # Agent A: granted P by its owner.
     insider = agent!("insider", org_id)
-    join!(space, insider)
+    :ok = grant!(owner, account, insider)
+
+    # DM D: the owner and A. Space X: the owner, a non-owner, and A.
+    dm = space!()
+    join_user!(dm, owner)
+    join!(dm, insider)
+
+    mixed = space!()
+    join_user!(mixed, owner)
+    join_user!(mixed, other)
+    join!(mixed, insider)
+
+    # Agent B: NOT granted, yet a participant of the inbound channel and of D.
+    outsider = agent!("outsider", org_id)
+    join!(inbound, outsider)
+    join!(dm, outsider)
 
     %{
       org_id: org_id,
       other_org_id: other_org_id,
       admin: admin,
-      space: space,
+      owner: owner,
+      other: other,
+      inbound: inbound,
       account: account,
       insider: insider,
-      outsider: agent!("outsider", org_id)
+      outsider: outsider,
+      dm: dm,
+      mixed: mixed
     }
   end
 
@@ -215,6 +302,21 @@ defmodule Platform.Federation.ToolSurfaceMailInboundTest do
       refute Enum.any?(ToolSurface.list_tools(["messaging"]), &(&1.name in @tools))
     end
 
+    test "both tools require space_id and say where the rule cannot be enforced" do
+      for tool <- @tools do
+        definition =
+          Enum.find(Platform.Federation.MailInboundTools.definitions(), &(&1.name == tool))
+
+        assert definition.parameters.space_id.required == true
+        assert definition.limitations =~ "Where this cannot be enforced"
+        assert definition.limitations =~ "space_id is asserted by you"
+        assert definition.limitations =~ "context and memory"
+        assert definition.limitations =~ "content provenance"
+        assert definition.limitations =~ "operator can see its transcripts"
+        refute definition.description =~ "inbound chat space you are a participant of"
+      end
+    end
+
     test "off: listed nowhere, and execute refuses recoverably without reading", ctx do
       row = backfilled!(ctx.account, raw("off-#{u()}@corp.test"))
       set_flag(false)
@@ -223,29 +325,38 @@ defmodule Platform.Federation.ToolSurfaceMailInboundTest do
       for tool <- @tools, do: refute(tool in names)
 
       assert {:error, %{code: :mail_disabled, recoverable: true}} =
-               list(ctx.insider, %{"org_id" => ctx.org_id})
+               list(ctx.insider, ctx.dm, %{"org_id" => ctx.org_id})
 
-      assert {:error, %{code: :mail_disabled, recoverable: true}} = get(ctx.insider, row.id)
+      assert {:error, %{code: :mail_disabled, recoverable: true}} =
+               get(ctx.insider, ctx.dm, row.id)
     end
 
     test "an anonymous caller is refused", ctx do
       assert {:error, %{code: :unauthorized}} =
-               ToolSurface.execute("mail_inbound_list", %{"org_id" => ctx.org_id}, %{})
+               ToolSurface.execute(
+                 "mail_inbound_list",
+                 %{"org_id" => ctx.org_id, "space_id" => ctx.dm.id},
+                 %{}
+               )
     end
   end
 
-  # ── the insider ───────────────────────────────────────────────────────────
+  # ── the owner's audience ──────────────────────────────────────────────────
 
-  describe "an agent in the inbound space" do
-    test "lists a backfilled row: metadata only, mentions escaped in the subject", ctx do
+  describe "a granted agent answering the owner" do
+    test "lists a backfilled row: metadata only, mentions escaped, audience and access line",
+         ctx do
       row = backfilled!(ctx.account, raw("list-#{u()}@corp.test", subject: "Ping @[y] now"))
       assert row.ingest_source == "backfill"
       assert row.chat_message_id == nil
 
-      assert {:ok, env} = list(ctx.insider, %{"org_id" => ctx.org_id})
+      assert {:ok, env} = list(ctx.insider, ctx.dm, %{"org_id" => ctx.org_id})
       assert env.total == 1
       assert env.has_more == false
       assert [listed] = env.messages
+      refute Map.has_key?(env, :withheld_notice)
+      assert env.audience == [ctx.owner.name]
+      assert env.access_line == "Visible to you · #{ctx.insider.name}"
 
       assert listed.id == row.id
       assert listed.account_id == ctx.account.id
@@ -267,12 +378,14 @@ defmodule Platform.Federation.ToolSurfaceMailInboundTest do
       row = backfilled!(ctx.account, raw("big-#{u()}@corp.test", body: body))
       assert byte_size(row.text_body) > @cap
 
-      assert {:ok, got} = get(ctx.insider, row.id)
+      assert {:ok, got} = get(ctx.insider, ctx.dm, row.id)
 
       assert got.id == row.id
       assert got.ingest_source == "backfill"
       assert got.truncated == true
       assert got.body_bytes == byte_size(row.text_body)
+      assert got.audience == [ctx.owner.name]
+      assert got.access_line == "Visible to you · #{ctx.insider.name}"
 
       # Exactly the live path's renderer, byte for byte once the wrapper's
       # per-render random marker ids are masked (they differ on every call,
@@ -297,21 +410,33 @@ defmodule Platform.Federation.ToolSurfaceMailInboundTest do
     test "a body under the cap is whole and carries no note", ctx do
       row = backfilled!(ctx.account, raw("small-#{u()}@corp.test", body: "short body ENDMARK"))
 
-      assert {:ok, got} = get(ctx.insider, row.id)
+      assert {:ok, got} = get(ctx.insider, ctx.dm, row.id)
       assert got.truncated == false
       assert got.content =~ "ENDMARK"
       refute got.content =~ "[Truncated:"
       assert got.content =~ "SECURITY NOTICE"
     end
 
-    test "a row from a real backfill run is listed and readable" do
+    test "a granted mailbox with no inbound space is readable: the grant is the right", ctx do
+      bare = ctx.admin |> account!(ctx.org_id, nil) |> then(&personal!(ctx.admin, &1, ctx.owner))
+      assert bare.inbound_space_id == nil
+      :ok = grant!(ctx.owner, bare, ctx.insider)
+      row = backfilled!(bare, raw("bare-#{u()}@corp.test"))
+
+      assert {:ok, %{id: id}} = get(ctx.insider, ctx.dm, row.id)
+      assert id == row.id
+    end
+
+    test "a row from a real backfill run is listed and readable", ctx do
       # Rebuild the rig with a polled cursor so `start_backfill/4` imports.
-      org_id = Tenancy.get_org_by_slug!("initech").id
-      admin = admin!(org_id)
       space = space!()
-      account = account!(admin, org_id, space.id)
-      agent = agent!("rig", org_id)
-      join!(space, agent)
+
+      account =
+        ctx.admin |> account!(ctx.org_id, space.id) |> then(&personal!(ctx.admin, &1, ctx.owner))
+
+      agent = agent!("rig", ctx.org_id)
+      :ok = grant!(ctx.owner, account, agent)
+      join!(ctx.dm, agent)
 
       FakeClient.start_server!(account.imap_host)
       FakeClient.put_folder(account.imap_host, "INBOX", uidvalidity: 7)
@@ -324,13 +449,18 @@ defmodule Platform.Federation.ToolSurfaceMailInboundTest do
       assert %FolderCursor{} = Repo.get_by!(FolderCursor, account_id: account.id, folder: "INBOX")
 
       before = chat_count()
-      assert {:ok, run} = Mail.start_backfill(admin, Repo.reload!(account), 30, runner: :inline)
+
+      assert {:ok, run} =
+               Mail.start_backfill(ctx.admin, Repo.reload!(account), 30, runner: :inline)
+
       assert run.imported == 1
       assert chat_count() == before
 
-      assert {:ok, %{messages: [listed], total: 1}} = list(agent, %{"org_id" => org_id})
+      assert {:ok, %{messages: [listed], total: 1}} =
+               list(agent, ctx.dm, %{"org_id" => ctx.org_id})
+
       assert listed.ingest_source == "backfill"
-      assert {:ok, %{content: content}} = get(agent, listed.id)
+      assert {:ok, %{content: content}} = get(agent, ctx.dm, listed.id)
       assert content =~ "Thanks, we received it."
     end
 
@@ -343,155 +473,310 @@ defmodule Platform.Federation.ToolSurfaceMailInboundTest do
         backfilled!(ctx.account, raw("#{id}-#{u()}@corp.test", date: date, subject: id))
       end
 
-      assert {:ok, page} = list(ctx.insider, %{"org_id" => ctx.org_id, "limit" => 2})
+      args = %{"org_id" => ctx.org_id}
+
+      assert {:ok, page} = list(ctx.insider, ctx.dm, Map.put(args, "limit", 2))
       assert Enum.map(page.messages, & &1.subject) == ["p3", "p2"]
       assert page.total == 3
       assert page.has_more == true
 
       assert {:ok, rest} =
-               list(ctx.insider, %{"org_id" => ctx.org_id, "limit" => 2, "offset" => 2})
+               list(ctx.insider, ctx.dm, Map.merge(args, %{"limit" => 2, "offset" => 2}))
 
       assert Enum.map(rest.messages, & &1.subject) == ["p1"]
       assert rest.has_more == false
 
-      assert {:ok, since} =
-               list(ctx.insider, %{"org_id" => ctx.org_id, "since" => "2026-09-22"})
-
+      assert {:ok, since} = list(ctx.insider, ctx.dm, Map.put(args, "since", "2026-09-22"))
       assert Enum.map(since.messages, & &1.subject) == ["p3", "p2"]
       assert since.total == 2
 
       assert {:error, %{recoverable: true}} =
-               list(ctx.insider, %{"org_id" => ctx.org_id, "since" => "yesterday"})
+               list(ctx.insider, ctx.dm, Map.put(args, "since", "yesterday"))
     end
 
     test "account_id narrows the list", ctx do
-      other_space = space!()
-      join!(other_space, ctx.insider)
-      other = account!(ctx.admin, ctx.org_id, other_space.id)
+      other =
+        ctx.admin |> account!(ctx.org_id, nil) |> then(&personal!(ctx.admin, &1, ctx.owner))
+
+      :ok = grant!(ctx.owner, other, ctx.insider)
 
       mine = backfilled!(ctx.account, raw("narrow-a-#{u()}@corp.test"))
       _theirs = backfilled!(other, raw("narrow-b-#{u()}@corp.test"))
 
-      assert {:ok, %{total: 2}} = list(ctx.insider, %{"org_id" => ctx.org_id})
+      assert {:ok, %{total: 2}} = list(ctx.insider, ctx.dm, %{"org_id" => ctx.org_id})
 
       assert {:ok, %{messages: [only], total: 1}} =
-               list(ctx.insider, %{"org_id" => ctx.org_id, "account_id" => ctx.account.id})
+               list(ctx.insider, ctx.dm, %{
+                 "org_id" => ctx.org_id,
+                 "account_id" => ctx.account.id
+               })
 
       assert only.id == mine.id
 
       assert {:ok, %{messages: [], total: 0}} =
-               list(ctx.insider, %{"org_id" => ctx.org_id, "account_id" => "not-a-uuid"})
+               list(ctx.insider, ctx.dm, %{"org_id" => ctx.org_id, "account_id" => "not-a-uuid"})
     end
   end
 
-  # ── everyone else ─────────────────────────────────────────────────────────
+  # ── the audience term ─────────────────────────────────────────────────────
 
-  describe "the not-found envelope" do
+  describe "the audience" do
     setup ctx do
-      %{row: backfilled!(ctx.account, raw("secret-#{u()}@corp.test"))}
+      %{
+        row:
+          backfilled!(
+            ctx.account,
+            raw("aud-#{u()}@corp.test", subject: "SUBJ-P-1", body: "BODY-P-1")
+          )
+      }
     end
 
-    test "an agent NOT in the space: nothing listed, get is not-found", ctx do
-      assert {:ok, %{messages: [], total: 0}} = list(ctx.outsider, %{"org_id" => ctx.org_id})
-      assert {:error, envelope} = get(ctx.outsider, ctx.row.id)
-      assert envelope.code == :not_found
+    test "a non-owner in the same space: nothing listed, the verbatim withheld_notice, no count or subject",
+         ctx do
+      assert {:ok, env} = list(ctx.insider, ctx.mixed, %{"org_id" => ctx.org_id})
+      assert env.messages == []
+      assert env.total == 0
+      assert env.has_more == false
+      assert env.withheld_notice == @notice
+      assert Enum.sort(env.audience) == Enum.sort([ctx.owner.name, ctx.other.name])
+      assert env.access_line == "Visible to 2 people"
+
+      rendered = inspect(env)
+      refute rendered =~ "SUBJ-P-1"
+      refute rendered =~ "BODY-P-1"
+      refute rendered =~ "recruiter@corp.test"
+      refute rendered =~ ctx.account.id
+      refute rendered =~ ctx.row.id
+
+      # Positive control: the same agent, the owner alone, reads the row.
+      assert {:ok, %{messages: [%{id: id}]}} =
+               list(ctx.insider, ctx.dm, %{"org_id" => ctx.org_id})
+
+      assert id == ctx.row.id
+    end
+
+    test "get of a granted row for that audience is withheld: the notice, no content or metadata",
+         ctx do
+      assert {:error, envelope} = get(ctx.insider, ctx.mixed, ctx.row.id)
+      assert envelope.code == :withheld
+      assert envelope.withheld_notice == @notice
+      refute Map.has_key?(envelope, :content)
+
+      rendered = inspect(envelope)
+      refute rendered =~ "SUBJ-P-1"
+      refute rendered =~ "BODY-P-1"
+      refute rendered =~ "recruiter@corp.test"
+      refute rendered =~ ctx.account.id
+
+      assert {:ok, %{content: content}} = get(ctx.insider, ctx.dm, ctx.row.id)
+      assert content =~ "BODY-P-1"
+    end
+
+    test "a shared mailbox both humans read is listed; the personal one is withheld", ctx do
+      support =
+        ctx.admin
+        |> account!(ctx.org_id, nil)
+        |> then(&Platform.Test.MailPrivacyFixtures.shared!(ctx.admin, &1, [ctx.owner, ctx.other]))
+
+      :ok = grant!(ctx.admin, support, ctx.insider)
+      shared_row = backfilled!(support, raw("shared-#{u()}@corp.test", subject: "SUBJ-S-1"))
+
+      assert {:ok, env} = list(ctx.insider, ctx.mixed, %{"org_id" => ctx.org_id})
+      assert Enum.map(env.messages, & &1.id) == [shared_row.id]
+      assert env.total == 1
+      assert env.withheld_notice == @notice
+      refute inspect(env) =~ "SUBJ-P-1"
+
+      assert {:ok, %{id: id}} = get(ctx.insider, ctx.mixed, shared_row.id)
+      assert id == shared_row.id
+    end
+
+    test "an empty audience (no human in the space) reads nothing", ctx do
+      lonely = space!()
+      join!(lonely, ctx.insider)
+
+      assert {:ok, env} = list(ctx.insider, lonely, %{"org_id" => ctx.org_id})
+      assert env.messages == []
+      assert env.total == 0
+      assert env.audience == []
+      assert {:error, %{code: :withheld}} = get(ctx.insider, lonely, ctx.row.id)
+    end
+  end
+
+  # ── the grant term ────────────────────────────────────────────────────────
+
+  describe "the grant" do
+    setup ctx do
+      %{row: backfilled!(ctx.account, raw("grant-#{u()}@corp.test", subject: "SUBJ-G-1"))}
+    end
+
+    test "an ungranted agent, even in the inbound channel and the owner's DM, reads nothing",
+         ctx do
+      for space <- [ctx.dm, ctx.inbound] do
+        assert {:ok, env} = list(ctx.outsider, space, %{"org_id" => ctx.org_id})
+        assert env.messages == []
+        assert env.total == 0
+        # Nothing it is granted was withheld: it is granted nothing.
+        refute Map.has_key?(env, :withheld_notice)
+
+        assert {:error, envelope} = get(ctx.outsider, space, ctx.row.id)
+        assert envelope == unknown_envelope(ctx)
+      end
+
+      # Positive control: the granted agent reads the very row in D.
+      assert {:ok, %{id: id}} = get(ctx.insider, ctx.dm, ctx.row.id)
+      assert id == ctx.row.id
+    end
+
+    test "revoke, then the very next call reads nothing", ctx do
+      assert {:ok, %{total: 1}} = list(ctx.insider, ctx.dm, %{"org_id" => ctx.org_id})
+      assert {:ok, _} = get(ctx.insider, ctx.dm, ctx.row.id)
+
+      {:ok, _} = Ownership.revoke(ctx.owner, ctx.account, {:agent, ctx.insider.id})
+
+      assert {:ok, env} = list(ctx.insider, ctx.dm, %{"org_id" => ctx.org_id})
+      assert env.messages == []
+      refute Map.has_key?(env, :withheld_notice)
+      assert {:error, envelope} = get(ctx.insider, ctx.dm, ctx.row.id)
       assert envelope == unknown_envelope(ctx)
     end
 
-    test "an agent of another org, even as a participant of the space", ctx do
-      sibling = agent!("sibling", ctx.other_org_id)
-      join!(ctx.space, sibling)
+    test "a mailbox returned to unassigned is read by no agent", ctx do
+      {:ok, _} = Ownership.set_owner(ctx.admin, ctx.account, %{kind: "unassigned"})
 
-      assert {:error, envelope} = get(sibling, ctx.row.id)
+      assert {:ok, %{messages: [], total: 0}} =
+               list(ctx.insider, ctx.dm, %{"org_id" => ctx.org_id})
+
+      assert {:error, envelope} = get(ctx.insider, ctx.dm, ctx.row.id)
+      assert envelope == unknown_envelope(ctx)
+    end
+  end
+
+  # ── the participant check ─────────────────────────────────────────────────
+
+  describe "the space" do
+    setup ctx do
+      %{row: backfilled!(ctx.account, raw("space-#{u()}@corp.test"))}
+    end
+
+    test "a missing space_id is not-found", ctx do
+      assert {:error, envelope} = list(ctx.insider, :omit, %{"org_id" => ctx.org_id})
+      assert envelope == list_not_found(ctx)
+      assert {:error, envelope} = get(ctx.insider, :omit, ctx.row.id)
+      assert envelope == unknown_envelope(ctx)
+    end
+
+    test "a space the agent is not a participant of is not-found, even with the owner in it",
+         ctx do
+      foreign = space!()
+      join_user!(foreign, ctx.owner)
+
+      assert {:error, envelope} = list(ctx.insider, foreign, %{"org_id" => ctx.org_id})
+      assert envelope == list_not_found(ctx)
+      assert {:error, envelope} = get(ctx.insider, foreign, ctx.row.id)
+      assert envelope == unknown_envelope(ctx)
+
+      # Positive control: once it joins, the same call reads.
+      join!(foreign, ctx.insider)
+      assert {:ok, %{id: id}} = get(ctx.insider, foreign, ctx.row.id)
+      assert id == ctx.row.id
+    end
+
+    test "an archived space is not-found", ctx do
+      {:ok, _} = Chat.archive_space(ctx.dm)
+
+      assert {:error, envelope} = list(ctx.insider, ctx.dm, %{"org_id" => ctx.org_id})
+      assert envelope == list_not_found(ctx)
+      assert {:error, %{code: :not_found}} = get(ctx.insider, ctx.dm, ctx.row.id)
+    end
+
+    test "a removed participant reads nothing", ctx do
+      ctx.dm.id |> Chat.get_agent_participant(ctx.insider) |> Chat.remove_participant()
+
+      assert {:error, envelope} = get(ctx.insider, ctx.dm, ctx.row.id)
+      assert envelope == unknown_envelope(ctx)
+    end
+
+    test "a malformed id or space id is the same not-found", ctx do
+      assert {:error, envelope} = get(ctx.insider, ctx.dm, "not-a-uuid")
+      assert envelope == unknown_envelope(ctx)
+      assert {:error, envelope} = get(ctx.insider, "not-a-uuid", ctx.row.id)
+      assert envelope == unknown_envelope(ctx)
+    end
+
+    test "an agent of another org, even granted and in the owner's DM", ctx do
+      sibling = agent!("sibling", ctx.other_org_id)
+      :ok = grant!(ctx.owner, ctx.account, sibling)
+      join!(ctx.dm, sibling)
+
+      assert {:error, envelope} = get(sibling, ctx.dm, ctx.row.id)
       assert envelope == unknown_envelope(ctx)
 
       # Listing the other org is the tenant pin's refusal, as for drafts.
       assert {:error, %{error: "unauthorized: " <> _}} =
-               list(sibling, %{"org_id" => ctx.org_id})
-
-      assert {:ok, %{messages: [], total: 0}} = list(sibling, %{"org_id" => ctx.other_org_id})
-    end
-
-    test "an account with no inbound space has no agent audience", ctx do
-      bare = account!(ctx.admin, ctx.org_id, nil)
-      assert bare.inbound_space_id == nil
-      row = backfilled!(bare, raw("bare-#{u()}@corp.test"))
-
-      assert {:ok, %{total: total, messages: messages}} =
-               list(ctx.insider, %{"org_id" => ctx.org_id})
-
-      refute Enum.any?(messages, &(&1.id == row.id))
-      assert total == 1
-
-      assert {:error, envelope} = get(ctx.insider, row.id)
-      assert envelope == unknown_envelope(ctx)
-    end
-
-    test "an archived inbound space reads as nothing", ctx do
-      {:ok, _} = Chat.archive_space(ctx.space)
-
-      assert {:ok, %{messages: [], total: 0}} = list(ctx.insider, %{"org_id" => ctx.org_id})
-      assert {:error, envelope} = get(ctx.insider, ctx.row.id)
-      assert envelope == unknown_envelope(ctx)
-    end
-
-    test "a removed participant reads as nothing", ctx do
-      ctx.space.id |> Chat.get_agent_participant(ctx.insider) |> Chat.remove_participant()
-
-      assert {:error, envelope} = get(ctx.insider, ctx.row.id)
-      assert envelope == unknown_envelope(ctx)
-    end
-
-    test "a history-bounded participant reads nothing from before its bound", ctx do
-      # Joined by a mention grant an hour from now: the existing backfilled
-      # row (old Date header, inserted now) and a row whose sender forged a
-      # far-future Date header (inserted now) are both before the bound.
-      bounded = agent!("bounded", ctx.org_id)
-      join!(ctx.space, bounded, %{history_visible_from: DateTime.add(DateTime.utc_now(), 3600)})
-
-      forged =
-        backfilled!(
-          ctx.account,
-          raw("forged-#{u()}@corp.test", date: "Fri, 01 Jan 2099 00:00:00 +0000")
-        )
-
-      assert DateTime.compare(forged.received_at, DateTime.utc_now()) == :gt
-
-      assert {:ok, %{messages: [], total: 0}} = list(bounded, %{"org_id" => ctx.org_id})
-      assert {:error, e1} = get(bounded, ctx.row.id)
-      assert {:error, e2} = get(bounded, forged.id)
-      assert e1 == unknown_envelope(ctx)
-      assert e2 == unknown_envelope(ctx)
-
-      # Positive control: the unbounded insider reads both.
-      assert {:ok, _} = get(ctx.insider, ctx.row.id)
-      assert {:ok, _} = get(ctx.insider, forged.id)
-    end
-
-    test "a malformed id is the same not-found", ctx do
-      assert {:error, envelope} = get(ctx.insider, "not-a-uuid")
-      assert envelope == unknown_envelope(ctx)
-    end
-
-    test "positive control: the insider reads the very row the others cannot", ctx do
-      assert {:ok, %{id: id}} = get(ctx.insider, ctx.row.id)
-      assert id == ctx.row.id
+               list(sibling, ctx.dm, %{"org_id" => ctx.org_id})
     end
   end
 
-  # ── quiet ─────────────────────────────────────────────────────────────────
+  # ── audit and quiet ───────────────────────────────────────────────────────
+
+  describe "audit" do
+    test "each list and get writes one audit row: ids and outcome, never content", ctx do
+      row =
+        backfilled!(
+          ctx.account,
+          raw("audit-#{u()}@corp.test", subject: "SUBJ-A-1", body: "BODY-A-1")
+        )
+
+      assert audit_rows(ctx.insider) == []
+
+      assert {:ok, _} = list(ctx.insider, ctx.dm, %{"org_id" => ctx.org_id})
+      assert {:ok, _} = get(ctx.insider, ctx.dm, row.id)
+      assert {:error, %{code: :withheld}} = get(ctx.insider, ctx.mixed, row.id)
+      assert {:error, %{code: :not_found}} = get(ctx.insider, Ecto.UUID.generate(), row.id)
+
+      assert [listed, read, withheld, missed] = audit_rows(ctx.insider)
+
+      assert listed.action == "list"
+      assert listed.actor_type == "agent"
+      assert listed.resource_type == "chat_space"
+      assert listed.resource_id == ctx.dm.id
+      assert listed.actor_org_id == ctx.org_id
+      assert listed.metadata["outcome"] == "ok"
+      assert listed.metadata["space_id"] == ctx.dm.id
+      assert listed.metadata["audience_user_ids"] == [ctx.owner.id]
+      assert listed.metadata["account_ids"] == [ctx.account.id]
+      assert listed.metadata["row_ids"] == [row.id]
+
+      assert read.action == "get"
+      assert read.metadata["outcome"] == "ok"
+      assert read.metadata["row_ids"] == [row.id]
+
+      assert withheld.metadata["outcome"] == "withheld"
+      assert withheld.resource_id == ctx.mixed.id
+      assert withheld.metadata["row_ids"] == []
+
+      assert missed.metadata["outcome"] == "not_found"
+
+      for event <- [listed, read, withheld, missed] do
+        rendered = inspect(event.metadata)
+        refute rendered =~ "SUBJ-A-1"
+        refute rendered =~ "BODY-A-1"
+        refute rendered =~ "recruiter@corp.test"
+      end
+    end
+  end
 
   describe "quiet" do
-    test "no tool call writes a chat message or broadcasts on mail:inbound", ctx do
+    test "no tool call writes a chat message, a mail row or broadcasts on mail:inbound", ctx do
       row = backfilled!(ctx.account, raw("quiet-#{u()}@corp.test"))
-      outsider_row_id = row.id
       :ok = Inbound.subscribe()
       before = chat_count()
       rows_before = Repo.aggregate(InboundMessage, :count)
 
-      assert {:ok, _} = list(ctx.insider, %{"org_id" => ctx.org_id})
-      assert {:ok, _} = get(ctx.insider, row.id)
-      assert {:error, _} = get(ctx.outsider, outsider_row_id)
+      assert {:ok, _} = list(ctx.insider, ctx.dm, %{"org_id" => ctx.org_id})
+      assert {:ok, _} = get(ctx.insider, ctx.dm, row.id)
+      assert {:error, _} = get(ctx.outsider, ctx.dm, row.id)
 
       assert chat_count() == before
       assert Repo.aggregate(InboundMessage, :count) == rows_before

@@ -8480,8 +8480,9 @@ defmodule Platform.Federation.ToolSurface do
 
   # ── Inbound mail reads (task 01a13ba5-42a7-7000-8f2b-4c63003f3f92 stage 2) ──
   #
-  # Read-only. The participant check lives in `Mail.InboundAccess`; every
-  # `mail_inbound_get` miss returns ONE envelope (`mail_inbound_not_found/0`)
+  # Read-only. The grant, audience and participant checks live in
+  # `Mail.InboundAccess` (task 01a1ea5b stage 3); every miss returns ONE
+  # envelope (`mail_inbound_not_found/1`)
   # so the tool is not an existence oracle.
 
   def execute("mail_inbound_list", args, context) do
@@ -8497,13 +8498,25 @@ defmodule Platform.Federation.ToolSurface do
         [limit: limit, offset: offset, since: since]
         |> Keyword.put(:account_id, mail_optional_string(args, "account_id"))
 
-      {rows, total} = Platform.Mail.InboundAccess.list(agent.id, org_id, opts)
-      # Echo the page bounds `InboundAccess.list/3` actually applied.
-      %{max: max_limit} = Platform.Mail.InboundAccess.limits()
-      limit = limit |> max(1) |> min(max_limit)
-      offset = max(offset, 0)
+      space_id = mail_optional_string(args, "space_id")
 
-      {:ok, ResultBound.paged(:messages, rows, total, offset, %{limit: limit, offset: offset})}
+      case Platform.Mail.InboundAccess.list(agent.id, org_id, space_id, opts) do
+        {:ok, %{messages: rows, total: total} = result} ->
+          # Echo the page bounds `InboundAccess.list/4` actually applied.
+          %{max: max_limit} = Platform.Mail.InboundAccess.limits()
+          limit = limit |> max(1) |> min(max_limit)
+          offset = max(offset, 0)
+
+          extra =
+            result
+            |> Map.take([:audience, :access_line, :withheld_notice])
+            |> Map.merge(%{limit: limit, offset: offset})
+
+          {:ok, ResultBound.paged(:messages, rows, total, offset, extra)}
+
+        :not_found ->
+          {:error, mail_inbound_not_found("mail_inbound_list")}
+      end
     end
   end
 
@@ -8511,7 +8524,7 @@ defmodule Platform.Federation.ToolSurface do
     with :ok <- mail_enabled("mail_inbound_get"),
          {:ok, agent} <- mail_agent(context, "mail_inbound_get"),
          {:ok, id} <- require_string(args, "id", "mail_inbound_get"),
-         {:ok, row} <- mail_inbound_fetch(agent, id) do
+         {:ok, row} <- mail_inbound_fetch(agent, mail_optional_string(args, "space_id"), id) do
       {:ok, row}
     end
   end
@@ -14297,23 +14310,54 @@ defmodule Platform.Federation.ToolSurface do
   end
 
   # A tenant-pinned agent reading a sibling org's row gets the SAME not-found
-  # as an unknown id; so does every miss `InboundAccess.get/2` reports.
-  defp mail_inbound_fetch(agent, id) do
-    with {:ok, row} <- Platform.Mail.InboundAccess.get(agent.id, id),
-         :ok <- authorize_org_filter(agent, row.org_id) do
-      {:ok, row}
-    else
-      _ -> {:error, mail_inbound_not_found()}
+  # as an unknown id; so does every miss `InboundAccess.get/3` reports. A row
+  # of a mailbox the agent is granted but the audience may not read is
+  # WITHHELD: the notice and the audience, never the row.
+  defp mail_inbound_fetch(agent, space_id, id) do
+    case Platform.Mail.InboundAccess.get(agent.id, space_id, id) do
+      {:ok, row} ->
+        case authorize_org_filter(agent, row.org_id) do
+          :ok -> {:ok, row}
+          _ -> {:error, mail_inbound_not_found("mail_inbound_get")}
+        end
+
+      {:withheld, withheld} ->
+        case authorize_org_filter(agent, withheld.org_id) do
+          :ok -> {:error, mail_inbound_withheld(withheld)}
+          _ -> {:error, mail_inbound_not_found("mail_inbound_get")}
+        end
+
+      :not_found ->
+        {:error, mail_inbound_not_found("mail_inbound_get")}
     end
   end
 
-  defp mail_inbound_not_found do
+  defp mail_inbound_not_found(tool) do
     %{
-      error: "mail_inbound_get: email not found",
+      error:
+        if(tool == "mail_inbound_get",
+          do: "mail_inbound_get: email not found",
+          else: "mail_inbound_list: space not found"
+        ),
       code: :not_found,
       recoverable: false,
       suggestion:
-        "Use an id from mail_inbound_list. You can read only mail of accounts whose inbound space you participate in."
+        "Pass `space_id`: the id of the space you are answering in, which you must be a participant of. " <>
+          "Use an id from mail_inbound_list. You can read only mail of mailboxes you are granted, " <>
+          "and only what every person in that space may read."
+    }
+  end
+
+  defp mail_inbound_withheld(withheld) do
+    %{
+      error: "mail_inbound_get: withheld from this audience",
+      code: :withheld,
+      recoverable: false,
+      withheld_notice: withheld.withheld_notice,
+      audience: withheld.audience,
+      access_line: withheld.access_line,
+      suggestion:
+        "Tell the person exactly the withheld_notice. Do not describe, count or hint at the email."
     }
   end
 
@@ -14397,7 +14441,14 @@ defmodule Platform.Federation.ToolSurface do
           {:draft_not_editable, false, "the draft is no longer a draft"}
 
         :account_not_found ->
-          {:account_not_found, true, "no such account in this org"}
+          {:account_not_found, true, "no such account in this org that you are granted"}
+
+        :account_or_on_behalf_required ->
+          {:account_or_on_behalf_required, true,
+           "name account_id (a mailbox you are granted) or on_behalf_of_user_id"}
+
+        :on_behalf_cannot_read_account ->
+          {:on_behalf_cannot_read_account, true, "on_behalf_of_user_id cannot read that mailbox"}
 
         :sender_key_not_found ->
           {:sender_key_not_found, true, "no such sender key on the account"}

@@ -100,6 +100,11 @@ defmodule Platform.Federation.ToolSurfaceMailTest do
 
     {:ok, task} = Tasks.create_task(%{project_id: project.id, title: "Weekly digest"})
 
+    agent = agent!("pinned", %{"org_id" => org_id})
+    # The drafting agent is GRANTED the mailbox (task 01a1ea5b stage 3);
+    # `other_agent` is not.
+    {:ok, _} = Platform.Mail.Ownership.grant(admin, account, {:agent, agent.id})
+
     %{
       org_id: org_id,
       other_org_id: other_org_id,
@@ -108,7 +113,7 @@ defmodule Platform.Federation.ToolSurfaceMailTest do
       other_admin: other_admin,
       account: account,
       task: task,
-      agent: agent!("pinned", %{"org_id" => org_id}),
+      agent: agent,
       other_agent: agent!("other", %{"org_id" => org_id}),
       sibling_agent: agent!("sibling", %{"org_id" => other_org_id})
     }
@@ -247,6 +252,112 @@ defmodule Platform.Federation.ToolSurfaceMailTest do
     test "an anonymous caller is refused", ctx do
       assert {:error, envelope} = ToolSurface.execute("mail_draft_create", create_args(ctx), %{})
       assert envelope.code == :unauthorized
+    end
+  end
+
+  describe "mailbox ownership (task 01a1ea5b stage 3)" do
+    test "a draft into an ungranted mailbox is refused, the same answer as an unknown one",
+         ctx do
+      before = draft_count()
+
+      assert {:error, envelope} =
+               ToolSurface.execute(
+                 "mail_draft_create",
+                 create_args(ctx),
+                 ctx_for(ctx.other_agent)
+               )
+
+      assert envelope.code == :account_not_found
+      assert draft_count() == before
+
+      # Positive control: the granted agent writes the identical draft.
+      assert {:ok, _} =
+               ToolSurface.execute("mail_draft_create", create_args(ctx), ctx_for(ctx.agent))
+    end
+
+    test "a draft naming neither a mailbox nor an on-behalf person is refused recoverably", ctx do
+      before = draft_count()
+      args = create_args(ctx) |> Map.drop(["account_id", "sender_key"])
+
+      assert {:error, envelope} =
+               ToolSurface.execute("mail_draft_create", args, ctx_for(ctx.agent))
+
+      assert envelope.code == :account_or_on_behalf_required
+      assert envelope.recoverable == true
+      assert draft_count() == before
+
+      # Naming only the on-behalf person is enough.
+      assert {:ok, result} =
+               ToolSurface.execute(
+                 "mail_draft_create",
+                 Map.put(args, "on_behalf_of_user_id", ctx.member.id),
+                 ctx_for(ctx.agent)
+               )
+
+      assert Repo.get!(Draft, result.draft_id).account_id == nil
+    end
+
+    test "an on-behalf person who cannot read the mailbox is refused", ctx do
+      # Joined after the mailbox was shared, so not one of its readers.
+      newcomer = user!("newcomer") |> member!(ctx.org_id, "member")
+      before = draft_count()
+
+      assert {:error, envelope} =
+               ToolSurface.execute(
+                 "mail_draft_create",
+                 create_args(ctx, %{"on_behalf_of_user_id" => newcomer.id}),
+                 ctx_for(ctx.agent)
+               )
+
+      assert envelope.code == :on_behalf_cannot_read_account
+      assert envelope.recoverable == true
+      assert draft_count() == before
+
+      assert {:ok, _} =
+               ToolSurface.execute(
+                 "mail_draft_create",
+                 create_args(ctx, %{"on_behalf_of_user_id" => ctx.member.id}),
+                 ctx_for(ctx.agent)
+               )
+    end
+
+    test "after a revoke, the agent can no longer update its draft on that mailbox", ctx do
+      {:ok, %{draft_id: draft_id}} =
+        ToolSurface.execute("mail_draft_create", create_args(ctx), ctx_for(ctx.agent))
+
+      {:ok, _} = Platform.Mail.Ownership.revoke(ctx.admin, ctx.account, {:agent, ctx.agent.id})
+
+      assert {:error, %{code: :account_not_found}} =
+               ToolSurface.execute(
+                 "mail_draft_update",
+                 %{"draft_id" => draft_id, "body" => "after revoke"},
+                 ctx_for(ctx.agent)
+               )
+
+      assert Repo.get!(Draft, draft_id).body =~ "This week"
+    end
+
+    test "an existing agent draft naming neither is left in place", ctx do
+      legacy =
+        Repo.insert!(%Draft{
+          org_id: ctx.org_id,
+          created_by_type: "agent",
+          created_by_id: ctx.agent.id,
+          status: "draft",
+          subject: "legacy",
+          body: "legacy body",
+          to_addresses: [],
+          to_user_ids: []
+        })
+
+      assert {:error, %{code: :account_or_on_behalf_required}} =
+               ToolSurface.execute(
+                 "mail_draft_update",
+                 %{"draft_id" => legacy.id, "body" => "x"},
+                 ctx_for(ctx.agent)
+               )
+
+      assert %Draft{status: "draft", body: "legacy body"} = Repo.get!(Draft, legacy.id)
     end
   end
 
