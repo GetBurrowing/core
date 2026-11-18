@@ -3,7 +3,7 @@ defmodule Platform.Repo.Migrations.AddDoctorAndRelationshipStewardRoles do
   Admit and seed the two super-agent roles the sponsor approved on
   2026-11-18, `doctor` and `relationship_steward`, their one-key bundles
   (`doctor.checkup`, `relationships.follow_up_sweep`) and their two prompt
-  templates. Modelled on `20261117214509_add_showrunner_role.exs`.
+  templates (PR #225). Modelled on `20261117214509_add_showrunner_role.exs`.
 
   One file, three steps, in this order:
 
