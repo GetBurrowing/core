@@ -1,7 +1,7 @@
 defmodule Platform.Repo.Migrations.MergeMeetingProducerIntoScribe do
   @moduledoc """
   Merge the `meeting_producer` role into `meeting_scribe` (super agents
-  restructure). The producer had one key, `meetings.intent_classify`, read
+  restructure, PR #220). The producer had one key, `meetings.intent_classify`, read
   the same transcript as the scribe and already handed work to it.
 
   In order:

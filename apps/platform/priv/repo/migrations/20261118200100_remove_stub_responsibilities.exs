@@ -1,6 +1,7 @@
 defmodule Platform.Repo.Migrations.RemoveStubResponsibilities do
   @moduledoc """
-  Remove four registration-only responsibilities (super agents restructure):
+  Remove four registration-only responsibilities (super agents restructure,
+  PR #220):
 
     * `design.spec_writer`, `design.brand_check` (Designer bundle)
     * `tasks.unblock`, `tasks.weekly_review` (Triage Officer bundle)
