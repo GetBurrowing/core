@@ -55,7 +55,9 @@ defmodule PlatformWeb.GoalsTabBarMarkerGuardTest do
   end
 
   defp unmarked(src) do
-    for {line, tag} <- fields(src), text_entry?(tag), not (tag =~ ~r/\bdata-hides-tab-bar\b/),
+    for {line, tag} <- fields(src),
+        text_entry?(tag),
+        not (tag =~ ~r/\bdata-hides-tab-bar\b/),
         do: line
   end
 
