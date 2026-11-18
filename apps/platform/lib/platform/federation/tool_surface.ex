@@ -3640,7 +3640,7 @@ defmodule Platform.Federation.ToolSurface do
       returns:
         "%{transcript_id, status: \"complete\", posted}. `posted` is false when the summary was saved but the chat post failed.",
       limitations:
-        "Only the agent currently holding the `meetings.summarize` responsibility may call it, and only while the transcript is awaiting its summary (`processing`, dispatched). Errors: not_summary_assignee, transcript_not_found, not_awaiting_summary, already_complete, blank_summary, stale_summary_input, persist_failed.",
+        "Only the agent currently assigned `meetings.summarize` may call it, and only while the transcript is awaiting its summary (`processing`, dispatched). Errors: not_summary_assignee, transcript_not_found, not_awaiting_summary, already_complete, blank_summary, stale_summary_input, persist_failed.",
       when_to_use: "When you finish a summarize dispatch for a meeting transcript."
     }
   end
