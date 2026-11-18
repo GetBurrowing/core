@@ -356,7 +356,11 @@ defmodule Platform.Meetings.SummarizerSweeper do
     try do
       task =
         Task.Supervisor.async_nolink(Platform.TaskSupervisor, fn ->
-          Summarizer.run_summary_legacy(transcript_id, space_id, segments)
+          if Meetings.Config.summary_enabled?() do
+            Summarizer.run_summary_legacy(transcript_id, space_id, segments)
+          else
+            time_out_dispatch(transcript, agent_slug, stalled_for_ms)
+          end
         end)
 
       ctx = %{
@@ -378,6 +382,28 @@ defmodule Platform.Meetings.SummarizerSweeper do
     end
   end
 
+  # No legacy summarizer is configured, so there is nothing to fall back
+  # to. Running `run_summary_legacy/3` anyway is what recorded
+  # `no_summary_provider_configured` on rows whose real failure was "the
+  # agent never returned a summary" — true, but the wrong lead for whoever
+  # reads the row. Record the timeout itself. `fail_summary_input/3` goes
+  # through `fail_transcript/3`, which also releases the router claim
+  # (`router_dispatched_at`), so the transcript can be dispatched again.
+  #
+  # Returns `{:error, {:timed_out, _}}` so the notice below says so.
+  defp time_out_dispatch(transcript, agent_slug, stalled_for_ms) do
+    reason =
+      {:summary_agent_timeout,
+       %{agent: agent_slug || "unassigned", waited_s: div(stalled_for_ms, 1000)}}
+
+    hash = Platform.Meetings.Transcript.summary_fingerprint(transcript)
+
+    case Meetings.fail_summary_input(transcript.id, hash, reason) do
+      {:ok, _failed} -> {:error, {:timed_out, reason}}
+      {:error, error} -> {:error, {:timed_out_not_recorded, error}}
+    end
+  end
+
   # Compose + post the "summary fallback" or "summary fallback also
   # failed" system message into the meeting's chat space. Both branches
   # are best-effort — if the space is gone or `post_message` errors we
@@ -389,6 +415,7 @@ defmodule Platform.Meetings.SummarizerSweeper do
         case result do
           :ok -> :completed
           {:ok, _} -> :completed
+          {:error, {:timed_out, _}} -> :timed_out
           _ -> :also_failed
         end
 

@@ -290,10 +290,10 @@ defmodule Platform.Meetings.SummarizerSweeperTest do
     end
 
     test "seeds a stalled dispatch, sweep tick runs, notice posts naming the assigned agent" do
-      # LLM provider is `:none` in test config, so the legacy body will
-      # ultimately return `{:error, {:llm_failed, :no_summary_provider_configured}}`.
-      # That's still a "legacy path ran to completion" from the sweeper's POV
-      # — we should see the `also_failed` notice land in the meeting space.
+      # LLM provider is `:none` in test config, so there is no legacy body to
+      # fall back to: the sweeper records the agent timeout itself and posts
+      # the `timed_out` notice instead of running a summarizer that can only
+      # fail with `no_summary_provider_configured`.
       space = create_execution_space!()
       agent = insert_agent!("scribe-under-test-#{System.unique_integer([:positive])}")
       {:ok, _} = Roles.set_override(MeetingSummarize.key(), agent.id)
@@ -317,11 +317,44 @@ defmodule Platform.Meetings.SummarizerSweeperTest do
         assert notice.content_type == "system"
         assert notice.content =~ "@#{agent.slug}"
         assert notice.content =~ "/control-center/roles"
-        # Real provider is :none in tests → legacy body fails → also_failed shape.
-        assert notice.content =~ "Summary fallback also failed"
-        assert notice.metadata["mode"] == "also_failed"
+        # Real provider is :none in tests → nothing to fall back to → timed_out.
+        assert notice.content =~ "Summary timed out"
+        assert notice.metadata["mode"] == "timed_out"
         assert notice.metadata["previously_assigned_agent"] == agent.slug
       end)
+    end
+
+    test "with no fallback summarizer, a timed-out dispatch is failed with the reason and released" do
+      space = create_execution_space!()
+      agent = insert_agent!("scribe-timeout-#{System.unique_integer([:positive])}")
+      {:ok, _} = Roles.set_override(MeetingSummarize.key(), agent.id)
+
+      stale =
+        create_stalled_processing_transcript!(
+          space.id,
+          DateTime.add(DateTime.utc_now(), -500, :millisecond)
+        )
+
+      # Anti-vacuity: the claim is held before the sweep.
+      assert {:error, :already_dispatched} = Meetings.claim_router_dispatch(stale.id)
+
+      {_pid, name} = start_sweeper(check_interval_ms: 60_000, stall_window_ms: 200)
+
+      capture_log(fn ->
+        {:ok, pids} = SummarizerSweeper.sweep_now(name)
+        await_pids(pids)
+        assert wait_for_fallback_notice(space.id, stale.id, 2_000)
+      end)
+
+      failed = Meetings.get_transcript(stale.id)
+      assert failed.status == "failed"
+      assert failed.failure_reason =~ "summary_agent_timeout"
+      assert failed.failure_reason =~ agent.slug
+      refute failed.failure_reason =~ "no_summary_provider_configured"
+      assert is_nil(failed.router_dispatched_at)
+
+      # Released: a re-dispatch can claim it again.
+      assert {:ok, :claimed} = Meetings.claim_router_dispatch(stale.id)
     end
 
     test "notice degrades to generic phrasing when no agent is assigned" do

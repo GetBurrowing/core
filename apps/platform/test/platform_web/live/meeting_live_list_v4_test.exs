@@ -215,6 +215,32 @@ defmodule PlatformWeb.MeetingLiveListV4Test do
     assert has_element?(view, panel, "No transcript was saved for this meeting.")
   end
 
+  test "a transcript without a summary says the summary is missing, not that nothing was saved",
+       %{conn: conn, project: project} do
+    {past, space} = meeting!(project, "Long call", "ended", at(-1, 15), 60)
+
+    # Captured with no meeting_id stamped (the shape a capture that began
+    # before the meeting row covered it leaves): same space, inside the
+    # meeting's window, still waiting on its summary.
+    Repo.insert!(%Platform.Meetings.Transcript{
+      room_id: "space-#{space.id}",
+      space_id: space.id,
+      status: "processing",
+      started_at: at(-1, 15) |> DateTime.add(300) |> DateTime.add(0, :microsecond),
+      segments: [%{"speaker_name" => "Ada", "text" => "Here is the long discussion."}]
+    })
+
+    {:ok, view, _} = live(meet_member_host(conn), "/meetings?meeting=#{past.id}")
+    panel = "[data-role=meetings-detail] [role=tabpanel]"
+
+    assert has_element?(view, panel <> " [data-role=summary-missing]", "Summary missing.")
+    refute has_element?(view, panel, "No summary was saved for this meeting.")
+
+    render_click(view, "meetings_list_tab", %{"tab" => "transcript"})
+    assert has_element?(view, panel, "Here is the long discussion.")
+    refute has_element?(view, panel, "No transcript was saved for this meeting.")
+  end
+
   test "+ New meeting opens the v4 modal and starts a room", %{conn: conn, project: project} do
     {:ok, view, _} = live(meet_member_host(conn), "/meetings")
     view |> element("[data-role=list-new-meeting]") |> render_click()

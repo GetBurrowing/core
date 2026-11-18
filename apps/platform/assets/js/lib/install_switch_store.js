@@ -372,6 +372,65 @@ export async function runPool(items, worker, limit = MAX_IN_FLIGHT) {
   return results
 }
 
+// ── Reciprocal add ───────────────────────────────────────────────────────
+//
+// Adding B from A puts B in A's list (the connected page). For B's list to
+// gain A too, B's own consent page (`/switcher/connect?origin=<A>&name=<A
+// name>`, the origin already validated by B's server) remembers A in B's
+// sessionStorage the moment the person answers it, Allow or Not now. When
+// that tab next opens B's switcher, A is added as a plain row: no key, no
+// unread, nothing to revoke. Showing A's unread on B is its own consent hop
+// (Show unread), as for any install added with Not now.
+//
+// Only B's own page can write the marker, so a link someone sends cannot
+// plant a row: it needs the person to answer B's consent page, which names
+// A, in this tab, within PENDING_TTL_MS. Only public identity crosses: an
+// origin and a display name. Never a key, never A's other installs (A's
+// script could claim any list, and B's person never vetted it).
+
+export const RECIPROCAL_KEY = "burrow.installs.reciprocal.v1"
+
+/** On B's consent page: remember A for B's switcher. Returns the marker or null. */
+export function rememberReciprocal(session, { origin, name }, here, now = Date.now()) {
+  const clean = allowedOrigin(origin)
+  if (!clean || clean === here) return null
+  const marker = { origin: clean, name: cleanName(name, hostOf(clean)), at: now }
+  try {
+    session?.setItem(RECIPROCAL_KEY, JSON.stringify(marker))
+    return marker
+  } catch {
+    return null
+  }
+}
+
+/**
+ * On B's switcher start: consume the marker (always cleared) and add A as a
+ * plain row if it is valid, fresh, not this install, and not already in the
+ * list (an existing row keeps its key, name and state). Returns the added
+ * entry, or null.
+ */
+export function adoptReciprocal(session, local, here, now = Date.now()) {
+  let marker = null
+  try {
+    const raw = session?.getItem(RECIPROCAL_KEY)
+    session?.removeItem(RECIPROCAL_KEY)
+    marker = JSON.parse(raw || "null")
+  } catch {
+    return null
+  }
+  if (!marker || typeof marker !== "object") return null
+  const origin = allowedOrigin(marker.origin)
+  if (!origin || origin === here) return null
+  if (typeof marker.at !== "number" || now - marker.at > PENDING_TTL_MS || marker.at > now + 60000) return null
+  if (readList(local).some(e => e.origin === origin)) return null
+  return upsertEntry(local, {
+    origin,
+    name: marker.name,
+    key: null,
+    added_at: new Date(now).toISOString()
+  })
+}
+
 /** A local return path (`/x?y`), or "/". Never another host. */
 export function safeReturnPath(value) {
   if (typeof value !== "string" || !value.startsWith("/") || value.startsWith("//")) return "/"

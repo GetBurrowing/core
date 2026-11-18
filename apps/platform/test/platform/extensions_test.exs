@@ -1219,12 +1219,22 @@ defmodule Platform.ExtensionsTest do
 
       # Task 01a17f00 stage 2 adds authenticated completion tools. Pin these
       # explicitly while preserving the frozen byte oracle for existing tools.
+      # `meeting_summary_complete` (the delegated-summary return path) is
+      # additive in the same way.
       {completion, defs} =
-        Enum.split_with(defs, &(&1.name in ["meeting_scribe_complete", "meeting_triage_file"]))
+        Enum.split_with(
+          defs,
+          &(&1.name in [
+              "meeting_scribe_complete",
+              "meeting_triage_file",
+              "meeting_summary_complete"
+            ])
+        )
 
       assert Enum.map(completion, &{&1.name, &1.bundle}) == [
                {"meeting_scribe_complete", "meetings"},
-               {"meeting_triage_file", "meetings"}
+               {"meeting_triage_file", "meetings"},
+               {"meeting_summary_complete", "meetings"}
              ]
 
       {extra, legacy} =
