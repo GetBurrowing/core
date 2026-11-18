@@ -246,6 +246,8 @@ defmodule Platform.Role do
     Platform.Orchestration.TaskRouterSupervisor,
     Platform.Chat.AttentionRouter,
     Platform.Federation.DeadLetterReplay,
+    # Holds and redelivers chat to runtimes on timers: it acts.
+    Platform.Federation.DeliveryQueue,
     Platform.Federation.Peers.Supervisor,
     Platform.Federation.Peers.Boot,
     Platform.Chat.ContextPlane,
@@ -660,6 +662,13 @@ defmodule Platform.Role do
       handling: :tolerates,
       note:
         "a cast to an unregistered name is a no-op; runtimes reconnect to prod, whose channel schedules it"
+    },
+    %{
+      target:
+        "Platform.Federation.DeliveryQueue (hold/3, sent/4, ack/2, runtime_joined/1, held_in_space/1)",
+      handling: :tolerates,
+      note:
+        "whereis guard; each returns its default (:disabled, :ok, :unknown, %{}), so a web node fails a held message the old way; runtimes connect to prod, whose channel and dispatcher reach the queue"
     },
     %{
       target: "Platform.Mail.Outbox.nudge/0",

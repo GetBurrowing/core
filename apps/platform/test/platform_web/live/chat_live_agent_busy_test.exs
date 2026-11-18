@@ -2,7 +2,7 @@ defmodule PlatformWeb.ChatLiveAgentBusyTest do
   @moduledoc """
   The busy and waiting states in the chat dock.
 
-  Jordan's report: a mention to an agent that was busy with a long job read
+  The reported bug: a mention to an agent that was busy with a long job read
   "<Agent> couldn't reply to this message. Something went wrong…" with a
   Restart button. Now, while a message waits on an agent, the typing
   indicator's slot says which of two things is true:

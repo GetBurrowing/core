@@ -282,7 +282,7 @@ defmodule Platform.Chat.ReplyFailureWatchdogTest do
     end
   end
 
-  # Jordan's report: a Claude Code agent in a multi-minute tool call shows no
+  # The reported bug: a Claude Code agent in a multi-minute tool call shows no
   # turn activity, so after one window the watch posted "Something went
   # wrong" with a Restart button, and a Restart killed the work. Busy is not
   # a failure: with the runtime's heartbeat present, the space is told

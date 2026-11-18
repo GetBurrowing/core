@@ -125,7 +125,7 @@ defmodule PlatformWeb.Components.ReplyFailureRowTest do
     assert LazyHTML.attribute(action, "href") == ["/control/#{burrow.slug}"]
   end
 
-  # Jordan's report: people pressed Restart on an agent that was only busy,
+  # The reported bug: people pressed Restart on an agent that was only busy,
   # and the restart killed its work in progress. Restart is offered only
   # while the runtime is down; a connected runtime gets "Open <Name>".
   # Mutant: drop the heartbeat check → the alive half fails; offer Open

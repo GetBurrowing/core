@@ -143,6 +143,7 @@ defmodule Platform.RoleTest do
                Platform.Federation.NodeContext,
                Platform.Federation.RuntimePresence,
                Platform.Federation.DeadLetterReplay,
+               Platform.Federation.DeliveryQueue,
                Platform.Federation.Peers.NonceCache,
                Platform.Federation.Peers.Registry,
                Platform.Federation.RuntimeHostRegistry,
