@@ -53,6 +53,10 @@ defmodule Platform.Meetings.Meeting do
     # column existed and for agent/tool creates; those fall back to host or
     # admin.
     belongs_to(:created_by_user, Platform.Accounts.User)
+    # Who soft-deleted the meeting (task 01a1b281 stage 2), stamped with
+    # `deleted_at` by `Platform.Meetings.delete_meeting_for_user/2` only.
+    # Nilified, not cascaded, when the user goes.
+    belongs_to(:deleted_by_user, Platform.Accounts.User)
 
     field(:slug, :string)
     field(:name, :string)
@@ -100,6 +104,22 @@ defmodule Platform.Meetings.Meeting do
     # Deliberately NOT in `@cast_fields`: only the reschedule path bumps
     # it, so a stray attrs map can never move it backwards.
     field(:ical_sequence, :integer, default: 0)
+    # The meeting's notes (task 01a1b281 stage 2). Cast only by
+    # `edit_changeset/2`. Notes are not on anyone's calendar copy, so a
+    # notes-only edit neither bumps `ical_sequence` nor sends mail.
+    field(:description, :string)
+    # Soft delete (task 01a1b281 stage 2). Set ONLY by
+    # `Platform.Meetings.delete_meeting_for_user/2`'s guarded UPDATE and in
+    # no cast list, so no attrs map can delete or undelete a meeting. Every
+    # viewer-facing listing filters `is_nil(deleted_at)`; `get_meeting/1`
+    # and the background sweepers deliberately do not.
+    field(:deleted_at, :utc_datetime_usec)
+    # Whether this record still offers a call (task 01a1b8a5 stage 1). An
+    # event can keep its people, guests and notes with the call turned off:
+    # the row, id, slug, chat space and invite links stay, only the call is
+    # withdrawn. Default true, which is every meeting that existed before the
+    # column. Cast only by `edit_changeset/2` and `put_event_fields/2`.
+    field(:call_enabled, :boolean, default: true)
 
     timestamps(type: :utc_datetime_usec)
   end
@@ -174,6 +194,52 @@ defmodule Platform.Meetings.Meeting do
         end
     end
   end
+
+  @edit_fields ~w(name description scheduled_start_at scheduled_end_at call_enabled)a
+
+  @doc """
+  Changeset for editing a meeting in place (task 01a1b281 stage 2): the
+  name, the notes, the intended-time pair and (task 01a1b8a5 stage 1)
+  whether the call is offered, nothing else.
+
+  `slug` is NEVER cast, so `/meetings/<slug>` and every `/g/<short_code>`
+  guest link stay the same across an edit. `status`, `ical_sequence` and
+  `deleted_at` are not cast either: the caller,
+  `Platform.Meetings.update_meeting_for_user/3`, owns those.
+  """
+  @spec edit_changeset(%__MODULE__{}, map()) :: Ecto.Changeset.t()
+  def edit_changeset(%__MODULE__{} = meeting, attrs) do
+    meeting
+    |> cast(attrs, @edit_fields, empty_values: [])
+    |> update_change(:name, &trim/1)
+    |> update_change(:description, &blank_to_nil/1)
+    |> validate_required([:name, :call_enabled])
+    |> validate_length(:name, max: 255)
+    |> validate_scheduled_window()
+  end
+
+  @doc """
+  The event fields a create may carry beyond `changeset/2`'s whitelist
+  (task 01a1b8a5 stage 1): the notes and whether the call is offered. Kept
+  apart from `@cast_fields` so `changeset/2`, which `reschedule_meeting/3`
+  also uses, still cannot touch either.
+  """
+  @spec put_event_fields(Ecto.Changeset.t(), map()) :: Ecto.Changeset.t()
+  def put_event_fields(%Ecto.Changeset{} = changeset, attrs) do
+    changeset
+    |> cast(attrs, [:description, :call_enabled])
+    |> update_change(:description, &blank_to_nil/1)
+    |> validate_required([:call_enabled])
+  end
+
+  defp trim(value) when is_binary(value), do: String.trim(value)
+  defp trim(value), do: value
+
+  defp blank_to_nil(value) when is_binary(value) do
+    if String.trim(value) == "", do: nil, else: value
+  end
+
+  defp blank_to_nil(value), do: value
 
   @doc """
   Changeset for transitioning a meeting's status.

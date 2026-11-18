@@ -20,7 +20,9 @@ defmodule PlatformWeb.SocialZeroDataComposerAcceptanceTest do
 
   import Ecto.Query
   import Phoenix.LiveViewTest
-  import Platform.SocialComposerFixtures, only: [use_llm_stub!: 0, llm_stub: 0, stub_llm!: 0]
+
+  import Platform.SocialComposerFixtures,
+    only: [use_llm_stub!: 0, llm_stub: 0, stub_llm!: 0, agent_key!: 1]
 
   alias Platform.Repo
   alias Platform.Social.{Account, Idea, Post, PostEvent, Profile, Secrets}
@@ -83,9 +85,10 @@ defmodule PlatformWeb.SocialZeroDataComposerAcceptanceTest do
         name: "Drafter #{n}",
         status: "active",
         model: "agent-model",
-        vault_key: "sk-ant-api03-test-not-real",
+        vault_key: "zero-composer-key-#{n}",
         metadata: %{"org_id" => org_id}
       })
+      |> agent_key!()
 
     {:ok, _} = Platform.Roles.set_override("social.composer", agent.id)
     restore_llm = use_llm_stub!()

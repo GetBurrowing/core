@@ -198,6 +198,21 @@ defmodule PlatformWeb.InboxLiveBriefingTest do
              )
     end
 
+    test "the briefing detail pane clears the phone tab bar (task 01a1ecb3 stage 3)",
+         %{conn: conn, user: user} do
+      # Below lg the detail pane is the scroller a briefing ends in; without
+      # the clearance the settings note's links sat under the glass rail.
+      briefing!(user, [insight!(addressee: user)])
+      lv = open!(conn, user)
+
+      assert has_element?(lv, ~s([data-role="inbox-detail-pane"].clears-tab-bar))
+
+      assert has_element?(
+               lv,
+               ~s([data-role="inbox-detail-pane"] [data-role=briefing-settings-link])
+             )
+    end
+
     test "a second user's GET of the date shows nothing of the first user's",
          %{conn: conn, user: user} do
       q = question!(user)
@@ -595,8 +610,8 @@ defmodule PlatformWeb.InboxLiveBriefingTest do
          %{conn: conn} do
       admin = person!("admin")
       mail_on!()
-      account!(acme_org_id())
       agent = dreaming_agent!()
+      account!(acme_org_id(), agent)
 
       outside =
         insight!(
@@ -713,7 +728,9 @@ defmodule PlatformWeb.InboxLiveBriefingTest do
     end)
   end
 
-  defp account!(org_id) do
+  # An account the dreaming `agent` is granted (task 01a1ea5b stage 3: an
+  # agent drafts only from a granted mailbox), or an ungranted one.
+  defp account!(org_id, agent \\ nil) do
     admin = person!("admin")
     name = "inboxbrief#{n()}"
 
@@ -726,6 +743,12 @@ defmodule PlatformWeb.InboxLiveBriefingTest do
         "username" => "#{name}-relay"
       })
 
-    account
+    if agent do
+      {:ok, account} = Platform.Mail.Ownership.set_owner(admin, account, %{kind: "shared"})
+      {:ok, _} = Platform.Mail.Ownership.grant(admin, account, {:agent, agent.id})
+      account
+    else
+      account
+    end
   end
 end

@@ -243,6 +243,8 @@ config :platform, :start_canvas_search_backfill, false
 config :platform, :start_burrow_docs_seed, false
 # Task 01a10322 stage 6: tests call Platform.Chat.DefaultSpace.ensure/0 directly.
 config :platform, :start_default_space_seed, false
+# Task 01a1e65e stage 2: tests call EmailLoginCodeBoot.run_at_boot/1 directly.
+config :platform, :start_pocket_id_email_login_code, false
 
 # ContainerPurger (task 019f4eaa stage 4): tests call `sweep/0` directly
 # inside the DataCase sandbox instead of racing a global daily ticker.
@@ -268,6 +270,10 @@ config :platform, :start_insight_purger, false
 # HabitsPruner (task 01a1b6a1 stage 2): tests call
 # `Platform.Habits.prune_signals/1` directly inside the DataCase sandbox.
 config :platform, :start_habits_pruner, false
+
+# Calendar DraftPruner (task 01a1b8a5 stage 5): tests call
+# `Platform.Calendar.Draft.prune_expired/1` directly inside the sandbox.
+config :platform, :start_calendar_draft_pruner, false
 
 # InsightDisseminator (task 01a13867 stage 3): tests call `run/1` directly
 # inside the DataCase sandbox instead of racing a global daily ticker.
@@ -470,6 +476,12 @@ config :platform, :start_summarizer_sweeper, false
 # directly — the timing assertions need an injectable `now`, not a real
 # 30-second wait — or start their own named instance.
 config :platform, :start_candidate_sweeper, false
+
+# Feedback IntakeSweeper (task 01a1e670 stage 2). Off in test: an ambient
+# instance would claim other suites' pending intake records from outside
+# their DataCase sandbox. Tests call `Intake.retry_pending/1` directly or
+# start their own named instance.
+config :platform, :start_feedback_intake_sweeper, false
 
 # StallRegistry (task 019f2566 stage 6): tests start their own per-case
 # instance so registry state is isolated per test — otherwise a callback

@@ -54,10 +54,12 @@ defmodule PlatformWeb.AppApiController do
            app_install_id: params["app_install_id"],
            device_name: params["device_name"]
          }) do
-      {:ok, %{token: token, handoff_code: handoff_code}} ->
+      # Task 01a1e58b stage 3: the landing the exchange code was minted with
+      # (`/settings?passkey=add` after an email-code sign-in; nil otherwise).
+      {:ok, %{token: token, handoff_code: handoff_code, landing: landing}} ->
         json(conn, %{
           token: token,
-          handoff_url: handoff_url(conn, handoff_code, nil)
+          handoff_url: handoff_url(conn, handoff_code, landing)
         })
 
       {:error, :invalid_code} ->
@@ -155,6 +157,10 @@ defmodule PlatformWeb.AppApiController do
       |> ExternalScope.scope_spaces(Access.Scope.for_user(user))
       |> Repo.all()
 
+    # A space owned by another surface is not a chat conversation, so the
+    # app's space list leaves it out (`Chat.rail_visible?/1`, task 01a1eab6
+    # stage 3).
+    rows = Enum.filter(rows, &Chat.rail_visible?(elem(&1, 0)))
     spaces = Enum.map(rows, &elem(&1, 0))
     agents_by_space = agents_by_space(Enum.map(spaces, & &1.id))
     participants_by_space = participants_for_naming(spaces)

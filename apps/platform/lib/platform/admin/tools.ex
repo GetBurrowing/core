@@ -44,6 +44,7 @@ defmodule Platform.Admin.Tools do
   alias Platform.AgentHost.Redact
   alias Platform.Agents.{Agent, NativeAgents}
   alias Platform.Federation
+  alias Platform.Meetings.IntentModel
   alias Platform.Repo
 
   @secret_key ~r/token|secret|key|password/i
@@ -188,7 +189,9 @@ defmodule Platform.Admin.Tools do
          full_root: AgentHost.full_root?(),
          profile: host && host[:profile],
          description: AgentHost.describe()
-       }
+       },
+       meeting_intent: meeting_intent_health(),
+       feedback_intake: Platform.Feedback.ClassifierRoute.health()
      }}
   end
 
@@ -292,6 +295,29 @@ defmodule Platform.Admin.Tools do
   defp dispatch("admin_rollback", args, _agent, _ctx), do: host_admin("rollback", args)
 
   defp dispatch(tool, _args, _agent, _ctx), do: {:error, :failed, "unknown admin tool #{tool}"}
+
+  # Whether the meeting intent classifier can reach a model (task 01a1e5da).
+  # Status, a reason and the route NAME only: never base_url, model,
+  # credentials or api_key_env, so the admin's agent can read it to the
+  # owner without leaking anything.
+  defp meeting_intent_health do
+    case Platform.Roles.assignee_for("meetings.intent_classify") do
+      nil ->
+        %{status: "off", reason: "no assignee", route: nil}
+
+      agent ->
+        case IntentModel.route(agent) do
+          {:assignee, _} ->
+            %{status: "ok", reason: nil, route: "assignee"}
+
+          {:hosted, %{provider: provider}} ->
+            %{status: "ok", reason: nil, route: to_string(provider)}
+
+          {:error, :not_configured} ->
+            %{status: "off", reason: "no model configured", route: nil}
+        end
+    end
+  end
 
   defp host_admin(op, args) do
     if AgentHost.full_root?() do

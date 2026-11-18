@@ -237,8 +237,19 @@ defmodule PlatformWeb.ChatLiveFirstFrameBackfillTest do
   # after the fix, measured 3/3 runs on 2026-10-27: 11 in the message window
   # and 112 on the whole synchronous join. The headroom is under N, so going
   # back to one COUNT per message (+12 queries) trips both.
-  @message_window_query_budget 12
-  @join_query_budget 116
+  # 117 at the merge of main into task 01a1b8a5: that task's stage 4 adds one
+  # `Meetings.call_disabled_for_space?/1` exists-query to the join (the
+  # `:space_call_off?` assign), on top of main's own growth since 2026-10-27.
+  # Measured 117 on the merged tree.
+  # 12 -> 13 with task 01a1ea5b stage 2: opening a space asks the Access
+  # restriction-provider hook (mail-bound spaces) once. Still under N, so a
+  # return to one COUNT per message (+12) trips it.
+  @message_window_query_budget 13
+  # 117 -> 130 with task 01a1ea5b stage 2, measured 130 on that branch: every
+  # restriction read on the join (the channel lists, the open gate, the
+  # canvas filters) now also asks the restriction provider, one query each.
+  # A return to one COUNT per message (+12) still trips it.
+  @join_query_budget 130
 
   test "(f) the synchronous join stays inside its query budget", %{conn: conn, space: space} do
     Application.put_env(:platform, :chat_async_fault, [{:hold, :history_backfill, self()}])

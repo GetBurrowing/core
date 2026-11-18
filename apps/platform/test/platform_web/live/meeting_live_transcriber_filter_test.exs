@@ -17,6 +17,12 @@ defmodule PlatformWeb.MeetingLiveTranscriberFilterTest do
   """
   use PlatformWeb.ConnCase, async: false
 
+  # The meetings LISTING survives only on the `meet.` host's member surface
+  # (task 01a1b8a5 stage 4, the `meet-member-meetings-index` ParallelUI
+  # shim); the app-host `/meetings` redirects to Calendar. These tests
+  # exercise that surviving listing, so they reach it the way a member does.
+  defp meet_member_host(conn), do: %{conn | host: "meet.example.com"}
+
   import Phoenix.Component, only: [sigil_H: 2]
   import Phoenix.LiveViewTest
 
@@ -451,7 +457,7 @@ defmodule PlatformWeb.MeetingLiveTranscriberFilterTest do
     test "a mount with no meeting renders without the assign and without the pill", %{
       conn: conn
     } do
-      {:ok, view, html} = live(conn, ~p"/meetings")
+      {:ok, view, html} = live(meet_member_host(conn), ~p"/meetings")
 
       assert :sys.get_state(view.pid).socket.assigns.meeting == nil
       refute html =~ "meeting-transcribing-pill"

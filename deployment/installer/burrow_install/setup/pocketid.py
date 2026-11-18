@@ -18,6 +18,13 @@ same image digest on 2026-10-05):
   PUT fail and reset every other setting to its default, so it is NOT used.
   The logo has no setting: ``PUT /api/application-images/logo?light=true|false``
   (multipart, field ``file``; the type comes from the file name's extension).
+- Email login code, verified at v2.18.0 (core task 01a1e65e):
+  ``ensure_email_login_code`` turns on
+  ``emailOneTimeAccessAsUnauthenticatedEnabled`` (default ``"false"``,
+  backend/internal/appconfig/model.go:145) with the same read-merge-write as
+  ``ensure_branding``: one key changed, every other setting written back as
+  read. Core repeats this once per existing install at boot
+  (``Platform.SignInAdmin.EmailLoginCodeBoot``).
 - ``STATIC_API_KEY`` (backend/internal/common/env_config.go:64, min 16 chars)
   creates the synthetic admin "Static API User" (id 0000...0000,
   apikey/service.go:221); requests authenticate with the ``X-API-Key`` header
@@ -64,12 +71,16 @@ CLIENT_NAME = "Burrow"
 # The one-time sign-in code's lifetime. It MUST stay above 15 minutes.
 # pocket-id v2.18.0 backend/internal/onetimeaccess/service.go:271-274 mints a
 # 6-character code when ttl <= 15m and a 12-character code otherwise. Its
-# frontend (routes/login/alternative/code/+page.svelte:24-29) expects 12
-# characters whenever emailOneTimeAccessAsUnauthenticatedEnabled is false,
-# which is the default and what this installer leaves it at. A 6-character
-# code therefore never auto-submits from /lc/<code>, and Submit stays disabled:
-# the first admin cannot sign in. "15m" sits exactly on that boundary and was
-# the bug that task 01a0d6ab's behavioural gate caught. Pinned by
+# frontend (routes/login/alternative/code/+page.svelte:21-29) computes
+# longCodeRequested = code.length > 6 || !emailOneTimeAccessAsUnauthenticatedEnabled.
+# This installer now turns that flag ON (ensure_email_login_code, core task
+# 01a1e65e), and a 12-character code arriving through /lc/<code> still selects
+# long mode and auto-submits (+page.svelte:24-26), so these links keep working.
+# The 30m pin is still required: an admin can turn the flag off again (core
+# turns it on once per install and never forces it back), and with the flag
+# off the page always expects 12 characters, so a 6-character code never
+# auto-submits and Submit stays disabled. "15m" sits exactly on that boundary
+# and was the bug that task 01a0d6ab's behavioural gate caught. Pinned by
 # tests/test_setup_pocketid.py LoginTtlTest.
 LOGIN_TTL = "30m"
 CALLBACK_PATH = "/auth/oidc/callback"  # core router.ex:332
@@ -305,14 +316,11 @@ def _settings(listed):
     }
 
 
-def ensure_branding(client, app_name=None, accent_color=None):
-    """Set pocket-id's app name and accent colour. Returns "skipped", "present" or "applied".
+def _writable_settings(client):
+    """Every setting from ``/all``, refusing a config that is unreadable or locked.
 
-    Idempotent: nothing is written when both already match. Every other setting is
-    read and written back exactly as it was, because the update replaces the config.
+    The map carries secrets (smtpPassword, ldapBindPassword): never print it.
     """
-    if app_name is None and accent_color is None:
-        return "skipped"
     _s, listed = client.call("GET", "/api/application-configuration/all")
     current = _settings(listed)
     if not current:
@@ -325,9 +333,46 @@ def ensure_branding(client, app_name=None, accent_color=None):
         raise SetupError(
             "pocketid_config_locked",
             "pocket-id is redacting its settings (UI_CONFIG_DISABLED is on)",
-            "remove UI_CONFIG_DISABLED from the pocket-id environment; branding is set "
+            "remove UI_CONFIG_DISABLED from the pocket-id environment; settings are made "
             "through the API and a locked config cannot be updated",
         )
+    return current
+
+
+EMAIL_LOGIN_CODE_KEY = "emailOneTimeAccessAsUnauthenticatedEnabled"
+
+
+def ensure_email_login_code(client):
+    """Turn on pocket-id's unauthenticated email login code. Returns "present" or "applied".
+
+    Idempotent: nothing is written when it is already "true". Otherwise the whole
+    config is written back with only this key changed, because the update replaces
+    the config (appconfig/model.go:200-226 resets a missing key to its default).
+    """
+    current = _writable_settings(client)
+    if current.get(EMAIL_LOGIN_CODE_KEY) == "true":
+        return "present"
+    desired = dict(current)
+    desired[EMAIL_LOGIN_CODE_KEY] = "true"
+    _s, saved = client.call("PUT", "/api/application-configuration", body=desired)
+    if _settings(saved).get(EMAIL_LOGIN_CODE_KEY) != "true":
+        raise SetupError(
+            "pocketid_email_login_code_not_saved",
+            f"pocket-id did not keep {EMAIL_LOGIN_CODE_KEY}",
+            "see pocket-id's logs: docker compose logs pocket-id",
+        )
+    return "applied"
+
+
+def ensure_branding(client, app_name=None, accent_color=None):
+    """Set pocket-id's app name and accent colour. Returns "skipped", "present" or "applied".
+
+    Idempotent: nothing is written when both already match. Every other setting is
+    read and written back exactly as it was, because the update replaces the config.
+    """
+    if app_name is None and accent_color is None:
+        return "skipped"
+    current = _writable_settings(client)
     desired = dict(current)
     if app_name is not None:
         desired["appName"] = app_name

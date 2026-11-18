@@ -87,9 +87,6 @@ defmodule Platform.Design.MeetingReskinContrastGuardTest do
   # Each translucent strength, read from the file that paints it. `{label,
   # file, regex}`: the regex's one capture is the integer percent.
   @strengths %{
-    captions:
-      {"lib/platform_web/live/meeting_live.html.heex",
-       ~r/bg-viewer\/(\d+) backdrop-blur-sm text-sm text-on-viewer/},
     chip:
       {"lib/platform_web/components/meeting/agent_tile.ex",
        ~r/agent-tile-chip [^"]*bg-viewer\/(\d+)/},
@@ -338,10 +335,19 @@ defmodule Platform.Design.MeetingReskinContrastGuardTest do
        W.contrast(c(b, ctx.danger_label), c(b, "--color-error")), @aa_text},
       {"primary-content / primary", ratio(b, "--color-primary-content", "--color-primary"),
        @aa_text},
-      {"on-viewer / viewer/#{s.captions} over #fff (captions)",
-       on(on_viewer, over(viewer, white, s.captions)), @aa_text},
-      {"interim caption on-viewer opacity-#{s.interim} / viewer/#{s.captions} over #fff",
-       interim_min(on_viewer, over(viewer, white, s.captions), s.interim), @aa_text},
+      # The docked captions strip (task 01a1eb27 stage 3): a base-200
+      # theme surface in the stage column, no longer a viewer scrim over
+      # video. "just you" is `text-subtle`, held by "subtle / base-200".
+      {"caption text base-content / base-200 (docked strip)",
+       ratio(b, "--color-base-content", "--color-base-200"), @aa_text},
+      {"interim caption base-content opacity-#{s.interim} / base-200",
+       interim_min(base, g(b, "--color-base-200"), s.interim), @aa_text},
+      {"caption agent name --ag-text / base-200 (10 slots)",
+       ids |> Enum.map(&ratio(b, "--ag-#{&1}-text", "--color-base-200")) |> Enum.min(), @aa_text},
+      # No "interim agent name at opacity-70" pair, by construction: that
+      # composite measured 2.69:1 (burrow light), so the hook dims the
+      # interim TEXT span only and keeps the name at full strength. The
+      # structural clause "interim opacity lands on the text span" pins it.
       {"on-viewer / viewer/#{s.stage_label} over #fff (stage label)",
        on(on_viewer, over(viewer, white, s.stage_label)), @aa_text},
       {"on-viewer / agent chip viewer/#{s.chip} on each tint#{if hc?(b), do: " (HC opaque)"}",
@@ -508,6 +514,34 @@ defmodule Platform.Design.MeetingReskinContrastGuardTest do
   end
 
   # ── structure ──────────────────────────────────────────────────────────
+
+  # The caption pairs above are about the DOCKED strip (task 01a1eb27 stage
+  # 3). Read the sources so they cannot quietly describe a surface that no
+  # longer exists: the shell is base-200 and in flow, the hook writes
+  # base-content, and the interim dim is on the text span, not the wrapper.
+  test "the captions strip paints what the caption pairs measure" do
+    heex = File.read!(Path.join(@root, "lib/platform_web/live/meeting_live.html.heex"))
+    js = File.read!(Path.join(@root, "assets/js/hooks/meeting_captions.js"))
+
+    [shell] =
+      Regex.run(
+        ~r/<div\s+:if=\{@captions_visible\}\s+data-role="meeting-captions-shell"[^>]*>/s,
+        heex
+      ) ||
+        flunk("no meeting-captions-shell in meeting_live.html.heex")
+
+    [_, class] = Regex.run(~r/class="([^"]*)"/, shell)
+    tokens = String.split(class)
+    assert "bg-base-200" in tokens
+    refute "fixed" in tokens
+    refute Enum.any?(tokens, &(&1 =~ ~r/viewer|primary|error/))
+
+    assert js =~ ~S|const CAPTION_TEXT = "text-base-content"|
+    assert js =~ ~S|const NAME_AGENT = `${NAME_BASE} text-[var(--ag-text)]`|
+    refute js =~ "text-on-viewer\""
+    assert js =~ ~S|<span class="min-w-0 truncate ${CAPTION_TEXT}${textDim}">|
+    refute js =~ ~r/caption-line[^`]*\$\{CAPTION_INTERIM\}/
+  end
 
   test "--ag-text is never painted on base-300 in the meeting rules", %{
     ask_rules: ask,

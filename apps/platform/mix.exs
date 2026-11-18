@@ -315,7 +315,12 @@ defmodule Platform.MixProject do
         "esbuild terminal",
         "cmd --cd assets node scripts/copy_excalidraw_assets.mjs"
       ],
+      # `compile` first: colocated hooks (`Phoenix.LiveView.ColocatedHook`) are
+      # extracted into the build path at compile time, and app.js imports them
+      # from `phoenix-colocated/platform`. The Dockerfile runs this alias
+      # before its own `mix compile`.
       "assets.deploy": [
+        "compile",
         "tailwind platform --minify",
         "esbuild platform --minify",
         "esbuild excalidraw --minify",

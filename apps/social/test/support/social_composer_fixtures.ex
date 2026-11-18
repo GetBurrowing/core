@@ -55,13 +55,29 @@ defmodule Platform.SocialComposerFixtures do
           endpoint_kind: "openai_compat",
           base_url: "http://stub.example.local/v1",
           model: "agent-model",
-          vault_key: "sk-ant-api03-test-not-real"
+          vault_key: "composer-key-#{unique()}"
         },
         attrs
       )
     )
     |> Repo.insert!()
+    |> agent_key!()
   end
+
+  @doc """
+  Stores the agent's provider secret in the Vault under its `vault_key`,
+  scoped to the agent, and returns the agent. `ToollessChat` sends the
+  secret the slug resolves to, never the slug itself (task 01a1e670), so
+  an agent row alone reaches the provider with no credentials.
+  """
+  def agent_key!(%Agent{vault_key: key} = agent) when is_binary(key) and key != "" do
+    {:ok, _} =
+      Platform.Vault.put(key, :api_key, "sk-ant-api03-test-not-real", scope: {:agent, agent.id})
+
+    agent
+  end
+
+  def agent_key!(agent), do: agent
 
   @doc "A composer agent set as the fallback drafter (the responsibility key)."
   def drafting_agent!(attrs \\ %{}) do

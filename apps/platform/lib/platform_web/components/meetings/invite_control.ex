@@ -165,6 +165,14 @@ defmodule PlatformWeb.Components.Meetings.InviteControl do
       # a lapsed row a new link. Live only: a draft row has no link yet.
       expiry: "meeting_invite_expiry",
       renew: "meeting_invite_renew"
+    },
+    # The Edit meeting form (task 01a1b281 stage 3): additions are STAGED
+    # like the create sheet's and written only on Save, through
+    # `Meetings.update_meeting_for_user/3`, so they get their own events.
+    edit: %{
+      search: "meeting_edit_invite_search",
+      stage: "meeting_edit_invite_stage",
+      commit: "meeting_edit_invite_commit"
     }
   }
 
@@ -269,7 +277,7 @@ defmodule PlatformWeb.Components.Meetings.InviteControl do
 
   # ── invite_control/1 ───────────────────────────────────────────────────
 
-  attr(:mode, :atom, required: true, values: [:draft, :live])
+  attr(:mode, :atom, required: true, values: [:draft, :live, :edit])
   attr(:query, :string, default: "")
   attr(:candidates, :list, required: true)
   attr(:email_option, :string, default: nil)
@@ -281,6 +289,9 @@ defmodule PlatformWeb.Components.Meetings.InviteControl do
     default: nil,
     doc: "the search input's form name; the create sheet names it so submit sees the query"
   )
+
+  attr(:placeholder, :string, default: "Name or email")
+  attr(:aria_label, :string, default: "Invite someone")
 
   @doc """
   The search box plus its dropdown.
@@ -321,8 +332,8 @@ defmodule PlatformWeb.Components.Meetings.InviteControl do
           id={"#{@id}-search"}
           data-role="meeting-invite-search"
           class="w-full min-w-0 border-0 bg-transparent p-0 text-sm focus:outline-none focus:ring-0"
-          placeholder="Name or email"
-          aria-label="Invite someone"
+          placeholder={@placeholder}
+          aria-label={@aria_label}
           autocomplete="off"
           name={@name}
           phx-hook="InviteSearchEnter"

@@ -171,6 +171,31 @@ defmodule Platform.Chat.AttentionRouterEmailInboundTest do
       drain()
     end
 
+    test "an agent GRANTED the mailbox is still not routed its inbound post (task 01a1ea5b stage 3)" do
+      alias Platform.Test.MailPrivacyFixtures, as: MP
+
+      org_id = Tenancy.get_org_by_slug!("initech").id
+      admin = MP.user!("router-admin") |> MP.member!(org_id, "admin")
+      owner = MP.user!("router-owner") |> MP.member!(org_id)
+      space = space!()
+      {agent, armed} = armed_agent!(space)
+
+      account =
+        admin
+        |> MP.account!(org_id)
+        |> MP.bind_inbound_space!(space)
+        |> then(&MP.personal!(admin, &1, owner))
+
+      {:ok, _} = Platform.Mail.Ownership.grant(owner, account, {:agent, agent.id})
+      assert Platform.Mail.Ownership.agent_granted_account_ids(agent.id, org_id) == [account.id]
+
+      message = email_message!(space, "granted but still untrusted")
+      assert {:ok, decisions} = AttentionRouter.route(message)
+      assert agent_decisions(decisions, [armed.id]) == []
+      refute_receive {:agent_chat_called, "granted but still untrusted", _}, 200
+      drain()
+    end
+
     test "a DM's agent is not :directed an email_inbound message" do
       space = space!("dm")
       agent = agent!("Zip")

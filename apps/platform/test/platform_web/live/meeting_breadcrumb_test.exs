@@ -69,7 +69,11 @@ defmodule PlatformWeb.MeetingBreadcrumbTest do
   end
 
   describe "shell chrome (:show)" do
-    test "renders a breadcrumb whose root link up-targets /meetings", %{conn: conn} do
+    # Since task 01a1b8a5 stage 4 the root is the call's own Calendar event:
+    # the Meetings list is retired on the shell.
+    test "renders a breadcrumb whose root link up-targets the call's Calendar event", %{
+      conn: conn
+    } do
       meeting = create_meeting(%{name: "Kickoff Sync"})
 
       user =
@@ -96,19 +100,21 @@ defmodule PlatformWeb.MeetingBreadcrumbTest do
         |> Phoenix.ConnTest.init_test_session(current_user_id: user.id)
         |> live(~p"/meetings/#{meeting.slug}")
 
+      root = "/calendar?meeting=#{meeting.id}"
+
       # The shared breadcrumb nav is present with a root link up-targeting
-      # the Meetings module root.
+      # the call's event in Calendar.
       assert has_element?(
                view,
-               ~s(nav[data-role="breadcrumb"] a[data-role="breadcrumb-link"][href="/meetings"])
+               ~s(nav[data-role="breadcrumb"] a[data-role="breadcrumb-link"][href="#{root}"])
              )
 
-      # The clickable root ancestor is labelled "Meetings".
+      # The clickable root ancestor is labelled "Calendar".
       assert view
              |> element(
-               ~s(nav[data-role="breadcrumb"] a[data-role="breadcrumb-link"][href="/meetings"])
+               ~s(nav[data-role="breadcrumb"] a[data-role="breadcrumb-link"][href="#{root}"])
              )
-             |> render() =~ "Meetings"
+             |> render() =~ "Calendar"
 
       # The inert current segment names the meeting.
       assert has_element?(view, ~s(nav[data-role="breadcrumb"] [data-role="breadcrumb-current"]))

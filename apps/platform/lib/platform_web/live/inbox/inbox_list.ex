@@ -49,6 +49,7 @@ defmodule PlatformWeb.Inbox.InboxList do
   | `lifecycle_step_failed`  | Step failed    |
   | `briefing`               | Briefing       |
   | `meeting_briefing`       | Meeting        |
+  | `mailbox_reassigned`     | Mailbox        |
   | an extension's kind      | its declared `label` (`Platform.Extension` `inbox_kinds/0`) |
   | anything else            | the humanized key |
 

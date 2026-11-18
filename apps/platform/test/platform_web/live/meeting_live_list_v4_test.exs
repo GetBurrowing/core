@@ -5,6 +5,12 @@ defmodule PlatformWeb.MeetingLiveListV4Test do
   detail, the past-meeting record tabs and the `+ New meeting` modal.
   """
   use PlatformWeb.ConnCase, async: false
+
+  # The meetings LISTING survives only on the `meet.` host's member surface
+  # (task 01a1b8a5 stage 4, the `meet-member-meetings-index` ParallelUI
+  # shim); the app-host `/meetings` redirects to Calendar. These tests
+  # exercise that surviving listing, so they reach it the way a member does.
+  defp meet_member_host(conn), do: %{conn | host: "meet.example.com"}
   import Phoenix.LiveViewTest
   alias Platform.Repo
 
@@ -101,7 +107,7 @@ defmodule PlatformWeb.MeetingLiveListV4Test do
       segments: [%{"speaker_name" => "Ada", "text" => "Let's review progress."}]
     })
 
-    {:ok, view, _} = live(conn, "/meetings")
+    {:ok, view, _} = live(meet_member_host(conn), "/meetings")
 
     for label <- ["Live now", "Upcoming", "Past"],
         do: assert(has_element?(view, ".mt-section-label", label))
@@ -137,7 +143,7 @@ defmodule PlatformWeb.MeetingLiveListV4Test do
     project: project
   } do
     {lapsed, _} = meeting!(project, "Missed sync", "scheduled", at(-3, 9), 30)
-    {:ok, view, _} = live(conn, "/meetings")
+    {:ok, view, _} = live(meet_member_host(conn), "/meetings")
     assert has_element?(view, "[data-section=ended] [data-meeting-id='#{lapsed.id}']")
     refute has_element?(view, "[data-section=upcoming] [data-meeting-id='#{lapsed.id}']")
   end
@@ -155,7 +161,7 @@ defmodule PlatformWeb.MeetingLiveListV4Test do
       segments: [%{"speaker_name" => "Ada", "text" => "Let's review progress."}]
     })
 
-    {:ok, view, _} = live(conn, "/meetings")
+    {:ok, view, _} = live(meet_member_host(conn), "/meetings")
     view |> element("[data-meeting-id='#{live.id}']") |> render_click()
     assert_patch(view, "/meetings?meeting=#{live.id}")
     assert has_element?(view, "[data-meeting-id='#{live.id}'][aria-current=true]")
@@ -171,7 +177,7 @@ defmodule PlatformWeb.MeetingLiveListV4Test do
     # The phone's pushed detail has its back button.
     assert has_element?(view, "[data-role=meetings-back]", "‹ Meetings")
 
-    {:ok, view, _} = live(conn, "/meetings?meeting=#{upcoming.id}")
+    {:ok, view, _} = live(meet_member_host(conn), "/meetings?meeting=#{upcoming.id}")
     assert has_element?(view, detail <> " .mt-kind", "Upcoming · #")
 
     assert has_element?(
@@ -180,7 +186,7 @@ defmodule PlatformWeb.MeetingLiveListV4Test do
              "Open meeting room"
            )
 
-    {:ok, view, _} = live(conn, "/meetings?meeting=#{past.id}")
+    {:ok, view, _} = live(meet_member_host(conn), "/meetings?meeting=#{past.id}")
     assert has_element?(view, detail <> " .mt-kind", "Past · #")
     refute has_element?(view, detail <> " a", "Join now")
     assert has_element?(view, detail <> " [role=tabpanel]", "We agreed the next milestone.")
@@ -202,7 +208,7 @@ defmodule PlatformWeb.MeetingLiveListV4Test do
 
   test "a past meeting with no records says so on every tab", %{conn: conn, project: project} do
     {past, _} = meeting!(project, "Quiet retro", "ended", at(-1, 15), 30)
-    {:ok, view, _} = live(conn, "/meetings?meeting=#{past.id}")
+    {:ok, view, _} = live(meet_member_host(conn), "/meetings?meeting=#{past.id}")
     panel = "[data-role=meetings-detail] [role=tabpanel]"
     assert has_element?(view, panel, "No summary was saved for this meeting.")
     render_click(view, "meetings_list_tab", %{"tab" => "transcript"})
@@ -210,14 +216,14 @@ defmodule PlatformWeb.MeetingLiveListV4Test do
   end
 
   test "+ New meeting opens the v4 modal and starts a room", %{conn: conn, project: project} do
-    {:ok, view, _} = live(conn, "/meetings")
+    {:ok, view, _} = live(meet_member_host(conn), "/meetings")
     view |> element("[data-role=list-new-meeting]") |> render_click()
     assert has_element?(view, "#meetings-new-room-title", "New meeting")
     assert has_element?(view, "input[name=title][placeholder='Team catch-up']")
     assert has_element?(view, "select[name=project_id] option[value='#{project.id}']")
 
     assert view |> element("[data-role=meetings-new-room] [data-role=new-room-hint]") |> render() =~
-             "Start a room now, or schedule one from Calendar → New → Meeting."
+             "Start a room now, or schedule a call from Calendar with + New event."
 
     refute render(view) =~ "Use Calendar to schedule a future meeting."
 

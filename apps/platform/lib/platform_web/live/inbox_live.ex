@@ -965,9 +965,6 @@ defmodule PlatformWeb.InboxLive do
     |> stream(:review_items, Enum.map(review, &decorate/1), dom_id: &row_dom_id/1, reset: true)
     |> stream(:mention_items, Enum.map(mentions, &decorate/1), dom_id: &row_dom_id/1, reset: true)
     |> stream(:meeting_items, Enum.map(meetings, &decorate/1), dom_id: &row_dom_id/1, reset: true)
-    # The phone list (redesign rung 14): one flat stream in `load_items/1`
-    # order, newest first. The three section streams above still feed desktop.
-    |> stream(:inbox_rows, Enum.map(items, &decorate/1), dom_id: &phone_row_dom_id/1, reset: true)
     |> assign(:mention_authors, Inbox.mention_authors(items))
     |> assign(:source_titles, Inbox.source_titles(items))
     |> assign(:review_count, length(review))
@@ -979,9 +976,33 @@ defmodule PlatformWeb.InboxLive do
       resolve_mention_labels(mentions, socket.assigns.current_user_id)
     )
     |> assign_briefings(briefings)
+    |> stream_phone_rows(items)
     |> assign_meeting_briefings(meeting_briefings)
     |> assign_ux_decisions(ux_decisions)
     |> prune_selection()
+  end
+
+  # The phone list (redesign rung 14): one flat stream in `load_items/1`
+  # order, newest first. The three section streams above still feed desktop.
+  #
+  # A briefing row's stored `body` is the receipt line counted when the
+  # briefing was delivered, so it can carry items the viewer may no longer
+  # see (a revoked `goals.use`, task 01a1e229 stage 2). The phone row shows
+  # the receipt line `assign_briefings/2` recomputed from `Briefings.view/2`
+  # instead, the same line the desktop row and the briefing page read.
+  defp stream_phone_rows(socket, items) do
+    summaries = Map.new(socket.assigns.briefing_rows, &{&1.id, &1.summary})
+
+    rows =
+      Enum.map(items, fn
+        %Item{kind: "briefing", id: id} = item when is_map_key(summaries, id) ->
+          decorate(%{item | body: Map.fetch!(summaries, id)})
+
+        item ->
+          decorate(item)
+      end)
+
+    stream(socket, :inbox_rows, rows, dom_id: &phone_row_dom_id/1, reset: true)
   end
 
   # ── Briefing rows + the detail pane ────────────────────────────────────

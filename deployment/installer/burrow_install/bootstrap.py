@@ -53,6 +53,14 @@ For an install provisioned by someone else (a droplet), where the Mac-oriented
    says ``"branding": "failed"`` with ``branding_error`` instead, so a cosmetic
    problem never strands the customer. With none of the three flags the
    document has ``"branding": "skipped"`` and nothing is sent.
+7. Email login code (core task 01a1e65e), before the appearance step: turn on
+   pocket-id's ``emailOneTimeAccessAsUnauthenticatedEnabled`` with
+   ``pocketid.ensure_email_login_code`` (a read-merge-write of the whole
+   config, one key changed). Like branding it runs after the link is written
+   and never fails the hand-over: the document says ``"email_login_code":
+   "present"|"applied"|"failed"``, with ``email_login_code_error`` set to the
+   SetupError code on failure. Core's own once-per-install boot step
+   converges a failed install later.
 
 The link is a credential until it is used or expires, and the API key is the
 pocket-id admin credential, so neither is EVER printed. stdout carries exactly
@@ -252,6 +260,18 @@ def apply_branding(client, args, logo):
     return {"branding": names}
 
 
+def apply_email_login_code(client):
+    """Turn on pocket-id's email login code. Returns the document fields.
+
+    A failure is reported, not raised: the hand-over link is already written,
+    and core's boot step turns the flag on later.
+    """
+    try:
+        return {"email_login_code": pocketid.ensure_email_login_code(client)}
+    except SetupError as exc:
+        return {"email_login_code": "failed", "email_login_code_error": exc.code}
+
+
 def _valid_host(value):
     labels = value.split(".")
     return len(labels) >= 2 and all(
@@ -342,6 +362,7 @@ def run(args):
     if oidc_secret is not None:
         oidc_action = ensure_oidc_client(client, args.primary, oidc_secret)
         extra["oidc_client"] = "created" if oidc_action == "created" else "exists"
+    extra |= apply_email_login_code(client)
     extra |= apply_branding(client, args, logo)
     return extra | {
         "ok": True,

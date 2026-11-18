@@ -103,6 +103,26 @@ defmodule Platform.ParallelUI do
           "short codes has passed its expires_at), make GuestShortLinkController admit " <>
           "the guest directly instead of redirecting, then delete the `/:slug/:token` " <>
           "guest route and its `parallel-ui` marker in router.ex."
+    },
+    %{
+      id: "meet-member-meetings-index",
+      kind: :route,
+      legacy:
+        "The meetings listing at `/meetings` on the `meet.` host " <>
+          "(`live(\"/meetings\", MeetingLive, :index)` in the `:meet_member` live_session), " <>
+          "rendered by `PlatformWeb.MeetingLive.ListComponents`. It is the only list an " <>
+          "external member has of the meetings they are invited to. It is read-only: " <>
+          "no Edit and no scheduled-meeting create (task 01a1b8a5 stage 4).",
+      replacement:
+        "Calendar (`/calendar`). The app-host `/meetings` index already redirects " <>
+          "there through `PlatformWeb.MeetingLive.CalendarRedirect`.",
+      introduced_by: "01a1b8a5-a4d8-7000-8c89-4d7da10c2701",
+      cutover:
+        "Give external members an invites-only Calendar view on the meet host, then make " <>
+          "MeetingLive's `:index` redirect on the meet host as it does on the shell, delete " <>
+          "`PlatformWeb.MeetingLive.ListComponents` and the index's list/archive rendering " <>
+          "in meeting_live.html.heex, and remove this entry's `parallel-ui` markers in " <>
+          "meeting_live.ex and router.ex."
     }
   ]
 

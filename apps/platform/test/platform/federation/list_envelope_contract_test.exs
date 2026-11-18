@@ -1262,6 +1262,25 @@ defmodule Platform.Federation.ListEnvelopeContractTest do
           %{smtp: "pw"}
         )
 
+      # Owned by `admin`, granted to `agent`, asked from a space where
+      # `admin` is the only human (task 01a1ea5b stage 3).
+      {:ok, account} =
+        Platform.Mail.Ownership.set_owner(admin, account, %{
+          kind: "personal",
+          owner_user_id: admin.id
+        })
+
+      {:ok, _} = Platform.Mail.Ownership.grant(admin, account, {:agent, agent.id})
+
+      {:ok, _} =
+        Chat.add_participant(space.id, %{
+          participant_type: "user",
+          participant_id: admin.id,
+          display_name: admin.name,
+          role: "member",
+          joined_at: DateTime.utc_now()
+        })
+
       for i <- 1..3 do
         raw =
           "From: a@corp.test\r\nTo: ops@initech.test\r\nSubject: s#{i}\r\n" <>
@@ -1271,7 +1290,7 @@ defmodule Platform.Federation.ListEnvelopeContractTest do
       end
 
       ctx = %{agent_id: agent.id}
-      args = %{"org_id" => org_id, "account_id" => account.id}
+      args = %{"org_id" => org_id, "account_id" => account.id, "space_id" => space.id}
 
       assert_truncated(
         "mail_inbound_list",

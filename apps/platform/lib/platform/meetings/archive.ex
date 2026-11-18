@@ -767,7 +767,8 @@ defmodule Platform.Meetings.Archive do
       as: :meeting,
       join: p in Project,
       on: p.id == m.project_id,
-      where: m.status in ^@archived_statuses
+      # A soft-deleted meeting is not looked back on (task 01a1b281 stage 2).
+      where: m.status in ^@archived_statuses and is_nil(m.deleted_at)
     )
     |> narrow_to_viewer(viewer)
     |> maybe_filter_project(Keyword.get(opts, :project_id))

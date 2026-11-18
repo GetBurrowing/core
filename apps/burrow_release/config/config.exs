@@ -1,12 +1,16 @@
 # The with-modules release host's config (ADR 0055, task 01a0ee08; Social
-# added by task 01a140a8): core's
+# added by task 01a140a8, Goals by task 01a1dfc0): core's
 # config, imported, plus the module selection and the two asset profiles
 # pointed at this host's generated inputs.
 import Config
 
 import_config "../../platform/config/config.exs"
 
-config :platform, :extensions, [Platform.GameStream.Extension, Platform.Social.Extension]
+config :platform, :extensions, [
+  Platform.GameStream.Extension,
+  Platform.Social.Extension,
+  Platform.Goals.Extension
+]
 
 # Written by `mix platform.extensions.assets --out assets/generated`; nothing
 # is generated inside apps/platform.

@@ -506,6 +506,7 @@ defmodule PlatformWeb.ChatLive do
       |> assign(:agents_block, agents_block)
       |> assign(:goal_panel, nil)
       |> assign(:goal_edit, false)
+      |> assign(:space_call_off?, false)
       |> assign(:goal_invite?, false)
       |> assign(:goal_scope_options, [])
       |> assign(:goal_scope_error, nil)
@@ -2632,8 +2633,12 @@ defmodule PlatformWeb.ChatLive do
   defp dm_conversations_for(_user_id, _scope, true), do: []
   defp dm_conversations_for(nil, _scope, _embedded?), do: []
 
+  # A space owned by another surface (`Chat.rail_visible?/1`, task 01a1eab6
+  # stage 3) never reaches `@dm_conversations`, so it is in no rail list,
+  # Direct section, search result or switcher fed from it. Opening it by URL
+  # still works: `handle_params/3` resolves the space with `Chat.get_space/1`.
   defp dm_conversations_for(user_id, scope, _embedded?),
-    do: ReadScope.conversations(user_id, scope)
+    do: user_id |> ReadScope.conversations(scope) |> Enum.filter(&Chat.rail_visible?/1)
 
   # Coerce a hide/show flag (boolean or "true"/"false" string from the
   # client) into a boolean. Anything other than a truthy marker is false.
@@ -4436,6 +4441,9 @@ defmodule PlatformWeb.ChatLive do
   defp active_org_summary(%{slug: slug, name: name}), do: %{slug: slug, name: name}
   defp active_org_summary(_), do: nil
 
+  defp space_call_off?(%{id: id}), do: Platform.Meetings.call_disabled_for_space?(id)
+  defp space_call_off?(_space), do: false
+
   # Assign the active space AND its resolved org scope atom together. Every
   # write to `:active_space` MUST go through here so `@active_space_scope`
   # (read by the header pill) can never drift from the space it labels — the
@@ -4460,6 +4468,10 @@ defmodule PlatformWeb.ChatLive do
       PrototypeUpload.allowed?(space, Map.get(socket.assigns, :user_id))
     )
     |> assign(:active_space_org, active_org_summary(org))
+    # The call toggle (task 01a1b8a5 stage 5): this space backs an event
+    # whose Burrow call is off, so the header says so instead of offering
+    # a Call the server refuses (`Meetings.authorize_join/2` is the gate).
+    |> assign(:space_call_off?, space_call_off?(space))
     # The agents goal panel (task 01a0b491 stage 4) rides the SAME funnel as
     # the scope atom and for the same reason: it is derived from the space,
     # and a second write path is how it would come to describe a space that

@@ -112,6 +112,12 @@ defmodule Platform.RepoLookupBoundaryTest do
 
   # {relative_path, call_kind, schema_alias, call_count, classification, reason}
   @inventory [
+    {"platform/gaming/new_game.ex", :get_by!, "Chat.Participant", 1, :safe_internal,
+     "Space ID comes from Chat.create_channel in the committed provisioning transaction; user ID comes from the authenticated Accounts.User struct"},
+    {"platform/gaming/studio.ex", :get_by, "Chat.Participant", 1, :safe_internal,
+     "Space ID comes from a reauthorized Chat.Space row and user ID from the authenticated Accounts.User struct"},
+    {"platform/gaming/studio.ex", :platform_uuid_guard, "-", 1, :must_cast,
+     "Development-space references originate in operator game metadata or project config and are UUID-validated before Chat.get_space"},
     {"platform/sign_in/email_setup.ex", :platform_uuid_guard, "-", 1, :must_cast,
      "complete/2 checks the browser challenge id before the locked query; malformed ids are refused"},
     {"platform/instruction_packs/check.ex", :get, "Check", 1, :safe_internal,
@@ -133,9 +139,6 @@ defmodule Platform.RepoLookupBoundaryTest do
     {"platform/instruction_packs.ex", :get_by, "Release", 1, :safe_internal,
      "get_release/2 queries pack_id, a string foreign key, and version, a positive bounded bigint checked before this lookup; neither lookup argument is cast to a UUID"},
     # Calendar consent task 01a16991: principal and persisted intent UUID sources.
-    # Calendar v4 details (task 01a18d9f stage 2): Approve/Revert on a hold.
-    {"platform_web/live/calendar_live.ex", :get, "Platform.Memory.Briefing", 1, :safe_internal,
-     "handle_consent/3 reads Consent.briefing_id, a non-null UUID foreign key written by AgentAccess.propose/6, from the Consent row it just loaded; no client value reaches it"},
     {"platform/calendar/agent_access.ex", :get, "AgentRuntime", 1, :safe_internal,
      "authority/3 reads Scope.actor.id from the authenticated AgentRuntime row; CalendarTools resolves the runtime string to that persisted UUIDv7 primary key before building Scope"},
     {"platform/calendar/agent_access.ex", :get, "Platform.Agents.Agent", 1, :safe_internal,
@@ -156,6 +159,24 @@ defmodule Platform.RepoLookupBoundaryTest do
      "revert_approved/2 uses Consent.event_id, the UUID foreign key assigned by approve/3 before it marks the intent approved, plus Consent.owner_id UUID FK"},
     {"platform/calendar/agent_access.ex", :platform_uuid_guard, "-", 3, :must_cast,
      "revoke/2 guards the agent id, authority/3 guards the Calendar owner id, and target/4 guards the event id before their typed queries; malformed boundary values fail closed"},
+    # Task 01a1e82a stage 1: the in-call top bar's roster.
+    {"platform_web/live/meeting_bar_presence.ex", :platform_uuid_guard, "-", 1, :must_cast,
+     "assign_roster/1 guards the shell's :meeting_space_id, which arrives from a Meetings.State join broadcast (and from tests and the dev evidence endpoint as an arbitrary string), before Meetings.active_participants_for_space/1; a malformed id answers an empty roster"},
+    # Task 01a1e82a stage 2: the in-call toasts and the host check.
+    {"platform_web/live/meeting_presence_events.ex", :platform_uuid_guard, "-", 4, :must_cast,
+     "track/1, left_payload/1 and end_for_everyone/1 (stage 3) guard the shell's :meeting_space_id (a Meetings.State join broadcast, or an arbitrary string from tests and the dev evidence endpoint) before Meetings.get_live_meeting_for_space/1 and active_participants_for_space/1, and host_participant/1 guards Meeting.host_participant_id before Chat.get_participant/1; a malformed id answers no meeting, an empty room or no host"},
+    # Task 01a1b8a5 stage 1: the Calendar authoring coordinator.
+    {"platform/calendar/authoring.ex", :get, "Event", 2, :safe_internal,
+     "do_save/3 re-reads Event.id after Calendar.update_event/3 or create_event/2 returned that row, a UUIDv7 primary key; the draft's own event id reaches the Repo only through Calendar's guarded owned_event/2"},
+    {"platform/calendar/authoring.ex", :platform_uuid_guard, "-", 1, :must_cast,
+     "linked_event/1 guards the draft's meeting id (an EventDraft field a LiveView or agent draft can carry) before its Repo.one; a malformed id answers nil and the save path then goes through Meetings.update_meeting_for_user/3, which answers :not_found"},
+    # Task 01a1b8a5 stage 3: the write-free agent draft.
+    {"platform/calendar/draft.ex", :get, "Platform.Agents.Agent", 1, :safe_internal,
+     "agent_name/1 reads Draft.agent_id, a non-null UUID foreign key copied from the live AgentGrant row when the draft was inserted"},
+    {"platform/calendar/draft.ex", :get_by, "__MODULE__", 4, :must_cast,
+     "create/4 looks up by owner_id only after AgentAccess.draft_authority/2 has passed Platform.UUID.valid?/1 on it, plus the grant's persisted agent_id and a string key; insert/5 repeats that lookup; fetch/3 pins a string token and the Scope actor's User.id; get/3 sits behind its own Platform.UUID.valid?/1 guard"},
+    {"platform/calendar/draft.ex", :platform_uuid_guard, "-", 3, :must_cast,
+     "get/3 guards the client draft id, lock_for_save/3 guards the editor's draft id, and attendee/2 guards an agent-supplied user_id before Accounts.get_user/1; malformed values answer not found or a clarification"},
     {"platform/calendar/booking_confirmation.ex", :get, "Platform.Tasks.Project", 1,
      :safe_internal,
      "enqueue/5 receives the persisted Meeting created by BookingLinks; meeting.project_id is a UUID foreign key already checked against the owner's current project list"},
@@ -173,12 +194,18 @@ defmodule Platform.RepoLookupBoundaryTest do
      "owned_event/2 guards the LiveView event id with Platform.UUID.valid?/1 before its owner-constrained Repo.get_by"},
     {"platform/calendar.ex", :get_by, "FeedToken", 1, :safe_internal,
      "feed_scope/1 accepts a 43-byte token and hashes it to a 32-byte binary; Repo.get_by compares token_hash, a binary field rather than a UUID"},
-    {"platform/calendar.ex", :platform_uuid_guard, "-", 4, :must_cast,
-     "get_event/2 and owned_event/2 guard event ids; authorize_scope/2 guards space and project ids supplied by the event form before typed queries"},
+    {"platform/calendar.ex", :platform_uuid_guard, "-", 5, :must_cast,
+     "get_event/2 and owned_event/2 guard event ids; authorize_scope/2 guards space and project ids supplied by the event form before typed queries; cancel_linked_events/2 (task 01a1b8a5 stage 4) guards the meeting id before its update_all"},
     {"platform/agents/burrow/getting_started.ex", :get_by, "Space", 1, :safe_internal,
      "task 01a10315 stage 5 (moved here by task 01a19505): getting_started_space/1 looks up by slug, a string column built from a persisted Agent.id; no UUID is cast"},
     {"platform/agents/burrow/getting_started.ex", :get_by, "Participant", 1, :safe_internal,
      "task 01a10315 stage 5 (moved here by task 01a19505): system_participant/1 uses a persisted Space.id and a participant_id from Platform.UUID.deterministic/1; neither comes from outside"},
+    # Task 01a1b8a5 stage 4: old /meetings links and ?meeting= on Calendar.
+    {"platform_web/live/meeting_live/calendar_redirect.ex", :platform_uuid_guard, "-", 2,
+     :must_cast,
+     "path/1 guards the ?meeting= and ?project_id= URL params with Platform.UUID.valid?/1 and drops a malformed one; the module never queries the Repo, Calendar re-resolves the id through the viewer scope"},
+    {"platform_web/live/calendar_live.ex", :platform_uuid_guard, "-", 1, :must_cast,
+     "open_meeting_link/2 guards the ?meeting= URL param with Platform.UUID.valid?/1 before Meetings.get_meeting_for_user/2; a malformed or invisible id opens plain Calendar"},
     {"platform/sharing/friction.ex", :get, "Agent", 1, :must_cast,
      "task 01a1b678 stage 3: context_agent/1 reads a tool call's context agent_id, which a transport built from a runtime row; it is guarded with Platform.UUID.cast/1 first and a malformed id records nothing"},
     {"platform/sharing/friction.ex", :platform_uuid_guard, "-", 1, :must_cast,
@@ -504,8 +531,8 @@ defmodule Platform.RepoLookupBoundaryTest do
      "two sit behind Platform.UUID.valid?/1 on the same value in the same `with` (`get_account/2` checks org_id AND id; `fetch_account_by_id/1`, the first step of `resolve_sender/3`, checks account_id, which arrives from a draft row or an MCP/deploy payload); the third, `authorize_manage/2`, reads `id` off an `%Account{}` struct the caller already loaded through one of those guarded getters — a `mail_accounts` UUIDv7 PK; the fourth (task 01a13ba5 stage 1, `start_backfill/4`) re-reads the same struct's `id` AFTER `authorize_manage/2` passed, for a fresh eligibility check"},
     {"platform/mail.ex", :get_by, "Sender", 2, :safe_internal,
      "both keyed `account_id:` read off an already-loaded `%Account{}` struct (a `mail_accounts` PK) plus `key:`, a `:string` column that cannot raise a cast error; `fetch_sender/2` additionally requires `is_binary(key)` in its head"},
-    {"platform/mail.ex", :platform_uuid_guard, "-", 4, :safe_internal,
-     "`list_accounts/1` (org_id), `get_account/2` (org_id and id — two calls) and `fetch_account_by_id/1` (account_id): each guards a value that arrives from a LiveView param, a draft row or an MCP/deploy payload before it reaches `where:` or `Repo.get/2`, and folds a malformed one into the function's existing miss (`[]`, `nil`, `{:error, :account_not_found}`)"},
+    {"platform/mail.ex", :platform_uuid_guard, "-", 5, :safe_internal,
+     "`list_accounts/1` (org_id), `get_account/2` (org_id and id — two calls) and `fetch_account_by_id/1` (account_id): each guards a value that arrives from a LiveView param, a draft row or an MCP/deploy payload before it reaches `where:` or `Repo.get/2`, and folds a malformed one into the function's existing miss (`[]`, `nil`, `{:error, :account_not_found}`). Count 4 -> 5 with task 01a1ea5b stage 2: `list_readable_accounts/2` guards the org_id (a LiveView param) and returns `[]` for a malformed one; the viewer id is guarded inside `Platform.Mail.Ownership`"},
     {"platform/mail/deliverer.ex", :get, "Delivery", 1, :safe_internal,
      "`deliver/1`'s id is the `mail_deliveries` PK that `Dispatch.record/6` generated in-process with `Platform.Types.UUIDv7.generate/0` and committed before calling it — the send path's only caller, pinned by `single_sender_guard_test.exs`"},
     {"platform/mail/deliverer.ex", :get!, "Account", 1, :safe_internal,
@@ -518,8 +545,8 @@ defmodule Platform.RepoLookupBoundaryTest do
      "`fetch_draft/1` guards the draft id with Platform.UUID.valid?/1 in the same `with` — the id arrives from a LiveView event or an agent tool call — and a malformed one returns `{:error, :draft_not_found}`"},
     {"platform/mail/dispatch.ex", :platform_uuid_guard, "-", 1, :safe_internal,
      "`fetch_draft/1`'s guard, recorded above: `dispatch/3`'s draft_id is caller-supplied"},
-    {"platform/mail/drafts.ex", :platform_uuid_guard, "-", 12, :safe_internal,
-     "stage 5's draft writes and reads. Every id reaches this module from a boundary — the `mail_draft_create` / `mail_draft_update` MCP payload (org_id, draft_id, account_id, to_user_ids, on_behalf_of_user_id, task_id) or a LiveView `/email/drafts/:id` path segment — and each is guarded before it reaches `where:`: `get/2` (org_id and id — two calls), `org_people/1` (org_id), `agent_exists?/1` (the agent id off the caller's context), `fetch_org/1` (org_id), `fetch_draft/1` (draft_id), `check_on_behalf_of/2`, `check_task/2`, and the three batch readers `users_by_id/1`, `names_by_id/2`, `titles_by_id/1`, which drop a malformed id from the `in ^ids` list instead of raising. A malformed value becomes the function's existing miss (`nil`, `[]`, `{:error, :draft_not_found}`, a named refusal). Count 11 -> 12 with task 01a0cf21 stage 6: `system_stage_id/1` guards the `stage_id` `create_system/2` accepts from `Platform.Deploy.Email` (a `stages.id` PK off the injected deploy stage) before it is written to the draft, refusing a malformed one as `{:invalid, _}` rather than persisting it"},
+    {"platform/mail/drafts.ex", :platform_uuid_guard, "-", 15, :safe_internal,
+     "stage 5's draft writes and reads. Every id reaches this module from a boundary — the `mail_draft_create` / `mail_draft_update` MCP payload (org_id, draft_id, account_id, to_user_ids, on_behalf_of_user_id, task_id) or a LiveView `/email/drafts/:id` path segment — and each is guarded before it reaches `where:`: `get/2` (org_id and id — two calls), `org_people/1` (org_id), `agent_exists?/1` (the agent id off the caller's context), `fetch_org/1` (org_id), `fetch_draft/1` (draft_id), `check_on_behalf_of/2`, `check_task/2`, and the three batch readers `users_by_id/1`, `names_by_id/2`, `titles_by_id/1`, which drop a malformed id from the `in ^ids` list instead of raising. A malformed value becomes the function's existing miss (`nil`, `[]`, `{:error, :draft_not_found}`, a named refusal). Count 11 -> 12 with task 01a0cf21 stage 6: `system_stage_id/1` guards the `stage_id` `create_system/2` accepts from `Platform.Deploy.Email` (a `stages.id` PK off the injected deploy stage) before it is written to the draft, refusing a malformed one as `{:invalid, _}` rather than persisting it. Count 12 -> 15 with task 01a1ea5b stage 2: `get_visible/3` guards the draft id (a `/email/drafts/:id` path segment) and `visible_query/2` guards the org id and the viewer id, matching nothing for a malformed one"},
     {"platform/mail/inbound.ex", :get, "Space", 1, :safe_internal,
      "`usable_space/1` is called only with `account.inbound_space_id`, a `belongs_to` FK column on the loaded `%Account{}`; the nil case has its own clause first"},
     {"platform/mail/inbound.ex", :get!, "InboundMessage", 1, :safe_internal,
@@ -528,8 +555,12 @@ defmodule Platform.RepoLookupBoundaryTest do
      "keyed `account_id:` off the loaded `%Account{}` being polled and `folder:`, a `:string` column holding the IMAP folder name"},
     {"platform/mail/inbound.ex", :get_by, "Participant", 1, :safe_internal,
      "`space_id` is off a `%Space{}` `usable_space/1` just loaded; `participant_id` is built by `email_participant_id/1` from a sha256 hex digest formatted 8-4-4-4-12, so it is uuid-shaped by construction; `participant_type` is the literal \"system\""},
-    {"platform/mail/inbound_access.ex", :platform_uuid_guard, "-", 5, :safe_internal,
-     "task 01a13ba5 stage 2's agent mail reads. Every id arrives from the `mail_inbound_list` / `mail_inbound_get` MCP payload (org_id, account_id, id) or off the caller's context (agent_id), and each is guarded before it reaches `where:`: `list/3` (agent_id, org_id, and account_id when given — three calls) and `get/2` (agent_id and id — two calls). A malformed value becomes the existing miss: `{[], 0}` for the list, `:not_found` for the get, which the tool returns as the one not-found envelope"},
+    {"platform/mail/inbound_access.ex", :platform_uuid_guard, "-", 11, :safe_internal,
+     "task 01a13ba5 stage 2's agent mail reads. Every id arrives from the `mail_inbound_list` / `mail_inbound_get` MCP payload (org_id, account_id, space_id, id) or off the caller's context (agent_id), and each is guarded before it reaches `where:`: `list/4` (agent_id and org_id — two calls) and `get/3` (agent_id and id — two calls). Count 5 -> 10 with task 01a1ea5b stage 3: `audience/2` guards the space_id (one call), `narrow_account/2` and `narrow_ids/2` guard the account_id, narrowing to nothing for a malformed one (two calls), and `audit!/5` guards the agent, space and org ids before they are written to the audit row (three calls; a malformed space or org id is stored as nil). The account_id guard moved out of `list/4` (-1). A malformed value becomes the existing miss: an empty list or `:not_found`, which the tool returns as the one not-found envelope. Count 10 -> 11 with task 01a1ea5b stage 5: `space_audience/2` (the `mail_digest` tool's audience) guards the agent id off the caller's context before `audience/2`, answering `:not_found`"},
+    {"platform/mail/digest.ex", :platform_uuid_guard, "-", 2, :safe_internal,
+     "task 01a1ea5b stage 5's metadata-only mail digest. `for_audience/2` guards the org id (an MCP `mail_digest` payload, or an org id off a loaded membership for the briefing) before it reaches `where:` or the raw SQL's `Ecto.UUID.dump!/1`, and `empty/1` guards it before echoing it; a malformed org id reads nothing (`mailboxes: 0, rows: []`). User ids are guarded inside `Platform.Tenancy.internal_member?/2` and `Platform.Mail.Ownership`. Pinned by digest_test.exs \"a malformed org or an empty audience reads nothing\""},
+    {"platform/mail/ownership.ex", :platform_uuid_guard, "-", 1, :safe_internal,
+     "task 01a1ea5b stage 1's mailbox ownership. The one call is the private `uuid?/1` helper, which guards every id before it reaches `where:`: the user and org ids in `readable_query/2`, the agent and org ids in `agent_granted_account_ids/2`, the account id in `fresh/1`, a principal id in `normalize_principal/1` and a personal owner id in `owner_allowed/3`. Stage 2-4 callers pass LiveView params and MCP payloads, so a malformed value reads nothing or answers `{:error, :unknown_principal}` / `:not_found`. Pinned by ownership_test.exs \"garbage input reads nothing and never raises\" and \"an agent grant needs an existing agent\""},
     {"platform/mail/inbound/poller.ex", :get, "Account", 2, :safe_internal,
      "both calls (the timer tick and the `:poll_now` call) reload the poller's `account_id`, its start arg, and both starters pass an `%Account{}` PK: `Inbound.sync_poller/1` (`account.id`) and `start_all_pollers/0` (ids off `Repo.all` of `mail_accounts`)"},
     {"platform/mail/mailbox.ex", :platform_uuid_guard, "-", 10, :safe_internal,
@@ -545,8 +576,8 @@ defmodule Platform.RepoLookupBoundaryTest do
      "task 01a161fd stage 3: `tasks_filter_epics` takes an `id` from LiveView event params and casts it with `Platform.UUID.cast/1` inside a `with`; a malformed id falls out of the `with` (socket unchanged) before `Selection.readable_project/2` sees it"},
     {"platform_web/live/email_live.ex", :platform_uuid_guard, "-", 1, :safe_internal,
      "`account_param/1` guards the `?account=` query param before it becomes the account filter; a malformed value is dropped to nil (all accounts), and `Mailbox.narrow_account/2` guards it again at the query"},
-    {"platform/meetings.ex", :platform_uuid_guard, "-", 28, :safe_internal,
-     "Task01a1830b adds explicit malformed-id guards for append, versioned summary completion and versioned summary failure before their locked queries. Task01a17f00 adds transcript_meeting_at/2, guarding caller space_id before its capture-owner lookup; malformed attrs still return a changeset error. cast_identity/2 now uses Platform.UUID.cast/1, so a 16-byte LiveKit webhook identity suffix yields :unknown instead of a fabricated user_id/agent_id FK; the remaining guards cover get_meeting/1, get_room/1, get_transcript/1, get_transcript_with_segments/1, the two recording lookups, resolve_agent/1, claim_router_dispatch/1 (019fa56b-c81f stage 2), whose transcript_id arrives inside a meeting:finished PubSub payload and must answer {:error, :no_such_transcript} rather than raise on the Router's dispatch path, and get_invite/1 (019fb954 stage 4), whose invite_id arrives inside a SIGNED GUEST TOKEN PAYLOAD — a signature proves who minted the payload, not that its ids are uuids, and a fabricated id must never be what decides whether a capability was revoked. Count 13 -> 14 with 019fb955 stage 4: `ensure_delivery_invitee/2` guards `invite.user_id` before the `Repo.get_by(Platform.Chat.Participant, ...)` recorded below. The classification is unchanged because the guard, not the caller, is what makes the lookup safe — `InviteDelivery.deliver/2` takes an %Invite{} STRUCT, so nothing upstream of the guard proves the field came out of the column. Count 14 -> 15 with 019fb955 stage 2: `invited_to_space?/2` guards its `space_id` before the `Repo.exists?` join, because that argument arrives off a session assign / a join-seam caller and the column is uuid — an unguarded bad value raises Ecto.Query.CastError out of an access predicate whose contract is a boolean, which fails the gate OPEN by crashing the caller instead of denying. Count 15 -> 16 at this stack's rollup merge, for `intent_muted?/1` (019fbaac stage 1, landed on main independently), whose meeting_id arrives inside a meeting:transcript_chunk PubSub payload and is legitimately nil whenever the chunk's space has no meeting — it is read per transcript chunk from the singleton IntentClassifier GenServer, so a raise there stops classification for every room on the node at once. Count 16 -> 17 with task 019fcfcf stage 1: `get_whiteboard/1`, whose meeting_id arrives unresolved from the whiteboard tab's mount/params path, and whose contract is `%Whiteboard{} | nil` — an empty board is the ordinary starting state, so a malformed id must answer nil rather than raise Ecto.Query.CastError out of a read whose miss is already meaningful. Count 17 -> 18 with task 01a00066 stage 1: `meeting_live?/1`, whose meeting id arrives from an inbox row's `source_id` column and whose contract is a boolean — an unresolvable id answers `true` (still live, so the caller never dismisses a row on ambiguity) instead of raising. Count 18 -> 19 with task 01a0740d-e5ce-7001-812e-aa79a5392aed stage 1: `live_recording_for_room/1`, whose room_id reaches it from a LiveView assign and from a `{:recording_updated, _}` broadcast payload, and whose contract is `%Recording{} | nil`. Note this is NOT the same shape as the two unguarded transcript reads recorded in the Repo.one map below: `meeting_transcripts.room_id` is a `:string` column holding the LiveKit room NAME, whereas `meeting_recordings.room_id` is a `belongs_to(:room)` on a `:binary_id` FK, so `where: r.room_id == ^room_id` here raises the same Ecto.Query.CastError `Repo.get/2` would. It backs a consent indicator in the call header, so a malformed id must read as `nil` (nothing is recording) rather than take the header render down. Count 19 -> 20 with task 01a0e906 stage 2: `resolve_removable_agent_row/2`, whose `row_id` arrives from the host's phx-value- \"Remove from meeting\" control; a malformed id folds into {:error, :not_found} before the `Repo.get(Participant, _)` recorded below. Count 20 -> 21 with task 01a10db7 stage 1: `get_meeting_for_user/2`, whose meeting id arrives as the `:id` URL path segment of `POST /api/app/meetings/:id/join` and `/leave`; a malformed id folds into {:error, :not_found} (404) before the `where: m.id == ^meeting_id` / `Repo.one` recorded in the Repo.one map below. Count 25 -> 26 with task 01a19e7f stage 1: `load_meeting_for_viewer/2`, whose meeting id arrives from a LiveView phx-value- Cancel meeting control on /meetings and /calendar; a malformed id folds into {:error, :not_found} before the viewer-scoped `where: m.id == ^meeting_id` / `Repo.one` recorded in the Repo.one map below Count 26 -> 27 with task 01a19ea6 stage 1: `get_live_guest_invite/3`, whose invite id arrives from a host's phx-value- expiry or New link control; a malformed id folds into nil, which `set_guest_invite_expiry/3` and `renew_guest_invite/4` answer as {:error, :not_found}. Count 27 -> 28 with `respond_to_invite/3`, whose meeting id arrives from the RSVP control in the calendar meeting details (the open selection) and from any future caller; a malformed id folds into {:error, :not_invited} before the invite lookup and the guarded UPDATEs"},
+    {"platform/meetings.ex", :platform_uuid_guard, "-", 29, :safe_internal,
+     "Task01a1830b adds explicit malformed-id guards for append, versioned summary completion and versioned summary failure before their locked queries. Task01a17f00 adds transcript_meeting_at/2, guarding caller space_id before its capture-owner lookup; malformed attrs still return a changeset error. cast_identity/2 now uses Platform.UUID.cast/1, so a 16-byte LiveKit webhook identity suffix yields :unknown instead of a fabricated user_id/agent_id FK; the remaining guards cover get_meeting/1, get_room/1, get_transcript/1, get_transcript_with_segments/1, the two recording lookups, resolve_agent/1, claim_router_dispatch/1 (019fa56b-c81f stage 2), whose transcript_id arrives inside a meeting:finished PubSub payload and must answer {:error, :no_such_transcript} rather than raise on the Router's dispatch path, and get_invite/1 (019fb954 stage 4), whose invite_id arrives inside a SIGNED GUEST TOKEN PAYLOAD — a signature proves who minted the payload, not that its ids are uuids, and a fabricated id must never be what decides whether a capability was revoked. Count 13 -> 14 with 019fb955 stage 4: `ensure_delivery_invitee/2` guards `invite.user_id` before the `Repo.get_by(Platform.Chat.Participant, ...)` recorded below. The classification is unchanged because the guard, not the caller, is what makes the lookup safe — `InviteDelivery.deliver/2` takes an %Invite{} STRUCT, so nothing upstream of the guard proves the field came out of the column. Count 14 -> 15 with 019fb955 stage 2: `invited_to_space?/2` guards its `space_id` before the `Repo.exists?` join, because that argument arrives off a session assign / a join-seam caller and the column is uuid — an unguarded bad value raises Ecto.Query.CastError out of an access predicate whose contract is a boolean, which fails the gate OPEN by crashing the caller instead of denying. Count 15 -> 16 at this stack's rollup merge, for `intent_muted?/1` (019fbaac stage 1, landed on main independently), whose meeting_id arrives inside a meeting:transcript_chunk PubSub payload and is legitimately nil whenever the chunk's space has no meeting — it is read per transcript chunk from the singleton IntentClassifier GenServer, so a raise there stops classification for every room on the node at once. Count 16 -> 17 with task 019fcfcf stage 1: `get_whiteboard/1`, whose meeting_id arrives unresolved from the whiteboard tab's mount/params path, and whose contract is `%Whiteboard{} | nil` — an empty board is the ordinary starting state, so a malformed id must answer nil rather than raise Ecto.Query.CastError out of a read whose miss is already meaningful. Count 17 -> 18 with task 01a00066 stage 1: `meeting_live?/1`, whose meeting id arrives from an inbox row's `source_id` column and whose contract is a boolean — an unresolvable id answers `true` (still live, so the caller never dismisses a row on ambiguity) instead of raising. Count 18 -> 19 with task 01a0740d-e5ce-7001-812e-aa79a5392aed stage 1: `live_recording_for_room/1`, whose room_id reaches it from a LiveView assign and from a `{:recording_updated, _}` broadcast payload, and whose contract is `%Recording{} | nil`. Note this is NOT the same shape as the two unguarded transcript reads recorded in the Repo.one map below: `meeting_transcripts.room_id` is a `:string` column holding the LiveKit room NAME, whereas `meeting_recordings.room_id` is a `belongs_to(:room)` on a `:binary_id` FK, so `where: r.room_id == ^room_id` here raises the same Ecto.Query.CastError `Repo.get/2` would. It backs a consent indicator in the call header, so a malformed id must read as `nil` (nothing is recording) rather than take the header render down. Count 19 -> 20 with task 01a0e906 stage 2: `resolve_removable_agent_row/2`, whose `row_id` arrives from the host's phx-value- \"Remove from meeting\" control; a malformed id folds into {:error, :not_found} before the `Repo.get(Participant, _)` recorded below. Count 20 -> 21 with task 01a10db7 stage 1: `get_meeting_for_user/2`, whose meeting id arrives as the `:id` URL path segment of `POST /api/app/meetings/:id/join` and `/leave`; a malformed id folds into {:error, :not_found} (404) before the `where: m.id == ^meeting_id` / `Repo.one` recorded in the Repo.one map below. Count 25 -> 26 with task 01a19e7f stage 1: `load_meeting_for_viewer/2`, whose meeting id arrives from a LiveView phx-value- Cancel meeting control on /meetings and /calendar; a malformed id folds into {:error, :not_found} before the viewer-scoped `where: m.id == ^meeting_id` / `Repo.one` recorded in the Repo.one map below Count 26 -> 27 with task 01a19ea6 stage 1: `get_live_guest_invite/3`, whose invite id arrives from a host's phx-value- expiry or New link control; a malformed id folds into nil, which `set_guest_invite_expiry/3` and `renew_guest_invite/4` answer as {:error, :not_found}. Count 27 -> 28 with task 01a1b8a5 stage 4: `call_disabled_for_space?/1`, whose space id arrives from the join paths (a LiveView `:active_space`, the native API, a companion token request) and whose contract is a boolean; a malformed id answers false before the `Repo.exists?` and the join is then decided by the meeting-visibility rules that already ran Count 28 -> 29 at the merge of origin/main into task 01a1b8a5: with `respond_to_invite/3`, whose meeting id arrives from the RSVP control in the calendar meeting details (the open selection) and from any future caller; a malformed id folds into {:error, :not_invited} before the invite lookup and the guarded UPDATEs"},
     {"platform/meetings/ringing.ex", :platform_uuid_guard, "-", 1, :safe_internal,
      "task 01a10db7 stage 2: `get_ring_for_user/2` guards the ring id, which arrives as the `:id` URL path segment of `GET /api/app/rings/:id` and its answer/decline/missed routes, with Platform.UUID.valid?/1 before the `where: r.id == ^ring_id` / `Repo.one` recorded in the Repo.one map; a malformed id folds into {:error, :not_found} (404)"},
     {"platform/meetings.ex", :get_by, "Whiteboard", 1, :safe_internal,
@@ -577,8 +608,12 @@ defmodule Platform.RepoLookupBoundaryTest do
      "019fb955 stage 4 — `ensure_delivery_invitee/2`'s get-or-insert guard ahead of `Chat.add_participant/2`, which has no such branch of its own and would hit `chat_participants_unique` on a re-delivery. `space_id` is `%Chat.Space{}.id` off the row `Chat.get_space/1` or `Chat.create_space/1` just returned in the same function. `participant_id` is `invite.user_id`, a `meeting_invites.user_id` FK column, and is checked with Platform.UUID.valid?/1 anyway before the lookup — because `deliver/2` accepts a STRUCT rather than an id, so a hand-built %Invite{} can carry anything, and because `Repo.get_by(_, participant_id: nil)` raises ArgumentError rather than returning nil (the nil case has its own head returning {:error, :no_invitee_user})"},
     {"platform/meetings.ex", :get_by, "Room", 4, :safe_internal,
      "keyed `livekit_room_name:` (string) and `space_id:`; the `space_id` callers pass a `%Space{}` id already resolved by `Chat.get_space/1`. The fourth (01a18d0a stage 4) is `adopt_concurrent_room/2` re-reading the SAME `space_id` `ensure_room/1` just looked up and inserted with, after a unique-index loss"},
-    {"platform/meetings.ex", :get_by, "User", 1, :safe_internal,
-     "019fb955-1d7b stage 2 — `invite_external_user/3` resolving the address a host TYPED into an account, which is the whole three-way branch. The value IS a boundary value, and it is safe for a reason this inventory should state precisely: the lookup is keyed `email:` only, a `:string` column, and casting a binary to `:string` cannot fail — `Ecto.Query.CastError`, the defect this test exists to catch, is only reachable when a boundary value is cast to `:binary_id`. No `Platform.UUID.valid?/1` guard applies because no UUID is pinned. `users.email` also carries a unique index, so `get_by/3` cannot raise `Ecto.MultipleResultsError` here either"},
+    {"platform/meetings.ex", :get!, "Invite", 1, :safe_internal,
+     "task 01a1b8a5 stage 5 review: `reinstate_user_invite/2`'s lost-race branch re-reads `revoked.id`, the meeting_invites.id primary key of the row `upsert_user_invite/3` just loaded with `Repo.get_by/2` (keyed by a user_id that `invite_user/3` already checked with Platform.UUID.valid?/1); no client value reaches it"},
+    {"platform/meetings.ex", :get!, "Meeting", 1, :safe_internal,
+     "task 01a1b281 stage 2 — `soft_delete/2`'s lost-race branch re-reads `meeting.id`, the meetings.id primary key of the row `load_meeting_for_viewer/3` already loaded behind Platform.UUID.valid?/1 in the same call"},
+    {"platform/meetings.ex", :get_by, "User", 2, :safe_internal,
+     "Count 1 -> 2 with task 01a1b281 stage 2: `prospective_invite/3` (the edit preview) resolves a typed external address exactly as `invite_external_user/3` does, keyed `email:` only, so the reason below holds for both. 019fb955-1d7b stage 2 — `invite_external_user/3` resolving the address a host TYPED into an account, which is the whole three-way branch. The value IS a boundary value, and it is safe for a reason this inventory should state precisely: the lookup is keyed `email:` only, a `:string` column, and casting a binary to `:string` cannot fail — `Ecto.Query.CastError`, the defect this test exists to catch, is only reachable when a boundary value is cast to `:binary_id`. No `Platform.UUID.valid?/1` guard applies because no UUID is pinned. `users.email` also carries a unique index, so `get_by/3` cannot raise `Ecto.MultipleResultsError` here either"},
     {"platform/meetings/completion.ex", :get, "Canvas", 1, :safe_internal,
      "callback/4 validates canvas_id with Platform.UUID.valid?/1 before looking up the caller-supplied canvas."},
     {"platform/meetings/completion.ex", :get, "Meeting", 4, :safe_internal,
@@ -1172,7 +1207,19 @@ defmodule Platform.RepoLookupBoundaryTest do
     {"platform/chat/canvas_room.ex", :platform_uuid_guard, "-", 2, :safe_internal,
      "(1) validate_key/2 guards the `canvas_id` every public CanvasRoom function takes (stage 2 passes it from a LiveView event's params) before the room's Registry key, its Repo.one on chat_canvas_rooms.canvas_id and Chat.get_canvas/1; a malformed id is {:error, :invalid_canvas_id}. (2) event_row/2 uses it as a BOOLEAN on the actor id before it becomes chat_canvas_room_events.actor_id (a uuid column); a non-UUID actor id is recorded as NULL rather than raising inside the flush transaction"},
     {"platform_web/live/chat/canvas_hooks.ex", :platform_uuid_guard, "-", 1, :safe_internal,
-     "room_canvas/2 (task 01a1316b-84fa stage 2) guards the `canvas_id` a `canvas_room_*` LiveView event carries in its params before CanvasAccess.fetch_for_viewer/3; a malformed id folds into {:error, :not_found}, the reply an unknown canvas already gets"}
+     "room_canvas/2 (task 01a1316b-84fa stage 2) guards the `canvas_id` a `canvas_room_*` LiveView event carries in its params before CanvasAccess.fetch_for_viewer/3; a malformed id folds into {:error, :not_found}, the reply an unknown canvas already gets"},
+    # ── Showrunner (task 01a1eaf6) ─────────────────────────────────────
+    {"platform/showrunner.ex", :get, "Agent", 1, :must_cast,
+     "agent/1 takes the operator-supplied `agent_id` of provision/1 (the mix task flag or an rpc map); it checks Platform.UUID.valid?/1 before Repo.get(Agent, id), and a malformed id is {:error, {:not_found, :agent_id}}"},
+    {"platform/showrunner.ex", :platform_uuid_guard, "-", 2, :must_cast,
+     "agent/1 and space/1 guard provision/1's operator-supplied `agent_id` and `space_id` before Repo.get(Agent, _) and Chat.get_space/1; a malformed id is {:error, {:not_found, field}}"},
+    {"platform/showrunner/config.ex", :platform_uuid_guard, "-", 1, :must_cast,
+     "uuid/1 reads id fields out of a responsibility's operator-written `trigger_config` JSON; a malformed value becomes nil (the unconfigured path) before any lookup uses it"},
+    {"platform/responsibilities/handlers/showrunner_recording_prep.ex", :get, "Agent", 1,
+     :flagged_sibling_owned,
+     "under the responsibilities/ sibling prefix, so flagged rather than classified; the id is internal regardless: runtime_scope/1 takes ctx.agent_id, built by Showrunner.Board.context/3 from the %Agent{} that Roles.assignee_for/1 loads through role_assignments.agent_id (a :binary_id FK to agents); no params, MCP payload or URL segment reaches it"},
+    {"platform/showrunner/social_bundle.ex", :get, "Agent", 1, :safe_internal,
+     "guard/4 takes ctx.agent_id, built by Showrunner.Board.context/3 from the %Agent{} that Roles.assignee_for/1 loads through role_assignments.agent_id (a :binary_id FK to agents); no params, MCP payload or URL segment reaches it"}
   ]
 
   # `Repo.one/1` per file. Counted, not classified: its ids live inside
@@ -1190,12 +1237,13 @@ defmodule Platform.RepoLookupBoundaryTest do
     # persisted Briefing.id and User.id; transaction/2 receives either
     # authority/3's UUID-validated owner id or Scope.actor User.id.
     "platform/calendar/agent_access.ex" => 3,
-    # handle_consent/3 pins Consent.hold_id to the selected entry's Event.id (a
-    # UUIDv7 primary key from list_entries; select_entry/4 only keeps ids it
-    # found in the loaded entries) and owner_id to current_user_record.id.
-    "platform_web/live/calendar_live.ex" => 1,
     # get_event/2 validates the boundary event UUID before its visible-query read.
     "platform/calendar.ex" => 1,
+    # linked_event/1 checks the meeting id with Platform.UUID.valid?/1 first.
+    "platform/calendar/authoring.ex" => 1,
+    # lock_for_save/3 pins the draft id behind Platform.UUID.valid?/1 and the
+    # owner id to the Scope actor's User.id (task 01a1b8a5 stage 3).
+    "platform/calendar/draft.ex" => 1,
     # Subscription refresh locks by the UUID from a loaded owner-scoped row;
     # the periodic worker selects one persisted row without caller-supplied ids.
     "platform/calendar/subscriptions.ex" => 1,
@@ -1271,6 +1319,16 @@ defmodule Platform.RepoLookupBoundaryTest do
     # behind Platform.UUID.valid?/1 in the same `with` (recorded in
     # @inventory), so a malformed one is `:not_found`, never a raise.
     "platform/mail/inbound_access.ex" => 1,
+    # Task 01a1ea5b stage 1: 0 -> 2, `Platform.Mail.Ownership`. Triaged by
+    # hand: `fresh/1` pins `a.id == ^id` only after `uuid?/1`, and `revoke/3`
+    # pins `account_id` off that fresh row and a principal id already passed
+    # through `normalize_principal/1`'s `uuid?/1` (recorded in @inventory).
+    "platform/mail/ownership.ex" => 2,
+    # Task 01a1ea5b stage 5: 0 -> 1, `Release.apply_mail_owner_mapping/2`'s
+    # `mapping_user/1`. Triaged by hand: the `where:` pins `lower(u.email)`,
+    # a `:string` column, against an address read from the mapping file; no
+    # id is pinned, so nothing can raise Ecto.Query.CastError there.
+    "platform/release.ex" => 1,
     # Task 01a11ec3 stage 2: 0 -> 1, `Feedback.Submission.existing/1`.
     # Triaged by hand: the `where:` pins `r.fingerprint == ^fingerprint`, a
     # `:string` column holding a sha256 hex digest the module computes itself
@@ -1293,8 +1351,14 @@ defmodule Platform.RepoLookupBoundaryTest do
     # Task 01a0cf21 stage 5. drafts.ex: 0 → 2 — `get/2` and `fetch_draft/1`,
     # each pinning an id behind Platform.UUID.valid?/1 in the same
     # expression (recorded in @inventory).
-    "platform/mail/drafts.ex" => 2,
-    "platform/mail/mailbox.ex" => 6,
+    # Task 01a1ea5b stage 2. drafts.ex: 2 → 3 — `get_visible/3`'s draft id
+    # is behind Platform.UUID.valid?/1 in the same `if`. mailbox.ex: 6 → 7 —
+    # the new `readable_inbound?/3`, reached only after `add_to_files/3`
+    # guards the inbound id (`raw_inbound_org_id/1` and `get_inbound/3`
+    # replace the old `inbound_org_id/1` and `get_inbound/2` one-for-one,
+    # each behind the same guard).
+    "platform/mail/drafts.ex" => 3,
+    "platform/mail/mailbox.ex" => 7,
     # Task 01a0cf21 stage 6. outbox.ex: 0 → 1 — `pending_test_pass/1`, whose
     # `stage_id` is read off a `%Delivery{}` row the Outbox just claimed and
     # delivered (a snapshot column `Dispatch.enqueue/3` wrote from the
@@ -1415,7 +1479,11 @@ defmodule Platform.RepoLookupBoundaryTest do
     # (`remove_message_attention/4`). Its `where:` pins a message id read off
     # the loaded message and a principal id that sits behind the function's
     # `Platform.UUID.valid?/1` guard (this file's `:platform_uuid_guard` entry).
-    "platform/chat.ex" => 24,
+    #
+    # 24 -> 25 for task 01a1b8a5 stage 3's `post_to_agent_dm/4`. Its `where:`
+    # pins the space id of the DM find_or_create_dm/4 just returned and the
+    # caller's own user id (Calendar passes its Scope actor's User.id).
+    "platform/chat.ex" => 25,
     "platform/chat/attachments/tool_handlers.ex" => 1,
     "platform/chat/canvas/versions.ex" => 1,
     # Task 019e2c4b stage 1 — `CanvasAccess.org_readable_space?/2`. Triaged by

@@ -591,7 +591,7 @@ defmodule PlatformWeb.FilesLive do
         # uncapped, so it can touch rows this page never loaded.
         {:noreply,
          socket
-         |> assign(:files, list_files(project_id))
+         |> assign(:files, list_files(socket, project_id))
          |> assign_failed_summary()}
     end
   end
@@ -911,7 +911,7 @@ defmodule PlatformWeb.FilesLive do
 
   defp maybe_refresh_after_upload(socket, _oks, project_id) do
     socket
-    |> assign(:files, list_files(project_id))
+    |> assign(:files, list_files(socket, project_id))
     |> assign(:show_upload_sheet, false)
     |> put_claims()
   end
@@ -1291,7 +1291,7 @@ defmodule PlatformWeb.FilesLive do
       socket
       |> assign(:selected_project_id, project_id)
       |> assign(:selected_project, project)
-      |> assign(:files, list_files(project_id))
+      |> assign(:files, list_files(socket, project_id))
       |> assign(:selected_file, nil)
       |> assign(:selected_file_text, nil)
       |> assign_failed_summary()
@@ -1312,7 +1312,7 @@ defmodule PlatformWeb.FilesLive do
   # `Files.get_file/1` for a file the viewer may read: a file in a project a
   # deny covers is `nil`, exactly like a missing one.
   defp readable_file(socket, file_id) do
-    case Files.get_file(file_id) do
+    case Browser.mail_readable(socket.assigns.viewer, Files.get_file(file_id)) do
       %Files.File{project_id: project_id} = file ->
         if project_readable?(socket, project_id), do: file, else: nil
 
@@ -1321,7 +1321,7 @@ defmodule PlatformWeb.FilesLive do
     end
   end
 
-  defp list_files(project_id), do: Files.list_files_for_project(project_id, limit: 200)
+  defp list_files(%{assigns: %{viewer: viewer}}, id), do: Browser.project_files(viewer, id)
 
   # Write a file we already hold into both places the page renders it —
   # the list row and the detail pane — without a re-fetch. Used by the
@@ -1673,6 +1673,8 @@ defmodule PlatformWeb.FilesLive do
 
     case Memory.search(query, opts) do
       {:ok, results} ->
+        results = Browser.drop_mail_hits(socket.assigns.viewer, results, &result_file_id/1)
+
         socket
         |> assign(:semantic_query, query)
         |> assign(:semantic_results, results)

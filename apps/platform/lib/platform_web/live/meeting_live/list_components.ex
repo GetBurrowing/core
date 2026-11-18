@@ -21,6 +21,8 @@ defmodule PlatformWeb.MeetingLive.ListComponents do
   import PlatformWeb.Components.Meetings.CancelMeeting,
     only: [cancel_meeting: 1, cancelled_chip: 1]
 
+  import PlatformWeb.Components.Meetings.DeleteMeeting, only: [delete_meeting: 1]
+
   @sections [{:live, "Live now"}, {:upcoming, "Upcoming"}, {:ended, "Past"}]
 
   # ── data ───────────────────────────────────────────────────────────────
@@ -274,6 +276,12 @@ defmodule PlatformWeb.MeetingLive.ListComponents do
       "`%{can_cancel, state, audience}` for the selected row (task 01a19e7f); nil draws no control"
   )
 
+  attr(:delete, :map,
+    default: nil,
+    doc:
+      "`%{can_delete, state}` for the selected row (task 01a1b281 stage 4); nil draws no Delete"
+  )
+
   def detail(assigns) do
     ~H"""
     <section
@@ -389,11 +397,22 @@ defmodule PlatformWeb.MeetingLive.ListComponents do
         <%!-- At the BOTTOM, below everything else and off the action row
            (design direction 01a19e80). Nothing at all for someone who may
            not cancel, or once the meeting is no longer cancellable. --%>
+        <%!-- No Edit here: the listing's edit entry point was retired with
+           the app-host list (task 01a1b8a5 stage 4); a call is edited in
+           Calendar's one editor. --%>
         <.cancel_meeting
           :if={@cancel}
           can_cancel={@cancel.can_cancel}
           state={@cancel.state}
           audience={@cancel.audience}
+          id_prefix="meetings-detail"
+        />
+        <%!-- Delete (task 01a1b281 stage 4) for a meeting that is over, on
+           its own rule under Cancel; Edit is never drawn with it. --%>
+        <.delete_meeting
+          :if={@delete}
+          can_delete={@delete.can_delete}
+          state={@delete.state}
           id_prefix="meetings-detail"
         />
       </div>
@@ -413,7 +432,7 @@ defmodule PlatformWeb.MeetingLive.ListComponents do
 
   def new_room_modal(assigns) do
     ~H"""
-    <div class="cal-modal-scrim" data-role="meetings-new-room">
+    <div class="cal-modal-scrim" data-role="meetings-new-room" data-covers-tab-bar>
       <.focus_wrap
         id="meetings-new-room-modal"
         class="cal-modal"
@@ -448,7 +467,7 @@ defmodule PlatformWeb.MeetingLive.ListComponents do
             </select>
           </label>
           <p class="my-[1em] text-sm text-subtle" data-role="new-room-hint">
-            Start a room now, or schedule one from Calendar → New → Meeting.
+            Start a room now, or schedule a call from Calendar with + New event.
           </p>
           <p :if={@error} class="cal-err" role="alert">{@error}</p>
           <div class="cal-ft">

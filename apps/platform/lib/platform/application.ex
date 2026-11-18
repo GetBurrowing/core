@@ -330,6 +330,7 @@ defmodule Platform.Application do
     |> maybe_add_lifecycle_step_registry(flag)
     |> maybe_add_summarizer_sweeper(flag)
     |> maybe_add_candidate_sweeper(flag)
+    |> maybe_add_feedback_intake_sweeper(flag)
     |> maybe_add_meeting_completion_sweeper(flag)
     |> maybe_add_security_sweeper(flag)
     |> maybe_add_space_purger(flag)
@@ -341,12 +342,14 @@ defmodule Platform.Application do
     |> maybe_add_prototype_purger(flag)
     |> maybe_add_insight_purger(flag)
     |> maybe_add_habits_pruner(flag)
+    |> maybe_add_calendar_draft_pruner(flag)
     |> maybe_add_insight_disseminator(flag)
     |> maybe_add_catalog_emitter(flag)
     |> maybe_add_deploy_merge_reconciler(flag)
     |> maybe_add_canvas_search_backfill(flag)
     |> maybe_add_burrow_docs_seed(flag)
     |> maybe_add_default_space_seed(flag)
+    |> maybe_add_pocket_id_email_login_code(flag)
     |> ensure_task_router_watcher_after_endpoint()
     |> maybe_add_web_boot_gate(role)
     |> maybe_add_web_peer_link(role)
@@ -576,6 +579,26 @@ defmodule Platform.Application do
     end
   end
 
+  # Turns on pocket-id's email login code on an existing install, once per
+  # install (task 01a1e65e stage 2). A one-shot `Task`, `restart: :transient`,
+  # like the seeds above; it starts asynchronously, so boot never waits on
+  # pocket-id, and `run_at_boot/0` never raises. Disabled in config/test.exs;
+  # tests call `EmailLoginCodeBoot.run_at_boot/1` directly.
+  defp maybe_add_pocket_id_email_login_code(children, flag) do
+    if flag.(:platform, :start_pocket_id_email_login_code, true) do
+      children ++
+        [
+          Supervisor.child_spec(
+            {Task, fn -> Platform.SignInAdmin.EmailLoginCodeBoot.run_at_boot() end},
+            id: :pocket_id_email_login_code,
+            restart: :transient
+          )
+        ]
+    else
+      children
+    end
+  end
+
   defp maybe_add_burrow_docs_seed(children, flag) do
     if flag.(:platform, :start_burrow_docs_seed, true) do
       children ++
@@ -705,6 +728,19 @@ defmodule Platform.Application do
     if flag.(:platform, :start_habits_pruner, true) do
       idx = Enum.find_index(children, &(&1 == PlatformWeb.Endpoint)) || length(children)
       List.insert_at(children, idx, Platform.Habits.Pruner)
+    else
+      children
+    end
+  end
+
+  # Calendar DraftPruner (task 01a1b8a5 stage 5): daily delete of
+  # calendar_drafts rows whose link expired more than a week ago. Needs Repo.
+  # Disabled in config/test.exs — tests call
+  # `Platform.Calendar.Draft.prune_expired/1` directly.
+  defp maybe_add_calendar_draft_pruner(children, flag) do
+    if flag.(:platform, :start_calendar_draft_pruner, true) do
+      idx = Enum.find_index(children, &(&1 == PlatformWeb.Endpoint)) || length(children)
+      List.insert_at(children, idx, Platform.Calendar.DraftPruner)
     else
       children
     end
@@ -902,6 +938,20 @@ defmodule Platform.Application do
     if flag.(:platform, :start_summarizer_sweeper, true) do
       idx = Enum.find_index(children, &(&1 == PlatformWeb.Endpoint)) || length(children)
       List.insert_at(children, idx, Platform.Meetings.SummarizerSweeper)
+    else
+      children
+    end
+  end
+
+  # Feedback IntakeSweeper (task 01a1e670 stage 2): every 5 minutes it
+  # re-fetches and re-classifies a bounded batch of pending feedback intake
+  # records. Repo-backed and idle while the feedback policy is off or the
+  # classifier has no model. Disabled in test env; tests start their own
+  # per-case instance or call `retry_pending/1` directly.
+  defp maybe_add_feedback_intake_sweeper(children, flag) do
+    if flag.(:platform, :start_feedback_intake_sweeper, true) do
+      idx = Enum.find_index(children, &(&1 == PlatformWeb.Endpoint)) || length(children)
+      List.insert_at(children, idx, Platform.Feedback.IntakeSweeper)
     else
       children
     end

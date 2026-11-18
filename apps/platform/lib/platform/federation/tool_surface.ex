@@ -4429,8 +4429,9 @@ defmodule Platform.Federation.ToolSurface do
 
   # ── Messaging tools ──────────────────────────────────────────────────────
 
-  def execute(tool, args, context) when tool in ["calendar_list", "calendar_propose"],
-    do: Platform.Federation.CalendarTools.execute(tool, args, context)
+  def execute(tool, args, context)
+      when tool in ["calendar_list", "calendar_propose", "calendar_draft"],
+      do: Platform.Federation.CalendarTools.execute(tool, args, context)
 
   def execute("send_media", args, context) do
     space_id = Map.get(args, "space_id")
@@ -8345,16 +8346,23 @@ defmodule Platform.Federation.ToolSurface do
       limit = Map.get(args, "limit") |> normalize_limit(50, 200)
       content_type = Map.get(args, "content_type")
 
+      exclude = mail_file_exclude(context)
+
       files =
         Platform.Files.list_files_for_project(project.id,
           limit: limit,
-          content_type: content_type
+          content_type: content_type,
+          exclude: exclude
         )
 
       # Task 01a04a7a stage 2: `total` is counted in the database over the
       # same filters (shared query builder in `Platform.Files`); `count`
       # keeps meaning the page length. No offset, so the page starts at 0.
-      total = Platform.Files.count_files_for_project(project.id, content_type: content_type)
+      total =
+        Platform.Files.count_files_for_project(project.id,
+          content_type: content_type,
+          exclude: exclude
+        )
 
       {:ok,
        ResultBound.paged(:files, Enum.map(files, &file_summary/1), total, 0, %{
@@ -8472,8 +8480,9 @@ defmodule Platform.Federation.ToolSurface do
 
   # ── Inbound mail reads (task 01a13ba5-42a7-7000-8f2b-4c63003f3f92 stage 2) ──
   #
-  # Read-only. The participant check lives in `Mail.InboundAccess`; every
-  # `mail_inbound_get` miss returns ONE envelope (`mail_inbound_not_found/0`)
+  # Read-only. The grant, audience and participant checks live in
+  # `Mail.InboundAccess` (task 01a1ea5b stage 3); every miss returns ONE
+  # envelope (`mail_inbound_not_found/1`)
   # so the tool is not an existence oracle.
 
   def execute("mail_inbound_list", args, context) do
@@ -8489,13 +8498,25 @@ defmodule Platform.Federation.ToolSurface do
         [limit: limit, offset: offset, since: since]
         |> Keyword.put(:account_id, mail_optional_string(args, "account_id"))
 
-      {rows, total} = Platform.Mail.InboundAccess.list(agent.id, org_id, opts)
-      # Echo the page bounds `InboundAccess.list/3` actually applied.
-      %{max: max_limit} = Platform.Mail.InboundAccess.limits()
-      limit = limit |> max(1) |> min(max_limit)
-      offset = max(offset, 0)
+      space_id = mail_optional_string(args, "space_id")
 
-      {:ok, ResultBound.paged(:messages, rows, total, offset, %{limit: limit, offset: offset})}
+      case Platform.Mail.InboundAccess.list(agent.id, org_id, space_id, opts) do
+        {:ok, %{messages: rows, total: total} = result} ->
+          # Echo the page bounds `InboundAccess.list/4` actually applied.
+          %{max: max_limit} = Platform.Mail.InboundAccess.limits()
+          limit = limit |> max(1) |> min(max_limit)
+          offset = max(offset, 0)
+
+          extra =
+            result
+            |> Map.take([:audience, :access_line, :withheld_notice])
+            |> Map.merge(%{limit: limit, offset: offset})
+
+          {:ok, ResultBound.paged(:messages, rows, total, offset, extra)}
+
+        :not_found ->
+          {:error, mail_inbound_not_found("mail_inbound_list")}
+      end
     end
   end
 
@@ -8503,8 +8524,44 @@ defmodule Platform.Federation.ToolSurface do
     with :ok <- mail_enabled("mail_inbound_get"),
          {:ok, agent} <- mail_agent(context, "mail_inbound_get"),
          {:ok, id} <- require_string(args, "id", "mail_inbound_get"),
-         {:ok, row} <- mail_inbound_fetch(agent, id) do
+         {:ok, row} <- mail_inbound_fetch(agent, mail_optional_string(args, "space_id"), id) do
       {:ok, row}
+    end
+  end
+
+  # The metadata-only mail digest (task 01a1ea5b stage 5): no grant needed,
+  # the briefing's audience rule applied to the humans of the named space
+  # (`Platform.Mail.Digest.for_audience/2`), org-pinned like mail_inbound_list.
+  def execute("mail_digest", args, context) do
+    with :ok <- mail_enabled("mail_digest"),
+         {:ok, agent} <- mail_agent(context, "mail_digest"),
+         {:ok, org_id} <- require_string(args, "org_id", "mail_digest"),
+         :ok <- authorize_mail_read_org(agent, org_id) do
+      case Platform.Mail.InboundAccess.space_audience(
+             agent.id,
+             mail_optional_string(args, "space_id")
+           ) do
+        {:ok, audience} ->
+          digest = Platform.Mail.Digest.for_audience(audience, org_id)
+
+          {:ok,
+           %{
+             org_id: digest.org_id,
+             mailboxes: digest.mailboxes,
+             rows: Enum.map(digest.rows, &mail_digest_row/1),
+             audience: Enum.map(audience, &(&1.name || "a person"))
+           }}
+
+        :not_found ->
+          {:error,
+           %{
+             error: "mail_digest: space not found",
+             code: :not_found,
+             recoverable: false,
+             suggestion:
+               "Pass `space_id`: the id of the space you are answering in, which you must be a participant of."
+           }}
+      end
     end
   end
 
@@ -8512,7 +8569,8 @@ defmodule Platform.Federation.ToolSurface do
     with {:ok, file_id} <- require_string(args, "file_id", "file_get_metadata"),
          %Platform.Files.File{} = file <- Platform.Files.get_file(file_id),
          {:ok, project} <- fetch_project_for_files(file.project_id, "file_get_metadata"),
-         :ok <- authorize_file_access(context, project) do
+         :ok <- authorize_file_access(context, project),
+         :ok <- authorize_mail_file(context, file) do
       {:ok, file_metadata(file)}
     else
       nil ->
@@ -8549,6 +8607,7 @@ defmodule Platform.Federation.ToolSurface do
             results
             |> Enum.map(&format_file_hit(&1, project.id))
             |> Enum.reject(&is_nil/1)
+            |> drop_unreadable_mail_hits(context)
 
           {:ok,
            %{
@@ -13109,6 +13168,7 @@ defmodule Platform.Federation.ToolSurface do
          file when not is_nil(file) <- Platform.Files.get_file(file_id),
          {:ok, project} <- fetch_project_for_files(file.project_id, "file_get_text"),
          :ok <- authorize_file_access(context, project),
+         :ok <- authorize_mail_file(context, file),
          :ok <- ensure_content_readable_by_agents(file),
          text_row when not is_nil(text_row) <- Platform.Files.fetch_extracted_text(file.id) do
       page = Map.get(args, "page")
@@ -13194,6 +13254,7 @@ defmodule Platform.Federation.ToolSurface do
          %Platform.Files.File{} = file <- Platform.Files.get_file(file_id),
          {:ok, project} <- fetch_project_for_files(file.project_id, "file_get_text"),
          :ok <- authorize_file_access(context, project),
+         :ok <- authorize_mail_file(context, file),
          :ok <- ensure_content_readable_by_agents(file),
          :ok <- check_inline_file_read_size(file.byte_size),
          {:ok, bytes} <- read_file_bytes(file) do
@@ -14285,23 +14346,68 @@ defmodule Platform.Federation.ToolSurface do
   end
 
   # A tenant-pinned agent reading a sibling org's row gets the SAME not-found
-  # as an unknown id; so does every miss `InboundAccess.get/2` reports.
-  defp mail_inbound_fetch(agent, id) do
-    with {:ok, row} <- Platform.Mail.InboundAccess.get(agent.id, id),
-         :ok <- authorize_org_filter(agent, row.org_id) do
-      {:ok, row}
-    else
-      _ -> {:error, mail_inbound_not_found()}
+  # as an unknown id; so does every miss `InboundAccess.get/3` reports. A row
+  # of a mailbox the agent is granted but the audience may not read is
+  # WITHHELD: the notice and the audience, never the row.
+  defp mail_inbound_fetch(agent, space_id, id) do
+    case Platform.Mail.InboundAccess.get(agent.id, space_id, id) do
+      {:ok, row} ->
+        case authorize_org_filter(agent, row.org_id) do
+          :ok -> {:ok, row}
+          _ -> {:error, mail_inbound_not_found("mail_inbound_get")}
+        end
+
+      {:withheld, withheld} ->
+        case authorize_org_filter(agent, withheld.org_id) do
+          :ok -> {:error, mail_inbound_withheld(withheld)}
+          _ -> {:error, mail_inbound_not_found("mail_inbound_get")}
+        end
+
+      :not_found ->
+        {:error, mail_inbound_not_found("mail_inbound_get")}
     end
   end
 
-  defp mail_inbound_not_found do
+  defp mail_digest_row(row) do
+    base = %{
+      customer: row.customer,
+      mailbox: row.mailbox,
+      readable: row.readable,
+      people: row.people,
+      agents: row.agents,
+      open_threads: row.open_threads,
+      last_activity_at: row.last_activity_at && DateTime.to_iso8601(row.last_activity_at)
+    }
+
+    if row.readable, do: Map.put(base, :account_id, row.account_id), else: base
+  end
+
+  defp mail_inbound_not_found(tool) do
     %{
-      error: "mail_inbound_get: email not found",
+      error:
+        if(tool == "mail_inbound_get",
+          do: "mail_inbound_get: email not found",
+          else: "mail_inbound_list: space not found"
+        ),
       code: :not_found,
       recoverable: false,
       suggestion:
-        "Use an id from mail_inbound_list. You can read only mail of accounts whose inbound space you participate in."
+        "Pass `space_id`: the id of the space you are answering in, which you must be a participant of. " <>
+          "Use an id from mail_inbound_list. You can read only mail of mailboxes you are granted, " <>
+          "and only what every person in that space may read."
+    }
+  end
+
+  defp mail_inbound_withheld(withheld) do
+    %{
+      error: "mail_inbound_get: withheld from this audience",
+      code: :withheld,
+      recoverable: false,
+      withheld_notice: withheld.withheld_notice,
+      audience: withheld.audience,
+      access_line: withheld.access_line,
+      suggestion:
+        "Tell the person exactly the withheld_notice. Do not describe, count or hint at the email."
     }
   end
 
@@ -14385,7 +14491,14 @@ defmodule Platform.Federation.ToolSurface do
           {:draft_not_editable, false, "the draft is no longer a draft"}
 
         :account_not_found ->
-          {:account_not_found, true, "no such account in this org"}
+          {:account_not_found, true, "no such account in this org that you are granted"}
+
+        :account_or_on_behalf_required ->
+          {:account_or_on_behalf_required, true,
+           "name account_id (a mailbox you are granted) or on_behalf_of_user_id"}
+
+        :on_behalf_cannot_read_account ->
+          {:on_behalf_cannot_read_account, true, "on_behalf_of_user_id cannot read that mailbox"}
 
         :sender_key_not_found ->
           {:sender_key_not_found, true, "no such sender key on the account"}
@@ -14697,6 +14810,35 @@ defmodule Platform.Federation.ToolSurface do
   # cached extracted text via `Platform.Files.fetch_extracted_text/1` —
   # the same store `file_get_text` reads from, so callers see consistent
   # bodies between the two surfaces.
+  # A file mail was added to is readable only by an agent granted that mail's
+  # account (task 01a1ea5b stage 2, `Platform.Mail.Ownership`). A denied file
+  # is `:access_denied`, which every file tool reports as not-found.
+  defp mail_file_principal(context), do: {:agent, Map.get(context, :agent_id)}
+
+  defp mail_file_exclude(context),
+    do: Platform.Mail.Ownership.unreadable_mail_file_ids_query(mail_file_principal(context))
+
+  defp authorize_mail_file(context, %Platform.Files.File{id: id}) do
+    if MapSet.member?(
+         Platform.Mail.Ownership.mail_file_ids_unreadable_by(mail_file_principal(context), [id]),
+         id
+       ),
+       do: {:error, :access_denied},
+       else: :ok
+  end
+
+  # Memory hits come from the index, not the database, so they can only be
+  # filtered after the search.
+  defp drop_unreadable_mail_hits(hits, context) do
+    unreadable =
+      Platform.Mail.Ownership.mail_file_ids_unreadable_by(
+        mail_file_principal(context),
+        Enum.map(hits, & &1.file_id)
+      )
+
+    Enum.reject(hits, &MapSet.member?(unreadable, &1.file_id))
+  end
+
   defp format_file_hit(memory_result, project_id) do
     entry_id =
       Map.get(memory_result, :entry_id) || Map.get(memory_result, "entry_id")

@@ -16,6 +16,12 @@ defmodule PlatformWeb.MeetingLiveProjectScopeTest do
   """
   use PlatformWeb.ConnCase, async: true
 
+  # The meetings LISTING survives only on the `meet.` host's member surface
+  # (task 01a1b8a5 stage 4, the `meet-member-meetings-index` ParallelUI
+  # shim); the app-host `/meetings` redirects to Calendar. These tests
+  # exercise that surviving listing, so they reach it the way a member does.
+  defp meet_member_host(conn), do: %{conn | host: "meet.example.com"}
+
   import Phoenix.LiveViewTest
 
   alias Platform.Accounts.User
@@ -58,7 +64,7 @@ defmodule PlatformWeb.MeetingLiveProjectScopeTest do
   defp project_option_texts(html) do
     html
     |> LazyHTML.from_fragment()
-    |> LazyHTML.query("select[data-role=start-meeting-project] option")
+    |> LazyHTML.query("#meetings-new-room-form select[name=project_id] option")
     |> Enum.map(&(&1 |> LazyHTML.text() |> String.trim()))
   end
 
@@ -72,7 +78,7 @@ defmodule PlatformWeb.MeetingLiveProjectScopeTest do
     %{acme_org_id: acme_org_id, own: own, foreign: foreign}
   end
 
-  describe "start-meeting project picker scoping" do
+  describe "the start-a-room project picker scoping" do
     # The plain member is seeded into a TENANT org, not the root org. Per
     # Alex's 2026-08-05 sub-orgs ruling, sub-orgs are filtering mechanisms
     # rather than walls, so `Tenancy.visibility/1` returns `:root_all` for a
@@ -98,16 +104,12 @@ defmodule PlatformWeb.MeetingLiveProjectScopeTest do
       refute Tenancy.root_member?(user)
 
       conn = init_test_session(conn, current_user_id: user.id)
-      {:ok, view, _html} = live(conn, "/meetings?view=calendar")
+      {:ok, view, _html} = live(meet_member_host(conn), "/meetings")
 
-      # The picker only renders inside the start-meeting sheet, which the
-      # FAB opens (on the calendar half; task 01a18d9f stage 4 gave the list
-      # view the v4 modal); the dead render never contains it.
-      options =
-        view
-        |> element("[data-role=start-meeting-fab]")
-        |> render_click()
-        |> project_option_texts()
+      # The picker renders inside the v4 "New meeting" (start a room now)
+      # modal; the scheduled-meeting sheet that also carried one is gone
+      # (task 01a1b8a5 stage 4). The dead render never contains it.
+      options = view |> render_click("open_new_room", %{}) |> project_option_texts()
 
       # Positive control — without it, `@projects == []` passes the refute.
       assert own.name in options
@@ -121,13 +123,9 @@ defmodule PlatformWeb.MeetingLiveProjectScopeTest do
       assert Tenancy.root_admin?(admin) == true
 
       conn = init_test_session(conn, current_user_id: admin.id)
-      {:ok, view, _html} = live(conn, "/meetings?view=calendar")
+      {:ok, view, _html} = live(meet_member_host(conn), "/meetings")
 
-      options =
-        view
-        |> element("[data-role=start-meeting-fab]")
-        |> render_click()
-        |> project_option_texts()
+      options = view |> render_click("open_new_room", %{}) |> project_option_texts()
 
       assert own.name in options
       assert foreign.name in options
@@ -200,7 +198,7 @@ defmodule PlatformWeb.MeetingLiveProjectScopeTest do
       refute Tenancy.root_admin?(user)
       refute Tenancy.root_member?(user)
 
-      {:ok, view, html} = live(index_conn(conn, user), "/meetings")
+      {:ok, view, html} = live(meet_member_host(index_conn(conn, user)), "/meetings")
 
       ids = meeting_assign_ids(view)
       assert own_meeting.id in ids
@@ -216,7 +214,9 @@ defmodule PlatformWeb.MeetingLiveProjectScopeTest do
       # same route and the same fixture. That is what makes the absence
       # above a scoping fact rather than a rendering accident.
       other = user!("member", foreign_org_id)
-      {:ok, _other_view, other_html} = live(index_conn(conn, other), "/meetings")
+
+      {:ok, _other_view, other_html} =
+        live(meet_member_host(index_conn(conn, other)), "/meetings")
 
       assert other_html =~ foreign_meeting.name
       refute other_html =~ own_meeting.name
@@ -231,7 +231,7 @@ defmodule PlatformWeb.MeetingLiveProjectScopeTest do
       {_foreign_project, foreign_meeting} = meeting!(foreign_org_id, "Foreign")
 
       user = user!("member", own_org_id)
-      {:ok, view, html} = live(index_conn(conn, user), "/meetings")
+      {:ok, view, html} = live(meet_member_host(index_conn(conn, user)), "/meetings")
 
       assert html =~ own_meeting.name
       refute html =~ foreign_meeting.name

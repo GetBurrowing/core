@@ -60,8 +60,8 @@ defmodule Platform.Social.PublishRetry do
         join: p in Profile,
         on: p.id == a.profile_id,
         where:
-          po.status == "approved" and po.refused_reason == "rate_limited" and
-            po.retry_after <= ^now,
+          po.flow == "legacy" and po.status == "approved" and
+            po.refused_reason == "rate_limited" and po.retry_after <= ^now,
         order_by: [asc: po.retry_after, asc: po.id],
         select: {p.org_id, po.id}
       )

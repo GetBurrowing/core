@@ -1,0 +1,109 @@
+name: Game studio checks
+on:
+  push:
+    branches: [feat/game-studio]
+  workflow_dispatch:
+permissions:
+  contents: read
+jobs:
+  smoke:
+    runs-on: ubuntu-latest
+    container:
+      image: ghcr.io/getburrowing/elixir:1.20.4-otp-28-slim@sha256:a61672ebbafaf93ec6baeee14657fa73407e4f7fe57e92b2e3f063d25d0d3244
+      credentials:
+        username: ${{ github.actor }}
+        password: ${{ secrets.GITHUB_TOKEN }}
+    services:
+      postgres:
+        image: ghcr.io/getburrowing/postgres:16-alpine@sha256:0cefaabd882e42bcb2a2f3dc56d3ce4770560ba62fd7f197f1a2e008fd5731ab
+        credentials:
+          username: ${{ github.actor }}
+          password: ${{ secrets.GITHUB_TOKEN }}
+        env:
+          POSTGRES_USER: postgres
+          POSTGRES_PASSWORD: postgres
+        options: >-
+          --health-cmd pg_isready
+          --health-interval 10s
+          --health-timeout 5s
+          --health-retries 5
+    env:
+      MIX_ENV: test
+      PGHOST: postgres
+      PGUSER: postgres
+      PGPASSWORD: postgres
+      STUDIO_EVIDENCE: /tmp/studio-evidence
+    defaults:
+      run:
+        working-directory: apps/platform
+    steps:
+      - name: Tools
+        working-directory: /
+        run: |
+          apt-get update
+          apt-get install -y --no-install-recommends build-essential ca-certificates curl git
+          update-ca-certificates
+      - uses: actions/checkout@v5
+        with:
+          fetch-depth: 0
+      - name: Hex
+        run: |
+          mix local.hex --force
+          mix local.rebar --force
+      - uses: actions/cache@v5
+        id: cache
+        with:
+          path: |
+            apps/platform/deps
+            apps/platform/_build
+          key: game-page-${{ runner.os }}-${{ hashFiles('apps/platform/mix.lock') }}
+      - name: Dependencies
+        run: |
+          mix deps.get
+          sh "$GITHUB_WORKSPACE/scripts/fetch-github-release-binaries.sh" nifs .
+      - name: Format studio changes
+        run: |
+          git config --global --add safe.directory "$GITHUB_WORKSPACE"
+          cd "$GITHUB_WORKSPACE"
+          git diff --name-only origin/main...HEAD -- '*.ex' '*.exs' '*.heex' > /tmp/studio-files
+          cd apps/platform
+          sed 's|^|../../|' /tmp/studio-files | xargs mix format --dot-formatter .formatter.exs
+          cd ../..
+          tar -czf studio-format.tar.gz -T /tmp/studio-files
+      - uses: actions/upload-artifact@v4
+        with:
+          name: studio-format
+          path: studio-format.tar.gz
+      - name: Exercise studio and existing navigation boundaries
+        run: |
+          mix ecto.create
+          mix ecto.migrate
+          mix test test/platform_web/live/game_studio_live_test.exs test/platform/orchestration/task_router_stage_isolation_test.exs test/platform_web/components/gaming_shell_bottom_nav_test.exs test/platform_web/components/gaming_shell_install_switch_test.exs test/platform_web/module_gate_test.exs test/platform_web/controllers/gaming_controller_test.exs test/platform_web/controllers/app_handoff_landing_test.exs test/platform/design/bottom_nav_glass_guard_test.exs test/platform/design/placeholder_contrast_test.exs test/platform/repo_lookup_boundary_test.exs test/platform/release/irreversible_migrations_test.exs test/platform/org/wiki/context_t4_e2e_test.exs test/platform/regression/install_identity_guard_test.exs
+      - uses: actions/setup-node@v5
+        with:
+          node-version: 24
+      - name: Render actual studio at desktop and phone sizes
+        run: |
+          cd assets
+          npm ci
+          npx vitest run test/hooks/native_tab_bar.test.js test/hooks/native_tab_bar_contract.test.js test/hooks/jump_anchor_stylesheet.test.js
+          cd ..
+          mix assets.setup
+          mix assets.build
+          mkdir -p /tmp/studio-evidence/assets /tmp/studio-screens
+          cp -r priv/static/assets priv/static/images priv/static/fonts /tmp/studio-evidence/
+          npm install --prefix /tmp/studio-browser playwright@1.58.2
+          /tmp/studio-browser/node_modules/.bin/playwright install --with-deps chromium
+          STUDIO_PLAYWRIGHT=/tmp/studio-browser/node_modules/playwright node "$GITHUB_WORKSPACE/.github/scripts/studio-layout.cjs"
+      - uses: actions/upload-artifact@v4
+        if: always()
+        with:
+          name: studio-screens
+          path: /tmp/studio-screens
+      - uses: actions/cache/save@v5
+        if: always() && steps.cache.outputs.cache-hit != 'true'
+        with:
+          path: |
+            apps/platform/deps
+            apps/platform/_build
+          key: game-page-${{ runner.os }}-${{ hashFiles('apps/platform/mix.lock') }}

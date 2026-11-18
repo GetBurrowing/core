@@ -269,6 +269,8 @@ defmodule Platform.Role do
     Platform.Responsibilities.StallRegistry,
     Platform.Meetings.SummarizerSweeper,
     Platform.Meetings.CandidateSweeper,
+    # Retries pending feedback intake records every 5 minutes (task 01a1e670).
+    Platform.Feedback.IntakeSweeper,
     Platform.Meetings.CompletionSweeper,
     Platform.Security.Sweeper,
     Platform.Chat.SpacePurger,
@@ -278,6 +280,7 @@ defmodule Platform.Role do
     Platform.Prototypes.Purger,
     Platform.Memory.Insights.Purger,
     Platform.Habits.Pruner,
+    Platform.Calendar.DraftPruner,
     Platform.Memory.Insights.Disseminator,
     Platform.Files.CatalogEmitter,
     Platform.Tasks.DeployMergeReconciler,
@@ -292,7 +295,9 @@ defmodule Platform.Role do
     Platform.Mail.Outbox,
     :canvas_search_backfill,
     :burrow_docs_seed,
-    :default_space_seed
+    :default_space_seed,
+    # Once-per-install pocket-id email login code switch (task 01a1e65e).
+    :pocket_id_email_login_code
   ]
 
   # Web children that `Platform.Application.children/2` adds only under :web,
@@ -684,7 +689,7 @@ defmodule Platform.Role do
     },
     %{
       target:
-        "Platform.Chat.AttentionRouter: mentioned?/2,3, extract_bracketed_tokens/1, untrusted_inbound?/1, voice_record?/1, dm_voice_record?/2",
+        "Platform.Chat.AttentionRouter: mentioned?/2,3, extract_bracketed_tokens/1, untrusted_inbound?/1, voice_record?/1, dm_voice_record?/2, caller_suppressed?/1",
       handling: :pure,
       note: "Platform.Chat and Responsibilities.Router call them; no process state"
     },

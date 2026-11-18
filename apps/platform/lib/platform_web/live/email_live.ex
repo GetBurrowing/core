@@ -56,6 +56,46 @@ defmodule PlatformWeb.EmailLive do
   posted to chat and nothing is broadcast on `"mail:inbound"`, and the row
   says so before the admin clicks.
 
+  ## Mailbox ownership (task 01a1ea5b stage 2)
+
+  Every list, count and deep link reads through `Platform.Mail.Mailbox` /
+  `Platform.Mail.Drafts` with the viewer, constrained in the query to the
+  accounts the viewer may read (`Platform.Mail.Ownership`). A crafted
+  `?account=` for an unreadable account lists nothing, and
+  `/email/messages/:id` or `/email/drafts/:id` for one takes the same
+  not-found path as an unknown id. The account filter lists only readable
+  accounts; the Accounts pane lists every account for an org admin
+  (settings), and only readable ones for a member.
+
+  ## Mailbox switcher, access line and Access panel (task 01a1ea5b stage 4)
+
+  The mailbox, not the org, is the unit (design canvas
+  01a1ea5b-6c3e-7000-ae5c-8b802d1e6674). The switcher (`mailbox-switcher`,
+  a left rail at `lg`, a horizontal strip above it) lists ONLY the viewer's
+  readable mailboxes, grouped "My mailboxes" (personal, owned by the
+  viewer) and "Shared with me"; an empty group is hidden, and a mailbox the
+  viewer cannot read is absent, never greyed. An unassigned account appears
+  only in an org admin's Accounts pane, as settings. Picking a mailbox is
+  the `?account=` filter; with one readable mailbox it is the default.
+
+  The chosen mailbox gets a header ("<Owner first name>'s mailbox", or the
+  account name for a shared one) and the access line (`access-line`) under
+  it, read from `Platform.Mail.Ownership.audience/2`, which answers only a
+  reader. Access opens the Access panel (`access-panel`): the right-hand
+  pane at `lg`, a bottom sheet below it. A manager (`can_manage_access?/2`)
+  gets `Ownership.list_grants/2`'s rows with Revoke, the revoke confirm
+  (`access-revoke-confirm`) and Grant; anyone else who reads it gets the
+  same panel read-only. The account editor carries the admin-only owner
+  form (`set_owner`) and, for an account the admin cannot read, the
+  `settings-only-note`.
+
+  `grant_agent`, `revoke_agent`, `grant_member`, `revoke_member`,
+  `set_digest_opt_in` (stage 5: the owner's morning-briefing opt-in,
+  `access-digest-opt-in`) and
+  `set_owner` resolve the account from the event's own `account_id` and
+  call the actor-checked `Platform.Mail.Ownership` writes; nothing here
+  decides who may write, so a crafted event writes nothing.
+
   ## Inbound mail is outside text
 
   A message body renders as escaped plain text only — no HTML, no markdown,
@@ -99,6 +139,7 @@ defmodule PlatformWeb.EmailLive do
   alias Platform.Mail.Drafts
   alias Platform.Mail.Inbound
   alias Platform.Mail.Mailbox
+  alias Platform.Mail.Ownership
   alias Platform.Tenancy
 
   defmodule NotFoundError do
@@ -146,6 +187,15 @@ defmodule PlatformWeb.EmailLive do
      |> assign(:confirm, nil)
      |> assign(:send_result, nil)
      |> assign(:senders, [])
+     |> assign(:readable_accounts, [])
+     |> assign(:readable_ids, MapSet.new())
+     |> assign(:owner_names, %{})
+     |> assign(:mailbox, nil)
+     |> assign(:mailbox_audience, nil)
+     |> assign(:access, nil)
+     |> assign(:grant_picker, false)
+     |> assign(:revoke_confirm, nil)
+     |> assign(:org_people, [])
      |> assign(:people, [])
      |> assign(:provenance, %{})
      |> assign(:editor_account, nil)
@@ -160,6 +210,8 @@ defmodule PlatformWeb.EmailLive do
       |> assign(:tab, tab_param(params["tab"]))
       |> assign_org(params)
       |> assign(:account_filter, account_param(params["account"]))
+      |> assign_mailbox()
+      |> close_access()
       |> assign(:add_error, nil)
       |> assign(:form_error, nil)
       |> reset_compose(socket.assigns.live_action)
@@ -205,7 +257,55 @@ defmodule PlatformWeb.EmailLive do
     socket
     |> assign(:org_id, org_id)
     |> assign(:is_admin, Mail.can_manage_accounts?(socket.assigns.user, org_id))
-    |> assign(:accounts, Mail.list_accounts(org_id))
+    |> assign_accounts()
+  end
+
+  # `@readable_accounts` (the account filter and the switcher) are the
+  # accounts the viewer may READ (`Mail.list_readable_accounts/2`, task
+  # 01a1ea5b stage 2). `@accounts` (the Accounts pane, settings) is every
+  # account for an org admin, who gets settings rows for mailboxes they
+  # cannot read, and the readable ones for everyone else.
+  defp assign_accounts(socket) do
+    %{user: user, org_id: org_id, is_admin: admin?} = socket.assigns
+    readable = Mail.list_readable_accounts(user, org_id)
+
+    accounts = if(admin?, do: Mail.list_accounts(org_id), else: readable)
+
+    owner_names =
+      accounts
+      |> Enum.map(& &1.owner_user_id)
+      |> Enum.filter(&is_binary/1)
+      |> Platform.Accounts.get_users_map(include_archived: true)
+      |> Map.new(fn {id, user} -> {id, user.name || user.email} end)
+
+    socket
+    |> assign(:readable_accounts, readable)
+    |> assign(:readable_ids, MapSet.new(readable, & &1.id))
+    |> assign(:accounts, accounts)
+    |> assign(:owner_names, owner_names)
+  end
+
+  # The mailbox the header and access line describe: the `?account=` filter
+  # when it names a readable mailbox, the only one when there is exactly
+  # one, else none ("All mailboxes"). Its audience comes from
+  # `Ownership.audience/2`, which answers a reader only.
+  defp assign_mailbox(socket) do
+    %{readable_accounts: readable, account_filter: filter, user: user} = socket.assigns
+
+    mailbox =
+      case {filter, readable} do
+        {nil, [only]} -> only
+        {nil, _} -> nil
+        {id, _} -> Enum.find(readable, &(&1.id == id))
+      end
+
+    audience =
+      case mailbox && Ownership.audience(user, mailbox) do
+        {:ok, audience} -> audience
+        _ -> nil
+      end
+
+    socket |> assign(:mailbox, mailbox) |> assign(:mailbox_audience, audience)
   end
 
   # Leaving the editor for any other screen drops its in-memory state. A
@@ -244,7 +344,7 @@ defmodule PlatformWeb.EmailLive do
   end
 
   defp apply_action(socket, :message, %{"id" => id}) do
-    org_id = Mailbox.inbound_org_id(id)
+    org_id = Mailbox.inbound_org_id(socket.assigns.user, id)
 
     socket =
       if org_id && org_id != socket.assigns.org_id &&
@@ -254,7 +354,7 @@ defmodule PlatformWeb.EmailLive do
         socket
       end
 
-    case Mailbox.get_inbound(socket.assigns.org_id, id) do
+    case Mailbox.get_inbound(socket.assigns.user, socket.assigns.org_id, id) do
       nil ->
         socket
         |> put_flash(:error, "That email is not in this org's inbox.")
@@ -312,6 +412,7 @@ defmodule PlatformWeb.EmailLive do
         |> assign(:replacing, MapSet.new())
         |> assign(:form, account_form(account, %{}))
         |> assign(:channels, Mailbox.org_channels(socket.assigns.org_id))
+        |> assign(:org_people, Drafts.org_people(socket.assigns.org_id))
         |> load_backfill()
 
       _ ->
@@ -325,15 +426,16 @@ defmodule PlatformWeb.EmailLive do
     socket =
       case Drafts.fetch(id) do
         {:ok, %{org_id: org_id}} when org_id != socket.assigns.org_id ->
-          if Enum.any?(socket.assigns.orgs, &(&1.id == org_id)),
-            do: assign_org(socket, %{"org" => org_id}),
-            else: socket
+          if Enum.any?(socket.assigns.orgs, &(&1.id == org_id)) and
+               Drafts.get_visible(socket.assigns.user, org_id, id),
+             do: assign_org(socket, %{"org" => org_id}),
+             else: socket
 
         _ ->
           socket
       end
 
-    case Drafts.get(socket.assigns.org_id, id) do
+    case Drafts.get_visible(socket.assigns.user, socket.assigns.org_id, id) do
       %{status: "draft"} = draft ->
         socket
         |> assign(:tab, "drafts")
@@ -364,25 +466,25 @@ defmodule PlatformWeb.EmailLive do
     org_id = socket.assigns.org_id
 
     socket
-    |> assign(:senders, Drafts.sendable_senders(org_id))
+    |> assign(:senders, Drafts.sendable_senders(socket.assigns.user, org_id))
     |> assign(:people, Drafts.org_people(org_id))
   end
 
   defp load_lists(socket) do
-    %{org_id: org_id, account_filter: account_id, tab: tab} = socket.assigns
+    %{user: user, org_id: org_id, account_filter: account_id, tab: tab} = socket.assigns
     opts = [account_id: account_id]
 
     counts = %{
-      "inbox" => Mailbox.count_inbound(org_id, opts),
-      "drafts" => Mailbox.count_drafts(org_id, opts)
+      "inbox" => Mailbox.count_inbound(user, org_id, opts),
+      "drafts" => Mailbox.count_drafts(user, org_id, opts)
     }
 
     rows =
       case tab do
-        "inbox" -> Mailbox.list_inbound(org_id, opts)
-        "drafts" -> Mailbox.list_drafts(org_id, opts)
-        "sent" -> Mailbox.list_deliveries(org_id, :sent, opts)
-        "refused" -> Mailbox.list_deliveries(org_id, :refused, opts)
+        "inbox" -> Mailbox.list_inbound(user, org_id, opts)
+        "drafts" -> Mailbox.list_drafts(user, org_id, opts)
+        "sent" -> Mailbox.list_deliveries(user, org_id, :sent, opts)
+        "refused" -> Mailbox.list_deliveries(user, org_id, :refused, opts)
       end
 
     provenance = if tab == "drafts", do: Drafts.provenance(rows), else: %{}
@@ -410,6 +512,103 @@ defmodule PlatformWeb.EmailLive do
      push_patch(socket,
        to: email_path(%{socket.assigns | org_id: org_id, account_filter: account}, "/email")
      )}
+  end
+
+  # ── Events: mailbox access (task 01a1ea5b stage 4) ─────────────────────
+  #
+  # Every write resolves the account from the event's own `account_id` and
+  # goes to an actor-checked `Platform.Mail.Ownership` function. The panel's
+  # state only decides what is SHOWN.
+
+  def handle_event("open_access", %{"account_id" => id}, socket) do
+    with %Account{} = account <- Mail.get_account(socket.assigns.org_id, id),
+         %{} = access <- load_access(socket.assigns.user, account) do
+      {:noreply,
+       socket
+       |> assign(:access, access)
+       |> assign(:grant_picker, false)
+       |> assign(:revoke_confirm, nil)
+       |> assign(:pane, nil)
+       |> assign(:selected_message, nil)}
+    else
+      _ -> {:noreply, put_flash(socket, :error, "You cannot see who reads that mailbox.")}
+    end
+  end
+
+  def handle_event("close_access", _params, socket), do: {:noreply, close_access(socket)}
+
+  def handle_event("open_grant_picker", _params, socket),
+    do: {:noreply, socket |> assign(:grant_picker, true) |> assign(:revoke_confirm, nil)}
+
+  def handle_event("close_grant_picker", _params, socket),
+    do: {:noreply, assign(socket, :grant_picker, false)}
+
+  def handle_event("confirm_revoke", %{"agent_id" => agent_id}, socket) do
+    case socket.assigns.access do
+      %{agents: agents} ->
+        {:noreply,
+         socket
+         |> assign(:revoke_confirm, Enum.find(agents, &(&1.id == agent_id)))
+         |> assign(:grant_picker, false)}
+
+      _ ->
+        {:noreply, socket}
+    end
+  end
+
+  def handle_event("cancel_revoke", _params, socket),
+    do: {:noreply, assign(socket, :revoke_confirm, nil)}
+
+  def handle_event("grant_agent", %{"account_id" => id, "agent_id" => agent_id}, socket) do
+    access_write(socket, id, &Ownership.grant(&1, &2, {:agent, agent_id}), "Access granted.")
+  end
+
+  def handle_event("revoke_agent", %{"account_id" => id, "agent_id" => agent_id}, socket) do
+    access_write(
+      socket,
+      id,
+      &Ownership.revoke(&1, &2, {:agent, agent_id}),
+      "Access revoked. It takes effect on the agent's next read."
+    )
+  end
+
+  def handle_event("grant_member", %{"account_id" => id, "user_id" => user_id}, socket) do
+    access_write(socket, id, &Ownership.grant(&1, &2, {:user, user_id}), "Member added.")
+  end
+
+  def handle_event("revoke_member", %{"account_id" => id, "user_id" => user_id}, socket) do
+    access_write(socket, id, &Ownership.revoke(&1, &2, {:user, user_id}), "Member removed.")
+  end
+
+  def handle_event("set_digest_opt_in", %{"account_id" => id} = params, socket) do
+    opt_in = params["digest_opt_in"] == "true"
+
+    access_write(
+      socket,
+      id,
+      &Ownership.set_digest_opt_in(&1, &2, opt_in),
+      if(opt_in,
+        do: "This mailbox now feeds the morning briefing.",
+        else: "This mailbox no longer feeds the morning briefing."
+      )
+    )
+  end
+
+  def handle_event("set_owner", %{"owner" => %{"account_id" => id} = params}, socket) do
+    attrs = %{kind: params["kind"], owner_user_id: blank_to_nil(params["owner_user_id"])}
+
+    with %Account{} = account <- Mail.get_account(socket.assigns.org_id, id),
+         {:ok, _updated} <- Ownership.set_owner(socket.assigns.user, account, attrs) do
+      {:noreply,
+       socket
+       |> put_flash(:info, "Owner saved.")
+       |> reload_accounts()
+       |> assign_mailbox()
+       |> load_lists()}
+    else
+      {:error, reason} -> {:noreply, put_flash(socket, :error, access_error_text(reason))}
+      nil -> {:noreply, put_flash(socket, :error, "That mail account is not in this org.")}
+    end
   end
 
   # ── Events: drafting ────────────────────────────────────────────────────
@@ -544,7 +743,8 @@ defmodule PlatformWeb.EmailLive do
   # refusal. It is not gated on what the UI chose to show.
   def handle_event("send", _params, socket) do
     with %{draft_id: id} when is_binary(id) <- socket.assigns.editor,
-         %{status: "draft"} = draft <- Drafts.get(socket.assigns.org_id, id) do
+         %{status: "draft"} = draft <-
+           Drafts.get_visible(socket.assigns.user, socket.assigns.org_id, id) do
       user = socket.assigns.user
 
       opts =
@@ -922,7 +1122,7 @@ defmodule PlatformWeb.EmailLive do
   end
 
   defp reload_accounts(socket) do
-    socket = assign(socket, :accounts, Mail.list_accounts(socket.assigns.org_id))
+    socket = assign_accounts(socket)
 
     case socket.assigns.form_account do
       %Account{id: id} ->
@@ -937,6 +1137,190 @@ defmodule PlatformWeb.EmailLive do
     socket |> reload_accounts() |> assign(:form_error, nil)
   end
 
+  # ── Access helpers (task 01a1ea5b stage 4) ─────────────────────────────
+
+  defp close_access(socket) do
+    socket
+    |> assign(:access, nil)
+    |> assign(:grant_picker, false)
+    |> assign(:revoke_confirm, nil)
+  end
+
+  defp access_write(socket, account_id, write, ok_text) do
+    with %Account{} = account <- Mail.get_account(socket.assigns.org_id, account_id),
+         {:ok, _grant} <- write.(socket.assigns.user, account) do
+      {:noreply,
+       socket
+       |> put_flash(:info, ok_text)
+       |> assign(:grant_picker, false)
+       |> assign(:revoke_confirm, nil)
+       |> reload_accounts()
+       |> reload_access()
+       |> assign_mailbox()}
+    else
+      {:error, reason} -> {:noreply, put_flash(socket, :error, access_error_text(reason))}
+      nil -> {:noreply, put_flash(socket, :error, "That mail account is not in this org.")}
+    end
+  end
+
+  defp reload_access(%{assigns: %{access: %{account: %Account{id: id}}}} = socket) do
+    with %Account{} = account <- Mail.get_account(socket.assigns.org_id, id),
+         %{} = access <- load_access(socket.assigns.user, account) do
+      assign(socket, :access, access)
+    else
+      _ -> close_access(socket)
+    end
+  end
+
+  defp reload_access(socket), do: socket
+
+  # The Access panel's data. A manager reads `Ownership.list_grants/2` (the
+  # grant rows, with when each agent was granted); anyone else who reads the
+  # mailbox gets `Ownership.audience/2`, read-only. Neither: nil, no panel.
+  defp load_access(user, %Account{} = account) do
+    case Ownership.list_grants(user, account) do
+      {:ok, grants} ->
+        names = Ownership.principal_names(grants)
+
+        agents =
+          for %{principal_type: "agent", principal_id: id} = grant <- grants,
+              %{} = agent <- [names[{"agent", id}]],
+              do: Map.put(agent, :granted_at, grant.inserted_at)
+
+        people =
+          case account.owner_kind do
+            "personal" ->
+              owner_people(account)
+
+            _ ->
+              for %{principal_type: "user", principal_id: id} <- grants,
+                  %{} = p <- [names[{"user", id}]],
+                  do: p
+          end
+
+        granted = MapSet.new(agents, & &1.id)
+        member_ids = MapSet.new(people, & &1.id)
+
+        %{
+          account: account,
+          manage?: true,
+          agents: agents,
+          people: people,
+          candidates:
+            Enum.reject(Platform.Chat.list_agents_for_picker(), &MapSet.member?(granted, &1.id)),
+          member_candidates:
+            if(account.owner_kind == "shared",
+              do:
+                Enum.reject(Drafts.org_people(account.org_id), &MapSet.member?(member_ids, &1.id)),
+              else: []
+            )
+        }
+
+      {:error, _} ->
+        case Ownership.audience(user, account) do
+          {:ok, %{agents: agents, people: people}} ->
+            %{
+              account: account,
+              manage?: false,
+              agents: Enum.map(agents, &Map.put(&1, :granted_at, nil)),
+              people: people,
+              candidates: [],
+              member_candidates: []
+            }
+
+          _ ->
+            nil
+        end
+    end
+  end
+
+  defp owner_people(%Account{owner_user_id: id}) when is_binary(id) do
+    case Platform.Accounts.get_users_map([id], include_archived: true) do
+      %{^id => user} ->
+        [%{id: user.id, name: user.name || user.email, avatar_url: user.avatar_url}]
+
+      _ ->
+        []
+    end
+  end
+
+  defp owner_people(_account), do: []
+
+  defp access_error_text(:unauthorized), do: "You cannot change who reads this mailbox."
+  defp access_error_text(:already_granted), do: "That agent can already read this mailbox."
+  defp access_error_text(:not_found), do: "That grant no longer exists."
+  defp access_error_text(:not_shared), do: "Only a shared mailbox has members."
+  defp access_error_text(:unknown_principal), do: "Pick an agent or a person of this org."
+  defp access_error_text(:invalid_kind), do: "Pick Unassigned, Personal or Shared."
+  defp access_error_text(_reason), do: "Could not save the change. Try again."
+
+  @doc false
+  # The mailbox header: "<Owner first name>'s mailbox" for a personal one
+  # (canvas: Public Sans semibold), the account name for a shared one.
+  def mailbox_title(%Account{owner_kind: "personal"}, %{people: [%{name: name} | _]}),
+    do: "#{first_name(name)}'s mailbox"
+
+  def mailbox_title(%Account{name: name}, _audience), do: name || "Mailbox"
+
+  defp first_name(name) when is_binary(name) do
+    name |> String.split("@") |> hd() |> String.split(~r/\s+/u, trim: true) |> List.first("Owner")
+  end
+
+  defp first_name(_), do: "Owner"
+
+  @doc false
+  # "you" for the owner of a personal mailbox, else the count of people who
+  # read it. Never truncates (`shrink-0` in the template).
+  def access_who(%{kind: "personal"}), do: "you"
+  def access_who(%{people: [_]}), do: "1 person"
+  def access_who(%{people: people}), do: "#{length(people)} people"
+  def access_who(_), do: "you"
+
+  @access_line_agents 2
+
+  @doc false
+  # The agents the access line names, and how many more collapse to "+N".
+  def access_line_agents(%{agents: agents}) do
+    {shown, rest} = Enum.split(agents, @access_line_agents)
+    {Enum.map(shown, & &1.name), length(rest)}
+  end
+
+  def access_line_agents(_), do: {[], 0}
+
+  @doc false
+  def people_text(%{account: %Account{owner_kind: "personal"}, people: people}, user) do
+    case people do
+      [%{id: id}] when id == user.id -> "you (owner)"
+      [%{name: name}] -> "#{name} (owner)"
+      _ -> "the owner"
+    end
+  end
+
+  def people_text(%{people: []}, _user), do: "nobody yet"
+
+  def people_text(%{people: people}, user),
+    do: Enum.map_join(people, ", ", &if(&1.id == user.id, do: "you", else: &1.name))
+
+  defp granted_text(%DateTime{} = at), do: "granted " <> Calendar.strftime(at, "%m-%d %H:%M")
+  defp granted_text(%NaiveDateTime{} = at), do: "granted " <> Calendar.strftime(at, "%m-%d %H:%M")
+  defp granted_text(_), do: nil
+
+  # The switcher's groups, each `{key, label, chip, accounts}`; an empty
+  # group is dropped. Personal mailboxes the viewer owns, then shared ones.
+  defp switcher_groups(readable, user) do
+    mine = Enum.filter(readable, &(&1.owner_kind == "personal" and &1.owner_user_id == user.id))
+    shared = Enum.filter(readable, &(&1.owner_kind == "shared"))
+
+    [{"mine", "My mailboxes", "Private", mine}, {"shared", "Shared with me", "Shared", shared}]
+    |> Enum.reject(fn {_, _, _, accounts} -> accounts == [] end)
+  end
+
+  defp kind_text(%Account{owner_kind: "personal", owner_user_id: id}, names),
+    do: "Personal · " <> Map.get(names, id, "unknown owner")
+
+  defp kind_text(%Account{owner_kind: "shared"}, _names), do: "Shared"
+  defp kind_text(%Account{}, _names), do: "Unassigned"
+
   # ── Drafting helpers ────────────────────────────────────────────────────
 
   defp close_confirm(socket) do
@@ -945,7 +1329,7 @@ defmodule PlatformWeb.EmailLive do
 
   defp new_editor(assigns) do
     from =
-      case Drafts.sendable_senders(assigns.org_id) do
+      case Drafts.sendable_senders(assigns.user, assigns.org_id) do
         [{account, sender}] -> from_value(account.id, sender.key)
         _ -> ""
       end
@@ -1177,7 +1561,7 @@ defmodule PlatformWeb.EmailLive do
   defp open_confirm(socket) do
     editor = socket.assigns.editor
 
-    case Drafts.get(socket.assigns.org_id, editor.draft_id) do
+    case Drafts.get_visible(socket.assigns.user, socket.assigns.org_id, editor.draft_id) do
       %{status: "draft"} = draft ->
         {account_id, key} = parse_from(editor.from)
 
@@ -1231,7 +1615,11 @@ defmodule PlatformWeb.EmailLive do
 
       {:error, :draft_changed} ->
         # Show the person what the draft holds now before they try again.
-        case Drafts.get(socket.assigns.org_id, socket.assigns.editor.draft_id) do
+        case Drafts.get_visible(
+               socket.assigns.user,
+               socket.assigns.org_id,
+               socket.assigns.editor.draft_id
+             ) do
           %{status: "draft"} = draft ->
             socket
             |> assign(:editor, %{

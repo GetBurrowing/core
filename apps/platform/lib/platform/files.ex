@@ -367,6 +367,8 @@ defmodule Platform.Files do
       (`"pending"` / `"ingested"` / `"failed"` / `"not_attempted"`).
       `nil` means no filter.
     * `:preload` — Ecto preload spec applied after the query (e.g. `:project`).
+    * `:exclude` — an Ecto query selecting file ids to leave out, in the
+      query (e.g. `Platform.Mail.Ownership.unreadable_mail_file_ids_query/1`).
   """
   @spec list_files_for_project(binary(), keyword()) :: [File.t()]
   def list_files_for_project(project_id, opts \\ []) when is_binary(project_id) do
@@ -416,6 +418,7 @@ defmodule Platform.Files do
     File
     |> not_deleted()
     |> where([f], f.project_id in ^project_ids)
+    |> maybe_exclude(Keyword.get(opts, :exclude))
     |> maybe_updated_since(Keyword.get(opts, :since))
     |> maybe_filter_file_type(Keyword.get(opts, :type))
     |> order_by([f], desc: f.updated_at, desc: f.id)
@@ -454,6 +457,7 @@ defmodule Platform.Files do
         File
         |> not_deleted()
         |> where([f], f.project_id in ^project_ids)
+        |> maybe_exclude(Keyword.get(opts, :exclude))
         |> where([f], ilike(f.name, ^pattern) or ilike(f.original_filename, ^pattern))
         |> order_by([f], desc: f.updated_at, desc: f.id)
         |> maybe_limit(Keyword.get(opts, :limit, 25))
@@ -463,6 +467,14 @@ defmodule Platform.Files do
   end
 
   def search_files_by_name(_project_ids, _query, _opts), do: []
+
+  # `:exclude` — an Ecto query selecting file ids to leave out, applied IN
+  # the query (`id not in subquery(...)`). Files does not know who builds it;
+  # the mail-derived files a viewer may not read
+  # (`Platform.Mail.Ownership.unreadable_mail_file_ids_query/1`, task 01a1ea5b
+  # stage 2) are the caller today.
+  defp maybe_exclude(query, nil), do: query
+  defp maybe_exclude(query, %Ecto.Query{} = ids), do: where(query, [f], f.id not in subquery(ids))
 
   defp maybe_updated_since(query, nil), do: query
   defp maybe_updated_since(query, since), do: where(query, [f], f.updated_at >= ^since)
@@ -504,6 +516,7 @@ defmodule Platform.Files do
     File
     |> not_deleted()
     |> where([f], f.project_id == ^project_id)
+    |> maybe_exclude(Keyword.get(opts, :exclude))
     |> maybe_filter_content_type(Keyword.get(opts, :content_type))
     |> maybe_filter_ingest_intent(Keyword.get(opts, :ingest_intent))
     |> maybe_filter_ingest_status(Keyword.get(opts, :ingest_status))

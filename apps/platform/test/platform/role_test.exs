@@ -190,6 +190,7 @@ defmodule Platform.RoleTest do
                Platform.Lifecycle.StepRegistry,
                Platform.Meetings.SummarizerSweeper,
                Platform.Meetings.CandidateSweeper,
+               Platform.Feedback.IntakeSweeper,
                Platform.Security.Sweeper,
                Platform.Chat.SpacePurger,
                Platform.Experiments.Signals.MailSubscriber,
@@ -200,6 +201,7 @@ defmodule Platform.RoleTest do
                Platform.Prototypes.Purger,
                Platform.Memory.Insights.Purger,
                Platform.Habits.Pruner,
+               Platform.Calendar.DraftPruner,
                Platform.Memory.Insights.Disseminator,
                Platform.Files.CatalogEmitter,
                Platform.Tasks.DeployMergeReconciler,
@@ -212,7 +214,8 @@ defmodule Platform.RoleTest do
                Platform.Meetings.CompletionSweeper,
                :canvas_search_backfill,
                :burrow_docs_seed,
-               :default_space_seed
+               :default_space_seed,
+               :pocket_id_email_login_code
              ]
     end
 

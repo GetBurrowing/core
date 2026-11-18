@@ -9,6 +9,7 @@
 @import "./theme_presets.css";
 @import "./public_game_page.css";
 @import "./console_glass.css";
+@import "./game_studio.css";
 @source "../css";
 @source "../js";
 @source "../../lib/platform_web";
@@ -828,45 +829,12 @@
   }
 }
 
-/* Call connection banner (meeting_client.js). A network drop keeps the call UI
-   up: "Reconnecting…" while LiveKit/the hook retries, then "Connection lost"
-   with Rejoin / Leave. #meeting-connection-banner[data-state] mirrors
-   #meeting-client[data-room-state]; anything else is hidden. */
+/* Call connection banner (meeting_client.js). Task 01a1e82a stage 2 folded
+   its visible pill into the in-call top bar (#meeting-top-bar[data-state],
+   driven by meeting_presence.js); #meeting-connection-banner survives only
+   as a hidden data-state carrier. */
 .meeting-connection-banner {
-  position: fixed;
-  top: 0.75rem;
-  left: 50%;
-  transform: translateX(-50%);
-  z-index: 60;
-  display: none;
-  align-items: center;
-  gap: 0.5rem;
-  padding: 0.4rem 0.9rem;
-  border-radius: 9999px;
-  font-size: 0.875rem;
-  background: var(--color-base-300, #333);
-  color: var(--color-base-content, #fff);
-  box-shadow: 0 2px 8px rgb(0 0 0 / 0.25);
-}
-.meeting-connection-banner .mcb-reconnecting,
-.meeting-connection-banner .mcb-lost {
-  display: none;
-  align-items: center;
-  gap: 0.5rem;
-}
-.meeting-connection-banner[data-state="reconnecting"],
-.meeting-connection-banner[data-state="lost"] {
-  display: flex;
-}
-.meeting-connection-banner[data-state="reconnecting"] .mcb-reconnecting,
-.meeting-connection-banner[data-state="lost"] .mcb-lost {
-  display: inline-flex;
-}
-.meeting-connection-banner button {
-  padding: 0.15rem 0.7rem;
-  border-radius: 9999px;
-  border: 1px solid currentColor;
-  cursor: pointer;
+  display: none !important;
 }
 
 /* ──────────────────────────────────────────────────────
@@ -5157,7 +5125,7 @@ body, .font-suite {
    bar's top edge plus 8px of breathing room, so a last row ends 8px above
    the glass (`.clears-tab-bar` below).
    --bottom-nav-gap is the masters' 12px gap above the bar, for elements that
-   stack on top of it (the in-call mini bar); 0 where there is no bar.
+   stack on top of it; 0 where there is no bar.
    ──────────────────────────────────────────────────────────────────── */
 :root {
   --bottom-nav-height: 0px;
@@ -5165,13 +5133,6 @@ body, .font-suite {
   --bottom-nav-offset: max(env(safe-area-inset-bottom, 0px) - 13px, 12px);
   --bottom-nav-clearance: calc(var(--bottom-nav-height) + env(safe-area-inset-bottom, 0px));
   --phone-chrome-bottom: calc(var(--bottom-nav-clearance) + 8px);
-  /* Persistent meeting bar height. Set inline on the shell root to 3rem
-     when `@meeting_active` is true (see shell.html.heex). The :root
-     default of 0px keeps any `calc(... + var(--meeting-bar-height))`
-     consumer well-behaved when no meeting is active. Reserving this on
-     the shell's padding-bottom is what keeps the chat composer above
-     the fixed-positioned meeting bar (meeting_bar_live.ex:52). */
-  --meeting-bar-height: 0px;
 }
 /* Only where the bar exists: a document with no `[data-bottom-rail]` (the
    guest `meet.` surface, auth pages) reserves nothing. */
@@ -5186,13 +5147,17 @@ body, .font-suite {
    scroll, CSS only so no state can go stale when an element is removed while
    focused:
      1. keyboard up with a composer focused. "Keyboard up" is detected by its
-        proxy, focus on a ComposeInput textarea (chat, thread, task steering);
+        proxy, focus on a ComposeInput textarea (chat, thread, task steering),
+        or on a page text field that opts in with [data-hides-tab-bar] (an
+        extension's form fields, which are not composers and must not take
+        the ComposeInput hook; task 01a1ecb3, the Goals fields);
      2. a full-screen viewer is open ([data-fullscreen-viewer]: the image
         in-app chat viewer, the file preview, the full-screen prototype);
      3. the in-call room ([data-in-call], MeetingLive while in the call). The
         mini bar on OTHER tabs during a call does not hide it.
    Clearance drops to 0 with it, so FABs, toasts and composer padding follow. */
 :root:has([phx-hook="ComposeInput"]:focus),
+:root:has([data-hides-tab-bar]:focus),
 :root:has([data-fullscreen-viewer]),
 :root:has([data-in-call]) {
   --bottom-nav-height: 0px;
@@ -5269,6 +5234,7 @@ body, .font-suite {
 }
 
 :root:has([phx-hook="ComposeInput"]:focus) .bottom-nav,
+:root:has([data-hides-tab-bar]:focus) .bottom-nav,
 :root:has([data-fullscreen-viewer]) .bottom-nav,
 :root:has([data-in-call]) .bottom-nav {
   transform: translateY(calc(100% + var(--bottom-nav-offset)));
@@ -5297,20 +5263,22 @@ body, .font-suite {
    Self-contained: without the attribute none of this applies.
 
    Specificity: the clearance rule is (0,3,0), so it beats the phone-width
-   :root:has([data-bottom-rail]) (0,2,0) wherever it sits. The three hide
-   rules above are (0,3,0) for the composer but only (0,2,0) for the viewer
-   and the in-call room, so they would LOSE to it; they are restated here at
-   (0,4,0) and (0,5,0) to drop the clearance to 0 again. */
-:root[data-native-tab-bar] .bottom-nav {
+   :root:has([data-bottom-rail]) (0,2,0) wherever it sits. The hide
+   rules above are (0,3,0) for the composer and the [data-hides-tab-bar]
+   field, a tie, but only (0,2,0) for the viewer and the in-call room, so they
+   would LOSE to it; all four are restated here at (0,4,0) and (0,5,0) to drop
+   the clearance to 0 again. */
+:root[data-native-tab-bar] .bottom-nav:not([data-web-tabs]) {
   display: none;
 }
 
 @media (max-width: 1023.98px) {
-  :root[data-native-tab-bar]:has([data-bottom-rail]) {
+  :root[data-native-tab-bar]:has([data-bottom-rail]:not([data-web-tabs])) {
     --bottom-nav-height: var(--native-tab-bar-height, 0px);
   }
 
   :root[data-native-tab-bar]:has([data-bottom-rail]):has([phx-hook="ComposeInput"]:focus),
+  :root[data-native-tab-bar]:has([data-bottom-rail]):has([data-hides-tab-bar]:focus),
   :root[data-native-tab-bar]:has([data-bottom-rail]):has([data-fullscreen-viewer]),
   :root[data-native-tab-bar]:has([data-bottom-rail]):has([data-in-call]) {
     --bottom-nav-height: 0px;
@@ -10171,6 +10139,45 @@ body.screen-share-fullscreen-active {
   font-size: 17px;
   font-weight: 700;
 }
+/* Unified editor (task 01a1b8a5 stage 2, v7 .editor-heading and the upper-right
+   X [data-close-modal]). Below lg the X and the footer actions are 44px
+   touch targets. */
+.cal-editor-head {
+  display: flex;
+  align-items: center;
+  justify-content: space-between;
+  gap: 8px;
+}
+.cal-editor-close:focus-visible {
+  outline: 2px solid var(--color-interactive);
+  outline-offset: 2px;
+  color: var(--color-interactive);
+}
+@media (max-width: 1023px) {
+  .cal-editor-close {
+    width: 44px;
+    height: 44px;
+  }
+  .cal-ft-btn {
+    height: 44px;
+    min-width: 44px;
+  }
+}
+.cal-people .cal-check,
+.cal-people [data-role="meeting-edit-invitees"] {
+  font-size: 13px;
+}
+/* A range being dragged on a day column (calendar_selection.js). */
+.cal-drag-selection {
+  position: absolute;
+  left: 3px;
+  right: 3px;
+  z-index: 3;
+  border: 1px solid var(--color-info);
+  border-radius: var(--radius-field);
+  background: color-mix(in srgb, var(--color-info) 16%, transparent);
+  pointer-events: none;
+}
 .cal-field {
   display: flex;
   flex-direction: column;
@@ -10288,8 +10295,8 @@ textarea.cal-input {
   font-size: 0.75rem;
 }
 .cal-visopt label:has(input:checked) {
-  border-color: var(--color-primary);
-  box-shadow: 0 0 0 1px var(--color-primary);
+  border-color: var(--color-interactive);
+  box-shadow: 0 0 0 1px var(--color-interactive);
 }
 .cal-visopt label:has(input:focus-visible) {
   outline: 2px solid var(--color-interactive);

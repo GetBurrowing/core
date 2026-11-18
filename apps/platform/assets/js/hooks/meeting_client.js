@@ -45,6 +45,11 @@ const LEGACY_NATIVE_CAPABILITIES = Object.freeze({
 // `failed: "camera"` (task 01a13ca2 stage 3). The same budget as the mic.
 export const COMPANION_CAMERA_TIMEOUT_MS = 3000
 
+// How long the companion camera track may stay `mute`d before the page turns
+// the camera OFF. Longer than livekit-client's own 5 s upstream pause, so a
+// short iOS capture interruption recovers by itself.
+export const COMPANION_CAMERA_MUTE_GRACE_MS = 8000
+
 // The Rooms this page opened as a person's video-only COMPANION connection
 // (`video:user:<uuid>`, task 01a13ca2 stage 3). Module-level, not a hook
 // field, because the Room outlives the hook (pinned on window) and a
@@ -165,7 +170,13 @@ const MeetingClient = {
     // only thing that should tear the room down here; an LV element
     // re-mount must ADOPT the still-connected room left on
     // window.__livekit_room (mirrors meeting_room.js:32-52).
-    this._onPageHide = () => {
+    //
+    // A beforeunload that meeting_presence.js already cancelled (the user is
+    // in a call and is about to see the browser's leave-page confirm) is not
+    // a page exit yet: "Stay" must keep the call. pagehide still tears down
+    // when the page really goes (task 01a1e82a stage 2).
+    this._onPageHide = (event) => {
+      if (event && event.type === "beforeunload" && event.defaultPrevented) return
       this._leaving = true
       this._companionCameraOff()
       this._leave()
@@ -1080,9 +1091,13 @@ const MeetingClient = {
     }
   },
 
-  // One banner for both call surfaces, created lazily in <body> and keyed on
-  // `data-state` (the same value as `#meeting-client[data-room-state]`), so
-  // CSS alone shows "Reconnecting…" or "Connection lost" + buttons.
+  // The connection-state carrier for both call surfaces, created lazily in
+  // <body> and keyed on `data-state` (the same value as
+  // `#meeting-client[data-room-state]`). Task 01a1e82a stage 2 folded its
+  // visible "Reconnecting…" / "Connection lost" pill into the in-call top
+  // bar (meeting_presence.js), so there is one indicator; this element stays,
+  // hidden, as the `dataset.state` machine and as the `_owner` handle the
+  // bar's Rejoin / Leave reach this hook through.
   _ensureConnectionBanner() {
     if (typeof document === "undefined" || !document.body) return
     let el = document.getElementById("meeting-connection-banner")
@@ -1090,21 +1105,9 @@ const MeetingClient = {
       el = document.createElement("div")
       el.id = "meeting-connection-banner"
       el.className = "meeting-connection-banner"
-      el.setAttribute("role", "status")
+      el.hidden = true
+      el.setAttribute("aria-hidden", "true")
       el.dataset.state = "idle"
-      el.innerHTML =
-        '<span class="mcb-reconnecting">Reconnecting…</span>' +
-        '<span class="mcb-lost"><span>Connection lost</span>' +
-        '<button type="button" data-mcb-action="rejoin">Rejoin</button>' +
-        '<button type="button" data-mcb-action="leave">Leave</button></span>'
-      // Hosts with a bare-bones DOM (unit tests) simply get no click wiring.
-      el.addEventListener?.("click", (event) => {
-        const btn = event.target.closest && event.target.closest("[data-mcb-action]")
-        const owner = el._owner
-        if (!btn || !owner) return
-        if (btn.dataset.mcbAction === "rejoin") owner._manualRejoin()
-        else owner._leaveAfterLoss()
-      })
       document.body.appendChild(el)
     }
     el._owner = this
@@ -1190,9 +1193,13 @@ const MeetingClient = {
     }
   },
 
-  // The camera track ending or being muted by the system (the camera taken
-  // by another app, the app suspended) turns the companion camera OFF, so
-  // remote tiles show the avatar rather than a frozen frame.
+  // The camera track ending turns the companion camera OFF, so remote tiles
+  // show the avatar rather than a frozen frame. A `mute` only does so if it
+  // outlasts COMPANION_CAMERA_MUTE_GRACE_MS: iOS WebKit mutes a capture
+  // track for every short interruption (the camera permission alert, Siri,
+  // the call's audio session activating) and unmutes it after, and
+  // livekit-client already pauses and resumes the upstream for those. An
+  // immediate OFF made each of them permanent: the camera "never worked".
   _watchCompanionTrack(room) {
     const pub = this._localCameraPublication(room)
     const mst = pub && pub.track && pub.track.mediaStreamTrack
@@ -1200,9 +1207,23 @@ const MeetingClient = {
     if (!this._watchedCompanionTracks) this._watchedCompanionTracks = new WeakSet()
     if (this._watchedCompanionTracks.has(mst)) return
     this._watchedCompanionTracks.add(mst)
-    const off = () => this._companionCameraOff()
-    mst.addEventListener("ended", off)
-    mst.addEventListener("mute", off)
+    let muteTimer = null
+    const clearMute = () => {
+      if (muteTimer) clearTimeout(muteTimer)
+      muteTimer = null
+    }
+    mst.addEventListener("ended", () => {
+      clearMute()
+      this._companionCameraOff()
+    })
+    mst.addEventListener("mute", () => {
+      clearMute()
+      muteTimer = setTimeout(() => {
+        muteTimer = null
+        if (mst.muted !== false) this._companionCameraOff()
+      }, COMPANION_CAMERA_MUTE_GRACE_MS)
+    })
+    mst.addEventListener("unmute", clearMute)
   },
 
   async _joinCompanion({ token, url, room_name } = {}) {
@@ -1417,10 +1438,16 @@ const MeetingClient = {
       })
     }
     if (!this._nativeAppStateHandle) {
-      // Stage 4's plugin fires this on willResignActive, BEFORE the web view
-      // is suspended: the last moment to take the companion camera down.
+      // Only a REAL background turns the companion camera down. Resigning
+      // active is not leaving: the camera permission alert, Control Center
+      // and the notification shade all resign the app, and an OFF on them
+      // undid the first Camera tap behind its own permission alert (the
+      // off waits for the pending publish, then mutes it). Newer builds
+      // send `background: true` on didEnterBackground; older ones send
+      // only `{active: false}` on resign, and for them `visibilitychange`
+      // to hidden (above) still takes the camera down on a real background.
       this._nativeAppStateHandle = native.addListener("appStateChanged", (data = {}) => {
-        if (data.active === false) this._companionCameraOff()
+        if (data.active === false && data.background === true) this._companionCameraOff()
       })
     }
     if (!this._nativeSpeakersHandle) {
@@ -1622,11 +1649,19 @@ const MeetingClient = {
 
   // The Room both connections use: the web call's and the app's companion
   // (task 01a13ca2 stage 3 factored these two out of `_join`).
+  //
+  // `disconnectOnPageLeave: false` (task 01a1e82a remediation, finding 6):
+  // livekit-client's own beforeunload listener otherwise disconnects even
+  // when meeting_presence.js cancelled that beforeunload and the user chose
+  // "Stay" on the browser's leave-page prompt. A real exit still leaves:
+  // pagehide (and an uncancelled beforeunload) run `_onPageHide` -> `_leave`
+  // here and the watchdog's disconnect on every other shell page.
   _newRoom() {
     return new Room({
       adaptiveStream: true,
       dynacast: true,
       publishDefaults: { simulcast: true },
+      disconnectOnPageLeave: false,
     })
   },
 

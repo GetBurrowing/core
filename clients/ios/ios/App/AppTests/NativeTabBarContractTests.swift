@@ -124,13 +124,13 @@ final class NativeTabBarContractTests: XCTestCase {
 
     /// master-mobile.html lines 704-708 (chat, meetings, more) and prototype
     /// 01a178d2 v4's `.tabbar` (calendar, inbox; task 01a18d9f stage 5),
-    /// verbatim: the five tab glyphs'
+    /// verbatim: the four tab glyphs' (the Meetings tab is retired, task
+    /// 01a1b8a5 stage 4)
     /// SVG bodies (viewBox 0 0 24 24, fill none, stroke-width 1.7, round
     /// caps and joins). The vitest mirror pins the same text.
     static let mastersGlyphs: [String: String] = [
         "tab-chat": #"<path d="M4 12a8 8 0 1 1 3.3 6.5L4 20l1.3-3.2A8 8 0 0 1 4 12z"/><path d="M9 11.5h.01M12 11.5h.01M15 11.5h.01"/>"#,
         "tab-calendar": #"<rect x="3" y="5" width="18" height="16" rx="2"/><path d="M3 10h18M8 3v4M16 3v4"/>"#,
-        "tab-meetings": #"<rect x="3" y="6" width="13" height="12" rx="2"/><path d="m16 10 5-3v10l-5-3"/>"#,
         "tab-inbox": #"<path d="M3 4h18v16H3zM3 14h5l2 3h4l2-3h5"/>"#,
         "tab-more": #"<circle cx="5" cy="12" r="1.5"/><circle cx="12" cy="12" r="1.5"/><circle cx="19" cy="12" r="1.5"/>"#,
     ]
@@ -142,7 +142,7 @@ final class NativeTabBarContractTests: XCTestCase {
     func testCatalogIsTheMastersGlyphTable() {
         XCTAssertEqual(
             NativeTab.catalog.map { "\($0.key):\($0.image):\($0.title)" },
-            ["chat:tab-chat:Chat", "calendar:tab-calendar:Calendar", "meetings:tab-meetings:Meetings", "inbox:tab-inbox:Inbox", "more:tab-more:More"])
+            ["chat:tab-chat:Chat", "calendar:tab-calendar:Calendar", "inbox:tab-inbox:Inbox", "more:tab-more:More"])
     }
 
     /// The asset itself is a template (Contents.json), not only the image

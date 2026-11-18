@@ -220,16 +220,17 @@ defmodule PlatformWeb.Components.IconRailTest do
     end
 
     # Task 01a18d9f stage 5 (the product lead, 2026-10-30): at most four link tabs on the
-    # phone, Chat, Calendar, Meetings and Inbox; Tasks and Voice move to More.
-    test "mobile_tab_keys/0 is exactly Chat, Calendar, Meetings, Inbox" do
-      assert mobile_tab_keys() == [:chat, :calendar, :meetings, :inbox]
+    # phone; Tasks and Voice move to More. Task 01a1b8a5 stage 4 retired Meetings
+    # (calls are Calendar events), leaving Chat, Calendar and Inbox.
+    test "mobile_tab_keys/0 is exactly Chat, Calendar, Inbox" do
+      assert mobile_tab_keys() == [:chat, :calendar, :inbox]
     end
 
-    test "renders exactly four link tabs plus More, in order: Chat, Calendar, Meetings, Inbox, More" do
+    test "renders exactly three link tabs plus More, in order: Chat, Calendar, Inbox, More" do
       html = render_bottom_rail(%{})
-      assert bar_keys(html) == ["chat", "calendar", "meetings", "inbox", "more"]
+      assert bar_keys(html) == ["chat", "calendar", "inbox", "more"]
       doc = LazyHTML.from_fragment(html)
-      assert doc |> LazyHTML.query("[data-bottom-rail] a.bottom-nav-tab") |> Enum.count() == 4
+      assert doc |> LazyHTML.query("[data-bottom-rail] a.bottom-nav-tab") |> Enum.count() == 3
 
       assert doc |> LazyHTML.query("[data-bottom-rail] button.bottom-nav-tab") |> Enum.count() ==
                1
@@ -258,8 +259,8 @@ defmodule PlatformWeb.Components.IconRailTest do
       acme = render_bottom_rail(%{root_user: true})
       non_acme = render_bottom_rail(%{root_user: false})
 
-      assert count_data_destination_matches(acme) == 5
-      assert count_data_destination_matches(non_acme) == 5
+      assert count_data_destination_matches(acme) == 4
+      assert count_data_destination_matches(non_acme) == 4
     end
   end
 
@@ -269,7 +270,6 @@ defmodule PlatformWeb.Components.IconRailTest do
 
       assert icon_for(html, "calendar") == "hero-calendar-solid"
       assert icon_for(html, "chat") == "hero-chat-bubble-oval-left-ellipsis"
-      assert icon_for(html, "meetings") == "hero-video-camera"
       assert icon_for(html, "inbox") == "hero-inbox"
       assert icon_for(html, "more") == "hero-ellipsis-horizontal"
     end
@@ -307,17 +307,29 @@ defmodule PlatformWeb.Components.IconRailTest do
     end
 
     test "active mobile tile carries aria-current=page" do
-      html = render_bottom_rail(%{current_path: "/meetings/standup-abc"})
-      assert active_keys(html) == ["meetings"]
+      html = render_bottom_rail(%{current_path: "/calendar"})
+      assert active_keys(html) == ["calendar"]
 
-      assert html =~ ~r/data-destination="meetings"[^>]*aria-current="page"/s or
-               html =~ ~r/aria-current="page"[^>]*data-destination="meetings"/s
+      assert html =~ ~r/data-destination="calendar"[^>]*aria-current="page"/s or
+               html =~ ~r/aria-current="page"[^>]*data-destination="calendar"/s
+    end
+
+    # Task 01a1b8a5 stage 4: Meetings is retired and a call is a Calendar
+    # event, so a call room (and the old listing path) light Calendar.
+    test "a call room lights Calendar; no Meetings tab exists" do
+      for path <- ["/meetings/standup-abc", "/meetings", "/meetings?view=archive"] do
+        html = render_bottom_rail(%{current_path: path})
+        assert active_keys(html) == ["calendar"], path
+        refute html =~ ~s(data-destination="meetings")
+      end
+
+      assert active_keys(render_bottom_rail(%{current_path: "/meetingsx"})) == []
     end
 
     test "every mobile tab carries an aria-label" do
       html = render_bottom_rail(%{})
 
-      for label <- ["Chat", "Calendar", "Meetings", "Inbox", "More"] do
+      for label <- ["Chat", "Calendar", "Inbox", "More"] do
         assert html =~ ~s(aria-label="#{label}"),
                "expected aria-label=#{inspect(label)} on mobile bottom-rail"
       end
@@ -591,7 +603,7 @@ defmodule PlatformWeb.Components.IconRailMailFlagTest do
       refute Enum.any?(destinations(root_user: acme?), &(&1.key == :email))
       html = render_rail(acme?)
       # Positive control: the rail rendered its other Working tiles.
-      assert html =~ ~s(data-destination="meetings")
+      assert html =~ ~s(data-destination="calendar")
       refute html =~ ~s(data-destination="email")
       refute html =~ ~s(href="/email")
     end

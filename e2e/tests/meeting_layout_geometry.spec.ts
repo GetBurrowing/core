@@ -1248,3 +1248,283 @@ test.describe("meeting bottom strip: safe-area inset @ 1280x800", () => {
     ).toBe(true)
   })
 })
+
+/**
+ * ═══════════════════════════════════════════════════════════════════════
+ * THE CAPTIONS NO-OVERLAP GATE (task 01a1eb27 stage 3)
+ * ═══════════════════════════════════════════════════════════════════════
+ *
+ * The caption bar used to be a `fixed … z-40` overlay that floated over the
+ * video in every stage mode and covered faces ("when i turn it on it blocks
+ * everything"). It is now an in-flow row of the stage column, directly
+ * above the controls, so the stage body shrinks to make room. That claim is
+ * geometric, so it is asserted geometrically: with captions on and the
+ * strip at its 2-line height (an interim in flight), the strip's rect has
+ * zero-area intersection with every laid-out video tile rect, in every
+ * stage mode, at both viewports. It is also inside the call stage, not
+ * `position: fixed`, and its bottom is at or above the controls' top.
+ *
+ * ZERO TILES IS A RIG STATE, NOT A PASS: an absent tile cannot overlap
+ * anything, so the gallery run asserts at least one tile was measured.
+ */
+
+const CAPTIONS_SHELL = '[data-role="meeting-captions-shell"]'
+const CAPTIONS_TOGGLE = '[data-role="meeting-captions-toggle"]'
+const STAGE_CONTROLS = '[data-role="meeting-stage-controls"]'
+const CAPTION_TILES = `${VIDEO_TILE}, [data-gallery-cell], #meeting-bottom-strip video`
+const CAPTION_MODES = ["gallery", "screen", "canvas", "whiteboard"] as const
+const CAPTION_VIEWPORTS = [
+  { label: "1280x800", width: 1280, height: 800 },
+  { label: "375x812", width: 375, height: 812 },
+]
+
+function intersectionArea(a: Rect, b: Rect): number {
+  const w = Math.min(a.right, b.right) - Math.max(a.left, b.left)
+  const h = Math.min(a.bottom, b.bottom) - Math.max(a.top, b.top)
+  return w > 0 && h > 0 ? w * h : 0
+}
+
+/** A final line and then an interim, so the strip is at its 2-line height.
+ *  Re-sent per mode because the hook fades after 5s of silence. */
+async function speakCaptions(page: Page): Promise<void> {
+  await page.evaluate(() => {
+    const send = (detail: Record<string, unknown>) =>
+      document.dispatchEvent(new CustomEvent("meeting:caption", { detail }))
+    send({ id: "geo-final", speaker: "Geometry", identity: "user:geo", text: "A finished line.", final: true })
+    send({ id: "geo-interim", speaker: "Geometry", identity: "user:geo", text: "and a line still being spoken", final: false })
+  })
+  await settle(page)
+}
+
+async function openWithCaptions(page: Page): Promise<void> {
+  await page.goto(`/meetings/${MEETING_SLUG}`)
+  await page.waitForSelector(STAGE, { timeout: 30_000 })
+  await page.waitForFunction(
+    () => !!(window as any).liveSocket?.isConnected?.(),
+    null,
+    { timeout: 30_000 },
+  )
+
+  // An ordinary visit no longer auto-joins (task 01a18d0a stage 2), and the
+  // CC button is gated on being in the call.
+  const join = page.locator('[data-role="meeting-join"]:visible').first()
+  if ((await join.count()) > 0) await join.click()
+
+  const cc = page.locator(`${CAPTIONS_TOGGLE}:visible`).first()
+  await expect(cc, "the CC button never rendered: not in the call").toBeVisible({ timeout: 20_000 })
+  if ((await cc.getAttribute("data-active")) !== "true") await cc.click()
+  await page.waitForSelector(CAPTIONS_SHELL, { timeout: 15_000 })
+  await settle(page)
+}
+
+for (const vp of CAPTION_VIEWPORTS) {
+  test.describe(`captions strip: no overlap @ ${vp.label}`, () => {
+    test.use({ viewport: { width: vp.width, height: vp.height } })
+
+    test("the docked strip intersects no video tile in any stage mode", async ({ page }) => {
+      await login(page)
+      await openWithCaptions(page)
+
+      for (const mode of CAPTION_MODES) {
+        const button = page.locator(`[data-stage-mode-button="${mode}"]:visible`).first()
+        await expect(button, `no ${mode} stage-mode control`).toBeVisible({ timeout: 15_000 })
+        await button.click()
+        await page.waitForSelector(`${STAGE}[data-stage-mode="${mode}"]`, { timeout: 15_000 })
+        await speakCaptions(page)
+
+        const lines = await page.locator(`${CAPTIONS_SHELL} .caption-line`).count()
+        expect(lines, `${mode}: expected the 2-line (speaking) strip`).toBe(2)
+
+        expect(
+          await isAncestor(page, STAGE, CAPTIONS_SHELL),
+          `${mode}: the captions strip is not inside the call stage`,
+        ).toBe(true)
+
+        const position = await page
+          .locator(CAPTIONS_SHELL)
+          .evaluate((el) => getComputedStyle(el).position)
+        expect(["static", "relative"], `${mode}: strip position is ${position}`).toContain(position)
+
+        const shellR = await rect(page, CAPTIONS_SHELL)
+        const controlsR = await visibleRect(page, STAGE_CONTROLS)
+        expect(
+          shellR.bottom,
+          `${mode}: strip bottom ${shellR.bottom} is below the controls top ${controlsR.top}`,
+        ).toBeLessThanOrEqual(controlsR.top + 0.5)
+
+        const tiles = (await allRects(page, CAPTION_TILES)).filter(
+          (r) => r.width > 0 && r.height > 0,
+        )
+        const overlaps = tiles
+          .map((t) => ({ tile: fmt(t), area: intersectionArea(shellR, t) }))
+          .filter((o) => o.area > 0)
+
+        console.log(
+          `[captions-overlap] ${vp.label} mode=${mode} strip=${fmt(shellR)} ` +
+            `tiles=${tiles.length} overlaps=${JSON.stringify(overlaps)}`,
+        )
+
+        if (mode === "gallery") {
+          expect(
+            tiles.length,
+            "no laid-out video tile to measure in gallery — seed the meeting fixture. " +
+              "Zero tiles is a rig state, not a passing layout.",
+          ).toBeGreaterThan(0)
+        }
+
+        expect(overlaps, `${mode}: the captions strip overlaps a video tile`).toEqual([])
+      }
+    })
+  })
+}
+
+/**
+ * ─── MOBILE JOIN: CLEAR OF EVERY BOTTOM BAR ──────────────────────────────
+ *
+ * Founder report: "I can't join a meeting on mobile cause the button is
+ * hidden behind the lower bar." Since #197 retired the Meetings nav, a
+ * phone reaches a call from Calendar: the event's details open as a bottom
+ * sheet whose footer holds Join now / Open call room
+ * (`calendar-detail-join`).
+ *
+ * On the WEB the sheet is z 60 over the tab bar's z 30, so the bar paints
+ * UNDER the footer: rects may intersect, and the check is that the join is
+ * what a tap lands on. In the iOS APP the native UITabBar is drawn over the
+ * WKWebView and no z-index can cover it; it sat over the footer. The fix is
+ * that `native_tab_bar.js` hides the native bar while a
+ * `[data-covers-tab-bar]` sheet is open. This spec stands the native side
+ * in for the app: the document-start contract (`<html data-native-tab-bar>`,
+ * `--native-tab-bar-height`), a `Capacitor` whose `BurrowNative.tabBarState`
+ * records what the hook sent, and the bar's rect (inset + 49px, the height
+ * the README gives) whenever the last state sent was `visible: true`.
+ *
+ * Fixture: the `geometry-gate` meeting from
+ * `e2e/scripts/seed-meeting-layout-fixture.sh`, scheduled so Calendar draws it.
+ */
+const GEOMETRY_MEETING_ID =
+  process.env.GEOMETRY_MEETING_ID ?? "01a06520-0000-7001-0000-000000000002"
+const CAL_JOIN = '[data-role="calendar-detail-join"]'
+const NATIVE_TAB_BAR_H = 49
+
+const JOIN_VIEWPORTS = [
+  { label: "375x812", width: 375, height: 812 },
+  { label: "390x844", width: 390, height: 844 },
+]
+
+async function standInNativeShell(page: Page): Promise<void> {
+  await page.addInitScript((h) => {
+    const w = window as any
+    w.__tabBarStates = []
+    const mark = () => {
+      const r = document.documentElement
+      if (r && !r.hasAttribute("data-native-tab-bar")) {
+        r.setAttribute("data-native-tab-bar", "")
+        r.style.setProperty("--native-tab-bar-height", `${h}px`)
+      }
+    }
+    mark()
+    new MutationObserver(mark).observe(document, { childList: true, subtree: true })
+    w.Capacitor = {
+      isNativePlatform: () => true,
+      Plugins: {
+        BurrowNative: {
+          tabBarState: (s: unknown) => {
+            w.__tabBarStates.push(s)
+            return Promise.resolve()
+          },
+        },
+      },
+    }
+  }, NATIVE_TAB_BAR_H)
+}
+
+async function openCalendarJoin(page: Page): Promise<Rect> {
+  await page.goto(`/calendar?meeting=${GEOMETRY_MEETING_ID}`)
+  await page.waitForFunction(
+    () => !!(window as any).liveSocket?.isConnected?.(),
+    null,
+    { timeout: 30_000 },
+  )
+  await page.waitForSelector(`${CAL_JOIN}`, { state: "visible", timeout: 30_000 })
+  await settle(page)
+  return visibleRect(page, CAL_JOIN)
+}
+
+for (const vp of JOIN_VIEWPORTS) {
+  test.describe(`mobile join: clear of the bottom bar @ ${vp.label}`, () => {
+    test.use({ viewport: { width: vp.width, height: vp.height } })
+
+    test("web tab bar: a tap on Join lands on Join", async ({ page }) => {
+      await login(page)
+      await injectSafeAreaInset(page, INJECTED_INSET)
+      const joinR = await openCalendarJoin(page)
+      expect(await readInsetProbe(page), "the safe-area override did not land").toBeCloseTo(
+        INJECTED_INSET,
+        1,
+      )
+
+      const bars = (await allRects(page, "#bottom-nav")).filter((r) => r.height > 0)
+      expect(bars.length, "no web tab bar drawn: not the case under test").toBe(1)
+
+      const onJoin = await page.evaluate(
+        ({ sel, pts }) => {
+          const join = document.querySelector(sel)
+          return pts.map(([x, y]) => {
+            const hit = document.elementFromPoint(x, y)
+            return !!(join && hit && join.contains(hit))
+          })
+        },
+        {
+          sel: CAL_JOIN,
+          pts: [
+            [(joinR.left + joinR.right) / 2, (joinR.top + joinR.bottom) / 2],
+            // Inset by the pill's radius, so a point is on the button's
+            // painted shape and not in its rounded-off corner.
+            [joinR.left + joinR.height / 2, joinR.bottom - 2],
+            [joinR.right - joinR.height / 2, joinR.bottom - 2],
+          ],
+        },
+      )
+      console.log(`[mobile-join] web ${vp.label} join=${fmt(joinR)} bar=${fmt(bars[0])} hits=${onJoin}`)
+      expect(onJoin, `the web tab bar paints over Join: join=${fmt(joinR)} bar=${fmt(bars[0])}`).toEqual(
+        [true, true, true],
+      )
+    })
+
+    test("native tab bar: Join intersects no bar the app draws", async ({ page }) => {
+      await standInNativeShell(page)
+      await login(page)
+      await injectSafeAreaInset(page, INJECTED_INSET)
+      const joinR = await openCalendarJoin(page)
+
+      const states = (await page.evaluate(() => (window as any).__tabBarStates)) as {
+        visible: boolean
+      }[]
+      expect(states.length, "the NativeTabBar hook never ran: the stand-in did not land").toBeGreaterThan(0)
+      const visible = states[states.length - 1].visible
+
+      const inset = await readInsetProbe(page)
+      expect(inset, "the safe-area override did not land").toBeCloseTo(INJECTED_INSET, 1)
+      const barTop = vp.height - inset - NATIVE_TAB_BAR_H
+      const nativeBar: Rect = {
+        x: 0,
+        y: barTop,
+        left: 0,
+        right: vp.width,
+        top: barTop,
+        bottom: vp.height,
+        width: vp.width,
+        height: inset + NATIVE_TAB_BAR_H,
+      }
+      const area = visible ? intersectionArea(joinR, nativeBar) : 0
+      console.log(
+        `[mobile-join] native ${vp.label} join=${fmt(joinR)} nativeBar=${fmt(nativeBar)} visible=${visible} overlap=${area}`,
+      )
+      expect(
+        area,
+        `the native tab bar (drawn over the webview, visible=${visible}) covers Join: ` +
+          `join=${fmt(joinR)} bar=${fmt(nativeBar)}`,
+      ).toBe(0)
+    })
+  })
+}

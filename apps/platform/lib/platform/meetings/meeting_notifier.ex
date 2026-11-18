@@ -24,6 +24,11 @@ defmodule Platform.Meetings.MeetingNotifier do
   only: an `Updated:` message with the new time and the bumped SEQUENCE to
   the same email audience, via `Platform.Meetings.InviteMailer.send_updates/1`.
 
+  `{:meeting_updated, meeting, info}` (task 01a1b281 stage 2) is email only
+  too: `Updated:` to the invitees in `info.update_invite_ids` (the audience
+  snapshotted before the edit added anyone) and one `METHOD:CANCEL` to each
+  invitee in `info.cancelled_invite_ids` (the ones the edit removed).
+
   Every channel of either event runs only inside the `{:ok, claimed}` branch
   of its compare-and-swap (`mark_notified/1`, `mark_cancellation_notified/1`),
   so a re-broadcast or a second delivery sends nothing. Each channel is
@@ -232,6 +237,26 @@ defmodule Platform.Meetings.MeetingNotifier do
   # there is no claim to take; a raise must not take the notifier down.
   def handle_info({:meeting_rescheduled, %Meeting{} = meeting}, state) do
     send_updates(meeting)
+    {:noreply, state}
+  end
+
+  # An in-place edit (task 01a1b281 stage 2). Both id lists were fixed by
+  # `Meetings.update_meeting_for_user/3` BEFORE it added anyone, so an
+  # invitee added by the same edit (who gets their own invitation through
+  # `InviteDelivery`) is never in `update_invite_ids`. Broadcast once per
+  # committed edit, like a reschedule, so there is no claim to take.
+  def handle_info({:meeting_updated, %Meeting{} = meeting, %{} = info}, state) do
+    update_ids = Map.get(info, :update_invite_ids, [])
+    cancelled_ids = Map.get(info, :cancelled_invite_ids, [])
+
+    if update_ids != [] do
+      send_updates(meeting, only: update_ids, changed: Map.get(info, :changed, []))
+    end
+
+    if cancelled_ids != [] do
+      send_removed_cancellations(meeting, cancelled_ids)
+    end
+
     {:noreply, state}
   end
 
@@ -520,12 +545,31 @@ defmodule Platform.Meetings.MeetingNotifier do
       :error
   end
 
-  defp send_updates(%Meeting{} = meeting) do
-    InviteMailer.send_updates(meeting)
+  defp send_updates(%Meeting{} = meeting, opts \\ []) do
+    InviteMailer.send_updates(meeting, opts)
   rescue
     error ->
       Logger.warning(
         "[MeetingNotifier] update mail raised — meeting=#{meeting.id}: " <>
+          Exception.message(error)
+      )
+
+      :error
+  end
+
+  # One METHOD:CANCEL per invitee the edit removed. The rows are revoked by
+  # now, hence `include_revoked: true`.
+  defp send_removed_cancellations(%Meeting{} = meeting, invite_ids) do
+    keep = MapSet.new(invite_ids)
+
+    meeting.id
+    |> Meetings.list_invites(include_revoked: true)
+    |> Enum.filter(&MapSet.member?(keep, &1.id))
+    |> Enum.each(&InviteMailer.send_cancellation(&1, meeting))
+  rescue
+    error ->
+      Logger.warning(
+        "[MeetingNotifier] removed-invitee cancellation raised — meeting=#{meeting.id}: " <>
           Exception.message(error)
       )
 

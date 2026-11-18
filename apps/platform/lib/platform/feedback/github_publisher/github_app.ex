@@ -6,12 +6,13 @@ defmodule Platform.Feedback.GithubPublisher.GithubApp do
 
   ## Least privilege, per call
 
-  Each publication mints a fresh installation access token narrowed in the
+  Each call mints a fresh installation access token narrowed in the
   token request itself to `permissions: %{issues: "write"}` and
   `repositories: [<the one configured repository>]`, uses it for the one
   issue call, and drops it. Even if the App is installed more broadly, the
   token this module holds can write issues on one repository and nothing
-  else.
+  else. `fetch_issue/2` (the feedback intake's retry sweep) mints its own
+  token narrowed to `issues: "read"` on the same one repository.
 
   ## Where the credential lives
 
@@ -38,7 +39,7 @@ defmodule Platform.Feedback.GithubPublisher.GithubApp do
   def create_issue(issue, opts) do
     repo = Keyword.fetch!(opts, :repository)
 
-    with {:ok, token} <- installation_token(repo),
+    with {:ok, token} <- installation_token(repo, %{issues: "write"}),
          {:ok, status, body} <-
            request(:post, "/repos/#{repo}/issues", "create_issue", token,
              json: %{title: issue.title, body: issue.body, labels: issue.labels}
@@ -62,7 +63,7 @@ defmodule Platform.Feedback.GithubPublisher.GithubApp do
     fingerprint = Keyword.fetch!(opts, :fingerprint)
     query = "repo:#{repo} is:issue in:body \"#{fingerprint}\""
 
-    with {:ok, token} <- installation_token(repo),
+    with {:ok, token} <- installation_token(repo, %{issues: "write"}),
          {:ok, status, body} <-
            request(:get, "/search/issues", "find_existing", token,
              params: [q: query, per_page: 1]
@@ -85,7 +86,47 @@ defmodule Platform.Feedback.GithubPublisher.GithubApp do
 
   # ── token minting ──────────────────────────────────────────────────────
 
-  defp installation_token(repo) do
+  @doc """
+  Read one issue of the configured feedback repository (task 01a1e670
+  stage 2), for `Platform.Feedback.IssueSource.GithubApp`.
+
+  The token is minted for `permissions: %{issues: "read"}` on that one
+  repository. Returns `{:ok, payload}` with GitHub's issue map, or a bounded
+  error: `:fetch_unavailable` when this node holds no App credential or the
+  repository is not `GithubPublisher.repository/0` (no request is sent),
+  `:pull_request` for a pull request, `:issue_not_found` for a 404 or 410,
+  or the publisher's bounded HTTP atoms. The payload is never logged.
+  """
+  @spec fetch_issue(String.t(), pos_integer()) :: {:ok, map()} | {:error, atom()}
+  def fetch_issue(repository, number)
+      when is_binary(repository) and is_integer(number) and number > 0 do
+    repo = GithubPublisher.repository()
+
+    with true <- String.downcase(repository) == String.downcase(repo),
+         {:ok, _app_id, _installation_id, _pem} <- credentials() do
+      do_fetch_issue(repo, number)
+    else
+      _ -> {:error, :fetch_unavailable}
+    end
+  end
+
+  def fetch_issue(_repository, _number), do: {:error, :fetch_unavailable}
+
+  defp do_fetch_issue(repo, number) do
+    with {:ok, token} <- installation_token(repo, %{issues: "read"}),
+         {:ok, status, body} <-
+           request(:get, "/repos/#{repo}/issues/#{number}", "fetch_issue", token, []) do
+      case {status, body} do
+        {200, %{"pull_request" => _}} -> {:error, :pull_request}
+        {200, %{"number" => ^number} = issue} -> {:ok, issue}
+        {200, _} -> {:error, :publisher_bad_response}
+        {status, _} when status in [404, 410] -> {:error, :issue_not_found}
+        {status, _} -> GithubPublisher.http_error(status)
+      end
+    end
+  end
+
+  defp installation_token(repo, permissions) do
     with {:ok, app_id, installation_id, pem} <- credentials(),
          {:ok, jwt} <- app_jwt(app_id, pem),
          {:ok, status, body} <-
@@ -96,7 +137,7 @@ defmodule Platform.Feedback.GithubPublisher.GithubApp do
              jwt,
              json: %{
                repositories: [repo |> String.split("/", parts: 2) |> List.last()],
-               permissions: %{issues: "write"}
+               permissions: permissions
              }
            ) do
       case {status, body} do

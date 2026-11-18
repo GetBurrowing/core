@@ -136,7 +136,8 @@ defmodule Platform.Mail.InboundBackfillTest do
       )
 
     {:ok, account} = Mail.create_account(ctx.admin, ctx.org_id, attrs, %{imap: "imap-pass"})
-    account
+    # Shared, so it feeds experiments and its members read it (task 01a1ea5b stage 2).
+    Platform.Test.MailPrivacyFixtures.share_with_org!(ctx.admin, account)
   end
 
   defp raw(message_id, subject \\ "Re: your application") do

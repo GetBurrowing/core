@@ -35,10 +35,7 @@
      (bar + gap + safe area); `<main>` itself is not padded. Fixed-position
      panels (e.g. tasks/skills detail) bound their bottom edge to
      `env(safe-area-inset-bottom) + var(--bottom-nav-height)`. --%>
-<div
-  class="app-shell-root flex h-[100dvh] overflow-hidden bg-base-100 safe-area-top pb-[var(--meeting-bar-height,0px)]"
-  style={"--meeting-bar-height: " <> (if @meeting_active, do: "calc(3rem + var(--bottom-nav-gap, 0px))", else: "0px")}
->
+<div class="app-shell-root flex h-[100dvh] overflow-hidden bg-base-100 safe-area-top">
   <%!-- Per-org scope colours as CSS custom properties. Rendered here, once,
        because every surface that shows a scope chip renders this shell.
        Deliberately NOT phx-update="ignore": an admin recolouring an org has
@@ -100,6 +97,7 @@
        and desktop cannot disagree; see PlatformWeb.Components.Sidebar.
        `hidden lg:flex` inside the component. --%>
   <.sidebar
+    :if={@current_path not in ["/studio", "/studio/chat", "/studio/playtest"]}
     gaming={gaming?}
     current_path={@current_path}
     root_user={@root_user}
@@ -127,6 +125,27 @@
        content height, which on long chat threads pushes the bottom-tab
        nav out of the visible viewport on iOS. --%>
   <div class="flex flex-1 flex-col overflow-hidden min-w-0 min-h-0">
+    <%!-- In-call top bar (task 01a1e82a stage 1; replaced the bottom
+         ribbon). First in the main column, so at lg it spans the column
+         right of the sidebar and below lg it sits under the status bar (the
+         shell root's `safe-area-top` already clears it), above the phone top
+         strip. In flow, not fixed: it pushes the page down rather than
+         covering it, so nothing reserves an offset for it. Hidden only in
+         the call room; see `PlatformWeb.MeetingBarPresence`. --%>
+    <.live_component
+      module={PlatformWeb.MeetingBarLive}
+      id="meeting-bar"
+      meeting_active={@meeting_active}
+      meeting_space_id={@meeting_space_id}
+      meeting_space_name={@meeting_space_name}
+      meeting_space_slug={@meeting_space_slug}
+      meeting_slug={@meeting_slug}
+      meeting_started_at={@meeting_started_at}
+      in_call_room={@in_call_room}
+      meeting_roster={@meeting_roster}
+      meeting_here_count={@meeting_here_count}
+      meeting_can_end={assigns[:meeting_can_end] == true}
+    />
     <%!-- Phone top strip (was #utility-bar; renamed in place by Burrow
          redesign 22 stage 1). `lg:hidden`: at lg the sidebar carries what
          this strip carried (the mask chip, the theme mode, the account), and
@@ -194,7 +213,10 @@
         />
       </div>
     </header>
-    <div :if={gaming?} class="cg-workspace-modes lg:hidden">
+    <div
+      :if={gaming? && @current_path not in ["/studio", "/studio/chat", "/studio/playtest"]}
+      class="cg-workspace-modes lg:hidden"
+    >
       <PlatformWeb.Components.GamingShell.modes mode="create" />
     </div>
     <%!-- Flash messages --%>
@@ -233,6 +255,8 @@
          while the Inbox has unread items. lg:hidden inside the component
          itself; desktop uses the sidebar. --%>
     <.bottom_rail
+      gaming={gaming?}
+      project_id={assigns[:gaming_nav_project_id]}
       current_path={@current_path}
       root_user={@root_user}
       access_scope={assigns[:access_scope]}
@@ -246,6 +270,7 @@
          Triggered by `phx-click="open_more_sheet"` on the More tab in
          <.bottom_rail>. lg:hidden inside the component itself. --%>
     <.more_sheet
+      gaming={gaming?}
       open={@more_sheet_open}
       current_user={@current_user}
       user={assigns[:current_user_record]}
@@ -276,19 +301,6 @@
       open={assigns[:mask_chip_open] == true}
     />
 
-    <%!-- Persistent meeting bar (survives navigation) --%>
-    <.live_component
-      module={PlatformWeb.MeetingBarLive}
-      id="meeting-bar"
-      meeting_active={@meeting_active}
-      meeting_space_id={@meeting_space_id}
-      meeting_space_name={@meeting_space_name}
-      meeting_space_slug={@meeting_space_slug}
-      meeting_slug={@meeting_slug}
-      meeting_started_at={@meeting_started_at}
-      on_meeting_page={@on_meeting_page}
-    />
-
     <%!-- Desktop command palette (Burrow redesign 23 stage 2; master-desktop
          #cmdk). Mounted once, here, for every shell page; it loads its
          Sources only when opened and sends nothing to the page. --%>
@@ -311,6 +323,39 @@
          `phx-update="ignore"` keeps the element stable across the shell's
          frequent repatches (path changes, presence) so we don't burn
          mount() cycles relying on the singleton guard to back off. --%>
+    <%!-- In-call toasts, the full-load link guard and the unload prompt
+         (task 01a1e82a stage 2). Always present so its hook mounts on every
+         live navigation, which is how "You're still in <name>" learns the
+         call was kept; the call state rides on the data attributes. The
+         toasts and dialogs themselves live in <body>
+         (assets/js/meeting_presence.js). `data-auth-routes` is the
+         `live_session :authenticated` route list from the router.
+         `data-path` is omitted while names are masked (a slug can carry a
+         masked name); the hook falls back to `location.pathname`. --%>
+    <div
+      id="meeting-presence"
+      phx-hook="MeetingPresence"
+      class="hidden"
+      data-call-active={to_string(@meeting_active == true)}
+      data-meeting-id={assigns[:meeting_id] || @meeting_space_id}
+      data-meeting-name={@meeting_space_name}
+      data-return-path={
+        PlatformWeb.MeetingBarLive.return_to_call_path(
+          @meeting_slug,
+          @meeting_space_slug,
+          @meeting_space_id
+        )
+      }
+      data-call-room={to_string(@in_call_room == true)}
+      data-others-count={max((@meeting_here_count || 0) - 1, 0)}
+      data-can-end={to_string(assigns[:meeting_can_end] == true)}
+      data-other-names={Jason.encode!(assigns[:meeting_other_names] || [])}
+      data-started-at={@meeting_started_at && DateTime.to_iso8601(@meeting_started_at)}
+      data-path={assigns[:mask_names?] != true && assigns[:current_path]}
+      data-auth-routes={PlatformWeb.MeetingPresenceEvents.auth_route_patterns_json()}
+    >
+    </div>
+
     <div
       :if={@meeting_active}
       id="meeting-watchdog"

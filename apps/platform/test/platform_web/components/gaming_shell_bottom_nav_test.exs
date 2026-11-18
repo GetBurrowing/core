@@ -65,10 +65,11 @@ defmodule PlatformWeb.Components.GamingShellBottomNavTest do
     expected =
       user
       |> Platform.Access.Scope.for_user()
-      |> IconRail.tab_destinations()
+      |> IconRail.gaming_destinations()
       |> Enum.map(&to_string(&1.key))
 
     assert "chat" in expected
+    refute has_element?(doc, "#bottom-nav [data-module-id]")
 
     tabs =
       doc
@@ -76,10 +77,16 @@ defmodule PlatformWeb.Components.GamingShellBottomNavTest do
       |> LazyHTML.attribute("data-destination")
 
     assert tabs == expected ++ ["more"]
-    assert has_element?(doc, ~s(#bottom-nav a[data-destination="chat"][href="/chat"]))
-    assert has_element?(doc, ~s(#bottom-nav a[data-destination="meetings"][href="/meetings"]))
-    # Nothing on /play is one of the tabs.
-    refute has_element?(doc, "#bottom-nav [aria-current]")
+    assert has_element?(doc, ~s(#bottom-nav a[data-destination="chat"][href="/studio/chat"]))
+
+    assert has_element?(
+             doc,
+             ~s(#bottom-nav a[data-destination="playtest"][href="/studio/playtest"])
+           )
+
+    # Meetings left the bar with task 01a1b8a5 stage 4.
+    refute has_element?(doc, ~s(#bottom-nav a[data-destination="meetings"]))
+    assert has_element?(doc, "#bottom-nav [data-destination=discover][aria-current=page]")
   end
 
   test "More is a link that opens the sheet in the workspace, not a dead phx-click" do

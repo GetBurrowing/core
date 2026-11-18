@@ -141,6 +141,37 @@ defmodule Platform.Social.TransportParityTest do
     assert Enum.filter(names, &(&1 =~ "publish" or &1 =~ "approve")) == []
   end
 
+  # Social Studio slice B: approval, planning and
+  # cancelling are human-only context functions; no tool name can reach one.
+  test "no advertised social name can approve, plan, cancel, revoke, accept or retarget", ctx do
+    {runtime, token} = runtime_for(ctx, @granted)
+    {_socket, capabilities} = join_runtime(runtime, token)
+
+    names =
+      (Map.keys(http_tools_by_name(token)) ++ ws_tool_names(capabilities))
+      |> Enum.filter(&social?/1)
+
+    assert length(names) == 44
+
+    forbidden =
+      ~r/approv|plan|cancel|revok|revoke|retarget|accept|resubmit|request_changes|schedule/
+
+    assert Enum.filter(names, &(&1 =~ forbidden)) == []
+
+    # The Studio write functions are not exposed as tools by any other name either.
+    studio_writers =
+      ~w(approve_version plan_post cancel_plan revoke_approval request_changes resubmit save_version accept_render)
+
+    tool_source =
+      ["tools.ex", "tool_definitions.ex"]
+      |> Enum.map(&File.read!(Path.expand("../../lib/platform/social/#{&1}", __DIR__)))
+      |> Enum.join("\n")
+
+    for fun <- studio_writers do
+      refute tool_source =~ fun, "#{fun} is referenced from the agent tool modules"
+    end
+  end
+
   test "publish and approve calls are denied on both transports, same text, nothing written",
        ctx do
     {runtime, token} = runtime_for(ctx, @granted)

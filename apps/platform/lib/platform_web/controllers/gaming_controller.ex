@@ -4,55 +4,66 @@ defmodule PlatformWeb.GamingController do
   plug :put_root_layout, html: false
 
   def home(conn, params) do
-    if Platform.Gaming.enabled?() do
-      games =
-        Platform.Games.list_published()
+    user = Platform.Games.user(get_session(conn, :current_user_id))
 
-      mode = if params["mode"] in ["create", "discover"], do: params["mode"], else: "play"
+    studio? =
+      not is_nil(user) and
+        Platform.Access.module_access?(Platform.Access.Scope.for_user(user), :chat)
 
-      query =
-        case params["catalog"] do
-          %{"q" => value} when is_binary(value) -> String.slice(value, 0, 100)
-          _ -> ""
-        end
+    cond do
+      Platform.Gaming.enabled?() and studio? and params["mode"] not in ["discover", "play"] ->
+        conn |> put_resp_header("cache-control", "private, no-store") |> redirect(to: "/studio")
 
-      visible_games =
-        Enum.filter(
-          games,
-          &String.contains?(
-            String.downcase(&1["title"] <> " " <> &1["summary"]),
-            String.downcase(query)
+      Platform.Gaming.enabled?() ->
+        games =
+          Platform.Games.list_published()
+
+        mode = if params["mode"] in ["create", "discover"], do: params["mode"], else: "play"
+
+        query =
+          case params["catalog"] do
+            %{"q" => value} when is_binary(value) -> String.slice(value, 0, 100)
+            _ -> ""
+          end
+
+        visible_games =
+          Enum.filter(
+            games,
+            &String.contains?(
+              String.downcase(&1["title"] <> " " <> &1["summary"]),
+              String.downcase(query)
+            )
           )
+
+        user = Platform.Games.user(get_session(conn, :current_user_id))
+        communities = Map.new(games, &{&1["slug"], Platform.Games.community(&1, user)})
+
+        projects = Platform.Gaming.projects(user, games)
+
+        workspaces =
+          Map.new(
+            games,
+            &{&1["slug"], Platform.Gaming.workspace_path(&1, projects[&1["slug"]], user)}
+          )
+
+        conn
+        |> put_resp_header("cache-control", "private, no-store")
+        |> render(:home,
+          games: games,
+          visible_games: visible_games,
+          mode: mode,
+          search_form: Phoenix.Component.to_form(%{"q" => query}, as: :catalog),
+          projects: projects,
+          workspaces: workspaces,
+          communities: communities,
+          user: user,
+          branding: Platform.Branding.get(),
+          creator?: not is_nil(user) and Platform.Access.authorize_install(user) == :ok,
+          csrf_token: Plug.CSRFProtection.get_csrf_token()
         )
 
-      user = Platform.Games.user(get_session(conn, :current_user_id))
-      communities = Map.new(games, &{&1["slug"], Platform.Games.community(&1, user)})
-
-      projects = Platform.Gaming.projects(user, games)
-
-      workspaces =
-        Map.new(
-          games,
-          &{&1["slug"], Platform.Gaming.workspace_path(&1, projects[&1["slug"]], user)}
-        )
-
-      conn
-      |> put_resp_header("cache-control", "private, no-store")
-      |> render(:home,
-        games: games,
-        visible_games: visible_games,
-        mode: mode,
-        search_form: Phoenix.Component.to_form(%{"q" => query}, as: :catalog),
-        projects: projects,
-        workspaces: workspaces,
-        communities: communities,
-        user: user,
-        branding: Platform.Branding.get(),
-        creator?: not is_nil(user) and Platform.Access.authorize_install(user) == :ok,
-        csrf_token: Plug.CSRFProtection.get_csrf_token()
-      )
-    else
-      send_resp(conn, 404, "Not found")
+      true ->
+        send_resp(conn, 404, "Not found")
     end
   end
 end

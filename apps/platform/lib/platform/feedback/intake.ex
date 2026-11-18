@@ -12,7 +12,11 @@ defmodule Platform.Feedback.Intake do
   `capabilities/0` is exhaustive:
 
     * `read_in_scope_issue` — read the title/body GitHub delivered for an
-      issue in scope. Nothing is fetched; no other repository content is read.
+      issue in scope. No other repository content is read.
+    * `fetch_in_scope_issue` — re-read ONE pending in-scope issue through
+      `Platform.Feedback.IssueSource` (an `issues: "read"` token on the one
+      feedback repository) so `retry_pending/1` can classify it again. The
+      text is held in memory only, like a webhook delivery.
     * `classify` — one tool-less `Platform.Feedback.Classifier` call.
     * `file_accepted_task` — `Platform.Tasks.create_task/2`, only for an
       `accept_*` verdict, with fixed provenance.
@@ -47,6 +51,20 @@ defmodule Platform.Feedback.Intake do
   backstop, and an existing task with the issue's identity is linked rather
   than duplicated.
 
+  ## Retrying pending records
+
+  `retry_pending/1` is driven by `Platform.Feedback.IntakeSweeper`. When
+  `Platform.Feedback.ClassifierRoute.status/0` is not `:ok` it returns at
+  once, touching no row and consuming no attempt. Otherwise it claims a
+  bounded batch of due pending records (attempts below the cap, deadline
+  passed), each under the record's row lock, increments `attempts` and sets
+  the next deadline on the backoff #{"5m, 15m, 1h, 4h, 12h"}, then fetches the
+  issue and runs the same decision path a webhook runs. That path's
+  decided-terminal check, the re-lock in the decision and
+  `tasks_external_feedback_identity_unique` remain the only idempotency
+  mechanism. A webhook redelivery resets `attempts`; `reset_exhausted/0`
+  re-arms records that stopped retrying.
+
   ## Untrusted text
 
   Issue title and body reach exactly one place: the classifier's user
@@ -61,9 +79,11 @@ defmodule Platform.Feedback.Intake do
   require Logger
 
   alias Platform.Feedback.Classifier
+  alias Platform.Feedback.ClassifierRoute
   alias Platform.Feedback.Disposition
   alias Platform.Feedback.GithubPublisher
   alias Platform.Feedback.IntakeRecord
+  alias Platform.Feedback.IssueSource
   alias Platform.Feedback.Policy
   alias Platform.Repo
   alias Platform.Tasks
@@ -71,10 +91,14 @@ defmodule Platform.Feedback.Intake do
   alias Platform.Tasks.RepoRef
   alias Platform.Tasks.Task
 
-  @capabilities ~w(read_in_scope_issue classify file_accepted_task apply_canned_disposition)
+  @capabilities ~w(read_in_scope_issue fetch_in_scope_issue classify file_accepted_task apply_canned_disposition)
   @actions ~w(opened edited reopened)
   @max_issue_number 2_147_483_647
   @max_text_bytes 200_000
+  @default_batch 10
+  @default_max_attempts 5
+  # Seconds before attempt n + 1, indexed by n - 1: 5m, 15m, 1h, 4h, 12h.
+  @backoff_seconds [300, 900, 3_600, 14_400, 43_200]
 
   @type issue :: Classifier.issue()
   @type outcome ::
@@ -127,10 +151,15 @@ defmodule Platform.Feedback.Intake do
   The entry point for the webhook and for any polling seam.
   """
   @spec process(issue()) :: {:ok, map()} | {:ignored, atom()} | {:error, atom()}
-  def process(%{repository: repository, issue_number: number} = issue) do
+  def process(issue), do: process(issue, :delivery)
+
+  # `:delivery` is a webhook (or poll) delivery: it bumps `deliveries` and
+  # resets the retry budget. `:retry` is `retry_pending/1` re-reading an
+  # issue it already holds a record for: neither counter moves.
+  defp process(%{repository: repository, issue_number: number} = issue, mode) do
     with :ok <- enabled(),
          {:ok, scope} <- scope(repository),
-         {:ok, record} <- upsert_record(issue) do
+         {:ok, record} <- upsert_record(issue, mode) do
       if record.status == "decided" do
         log(record, "already_decided")
         {:ok, result(:already_decided, record)}
@@ -205,6 +234,14 @@ defmodule Platform.Feedback.Intake do
 
       {:ok, %{status: "unassigned"}} ->
         mark_pending(record, "unassigned")
+
+      {:ok, %{status: "no_endpoint"}} ->
+        Logger.warning(
+          "[Feedback.Intake] classifier has no model endpoint record=#{record.id} " <>
+            "reason=no_endpoint"
+        )
+
+        mark_pending(record, "no_endpoint")
 
       {:ok, %{status: "rejected_output"}} ->
         mark_pending(record, "rejected_output")
@@ -368,8 +405,26 @@ defmodule Platform.Feedback.Intake do
 
   # ── records ─────────────────────────────────────────────────────────────
 
-  defp upsert_record(issue) do
+  defp upsert_record(issue, mode) do
     now = DateTime.utc_now()
+
+    conflict_set =
+      case mode do
+        :delivery ->
+          [
+            inc: [deliveries: 1],
+            set: [
+              last_delivered_at: now,
+              content_sha256: digest(issue),
+              updated_at: now,
+              attempts: 0,
+              next_attempt_at: nil
+            ]
+          ]
+
+        :retry ->
+          [set: [content_sha256: digest(issue), updated_at: now]]
+      end
 
     attrs = %IntakeRecord{
       repository_identity: issue.repository,
@@ -381,10 +436,7 @@ defmodule Platform.Feedback.Intake do
     }
 
     Repo.insert(attrs,
-      on_conflict: [
-        inc: [deliveries: 1],
-        set: [last_delivered_at: now, content_sha256: digest(issue), updated_at: now]
-      ],
+      on_conflict: conflict_set,
       conflict_target: {:unsafe_fragment, "(lower(repository_identity), issue_number)"},
       returning: true
     )
@@ -392,6 +444,172 @@ defmodule Platform.Feedback.Intake do
       {:ok, record} -> {:ok, record}
       {:error, _} -> {:error, :record_not_written}
     end
+  end
+
+  # ── retry sweep ─────────────────────────────────────────────────────────
+
+  @doc """
+  Re-fetch and re-classify due pending records. Options: `:batch` (default
+  #{@default_batch}), `:max_attempts` (default `max_attempts/0`), `:now`.
+
+  Returns `{:ok, %{skipped: :classifier_off | :feedback_disabled}}` without
+  touching any row, or `{:ok, %{claimed: n, outcomes: [...]}}`. Never logs
+  issue text.
+  """
+  @spec retry_pending(keyword()) :: {:ok, map()}
+  def retry_pending(opts \\ []) do
+    cond do
+      not Policy.enabled?() -> {:ok, %{skipped: :feedback_disabled}}
+      ClassifierRoute.status() != :ok -> {:ok, %{skipped: :classifier_off}}
+      true -> {:ok, sweep(opts)}
+    end
+  end
+
+  @doc "The attempt cap (`config :platform, Platform.Feedback.Intake, max_attempts:`)."
+  @spec max_attempts() :: pos_integer()
+  def max_attempts do
+    case :platform |> Application.get_env(__MODULE__, []) |> Keyword.get(:max_attempts) do
+      n when is_integer(n) and n > 0 -> n
+      _ -> @default_max_attempts
+    end
+  end
+
+  @doc "Seconds `retry_pending/1` waits after the `attempts`-th attempt."
+  @spec backoff_seconds(pos_integer()) :: pos_integer()
+  def backoff_seconds(attempts) when is_integer(attempts) and attempts > 0 do
+    Enum.at(@backoff_seconds, attempts - 1, List.last(@backoff_seconds))
+  end
+
+  @doc """
+  Re-arm every pending record that reached the attempt cap: `attempts` back
+  to 0 and no deadline. Returns the number of records re-armed.
+  """
+  @spec reset_exhausted() :: non_neg_integer()
+  def reset_exhausted do
+    max = max_attempts()
+
+    {count, _} =
+      from(r in IntakeRecord, where: r.status == "pending" and r.attempts >= ^max)
+      |> Repo.update_all(set: [attempts: 0, next_attempt_at: nil, updated_at: DateTime.utc_now()])
+
+    count
+  end
+
+  defp sweep(opts) do
+    now = Keyword.get(opts, :now) || DateTime.utc_now()
+    batch = Keyword.get(opts, :batch, @default_batch)
+    max = Keyword.get(opts, :max_attempts) || max_attempts()
+
+    ids =
+      from(r in IntakeRecord,
+        where:
+          r.status == "pending" and r.attempts < ^max and
+            (is_nil(r.next_attempt_at) or r.next_attempt_at <= ^now),
+        order_by: [asc: r.last_delivered_at, asc: r.id],
+        limit: ^batch,
+        select: r.id
+      )
+      |> Repo.all()
+
+    outcomes =
+      Enum.reduce_while(ids, [], fn id, acc ->
+        case retry_one(id, now) do
+          :fetch_unavailable -> {:halt, [:fetch_unavailable | acc]}
+          outcome -> {:cont, [outcome | acc]}
+        end
+      end)
+      |> Enum.reverse()
+
+    %{claimed: Enum.count(outcomes, &(&1 != :skipped)), outcomes: outcomes}
+  end
+
+  defp retry_one(id, now) do
+    case claim(id, now) do
+      {:claimed, record, prior} -> fetch_and_process(record, prior)
+      :skipped -> :skipped
+    end
+  end
+
+  # The claim is the existing row lock plus a re-read of the due deadline: a
+  # record decided or already claimed by a concurrent sweep since the select
+  # is skipped. The attempt cap lives in the select alone.
+  defp claim(id, now) do
+    Repo.transaction(fn ->
+      record = lock(id)
+
+      cond do
+        record.status == "decided" ->
+          :skipped
+
+        record.next_attempt_at != nil and DateTime.compare(record.next_attempt_at, now) == :gt ->
+          :skipped
+
+        true ->
+          attempts = record.attempts + 1
+
+          claimed =
+            record
+            |> Ecto.Changeset.change(
+              attempts: attempts,
+              last_attempt_at: now,
+              next_attempt_at: DateTime.add(now, backoff_seconds(attempts), :second)
+            )
+            |> Repo.update!()
+
+          {:claimed, claimed, record}
+      end
+    end)
+    |> case do
+      {:ok, result} -> result
+      {:error, _} -> :skipped
+    end
+  end
+
+  defp fetch_and_process(record, prior) do
+    case IssueSource.fetch(record.repository_identity, record.issue_number) do
+      {:ok, issue} ->
+        case process(issue, :retry) do
+          {:ok, %{outcome: outcome}} -> outcome
+          {:ignored, reason} -> {:ignored, reason}
+          {:error, reason} -> {:error, reason}
+        end
+
+      {:error, :fetch_unavailable} ->
+        give_back(record, prior)
+        retry_log(record, "fetch_unavailable")
+        :fetch_unavailable
+
+      {:error, reason} ->
+        retry_log(record, "fetch_failed:" <> bounded(reason))
+        {:fetch_failed, reason}
+    end
+  rescue
+    error ->
+      Logger.error(
+        "[Feedback.Intake] retry crashed record=#{record.id} error=#{inspect(error.__struct__)}"
+      )
+
+      {:error, :retry_crashed}
+  end
+
+  # This node cannot fetch at all: the attempt was not really made.
+  defp give_back(record, prior) do
+    from(r in IntakeRecord, where: r.id == ^record.id and r.attempts == ^record.attempts)
+    |> Repo.update_all(
+      set: [
+        attempts: prior.attempts,
+        next_attempt_at: prior.next_attempt_at,
+        last_attempt_at: prior.last_attempt_at
+      ]
+    )
+  end
+
+  defp retry_log(record, event) do
+    Logger.warning(
+      "[Feedback.Intake] retry #{event} record=#{record.id} " <>
+        "repository=#{record.repository_identity} issue=#{record.issue_number} " <>
+        "attempts=#{record.attempts}"
+    )
   end
 
   defp lock(id) do

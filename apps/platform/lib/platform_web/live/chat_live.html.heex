@@ -183,6 +183,7 @@
           revealed_section_ids={@revealed_section_ids}
           sidebar_sections={@sidebar_sections}
           meetings_enabled={@meetings_enabled}
+          call_off?={@space_call_off?}
           in_meeting={@in_meeting}
           goal_panel={@goal_panel}
           details_panel={@details_panel}
@@ -236,7 +237,7 @@
           external?={@external?}
           canvases={@canvases}
           show_canvases={@show_canvases}
-          meetings_enabled={@meetings_enabled}
+          meetings_enabled={@meetings_enabled && !@space_call_off?}
           in_meeting={@in_meeting}
           agent_presence={@agent_presence}
           has_agent_participant={@has_agent_participant}
@@ -281,6 +282,7 @@
         />
 
         <.message_scroller
+          embedded_context={assigns[:embedded_context] || "meeting"}
           room_agent_picker={@room_agent_picker}
           can_add_room_agents?={@can_add_room_agents?}
           streams={@streams}
@@ -572,7 +574,7 @@
       external?={@external?}
       canvases={@canvases}
       show_canvases={@show_canvases}
-      meetings_enabled={@meetings_enabled}
+      meetings_enabled={@meetings_enabled && !@space_call_off?}
       in_meeting={@in_meeting}
       agent_presence={@agent_presence}
       has_agent_participant={@has_agent_participant}

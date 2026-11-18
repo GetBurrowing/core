@@ -563,7 +563,24 @@ describe("hide predicate", () => {
     expect(barVisible(e.win, e.doc)).toBe(true)
     e.flags.otherSheet = true
     expect(barVisible(e.win, e.doc)).toBe(false)
-    expect(OTHER_SHEET_SELECTOR).toBe(".sheet-open:not(#more-sheet)")
+    expect(OTHER_SHEET_SELECTOR).toBe(".sheet-open:not(#more-sheet), [data-covers-tab-bar]")
+  })
+
+  // Calendar's event details are a hand-rolled bottom sheet (not the Sheet
+  // component) with Join in the footer. The native bar sat over it.
+  it("hides for a hand-rolled sheet marked data-covers-tab-bar", () => {
+    const e = env()
+    const marked = new Set()
+    e.doc.querySelector = (sel) =>
+      sel
+        .split(",")
+        .map((s) => s.trim())
+        .some((s) => marked.has(s))
+        ? {}
+        : null
+    expect(barVisible(e.win, e.doc)).toBe(true)
+    marked.add("[data-covers-tab-bar]")
+    expect(barVisible(e.win, e.doc)).toBe(false)
   })
 
   it("mirrors app.css's three hide rules", () => {
@@ -723,3 +740,13 @@ describe("plugin failures", () => {
     expect(() => mount(throwing)).not.toThrow()
   })
 })
+
+// A game install must remain navigable in already-shipped native clients.
+describe("game dock compatibility", () => {
+  it("keeps native chrome hidden when the complete game dock is rendered on the web", () => {
+    const el = fakeSpan({"data-web-tabs": "true", "data-items": "studio,chat,playtest,discover,more"});
+    const state = stateOf(el, {matchMedia: () => ({matches: false})}, {documentElement: {matches: () => false}}, () => null);
+    expect(state.visible).toBe(false);
+    expect(state.items).toEqual(["studio", "chat", "playtest", "discover", "more"]);
+  });
+});

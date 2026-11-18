@@ -6,6 +6,7 @@ defmodule Platform.Meetings.TranscriptViewerScopeTest do
   """
   use Platform.DataCase, async: false
 
+  import Ecto.Query, only: [from: 2]
   import Platform.ExternalUserFixtures
 
   alias Platform.Meetings
@@ -66,6 +67,26 @@ defmodule Platform.Meetings.TranscriptViewerScopeTest do
              Meetings.get_transcript_for_user(external, ctx.transcript.id)
 
     assert id == ctx.transcript.id
+  end
+
+  # Task 01a1b281 stage 4: the delete confirm promises "Its transcript and
+  # recording are kept", so the read must not inherit the deleted filter
+  # the lists carry. The viewer rule itself still applies.
+  test "a soft-deleted meeting's transcript stays readable under the same viewer rule", ctx do
+    assert {:ok, %Transcript{id: id}} =
+             Meetings.get_transcript_for_user(ctx.insider, ctx.transcript.id)
+
+    assert id == ctx.transcript.id
+
+    {1, _} =
+      from(m in Meetings.Meeting, where: m.id == ^ctx.meeting.id)
+      |> Repo.update_all(set: [status: "cancelled", deleted_at: DateTime.utc_now()])
+
+    assert {:error, :not_found} = Meetings.get_meeting_for_user(ctx.insider, ctx.meeting.id)
+    assert {:ok, %Transcript{id: ^id}} = Meetings.get_transcript_for_user(ctx.insider, id)
+
+    outsider = create_user!()
+    assert {:error, :not_found} = Meetings.get_transcript_for_user(outsider, id)
   end
 
   test "malformed ids and nil or id-less users are not_found", ctx do

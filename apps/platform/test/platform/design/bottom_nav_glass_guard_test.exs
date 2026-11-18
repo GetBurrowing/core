@@ -121,8 +121,13 @@ defmodule Platform.Design.BottomNavGlassGuardTest do
 
   # Every `.bottom-nav*` rule app.css declares, by selector and the at-rule
   # it sits in. Stages 2 and 3 add geometry rules; add them here too.
+  # Task 01a1ecb3 stage 1: a page text field that opts in with
+  # data-hides-tab-bar (the Goals fields) hides the bar as a composer does.
+  @hides_tab_bar ":root:has([data-hides-tab-bar]:focus)"
+
   @hide_selectors [
     ~s{:root:has([phx-hook="ComposeInput"]:focus)},
+    @hides_tab_bar,
     ":root:has([data-fullscreen-viewer])",
     ":root:has([data-in-call])"
   ]
@@ -132,7 +137,7 @@ defmodule Platform.Design.BottomNavGlassGuardTest do
     {[], Enum.map_join(@hide_selectors, ", ", &(&1 <> " .bottom-nav"))},
     {[], ":root:has(#more-sheet.sheet-open) .bottom-nav"},
     # Task 01a1557b stage 3: inside the iOS app the native tab bar replaces it.
-    {[], ":root[data-native-tab-bar] .bottom-nav"},
+    {[], ":root[data-native-tab-bar] .bottom-nav:not([data-web-tabs])"},
     {["@media (prefers-reduced-motion: reduce)"], ".bottom-nav"},
     {[], ~s([data-preset="high-contrast"] .bottom-nav)},
     {["@media (prefers-reduced-transparency: reduce)"], ".bottom-nav"},
@@ -548,7 +553,7 @@ defmodule Platform.Design.BottomNavGlassGuardTest do
       assert declaration(root, "--bottom-nav-height") == "0px"
     end
 
-    test "exactly the three hide selectors zero the clearance and hide the bar", %{rules: rules} do
+    test "exactly the hide selectors zero the clearance and hide the bar", %{rules: rules} do
       zeroing = Enum.filter(rules, &(declaration(&1.body, "--bottom-nav-height") == "0px"))
       [token_rule] = Enum.filter(zeroing, &(&1.selector =~ ":has(" and &1.context == []))
 
@@ -583,7 +588,10 @@ defmodule Platform.Design.BottomNavGlassGuardTest do
       native = ":root[data-native-tab-bar]:has([data-bottom-rail])"
       phone = ["@media (max-width: 1023.98px)"]
 
-      [clearance] = Enum.filter(rules, &(&1.selector == native and &1.context == phone))
+      # Already-shipped native clients cannot draw Studio/Playtest/Discover;
+      # those docks retain the web clearance instead of the hidden native bar's.
+      native_clearance = ":root[data-native-tab-bar]:has([data-bottom-rail]:not([data-web-tabs]))"
+      [clearance] = Enum.filter(rules, &(&1.selector == native_clearance and &1.context == phone))
 
       assert normalise(declaration(clearance.body, "--bottom-nav-height")) =~
                "var(--native-tab-bar-height"
@@ -599,6 +607,46 @@ defmodule Platform.Design.BottomNavGlassGuardTest do
                Enum.map(@hide_selectors, &String.replace(&1, ":root", native, global: false))
 
       assert declaration(restated.body, "--bottom-nav-gap") == "0px"
+    end
+
+    # Task 01a1ecb3 stage 1: the opt-in field marker sits in all three hide
+    # blocks (the clearance token, the bar's transform, the native restatement).
+    # The equality checks above already cover it through @hide_selectors; this
+    # names the selector so its loss reads as itself.
+    test "[data-hides-tab-bar]:focus is in all three hide blocks", %{rules: rules} do
+      native = ":root[data-native-tab-bar]:has([data-bottom-rail])"
+      phone = ["@media (max-width: 1023.98px)"]
+      zeroes? = &(declaration(&1.body, "--bottom-nav-height") == "0px")
+
+      token =
+        Enum.filter(rules, &(&1.context == [] and zeroes?.(&1) and &1.selector =~ ":has("))
+
+      bar =
+        Enum.filter(
+          rules,
+          &(&1.context == [] and &1.selector =~ ".bottom-nav" and
+              declaration(&1.body, "visibility") == "hidden")
+        )
+
+      restated =
+        Enum.filter(rules, &(&1.context == phone and zeroes?.(&1) and &1.selector =~ native))
+
+      # A bare match, not a `for` pattern: a generator pattern would skip a
+      # block that matched zero or two rules and pass vacuously.
+      [token_rule] = token
+      [bar_rule] = bar
+      [native_rule] = restated
+
+      checks = [
+        {token_rule, @hides_tab_bar},
+        {bar_rule, @hides_tab_bar <> " .bottom-nav"},
+        {native_rule, String.replace(@hides_tab_bar, ":root", native, global: false)}
+      ]
+
+      for {rule, expected} <- checks do
+        assert expected in split_selectors(rule.selector),
+               "hide rule lacks #{expected}: #{rule.selector}"
+      end
     end
 
     test "no rule hides the bar or zeroes its clearance on scroll", %{rules: rules} do

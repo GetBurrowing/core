@@ -263,6 +263,230 @@ defmodule Platform.SignInAdmin.PocketIdTest do
     end
   end
 
+  describe "email_login_code_enabled?/0 (task 01a1e58b)" do
+    # The shape pocket-id v2.18.0 serves at GET /api/application-configuration:
+    # a list of public {key, type, value} entries, values as strings.
+    defp app_config(value) do
+      [
+        %{"key" => "appName", "type" => "string", "value" => "Pocket ID"},
+        %{
+          "key" => "emailOneTimeAccessAsUnauthenticatedEnabled",
+          "type" => "bool",
+          "value" => value
+        },
+        %{"key" => "emailOneTimeAccessAsAdminEnabled", "type" => "bool", "value" => "true"}
+      ]
+    end
+
+    test "is true only when the IdP's unauthenticated email login code is on" do
+      stub(fn conn, _ -> json(conn, 200, app_config("true")) end)
+      assert PocketId.email_login_code_enabled?() == true
+
+      assert [%{method: "GET", path: "/api/application-configuration"}] =
+               requests() |> assert_every_request_keyed()
+
+      stub(fn conn, _ -> json(conn, 200, app_config("false")) end)
+      assert PocketId.email_login_code_enabled?() == false
+    end
+
+    test "fails closed on errors, odd shapes, a missing key or a non-\"true\" value" do
+      for responder <- [
+            fn conn, _ -> json(conn, 503, %{"error" => "down"}) end,
+            fn conn, _ -> json(conn, 404, %{"error" => "missing"}) end,
+            fn conn, _ -> json(conn, 200, %{"unexpected" => true}) end,
+            fn conn, _ -> json(conn, 200, [%{"key" => "appName", "value" => "x"}]) end,
+            fn conn, _ -> json(conn, 200, app_config(true)) end,
+            fn conn, _ -> json(conn, 200, app_config("TRUE ")) end,
+            fn conn, _ -> Req.Test.transport_error(conn, :econnrefused) end
+          ] do
+        stub(responder)
+        assert PocketId.email_login_code_enabled?() == false
+      end
+
+      Application.delete_env(:platform, :sign_in_admin_url)
+      assert PocketId.email_login_code_enabled?() == false
+    end
+  end
+
+  describe "ensure_email_login_code/0 (task 01a1e65e)" do
+    @smtp_sentinel "smtp-SENTINEL-must-never-print-7f3a"
+    @flag "emailOneTimeAccessAsUnauthenticatedEnabled"
+
+    # The shape pocket-id v2.18.0 serves at GET
+    # /api/application-configuration/all: every {key, type, value} entry,
+    # secrets included, values as strings. An admin has customised appName
+    # and sessionDuration, the way an existing install would have.
+    defp all_config(flag, overrides \\ %{}) do
+      %{
+        "appName" => "Legacy Pie Auth",
+        "sessionDuration" => "120",
+        "emailsVerified" => "false",
+        "smtpHost" => "smtp.example.test",
+        "smtpPassword" => @smtp_sentinel,
+        "ldapBindPassword" => "",
+        @flag => flag,
+        "emailOneTimeAccessAsAdminEnabled" => "true"
+      }
+      |> Map.merge(overrides)
+      |> Enum.map(fn {key, value} -> %{"key" => key, "type" => "string", "value" => value} end)
+    end
+
+    defp as_map(list), do: Map.new(list, &{&1["key"], &1["value"]})
+
+    defp as_list(map),
+      do:
+        Enum.map(map, fn {key, value} -> %{"key" => key, "type" => "string", "value" => value} end)
+
+    # GET /all answers `all`; PUT stores nothing (the test reads the body
+    # from the recorded request) and echoes the body back as a list, the way
+    # pocket-id answers with the saved configuration.
+    defp config_stub(all, put_responder \\ fn conn, body -> json(conn, 200, as_list(body)) end) do
+      stub(fn conn, body ->
+        case {conn.method, conn.request_path} do
+          {"GET", "/api/application-configuration/all"} -> json(conn, 200, all)
+          {"PUT", "/api/application-configuration"} -> put_responder.(conn, body)
+          _ -> json(conn, 404, %{"error" => "unexpected"})
+        end
+      end)
+    end
+
+    defp puts(reqs), do: Enum.filter(reqs, &(&1.method == "PUT"))
+
+    test "(a) flag off: one PUT whose body is the GET map with only the flag changed" do
+      all = all_config("false")
+      config_stub(all)
+
+      assert PocketId.ensure_email_login_code() == {:ok, :enabled}
+
+      reqs = requests() |> assert_every_request_keyed()
+
+      assert [%{method: "GET", path: "/api/application-configuration/all"}, put] = reqs
+      assert [^put] = puts(reqs)
+      assert put.path == "/api/application-configuration"
+      assert put.body == Map.put(as_map(all), @flag, "true")
+      # Positive control: the admin's customisation survives the full replace.
+      assert put.body["appName"] == "Legacy Pie Auth"
+      assert put.body["sessionDuration"] == "120"
+      assert map_size(put.body) == map_size(as_map(all))
+    end
+
+    test "(b) flag already on: zero PUTs" do
+      config_stub(all_config("true"))
+
+      assert PocketId.ensure_email_login_code() == {:ok, :present}
+
+      reqs = requests() |> assert_every_request_keyed()
+      assert [%{method: "GET", path: "/api/application-configuration/all"}] = reqs
+      assert puts(reqs) == []
+    end
+
+    test "(c) a locked config (redaction placeholder) sends zero PUTs" do
+      config_stub(all_config("false", %{"smtpPassword" => "XXXXXXXXXX"}))
+
+      assert PocketId.ensure_email_login_code() == {:error, :config_locked}
+
+      reqs = requests() |> assert_every_request_keyed()
+      assert [%{method: "GET"}] = reqs
+      assert puts(reqs) == []
+    end
+
+    test "(d) a 200 PUT whose answer does not carry the flag as true is not saved" do
+      config_stub(all_config("false"), fn conn, _body -> json(conn, 200, all_config("false")) end)
+      assert PocketId.ensure_email_login_code() == {:error, :not_saved}
+      assert [_put] = requests() |> puts()
+
+      config_stub(all_config("false"), fn conn, _body -> json(conn, 200, %{"ok" => true}) end)
+      assert PocketId.ensure_email_login_code() == {:error, :not_saved}
+
+      config_stub(all_config("false"), fn conn, _body -> json(conn, 400, %{"error" => "x"}) end)
+      assert PocketId.ensure_email_login_code() == {:error, {:http, 400}}
+    end
+
+    test "(e) GET 401: http error, zero PUTs" do
+      stub(fn conn, _ -> json(conn, 401, %{"error" => "unauthorized"}) end)
+
+      assert PocketId.ensure_email_login_code() == {:error, {:http, 401}}
+
+      reqs = requests() |> assert_every_request_keyed()
+      assert [%{method: "GET", path: "/api/application-configuration/all"}] = reqs
+    end
+
+    test "(e2) an empty or non-list /all is a bad response, zero PUTs" do
+      for body <- [[], %{"unexpected" => true}, [%{"value" => "x"}]] do
+        stub(fn conn, _ -> json(conn, 200, body) end)
+        assert PocketId.ensure_email_login_code() == {:error, :bad_response}
+        assert requests() |> puts() == []
+      end
+    end
+
+    test "(f) transport error on the GET or on the PUT" do
+      stub(fn conn, _ -> Req.Test.transport_error(conn, :econnrefused) end)
+      assert PocketId.ensure_email_login_code() == {:error, :transport}
+
+      config_stub(all_config("false"), fn conn, _ -> Req.Test.transport_error(conn, :closed) end)
+      assert PocketId.ensure_email_login_code() == {:error, :transport}
+      assert [_put] = requests() |> puts()
+
+      Application.delete_env(:platform, :sign_in_admin_url)
+      assert PocketId.ensure_email_login_code() == {:error, :not_configured}
+    end
+
+    test "(g) no config value reaches a log or the result" do
+      previous = Logger.level()
+      Logger.configure(level: :debug)
+      on_exit(fn -> Logger.configure(level: previous) end)
+
+      outcomes = [
+        fn -> config_stub(all_config("false")) end,
+        fn -> config_stub(all_config("true")) end,
+        fn -> config_stub(all_config("false", %{"ldapBindPassword" => "XXXXXXXXXX"})) end,
+        fn ->
+          config_stub(all_config("false"), fn conn, _ -> json(conn, 200, all_config("false")) end)
+        end,
+        fn ->
+          config_stub(all_config("false"), fn conn, _ -> json(conn, 500, all_config("false")) end)
+        end
+      ]
+
+      {results, log} =
+        with_log(fn ->
+          for setup <- outcomes do
+            setup.()
+            PocketId.ensure_email_login_code()
+          end
+        end)
+
+      assert results == [
+               {:ok, :enabled},
+               {:ok, :present},
+               {:error, :config_locked},
+               {:error, :not_saved},
+               {:error, {:http, 500}}
+             ]
+
+      # Positive control: the request lines ARE captured, and the PUT really
+      # carried the sentinel, so its absence from the log is not an empty log.
+      assert log =~
+               "pocket_id.request method=GET path=/api/application-configuration/all status=200"
+
+      assert log =~ "pocket_id.request method=PUT path=/api/application-configuration status=200"
+
+      assert Enum.any?(
+               requests(),
+               &(&1.method == "PUT" and &1.body["smtpPassword"] == @smtp_sentinel)
+             )
+
+      refute log =~ @smtp_sentinel
+      refute log =~ "Legacy Pie Auth"
+      refute log =~ @key
+
+      for result <- results do
+        refute inspect(result) =~ @smtp_sentinel
+        refute inspect(result) =~ "Legacy Pie Auth"
+      end
+    end
+  end
+
   describe "one_time_token/1" do
     test "asks for a 30m TTL (a 12-character code) and returns the token redacted" do
       stub(fn conn, _ -> json(conn, 201, %{"token" => @token}) end)

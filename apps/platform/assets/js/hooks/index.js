@@ -9,6 +9,7 @@ import AttachSheet from "./attach_sheet"
 import { AttachFailedPreview } from "../attach_stage"
 import ButtonLoading from "./button_loading"
 import CalendarScroll from "./calendar_scroll"
+import CalendarSelection, {CalendarEditorFocus} from "./calendar_selection"
 import CandidateClock, { SheetHandleClock } from "./candidate_clock"
 import CanvasRoomBridge from "./canvas_room_bridge"
 import CanvasSidebarResize from "./canvas_sidebar_resize"
@@ -51,11 +52,13 @@ import MeetingBar from "./meeting_bar"
 import MeetingCaptions, { MeetingCaptionsPersist } from "./meeting_captions"
 import MeetingClient from "./meeting_client"
 import MeetingLobbyPreview from "./meeting_lobby_preview"
+import MeetingPresence from "./meeting_presence"
 import MeetingPushToTalk from "./meeting_push_to_talk"
 import MeetingRoom from "./meeting_room"
 import MeetingScreenShare from "./meeting_screen_share"
 import MeetingShareButton from "./meeting_share_button"
 import MeetingSoundboard from "./meeting_soundboard"
+import MeetingSpeakerButton from "./meeting_speaker_button"
 import MeetingTimer from "./meeting_timer"
 import MeetingTranscript from "./meeting_transcript"
 import MeetingVideoTile from "./meeting_video_tile"
@@ -101,6 +104,8 @@ export default {
   AttachSheet,
   ButtonLoading,
   CalendarScroll,
+  CalendarSelection,
+  CalendarEditorFocus,
   CandidateClock,
   CanvasRoomBridge,
   ChatClip,
@@ -145,11 +150,13 @@ export default {
   MeetingCaptionsPersist,
   MeetingClient,
   MeetingLobbyPreview,
+  MeetingPresence,
   MeetingPushToTalk,
   MeetingRoom,
   MeetingScreenShare,
   MeetingShareButton,
   MeetingSoundboard,
+  MeetingSpeakerButton,
   MeetingTimer,
   MeetingTranscript,
   MeetingVideoTile,

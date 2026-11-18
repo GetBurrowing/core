@@ -3,10 +3,15 @@ defmodule PlatformWeb.Components.BottomNavHideMarkersTest do
   The markup half of the mobile tab bar's hide rules (task
   01a1557a-7a71-7000-8580-75565039bffe, Burrow redesign 4, stage 3).
 
-  app.css hides the bar under exactly three selectors:
+  app.css hides the bar under exactly four selectors:
 
     * `:root:has([phx-hook="ComposeInput"]:focus)`: keyboard up with a
       composer focused (composer focus is the proxy for "keyboard up");
+    * `:root:has([data-hides-tab-bar]:focus)`: keyboard up with a page text
+      field focused that opts in with `data-hides-tab-bar`, for fields that
+      are not composers (task 01a1ecb3 stage 1: every Goals text input and
+      textarea, pinned by apps/goals'
+      test/platform_web/goals_tab_bar_marker_guard_test.exs);
     * `:root:has([data-fullscreen-viewer])`: a full-screen viewer;
     * `:root:has([data-in-call])`: MeetingLive while in the call (pinned in
       meeting_live_test.exs, where the join lifecycle lives).

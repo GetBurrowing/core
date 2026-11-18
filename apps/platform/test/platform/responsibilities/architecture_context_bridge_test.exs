@@ -253,7 +253,55 @@ defmodule Platform.Responsibilities.ArchitectureContextBridgeTest do
         "or the meeting row. The shared resolver's flat opts map cannot " <>
         "express that fallback, and the slot is an INVENTORY the recipient " <>
         "reads further with its own canvas tools rather than a typed " <>
-        "artifact the platform reconciles"
+        "artifact the platform reconciles",
+    "brief" =>
+      "the showrunner.* handlers (task 01a1eaf6 stage 3) serve this themselves in " <>
+        "gather_context/2 from the episode board, the show journal and the row's " <>
+        "trigger_config; it is per-show state, not a row a shared resolver could read",
+    "clip_ids" =>
+      "the showrunner.* handlers (task 01a1eaf6 stage 4) serve this themselves in " <>
+        "gather_context/2 from the episode board and the row's trigger_config; it is " <>
+        "per-show state, not a row a shared resolver could read",
+    "draft_ids" =>
+      "the showrunner.* handlers (task 01a1eaf6 stage 4) serve this themselves in " <>
+        "gather_context/2 from the episode board and the row's trigger_config; it is " <>
+        "per-show state, not a row a shared resolver could read",
+    "host_calendars" =>
+      "the showrunner.* handlers (task 01a1eaf6 stage 4) serve this themselves in " <>
+        "gather_context/2 from the episode board and the row's trigger_config; it is " <>
+        "per-show state, not a row a shared resolver could read",
+    "meeting_id" =>
+      "the showrunner.* handlers (task 01a1eaf6 stage 4) serve this themselves in " <>
+        "gather_context/2 from the episode board and the row's trigger_config; it is " <>
+        "per-show state, not a row a shared resolver could read",
+    "run_sheet" =>
+      "the showrunner.* handlers (task 01a1eaf6 stage 4) serve this themselves in " <>
+        "gather_context/2 from the episode board and the row's trigger_config; it is " <>
+        "per-show state, not a row a shared resolver could read",
+    "transcript_id" =>
+      "the showrunner.* handlers (task 01a1eaf6 stage 4) serve this themselves in " <>
+        "gather_context/2 from the episode board and the row's trigger_config; it is " <>
+        "per-show state, not a row a shared resolver could read",
+    "host_roles" =>
+      "the showrunner.* handlers (task 01a1eaf6 stage 3) serve this themselves in " <>
+        "gather_context/2 from the episode board, the show journal and the row's " <>
+        "trigger_config; it is per-show state, not a row a shared resolver could read",
+    "recent_episodes" =>
+      "the showrunner.* handlers (task 01a1eaf6 stage 3) serve this themselves in " <>
+        "gather_context/2 from the episode board, the show journal and the row's " <>
+        "trigger_config; it is per-show state, not a row a shared resolver could read",
+    "recent_messages" =>
+      "the showrunner.* handlers (task 01a1eaf6 stage 3) serve this themselves in " <>
+        "gather_context/2 from the episode board, the show journal and the row's " <>
+        "trigger_config; it is per-show state, not a row a shared resolver could read",
+    "redraft_note" =>
+      "the showrunner.* handlers (task 01a1eaf6 stage 3) serve this themselves in " <>
+        "gather_context/2 from the episode board, the show journal and the row's " <>
+        "trigger_config; it is per-show state, not a row a shared resolver could read",
+    "topic" =>
+      "the showrunner.* handlers (task 01a1eaf6 stage 3) serve this themselves in " <>
+        "gather_context/2 from the episode board, the show journal and the row's " <>
+        "trigger_config; it is per-show state, not a row a shared resolver could read"
   }
 
   setup do

@@ -61,7 +61,7 @@ defmodule PlatformWeb.NativeTabBridgeTest do
 
     expected = Enum.map_join(IconRail.mobile_tab_keys(), ",", &to_string/1) <> ",more"
     assert items_attr(html) == [expected]
-    assert expected == "chat,calendar,meetings,inbox,more"
+    assert expected == "chat,calendar,inbox,more"
   end
 
   test "/chat selects chat, More closed, no unread", %{conn: conn} do
@@ -71,7 +71,7 @@ defmodule PlatformWeb.NativeTabBridgeTest do
 
     assert has_element?(
              view,
-             "#native-tab-bridge[data-items='chat,calendar,meetings,inbox,more']"
+             "#native-tab-bridge[data-items='chat,calendar,inbox,more']"
            )
 
     assert has_element?(view, "#native-tab-bridge[data-active-key='chat']")

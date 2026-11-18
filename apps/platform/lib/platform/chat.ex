@@ -1104,6 +1104,44 @@ defmodule Platform.Chat do
     end
   end
 
+  @doc """
+  Post `content` as the user `user_id` into their DM with `agent_id`,
+  opening the DM first if there is none (`find_or_create_dm/4`, so the same
+  external-user rule applies). Delivery to the agent is whatever
+  `post_message/2` already does for a DM message; nothing is added.
+
+  The smallest shared step for a surface outside Chat that sends a person's
+  own words to an agent (task 01a1b8a5 stage 3: Calendar's scheduling
+  entry). Option `:metadata` is stored on the message.
+
+  `{:ok, space, message}` or `{:error, reason}`.
+  """
+  @spec post_to_agent_dm(binary(), binary(), String.t(), keyword()) ::
+          {:ok, Space.t(), Message.t()} | {:error, term()}
+  def post_to_agent_dm(user_id, agent_id, content, opts \\ [])
+      when is_binary(user_id) and is_binary(agent_id) and is_binary(content) do
+    with {:ok, %Space{} = space} <- find_or_create_dm(user_id, "agent", agent_id),
+         %Participant{} = participant <-
+           Repo.one(
+             from(p in Participant,
+               where:
+                 p.space_id == ^space.id and p.participant_type == "user" and
+                   p.participant_id == ^user_id,
+               limit: 1
+             )
+           ) || {:error, :not_participant},
+         {:ok, message} <-
+           post_message(%{
+             space_id: space.id,
+             participant_id: participant.id,
+             content_type: "text",
+             content: content,
+             metadata: Keyword.get(opts, :metadata, %{})
+           }) do
+      {:ok, space, message}
+    end
+  end
+
   # Learned defaults broad capture (task 01a1b6a1 stage 3): who a person
   # opens DMs with, org-level (`space_id` nil). Never fails the open.
   defp capture_dm_target({:ok, %Space{}}, user_id, target_type, target_id) do
@@ -1699,6 +1737,26 @@ defmodule Platform.Chat do
     |> ExternalScope.scope_spaces(scope)
     |> Repo.all()
   end
+
+  @doc """
+  Whether `space` belongs on the chat rail.
+
+  A space whose metadata carries a non-empty `"surface" => <owner>` belongs
+  to another surface (the surface that created it renders it) and is not a
+  chat-rail conversation: it is left out of every rail list and of the rail
+  unread badge. Any other space, including one with no metadata, is
+  rail-visible. The value is never compared; core only reads whether it is
+  set (task 01a1eab6 stage 3).
+
+  Access is unaffected: `list_user_conversations/2` stays unfiltered, so the
+  person still reaches the space wherever participation decides access.
+  """
+  @spec rail_visible?(Space.t()) :: boolean()
+  def rail_visible?(%Space{metadata: %{"surface" => surface}})
+      when not is_nil(surface) and surface != "",
+      do: false
+
+  def rail_visible?(%Space{}), do: true
 
   @doc """
   Compute a display name for a space relative to the current user.
@@ -2428,6 +2486,16 @@ defmodule Platform.Chat do
   else) is itself a voice record (metadata `"source" => "voice"`). If an older
   unread typed message sits in between, the cursor stays put and that message
   keeps its badge.
+
+  Option `route: :none` posts a message that is NOT a turn for any agent:
+  the message is stored with metadata `"attention" => "none"` and
+  `Platform.Chat.AttentionRouter` makes no routing decision for it (reason
+  `:caller_suppressed`, see `AttentionRouter.caller_suppressed?/1`). It is for
+  a server-side caller that triggers the agent some other way and must not
+  trigger it twice. Everything else is unchanged: the message is stored,
+  broadcast to open screens and counted as usual. Only this option sets the
+  key: a caller-supplied `"attention"` in `:metadata` is always STRIPPED, so
+  a client-supplied metadata map can never silence routing.
   """
   @spec post_message(map(), keyword()) ::
           {:ok, Message.t()}
@@ -2445,6 +2513,7 @@ defmodule Platform.Chat do
   defp do_post_message(attrs, opts) do
     attrs =
       attrs
+      |> apply_route_option(opts)
       |> Platform.Chat.ReplyTarget.apply_to_attrs()
       |> put_author_snapshot(:participant_id, :author)
 
@@ -2476,6 +2545,38 @@ defmodule Platform.Chat do
 
       {:error, changeset} ->
         {:error, changeset}
+    end
+  end
+
+  # `post_message/2`'s `route: :none` (task 01a1eab6 stage 2). The
+  # `"attention"` metadata key is server-owned: whatever the caller put there
+  # is dropped first, so a metadata map that came from a client can never
+  # silence routing, and only the option writes it back. Metadata may arrive
+  # under `:metadata` or `"metadata"`, and its keys as strings or atoms.
+  @route_none_attention "none"
+
+  defp apply_route_option(attrs, opts) when is_map(attrs) do
+    key =
+      cond do
+        Map.has_key?(attrs, :metadata) -> :metadata
+        Map.has_key?(attrs, "metadata") -> "metadata"
+        Enum.any?(Map.keys(attrs), &is_binary/1) -> "metadata"
+        true -> :metadata
+      end
+
+    attrs =
+      case Map.get(attrs, key) do
+        %{} = metadata -> Map.put(attrs, key, Map.drop(metadata, ["attention", :attention]))
+        _ -> attrs
+      end
+
+    case Keyword.get(opts, :route) do
+      :none ->
+        metadata = Map.get(attrs, key) || %{}
+        Map.put(attrs, key, Map.put(metadata, "attention", @route_none_attention))
+
+      _ ->
+        attrs
     end
   end
 
@@ -2587,6 +2688,7 @@ defmodule Platform.Chat do
   defp do_post_message_with_attachments(attrs, attachment_attrs_list, opts) do
     attrs =
       attrs
+      |> apply_route_option(opts)
       |> Platform.Chat.ReplyTarget.apply_to_attrs()
       |> put_author_snapshot(:participant_id, :author)
 
@@ -2790,7 +2892,10 @@ defmodule Platform.Chat do
     with :ok <- ensure_space_writable(space_id),
          :ok <- ensure_dm_send_allowed(space_id, participant_id),
          :ok <- ensure_external_upload_allowed(space_id, poster_user_id) do
-      attrs = put_author_snapshot(attrs, :participant_id, :author)
+      attrs =
+        attrs
+        |> apply_route_option(opts)
+        |> put_author_snapshot(:participant_id, :author)
 
       Multi.new()
       |> Multi.insert(:message, Message.changeset(%Message{}, attrs))
@@ -2885,6 +2990,7 @@ defmodule Platform.Chat do
 
       attrs =
         attrs
+        |> apply_route_option(opts)
         |> put_author_snapshot(:participant_id, :author)
         |> Map.update(
           :metadata,
@@ -3523,6 +3629,10 @@ defmodule Platform.Chat do
 
   Accepts the same `:include_kinds` / `:content_types` / `:include_archived`
   / `:scope` options as `list_messages_since/2`, with the same defaults.
+
+  Every space a restriction provider withholds from an actor who reads
+  nothing (`Platform.Access.provider_restricted_space_ids/2`; a mail-bound
+  space, task 01a1ea5b stage 2) is excluded, whatever the options.
   """
   @spec digest_eligible_messages_query(keyword()) :: Ecto.Query.t()
   def digest_eligible_messages_query(opts \\ []) do
@@ -3542,7 +3652,10 @@ defmodule Platform.Chat do
             s.kind in ^include_kinds
       )
 
-    query = apply_digest_scope(query, scope)
+    query =
+      query
+      |> apply_digest_scope(scope)
+      |> exclude_provider_restricted()
 
     if include_archived do
       # Deletion-flagged spaces must vanish from search immediately even
@@ -3620,6 +3733,18 @@ defmodule Platform.Chat do
   # `external_space_ids/0` and `participant_space_ids_for_user/1` supply the
   # two id-sets; `list_messages_since/2` and `Meetings.list_transcripts_since/2`
   # thread the `:scope` opt.
+
+  # A space a restriction provider withholds from an actor who can read
+  # nothing (a mail-bound space, task 01a1ea5b stage 2: an inbound space, or
+  # one holding a mail post) never reaches a digest. The digest feeds agents
+  # and org memory, which no mailbox's owner chose to share with.
+  defp exclude_provider_restricted(query) do
+    case Platform.Access.provider_restricted_space_ids(%Platform.Access.Scope{}, :all)
+         |> MapSet.to_list() do
+      [] -> query
+      ids -> where(query, [m, s], s.id not in ^ids)
+    end
+  end
 
   defp apply_digest_scope(query, :internal) do
     exclude = external_space_ids()
@@ -8450,7 +8575,7 @@ defmodule Platform.Chat do
   struct, `unread_counts_for_user/1` keys off the id, and changing the accepted
   input here would ripple into every caller for no gain.
 
-  Counting exactly the set Chat RENDERS is what makes the badge honest, and two
+  Counting exactly the set Chat RENDERS is what makes the badge honest, and three
   predicates do that work:
 
     * **kind**: only `#{Enum.join(@chat_surface_kinds, "`, `")}`. Every other
@@ -8464,6 +8589,8 @@ defmodule Platform.Chat do
       and the member query does, so the `Map.take/2` intersection below is
       load-bearing rather than tidiness: an archived space holding unread would
       otherwise pin the badge at a number that can never move.
+    * **surface**: a space another surface owns (`rail_visible?/1` false) is
+      never on the rail, so it is not counted (task 01a1eab6 stage 3).
   There is deliberately NO org-visibility predicate. It was removed in task
   `01a01f4c`: `unread_counts_for_user/1` has never been org-fenced, so a fenced
   count disagreed permanently with the per-channel pills for any viewer whose
@@ -8559,12 +8686,17 @@ defmodule Platform.Chat do
     user_id
     |> participant_spaces_query()
     |> where([space: s], s.kind in @chat_surface_kinds)
-    |> select([participant: p], %{
+    |> select([participant: p, space: s], %{
       participant_id: p.id,
       space_id: p.space_id,
-      last_read_message_id: p.last_read_message_id
+      last_read_message_id: p.last_read_message_id,
+      metadata: s.metadata
     })
     |> Repo.all()
+    # A space owned by another surface is not on the rail, so the badge does
+    # not count it (`rail_visible?/1`, task 01a1eab6 stage 3).
+    |> Enum.filter(&rail_visible?(%Space{metadata: &1.metadata}))
+    |> Enum.map(&Map.delete(&1, :metadata))
   end
 
   @excerpt_max_graphemes 140
@@ -8744,23 +8876,34 @@ defmodule Platform.Chat do
   end
 
   defp publish_message_posted(msg, opts \\ []) do
-    :telemetry.execute(
-      [:platform, :chat, :message_posted],
-      %{system_time: System.system_time()},
-      %{
-        space_id: msg.space_id,
-        message_id: msg.id,
-        participant_id: msg.participant_id
-      }
-    )
+    # Task 01a1eab6 stage 1: when a caller posts inside an outer
+    # `Repo.transaction`, the telemetry below reached AttentionRouter before
+    # that transaction committed; the router's `Repo.get(Message, id)` runs on
+    # its own connection, saw nothing, and logged "[AttentionRouter] message
+    # not found", so the message was never routed. Inside a
+    # `Platform.Tasks.PostCommit.scope/1` these side effects now run after the
+    # outermost commit (and are dropped on rollback). With no scope open,
+    # `run_after_commit/2` runs the thunk immediately: today's behaviour.
+    # No dedupe `:key`: every message is its own event.
+    Platform.Tasks.PostCommit.run_after_commit(fn ->
+      :telemetry.execute(
+        [:platform, :chat, :message_posted],
+        %{system_time: System.system_time()},
+        %{
+          space_id: msg.space_id,
+          message_id: msg.id,
+          participant_id: msg.participant_id
+        }
+      )
 
-    case Keyword.get(opts, :from_pid) do
-      pid when is_pid(pid) -> ChatPubSub.broadcast_from(msg.space_id, pid, {:new_message, msg})
-      _ -> ChatPubSub.broadcast(msg.space_id, {:new_message, msg})
-    end
+      case Keyword.get(opts, :from_pid) do
+        pid when is_pid(pid) -> ChatPubSub.broadcast_from(msg.space_id, pid, {:new_message, msg})
+        _ -> ChatPubSub.broadcast(msg.space_id, {:new_message, msg})
+      end
 
-    # Link unfurls (task 01a1a944 stage 3): one call, which only spawns.
-    Platform.Chat.LinkUnfurls.unfurl_message(msg)
+      # Link unfurls (task 01a1a944 stage 3): one call, which only spawns.
+      Platform.Chat.LinkUnfurls.unfurl_message(msg)
+    end)
   end
 
   @doc """

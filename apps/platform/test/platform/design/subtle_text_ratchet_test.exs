@@ -281,7 +281,7 @@ defmodule Platform.Design.SubtleTextRatchetTest do
     {"apps/platform/lib/platform_web/live/pipeline_live.ex",
      ~r/:for=\{row <- measured\(@breakdown\)\}\s*class="([^"]*)"/},
     {"apps/platform/lib/platform_web/live/control_center/roles_panel.ex",
-     ~r/:for=\{key <- Map\.get\(@role_bundles, role\.key, \[\]\)\}\s*class="([^"]*)"/},
+     ~r/defp bundle_chip\(assigns\) do\s*~H"""\s*<code class="([^"]*)">/},
     {"apps/platform/lib/platform_web/live/control_center/roles_panel.ex",
      ~r/<code class="([^"]*)">\s*\{row\.responsibility_key\}/},
     {"apps/platform/lib/platform_web/live/tasks/task_detail_component.ex",

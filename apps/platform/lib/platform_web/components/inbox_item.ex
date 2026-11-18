@@ -220,7 +220,9 @@ defmodule PlatformWeb.Components.InboxItem do
     "meeting_briefing" => %{long: "Meeting briefing", short: "Meeting"},
     # The UX role's question (task 01a1af00 stage 3). The short form is the
     # chip its own row renders.
-    "ux_decision" => %{long: "UX decision", short: "UX"}
+    "ux_decision" => %{long: "UX decision", short: "UX"},
+    # Task 01a1ea5b stage 4: an admin moved the viewer's personal mailbox.
+    "mailbox_reassigned" => %{long: "Mailbox reassigned", short: "Mailbox"}
   }
 
   @doc "The core kinds `kind_label/2` has an explicit entry for."

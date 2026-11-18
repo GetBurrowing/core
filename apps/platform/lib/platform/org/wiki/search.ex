@@ -947,6 +947,7 @@ defmodule Platform.Org.Wiki.Search do
       |> Chat.list_spaces_for_agent()
       |> Enum.map(& &1.id)
       |> readable_space_ids(opts.access_scope)
+      |> drop_provider_restricted(opts.agent, opts.access_scope)
 
     if spaces == [] do
       []
@@ -1413,11 +1414,32 @@ defmodule Platform.Org.Wiki.Search do
 
   defp agent_space_ids(nil, _scope), do: []
 
-  defp agent_space_ids(%Agent{id: id}, scope) do
+  defp agent_space_ids(%Agent{id: id} = agent, scope) do
     id
     |> Chat.list_spaces_for_agent()
     |> Enum.map(& &1.id)
     |> readable_space_ids(scope)
+    |> drop_provider_restricted(agent, scope)
+  end
+
+  # A space a restriction provider refuses the caller (a mail-bound space
+  # whose mailbox the agent is not granted, task 01a1ea5b stage 2) yields no
+  # message hit, lexical or semantic. Asked of the caller's Scope, else of the
+  # agent's own runtime Scope, so it holds with or without grants.
+  defp drop_provider_restricted([], _agent, _scope), do: []
+
+  defp drop_provider_restricted(ids, agent, scope) do
+    scope =
+      case scope do
+        %Access.Scope{} = scope ->
+          scope
+
+        _ ->
+          Access.Scope.for_runtime(%Platform.Agents.AgentRuntime{agent_id: agent.id})
+      end
+
+    restricted = Access.provider_restricted_space_ids(scope, ids)
+    Enum.reject(ids, &MapSet.member?(restricted, &1))
   end
 
   defp readable_space_ids(ids, %Access.Scope{} = scope) do

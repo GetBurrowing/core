@@ -8,6 +8,8 @@ defmodule Platform.Chat.Canvas.Templates do
   works. Adjust node props and children to taste.
   """
 
+  alias Platform.Showrunner.Episode
+
   @type template :: %{
           required(:name) => String.t(),
           required(:description) => String.t(),
@@ -46,6 +48,14 @@ defmodule Platform.Chat.Canvas.Templates do
     %{
       name: "dashboard",
       description: "A row of KPI cards."
+    },
+    %{
+      name: "episode_board",
+      description:
+        "A weekly episode board: title and records line on the production rail, " <>
+          "Needs you, the run sheet (with show mode), and collapsed brief, guests and " <>
+          "last week's retro. The rail, needs_you and run_sheet nodes are " <>
+          "Platform.Showrunner.Episode.to_document/1's."
     }
   ]
 
@@ -196,6 +206,104 @@ defmodule Platform.Chat.Canvas.Templates do
         ]
       }
     ])
+  end
+
+  # The episode board (task 01a1eaf6 stage 2). The three episode nodes and
+  # `meta.showrunner` come from `Episode.to_document/1` itself, so the template
+  # cannot drift from what the showrunner writes; the collapsed sections are
+  # existing `markdown` nodes with a `<details>` block each.
+  defp build("episode_board") do
+    doc = Episode.to_document(sample_episode())
+
+    collapsed = %{
+      "id" => "episode-collapsed",
+      "type" => "stack",
+      "props" => %{"gap" => 8},
+      "children" => [
+        details(
+          "episode-brief",
+          "Research brief · 3 sources",
+          "<p>Where the savings from automation go, and why they stall before they reach a household budget.</p>"
+        ),
+        details(
+          "episode-guests",
+          "Guests",
+          "<p>No guests this week.</p>"
+        ),
+        details(
+          "episode-retro",
+          "Last week's retro",
+          "<p>Kept 4 of 5 segments. The cold open ran long; trim it to 4:30.</p>"
+        )
+      ]
+    }
+
+    update_in(doc, ["root", "children"], &(&1 ++ [collapsed]))
+  end
+
+  defp details(id, summary, body_html) do
+    %{
+      "id" => id,
+      "type" => "markdown",
+      "props" => %{
+        "content" => "<details>\n<summary>#{summary}</summary>\n#{body_html}\n</details>"
+      },
+      "children" => []
+    }
+  end
+
+  defp sample_episode do
+    {:ok, episode} =
+      Episode.new(%{
+        number: 14,
+        title: "The AI savings cliff",
+        records_at: ~U[2026-11-19 19:00:00Z],
+        room_status: "room ready"
+      })
+
+    {:ok, episode} = Episode.advance(episode, :research)
+    {:ok, episode} = Episode.advance(episode, :run_sheet)
+
+    {:ok, episode} =
+      Episode.put_run_sheet(episode, [
+        %{
+          id: "cold-open",
+          starts_at_s: 0,
+          ends_at_s: 270,
+          name: "Cold open",
+          talking_points: %{"Host A" => "The town analogy", "Host B" => "The $2 per worker hook"},
+          callback_episode: 9
+        },
+        %{
+          id: "the-town",
+          starts_at_s: 270,
+          ends_at_s: 900,
+          name: "The town",
+          talking_points: %{"Host A" => "Walk the savings through one street"},
+          stat_cards: [
+            %{
+              text: "38% of tasks automatable",
+              source_url: "https://example.org/automation-report"
+            }
+          ]
+        },
+        %{
+          id: "the-cliff",
+          starts_at_s: 900,
+          ends_at_s: 1800,
+          name: "The cliff",
+          talking_points: %{"Chris" => "Why the savings stop at the payroll line"}
+        }
+      ])
+
+    {:ok, episode} =
+      Episode.add_needs_you(episode, %{
+        id: "cold-open-pick",
+        question: "Cold open: the town analogy or the $2 per worker hook?",
+        options: ["Pick the town", "Pick the hook"]
+      })
+
+    episode
   end
 
   defp metric_card(id, label, value) do

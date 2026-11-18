@@ -111,7 +111,13 @@ defmodule Platform.Design.MeetingPaletteGuardTest do
      ~r/^\s*defp glyph_tone\(:off\), do: "text-error"$/},
     # The activity ring and corner glyph, both `aria-hidden="true"`.
     {"lib/platform_web/components/meetings/agent_activity_badge.ex",
-     ~r/^\s*ring: "border-(info|success|error) text-(info|success|error)",$/}
+     ~r/^\s*ring: "border-(info|success|error) text-(info|success|error)",$/},
+    # The in-call top bar's "off" chip (task 01a1e82a stage 1): the inverted
+    # band, `text-success` on a solid `bg-success-content` fill (warning on
+    # warning-content while reconnecting). Not a hue on a base surface: it
+    # is the band's own token pair with fill and text swapped.
+    {"lib/platform_web/live/meeting_bar_live.ex",
+     ~r/^\s*"bg-success-content text-success group-data-\[state=reconnecting\]:bg-warning-content group-data-\[state=reconnecting\]:text-warning lg:hover:opacity-90"$/}
   ]
 
   @app_css_selectors MapSet.new([
@@ -399,9 +405,10 @@ defmodule Platform.Design.MeetingPaletteGuardTest do
     assert scoped =~ ~s(data-role="meeting-captions")
     assert scoped =~ ~s(data-role="meeting-live-pill")
     assert scoped =~ ~s(data-role="meeting-agent-removed-toast")
-    # Index, detail, archive and new-meeting sheet (stage 2).
+    # Index, detail and archive (stage 2). The new-meeting sheet left with
+    # the scheduled-meeting create flow (task 01a1b8a5 stage 4).
     assert scoped =~ @heex_index_open
-    assert scoped =~ ~s(data-role="start-meeting-sheet")
+    refute scoped =~ ~s(data-role="start-meeting-sheet")
     assert scoped =~ ~s(data-role="archive-row")
     assert scoped =~ ~s(data-role="meeting-detail-sheet-backdrop")
 

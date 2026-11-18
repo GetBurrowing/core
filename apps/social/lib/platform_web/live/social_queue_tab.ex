@@ -52,10 +52,10 @@ defmodule PlatformWeb.SocialQueueTab do
   def events, do: @events
 
   @impl true
-  def tab_label(%{scope: :all, counts: counts}),
+  def tab_label(%{scope: :all, legacy_counts: counts}),
     do: "Queue (#{SocialScope.waiting_total(counts)})"
 
-  def tab_label(%{counts: counts, profile: profile}),
+  def tab_label(%{legacy_counts: counts, profile: profile}),
     do: "Queue (#{SocialScope.count(counts, profile)})"
 
   @impl true

@@ -156,7 +156,9 @@ defmodule Platform.Access.SpaceRestrictionsTest do
       assert Access.restricted_space_ids(m, [child.id, c.finance.id]) ==
                MapSet.new([child.id, c.finance.id])
 
-      assert_receive :restriction_query
+      # ONE role-restriction query, plus one per restriction provider
+      # (task 01a1ea5b stage 2: the provider hook adds one merged query).
+      for _ <- 0..length(Access.restriction_providers()), do: assert_receive(:restriction_query)
       refute_receive :restriction_query
     after
       :telemetry.detach(handler)

@@ -35,7 +35,8 @@ defmodule Platform.Social.Application do
     Platform.Social.ClipPublish,
     Platform.Social.EpisodeDiscovery,
     Platform.Social.AnalyticsSync,
-    Platform.Social.WeeklyNoteSweep
+    Platform.Social.WeeklyNoteSweep,
+    Platform.Social.Trends.Refresher
   ]
 
   @impl true
@@ -81,7 +82,8 @@ defmodule Platform.Social.Application do
       # Task 01a17e37: durable source-level episode discovery.
       Platform.Social.EpisodeDiscovery,
       Platform.Social.AnalyticsSync,
-      Platform.Social.WeeklyNoteSweep
+      Platform.Social.WeeklyNoteSweep,
+      Platform.Social.Trends.Refresher
     ]
     |> Platform.Role.select(role, @web)
   end

@@ -230,13 +230,7 @@ defmodule PlatformWeb.GameStreamHooks do
   defp dispatch("game_stream_restart", params, socket) do
     with {:ok, _old_session_id, grant} <- authorize(socket, params),
          {:ok, canvas} <- CanvasAccess.fetch_for_writer(grant.canvas_id, viewer(socket)),
-         {:ok, task_id} <- node_task_id(grant),
-         {:ok, status} <-
-           GameStream.start_session(task_id,
-             started_by: viewer(socket),
-             viewer: self(),
-             viewer_info: viewer_info(socket)
-           ),
+         {:ok, status} <- restart_build(grant, socket),
          :ok <- patch_node(socket, canvas, grant.node_id, status) do
       socket = grant(socket, status.session_id, grant)
       {%{ok: true, session_id: status.session_id, status: public(status)}, socket}
@@ -418,10 +412,34 @@ defmodule PlatformWeb.GameStreamHooks do
 
   defp find_in(_node, _id), do: nil
 
-  defp node_task_id(%{props: %{"task_id" => task_id}}) when is_binary(task_id),
-    do: {:ok, task_id}
+  defp restart_build(%{props: %{"project_id" => id}}, socket) when is_binary(id) do
+    case viewer(socket) do
+      {:user, user_id} ->
+        case Platform.Accounts.get_user(user_id) do
+          nil ->
+            {:error, :forbidden}
 
-  defp node_task_id(_grant), do: {:error, :task_not_found}
+          user ->
+            GameStream.start_project_session(id, user,
+              viewer: self(),
+              viewer_info: viewer_info(socket)
+            )
+        end
+
+      _ ->
+        {:error, :forbidden}
+    end
+  end
+
+  defp restart_build(%{props: %{"task_id" => id}}, socket) when is_binary(id),
+    do:
+      GameStream.start_session(id,
+        started_by: viewer(socket),
+        viewer: self(),
+        viewer_info: viewer_info(socket)
+      )
+
+  defp restart_build(_, _), do: {:error, :task_not_found}
 
   defp patch_node(socket, canvas, node_id, status) do
     props = %{"session_id" => status.session_id, "review_sha" => status.review_sha}

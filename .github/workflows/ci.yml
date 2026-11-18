@@ -34,6 +34,11 @@ env:
   # The same crash detector for the `Test (with Social)` job's module suite
   # (apps/social's own `mix test`): 47 tests at task 01a140a8's tip.
   MIN_SOCIAL_TEST_COUNT: 35
+  # The same crash detector for the `Test (with Goals)` job's module suite
+  # (apps/goals' own `mix test`). Provisional: Goals 1/8 stage 4 sets it to
+  # about three quarters of the final count; Goals 7/8 stage 4 raised it
+  # to 306, three quarters of the 408 the module suite ran then.
+  MIN_GOALS_TEST_COUNT: 352
 
 on:
   push:
@@ -1383,6 +1388,176 @@ jobs:
           if-no-files-found: warn
           retention-days: 14
 
+  test-with-goals:
+    name: Test (with Goals)
+    runs-on: ubuntu-latest
+    container:
+      image: ghcr.io/getburrowing/elixir:1.20.4-otp-28-slim@sha256:a61672ebbafaf93ec6baeee14657fa73407e4f7fe57e92b2e3f063d25d0d3244
+      credentials:
+        username: ${{ github.actor }}
+        password: ${{ secrets.GITHUB_TOKEN }}
+    services:
+      postgres:
+        image: ghcr.io/getburrowing/postgres:16-alpine@sha256:0cefaabd882e42bcb2a2f3dc56d3ce4770560ba62fd7f197f1a2e008fd5731ab
+        credentials:
+          username: ${{ github.actor }}
+          password: ${{ secrets.GITHUB_TOKEN }}
+        env:
+          POSTGRES_USER: postgres
+          POSTGRES_PASSWORD: postgres
+          # Lock-wait logging; the rationale is on the `test` job's service.
+          POSTGRES_INITDB_ARGS: >-
+            -c log_lock_waits=on -c deadlock_timeout=1s
+            -c logging_collector=on -c log_filename=postgresql.log
+            -c log_rotation_age=0 -c log_rotation_size=0
+        options: >-
+          --health-cmd pg_isready
+          --health-interval 5s
+          --health-timeout 5s
+          --health-retries 5
+    env:
+      MIX_ENV: test
+      PGHOST: postgres
+      PGUSER: postgres
+      PGPASSWORD: postgres
+    defaults:
+      run:
+        working-directory: apps/goals
+
+    steps:
+      - uses: actions/checkout@v5
+
+      - name: Install system packages (with Goals)
+        run: |
+          apt-get update
+          apt-get install -y --no-install-recommends build-essential ca-certificates curl git postgresql-client
+          update-ca-certificates
+
+      # The guard for the service's POSTGRES_INITDB_ARGS: fails unless the
+      # running server reports every setting the lock-wait log depends on.
+      - name: Check Postgres lock-wait logging (with Goals)
+        working-directory: ${{ github.workspace }}
+        run: |
+          got=$(psql -Atc "SELECT current_setting('log_lock_waits') || ' ' || current_setting('deadlock_timeout') || ' ' || current_setting('logging_collector') || ' ' || coalesce(pg_current_logfile(), '-')")
+          echo "log_lock_waits deadlock_timeout logging_collector logfile: $got"
+          if [ "$got" != "on 1s on log/postgresql.log" ]; then
+            echo "::error::Postgres service is not logging lock waits: got '$got', expected 'on 1s on log/postgresql.log'. See POSTGRES_INITDB_ARGS on this job's postgres service."
+            exit 1
+          fi
+
+      - name: Install Hex and Rebar (with Goals)
+        run: |
+          mix local.hex --force
+          mix local.rebar --force
+
+      # Toolchain in the cache keys, as in `test-checks`.
+      - name: Toolchain version (cache key) (with Goals)
+        id: toolchain
+        run: |
+          key=$(elixir -e 'IO.write("elixir-" <> System.version() <> "-otp-" <> String.trim(File.read!(Path.join([to_string(:code.root_dir()), "releases", System.otp_release(), "OTP_VERSION"]))))')
+          echo "key=$key" >> "$GITHUB_OUTPUT"
+          echo "toolchain cache key: $key"
+
+      - name: Cache module deps (with Goals)
+        uses: actions/cache@v5
+        with:
+          path: |
+            apps/goals/deps
+            apps/platform/deps
+          key: deps-with-goals-${{ steps.toolchain.outputs.key }}-dev-test-${{ hashFiles('apps/goals/mix.lock', 'apps/platform/mix.lock') }}
+          restore-keys: deps-with-goals-${{ steps.toolchain.outputs.key }}-dev-test-
+
+      # Compiled deps (dev and test), as in `Test (with Play)`.
+      - name: Cache module _build (with Goals)
+        uses: actions/cache@v5
+        with:
+          path: apps/goals/_build
+          key: build-with-goals-${{ steps.toolchain.outputs.key }}-dev-test-${{ hashFiles('apps/goals/mix.lock', 'apps/platform/mix.lock') }}
+          restore-keys: build-with-goals-${{ steps.toolchain.outputs.key }}-dev-test-
+
+      # Once per env, for the reason given on `Test (with Play)`.
+      - name: Install module dependencies (with Goals)
+        run: |
+          MIX_ENV=dev mix deps.get
+          MIX_ENV=test mix deps.get
+          sh "$GITHUB_WORKSPACE/scripts/fetch-github-release-binaries.sh" nifs .
+
+      - name: Compile the module with warnings as errors (dev + test)
+        run: |
+          if ! MIX_ENV=dev mix compile --force --warnings-as-errors; then
+            echo "::error::apps/goals: mix compile --warnings-as-errors failed in MIX_ENV=dev. Fix the warning; never suppress it."
+            exit 1
+          fi
+          if ! MIX_ENV=test mix compile --force --warnings-as-errors; then
+            echo "::error::apps/goals: mix compile --warnings-as-errors failed in MIX_ENV=test."
+            exit 1
+          fi
+
+      - name: Check module formatting (with Goals)
+        run: mix format --check-formatted
+
+      # Task 01a15cfd: the runner host's load and PSI around mix test (the job
+      # container sees the host's /proc), so a first-pass failure can be read
+      # against the runner host's load from this run alone. Never fails the job;
+      # the body is .github/scripts/host-pressure.sh.
+      - name: Host pressure (before mix test) (with Goals)
+        continue-on-error: true
+        working-directory: ${{ github.workspace }}
+        run: .github/scripts/host-pressure.sh "before mix test" || true
+
+      # Same crash-detector shape as `Run module tests` in `Test (with Play)`.
+      - name: Run module tests (with Goals)
+        run: |
+          set -o pipefail
+          log="${RUNNER_TEMP:-.}/mix-test-with-goals.log"
+          mix test 2>&1 | tee "$log"
+          summary=$(grep -oE 'Result: [0-9]+(/[0-9]+)? (passed|tests)' "$log" | tail -n1 || true)
+          if [ -z "$summary" ]; then
+            echo
+            echo "::error::apps/goals mix test printed no ExUnit summary line (Result: N passed) — the suite did not run to completion"
+            exit 1
+          fi
+          count=$(printf '%s' "$summary" | grep -oE '[0-9]+' | tail -n1)
+          if [ "$count" -lt "$MIN_GOALS_TEST_COUNT" ]; then
+            echo
+            echo "::error::apps/goals mix test ran $count tests, below MIN_GOALS_TEST_COUNT=$MIN_GOALS_TEST_COUNT"
+            exit 1
+          fi
+          echo "apps/goals mix test ran $count tests (floor MIN_GOALS_TEST_COUNT=$MIN_GOALS_TEST_COUNT)"
+
+      # Task 01a15cfd: the runner host's load and PSI around mix test (the job
+      # container sees the host's /proc), so a first-pass failure can be read
+      # against the runner host's load from this run alone. Never fails the job;
+      # the body is .github/scripts/host-pressure.sh.
+      - name: Host pressure (after mix test) (with Goals)
+        if: always()
+        continue-on-error: true
+        working-directory: ${{ github.workspace }}
+        run: .github/scripts/host-pressure.sh "after mix test" || true
+
+      # This job has no serial retry, so a lock-wait timeout here fails it.
+      # pg_read_file is the only way to the log from here (see the
+      # service's POSTGRES_INITDB_ARGS). The lock-wait lines are also printed,
+      # so a reader without the artifact still gets the holder's pid.
+      - name: Collect the Postgres log (with Goals)
+        if: failure()
+        working-directory: ${{ github.workspace }}
+        run: |
+          log="postgres-${{ github.job }}.log"
+          psql -Atc "SELECT pg_read_file(pg_current_logfile())" > "$log" || echo "::warning::could not read the Postgres log"
+          waits=$(grep -c 'still waiting for' "$log" || true)
+          echo "Postgres log: $(wc -l < "$log") lines, $waits lock wait(s) over deadlock_timeout"
+          grep -A2 -E 'still waiting for|acquired .* after|deadlock detected' "$log" | head -n 300 || true
+
+      - name: Upload the Postgres log (with Goals)
+        if: failure()
+        uses: actions/upload-artifact@v4
+        with:
+          name: postgres-log-${{ github.job }}-attempt-${{ github.run_attempt }}
+          path: postgres-${{ github.job }}.log
+          if-no-files-found: warn
+          retention-days: 14
+
   # MULTI-ARCH IMAGE (task 01a0d6ab). One leg per architecture, each built
   # NATIVELY on a runner of that architecture, never under QEMU: the release
   # compiles every dep under MIX_ENV=prod, copies ERTS out of the build image,
@@ -1399,7 +1574,7 @@ jobs:
   build-and-push:
     name: Build and push image (${{ matrix.arch }})
     if: github.event_name == 'push'
-    needs: [test, test-with-play, test-with-social]
+    needs: [test, test-with-play, test-with-social, test-with-goals]
     strategy:
       fail-fast: true
       matrix:

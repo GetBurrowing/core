@@ -25,8 +25,13 @@ defmodule PlatformWeb.CalendarLive.Components do
   import PlatformWeb.Components.Meetings.CancelMeeting,
     only: [cancel_meeting: 1, cancelled_chip: 1]
 
+  import PlatformWeb.Components.Meetings.EditMeeting,
+    only: [edit_button: 1, invitees: 1, summary: 1, was: 1]
+
+  import PlatformWeb.Components.Meetings.DeleteMeeting, only: [delete_meeting: 1]
+
   alias PlatformWeb.CalendarLive, as: Cal
-  alias PlatformWeb.Components.NewKindToggle
+  alias PlatformWeb.CalendarLive.Editor
 
   @primary_btn "inline-flex h-8 items-center gap-1.5 whitespace-nowrap rounded-full bg-primary px-3 text-xs font-semibold text-primary-content hover:brightness-110"
   @ghost_btn "inline-flex h-8 items-center gap-1.5 whitespace-nowrap rounded-full border border-subtle px-3 text-xs text-base-content hover:bg-base-300"
@@ -46,6 +51,7 @@ defmodule PlatformWeb.CalendarLive.Components do
   attr(:booking_link_count, :integer, default: 0)
   attr(:calendars, :list, default: [])
   attr(:calendars_shown, :map, default: %{})
+  attr(:past_open, :boolean, default: false)
 
   @doc "The 270px desktop list pane: header, mini month, nav rows, calendar toggles."
   def list_pane(assigns) do
@@ -87,6 +93,17 @@ defmodule PlatformWeb.CalendarLive.Components do
           label="Calendar settings"
           note="feed · external · agents"
         />
+        <%!-- Past events (task 01a1b8a5 stage 4; v7 `[data-past-events]`).
+             Where the retired Meetings archive went. --%>
+        <.nav_row
+          href={~p"/calendar?#{%{view: @view, past: 1}}"}
+          current={@past_open}
+          navigate={@section != :calendar}
+          icon="hero-archive-box"
+          label="Past events"
+          note="Call summaries, transcripts, recordings"
+          data_past_events
+        />
         <div class="px-2 pb-1 pt-3 text-xs font-[650] uppercase tracking-[.08em] text-subtle">
           Calendars
         </div>
@@ -106,12 +123,14 @@ defmodule PlatformWeb.CalendarLive.Components do
   attr(:icon, :string, required: true)
   attr(:label, :string, required: true)
   attr(:note, :string, required: true)
+  attr(:data_past_events, :boolean, default: false)
 
   defp nav_row(assigns) do
     ~H"""
     <.link
       patch={!@navigate && @href}
       navigate={@navigate && @href}
+      data-past-events={@data_past_events && "open"}
       class={[
         "relative flex w-full items-center gap-2 rounded-[var(--radius-field)] p-2 text-left text-[13px] hover:bg-base-300",
         @current && "bg-base-300"
@@ -227,6 +246,235 @@ defmodule PlatformWeb.CalendarLive.Components do
     """
   end
 
+  # ── scheduling language (v7 renderMain `#quick-plan`, task 01a1b8a5 s3) ─
+
+  attr(:plan, :map, required: true)
+
+  @doc """
+  v7's `#quick-plan`: "Describe what you want to schedule", the text and
+  Draft event. The words go to a real calendar agent the owner granted
+  `create`, through the owner's DM with it (`Platform.Calendar.Draft.ask/4`);
+  nothing here parses them. The agent chooser, the waiting, reply,
+  unavailable and failure states and Review draft are production
+  extensions (not in canvas), declared under Design deviations.
+  """
+  def quick_plan(assigns) do
+    plan = assigns.plan
+    agent = Enum.find(plan.agents, &(&1.id == plan.agent_id))
+
+    assigns =
+      assign(assigns,
+        agent: agent,
+        agent_name: (agent && agent.name) || "Your agent",
+        busy?: plan.status in [:waiting, :slow]
+      )
+
+    ~H"""
+    <section
+      id="quick-plan"
+      class="shrink-0 border-b border-edge bg-base-100 px-3 py-2.5 lg:px-4"
+      aria-labelledby="quick-plan-label"
+      data-role="quick-plan"
+      data-status={@plan.status}
+    >
+      <form
+        id="quick-plan-form"
+        phx-submit="plan_submit"
+        phx-change="plan_change"
+        class="flex flex-col gap-2 lg:flex-row lg:items-end"
+      >
+        <label class="flex min-w-0 flex-1 flex-col gap-1">
+          <span id="quick-plan-label" class="text-xs font-[550] text-subtle">
+            Describe what you want to schedule
+          </span>
+          <input
+            type="text"
+            name="plan[text]"
+            value={@plan.text}
+            placeholder="Meet Friday at 2pm with Alex and Sam"
+            maxlength="2000"
+            autocomplete="off"
+            class="cal-input"
+            disabled={@plan.agents == []}
+            data-role="quick-plan-text"
+          />
+        </label>
+        <div class="flex items-end gap-2">
+          <label :if={length(@plan.agents) > 1} class="flex min-w-0 flex-col gap-1">
+            <span class="text-xs font-[550] text-subtle">Drafted by</span>
+            <select name="plan[agent_id]" class="cal-input" data-role="quick-plan-agent">
+              <option
+                :for={choice <- @plan.agents}
+                value={choice.id}
+                selected={choice.id == @plan.agent_id}
+              >
+                {choice.name}
+              </option>
+            </select>
+          </label>
+          <button
+            type="submit"
+            class={[primary_btn(), "h-[38px] px-4 disabled:opacity-50"]}
+            disabled={@plan.agents == [] or @busy?}
+            data-role="quick-plan-submit"
+          >
+            Draft event
+          </button>
+        </div>
+      </form>
+
+      <p :if={@plan.agents == []} class="mt-2 text-xs text-subtle" data-role="quick-plan-empty">
+        No agent can draft events for you yet. Give one access in <.link
+          navigate={~p"/calendar/settings"}
+          class="underline"
+        >Calendar settings</.link>.
+      </p>
+      <p
+        :if={length(@plan.agents) == 1 and @plan.status == :idle}
+        class="mt-1.5 text-xs text-subtle"
+        data-role="quick-plan-agent-note"
+      >
+        {@agent_name} drafts it; nothing is saved until you choose Create event.
+      </p>
+
+      <div
+        :if={@plan.status != :idle}
+        class="mt-2 flex flex-col gap-1.5 text-[13px]"
+        role="status"
+        aria-live="polite"
+        data-role="quick-plan-state"
+      >
+        <p :if={@plan.status == :waiting} class="text-subtle" data-role="quick-plan-waiting">
+          Sent to {@agent_name}. Waiting for a reply…
+        </p>
+        <p :if={@plan.status == :slow} class="text-subtle" data-role="quick-plan-slow">
+          {@agent_name} hasn't replied yet. You can keep waiting, or add the event yourself with + New.
+        </p>
+        <p
+          :if={@plan.status == :unavailable}
+          class="font-[550] text-error"
+          data-role="quick-plan-unavailable"
+        >
+          {@agent_name} isn't connected right now, so nothing was sent. You can still add the event yourself with + New.
+        </p>
+        <p :if={@plan.status == :failed} class="font-[550] text-error" data-role="quick-plan-failed">
+          {@plan.error ||
+            "Couldn't send that to #{@agent_name}. Try again, or add the event yourself with + New."}
+        </p>
+        <div
+          :for={reply <- @plan.replies}
+          class="rounded-[var(--radius-field)] bg-base-200 px-3 py-2"
+          data-role="quick-plan-reply"
+        >
+          <span class="text-xs font-[650] text-subtle">{@agent_name}</span>
+          <p class="m-0 whitespace-pre-line break-words">{reply.content}</p>
+        </div>
+        <div
+          :if={@plan.draft}
+          class="flex flex-wrap items-center gap-2"
+          data-role="quick-plan-draft"
+          data-draft-status={@plan.draft.status}
+        >
+          <span :if={@plan.draft.status == "ready"}>{@agent_name} drafted an event.</span>
+          <span :if={@plan.draft.status == "needs_clarification"}>
+            {@agent_name} drafted an event that needs your answer before you can save it.
+          </span>
+          <span :if={@plan.draft.status == "incomplete"}>
+            {@agent_name} drafted an event with details still missing.
+          </span>
+          <button
+            type="button"
+            class={primary_btn()}
+            phx-click="plan_open_draft"
+            data-role="quick-plan-review"
+          >
+            Review draft
+          </button>
+        </div>
+        <div class="flex flex-wrap gap-2">
+          <.link
+            :if={@plan.space}
+            navigate={~p"/chat/#{PlatformWeb.ChatLive.space_nav_target(@plan.space)}"}
+            class={ghost_btn()}
+            data-role="quick-plan-conversation"
+          >
+            Open conversation
+          </.link>
+          <button
+            type="button"
+            class={ghost_btn()}
+            phx-click="plan_reset"
+            data-role="quick-plan-reset"
+          >
+            Start over
+          </button>
+        </div>
+      </div>
+    </section>
+    """
+  end
+
+  # The agent's open questions inside the editor (production extension:
+  # agent clarification state, not in canvas).
+  attr(:agent, :map, required: true)
+
+  defp agent_questions(assigns) do
+    ~H"""
+    <div
+      class="flex flex-col gap-2 rounded-[var(--radius-box)] border border-edge bg-base-200 p-3 text-[13px]"
+      data-role="calendar-editor-agent"
+    >
+      <p class="m-0 text-xs text-subtle">
+        Drafted by {@agent.name}. Nothing is saved until you choose Create event.
+      </p>
+      <ul :if={@agent.issues != []} class="m-0 list-none p-0 text-xs text-subtle">
+        <li :for={issue <- @agent.issues} data-role="calendar-editor-agent-issue">{issue}</li>
+      </ul>
+      <div
+        :for={question <- @agent.clarifications}
+        class="flex flex-col gap-1.5"
+        data-role="calendar-editor-agent-question"
+        data-kind={question["kind"]}
+        data-answered={to_string(question["id"] in @agent.resolved)}
+      >
+        <p class="m-0 font-[550]">{question["question"]}</p>
+        <div
+          :if={question["kind"] == "attendee" and question["id"] not in @agent.resolved}
+          class="flex flex-wrap gap-1.5"
+        >
+          <button
+            :for={candidate <- question["candidates"] || []}
+            type="button"
+            class={ghost_btn()}
+            phx-click="draft_resolve"
+            phx-value-id={question["id"]}
+            phx-value-choice={candidate["user_id"]}
+            data-role="calendar-editor-agent-candidate"
+          >
+            Add {candidate["name"]}
+          </button>
+          <button
+            type="button"
+            class={ghost_btn()}
+            phx-click="draft_resolve"
+            phx-value-id={question["id"]}
+            phx-value-choice="skip"
+            data-role="calendar-editor-agent-skip"
+          >
+            Leave out
+          </button>
+        </div>
+        <p
+          :if={question["kind"] == "attendee" and question["id"] in @agent.resolved}
+          class="m-0 text-xs text-subtle"
+        >
+          Answered.
+        </p>
+      </div>
+    </div>
+    """
+  end
+
   # ── header (app.js `headHTML`) ─────────────────────────────────────────
 
   attr(:view, :string, required: true)
@@ -253,6 +501,15 @@ defmodule PlatformWeb.CalendarLive.Components do
       <button type="button" class={primary_btn()} phx-click="new" id="calendar-new-event">
         + New event
       </button>
+      <%!-- v7 headHTML `[data-past-events]`, after + New event (stage 5 review). --%>
+      <.link
+        patch={~p"/calendar?#{%{view: @view, past: 1}}"}
+        class={ghost_btn()}
+        data-past-events="open"
+        data-role="calendar-header-past"
+      >
+        <.icon name="hero-archive-box" class="size-3.5" /> Past events
+      </.link>
     </div>
     <div class="shrink-0 lg:hidden" data-role="calendar-phone-header">
       <div class="flex min-h-[52px] items-center gap-1.5 border-b border-edge px-3 py-1.5">
@@ -269,11 +526,24 @@ defmodule PlatformWeb.CalendarLive.Components do
           <.icon name="hero-plus" class="size-[18px]" />
         </button>
       </div>
-      <div class="flex min-h-11 items-center gap-1.5 border-b border-edge px-3 py-1.5">
+      <div
+        class="flex min-h-11 items-center gap-1.5 border-b border-edge px-3 py-1.5"
+        data-role="calendar-phone-nav"
+      >
         <.date_nav step="day" />
-        <span class="whitespace-nowrap text-[13px] font-semibold">
+        <span class="whitespace-nowrap text-[13px] font-semibold" data-role="calendar-phone-range">
           {Cal.phone_range_label(@view, @cursor, @sel_day)}
         </span>
+        <span class="flex-1"></span>
+        <%!-- v7 phone header row 2: "Today | <month> | Past events" (stage 5
+             review, fourth pass); the section tabs no longer carry it. --%>
+        <.link
+          patch={~p"/calendar?#{%{view: @view, past: 1}}"}
+          class={ghost_btn()}
+          data-past-events="open"
+        >
+          Past events
+        </.link>
       </div>
     </div>
     """
@@ -382,7 +652,7 @@ defmodule PlatformWeb.CalendarLive.Components do
         <i class="cal-sw cal-k-native"></i>Your events
       </span>
       <span :if={@meetings_on} class="inline-flex items-center gap-1.5" data-legend="meeting">
-        <i class="cal-sw cal-k-meeting"></i>Meetings
+        <i class="cal-sw cal-k-meeting"></i>Calls
       </span>
       <span class="inline-flex items-center gap-1.5">
         <i class="cal-sw cal-k-external"></i>External · read-only, blocks availability
@@ -405,7 +675,12 @@ defmodule PlatformWeb.CalendarLive.Components do
   @doc "The desktop week: sticky day header, 07–21 gutter, seven columns."
   def week_grid(assigns) do
     ~H"""
-    <div class="hidden grid-cols-[56px_repeat(7,minmax(0,1fr))] lg:grid" data-role="calendar-week">
+    <div
+      id="calendar-week"
+      class="hidden grid-cols-[56px_repeat(7,minmax(0,1fr))] lg:grid"
+      data-role="calendar-week"
+      phx-hook="CalendarSelection"
+    >
       <div class="sticky top-0 z-[4] border-b border-edge bg-base-200"></div>
       <div
         :for={day <- @days}
@@ -679,7 +954,12 @@ defmodule PlatformWeb.CalendarLive.Components do
   @doc "The phone's single-day column: a 44px gutter and full-width chips."
   def phone_day(assigns) do
     ~H"""
-    <div class="grid grid-cols-[44px_minmax(0,1fr)]" data-role="calendar-phone-day">
+    <div
+      id="calendar-phone-day"
+      class="grid grid-cols-[44px_minmax(0,1fr)]"
+      data-role="calendar-phone-day"
+      phx-hook="CalendarSelection"
+    >
       <.gutter class="w-11 pr-2" />
       <.day_column
         day={@day}
@@ -807,6 +1087,12 @@ defmodule PlatformWeb.CalendarLive.Components do
     doc: "`%{state}` for the selected meeting's Cancel control (task 01a19e7f); nil draws none"
   )
 
+  attr(:delete, :map,
+    default: nil,
+    doc:
+      "`%{state}` for the selected meeting's Delete control (task 01a1b281 stage 4); nil draws none"
+  )
+
   @doc """
   The details: a 320px right column at `lg`, a bottom sheet over a scrim
   below it (index.html `.details` / `@media (max-width:899px) .details`).
@@ -825,10 +1111,16 @@ defmodule PlatformWeb.CalendarLive.Components do
 
     ~H"""
     <div class="cal-sheet-scrim" phx-click="close_details" data-role="calendar-details-scrim"></div>
+    <%!-- `data-covers-tab-bar`: below lg this is a bottom sheet whose footer
+         holds Join now / Open call room. On the web it covers the tab bar
+         (z 60 over 30); the iOS app's native bar cannot be covered, so
+         `native_tab_bar.js` hides it while this is in the DOM. Without the
+         marker the native bar sat over the footer and hid Join. --%>
     <aside
       class="cal-details"
       aria-label="Event details"
       data-role="calendar-details"
+      data-covers-tab-bar
       data-kind={@detail.kind}
     >
       <div class="cal-dhead">
@@ -842,6 +1134,7 @@ defmodule PlatformWeb.CalendarLive.Components do
         <h3>{@detail.title}</h3>
         <.detail_row icon="hero-clock" text={@detail.when} sub={@detail[:recurrence]} />
         <.detail_body detail={@detail} invite={@invite} />
+        <.call_block :if={@detail[:call]} call={@detail.call} />
         <.cancel_meeting
           :if={@detail.kind == "meeting" and @cancel}
           can_cancel={@detail.can_cancel}
@@ -849,6 +1142,13 @@ defmodule PlatformWeb.CalendarLive.Components do
           audience={@detail.audience}
           escape={false}
           id_prefix="calendar-detail-cancel"
+        />
+        <.delete_meeting
+          :if={@detail.kind == "meeting" and @delete}
+          can_delete={@detail[:can_delete] == true}
+          state={@delete.state}
+          escape={false}
+          id_prefix="calendar-detail-delete"
         />
       </div>
       <div :if={footer?(@detail)} class="cal-dfoot">
@@ -860,6 +1160,84 @@ defmodule PlatformWeb.CalendarLive.Components do
 
   defp footer?(%{kind: "native", owner?: owner?}), do: owner? == true
   defp footer?(_), do: true
+
+  # ── the call on an event (task 01a1b8a5 stage 4) ───────────────────────
+
+  attr(:call, :map, required: true)
+
+  # v7 `.dl` call row and `.panel` "After the call". A call that is off says
+  # so instead of offering a room; a finished call lists its three records,
+  # each one admitted for this viewer (`Meetings.PastEvents.records/2`), and
+  # an absent record says it is absent rather than linking nothing.
+  defp call_block(assigns) do
+    ~H"""
+    <div
+      :if={!@call.enabled? and !@call.cancelled?}
+      class="cal-dl"
+      data-role="calendar-detail-call-off"
+    >
+      <.icon name="hero-video-camera-slash" class="size-3.5" />
+      <span class="min-w-0">
+        No Burrow call<small>The call is off for this event, so there is no room to join.</small>
+      </span>
+    </div>
+    <div :if={@call.enabled? and @call.live?} class="cal-dl" data-role="calendar-detail-call-live">
+      <.icon name="hero-video-camera" class="size-3.5" />
+      <span class="min-w-0">Burrow call<small>Live now</small></span>
+    </div>
+    <div :if={@call.ended?} class="cal-panel" data-role="calendar-detail-recap">
+      <h3>After the call</h3>
+      <p :if={@call.records.summary} class="!text-base-content" data-record="summary">
+        <span class="whitespace-pre-line">{@call.records.summary}</span>
+      </p>
+      <p :if={!@call.records.summary} data-record="summary-none">No summary was saved.</p>
+      <p :if={@call.records.transcript_id} data-record="transcript">
+        <a
+          href={~p"/api/transcripts/#{@call.records.transcript_id}/download"}
+          class="text-interactive underline"
+        >
+          Transcript
+        </a>
+      </p>
+      <p :if={!@call.records.transcript_id} data-record="transcript-none">
+        No transcript was saved.
+      </p>
+      <p :if={@call.records.recording_url} data-record="recording">
+        <a
+          href={@call.records.recording_url}
+          class="text-interactive underline"
+          target="_blank"
+          rel="noopener"
+        >
+          Recording
+        </a>
+      </p>
+      <p :if={!@call.records.recording_url} data-record="recording-none">
+        No recording was saved.
+      </p>
+    </div>
+    """
+  end
+
+  attr(:call, :map, default: nil)
+  attr(:primary, :boolean, default: true)
+
+  # Join now / Open call room. Absent when there is nothing to join: the
+  # call is off or the meeting was cancelled. The room's own breadcrumb and
+  # "Back to Calendar" return to this event (`/calendar?meeting=<id>`).
+  defp call_link(assigns) do
+    ~H"""
+    <.link
+      :if={call_offered?(@call)}
+      navigate={~p"/meetings/#{@call.slug}"}
+      class={if @primary, do: primary_btn(), else: ghost_btn()}
+      data-role="calendar-detail-join"
+    >
+      <.icon name="hero-video-camera" class="size-3.5" />
+      {if @call.live?, do: "Join now", else: "Open call room"}
+    </.link>
+    """
+  end
 
   attr(:detail, :map, required: true)
 
@@ -912,6 +1290,21 @@ defmodule PlatformWeb.CalendarLive.Components do
 
   defp detail_body(%{detail: %{kind: kind}} = assigns) when kind in ["native", "tentative"] do
     ~H"""
+    <%!-- v7 `.dl` call row and invitees on the owner's own call event. --%>
+    <.detail_row
+      :if={@detail[:call]}
+      icon="hero-video-camera"
+      text={"Burrow meeting in #{@detail.call.space || "its call space"}"}
+      sub={@detail.call.host && "hosted by #{@detail.call.host}"}
+      data-role="calendar-detail-call"
+    />
+    <.detail_row
+      :if={@detail[:call] && @detail.call.invitees != []}
+      icon="hero-user-group"
+      text={"#{length(@detail.call.invitees)} invited"}
+      sub={Enum.join(@detail.call.invitees, ", ")}
+      data-role="calendar-detail-people"
+    />
     <.detail_row
       icon="hero-eye-slash"
       text={if @detail.busy?, do: "Busy only", else: "Full details"}
@@ -932,6 +1325,16 @@ defmodule PlatformWeb.CalendarLive.Components do
       text={@detail.calendar}
       sub={if @detail.kind == "tentative", do: "held by #{@detail.agent}"}
     />
+    <%!-- v7 renderDetails, verbatim: a Focus time / Out of office event
+         ends with one panel line, below the calendar row (stage 5 review).
+         phx-no-format keeps the text node free of surrounding whitespace. --%>
+    <p
+      :if={@detail[:preset] in ["focus", "ooo"]}
+      class="cal-panel"
+      data-role="calendar-detail-blocks"
+      data-preset={@detail.preset}
+      phx-no-format
+    >{preset_label(@detail.preset)} · blocks your availability.</p>
     """
   end
 
@@ -941,6 +1344,7 @@ defmodule PlatformWeb.CalendarLive.Components do
       icon="hero-video-camera"
       text={"Burrow meeting in #{@detail.space || "Meetings"}"}
       sub={@detail.host && "hosted by #{@detail.host}"}
+      data-role="calendar-detail-call"
     />
     <%!-- The same live invite surface as /meetings' detail panel (task
        01a19e7b). There is ONE aside for the lg column and the <lg sheet,
@@ -949,14 +1353,27 @@ defmodule PlatformWeb.CalendarLive.Components do
        `.cal-details` is overflow:hidden and `.cal-dbody` is the scroll
        region, so a floating dropdown would be clipped. No meeting-wide
        invite link: invites are minted per person. --%>
+    <%!-- v7 renderDetails: an invitee sees "N invited / names", the same
+         row as the owner's own call event (stage 5 review, third pass). --%>
+    <.detail_row
+      :if={@detail[:invitee_view?] && @detail.invitees != []}
+      icon="hero-user-group"
+      text={"#{length(@detail.invitees)} invited"}
+      sub={Enum.join(@detail.invitees, ", ")}
+      data-role="calendar-detail-people"
+    />
     <.rsvp_control :if={@detail[:my_rsvp] && !@detail[:cancelled?]} rsvp={@detail.my_rsvp} />
     <.invite_list
+      :if={!@detail[:invitee_view?]}
       mode={:live}
       entries={@detail.invite_entries}
       id_prefix="calendar-detail-invite"
       time_zone={@detail[:time_zone]}
     />
-    <div :if={@invite[:open]} data-role="calendar-detail-invite-expansion">
+    <div
+      :if={!@detail[:invitee_view?] && @invite[:open]}
+      data-role="calendar-detail-invite-expansion"
+    >
       <.invite_control
         mode={:live}
         id="calendar-detail-invite-control"
@@ -1027,10 +1444,11 @@ defmodule PlatformWeb.CalendarLive.Components do
   attr(:text, :string, required: true)
   attr(:sub, :string, default: nil)
   attr(:class, :string, default: nil)
+  attr(:rest, :global)
 
   defp detail_row(assigns) do
     ~H"""
-    <div class="cal-dl">
+    <div class="cal-dl" {@rest}>
       <.icon name={@icon} class="size-3.5" />
       <span class={["min-w-0", @class]}>
         {@text}<small :if={@sub}>{@sub}</small>
@@ -1043,34 +1461,40 @@ defmodule PlatformWeb.CalendarLive.Components do
 
   defp detail_footer(%{detail: %{kind: "native"}} = assigns) do
     ~H"""
-    <button type="button" class={primary_btn()} phx-click="edit">Edit</button>
+    <.call_link call={@detail[:call]} />
+    <button
+      type="button"
+      class={if call_offered?(@detail[:call]), do: ghost_btn(), else: primary_btn()}
+      phx-click="edit"
+    >
+      {if @detail[:call], do: "Edit event", else: "Edit"}
+    </button>
     <button type="button" class={[ghost_btn(), "cal-danger-btn"]} phx-click="delete">Delete</button>
     """
   end
 
+  # Approve / Revert live in Inbox only (task 01a1b8a5 stage 5: every
+  # briefing, consent included, stays Inbox-only; v7 excludes inline
+  # consent). The hold's details point there instead.
   defp detail_footer(%{detail: %{kind: "tentative"}} = assigns) do
     ~H"""
-    <button type="button" class={primary_btn()} phx-click="consent" phx-value-verb="approve">
-      Approve
-    </button>
-    <button type="button" class={ghost_btn()} phx-click="consent" phx-value-verb="revert">
-      Revert
-    </button>
+    <span class="text-xs text-subtle" data-role="calendar-detail-consent-note">
+      Approve or revert this hold in Inbox.
+    </span>
+    <.link navigate={~p"/inbox"} class={primary_btn()} data-role="calendar-detail-open-inbox">
+      Open Inbox
+    </.link>
     """
   end
 
   defp detail_footer(%{detail: %{kind: "meeting"}} = assigns) do
     ~H"""
-    <.link
-      :if={!@detail[:cancelled?]}
-      navigate={~p"/meetings/#{@detail.slug}"}
-      class={primary_btn()}
-    >
-      {if @detail.live?, do: "Join now", else: "Open meeting"}
-    </.link>
-    <.link navigate={~p"/meetings?#{%{meeting: @detail.meeting_id}}"} class={ghost_btn()}>
-      View in Meetings
-    </.link>
+    <.call_link call={@detail[:call]} />
+    <.edit_button
+      can_edit={@detail[:can_edit] == true}
+      variant={:text}
+      id="calendar-detail-edit"
+    />
     """
   end
 
@@ -1080,45 +1504,202 @@ defmodule PlatformWeb.CalendarLive.Components do
     """
   end
 
-  # ── editor (app.js `openEditor`, index.html `.modal`) ──────────────────
+  defp call_offered?(%{enabled?: true, cancelled?: false}), do: true
+  defp call_offered?(_call), do: false
 
-  attr(:form, :any, required: true)
-  attr(:editing, :any, required: true)
-  attr(:error, :string, default: nil)
-  attr(:invalid, :list, default: [])
-  attr(:where_options, :list, default: [])
+  # ── past events (v7 `[data-past-events]` modal, task 01a1b8a5 stage 4) ─
 
-  attr(:meetings_on, :boolean,
-    default: false,
-    doc: "Meetings module on: a NEW editor offers the Event | Meeting toggle (task 01a1986e)"
-  )
+  attr(:past, :map, required: true)
+  attr(:zone, :string, required: true)
+  attr(:view, :string, default: "week")
 
   @doc """
-  New / Edit event: a 520px modal at `lg`, a bottom sheet below it. PR #51's
-  all-day flag and custom recurrence stay (declared deviations): all-day is
-  one checkbox row under the Date row, and a custom rule shows as its own
-  selected Repeat option.
+  Past events: the calls the viewer can look back on
+  (`Platform.Meetings.PastEvents.page/2`), newest first, a page at a time.
+  A row opens its event in the Calendar (`?meeting=<id>`), where the
+  details' "After the call" panel holds the records. Production states
+  beyond v7: empty, unavailable (no video calls for this viewer) and a
+  pager.
+  """
+  def past_events(assigns) do
+    ~H"""
+    <div class="cal-sheet-scrim" phx-click="close_past" data-role="past-events-scrim"></div>
+    <div
+      class="fixed inset-x-0 bottom-0 z-50 flex max-h-[85vh] flex-col rounded-t-2xl border border-edge bg-base-100 shadow-2xl lg:inset-auto lg:left-1/2 lg:top-1/2 lg:w-[560px] lg:-translate-x-1/2 lg:-translate-y-1/2 lg:rounded-2xl"
+      role="dialog"
+      aria-modal="true"
+      aria-labelledby="past-events-title"
+      data-role="past-events"
+      data-state={@past.state}
+    >
+      <div class="flex shrink-0 items-center gap-2 border-b border-edge px-4 py-3">
+        <div class="min-w-0 flex-1">
+          <h2 id="past-events-title" class="m-0 text-base font-[650]">Past events</h2>
+          <p class="m-0 text-xs text-subtle">Call records stay attached to their calendar event.</p>
+        </div>
+        <button type="button" class={icon_btn()} phx-click="close_past" aria-label="Close">
+          <.icon name="hero-x-mark" class="size-[18px]" />
+        </button>
+      </div>
+      <div class="min-h-0 flex-1 overflow-y-auto px-2 py-2">
+        <p
+          :if={@past.state == :unavailable}
+          class="m-0 px-2 py-6 text-center text-sm text-subtle"
+          data-role="past-events-unavailable"
+        >
+          Past events need Burrow calls, and calls aren’t available to you. Ask an admin to turn on video calls.
+        </p>
+        <p
+          :if={@past.state == :empty}
+          class="m-0 px-2 py-6 text-center text-sm text-subtle"
+          data-role="past-events-empty"
+        >
+          No past calls yet. When a call you can see ends, it appears here with its summary, transcript and recording.
+        </p>
+        <.link
+          :for={row <- @past.rows}
+          patch={~p"/calendar?#{%{meeting: row.id}}"}
+          class="flex items-start gap-3 rounded-[var(--radius-field)] px-2 py-2.5 hover:bg-base-300"
+          data-role="past-event-row"
+          data-meeting-id={row.id}
+        >
+          <.icon name="hero-video-camera" class="mt-0.5 size-4 shrink-0 text-subtle" />
+          <span class="min-w-0 flex-1">
+            <span class="block truncate text-[13px] font-semibold text-base-content">
+              {row.name}
+            </span>
+            <small class="block text-xs text-subtle">
+              {past_when(row, @zone)}<span :if={row.project_path}> · {row.project_path}</span>
+            </small>
+            <small class="mt-1 flex flex-wrap gap-1.5 text-xs" data-role="past-event-records">
+              <span :if={row.status == "cancelled"} class="text-subtle">
+                Cancelled · no call records
+              </span>
+              <span
+                :if={row.status != "cancelled"}
+                class={if row.summary, do: "text-base-content", else: "text-subtle line-through"}
+                data-record={if row.summary, do: "summary", else: "summary-none"}
+              >
+                Summary
+              </span>
+              <span :if={row.status != "cancelled"} class="text-subtle" aria-hidden="true">·</span>
+              <span
+                :if={row.status != "cancelled"}
+                class={
+                  if row.transcript_id, do: "text-base-content", else: "text-subtle line-through"
+                }
+                data-record={if row.transcript_id, do: "transcript", else: "transcript-none"}
+              >
+                Transcript
+              </span>
+              <span :if={row.status != "cancelled"} class="text-subtle" aria-hidden="true">·</span>
+              <span
+                :if={row.status != "cancelled"}
+                class={
+                  if row.recording_url, do: "text-base-content", else: "text-subtle line-through"
+                }
+                data-record={if row.recording_url, do: "recording", else: "recording-none"}
+              >
+                Recording
+              </span>
+            </small>
+          </span>
+        </.link>
+      </div>
+      <div class="flex shrink-0 items-center gap-2 border-t border-edge px-4 py-3">
+        <.link
+          :if={@past.page > 1}
+          patch={~p"/calendar?#{%{view: @view, past: 1, past_page: @past.page - 1}}"}
+          class={ghost_btn()}
+          data-role="past-events-newer"
+        >
+          Newer
+        </.link>
+        <.link
+          :if={@past.more?}
+          patch={~p"/calendar?#{%{view: @view, past: 1, past_page: @past.page + 1}}"}
+          class={ghost_btn()}
+          data-role="past-events-older"
+        >
+          Older
+        </.link>
+        <span class="flex-1"></span>
+        <button type="button" class={ghost_btn()} phx-click="close_past">Close</button>
+      </div>
+    </div>
+    """
+  end
+
+  defp past_when(%{at: %DateTime{} = at}, zone),
+    do: at |> DateTime.shift_zone!(zone) |> Calendar.strftime("%a %-d %b %Y · %H:%M")
+
+  defp past_when(_row, _zone), do: "No date"
+
+  # ── editor (app.js `openEditor`, index.html `.modal`) ──────────────────
+
+  attr(:editor, :map, required: true, doc: "the `:editor` assign (`CalendarLive.Editor`)")
+  attr(:where_options, :list, default: [])
+  attr(:projects, :list, default: [])
+  attr(:user, :any, default: nil)
+
+  @doc """
+  The ONE event editor (prototype 01a178d2 v7 app.js `openEditor`, task
+  01a1b8a5 stage 2): a 520px modal at `lg`, a bottom sheet below it. New,
+  edit, slot, drag, month, mobile and agent drafts all render this from a
+  `Platform.Calendar.EventDraft`; there is no Event | Meeting split.
+
+  Production extensions beyond v7, declared as design deviations: all-day
+  and custom recurrence (PR #51), Where, the call's Project when Where does
+  not name one, the staged-people rows with removed/undo and the
+  last-invitee refusal, the per-field "was ..." markers and the "When you
+  save" summary for an event with a call record (task 01a1b281).
+
+  DOM contract: the v7 ids as `data-role` (`f-title`, `f-date`, `f-s`,
+  `f-e`, `f-type`, `type-help`, `f-people`, `f-call`, `f-rec`, `f-notes`,
+  `f-err`, `f-save`), `data-close-modal` on the X and Cancel, `data-del` on
+  Delete and `data-vis` on the visibility choices.
   """
   def event_editor(assigns) do
-    form = assigns.form
-    editing = assigns.editing
+    editor = assigns.editor
+    form = editor.form
     all_day? = form[:all_day].value in [true, "true"]
+    base = editor.base
 
     assigns =
       assign(assigns,
-        new?: is_nil(editing.id),
+        form: form,
+        new?: editor.new?,
         all_day?: all_day?,
         repeat: form[:repeat].value || "",
         visibility: form[:visibility].value || "details",
-        recurring?: not is_nil(editing.id) and editing.recurrence not in [nil, ""],
+        preset: Editor.preset(editor),
+        people?: Editor.people_enabled?(editor),
+        call_shown?: Editor.call_shown?(editor),
+        call_enabled?: Editor.call_enabled?(editor, assigns.projects),
+        call_checked?: Editor.call_checked?(editor),
+        project?: Editor.project_needed?(editor) and assigns.projects != [],
+        changed: Editor.changed(editor),
+        original: editor.original,
+        recurring?: not editor.new? and base.recurrence not in [nil, ""],
         custom_label:
-          if(editing.recurrence not in [nil, "", "FREQ=DAILY", "FREQ=WEEKLY", "FREQ=MONTHLY"],
-            do: Cal.recurrence_label(editing)
+          if(base.recurrence not in [nil, "", "FREQ=DAILY", "FREQ=WEEKLY", "FREQ=MONTHLY"],
+            do:
+              Cal.recurrence_label(%{
+                recurrence: base.recurrence,
+                starts_at: base.starts_at,
+                time_zone: base.time_zone || "Etc/UTC"
+              })
           )
       )
 
     ~H"""
-    <div class="cal-modal-scrim" data-role="calendar-editor-scrim">
+    <div
+      id="calendar-editor-scrim"
+      class="cal-modal-scrim"
+      data-role="calendar-editor-scrim"
+      data-covers-tab-bar
+      phx-hook="CalendarEditorFocus"
+    >
       <.focus_wrap
         id="calendar-editor"
         class="cal-modal"
@@ -1126,8 +1707,25 @@ defmodule PlatformWeb.CalendarLive.Components do
         aria-modal="true"
         aria-labelledby="calendar-editor-title"
         phx-click-away="close_editor"
+        data-role="calendar-editor"
+        data-source={@editor.base.source}
       >
-        <h2 id="calendar-editor-title">{if @new?, do: "New event", else: "Edit event"}</h2>
+        <div class="cal-editor-head">
+          <h2 id="calendar-editor-title" class="editor-heading">
+            {if @new?, do: "New event", else: "Edit event"}
+          </h2>
+          <button
+            type="button"
+            class={[icon_btn(), "cal-editor-close"]}
+            phx-click="close_editor"
+            aria-label="Close event editor"
+            data-close-modal
+            data-role="calendar-editor-close"
+          >
+            <.icon name="hero-x-mark" class="size-[18px]" />
+          </button>
+        </div>
+        <.agent_questions :if={@editor.agent} agent={@editor.agent} />
         <.form
           for={@form}
           id="calendar-event-form"
@@ -1137,16 +1735,9 @@ defmodule PlatformWeb.CalendarLive.Components do
           novalidate
         >
           <input type="hidden" name={@form[:time_zone].name} value={@form[:time_zone].value} />
-          <%!-- New only, and only with Meetings on (task 01a1986e). Meeting
-               navigates to the MeetingLive scheduling sheet with this form's
-               date and start; Edit never changes an event's kind. --%>
-          <NewKindToggle.new_kind_toggle
-            :if={@new? and @meetings_on}
-            active={:event}
-            meeting_click="new_meeting"
-          />
           <label class="cal-field">
-            Title<input
+            <span>Title <.was :if={@changed["title"]} text={@original["title"]} /></span>
+            <input
               type="text"
               name={@form[:title].name}
               value={@form[:title].value}
@@ -1154,18 +1745,21 @@ defmodule PlatformWeb.CalendarLive.Components do
               maxlength="300"
               class="cal-input"
               aria-describedby="calendar-event-error"
-              aria-invalid={to_string(:title in @invalid)}
+              aria-invalid={to_string(:title in @editor.invalid)}
               phx-mounted={Phoenix.LiveView.JS.focus()}
+              data-role="f-title"
             />
           </label>
           <div class="cal-formgrid">
             <label class="cal-field cal-field-date">
-              Date<input
+              <span>Date <.was :if={@changed["date"]} text={@original["date"]} /></span>
+              <input
                 type="date"
                 name={@form[:date].name}
                 value={@form[:date].value}
                 class="cal-input"
-                aria-invalid={to_string(:date in @invalid)}
+                aria-invalid={to_string(:date in @editor.invalid)}
+                data-role="f-date"
               />
             </label>
             <%= if @all_day? do %>
@@ -1175,7 +1769,7 @@ defmodule PlatformWeb.CalendarLive.Components do
                   name={@form[:end_date].name}
                   value={@form[:end_date].value}
                   class="cal-input"
-                  aria-invalid={to_string(:end in @invalid)}
+                  aria-invalid={to_string(:end in @editor.invalid)}
                 />
               </label>
             <% else %>
@@ -1183,7 +1777,8 @@ defmodule PlatformWeb.CalendarLive.Components do
                    parses them, so a time with no AM/PM gets "pick AM or PM"
                    instead of posting "" and reading as a missing start. --%>
               <label class="cal-field">
-                Start<input
+                <span>Start <.was :if={@changed["start"]} text={@original["start"]} /></span>
+                <input
                   type="text"
                   inputmode="text"
                   autocomplete="off"
@@ -1191,11 +1786,13 @@ defmodule PlatformWeb.CalendarLive.Components do
                   name={@form[:start].name}
                   value={@form[:start].value}
                   class="cal-input"
-                  aria-invalid={to_string(:start in @invalid)}
+                  aria-invalid={to_string(:start in @editor.invalid)}
+                  data-role="f-s"
                 />
               </label>
               <label class="cal-field">
-                End<input
+                <span>End <.was :if={@changed["end"]} text={@original["end"]} /></span>
+                <input
                   type="text"
                   inputmode="text"
                   autocomplete="off"
@@ -1203,7 +1800,8 @@ defmodule PlatformWeb.CalendarLive.Components do
                   name={@form[:end].name}
                   value={@form[:end].value}
                   class="cal-input"
-                  aria-invalid={to_string(:end in @invalid)}
+                  aria-invalid={to_string(:end in @editor.invalid)}
+                  data-role="f-e"
                 />
               </label>
             <% end %>
@@ -1219,7 +1817,94 @@ defmodule PlatformWeb.CalendarLive.Components do
             /> All day
           </label>
           <label class="cal-field">
-            Repeat (optional)<select name={@form[:repeat].name} class="cal-input">
+            Type<select name={@form[:preset].name} class="cal-input" data-role="f-type">
+            <option
+                :for={
+                  {label, value} <- [
+                    {"Event", "event"},
+                    {"Focus time", "focus"},
+                    {"Out of office", "ooo"}
+                  ]
+                }
+                value={value}
+                selected={@preset == value}
+              >
+              {label}
+            </option>
+          </select>
+            <span class="cal-hint" data-role="type-help" data-preset={@preset}>
+              {type_help(@preset)}
+            </span>
+          </label>
+          <div :if={@people?} data-role="f-people" class="cal-people">
+            <.invitees
+              staging={@editor}
+              kept={Editor.kept(@editor)}
+              removed={Editor.removed(@editor)}
+              label="People"
+              label_class="text-xs font-[550] text-subtle"
+              placeholder="Names or email addresses"
+              id="calendar-editor-people"
+              always_open
+            />
+          </div>
+          <label :if={!@people?} class="cal-field" data-role="f-people" data-disabled="true">
+            People<input
+              type="text"
+              class="cal-input"
+              placeholder="Names or email addresses"
+              disabled
+            />
+          </label>
+          <div :if={@call_shown?} class="cal-field">
+            <label class="cal-check" data-role="calendar-editor-call">
+              <input
+                :if={@call_enabled?}
+                type="hidden"
+                name={@form[:call_enabled].name}
+                value="false"
+              />
+              <input
+                type="checkbox"
+                id="calendar-editor-call"
+                name={@call_enabled? && @form[:call_enabled].name}
+                value="true"
+                checked={@call_enabled? and @call_checked?}
+                disabled={!@call_enabled?}
+                class="cal-checkbox"
+                data-role="f-call"
+              /> Add a Burrow call
+            </label>
+            <span
+              :if={@people? and !@call_enabled? and @projects == []}
+              class="cal-hint"
+              data-role="calendar-editor-call-no-project"
+            >
+              Create a project before adding a Burrow call.
+            </span>
+          </div>
+          <label :if={@project?} class="cal-field" data-role="calendar-editor-call-project">
+            Project<select
+              name={@form[:call_project].name}
+              class="cal-input"
+              aria-invalid={to_string(:call_project in @editor.invalid)}
+            >
+            <option
+                :for={project <- @projects}
+                value={project.id}
+                selected={@form[:call_project].value == project.id}
+              >
+              {project.name}
+            </option>
+          </select>
+          </label>
+          <label class="cal-field">
+            Repeat (optional)<select
+              name={@form[:repeat].name}
+              class="cal-input"
+              data-role="f-rec"
+              aria-invalid={to_string(:repeat in @editor.invalid)}
+            >
             <option
                 :for={
                   {label, value} <- [
@@ -1286,12 +1971,14 @@ defmodule PlatformWeb.CalendarLive.Components do
             <div class="cal-visopt" role="radiogroup" aria-label="Visibility">
               <label
                 :for={
-                  {value, label, note} <- [
-                    {"busy", "Busy only", "Others, agents and your iCal feed just see “Busy”."},
-                    {"details", "Full details", "People with access see the title and notes."}
+                  {value, vis, label, note} <- [
+                    {"busy", "busy", "Busy only",
+                     "Others, agents and your iCal feed just see “Busy”."},
+                    {"details", "full", "Full details", "People with access see the title and notes."}
                   ]
                 }
                 class="relative"
+                data-vis={vis}
               >
                 <input
                   type="radio"
@@ -1316,25 +2003,44 @@ defmodule PlatformWeb.CalendarLive.Components do
           </select>
           </label>
           <label class="cal-field">
-            Notes<textarea
+            <span>Notes <.was :if={@changed["description"]} text="edited" bare /></span><textarea
               name={@form[:description].name}
               placeholder="Optional"
               maxlength="10000"
               class="cal-input"
+              data-role="f-notes"
             >{@form[:description].value}</textarea>
           </label>
-          <p id="calendar-event-error" class="cal-err" role="alert">{@error}</p>
+          <.summary :if={@editor.preview} preview={@editor.preview} />
+          <p id="calendar-event-error" class="cal-err" role="alert" data-role="f-err">
+            {@editor.error}
+          </p>
           <div class="cal-ft">
             <button
-              :if={!@new?}
+              :if={!@new? and @editor.deletable?}
               type="button"
-              class={[ghost_btn(), "cal-danger-btn mr-auto"]}
+              class={[ghost_btn(), "cal-danger-btn cal-ft-btn mr-auto"]}
               phx-click="delete"
+              data-del
+              data-role="calendar-editor-delete"
             >
               Delete
             </button>
-            <button type="button" class={ghost_btn()} phx-click="close_editor">Cancel</button>
-            <button type="submit" class={primary_btn()}>
+            <button
+              type="button"
+              class={[ghost_btn(), "cal-ft-btn"]}
+              phx-click="close_editor"
+              data-close-modal
+              data-role="calendar-editor-cancel"
+            >
+              Cancel
+            </button>
+            <button
+              type="submit"
+              class={[primary_btn(), "cal-ft-btn disabled:opacity-50"]}
+              disabled={Editor.unresolved(@editor) != []}
+              data-role="f-save"
+            >
               {if @new?, do: "Create event", else: "Save"}
             </button>
           </div>
@@ -1343,6 +2049,19 @@ defmodule PlatformWeb.CalendarLive.Components do
     </div>
     """
   end
+
+  defp preset_label("focus"), do: "Focus time"
+  defp preset_label("ooo"), do: "Out of office"
+
+  @doc "The v7 `#type-help` line for a preset, verbatim."
+  def type_help("focus"), do: "Focus time · blocks bookings, with no call."
+
+  def type_help("ooo"),
+    do:
+      "Out of office · blocks bookings. Existing events are kept; no invitations are declined automatically."
+
+  def type_help(_event),
+    do: "People and a call are optional. This event blocks your availability."
 
   # ── Calendar settings page (app.js `renderSettings`) ───────────────────
 
@@ -1575,7 +2294,7 @@ defmodule PlatformWeb.CalendarLive.Components do
       </div>
     </div>
 
-    <div :if={@feed_modal} class="cal-modal-scrim" data-role="feed-modal">
+    <div :if={@feed_modal} class="cal-modal-scrim" data-role="feed-modal" data-covers-tab-bar>
       <.focus_wrap
         id="calendar-feed-modal"
         class="cal-modal"

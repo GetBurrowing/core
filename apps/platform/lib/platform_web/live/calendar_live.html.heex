@@ -13,6 +13,7 @@
     booking_link_count={@booking_link_count}
     calendars={@calendars}
     calendars_shown={@calendars_shown}
+    past_open={@past != nil}
   />
 
   <section
@@ -49,6 +50,7 @@
   >
     <.cal_header view={@view} cursor={@cursor} sel_day={@sel_day} zone={@zone} />
     <.section_tabs section={:calendar} />
+    <.quick_plan plan={@plan} />
     <div
       id="calendar-body"
       phx-hook="CalendarScroll"
@@ -99,15 +101,16 @@
       }
     }
     cancel={%{state: @meeting_cancel_state}}
+    delete={%{state: @meeting_delete_state}}
   />
 
+  <.past_events :if={@past && @live_action != :settings} past={@past} zone={@zone} view={@view} />
+
   <.event_editor
-    :if={@editing}
-    form={@form}
-    editing={@editing}
-    error={@editor_error}
-    invalid={@editor_fields}
+    :if={@editor}
+    editor={@editor}
     where_options={where_options(@spaces, @projects)}
-    meetings_on={@meetings_on}
+    projects={@projects}
+    user={@current_user_record}
   />
 </div>

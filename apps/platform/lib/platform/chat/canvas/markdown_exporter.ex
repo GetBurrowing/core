@@ -8,7 +8,7 @@ defmodule Platform.Chat.Canvas.MarkdownExporter do
   to serialise a canvas to a `.md` attachment. Does not touch the repo, the
   filesystem, or telemetry — the caller decides where the bytes go.
 
-  Kind coverage mirrors `Platform.Chat.Canvas.Kinds.@modules` (17 kinds).
+  Kind coverage mirrors `Platform.Chat.Canvas.Kinds.@modules` (20 kinds).
   Interactive-only kinds (`form`, `action_row`, `embed`, `image`, `mermaid`,
   `prototype`)
   render as an HTML comment marker so the export is round-trippable and diffable
@@ -19,6 +19,7 @@ defmodule Platform.Chat.Canvas.MarkdownExporter do
 
   alias Platform.Chat.Canvas
   alias Platform.Chat.Canvas.Kinds
+  alias Platform.Chat.Canvas.Kinds.{NeedsYou, ProductionRail, RunSheet}
 
   @skipped_kinds ~w(form action_row embed image mermaid prototype)
 
@@ -148,6 +149,72 @@ defmodule Platform.Chat.Canvas.MarkdownExporter do
     [fence, language, "\n", source, "\n", fence]
   end
 
+  # ── Episode board (task 01a1eaf6 stage 2) ─────────────────────────────
+
+  defp render_node(%{"type" => "production_rail"} = node) do
+    props = props(node)
+
+    title =
+      case props["number"] do
+        n when is_integer(n) -> ["## Ep ", Integer.to_string(n), " · ", stringify(props["title"])]
+        _ -> ["## ", stringify(props["title"])]
+      end
+
+    records =
+      [
+        is_binary(props["records_at"]) && ["Records ", props["records_at"]],
+        is_binary(props["room_status"]) && props["room_status"]
+      ]
+      |> Enum.filter(& &1)
+      |> Enum.intersperse(" · ")
+
+    rail =
+      props["stages"]
+      |> List.wrap()
+      |> Enum.filter(&is_map/1)
+      |> Enum.map(fn stage ->
+        label = ProductionRail.label(stringify(stage["stage"]))
+        label = if stage["stage"] == props["stage"], do: ["**", label, "**"], else: label
+        [label, " (", String.replace(stringify(stage["state"]), "_", " "), ")"]
+      end)
+      |> Enum.intersperse(" → ")
+
+    [title, "\n\n"]
+    |> then(fn acc -> if records == [], do: acc, else: [acc, records, "\n\n"] end)
+    |> then(fn acc -> [acc, rail] end)
+  end
+
+  defp render_node(%{"type" => "needs_you"} = node) do
+    case props(node)["items"] |> List.wrap() |> Enum.filter(&is_map/1) do
+      [] ->
+        NeedsYou.empty_copy()
+
+      items ->
+        lines =
+          Enum.map(items, fn item ->
+            options = item["options"] |> List.wrap() |> Enum.map(&stringify/1)
+            ["- ", stringify(item["question"]), " (", Enum.intersperse(options, " / "), ")"]
+          end)
+
+        [
+          "**Needs you (",
+          Integer.to_string(length(items)),
+          ")**\n\n",
+          Enum.intersperse(lines, "\n")
+        ]
+    end
+  end
+
+  defp render_node(%{"type" => "run_sheet"} = node) do
+    segments =
+      props(node)["segments"]
+      |> List.wrap()
+      |> Enum.filter(&is_map/1)
+      |> Enum.map(&render_segment/1)
+
+    ["**Run sheet**", Enum.map(segments, &["\n", &1])]
+  end
+
   # ── Skipped / unknown ─────────────────────────────────────────────────
 
   defp render_node(%{"type" => type} = node) when is_binary(type) do
@@ -192,6 +259,45 @@ defmodule Platform.Chat.Canvas.MarkdownExporter do
 
   defp empty_iodata?(iodata) do
     iodata |> IO.iodata_to_binary() |> String.trim() == ""
+  end
+
+  defp render_segment(segment) do
+    points =
+      case segment["talking_points"] do
+        points when is_map(points) ->
+          points
+          |> Enum.sort()
+          |> Enum.map(fn {host, text} -> [" ", stringify(host), ": ", stringify(text)] end)
+
+        _ ->
+          []
+      end
+
+    callback =
+      case segment["callback_episode"] do
+        n when is_integer(n) -> [" ↩ callback Ep ", Integer.to_string(n)]
+        _ -> []
+      end
+
+    stats =
+      segment["stat_cards"]
+      |> List.wrap()
+      |> Enum.filter(&is_map/1)
+      |> Enum.map(fn card ->
+        ["\n  - ", stringify(card["text"]), " (source: ", stringify(card["source_url"]), ")"]
+      end)
+
+    [
+      "- `",
+      RunSheet.clock(segment["starts_at_s"]),
+      "–",
+      RunSheet.clock(segment["ends_at_s"]),
+      "` ",
+      stringify(segment["name"]),
+      points,
+      callback,
+      stats
+    ]
   end
 
   defp render_checklist_item(%{"type" => "checklist_item"} = node) do

@@ -1,5 +1,14 @@
 defmodule Platform.Calendar.Event do
-  @moduledoc "A native event. Meetings remain in their own table and are projected at read time."
+  @moduledoc """
+  A native event. Meetings remain in their own table and are projected at
+  read time.
+
+  `meeting_id` links a native event to the one call record it is backed by
+  (task 01a1b8a5 stage 1). It is set only by `Platform.Calendar.Authoring`
+  and is deliberately absent from `changeset/2`'s cast list, so no attrs map
+  can attach or detach a call. `preset` is `event`, `focus` or `ooo`; the
+  two presets block availability like any event and never carry a call.
+  """
   use Ecto.Schema
   import Ecto.Changeset
 
@@ -10,6 +19,7 @@ defmodule Platform.Calendar.Event do
     belongs_to(:owner, Platform.Accounts.User)
     belongs_to(:space, Platform.Chat.Space)
     belongs_to(:project, Platform.Tasks.Project)
+    belongs_to(:meeting, Platform.Meetings.Meeting)
     field(:title, :string)
     field(:description, :string)
     field(:starts_at, :utc_datetime_usec)
@@ -24,8 +34,14 @@ defmodule Platform.Calendar.Event do
     field(:sequence, :integer, default: 0)
     field(:cancelled_at, :utc_datetime_usec)
     field(:tentative, :boolean, default: false)
+    field(:preset, :string, default: "event")
     timestamps(type: :utc_datetime_usec)
   end
+
+  @presets ~w(event focus ooo)
+
+  @doc "The event presets: an ordinary event, Focus time and Out of office."
+  def presets, do: @presets
 
   def changeset(event, attrs) do
     event
@@ -42,12 +58,14 @@ defmodule Platform.Calendar.Event do
       :space_id,
       :project_id,
       :recurrence,
-      :exception_dates
+      :exception_dates,
+      :preset
     ])
     |> validate_required([:title, :time_zone, :visibility])
     |> validate_length(:title, min: 1, max: 300)
     |> validate_length(:description, max: 10_000)
     |> validate_inclusion(:visibility, ~w(busy details))
+    |> validate_inclusion(:preset, @presets)
     |> validate_change(:time_zone, fn :time_zone, zone ->
       case DateTime.shift_zone(DateTime.utc_now(), zone) do
         {:ok, _} -> []
@@ -63,8 +81,21 @@ defmodule Platform.Calendar.Event do
     |> normalize_window()
     |> check_constraint(:ends_at, name: :calendar_events_positive_window)
     |> check_constraint(:space_id, name: :calendar_events_one_scope)
+    |> check_constraint(:preset, name: :calendar_events_preset)
     |> foreign_key_constraint(:space_id)
     |> foreign_key_constraint(:project_id)
+  end
+
+  @doc """
+  Attach `event` to its call record. Used only by `Platform.Calendar.Authoring`;
+  the unique index makes a second link to the same meeting an error rather than
+  a second calendar entry.
+  """
+  def meeting_link_changeset(event, meeting_id) do
+    event
+    |> change(meeting_id: meeting_id)
+    |> unique_constraint(:meeting_id, name: :calendar_events_meeting_id_index)
+    |> foreign_key_constraint(:meeting_id)
   end
 
   defp normalize_window(changeset) do

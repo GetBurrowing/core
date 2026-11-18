@@ -45,7 +45,10 @@ defmodule Platform.Chat.Canvas.Kinds do
     Checklist,
     ChecklistItem,
     Table,
-    Prototype
+    Prototype,
+    ProductionRail,
+    NeedsYou,
+    RunSheet
   }
 
   @modules [
@@ -65,7 +68,11 @@ defmodule Platform.Chat.Canvas.Kinds do
     Checklist,
     ChecklistItem,
     Table,
-    Prototype
+    Prototype,
+    # The episode board's kinds (task 01a1eaf6 stage 2).
+    ProductionRail,
+    NeedsYou,
+    RunSheet
   ]
 
   @doc "Returns all registered kind modules, including every extension kind."
@@ -163,6 +170,21 @@ defmodule Platform.Chat.Canvas.Kinds do
         "(`sandbox=\"allow-scripts\"`, no network, no Burrow access). `prototype_id` required; " <>
         "`version` pins one, absent follows latest. Same org as this space only."
 
+  defp describe("production_rail"),
+    do:
+      "Episode header and production rail: the title, the records line and seven stages " <>
+        "(pitch → retro) as small state dots. Props are an episode's rail state."
+
+  defp describe("needs_you"),
+    do:
+      "Human decisions only: `items` of {id, question, options}, each option a quiet button " <>
+        "emitting an `action` event (\"<id>:<option>\"). Empty reads \"Nothing needs you this week.\""
+
+  defp describe("run_sheet"),
+    do:
+      "Episode run sheet: contiguous `segments` from 00:00 (at most 45:00) with talking " <>
+        "points, callbacks and stat cards; every stat card needs a `source_url`. Has a show mode."
+
   defp describe(_), do: ""
 
   defp children_rule(:none), do: "none"
@@ -207,6 +229,10 @@ defmodule Platform.Chat.Canvas.Kinds do
   end
 
   defp brief(%{"type" => "object"}, required?), do: marker(required?) <> "object"
+
+  defp brief(%{"type" => types}, required?) when is_list(types),
+    do: marker(required?) <> Enum.join(types, " | ")
+
   defp brief(%{"type" => type}, required?), do: marker(required?) <> to_string(type)
   defp brief(_, required?), do: marker(required?) <> "any"
 

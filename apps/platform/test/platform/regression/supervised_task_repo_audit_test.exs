@@ -262,6 +262,10 @@ defmodule Platform.Regression.SupervisedTaskRepoAuditTest do
     # "#general" on an install with no channel, from its own process at boot.
     # Tests call `DefaultSpace.ensure/0` inside the sandbox instead.
     :start_default_space_seed,
+    # Task 01a1e65e stage 2: `EmailLoginCodeBoot.run_at_boot/0` reads and
+    # writes `install_boot_markers` from its own process at boot. Tests call
+    # `run_at_boot/1` inside the sandbox instead.
+    :start_pocket_id_email_login_code,
     # Task 019f4eaa — container retention purger. Sibling of
     # :start_space_purger (which is channel-specific by contract); this one
     # hard-deletes deletion-scheduled projects and the cascade-hidden
@@ -278,6 +282,8 @@ defmodule Platform.Regression.SupervisedTaskRepoAuditTest do
     :start_insight_purger,
     # task 01a1b6a1 stage 2: daily prune of habit_signals past retention.
     :start_habits_pruner,
+    # task 01a1b8a5 stage 5: daily prune of expired calendar_drafts.
+    :start_calendar_draft_pruner,
     # task 01a13867 stage 3: daily insight briefing delivery. Tests call
     # `Platform.Memory.Insights.Disseminator.run/1` directly.
     :start_insight_disseminator,
@@ -326,6 +332,11 @@ defmodule Platform.Regression.SupervisedTaskRepoAuditTest do
     # timing assertions need an injectable `now`) or start their own
     # named instance with `start_supervised!/1`.
     :start_candidate_sweeper,
+
+    # Task 01a1e670 stage 2 — the feedback IntakeSweeper claims pending
+    # intake records from its own process. Tests call
+    # `Intake.retry_pending/1` directly or start their own named instance.
+    :start_feedback_intake_sweeper,
 
     # Completion retries belong to explicit lifecycle fixtures; the ambient
     # singleton must never query another DataCase sandbox.

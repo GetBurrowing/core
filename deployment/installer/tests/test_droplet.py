@@ -31,6 +31,7 @@ import subprocess
 import sys
 import tempfile
 import unittest
+from unittest import mock
 
 HERE = os.path.dirname(os.path.abspath(__file__))
 INSTALLER = os.path.dirname(HERE)
@@ -48,6 +49,7 @@ sys.path.insert(0, INSTALLER)
 sys.path.insert(0, HERE)
 
 from identity_terms import identity_hits
+from render_identity_scan import identity_scan_files, planted_like
 from setup_fakes import FakePocketId, _Server, write_secret_file
 
 from burrow_install import registry, templates
@@ -211,13 +213,48 @@ class DropletMeetingsRenderTest(unittest.TestCase):
     def setUpClass(cls):
         cls.rendered = meetings_droplet()
         cls.files = {rel: text for rel, (text, _mode) in cls.rendered.files.items()}
-        cls.base = {rel: text for rel, (text, _mode) in droplet().files.items()}
+        cls.base_rendered = droplet()
+        cls.base = {rel: text for rel, (text, _mode) in cls.base_rendered.files.items()}
+        # Literal searches run over these: secrets.env and the user-data carry
+        # random generated values, and a 48-char hex password holds '7881' or
+        # '7882' in about 0.3% of renders (task 01a1ef1b).
+        cls.scan = identity_scan_files(cls.rendered)
+        cls.base_scan = identity_scan_files(cls.base_rendered)
         cls.primary = load(DO_MEETINGS)["domain"]["primary"]
 
+    MEETINGS_LITERALS = ("livekit", "LIVEKIT_", "meeting-transcriber", ":4080", "7881", "7882")
+
     def test_00_positive_control_the_pre_meetings_droplet_has_none_of_it(self):
-        for absent in ("livekit", "LIVEKIT_", "meeting-transcriber", ":4080", "7881", "7882"):
+        for absent in self.MEETINGS_LITERALS:
             with self.subTest(absent=absent):
-                self.assertFalse([r for r, t in self.base.items() if absent in t])
+                # Positive control first: the same search hits the meetings droplet.
+                self.assertTrue([r for r, t in self.scan.items() if absent in t])
+                self.assertFalse([r for r, t in self.base_scan.items() if absent in t])
+
+    def test_00_literal_search_ignores_generated_values_that_contain_them(self):
+        # Plant same-length, same-alphabet values holding every port literal in
+        # each generated secret the droplet uses; the search must not see them.
+        names = sorted(self.base_rendered.generated)
+        self.assertGreater(len(names), 0)
+        planted = {}
+        with contextlib.ExitStack() as stack:
+            for index, name in enumerate(names):
+                secret = registry.SECRETS[name]
+                planted[name] = planted_like(secret.generate(), index)
+                stack.enter_context(
+                    mock.patch.object(secret, "generate", lambda v=planted[name]: v)
+                )
+            rendered = droplet()
+        # Positive control: the planted values reached the rendered files.
+        # assertTrue, not assertIn: a failure must not print the render.
+        self.assertTrue(rendered.generated == planted, "patched generators not used")
+        raw = "\n".join(text for text, _mode in rendered.files.values())
+        for literal in ("7881", "7882", ":4080"):
+            self.assertTrue(literal in raw, f"planted {literal!r} absent from the raw render")
+        scan = identity_scan_files(rendered)
+        for absent in self.MEETINGS_LITERALS:
+            with self.subTest(absent=absent):
+                self.assertFalse([r for r, t in scan.items() if absent in t])
 
     def test_fixture_is_do_droplet_plus_meetings_only(self):
         base, meet = load(DO_DROPLET), load(DO_MEETINGS)
@@ -366,8 +403,11 @@ class DropletMeetingsRenderTest(unittest.TestCase):
         raw["services"]["voice"] = True
         raw["voice"]["accelerator"] = "cpu"
         voiced = build(valid(raw), registry_auth=DO_AUTH, customer_secrets=DO_MEETINGS_CUSTOMER)
-        self.assertIn("speaches", voiced.files["compose.yaml"][0])  # positive control
-        for rel, text in self.files.items():
+        # Positive control: the same (redacted) search finds speaches when voiced.
+        voiced_scan = identity_scan_files(voiced)["compose.yaml"]
+        self.assertTrue("speaches" in voiced_scan, "speaches absent when voiced")
+        # Generated values redacted: 'TTS_' is four urlsafe characters.
+        for rel, text in self.scan.items():
             for absent in ("speaches", "voice-worker", "burrow-voice", "TTS_"):
                 with self.subTest(file=rel, absent=absent):
                     self.assertNotIn(absent, text)
@@ -1088,6 +1128,10 @@ class BootstrapBrandingTest(unittest.TestCase):
         self.logo = os.path.join(self.tmp, "logo.svg")
         with open(self.logo, "wb") as handle:
             handle.write(b"<svg xmlns='http://www.w3.org/2000/svg'/>")
+        # The email login code step (core task 01a1e65e) runs before branding.
+        # These cases are about branding, so they start from an install where
+        # that step has nothing to write; BootstrapEmailLoginCodeTest covers it.
+        self.fake.config[pocketid.EMAIL_LOGIN_CODE_KEY] = "true"
 
     def bootstrap(self, *extra):
         return run_main(
@@ -1107,10 +1151,24 @@ class BootstrapBrandingTest(unittest.TestCase):
         return [r for r in self.fake.requests if "application-" in r[1]]
 
     def test_no_flags_sends_nothing_and_says_skipped(self):
+        # Changed deliberately in core task 01a1e65e: with no branding flags,
+        # branding still sends nothing, but the email login code step now reads
+        # the config once and writes it once, changing only that one key.
+        self.fake.config[pocketid.EMAIL_LOGIN_CODE_KEY] = "false"
+        before = dict(self.fake.config)
         code, out, _err = self.bootstrap()
         self.assertEqual(code, 0, out)
-        self.assertEqual(json.loads(out)["branding"], "skipped")
-        self.assertEqual(self.config_requests(), [])
+        doc = json.loads(out)
+        self.assertEqual(doc["branding"], "skipped")
+        self.assertEqual(doc["email_login_code"], "applied")
+        self.assertEqual(
+            self.config_requests(),
+            [("GET", "/api/application-configuration/all"), ("PUT", "/api/application-configuration")],
+        )
+        self.assertEqual(self.fake.logos, [])
+        self.assertEqual(
+            self.fake.config_puts, [dict(before, **{pocketid.EMAIL_LOGIN_CODE_KEY: "true"})]
+        )
 
     def test_name_and_accent_are_set_and_every_other_setting_is_kept(self):
         before = dict(self.fake.config)
@@ -1208,6 +1266,96 @@ class BootstrapBrandingTest(unittest.TestCase):
             self.assertTrue(pocketid.valid_accent_color(good), good)
         for bad in ("", "#abcd1", "rgb(1,2,3)", "red; x", "<b>", "url(x)"):
             self.assertFalse(pocketid.valid_accent_color(bad), bad)
+
+
+class BootstrapEmailLoginCodeTest(unittest.TestCase):
+    """bootstrap-admin's email login code step (core task 01a1e65e).
+
+    Against the in-process fake, which starts at pocket-id v2.18.0's default
+    (the flag "false"). The PUT replaces the whole config, so the step must
+    send every setting back with only the one key changed.
+    """
+
+    FLAG = pocketid.EMAIL_LOGIN_CODE_KEY
+
+    def setUp(self):
+        self.tmp = tempfile.mkdtemp(prefix="burrow-email-code-")
+        self.addCleanup(shutil.rmtree, self.tmp, True)
+        self.fake = FakePocketId(API_KEY)
+        self.addCleanup(self.fake.close)
+        self.key_file = write_secret_file(self.tmp, "api-key", API_KEY)
+        self.link_file = os.path.join(self.tmp, "login-link")
+        # An admin customised the name, the way an existing install would have.
+        self.fake.config["appName"] = "Legacy Pie Auth"
+
+    def bootstrap(self):
+        return run_main(
+            "bootstrap-admin", "--base", self.fake.url, "--api-key-file", self.key_file,
+            "--email", EMAIL, "--link-file", self.link_file,
+        )  # fmt: skip
+
+    def test_applied_and_every_other_setting_survives(self):
+        before = dict(self.fake.config)
+        self.assertEqual(before[self.FLAG], "false")
+        code, out, err = self.bootstrap()
+        self.assertEqual(code, 0, out)
+        doc = json.loads(out)
+        self.assertEqual((doc["ok"], doc["email_login_code"]), (True, "applied"))
+        self.assertNotIn("email_login_code_error", doc)
+        self.assertEqual(len(self.fake.config_puts), 1)
+        self.assertEqual(self.fake.config_puts[0], dict(before, **{self.FLAG: "true"}))
+        # Positive control: the admin's customisation survives the full replace.
+        self.assertEqual(self.fake.config["appName"], "Legacy Pie Auth")
+        self.assertEqual(self.fake.config[self.FLAG], "true")
+        self.assertNotIn("smtp-secret-kept-exactly", out + err)
+        self.assertNotIn(API_KEY, out + err)
+
+    def test_a_second_run_says_present_and_writes_nothing(self):
+        self.bootstrap()
+        self.assertEqual(len(self.fake.config_puts), 1)
+        code, out, _err = self.bootstrap()
+        self.assertEqual(code, 0, out)
+        self.assertEqual(json.loads(out)["email_login_code"], "present")
+        self.assertEqual(len(self.fake.config_puts), 1)
+
+    def test_a_refused_put_is_reported_and_does_not_strand_the_hand_over(self):
+        self.fake.config_put_status = 500
+        code, out, _err = self.bootstrap()
+        self.assertEqual(code, 0, out)
+        doc = json.loads(out)
+        self.assertEqual((doc["ok"], doc["email_login_code"]), (True, "failed"))
+        self.assertEqual(doc["email_login_code_error"], "pocketid_api_error")
+        self.assertTrue(os.path.exists(self.link_file))
+        self.assertEqual(self.fake.config[self.FLAG], "false")
+
+    def test_a_locked_config_is_never_written(self):
+        self.fake.config["smtpPassword"] = pocketid.REDACTED
+        code, out, _err = self.bootstrap()
+        self.assertEqual(code, 0, out)
+        doc = json.loads(out)
+        self.assertEqual(
+            (doc["ok"], doc["email_login_code"], doc["email_login_code_error"]),
+            (True, "failed", "pocketid_config_locked"),
+        )
+        self.assertEqual(self.fake.count("PUT"), 0)
+        self.assertEqual(self.fake.config[self.FLAG], "false")
+
+    def test_a_put_that_does_not_keep_the_flag_is_not_saved(self):
+        original = self.fake.dispatch
+
+        def forgetful(method, path, headers, data):
+            if method == "PUT" and path == "/api/application-configuration":
+                data = dict(data, **{self.FLAG: "false"})
+            return original(method, path, headers, data)
+
+        self.fake.dispatch = forgetful
+        code, out, _err = self.bootstrap()
+        self.assertEqual(code, 0, out)
+        doc = json.loads(out)
+        self.assertEqual(
+            (doc["email_login_code"], doc["email_login_code_error"]),
+            ("failed", "pocketid_email_login_code_not_saved"),
+        )
 
  
 if __name__ == "__main__":

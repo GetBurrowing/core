@@ -47,7 +47,9 @@ defmodule Platform.Memory.Insights.OutsideTest do
     end)
   end
 
-  defp account!(org_id) do
+  # An account the dreaming `agent` is granted (task 01a1ea5b stage 3: an
+  # agent drafts only from a granted mailbox), or an ungranted one.
+  defp account!(org_id, agent \\ nil) do
     admin = person!("admin")
     name = "outside#{n()}"
 
@@ -60,7 +62,13 @@ defmodule Platform.Memory.Insights.OutsideTest do
         "username" => "#{name}-relay"
       })
 
-    account
+    if agent do
+      {:ok, account} = Platform.Mail.Ownership.set_owner(admin, account, %{kind: "shared"})
+      {:ok, _} = Platform.Mail.Ownership.grant(admin, account, {:agent, agent.id})
+      account
+    else
+      account
+    end
   end
 
   defp outside_insight!(email, attrs \\ %{}) do
@@ -182,7 +190,8 @@ defmodule Platform.Memory.Insights.OutsideTest do
 
     test "the draft is created once across two runs, addressed and never sent", %{agent: agent} do
       mail_on!()
-      account = account!(acme_org_id())
+      _ungranted = account!(acme_org_id())
+      account = account!(acme_org_id(), agent)
       email = "ana-#{n()}@client.example"
       insight = outside_insight!(email)
 
@@ -212,7 +221,7 @@ defmodule Platform.Memory.Insights.OutsideTest do
     test "nothing is drafted while the Email module is off; the insight is still delivered",
          %{agent: agent} do
       Application.put_env(:platform, :mail_enabled, false)
-      _account = account!(acme_org_id())
+      _account = account!(acme_org_id(), agent)
       insight = outside_insight!("off-#{n()}@client.example")
 
       assert {:ok, %{items: items}} = run!()
@@ -239,6 +248,21 @@ defmodule Platform.Memory.Insights.OutsideTest do
       assert Outside.draft(Repo.get!(Insight, insight.id), agent) == :skip
     end
 
+    test "nothing is drafted from a mailbox the dreaming agent is not granted (task 01a1ea5b stage 3)",
+         %{agent: agent} do
+      mail_on!()
+      _ungranted = account!(acme_org_id())
+      insight = outside_insight!("ungranted-#{n()}@client.example")
+
+      assert Outside.draft(Repo.get!(Insight, insight.id), agent) == :skip
+      assert drafts() == []
+
+      # Positive control: once a mailbox is granted, the same insight drafts.
+      granted = account!(acme_org_id(), agent)
+      assert {:ok, id} = Outside.draft(Repo.get!(Insight, insight.id), agent)
+      assert Repo.get!(Draft, id).account_id == granted.id
+    end
+
     test "an internal member's email gets no draft", %{agent: agent} do
       mail_on!()
       account!(acme_org_id())
@@ -250,9 +274,9 @@ defmodule Platform.Memory.Insights.OutsideTest do
       assert drafts() == []
     end
 
-    test "Platform.Mail.Dispatch is never called, and the draft stays a draft" do
+    test "Platform.Mail.Dispatch is never called, and the draft stays a draft", %{agent: agent} do
       mail_on!()
-      account!(acme_org_id())
+      account!(acme_org_id(), agent)
       _insight = outside_insight!("trace-#{n()}@client.example")
 
       # Trace every call into Dispatch (and the Deliverer behind it) made by

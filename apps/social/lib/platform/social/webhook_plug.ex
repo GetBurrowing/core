@@ -99,17 +99,9 @@ defmodule Platform.Social.WebhookPlug do
     end
   end
 
-  defp apply_event(%Profile{id: profile_id}, %{external_id: external_id} = event)
+  defp apply_event(%Profile{} = profile, %{external_id: external_id} = event)
        when is_binary(external_id) and external_id != "" do
-    post =
-      Repo.one(
-        from(p in Post,
-          join: a in Account,
-          on: a.id == p.account_id,
-          where: a.profile_id == ^profile_id and p.external_id == ^external_id,
-          limit: 1
-        )
-      )
+    post = post_for_event(profile, external_id)
 
     case post && Publishing.apply_outcome(post, event) do
       {:ok, %Post{}} -> true
@@ -118,6 +110,23 @@ defmodule Platform.Social.WebhookPlug do
   end
 
   defp apply_event(_profile, _event), do: false
+
+  @doc false
+  # The post a vendor event names, among the profile's LEGACY posts only: a
+  # Studio post is planned inside Burrow, never sent, so no vendor event can
+  # be about it (`Publishing.apply_outcome/2` refuses one as well).
+  @spec post_for_event(Profile.t(), String.t()) :: Post.t() | nil
+  def post_for_event(%Profile{id: profile_id}, external_id) do
+    Repo.one(
+      from(p in Post,
+        join: a in Account,
+        on: a.id == p.account_id,
+        where:
+          a.profile_id == ^profile_id and p.external_id == ^external_id and p.flow == "legacy",
+        limit: 1
+      )
+    )
+  end
 
   defp profile_account(%Profile{id: profile_id}, ref) do
     Repo.one(

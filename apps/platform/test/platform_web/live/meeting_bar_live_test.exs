@@ -1,9 +1,9 @@
 defmodule PlatformWeb.MeetingBarLiveTest do
   @moduledoc """
-  Tests for the MeetingBarLive component rendered in the shell layout.
-
-  These tests verify the mini-bar's conditional visibility, content rendering,
-  and event handling by directly testing the LiveComponent assigns and markup.
+  The in-call top bar (task 01a1e82a stage 1, direction A of prototype
+  01a1e823). Renders the LiveComponent directly and reads the markup with
+  LazyHTML; the shell-level placement and per-page visibility live in
+  `PlatformWeb.ShellLiveTest`.
   """
   use PlatformWeb.ConnCase, async: true
   import Phoenix.LiveViewTest
@@ -13,217 +13,271 @@ defmodule PlatformWeb.MeetingBarLiveTest do
   @meeting_assigns %{
     meeting_active: true,
     meeting_space_id: "space-123",
-    meeting_space_name: "Engineering",
-    meeting_space_slug: "engineering",
-    meeting_slug: "engineering-standup-2026-06-19",
+    meeting_space_name: "Weekly sync",
+    meeting_space_slug: "weekly-sync",
+    meeting_slug: "weekly-sync-2026-11-17",
     meeting_started_at: ~U[2026-04-14 08:00:00Z],
-    on_meeting_page: false,
+    in_call_room: false,
+    meeting_roster: [
+      %{id: "p1", name: "Riley Park", initials: "RP"},
+      %{id: "p2", name: "Sam", initials: "S"}
+    ],
+    meeting_here_count: 2,
     id: "meeting-bar"
   }
 
-  describe "render/1" do
-    # Task 01a13c62 stage 3: inside the iOS app the bar follows the native
-    # call. No camera while the build has none; a pending mic is disabled
-    # with the warning ring.
-    test "native mode hides the camera and renders a pending mic disabled" do
-      assigns =
-        Map.merge(@meeting_assigns, %{
-          native: %{mic: true, camera: false, active_speakers: true},
-          mic_pending: true
-        })
+  defp doc(assigns),
+    do: assigns |> then(&render_component(MeetingBarLive, &1)) |> LazyHTML.from_fragment()
 
-      html = render_component(MeetingBarLive, assigns)
+  defp q(doc, selector), do: LazyHTML.query(doc, selector)
+  defp present?(doc, selector), do: Enum.count(q(doc, selector)) > 0
+  defp text(doc, selector), do: doc |> q(selector) |> LazyHTML.text() |> String.trim()
 
-      refute html =~ "data-bar-camera"
-      assert html =~ "data-bar-mic"
-      assert html =~ "ring-warning"
-      assert html =~ ~s(aria-busy="true")
-    end
-
-    test "in a browser the bar keeps mic and camera" do
-      html = render_component(MeetingBarLive, @meeting_assigns)
-
-      assert html =~ "data-bar-camera"
-      assert html =~ "data-bar-mic"
-      refute html =~ "ring-warning"
-    end
-
-    test "renders mini-bar when meeting is active and not on meeting page" do
-      html = render_component(MeetingBarLive, @meeting_assigns)
-
-      assert html =~ "meeting-mini-bar"
-      assert html =~ "Engineering"
-      assert html =~ "data-timer"
-      assert html =~ "Return to call"
-      assert html =~ "Leave"
-    end
-
-    test "hides mini-bar when on the meeting page" do
-      assigns = Map.put(@meeting_assigns, :on_meeting_page, true)
-      html = render_component(MeetingBarLive, assigns)
-
-      assert html =~ "hidden"
-    end
-
-    test "hides mini-bar when no active meeting" do
-      assigns = Map.put(@meeting_assigns, :meeting_active, false)
-      html = render_component(MeetingBarLive, assigns)
-
-      assert html =~ "hidden"
-    end
-
-    test "return-to-call link deep-links to /meetings/<meeting_slug>" do
-      html = render_component(MeetingBarLive, @meeting_assigns)
-
-      # The Return-to-call action targets the canonical MeetingLive surface,
-      # not the chat surface — this is the whole point of the stage-2 wiring:
-      # navigating back to the call lands you on the meeting page where the
-      # actual video/audio UI lives.
-      assert html =~ ~s|href="/meetings/engineering-standup-2026-06-19"|
-      # The space-name link still points at the chat surface (intentional —
-      # only Return-to-call is the meeting deep link).
-      assert html =~ ~s|href="/chat/engineering"|
-    end
-
-    test "return-to-call link falls back to /chat/<space_slug> when meeting_slug is nil" do
-      assigns = Map.put(@meeting_assigns, :meeting_slug, nil)
-      html = render_component(MeetingBarLive, assigns)
-
-      # Falls back to the chat surface when the join broadcast raced ahead
-      # of the Meeting row insert (stage-1 fallback path).
-      assert html =~ ~s|href="/chat/engineering"|
-      refute html =~ ~s|href="/meetings/|
-    end
-
-    test "return-to-call link falls back to /chat/<space_id> when both slugs are nil" do
-      assigns =
-        @meeting_assigns
-        |> Map.put(:meeting_slug, nil)
-        |> Map.put(:meeting_space_slug, nil)
-
-      html = render_component(MeetingBarLive, assigns)
-
-      # Final fallback so a wholly-degraded bar still has a valid href
-      # rather than `nil` interpolation in the DOM.
-      assert html =~ ~s|href="/chat/space-123"|
-    end
-
-    test "duration timer has correct data-started-at attribute" do
-      html = render_component(MeetingBarLive, @meeting_assigns)
-
-      assert html =~ "data-started-at=\"2026-04-14T08:00:00Z\""
-    end
-
-    test "uses MeetingBar JS hook" do
-      html = render_component(MeetingBarLive, @meeting_assigns)
-
-      assert html =~ ~s|phx-hook="MeetingBar"|
-    end
-
-    test "mic toggle defaults to on (microphone icon)" do
-      html = render_component(MeetingBarLive, @meeting_assigns)
-
-      assert html =~ "hero-microphone"
-      refute html =~ "hero-microphone-slash"
-    end
-
-    test "camera toggle defaults to off (camera-slash icon)" do
-      html = render_component(MeetingBarLive, @meeting_assigns)
-
-      assert html =~ "hero-video-camera-slash"
-    end
-
-    # Burrow redesign 22 stage 1: the collapsible rail is gone, so the bar
-    # starts at the sidebar's right edge, one width read from app.css's
-    # `--sidebar-width` (220px, 200px at or below 1100px).
-    test "starts at the desktop sidebar's right edge, with no collapsed variant" do
-      html = render_component(MeetingBarLive, @meeting_assigns)
-
-      assert html =~ "lg:left-[var(--sidebar-width)]"
-      refute html =~ "lg:left-14"
-      refute html =~ "lg:left-56"
-    end
-
-    test "includes data-bar attributes for JS hook binding" do
-      html = render_component(MeetingBarLive, @meeting_assigns)
-
-      assert html =~ "data-bar-mic"
-      assert html =~ "data-bar-camera"
-      assert html =~ "data-bar-leave"
-    end
-
-    # Stage 4 (task 019ee06b): the mic/camera buttons must NOT carry
-    # `phx-click` so the MeetingBar JS hook is the sole click handler.
-    # A stray `phx-click` would re-introduce the LiveComponent-local
-    # toggle path that was the source of the bar/in-chat drift this
-    # stage fixes. The leave button still uses phx-click — only the
-    # media toggles route through the JS hook.
-    test "mic and camera buttons have no phx-click binding (JS-hook driven)" do
-      html = render_component(MeetingBarLive, @meeting_assigns)
-
-      # Scope the assertions to the button elements themselves so an
-      # unrelated phx-click elsewhere in the bar (the Leave button) does
-      # not produce a false positive. A regex over the button-opening tag
-      # is the tightest fit available without a HTML parser.
-      mic_button =
-        Regex.run(~r/<button[^>]*data-bar-mic[^>]*>/, html) |> List.first()
-
-      camera_button =
-        Regex.run(~r/<button[^>]*data-bar-camera[^>]*>/, html) |> List.first()
-
-      assert is_binary(mic_button), "mic button not found"
-      assert is_binary(camera_button), "camera button not found"
-      refute mic_button =~ "phx-click"
-      refute camera_button =~ "phx-click"
-
-      # Leave button keeps phx-click — sanity check that we're not just
-      # asserting absence of the attribute everywhere.
-      leave_button =
-        Regex.run(~r/<button[^>]*data-bar-leave[^>]*>/, html) |> List.first()
-
-      assert is_binary(leave_button)
-      assert leave_button =~ ~s|phx-click="leave_meeting"|
+  defp attr(doc, selector, name) do
+    case doc |> q(selector) |> LazyHTML.attribute(name) do
+      [value | _] -> value
+      [] -> nil
     end
   end
 
-  # ---------------------------------------------------------------------
-  # Stage 3 (task 019ee06b): the bar's mic/camera assigns must be
-  # overridable from the parent via the `send_update/2` bridge in
-  # ShellLive's `:meeting_media_state` handler. These tests verify the
-  # `update/2` contract: explicit `mic_on`/`camera_on` keys win, including
-  # an explicit `false` (which would have been swallowed by the prior
-  # `assigns[:mic_on] || socket.assigns.mic_on` shape).
-  # ---------------------------------------------------------------------
-  describe "media state override (stage 3)" do
-    test "explicit mic_on=false from parent renders muted icon + error color" do
-      assigns = Map.put(@meeting_assigns, :mic_on, false)
-      html = render_component(MeetingBarLive, assigns)
+  defp classes(doc, selector), do: (attr(doc, selector, "class") || "") |> String.split()
 
-      assert html =~ "hero-microphone-slash"
-      assert html =~ "text-error"
-      assert html =~ "bg-error/10"
+  describe "visibility" do
+    test "renders the bar when a meeting is active outside the call room" do
+      assert present?(doc(@meeting_assigns), "#meeting-top-bar")
     end
 
-    test "explicit camera_on=true from parent renders camera-on icon" do
-      assigns = Map.put(@meeting_assigns, :camera_on, true)
-      html = render_component(MeetingBarLive, assigns)
+    test "renders nothing in the call room" do
+      d = doc(Map.put(@meeting_assigns, :in_call_room, true))
 
-      # camera-on means the active hero-video-camera icon, NOT the
-      # -slash variant. Use a regex/negative-lookahead-style check by
-      # asserting the slashed icon is absent — render_component scopes
-      # to this component's HTML only.
-      assert html =~ "hero-video-camera"
-      refute html =~ "hero-video-camera-slash"
+      refute present?(d, "#meeting-top-bar")
+      refute present?(d, "[data-bar-mic]")
     end
 
-    test "explicit mic_on=true and camera_on=false match the defaults" do
-      # Sanity case: passing the defaults explicitly should be a no-op.
-      assigns = @meeting_assigns |> Map.put(:mic_on, true) |> Map.put(:camera_on, false)
-      html = render_component(MeetingBarLive, assigns)
+    test "renders nothing with no active meeting" do
+      refute present?(doc(Map.put(@meeting_assigns, :meeting_active, false)), "#meeting-top-bar")
+    end
+  end
 
-      assert html =~ "hero-microphone"
-      refute html =~ "hero-microphone-slash"
-      assert html =~ "hero-video-camera-slash"
+  describe "direction-A markup" do
+    test "carries the prototype copy in order on desktop" do
+      d = doc(@meeting_assigns)
+      bar = text(d, "#meeting-top-bar") |> String.replace(~r/\s+/, " ")
+
+      # The reconnecting / lost spans and Rejoin are in the markup but hidden
+      # while connected (stage 2); see "reconnecting and lost" below.
+      assert bar =~
+               ~r/In call Weekly sync 0:00 (Reconnecting… 0:00 Connection lost )?RP S 2 here .*Mic on Cam off Return to call ↗ (Rejoin Leave )?Leave/
+
+      assert text(d, "[data-role=meeting-name]") == "Weekly sync"
+      assert text(d, "[data-role=meeting-here]") == "2 here"
+      assert text(d, "[data-role=meeting-return]") == "Return to call ↗"
+      assert text(d, "[data-bar-leave]") == "Leave"
+    end
+
+    test "paints the band in success tokens with warning variants for reconnecting" do
+      cls = classes(doc(@meeting_assigns), "#meeting-top-bar")
+
+      assert "bg-success" in cls
+      assert "text-success-content" in cls
+      assert "data-[state=reconnecting]:bg-warning" in cls
+      assert "data-[state=reconnecting]:text-warning-content" in cls
+      assert "sm:h-11" in cls
+    end
+
+    test "is in flow at the top, not the old fixed bottom ribbon" do
+      d = doc(@meeting_assigns)
+      cls = classes(d, "#meeting-top-bar")
+
+      refute "fixed" in cls
+      refute "bg-base-100" in cls
+      refute Enum.any?(cls, &String.starts_with?(&1, "bottom-"))
+      refute present?(d, "#meeting-mini-bar")
+    end
+
+    test "starts connected and protects data-state from server patches" do
+      d = doc(@meeting_assigns)
+
+      assert attr(d, "#meeting-top-bar", "data-state") == "connected"
+      assert attr(d, "#meeting-top-bar", "phx-mounted") =~ "ignore_attrs"
+      assert attr(d, "#meeting-top-bar", "phx-mounted") =~ "data-state"
+      assert attr(d, "#meeting-top-bar", "phx-mounted") =~ "data-lost"
+    end
+
+    # Task 01a1e82a stage 2: meeting_presence.js sets data-state=reconnecting
+    # (and data-lost=true after 30s); these variants and slots are what it
+    # repaints. The old body-level banner is folded into the bar.
+    test "reconnecting and lost: the clock gives way, Rejoin and the phone Leave sheet appear" do
+      d = doc(@meeting_assigns)
+
+      assert attr(d, "#meeting-top-bar [data-timer]", "class") =~
+               "group-data-[state=reconnecting]:hidden"
+
+      status = "#meeting-top-bar [data-role=meeting-conn-status]"
+      assert attr(d, status, "class") =~ "group-data-[state=reconnecting]:inline"
+      assert text(d, status) |> String.replace(~r/\s+/, " ") =~ "Reconnecting… 0:00"
+      assert text(d, status) =~ "Connection lost"
+      assert present?(d, "#{status} [data-conn-timer]")
+
+      assert text(d, "#meeting-top-bar [data-bar-rejoin]") == "Rejoin"
+      assert text(d, "#meeting-top-bar [data-meeting-leave-sheet]") == "Leave"
+      assert attr(d, "#meeting-top-bar", "class") =~ "data-[state=reconnecting]:bg-warning"
+    end
+
+    test "keeps the MeetingBar hook, timer and started-at contract" do
+      d = doc(@meeting_assigns)
+
+      assert attr(d, "#meeting-top-bar", "phx-hook") == "MeetingBar"
+      assert attr(d, "#meeting-top-bar", "data-started-at") == "2026-04-14T08:00:00Z"
+      assert Enum.count(q(d, "#meeting-top-bar [data-timer]")) == 1
+    end
+
+    test "shows up to the roster's faces, and no faces or count with an empty roster" do
+      d = doc(@meeting_assigns)
+      assert Enum.count(q(d, "[data-role=meeting-faces] > span")) == 2
+
+      empty = doc(%{@meeting_assigns | meeting_roster: [], meeting_here_count: 0})
+      refute present?(empty, "[data-role=meeting-faces]")
+      refute present?(empty, "[data-role=meeting-here]")
+    end
+
+    test "Leave is in error tokens" do
+      cls = classes(doc(@meeting_assigns), "[data-bar-leave]")
+
+      assert "bg-error" in cls
+      assert "text-error-content" in cls
+    end
+
+    test "the phone strip is the whole bar as a link to the call" do
+      d = doc(@meeting_assigns)
+
+      assert text(d, "#meeting-top-bar") =~ "Tap to return ›"
+
+      assert attr(d, "[data-role=meeting-strip-link]", "href") ==
+               "/meetings/weekly-sync-2026-11-17"
+
+      assert "absolute" in classes(d, "[data-role=meeting-strip-link]")
+      assert "sm:hidden" in classes(d, "[data-role=meeting-strip-link]")
+      # The desktop controls are hidden below sm.
+      assert "hidden" in classes(d, "[data-bar-mic]")
+      assert "sm:inline-flex" in classes(d, "[data-bar-mic]")
+    end
+  end
+
+  describe "return to call" do
+    test "deep-links to /meetings/<meeting_slug>" do
+      assert attr(doc(@meeting_assigns), "[data-role=meeting-return]", "href") ==
+               "/meetings/weekly-sync-2026-11-17"
+    end
+
+    test "falls back to /chat/<space_slug> when meeting_slug is nil" do
+      d = doc(Map.put(@meeting_assigns, :meeting_slug, nil))
+      assert attr(d, "[data-role=meeting-return]", "href") == "/chat/weekly-sync"
+    end
+
+    test "falls back to /chat/<space_id> when both slugs are nil" do
+      d = doc(%{@meeting_assigns | meeting_slug: nil, meeting_space_slug: nil})
+      assert attr(d, "[data-role=meeting-return]", "href") == "/chat/space-123"
+    end
+  end
+
+  describe "controls" do
+    test "include the data-bar attributes the MeetingBar hook binds" do
+      d = doc(@meeting_assigns)
+
+      assert present?(d, "[data-bar-mic]")
+      assert present?(d, "[data-bar-camera]")
+      assert present?(d, "[data-bar-leave]")
+    end
+
+    # Stage 4 (task 019ee06b): the MeetingBar JS hook is the sole click
+    # handler for the media toggles; Leave keeps its server path.
+    test "mic and camera have no phx-click, Leave does" do
+      d = doc(@meeting_assigns)
+
+      assert attr(d, "[data-bar-mic]", "phx-click") == nil
+      assert attr(d, "[data-bar-camera]", "phx-click") == nil
+      assert attr(d, "[data-bar-leave]", "phx-click") == "leave_meeting"
+    end
+
+    test "defaults to Mic on (soft well) and Cam off (inverted chip)" do
+      d = doc(@meeting_assigns)
+
+      assert text(d, "[data-bar-mic]") == "Mic on"
+      assert "bg-success-content/15" in classes(d, "[data-bar-mic]")
+      assert attr(d, "[data-bar-mic]", "title") == "Mute mic"
+
+      assert text(d, "[data-bar-camera]") == "Cam off"
+      assert "bg-success-content" in classes(d, "[data-bar-camera]")
+      assert "text-success" in classes(d, "[data-bar-camera]")
+      assert "group-data-[state=reconnecting]:text-warning" in classes(d, "[data-bar-camera]")
+    end
+
+    # Task 01a13c62 stage 3: inside the iOS app the bar follows the native call.
+    test "native mode hides the camera and renders a pending mic disabled" do
+      d =
+        doc(
+          Map.merge(@meeting_assigns, %{
+            native: %{mic: true, camera: false, active_speakers: true},
+            mic_pending: true
+          })
+        )
+
+      refute present?(d, "[data-bar-camera]")
+      assert present?(d, "[data-bar-mic][disabled]")
+      assert attr(d, "[data-bar-mic]", "aria-busy") == "true"
+      assert "ring-warning" in classes(d, "[data-bar-mic]")
+    end
+
+    test "in a browser the bar keeps mic and camera without the pending ring" do
+      d = doc(@meeting_assigns)
+
+      assert present?(d, "[data-bar-camera]")
+      refute "ring-warning" in classes(d, "[data-bar-mic]")
+    end
+  end
+
+  # Stage 3 (task 019ee06b): mic/camera arrive from ShellLive via
+  # `send_update/2`; an explicit `false` must win over the default.
+  describe "media state override" do
+    test "mic_on=false renders Mic off as the inverted chip" do
+      d = doc(Map.put(@meeting_assigns, :mic_on, false))
+
+      assert text(d, "[data-bar-mic]") == "Mic off"
+      assert attr(d, "[data-bar-mic]", "title") == "Unmute mic"
+      assert "text-success" in classes(d, "[data-bar-mic]")
+    end
+
+    test "camera_on=true renders Cam on as a soft well" do
+      d = doc(Map.put(@meeting_assigns, :camera_on, true))
+
+      assert text(d, "[data-bar-camera]") == "Cam on"
+      refute "text-success" in classes(d, "[data-bar-camera]")
+    end
+  end
+
+  # Task 01a1e82a remediation, finding 8: the host gets "End for everyone" on
+  # desktop, in a one-item menu split off Leave. Leave stays one click.
+  describe "End for everyone" do
+    test "the host gets it beside Leave, pushing the host-checked end" do
+      d = doc(Map.put(@meeting_assigns, :meeting_can_end, true))
+
+      assert text(d, "#meeting-bar-end-menu [data-bar-end]") == "End for everyone"
+      assert attr(d, "[data-bar-end]", "phx-click") =~ "meeting_presence_end"
+      assert attr(d, "[data-bar-end-menu]", "aria-controls") == "meeting-bar-end-menu"
+      # The destructive tone sits on the aria-hidden glyph, never on the
+      # label (the room's palette guard, R3).
+      assert "text-error" in classes(d, "[data-bar-end] [aria-hidden=\"true\"]")
+      refute "text-error" in classes(d, "[data-bar-end]")
+      assert attr(d, "[data-bar-leave]", "phx-click") == "leave_meeting"
+    end
+
+    test "nobody else sees it" do
+      d = doc(@meeting_assigns)
+
+      refute present?(d, "[data-bar-end]")
+      refute present?(d, "[data-bar-end-menu]")
+      assert present?(d, "[data-bar-leave]")
     end
   end
 end

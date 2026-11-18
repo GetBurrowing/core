@@ -59,6 +59,20 @@ export function stripBadgePrefix(title) {
 }
 
 /**
+ * The badge prefix a title currently carries ("(3) "), or "". Any other
+ * writer of `document.title` (the in-call title in meeting_media_session.js)
+ * keeps this in front of its own text instead of stripping it: one string,
+ * two contributors, so neither one's observer sees the other's write as
+ * something to undo (task 01a1e82a remediation round 2 — the two used to
+ * alternate forever and freeze the tab whenever Inbox unread was above 0).
+ */
+export function badgePrefix(title) {
+  if (typeof title !== "string") return ""
+  const m = title.match(BADGE_PREFIX_RE)
+  return m ? m[0] : ""
+}
+
+/**
  * The title this hook wants, given the browser's current title and the
  * badge label (`null`/`""` at zero). Always strips first, so calling it
  * with its own output is a fixed point — the property the MutationObserver
@@ -130,7 +144,13 @@ const AppBadge = {
     // re-enters the observer that may have called us. The equality guard is
     // what terminates that loop: the second pass computes the same string,
     // writes nothing, and no further mutation is queued.
-    if (document.title !== next) document.title = next
+    if (document.title === next) return
+    document.title = next
+    // Our own write is not news: drop the records it queued for this
+    // observer so it never re-enters on itself.
+    if (this.titleObserver && typeof this.titleObserver.takeRecords === "function") {
+      this.titleObserver.takeRecords()
+    }
   },
 }
 

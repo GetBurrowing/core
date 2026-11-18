@@ -268,7 +268,7 @@ defmodule Platform.GameStream.Session do
         state =
           args
           |> Map.take(
-            ~w(session_id task_id review_sha branch repo_url host_runtime_id started_by encoder
+            ~w(session_id task_id project_id review_sha branch repo_url host_runtime_id started_by encoder
                experiment_id variant_slug roster_experiment_id roster_variant_slug
                touch_experiment_id touch_variant_slug idle_timeout_s ice_servers force_relay)a
           )
@@ -1169,6 +1169,7 @@ defmodule Platform.GameStream.Session do
     attrs = %{
       id: state.session_id,
       task_id: state.task_id,
+      project_id: Map.get(state, :project_id),
       review_sha: state.review_sha,
       branch: state.branch,
       host_runtime_id: state.host_runtime_id,
@@ -1212,6 +1213,7 @@ defmodule Platform.GameStream.Session do
     %{
       session_id: state.session_id,
       task_id: state.task_id,
+      project_id: Map.get(state, :project_id),
       state: state.state,
       detail: state.detail,
       elapsed_ms: state.elapsed_ms,

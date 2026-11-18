@@ -46,10 +46,14 @@ defmodule Platform.Mobile.NativeCall do
   """
   @spec join(User.t(), term()) ::
           {:ok, join_result()}
-          | {:error, :not_found | :meeting_over | :join_not_permitted | term()}
+          | {:error, :not_found | :meeting_over | :join_not_permitted | :call_disabled | term()}
   def join(%User{} = user, meeting_id) do
     with {:ok, meeting} <- Meetings.get_meeting_for_user(user, meeting_id),
          :ok <- refuse_over(meeting),
+         # Before `ensure_started/2`: a call that is off must not flip its
+         # meeting live (task 01a1b8a5 stage 4). `join_for_user/3` refuses
+         # it as well; this keeps the refusal free of side effects.
+         :ok <- refuse_call_off(meeting),
          {:ok, meeting} <- ensure_started(meeting, user),
          {:ok, joined} <-
            Meetings.join_for_user(meeting.chat_space_id, user.id, display_name(user)) do
@@ -79,6 +83,9 @@ defmodule Platform.Mobile.NativeCall do
     do: {:error, :meeting_over}
 
   defp refuse_over(%Meeting{}), do: :ok
+
+  defp refuse_call_off(%Meeting{} = meeting),
+    do: if(Meetings.call_enabled?(meeting), do: :ok, else: {:error, :call_disabled})
 
   defp ensure_started(%Meeting{status: "scheduled"} = meeting, %User{id: user_id}) do
     Meetings.start_meeting(meeting, started_by_user_id: user_id)

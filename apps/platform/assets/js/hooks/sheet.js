@@ -92,6 +92,7 @@ const Sheet = {
   },
 
   destroyed() {
+    this._restoreFocusOnUnmount()
     if (this._unwatchKeyboard) {
       this._unwatchKeyboard()
       this._unwatchKeyboard = null
@@ -189,6 +190,24 @@ const Sheet = {
     panel.addEventListener("pointermove", this.handleSwipeMove)
     panel.addEventListener("pointerup", this.handleSwipeEnd)
     panel.addEventListener("pointercancel", this.handleSwipeCancel)
+  },
+
+  // A sheet rendered under `:if` never sees data-open flip to "false": closing
+  // it removes the node, so updated() never runs its restore and focus falls
+  // to <body> (task 01a1ecb3 stage 4, the Goals Change coach sheet). Restore
+  // here instead, but only when the origin is still in the document (a page
+  // navigation tears both down) and nothing else has taken focus by the next
+  // frame (a sheet mounted in the same patch keeps the focus it grabbed).
+  _restoreFocusOnUnmount() {
+    const target = this.previousFocus
+    this.previousFocus = null
+    if (!target || target === document.body || target.isConnected === false) return
+    requestAnimationFrame(() => {
+      const active = document.activeElement
+      if (active && active !== document.body) return
+      if (target.isConnected === false) return
+      try { target.focus() } catch (_e) { /* trigger may have unmounted */ }
+    })
   },
 
   _captureFocusInto() {

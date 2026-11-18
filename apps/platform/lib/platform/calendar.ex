@@ -103,13 +103,26 @@ defmodule Platform.Calendar do
   def list_entries(scope, from, to, opts \\ [])
 
   def list_entries(%Scope{actor: %Accounts.User{}} = scope, from, to, opts) do
+    meetings =
+      if Access.can?(scope, "calendar.read") and Access.can?(scope, "meetings.join") do
+        Platform.Meetings.list_meetings_in_range_for_user(scope.actor, from, to,
+          overlap: Keyword.get(opts, :meeting_overlap, false)
+        )
+        |> reject_cancelled_meetings(Keyword.get(opts, :cancelled_meetings, :recent))
+      else
+        []
+      end
+
+    {events, meetings} = project_linked(list_events(scope, from, to), meetings, scope)
+
     native =
       Enum.map(
-        list_events(scope, from, to),
+        events,
         &%{
           kind: :event,
           id: &1.id,
           event: &1,
+          meeting_id: &1.meeting_id,
           title: if(&1.tentative, do: "Tentative · " <> &1.title, else: &1.title),
           starts_at: &1.starts_at,
           ends_at: &1.ends_at,
@@ -118,25 +131,18 @@ defmodule Platform.Calendar do
       )
 
     meetings =
-      if Access.can?(scope, "calendar.read") and Access.can?(scope, "meetings.join") do
-        Platform.Meetings.list_meetings_in_range_for_user(scope.actor, from, to,
-          overlap: Keyword.get(opts, :meeting_overlap, false)
-        )
-        |> reject_cancelled_meetings(Keyword.get(opts, :cancelled_meetings, :recent))
-        |> Enum.map(
-          &%{
-            kind: :meeting,
-            id: &1.id,
-            meeting: &1,
-            title: &1.name,
-            starts_at: &1.scheduled_start_at,
-            ends_at: &1.scheduled_end_at,
-            all_day: false
-          }
-        )
-      else
-        []
-      end
+      Enum.map(
+        meetings,
+        &%{
+          kind: :meeting,
+          id: &1.id,
+          meeting: &1,
+          title: &1.name,
+          starts_at: &1.scheduled_start_at,
+          ends_at: &1.scheduled_end_at,
+          all_day: false
+        }
+      )
 
     Enum.sort_by(
       native ++ meetings ++ Platform.Calendar.Subscriptions.entries(scope, from, to, opts),
@@ -146,6 +152,37 @@ defmodule Platform.Calendar do
   end
 
   def list_entries(_, _, _, _), do: []
+
+  @doc """
+  Project each native-event/meeting pair linked by `calendar_events.meeting_id`
+  exactly once (task 01a1b8a5 stage 1). Every surface that lists both stores
+  (the Calendar grid, booking availability, agent access and the private
+  feed) goes through this one rule:
+
+    * the event's owner sees the native event, and the meeting is dropped;
+    * anyone else who can see the meeting sees the meeting, and the native
+      event is dropped (so an invitee sees the call, not a "Busy" copy);
+    * anyone who sees only one of the two sees that one.
+  """
+  @spec project_linked([Event.t()], [Platform.Meetings.Meeting.t()], Scope.t()) ::
+          {[Event.t()], [Platform.Meetings.Meeting.t()]}
+  def project_linked(events, meetings, %Scope{actor: %Accounts.User{id: viewer_id}}) do
+    meeting_ids = MapSet.new(meetings, & &1.id)
+
+    events =
+      Enum.reject(events, fn event ->
+        is_binary(event.meeting_id) and event.owner_id != viewer_id and
+          MapSet.member?(meeting_ids, event.meeting_id)
+      end)
+
+    owned =
+      for %{meeting_id: id, owner_id: ^viewer_id} <- events,
+          is_binary(id),
+          into: MapSet.new(),
+          do: id
+
+    {events, Enum.reject(meetings, &MapSet.member?(owned, &1.id))}
+  end
 
   # A cancelled meeting is listed for 24h after `cancelled_at` and then
   # dropped (PR #51), unless the caller passes `cancelled_meetings: :keep`.
@@ -310,6 +347,41 @@ defmodule Platform.Calendar do
     do: %{event | title: "Busy", description: nil, owner: nil, space_id: nil, project_id: nil}
 
   defp redact(event, _), do: event
+
+  @doc """
+  Cancel every still-active native event linked to `meeting_id` (task
+  01a1b8a5 stage 4). `Platform.Meetings.cancel_meeting/2` calls it in the
+  same transaction as the meeting's own status change, so a call cancelled
+  from anywhere (the Calendar details, the old Meetings detail, an agent
+  tool, the native app) never leaves its owner's calendar row active: the
+  row is stamped `cancelled_at`, its `sequence` advances like
+  `delete_event/2`'s, and each owner's Calendar is told to reload.
+
+  Returns the cancelled events. A malformed id cancels nothing.
+  """
+  @spec cancel_linked_events(binary(), DateTime.t()) :: [Event.t()]
+  def cancel_linked_events(meeting_id, now \\ DateTime.utc_now())
+
+  def cancel_linked_events(meeting_id, now) when is_binary(meeting_id) do
+    if Platform.UUID.valid?(meeting_id) do
+      {_count, events} =
+        from(e in Event, where: e.meeting_id == ^meeting_id and is_nil(e.cancelled_at))
+        |> select([e], e)
+        |> Repo.update_all(set: [cancelled_at: now, updated_at: now], inc: [sequence: 1])
+
+      events
+    else
+      []
+    end
+  end
+
+  def cancel_linked_events(_meeting_id, _now), do: []
+
+  @doc "Tell each event owner's Calendar that the event changed."
+  @spec broadcast_changed([Event.t()]) :: :ok
+  def broadcast_changed(events) when is_list(events) do
+    Enum.each(events, &broadcast({:ok, &1}))
+  end
 
   defp broadcast({:ok, event} = result) do
     Phoenix.PubSub.broadcast(

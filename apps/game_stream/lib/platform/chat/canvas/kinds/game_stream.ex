@@ -147,6 +147,7 @@ defmodule Platform.Chat.Canvas.Kinds.GameStream do
       "additionalProperties" => false,
       "properties" => %{
         "session_id" => %{"type" => "string", "description" => "Play session id."},
+        "project_id" => %{"type" => "string", "description" => "Project default-branch playtest."},
         "task_id" => %{"type" => "string", "description" => "Task whose review build is played."},
         "review_sha" => %{
           "type" => "string",
@@ -172,7 +173,7 @@ defmodule Platform.Chat.Canvas.Kinds.GameStream do
         check_sha(Map.get(props, "review_sha")),
         check_warn(Map.get(props, "latency_warn_ms"))
       ] ++
-        for {key, value} <- Map.take(props, ~w(session_id task_id branch title)),
+        for {key, value} <- Map.take(props, ~w(session_id task_id project_id branch title)),
             not is_nil(value) and not is_binary(value) do
           "#{key} must be a string"
         end
