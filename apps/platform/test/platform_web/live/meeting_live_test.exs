@@ -9412,7 +9412,7 @@ defmodule PlatformWeb.MeetingLiveTest do
       {:ok, conn: conn, user: user, meeting: meeting, space: space}
     end
 
-    test "unassigned meeting_producer leaves NOTHING in the DOM", %{
+    test "unassigned meeting_scribe leaves NOTHING in the DOM", %{
       conn: conn,
       meeting: meeting
     } do
@@ -9421,7 +9421,7 @@ defmodule PlatformWeb.MeetingLiveTest do
       # and still ship the queue's contents to a viewer who may not see
       # them. Assert on the data-role hook, which is what the contract
       # names.
-      refute Platform.Roles.agent_id_for_role("meeting_producer")
+      refute Platform.Roles.agent_id_for_role("meeting_scribe")
 
       {:ok, view, _} = live(conn, ~p"/meetings/#{meeting.slug}?tab=canvas")
       html = render_hook(view, "meeting_viewport", %{"below" => true})
@@ -9432,7 +9432,7 @@ defmodule PlatformWeb.MeetingLiveTest do
       refute html =~ "Listening for intents"
     end
 
-    test "assigned meeting_producer renders the strip", %{conn: conn, meeting: meeting} do
+    test "assigned meeting_scribe renders the strip", %{conn: conn, meeting: meeting} do
       assign_producer!()
 
       {:ok, view, _} = live(conn, ~p"/meetings/#{meeting.slug}?tab=canvas")
@@ -9494,7 +9494,7 @@ defmodule PlatformWeb.MeetingLiveTest do
       html = render_hook(view, "meeting_viewport", %{"below" => true})
       assert html =~ ~s(data-intent-id="#{row.id}")
 
-      :ok = Platform.Roles.unassign_role("meeting_producer")
+      :ok = Platform.Roles.unassign_role("meeting_scribe")
 
       html = render(view)
       refute html =~ ~s(data-role="intents-collapse")
@@ -10636,7 +10636,7 @@ defmodule PlatformWeb.MeetingLiveTest do
       conn: conn,
       meeting: meeting
     } do
-      :ok = Platform.Roles.unassign_role("meeting_producer")
+      :ok = Platform.Roles.unassign_role("meeting_scribe")
 
       {:ok, view, _} = live(conn, ~p"/meetings/#{meeting.slug}?tab=canvas")
       render_hook(view, "meeting_viewport", %{"below" => true})
@@ -10680,7 +10680,7 @@ defmodule PlatformWeb.MeetingLiveTest do
 
   describe "meeting-intent-off chip (task 01a1e5da stage 3)" do
     # The chip reads install-level state: the `meetings.intent_classify`
-    # assignee (the meeting_producer role's bundle) and the
+    # assignee (the meeting_scribe role's bundle) and the
     # `:meetings_intent_model` app env. Both env sources are saved and
     # cleared here so a developer's OLLAMA_BASE_URL cannot make the
     # "nothing configured" case pass or fail by accident.
@@ -10754,7 +10754,7 @@ defmodule PlatformWeb.MeetingLiveTest do
       conn: conn,
       meeting: meeting
     } do
-      :ok = Platform.Roles.unassign_role("meeting_producer")
+      :ok = Platform.Roles.unassign_role("meeting_scribe")
       view = mount_top_bar(conn, meeting)
 
       assert has_element?(view, "[data-role=chat-panel-toggle]")
@@ -10772,7 +10772,7 @@ defmodule PlatformWeb.MeetingLiveTest do
         status: "active"
       })
 
-    {:ok, _} = Platform.Roles.assign_role("meeting_producer", agent.id)
+    {:ok, _} = Platform.Roles.assign_role("meeting_scribe", agent.id)
     agent
   end
 

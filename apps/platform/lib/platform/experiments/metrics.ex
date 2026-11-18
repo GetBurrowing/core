@@ -145,6 +145,16 @@ defmodule Platform.Experiments.Metrics do
           "dismissed (Not now, or the Inbox row dismissed), over a variant's workspaces.",
       direction: :higher_is_better
     },
+    # Task 01a1f048: the UX super agent's north star. Settled post-ship
+    # recurrence of a finding's friction, 4 weeks after vs before.
+    "ux_friction_drop" => %{
+      module: Platform.Experiments.Metrics.UxFrictionDrop,
+      label: "UX friction drop after ship",
+      description:
+        "1 - after / before: how often a shipped finding's friction recurs in the 4 weeks " <>
+          "after its task shipped versus the 4 weeks before, over a variant's workspaces.",
+      direction: :higher_is_better
+    },
     # Task 01a1b6a1 stage 1, for the `habits.learned_defaults` surface
     # (0061-learned-defaults.md). Counts judged pre-fills of assigned users;
     # ignored pre-fills are in neither side (see the module).

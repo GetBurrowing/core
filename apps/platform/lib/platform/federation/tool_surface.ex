@@ -1493,7 +1493,7 @@ defmodule Platform.Federation.ToolSurface do
       %{
         name: "design_critique_request",
         description:
-          "Obtain the Designer role's design critique (`design.critique`, held by Saru) of one evidence canvas, synchronously. Returns the verdict to you so you can inline it into your own review request; when `review_request_id` is supplied the verdict is ALSO appended to that pending request as an item the human reads.",
+          "Obtain the Designer role's design critique (`design.critique`) of one evidence canvas. With an external (HTTP) Designer the verdict comes back to you synchronously so you can inline it into your own review request; with a native or federated Designer the critique is dispatched and `pending` is true. Either way, when `review_request_id` is supplied the verdict is appended to that pending request as an item the human reads.",
         parameters: %{
           canvas_id: %{
             type: "string",
@@ -1521,13 +1521,47 @@ defmodule Platform.Federation.ToolSurface do
           }
         },
         returns:
-          "A map with issues (a list of {severity, location, issue, suggestion} maps, possibly empty), raw (the critique text as returned), unparseable? (true when the reply carried no parseable JSON — the prose is still in raw and still lands), and review_item_id (the id of the appended review item, or null when none was appended).",
+          "A map with issues (a list of {severity, location, issue, suggestion} maps, possibly empty), raw (the critique text as returned), unparseable? (true when the reply carried no parseable JSON — the prose is still in raw and still lands), review_item_id (the id of the appended review item, or null when none was appended), and pending (true when the Designer runs natively: no verdict yet, it lands on the review request and in the task's execution space when the Designer returns it).",
         limitations:
-          "Requires `design.critique` to be assigned to an external agent — an unassigned Designer role returns a non-recoverable error rather than a critique. Critiques exactly one canvas per call. Advisory only: the verdict never disposes of a manual_approval gate, and appending an item does not resolve the request.",
+          "An unassigned Designer role returns a non-recoverable error rather than a critique. Critiques exactly one canvas per call. A pending critique arrives later, so pass `review_request_id` if you want it on your review request. Advisory only: the verdict never disposes of a manual_approval gate, and appending an item does not resolve the request.",
         when_to_use:
-          "Before creating the human review request on a UI change: it returns the verdict SYNCHRONOUSLY, so you can include Saru's issue list as a labelled item in the same review request rather than waiting on a channel post."
-      }
+          "Before creating the human review request on a UI change: with an external Designer it returns the verdict synchronously, so you can include the issue list as a labelled item in the same review request rather than waiting on a channel post."
+      },
+      design_critique_complete_tool()
     ]
+  end
+
+  # The return path for a `design.critique` job dispatched to a native or
+  # federated Designer (task 01a1eb2f). Such an assignee is sent a one-way
+  # signal, so its reply is never read; the verdict comes back through this
+  # tool and lands through the same `Critique.land_verdict/2` as the
+  # synchronous path. Where it lands is carried in the signed `critique_ref`
+  # the dispatch named, never in the caller's arguments.
+  defp design_critique_complete_tool do
+    %{
+      name: "design_critique_complete",
+      description:
+        "Return the design critique you were dispatched to write (a `design.critique` job). The verdict is appended to the review request and posted in the space the critique was requested for. A chat reply is NOT saved — this call is the only way the critique reaches the person who asked.",
+      parameters: %{
+        critique_ref: %{
+          type: "string",
+          required: true,
+          description: "The critique_ref named in the critique dispatch."
+        },
+        issues: %{
+          type: "array",
+          required: true,
+          items: %{type: "object"},
+          description:
+            "The issues, each {severity: blocker|major|minor, location, issue, suggestion}. An empty list means the canvas is sound."
+        }
+      },
+      returns:
+        "%{canvas_id, issues, review_item_id, landed: true}. `issues` is the count landed; `review_item_id` is null when the dispatch named no review request.",
+      limitations:
+        "Only the agent currently assigned `design.critique` may call it, with a critique_ref less than a week old. Errors: not_critique_assignee, invalid_critique_ref, invalid_issues.",
+      when_to_use: "When you finish a critique dispatch for a design canvas."
+    }
   end
 
   defp space_tools do
@@ -4584,6 +4618,35 @@ defmodule Platform.Federation.ToolSurface do
          offset: offset,
          next_offset: if(offset + length(page) < length(items), do: offset + length(page))
        })}
+    end
+  end
+
+  def execute("design_critique_complete", args, context) do
+    case load_agent(context) do
+      %Agent{id: agent_id} ->
+        case Platform.Responsibilities.Handlers.DesignCritique.complete_from_agent(
+               agent_id,
+               args
+             ) do
+          {:ok, response} ->
+            {:ok, response}
+
+          {:error, reason} ->
+            {:error,
+             %{
+               error: "design_critique_complete: #{reason}",
+               code: reason,
+               recoverable: reason == :invalid_issues
+             }}
+        end
+
+      _ ->
+        {:error,
+         %{
+           error: "design_critique_complete: no authenticated calling agent",
+           code: :unauthorized,
+           recoverable: false
+         }}
     end
   end
 
@@ -9932,13 +9995,11 @@ defmodule Platform.Federation.ToolSurface do
     }
   end
 
-  defp design_critique_error({:assignee_not_external, kind}) do
+  defp design_critique_error({:dispatch_not_sent, outcome}) do
     %{
-      error:
-        "The `design.critique` assignee is a #{kind} agent; a synchronous critique needs an external one.",
+      error: "The design critique could not be dispatched to the Designer (#{inspect(outcome)}).",
       recoverable: false,
-      suggestion:
-        "Point the Designer role at an external agent, or proceed without design review and say so."
+      suggestion: "Create the review request anyway and note that design review is missing."
     }
   end
 
@@ -17331,7 +17392,8 @@ defmodule Platform.Federation.ToolSurface do
            issues: Map.get(verdict, :issues, []),
            raw: Map.get(verdict, :raw),
            unparseable?: Map.get(verdict, :unparseable?, false),
-           review_item_id: Map.get(verdict, :review_item_id)
+           review_item_id: Map.get(verdict, :review_item_id),
+           pending: Map.get(verdict, :pending?, false)
          }}
 
       {:error, reason} ->

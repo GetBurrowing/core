@@ -127,9 +127,10 @@ defmodule Platform.Repo.Migrations.SeedHrProfileTemplateAndBundleTest do
     assert PromptTemplates.get_template_by_slug("memory.dreaming.v1").content ==
              dreaming_row.content
 
-    # 10 -> 11: task 01a1eaf6 stage 3 admitted `showrunner`; this file's down/0
-    # still removes no role.
-    assert Repo.aggregate(Platform.Roles.Role, :count, :key) == 11
+    # 10 -> 11: task 01a1eaf6 stage 3 admitted `showrunner`; 11 -> 10: the
+    # super agents restructure merged `meeting_producer` into the scribe.
+    # This file's down/0 still removes no role.
+    assert Repo.aggregate(Platform.Roles.Role, :count, :key) == 10
   end
 
   test "seed_defaults/0 alone does not repair a stale row — the migration is load-bearing" do

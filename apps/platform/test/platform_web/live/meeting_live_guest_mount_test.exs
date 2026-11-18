@@ -998,7 +998,7 @@ defmodule PlatformWeb.MeetingLiveGuestMountTest do
         status: "active"
       })
 
-    {:ok, _} = Platform.Roles.assign_role("meeting_producer", agent.id)
+    {:ok, _} = Platform.Roles.assign_role("meeting_scribe", agent.id)
     agent
   end
 

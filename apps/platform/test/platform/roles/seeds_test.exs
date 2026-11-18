@@ -52,25 +52,13 @@ defmodule Platform.Roles.SeedsTest do
              """
     end
 
-    test "meeting_producer is present with the expected bundle, icon, and description" do
-      # Pin the exact seed shape for the role added in task
-      # 019f2451-6728 stage 2. The bundle key `meetings.intent_classify`
-      # gets its cost_profile ("high_freq_capable") attached at the
-      # responsibility layer, not the role — see
-      # `Platform.Responsibilities.Handlers.IntentClassify.register/0`
-      # (lands in stage 3).
-      producer = Enum.find(Seeds.default_roles(), &(&1.key == "meeting_producer"))
+    test "meeting_producer is retired and its key lives in the scribe bundle" do
+      # Super agents restructure: the producer's one key moved to the
+      # scribe (`20261118200000_merge_meeting_producer_into_scribe.exs`).
+      refute Enum.find(Seeds.default_roles(), &(&1.key == "meeting_producer"))
 
-      assert producer,
-             "meeting_producer must be present in the canonical seed roster"
-
-      assert producer.name == "Meeting Producer"
-      assert producer.icon == "hero-signal"
-
-      assert producer.description ==
-               "Watches meeting transcript in real time; classifies intent and delegates to specialist agents"
-
-      assert producer.bundle == ["meetings.intent_classify"]
+      scribe = Enum.find(Seeds.default_roles(), &(&1.key == "meeting_scribe"))
+      assert "meetings.intent_classify" in scribe.bundle
     end
 
     test "each role has 1+ bundled responsibility keys" do
@@ -109,7 +97,7 @@ defmodule Platform.Roles.SeedsTest do
   end
 
   describe "seed_defaults/0" do
-    test "inserts eleven roles and forty-one bundle rows on a fresh DB" do
+    test "inserts ten roles and forty bundle rows on a fresh DB" do
       assert :ok = Seeds.seed_defaults()
 
       # 10 roles: designer, historian, meeting_producer, meeting_scribe,
@@ -117,7 +105,7 @@ defmodule Platform.Roles.SeedsTest do
       # agents_leader (task 01a0b491 stage 1), scientist (task 01a0d415
       # stage 3), janitor (task 019fa1ac-6685 stage 1), showrunner (task
       # 01a1eaf6 stage 3).
-      assert Repo.aggregate(Role, :count, :key) == 11
+      assert Repo.aggregate(Role, :count, :key) == 10
 
       # 26 bundle rows = 6 (designer) + 4 (historian) + 1 (meeting_producer)
       #                + 4 (meeting_scribe) + 4 (triage_officer)
@@ -175,24 +163,32 @@ defmodule Platform.Roles.SeedsTest do
       # `showrunner.research_brief` and `showrunner.run_sheet`. Its own role:
       # the show's prep posts into a show space and puts decisions to a named
       # person, a scope no existing role was chosen for.
+      # 41 -> 44 in task 01a1f048: `design.reflect`, `design.scout` and
+      # `design.prototype_eval` joined the EXISTING `designer` bundle; the
+      # role count is unchanged.
       # 38 -> 41 in task 01a1eaf6 stage 4: the loop's second half,
       # `showrunner.recording_prep`, `showrunner.post_show` and
       # `showrunner.retro`, joined the SAME `showrunner` bundle; the role
       # count stays at 11.
-      assert Repo.aggregate(RoleResponsibility, :count, :id) == 41
+      # 44 -> 40 in the super agents restructure: `meeting_producer` merged
+      # into `meeting_scribe` (roster 11 -> 10; its key moved, so the bundle
+      # count does not change for it) and four registration-only stubs left
+      # (`design.spec_writer`, `design.brand_check`, `tasks.unblock`,
+      # `tasks.weekly_review`).
+      assert Repo.aggregate(RoleResponsibility, :count, :id) == 40
     end
 
     test "is idempotent — calling twice does not duplicate rows" do
       assert :ok = Seeds.seed_defaults()
       assert :ok = Seeds.seed_defaults()
 
-      assert Repo.aggregate(Role, :count, :key) == 11
+      assert Repo.aggregate(Role, :count, :key) == 10
 
-      # Same 41 as the fresh-DB case above — the point of this test is
+      # Same 40 as the fresh-DB case above — the point of this test is
       # that the SECOND `seed_defaults/0` adds nothing, so the number
       # must be read off the same breakdown rather than drifting into
       # an independent literal.
-      assert Repo.aggregate(RoleResponsibility, :count, :id) == 41
+      assert Repo.aggregate(RoleResponsibility, :count, :id) == 40
     end
 
     test "each role's bundle round-trips via Platform.Roles.bundle_for/1" do

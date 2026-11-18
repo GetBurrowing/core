@@ -138,6 +138,20 @@ defmodule Platform.Responsibilities.ArchitectureContextBridgeTest do
   # twelve are stated, not fixed — the original nine plus the three
   # `design.task_direction` declares (ADR-0046 stack member 7 stage 3).
   @unresolved_slots %{
+    "budget" =>
+      "the UX super agent loop (task 01a1f048) builds this in its own gather_context/2; no ContextProviders clause",
+    "card_moves" =>
+      "the UX super agent loop (task 01a1f048) builds this in its own gather_context/2; no ContextProviders clause",
+    "card_prefix" =>
+      "the UX super agent loop (task 01a1f048) builds this in its own gather_context/2; no ContextProviders clause",
+    "friction_drop" =>
+      "the UX super agent loop (task 01a1f048) builds this in its own gather_context/2; no ContextProviders clause",
+    "job" =>
+      "the UX super agent loop (task 01a1f048) builds this in its own gather_context/2; no ContextProviders clause",
+    "prototype" =>
+      "the UX super agent loop (task 01a1f048) builds this in its own gather_context/2; no ContextProviders clause",
+    "scorecard" =>
+      "the UX super agent loop (task 01a1f048) builds this in its own gather_context/2; no ContextProviders clause",
     "experiments" =>
       "experiments.scientist assembles this itself in gather_context/1 " <>
         "(task 01a0d415 stage 5) from the experimentation tables; no " <>
@@ -210,17 +224,15 @@ defmodule Platform.Responsibilities.ArchitectureContextBridgeTest do
     "people_staleness" => "hr.* assembles this itself in Handlers.Hr.gather_context/2",
     "people_own_words" => "hr.* assembles this itself in Handlers.Hr.gather_context/2",
     "canvas_snapshot" =>
-      "design.spec_writer / design.brand_check are placeholder handlers " <>
-        "returning `missing?: true` — no runtime yet. design.critique " <>
+      "design.critique " <>
         "materialises this itself (task 019fe844) by resolving a canvas and " <>
         "rendering it through Chat.Canvas.MarkdownExporter, refusing the " <>
         "dispatch when no canvas resolves — a refusal a shared slot resolver " <>
         "has no way to express",
     "grounding_notes" =>
-      "design.spec_writer placeholder — no runtime yet. design.critique " <>
+      "design.critique " <>
         "composes this itself from the requester's note plus the trigger's " <>
         "task row",
-    "brand_guidelines" => "design.brand_check placeholder — no runtime yet",
     "task_payload" =>
       "design.task_direction materialises this itself from " <>
         "Tasks.get_task_record/1 — the pre-plan step needs the task row, " <>

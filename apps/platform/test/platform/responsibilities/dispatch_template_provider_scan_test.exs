@@ -22,21 +22,20 @@ defmodule Platform.Responsibilities.DispatchTemplateProviderScanTest do
 
   ## What passes today, and why that is not reassuring on its own
 
-  `design.spec_writer` and `design.brand_check` are still stubs. They pass
-  this scan today ONLY because no template references them: they are
-  inert-but-harmless rather than a live false promise, and fixing them was
-  deliberately left out of scope. What this scan changes is the cost of
-  referencing them — the moment any template body names either key, this
-  test fails the build, and the choice becomes "implement the handler" or
-  "do not write the instruction" rather than "ship the instruction and hope".
+  `design.spec_writer` and `design.brand_check` were stubs that passed this
+  scan only because no template referenced them. They were removed in the
+  super agents restructure. What this scan keeps is the cost of
+  referencing a stub — the moment any template body names one, this test
+  fails the build, and the choice becomes "implement the handler" or "do
+  not write the instruction" rather than "ship the instruction and hope".
 
   ## The scan is shown to bite
 
   A scan that passes because it matched nothing is the exact failure mode
   this whole ticket is about. `"the scan detonates on a stub key"` below
-  runs the same predicate against a synthetic template body naming
-  `design.spec_writer` and asserts it reports a violation. If that test
-  ever goes green-by-vacuity, so has the real one.
+  runs the same extraction and stub predicate against synthetic inputs and
+  asserts each reports what it should. If that test ever goes
+  green-by-vacuity, so has the real one.
 
   Sibling guard on a different axis: `chat_trigger_names_a_role_test.exs`
   asserts no chat trigger regex names an agent handle (naming); this one
@@ -81,17 +80,41 @@ defmodule Platform.Responsibilities.DispatchTemplateProviderScanTest do
     end
 
     test "the scan detonates on a stub key" do
-      # The proof that the assertion above can fail. `design.spec_writer`
-      # is a real registered responsibility with a real stub handler; it
-      # escapes the scan today only because no template names it.
-      synthetic = "Before the gate, obtain the design.spec_writer output for this surface."
+      # The proof that the assertion above can fail. No registered handler
+      # is a stub any more (the last two, `design.spec_writer` and
+      # `design.brand_check`, were removed), so the two halves of the scan
+      # are shown to bite separately: extraction finds a real key in a
+      # template body, and the stub predicate fires on the context shape
+      # those stubs returned.
+      synthetic = "Before the gate, obtain the design.critique output for this surface."
+      assert extract_keys(synthetic) == ["design.critique"]
 
-      keys = extract_keys(synthetic)
-      assert keys == ["design.spec_writer"]
+      stub_context = %{
+        canvas_snapshot: %{missing?: true, note: "runtime not yet implemented"}
+      }
 
-      assert Enum.filter(keys, &stub_context?/1) == ["design.spec_writer"],
-             "the stub predicate did not fire on a known stub handler — the scan " <>
+      assert marks_missing?(stub_context),
+             "the stub predicate did not fire on a stub-shaped context — the scan " <>
                "above would pass over a real regression"
+
+      refute marks_missing?(%{canvas_snapshot: %{markdown: "# Canvas"}})
+    end
+
+    test "no template names a design or architecture key that has no handler" do
+      # A removed responsibility (the two design stubs) must not linger in a
+      # dispatch template: extraction drops handler-less keys, so without
+      # this check a template naming one would pass the scan above silently.
+      unhandled =
+        PromptTemplates.default_templates()
+        |> Enum.flat_map(fn template ->
+          @key_pattern
+          |> Regex.scan(Map.get(template, :content, "") || "", capture: :all_but_first)
+          |> List.flatten()
+        end)
+        |> Enum.uniq()
+        |> Enum.filter(&(&1 in ["design.spec_writer", "design.brand_check"]))
+
+      assert unhandled == []
     end
   end
 

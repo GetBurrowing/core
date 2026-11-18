@@ -514,6 +514,8 @@ defmodule Platform.RepoLookupBoundaryTest do
      "task 01a1af00 stage 4: digest_space/1 checks Platform.UUID.valid?/1 on the agent's metadata[\"ux_digest_space_id\"] (an admin-edited string) before Chat.get_agent_participant/2, and org_scope/2 checks the trigger meta's org_id before `where: f.org_id == ^org_id`, so a malformed value is {:skipped, :no_digest_space} / no org filter, never Ecto.Query.CastError"},
     {"platform/ux/decisions.ex", :platform_uuid_guard, "-", 10, :safe_internal,
      "task 01a1af00 stage 3: every lookup in Platform.Ux.Decisions that pins an id arriving from a LiveView param (/inbox/ux/:finding_id), a click payload or a finding's citation/mockup strings goes through Platform.UUID.valid?/1 first (get_for_recipient/2, list_for_recipient/2, lock_for_recipient/2, inbox_row_stale?/1, parse_citation/1, mockup_src/1), so a malformed id is nil / not_found / dropped instead of Ecto.Query.CastError"},
+    {"platform/ux/morning_review.ex", :platform_uuid_guard, "-", 1, :safe_internal,
+     "designer morning review: config/1 checks Platform.UUID.valid?/1 on the operator-edited trigger_config[\"fix_project_id\"] string before it is used as a task's project_id, so a malformed value is nil (no task filed), never Ecto.Query.CastError"},
     # ── Lifecycle ──────────────────────────────────────────────────────
     {"platform/lifecycle/executor.ex", :get, "TaskSchema", 1, :safe_internal,
      "task 019fe1b6 stage 4 — `maybe_notify/3` loads the task to read `sponsor_user_id` before emitting a `lifecycle_step_failed` inbox row. The id is `run.task_id`, read off a `%StepRun{}` this function just loaded from `lifecycle_step_runs`, so it is a persisted column value constrained by a NOT NULL FK to `tasks`; it cannot be malformed without the FK having admitted a malformed row. Note the module deliberately calls `Repo.get/2` and NOT `Platform.Tasks.get_task/1` — that name belongs to the artifacts-summary reader and returns `{:ok, %Detail{}} | {:error, :not_found}`, a different concept that compiles fine here and fails at the field access"},
@@ -1219,6 +1221,15 @@ defmodule Platform.RepoLookupBoundaryTest do
      "agent/1, user/1 and spaces/2 guard provision/1's operator-supplied agent, escalation-user and space ids before Repo.get/Accounts.get_user/Chat.get_space (malformed = {:error, {:not_found, field}}); escalate_user_id/1 reads the operator-written trigger_config and turns a malformed value into nil"},
     {"platform/showrunner/config.ex", :platform_uuid_guard, "-", 1, :must_cast,
      "uuid/1 reads id fields out of a responsibility's operator-written `trigger_config` JSON; a malformed value becomes nil (the unconfigured path) before any lookup uses it"},
+    {"platform/responsibilities/handlers/design_prototype_eval.ex", :get, "Agent", 1,
+     :flagged_sibling_owned,
+     "assignee/0 takes the id of the %Agent{} that Roles.assignee_for/1 loads through role_assignments.agent_id or responsibility_overrides.agent_id (:binary_id FKs to agents); no params, MCP payload or URL segment reaches it"},
+    {"platform/responsibilities/handlers/design_reflect.ex", :get, "Agent", 1,
+     :flagged_sibling_owned,
+     "assignee/0 takes the id of the %Agent{} that Roles.assignee_for/1 loads through role_assignments.agent_id or responsibility_overrides.agent_id (:binary_id FKs to agents); no params, MCP payload or URL segment reaches it"},
+    {"platform/responsibilities/handlers/design_scout.ex", :get, "Agent", 1,
+     :flagged_sibling_owned,
+     "assignee/0 takes the id of the %Agent{} that Roles.assignee_for/1 loads through role_assignments.agent_id or responsibility_overrides.agent_id (:binary_id FKs to agents); no params, MCP payload or URL segment reaches it"},
     {"platform/responsibilities/handlers/showrunner_recording_prep.ex", :get, "Agent", 1,
      :flagged_sibling_owned,
      "under the responsibilities/ sibling prefix, so flagged rather than classified; the id is internal regardless: runtime_scope/1 takes ctx.agent_id, built by Showrunner.Board.context/3 from the %Agent{} that Roles.assignee_for/1 loads through role_assignments.agent_id (a :binary_id FK to agents); no params, MCP payload or URL segment reaches it"},
@@ -1233,6 +1244,9 @@ defmodule Platform.RepoLookupBoundaryTest do
   @repo_one_counts %{
     # goal/1 pins a module-attribute metric slug and status; no id from a boundary.
     "platform/designer.ex" => 1,
+    # tokens_between/3 pins agent_usage_events.agent_id to the caller's
+    # runtime agent id (ToolCall.build_context/2) or an assignee's FK id.
+    "platform/designer/loop.ex" => 1,
     # Target lookups compare string slugs and lock existing skill/prompt rows.
     "platform/instruction_packs/targets.ex" => 2,
     # Publisher lookup pins the validated manifest pack_id string; no UUID input.

@@ -61,8 +61,9 @@ defmodule Platform.Roles do
       override-aware: `responsibility_overrides` is consulted first.
     * `agent_id_for_role/1` takes a **role_key** — always undotted, from
       the closed 7-element roster in `Platform.Roles.Role.valid_keys/0`
-      (`designer`, `historian`, `meeting_scribe`, `meeting_producer`,
-      `triage_officer`, `security_guard`, `architect`). It is
+      (`designer`, `historian`, `meeting_scribe`, `triage_officer`,
+      `security_guard`, `architect`, ...). A retired key (`meeting_producer`)
+      reads as the role that absorbed it (`Role.canonical_key/1`). It is
       deliberately **not** override-aware.
 
   `agent_id_for_role/1` is the RAW ROLE ASSIGNMENT accessor;
@@ -141,7 +142,7 @@ defmodule Platform.Roles do
       :raised
   """
   @spec get_role!(String.t()) :: Role.t() | no_return()
-  def get_role!(key) when is_binary(key), do: Repo.get!(Role, key)
+  def get_role!(key) when is_binary(key), do: Repo.get!(Role, Role.canonical_key(key))
 
   @doc """
   Fetch a role by its natural key. Returns `nil` if not found — use
@@ -153,7 +154,7 @@ defmodule Platform.Roles do
       nil
   """
   @spec get_role(String.t()) :: Role.t() | nil
-  def get_role(key) when is_binary(key), do: Repo.get(Role, key)
+  def get_role(key) when is_binary(key), do: Repo.get(Role, Role.canonical_key(key))
 
   @doc """
   Return the bundle of responsibility keys for a role, in stable
@@ -168,6 +169,8 @@ defmodule Platform.Roles do
   """
   @spec bundle_for(String.t()) :: [String.t()]
   def bundle_for(role_key) when is_binary(role_key) do
+    role_key = Role.canonical_key(role_key)
+
     RoleResponsibility
     |> where([rr], rr.role_key == ^role_key)
     |> order_by([rr], asc: rr.responsibility_key)
@@ -249,9 +252,9 @@ defmodule Platform.Roles do
   PubSub topic carrying `{:role_assignment_changed, %{role_key: key,
   agent_id: id | nil}}` whenever a role is pinned or released.
 
-  Exists because the meeting-producer intents strip is DOM-absent when
-  `meeting_producer` is unassigned (AC13): without a notification, a
-  producer appointed mid-meeting would not see the panel until they
+  Exists because the meeting intents strip is DOM-absent when nobody
+  answers `meetings.intent_classify` (AC13): without a notification, a
+  classifier appointed mid-meeting would not see the panel until they
   reloaded, which for a live meeting surface is the same as never.
   """
   @spec assignments_topic() :: String.t()
@@ -586,6 +589,8 @@ defmodule Platform.Roles do
   """
   @spec agent_id_for_role(String.t()) :: binary() | nil
   def agent_id_for_role(role_key) when is_binary(role_key) do
+    role_key = Role.canonical_key(role_key)
+
     from(ra in RoleAssignment,
       where: ra.role_key == ^role_key,
       select: ra.agent_id

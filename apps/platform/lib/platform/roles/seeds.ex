@@ -1,9 +1,15 @@
 defmodule Platform.Roles.Seeds do
   @moduledoc """
-  Seeds the six platform-fixed roles + their responsibility bundles on
+  Seeds the platform-fixed roles + their responsibility bundles on
   first boot (M4 stage 4 of task `019ef65b-a361-7873-871b-3375bf60ead7`;
-  `meeting_producer` added in task `019f2451-6728` stage 2;
   `security_guard` added in task `019f3e8e-4406` stage 1).
+
+  `meeting_producer` (added in task `019f2451-6728` stage 2) was merged
+  into `meeting_scribe` in the super agents restructure: its one key,
+  `meetings.intent_classify`, now sits in the scribe's bundle. Existing
+  DBs are moved by `20261118200000_merge_meeting_producer_into_scribe.exs`,
+  which carries a producer held by a different agent over as a per-key
+  override so the classifier keeps running on the same (fast, cheap) agent.
 
   Per Decision 2 from the M4 stack — the role roster is fixed by the
   platform, not user-extensible. The closed list:
@@ -22,10 +28,9 @@ defmodule Platform.Roles.Seeds do
       in ADR-0044 stage 1, task `019f3da3`)
     * `designer` — visual design, critique, brand alignment
     * `historian` — long-term memory accretion + recall
-    * `meeting_producer` — watches meeting transcript in real time;
-      classifies intent and delegates to specialist agents
-    * `meeting_scribe` — capture, summarize, follow up after meetings
-    * `triage_officer` — task hygiene: sort, unblock, weekly rollup
+    * `meeting_scribe` — capture, summarize, follow up after meetings;
+      also classifies live meeting intent (the former `meeting_producer`)
+    * `triage_officer` — task hygiene: backlog sort and feedback intake
     * `janitor` — weekly drain of small internal chores (added in task
       `019fa1ac-6685` stage 1). Its one bundle key, `janitor.cron_drain`,
       is a Router cron responsibility. No assignment is seeded.
@@ -66,8 +71,9 @@ defmodule Platform.Roles.Seeds do
       icon: "hero-paint-brush",
       bundle: [
         "design.critique",
-        "design.spec_writer",
-        "design.brand_check",
+        # `design.spec_writer` and `design.brand_check` were registration-only
+        # stubs and were removed in the super agents restructure; existing DBs
+        # drop their rows in `20261118200100_remove_stub_responsibilities.exs`.
         # ADR-0046 stack member 7 (task 019f9b29-5ecd stage 3). Existing
         # DBs pick this up from
         # `20260726051346_seed_design_task_direction.exs`, which re-runs
@@ -87,7 +93,12 @@ defmodule Platform.Roles.Seeds do
         # equal `Handlers.UxFrictionWatch.key/0` (see the historian note
         # below). Existing DBs pick it up from
         # `20261107184211_seed_ux_friction_watch_template_and_bundle.exs`.
-        "ux.friction_watch"
+        "ux.friction_watch",
+        # Task 01a1f048: the UX super agent loop. Existing DBs pick these up
+        # from `20261118220000_seed_designer_loop_templates_and_bundle.exs`.
+        "design.reflect",
+        "design.scout",
+        "design.prototype_eval"
       ]
     },
     %{
@@ -125,17 +136,9 @@ defmodule Platform.Roles.Seeds do
       ]
     },
     %{
-      key: "meeting_producer",
-      name: "Meeting Producer",
-      description:
-        "Watches meeting transcript in real time; classifies intent and delegates to specialist agents",
-      icon: "hero-signal",
-      bundle: ["meetings.intent_classify"]
-    },
-    %{
       key: "meeting_scribe",
       name: "Meeting Scribe",
-      description: "Capture, summarize, follow up after meetings",
+      description: "Capture, summarize, follow up after meetings; classify live meeting intent",
       icon: "hero-calendar-days",
       bundle: [
         "meetings.summarize",
@@ -146,18 +149,23 @@ defmodule Platform.Roles.Seeds do
         # Mid-meeting intent key (2026-07-31). The scribe already owns
         # what a meeting leaves behind; `brief_worthy` is the same job
         # done live, one utterance at a time, instead of once at the end.
-        "meetings.brief_worthy"
+        "meetings.brief_worthy",
+        # Formerly the whole `meeting_producer` bundle (merged here in the
+        # super agents restructure). Same transcript, same job family. An
+        # install that wants the classifier on a faster agent sets a per-key
+        # override (`Platform.Roles.set_override/2`) instead of a second role.
+        "meetings.intent_classify"
       ]
     },
     %{
       key: "triage_officer",
       name: "Triage Officer",
-      description: "Task hygiene: sort, unblock, weekly rollup",
+      description: "Task hygiene: backlog sort and feedback intake",
       icon: "hero-clipboard-document-check",
       bundle: [
         "tasks.triage",
-        "tasks.unblock",
-        "tasks.weekly_review",
+        # `tasks.unblock` and `tasks.weekly_review` were registration-only
+        # stubs and were removed in the super agents restructure.
         # Mid-meeting intent key (2026-07-31) — an unanswered question
         # surfacing live is triage work before it is anybody's task.
         "meetings.open_question",
@@ -280,11 +288,8 @@ defmodule Platform.Roles.Seeds do
       `20260624013500_seed_default_roles.exs` migration: at that
       timestamp the `roles_key_check` CHECK constraint only permits the
       four original keys, so an unqualified call to `seed_defaults/0`
-      on a fresh DB would blow up trying to insert `meeting_producer`.
-      The dedicated re-seed migration
-      (`20260702200500_seed_meeting_producer_role.exs`) runs after
-      `20260702000000_add_meeting_producer_to_roles_check.exs` extends
-      the CHECK, so it calls `seed_defaults/0` unqualified.
+      on a fresh DB would blow up trying to insert a later role. Every
+      role-seeding migration pins the roster valid at its own version.
   """
   def seed_defaults(opts \\ []) do
     now = DateTime.utc_now() |> DateTime.truncate(:microsecond)

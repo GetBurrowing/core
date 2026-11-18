@@ -257,6 +257,17 @@ defmodule Platform.Responsibilities.EventTopicDeliveryTest do
     "task:planning_started" => %{
       mode: :direct_fire,
       entry_point: {Platform.Design.PreplanStep, :responsibility_key, 0}
+    },
+    # Task 01a1f048: the designer's super agent loop. `Platform.Designer.Loop`
+    # fires both from `ToolCall.invoke/4` (observe/4) when the designer
+    # finishes a job or publishes a prototype.
+    "design:job_finished" => %{
+      mode: :direct_fire,
+      entry_point: {Platform.Designer.Loop, :job_finished, 3}
+    },
+    "prototype:published" => %{
+      mode: :direct_fire,
+      entry_point: {Platform.Designer.Loop, :observe, 4}
     }
   }
 

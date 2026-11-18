@@ -1030,7 +1030,12 @@ defmodule Platform.ExtensionsTest do
     # `prototype`, enter canvas_create/patch's document schema, the kind
     # summaries and the tool schemas, so all four values move. Names and
     # bundles are unchanged. Measured locally at the stage's branch.
-    @main_tool_digest_off "1dc302b9db79557169c373ce6c445e34a052be6c0a692bded650653db79bc00e"
+    #
+    # Re-pinned by task 01a1eb2f: `design_critique_request`'s description,
+    # returns and limitations now describe the native Designer's dispatched
+    # (`pending`) critique, so both tool-definition digests move. Names,
+    # bundles, kinds and parameter schemas are unchanged. Measured locally.
+    @main_tool_digest_off "70e449d97bce3ab16ee230aaa8cbdcc2271b0740e28b4999ac00849d254a7bee"
     @main_kinds_summaries_digest_off "cdfa332e00934d0fc7ab3288d73b2506f57abde6d47848626dd090f7c948a66f"
     @main_kinds_tool_schemas_digest_off "7200834a166530d83aecfb8c4b5c0a37d23035b91da696f78dc4c4a04e092797"
     # main's lists minus exactly `play`.
@@ -1060,7 +1065,7 @@ defmodule Platform.ExtensionsTest do
     ]
     # main's lists minus exactly Play's two metric slugs and two surface keys,
     # in main's order.
-    @core_metrics ~w(cycle_time habits.prefill_accept_rate insight_acceptance_rate manual_gate_rejection_rate meeting_synthesis_resolution_rate overscoped_gate_count plan_revision_count stages_per_plan time_in_phase ux_finding_keep_rate validation_failure_rate)
+    @core_metrics ~w(cycle_time habits.prefill_accept_rate insight_acceptance_rate manual_gate_rejection_rate meeting_synthesis_resolution_rate overscoped_gate_count plan_revision_count stages_per_plan time_in_phase ux_finding_keep_rate ux_friction_drop validation_failure_rate)
     @core_surfaces ~w(dispatch.prompt mail.draft.generator planner.stage_budget chat.context_summary meetings.brief_synthesis meetings.open_question_classifier dispatch.product_docs_preamble dispatch.code_mode agents.tool_profile memory.insight_synthesis hr.profile ux.friction_detection habits.learned_defaults showrunner.run_sheet)
 
     defp canon(%_{} = s), do: canon(Map.from_struct(s))
@@ -1221,18 +1226,21 @@ defmodule Platform.ExtensionsTest do
       # Task 01a17f00 stage 2 adds authenticated completion tools. Pin these
       # explicitly while preserving the frozen byte oracle for existing tools.
       # `meeting_summary_complete` (the delegated-summary return path) is
-      # additive in the same way.
+      # additive in the same way, and so is `design_critique_complete` (the
+      # native Designer's critique return path, task 01a1eb2f).
       {completion, defs} =
         Enum.split_with(
           defs,
           &(&1.name in [
               "meeting_scribe_complete",
               "meeting_triage_file",
-              "meeting_summary_complete"
+              "meeting_summary_complete",
+              "design_critique_complete"
             ])
         )
 
       assert Enum.map(completion, &{&1.name, &1.bundle}) == [
+               {"design_critique_complete", "review"},
                {"meeting_scribe_complete", "meetings"},
                {"meeting_triage_file", "meetings"},
                {"meeting_summary_complete", "meetings"}
@@ -1263,7 +1271,7 @@ defmodule Platform.ExtensionsTest do
                digest(without_instruction_updates(legacy_kind_props(legacy)))
              ] == [
                @main_tool_digest_off,
-               "d5d9ccd62d07ce3ed4b9547862baa46df2b067d75939f01193db6b2a9a1d26e7"
+               "a18d1c3b55db53c96f0824a374607ec1ee6d54e2faa8457bb852ecb0475875b6"
              ]
     end
 

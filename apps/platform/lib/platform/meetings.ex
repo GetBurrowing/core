@@ -1212,9 +1212,9 @@ defmodule Platform.Meetings do
 
   # ── Per-meeting intent mute (task 019fbaac stage 1) ───────────────────────
   #
-  # A hold on the Meeting Producer for THIS meeting, so a human in a live
+  # A hold on the intent classifier for THIS meeting, so a human in a live
   # meeting can stop agents diving in on classified intent without
-  # unassigning the org-wide `meeting_producer` role — which is the only
+  # unassigning the org-wide classifier (formerly the `meeting_producer` role) — the only
   # switch that existed before, and which silences every meeting on the
   # platform.
   #

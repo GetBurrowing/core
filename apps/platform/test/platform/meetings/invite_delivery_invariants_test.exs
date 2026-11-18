@@ -15,7 +15,7 @@ defmodule Platform.Meetings.InviteDeliveryInvariantsTest do
   one-sided version of any of them passes against an implementation that is
   wrong in the obvious way.
 
-  ## 1. An invite cannot fail for want of a `meeting_producer`
+  ## 1. An invite cannot fail for want of a `meeting_scribe`
 
   The structural reason is that nothing in `Platform.Meetings.InviteDelivery`
   calls `Platform.Roles.assignee_for/1` or `Roles.agent_id_for_role/1` — the
@@ -262,9 +262,9 @@ defmodule Platform.Meetings.InviteDeliveryInvariantsTest do
     end)
   end
 
-  # ── 1. An invite cannot fail for want of a `meeting_producer` ─────────────
+  # ── 1. An invite cannot fail for want of a `meeting_scribe` ─────────────
 
-  describe "invariant 1: delivery does not consult the meeting_producer role" do
+  describe "invariant 1: delivery does not consult the meeting_scribe role" do
     setup do
       enable_meetings!()
       :ok
@@ -274,7 +274,7 @@ defmodule Platform.Meetings.InviteDeliveryInvariantsTest do
       # Step one: the key is real. `agent_id_for_role/1` answers nil for any
       # string at all, so asserting nil about a misspelled key would be a
       # test of nothing. `get_role/1` reads the catalogue row.
-      assert %Roles.Role{key: "meeting_producer"} = Roles.get_role("meeting_producer")
+      assert %Roles.Role{key: "meeting_scribe"} = Roles.get_role("meeting_scribe")
 
       # Step two: the resolver DISCRIMINATES. If assigning the role did not
       # move `agent_id_for_role/1` off nil, then the nil in step three would
@@ -282,12 +282,12 @@ defmodule Platform.Meetings.InviteDeliveryInvariantsTest do
       # assignment. Any agent will do here — the point is the reading, not
       # the agent.
       {:ok, %Agent{id: agent_id}} = SenderSeed.ensure!()
-      {:ok, _assignment} = Roles.assign_role("meeting_producer", agent_id)
-      assert Roles.agent_id_for_role("meeting_producer") == agent_id
+      {:ok, _assignment} = Roles.assign_role("meeting_scribe", agent_id)
+      assert Roles.agent_id_for_role("meeting_scribe") == agent_id
 
       # Step three: and now unassigned, observably.
-      assert :ok = Roles.unassign_role("meeting_producer")
-      assert Roles.agent_id_for_role("meeting_producer") == nil
+      assert :ok = Roles.unassign_role("meeting_scribe")
+      assert Roles.agent_id_for_role("meeting_scribe") == nil
 
       meeting = meeting_hosted_by("Producerless", "Ada")
       internal = create_user("Internal Invitee")
@@ -305,7 +305,7 @@ defmodule Platform.Meetings.InviteDeliveryInvariantsTest do
       # And the delivery pass did not quietly appoint anybody to make that
       # work: an implementation that self-assigned the role on demand would
       # pass everything above.
-      assert Roles.agent_id_for_role("meeting_producer") == nil
+      assert Roles.agent_id_for_role("meeting_scribe") == nil
     end
   end
 

@@ -114,8 +114,8 @@ defmodule PlatformWeb.Components.Meetings.IntentsCollapse do
 
   The toggle is only HALF the surface. `MeetingLive` also renders a
   `meeting-intent-mute-badge` in the meeting top bar, outside this
-  component, because this whole bar is gated on the `meeting_producer`
-  role being assigned and vanishes when it is not. A mute indicator that
+  component, because this whole bar is gated on the `meetings.intent_classify`
+  responsibility having an assignee and vanishes when it has none. A mute indicator that
   lived only here would be invisible to exactly the person waiting on an
   agent that a since-departed participant silenced.
 
@@ -337,7 +337,7 @@ defmodule PlatformWeb.Components.Meetings.IntentsCollapse do
 
   Caller is responsible for the role gate — this component renders
   whenever it is called, and `MeetingLive` wraps it in the
-  `meeting_producer` `:if` so an unassigned role leaves NOTHING in the
+  `meetings.intent_classify` `:if` so an unassigned classifier leaves NOTHING in the
   DOM rather than something hidden with CSS.
   """
   attr(:intents, :list, required: true)
