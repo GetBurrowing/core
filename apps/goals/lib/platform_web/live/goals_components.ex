@@ -85,6 +85,7 @@ defmodule PlatformWeb.GoalsComponents do
   def coach_cards(assigns) do
     {shown, hidden} =
       visible_coaches(assigns.coaches, assigns.selected_id, assigns.expanded?, assigns.default_id)
+
     assigns = assign(assigns, shown: shown, hidden: hidden)
 
     ~H"""
