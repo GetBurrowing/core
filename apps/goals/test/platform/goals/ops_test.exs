@@ -83,6 +83,16 @@ defmodule Platform.Goals.OpsTest do
     assert row(c.open).delivery == "sent"
   end
 
+  test "the resent new_goal prompt points at opening_message and carries no opening text", c do
+    assert {:ok, %Proposal{delivery: "sent"}} = Ops.resend_start_signal(c.open.id)
+
+    assert_received {:signal, signal}
+    assert signal.metadata.prompt =~ "goal_proposal_get's opening_message"
+    assert signal.metadata.prompt =~ "answer what they already wrote"
+    refute inspect(signal) =~ "GOAL G"
+    refute inspect(signal) =~ "theater play"
+  end
+
   test "with Goals disabled it answers goals_disabled, sends nothing and changes no row", c do
     before = proposal_json(c.open.id)
     Application.put_env(:goals, :enabled, false)
