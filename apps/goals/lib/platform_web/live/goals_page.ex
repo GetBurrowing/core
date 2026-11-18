@@ -912,6 +912,7 @@ defmodule PlatformWeb.GoalsPage do
           inputmode="decimal"
           name="value"
           autocomplete="off"
+          data-hides-tab-bar
           class={[field_class(), "min-h-11 tabular-nums"]}
         />
       </div>

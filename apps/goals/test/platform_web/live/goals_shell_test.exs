@@ -111,6 +111,22 @@ defmodule PlatformWeb.GoalsShellTest do
       assert has_element?(child, "[data-role='goal-meta']", "'s goal")
     end
 
+    # Task 01a1ecb3 stage 1: below lg the detail pane is the scroller every
+    # Goals screen ends in, so it pads its end clear of the glass rail.
+    test "the detail pane with a goal open clears the bottom rail", %{
+      conn: conn,
+      user: user,
+      org_id: org_id
+    } do
+      goal = goal!(user, org_id, %{title: "Learn Spanish"})
+
+      {:ok, view, _html} = live(login(conn, user), "/m/goals?goal=#{goal.id}")
+      child = find_live_child(view, "ext-page-goals")
+
+      assert has_element?(child, "[data-role='goals-detail-pane'].clears-tab-bar")
+      assert has_element?(child, "[data-role='goals-detail-pane'] [data-role='goal-view']")
+    end
+
     test "a viewer sees the goal without its audience", %{conn: conn, user: user, org_id: org_id} do
       owner = member!(org_id)
       goal = goal!(owner, org_id, %{title: "Ship the redesign"})

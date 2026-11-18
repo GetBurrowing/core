@@ -5147,13 +5147,17 @@ body, .font-suite {
    scroll, CSS only so no state can go stale when an element is removed while
    focused:
      1. keyboard up with a composer focused. "Keyboard up" is detected by its
-        proxy, focus on a ComposeInput textarea (chat, thread, task steering);
+        proxy, focus on a ComposeInput textarea (chat, thread, task steering),
+        or on a page text field that opts in with [data-hides-tab-bar] (an
+        extension's form fields, which are not composers and must not take
+        the ComposeInput hook; task 01a1ecb3, the Goals fields);
      2. a full-screen viewer is open ([data-fullscreen-viewer]: the image
         in-app chat viewer, the file preview, the full-screen prototype);
      3. the in-call room ([data-in-call], MeetingLive while in the call). The
         mini bar on OTHER tabs during a call does not hide it.
    Clearance drops to 0 with it, so FABs, toasts and composer padding follow. */
 :root:has([phx-hook="ComposeInput"]:focus),
+:root:has([data-hides-tab-bar]:focus),
 :root:has([data-fullscreen-viewer]),
 :root:has([data-in-call]) {
   --bottom-nav-height: 0px;
@@ -5230,6 +5234,7 @@ body, .font-suite {
 }
 
 :root:has([phx-hook="ComposeInput"]:focus) .bottom-nav,
+:root:has([data-hides-tab-bar]:focus) .bottom-nav,
 :root:has([data-fullscreen-viewer]) .bottom-nav,
 :root:has([data-in-call]) .bottom-nav {
   transform: translateY(calc(100% + var(--bottom-nav-offset)));
@@ -5258,10 +5263,11 @@ body, .font-suite {
    Self-contained: without the attribute none of this applies.
 
    Specificity: the clearance rule is (0,3,0), so it beats the phone-width
-   :root:has([data-bottom-rail]) (0,2,0) wherever it sits. The three hide
-   rules above are (0,3,0) for the composer but only (0,2,0) for the viewer
-   and the in-call room, so they would LOSE to it; they are restated here at
-   (0,4,0) and (0,5,0) to drop the clearance to 0 again. */
+   :root:has([data-bottom-rail]) (0,2,0) wherever it sits. The hide
+   rules above are (0,3,0) for the composer and the [data-hides-tab-bar]
+   field, a tie, but only (0,2,0) for the viewer and the in-call room, so they
+   would LOSE to it; all four are restated here at (0,4,0) and (0,5,0) to drop
+   the clearance to 0 again. */
 :root[data-native-tab-bar] .bottom-nav:not([data-web-tabs]) {
   display: none;
 }
@@ -5272,6 +5278,7 @@ body, .font-suite {
   }
 
   :root[data-native-tab-bar]:has([data-bottom-rail]):has([phx-hook="ComposeInput"]:focus),
+  :root[data-native-tab-bar]:has([data-bottom-rail]):has([data-hides-tab-bar]:focus),
   :root[data-native-tab-bar]:has([data-bottom-rail]):has([data-fullscreen-viewer]),
   :root[data-native-tab-bar]:has([data-bottom-rail]):has([data-in-call]) {
     --bottom-nav-height: 0px;
