@@ -531,8 +531,8 @@ defmodule Platform.RepoLookupBoundaryTest do
      "two sit behind Platform.UUID.valid?/1 on the same value in the same `with` (`get_account/2` checks org_id AND id; `fetch_account_by_id/1`, the first step of `resolve_sender/3`, checks account_id, which arrives from a draft row or an MCP/deploy payload); the third, `authorize_manage/2`, reads `id` off an `%Account{}` struct the caller already loaded through one of those guarded getters — a `mail_accounts` UUIDv7 PK; the fourth (task 01a13ba5 stage 1, `start_backfill/4`) re-reads the same struct's `id` AFTER `authorize_manage/2` passed, for a fresh eligibility check"},
     {"platform/mail.ex", :get_by, "Sender", 2, :safe_internal,
      "both keyed `account_id:` read off an already-loaded `%Account{}` struct (a `mail_accounts` PK) plus `key:`, a `:string` column that cannot raise a cast error; `fetch_sender/2` additionally requires `is_binary(key)` in its head"},
-    {"platform/mail.ex", :platform_uuid_guard, "-", 4, :safe_internal,
-     "`list_accounts/1` (org_id), `get_account/2` (org_id and id — two calls) and `fetch_account_by_id/1` (account_id): each guards a value that arrives from a LiveView param, a draft row or an MCP/deploy payload before it reaches `where:` or `Repo.get/2`, and folds a malformed one into the function's existing miss (`[]`, `nil`, `{:error, :account_not_found}`)"},
+    {"platform/mail.ex", :platform_uuid_guard, "-", 5, :safe_internal,
+     "`list_accounts/1` (org_id), `get_account/2` (org_id and id — two calls) and `fetch_account_by_id/1` (account_id): each guards a value that arrives from a LiveView param, a draft row or an MCP/deploy payload before it reaches `where:` or `Repo.get/2`, and folds a malformed one into the function's existing miss (`[]`, `nil`, `{:error, :account_not_found}`). Count 4 -> 5 with task 01a1ea5b stage 2: `list_readable_accounts/2` guards the org_id (a LiveView param) and returns `[]` for a malformed one; the viewer id is guarded inside `Platform.Mail.Ownership`"},
     {"platform/mail/deliverer.ex", :get, "Delivery", 1, :safe_internal,
      "`deliver/1`'s id is the `mail_deliveries` PK that `Dispatch.record/6` generated in-process with `Platform.Types.UUIDv7.generate/0` and committed before calling it — the send path's only caller, pinned by `single_sender_guard_test.exs`"},
     {"platform/mail/deliverer.ex", :get!, "Account", 1, :safe_internal,
@@ -545,8 +545,8 @@ defmodule Platform.RepoLookupBoundaryTest do
      "`fetch_draft/1` guards the draft id with Platform.UUID.valid?/1 in the same `with` — the id arrives from a LiveView event or an agent tool call — and a malformed one returns `{:error, :draft_not_found}`"},
     {"platform/mail/dispatch.ex", :platform_uuid_guard, "-", 1, :safe_internal,
      "`fetch_draft/1`'s guard, recorded above: `dispatch/3`'s draft_id is caller-supplied"},
-    {"platform/mail/drafts.ex", :platform_uuid_guard, "-", 12, :safe_internal,
-     "stage 5's draft writes and reads. Every id reaches this module from a boundary — the `mail_draft_create` / `mail_draft_update` MCP payload (org_id, draft_id, account_id, to_user_ids, on_behalf_of_user_id, task_id) or a LiveView `/email/drafts/:id` path segment — and each is guarded before it reaches `where:`: `get/2` (org_id and id — two calls), `org_people/1` (org_id), `agent_exists?/1` (the agent id off the caller's context), `fetch_org/1` (org_id), `fetch_draft/1` (draft_id), `check_on_behalf_of/2`, `check_task/2`, and the three batch readers `users_by_id/1`, `names_by_id/2`, `titles_by_id/1`, which drop a malformed id from the `in ^ids` list instead of raising. A malformed value becomes the function's existing miss (`nil`, `[]`, `{:error, :draft_not_found}`, a named refusal). Count 11 -> 12 with task 01a0cf21 stage 6: `system_stage_id/1` guards the `stage_id` `create_system/2` accepts from `Platform.Deploy.Email` (a `stages.id` PK off the injected deploy stage) before it is written to the draft, refusing a malformed one as `{:invalid, _}` rather than persisting it"},
+    {"platform/mail/drafts.ex", :platform_uuid_guard, "-", 15, :safe_internal,
+     "stage 5's draft writes and reads. Every id reaches this module from a boundary — the `mail_draft_create` / `mail_draft_update` MCP payload (org_id, draft_id, account_id, to_user_ids, on_behalf_of_user_id, task_id) or a LiveView `/email/drafts/:id` path segment — and each is guarded before it reaches `where:`: `get/2` (org_id and id — two calls), `org_people/1` (org_id), `agent_exists?/1` (the agent id off the caller's context), `fetch_org/1` (org_id), `fetch_draft/1` (draft_id), `check_on_behalf_of/2`, `check_task/2`, and the three batch readers `users_by_id/1`, `names_by_id/2`, `titles_by_id/1`, which drop a malformed id from the `in ^ids` list instead of raising. A malformed value becomes the function's existing miss (`nil`, `[]`, `{:error, :draft_not_found}`, a named refusal). Count 11 -> 12 with task 01a0cf21 stage 6: `system_stage_id/1` guards the `stage_id` `create_system/2` accepts from `Platform.Deploy.Email` (a `stages.id` PK off the injected deploy stage) before it is written to the draft, refusing a malformed one as `{:invalid, _}` rather than persisting it. Count 12 -> 15 with task 01a1ea5b stage 2: `get_visible/3` guards the draft id (a `/email/drafts/:id` path segment) and `visible_query/2` guards the org id and the viewer id, matching nothing for a malformed one"},
     {"platform/mail/inbound.ex", :get, "Space", 1, :safe_internal,
      "`usable_space/1` is called only with `account.inbound_space_id`, a `belongs_to` FK column on the loaded `%Account{}`; the nil case has its own clause first"},
     {"platform/mail/inbound.ex", :get!, "InboundMessage", 1, :safe_internal,
@@ -1344,8 +1344,14 @@ defmodule Platform.RepoLookupBoundaryTest do
     # Task 01a0cf21 stage 5. drafts.ex: 0 → 2 — `get/2` and `fetch_draft/1`,
     # each pinning an id behind Platform.UUID.valid?/1 in the same
     # expression (recorded in @inventory).
-    "platform/mail/drafts.ex" => 2,
-    "platform/mail/mailbox.ex" => 6,
+    # Task 01a1ea5b stage 2. drafts.ex: 2 → 3 — `get_visible/3`'s draft id
+    # is behind Platform.UUID.valid?/1 in the same `if`. mailbox.ex: 6 → 7 —
+    # the new `readable_inbound?/3`, reached only after `add_to_files/3`
+    # guards the inbound id (`raw_inbound_org_id/1` and `get_inbound/3`
+    # replace the old `inbound_org_id/1` and `get_inbound/2` one-for-one,
+    # each behind the same guard).
+    "platform/mail/drafts.ex" => 3,
+    "platform/mail/mailbox.ex" => 7,
     # Task 01a0cf21 stage 6. outbox.ex: 0 → 1 — `pending_test_pass/1`, whose
     # `stage_id` is read off a `%Delivery{}` row the Outbox just claimed and
     # delivered (a snapshot column `Dispatch.enqueue/3` wrote from the

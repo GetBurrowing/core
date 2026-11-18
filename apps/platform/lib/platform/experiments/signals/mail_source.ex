@@ -36,6 +36,16 @@ defmodule Platform.Experiments.Signals.MailSource do
   so `inserted_at` is the (wider) lower bound; a draft never matches, so the
   bound only matters for mail that arrived between creation and start.
 
+  ## Only shared mailboxes (task 01a1ea5b stage 2)
+
+  Only mail of a SHARED mailbox (`Platform.Mail.Account.owner_kind ==
+  "shared"`) is labelled: a personal or unassigned mailbox's row is never
+  read by `on_inbound/1` or `reconcile/0`. Existing signal rows are kept. A
+  signal stores no body, but its `reason` is a model-written line about the
+  mail (at most `Labeler.reason_cap/0` characters), so
+  `experiment_signals_list` returns it only to an agent granted the source
+  mailbox (`Platform.Mail.Ownership.readable_inbound_ids/2`).
+
   Rows with `ingest_source == "backfill"` (task
   01a13ba5-42a7-7000-8f2b-4c63003f3f92) are excluded. A backfilled row's
   `inserted_at` is the moment of the import, not of the mail, so without the
@@ -53,6 +63,7 @@ defmodule Platform.Experiments.Signals.MailSource do
   alias Platform.Experiments.Labeler
   alias Platform.Experiments.Signal
   alias Platform.Experiments.Signals
+  alias Platform.Mail.Account
   alias Platform.Mail.InboundMessage
   alias Platform.Repo
 
@@ -73,7 +84,11 @@ defmodule Platform.Experiments.Signals.MailSource do
         ]
   def on_inbound(inbound_id) when is_binary(inbound_id) do
     if Platform.UUID.valid?(inbound_id) do
-      case Repo.one(from(m in InboundMessage, where: m.id == ^inbound_id)) do
+      case Repo.one(
+             from(m in InboundMessage,
+               where: m.id == ^inbound_id and m.account_id in subquery(shared_accounts())
+             )
+           ) do
         nil ->
           []
 
@@ -161,7 +176,7 @@ defmodule Platform.Experiments.Signals.MailSource do
               m.to_addresses,
               ^addr
             ) and m.inserted_at >= ^experiment.inserted_at and m.ingest_source != "backfill" and
-              not exists(signalled),
+              m.account_id in subquery(shared_accounts()) and not exists(signalled),
           order_by: [asc: m.inserted_at, asc: m.id]
         )
         |> inbound_org_matches(experiment.org_id)
@@ -171,6 +186,11 @@ defmodule Platform.Experiments.Signals.MailSource do
         []
     end
   end
+
+  # Only SHARED mailboxes feed experiments (task 01a1ea5b stage 2): a
+  # personal or unassigned mailbox's mail is never handed to the labeler.
+  defp shared_accounts,
+    do: from(a in Account, where: a.owner_kind == "shared", select: a.id)
 
   # An install-wide experiment reads every org's mail; an org experiment
   # reads its own org's only.

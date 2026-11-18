@@ -92,6 +92,9 @@ defmodule Platform.Federation.ToolSurfaceMailTest do
     {:ok, _} =
       Mail.put_sender(admin, account, %{"key" => "ops", "address" => "ops@initech.test"})
 
+    # Shared with the org's people, who read it (task 01a1ea5b stage 2).
+    account = Platform.Test.MailPrivacyFixtures.share_with_org!(admin, account)
+
     {:ok, project} =
       Tasks.create_project(%{name: "Mail tool #{System.unique_integer()}", org_id: org_id})
 

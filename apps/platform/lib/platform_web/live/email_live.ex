@@ -56,6 +56,17 @@ defmodule PlatformWeb.EmailLive do
   posted to chat and nothing is broadcast on `"mail:inbound"`, and the row
   says so before the admin clicks.
 
+  ## Mailbox ownership (task 01a1ea5b stage 2)
+
+  Every list, count and deep link reads through `Platform.Mail.Mailbox` /
+  `Platform.Mail.Drafts` with the viewer, constrained in the query to the
+  accounts the viewer may read (`Platform.Mail.Ownership`). A crafted
+  `?account=` for an unreadable account lists nothing, and
+  `/email/messages/:id` or `/email/drafts/:id` for one takes the same
+  not-found path as an unknown id. The account filter lists only readable
+  accounts; the Accounts pane lists every account for an org admin
+  (settings), and only readable ones for a member.
+
   ## Inbound mail is outside text
 
   A message body renders as escaped plain text only — no HTML, no markdown,
@@ -146,6 +157,7 @@ defmodule PlatformWeb.EmailLive do
      |> assign(:confirm, nil)
      |> assign(:send_result, nil)
      |> assign(:senders, [])
+     |> assign(:readable_accounts, [])
      |> assign(:people, [])
      |> assign(:provenance, %{})
      |> assign(:editor_account, nil)
@@ -205,7 +217,21 @@ defmodule PlatformWeb.EmailLive do
     socket
     |> assign(:org_id, org_id)
     |> assign(:is_admin, Mail.can_manage_accounts?(socket.assigns.user, org_id))
-    |> assign(:accounts, Mail.list_accounts(org_id))
+    |> assign_accounts()
+  end
+
+  # `@readable_accounts` (the account filter and the switcher) are the
+  # accounts the viewer may READ (`Mail.list_readable_accounts/2`, task
+  # 01a1ea5b stage 2). `@accounts` (the Accounts pane, settings) is every
+  # account for an org admin, who gets settings rows for mailboxes they
+  # cannot read, and the readable ones for everyone else.
+  defp assign_accounts(socket) do
+    %{user: user, org_id: org_id, is_admin: admin?} = socket.assigns
+    readable = Mail.list_readable_accounts(user, org_id)
+
+    socket
+    |> assign(:readable_accounts, readable)
+    |> assign(:accounts, if(admin?, do: Mail.list_accounts(org_id), else: readable))
   end
 
   # Leaving the editor for any other screen drops its in-memory state. A
@@ -244,7 +270,7 @@ defmodule PlatformWeb.EmailLive do
   end
 
   defp apply_action(socket, :message, %{"id" => id}) do
-    org_id = Mailbox.inbound_org_id(id)
+    org_id = Mailbox.inbound_org_id(socket.assigns.user, id)
 
     socket =
       if org_id && org_id != socket.assigns.org_id &&
@@ -254,7 +280,7 @@ defmodule PlatformWeb.EmailLive do
         socket
       end
 
-    case Mailbox.get_inbound(socket.assigns.org_id, id) do
+    case Mailbox.get_inbound(socket.assigns.user, socket.assigns.org_id, id) do
       nil ->
         socket
         |> put_flash(:error, "That email is not in this org's inbox.")
@@ -325,15 +351,16 @@ defmodule PlatformWeb.EmailLive do
     socket =
       case Drafts.fetch(id) do
         {:ok, %{org_id: org_id}} when org_id != socket.assigns.org_id ->
-          if Enum.any?(socket.assigns.orgs, &(&1.id == org_id)),
-            do: assign_org(socket, %{"org" => org_id}),
-            else: socket
+          if Enum.any?(socket.assigns.orgs, &(&1.id == org_id)) and
+               Drafts.get_visible(socket.assigns.user, org_id, id),
+             do: assign_org(socket, %{"org" => org_id}),
+             else: socket
 
         _ ->
           socket
       end
 
-    case Drafts.get(socket.assigns.org_id, id) do
+    case Drafts.get_visible(socket.assigns.user, socket.assigns.org_id, id) do
       %{status: "draft"} = draft ->
         socket
         |> assign(:tab, "drafts")
@@ -364,25 +391,25 @@ defmodule PlatformWeb.EmailLive do
     org_id = socket.assigns.org_id
 
     socket
-    |> assign(:senders, Drafts.sendable_senders(org_id))
+    |> assign(:senders, Drafts.sendable_senders(socket.assigns.user, org_id))
     |> assign(:people, Drafts.org_people(org_id))
   end
 
   defp load_lists(socket) do
-    %{org_id: org_id, account_filter: account_id, tab: tab} = socket.assigns
+    %{user: user, org_id: org_id, account_filter: account_id, tab: tab} = socket.assigns
     opts = [account_id: account_id]
 
     counts = %{
-      "inbox" => Mailbox.count_inbound(org_id, opts),
-      "drafts" => Mailbox.count_drafts(org_id, opts)
+      "inbox" => Mailbox.count_inbound(user, org_id, opts),
+      "drafts" => Mailbox.count_drafts(user, org_id, opts)
     }
 
     rows =
       case tab do
-        "inbox" -> Mailbox.list_inbound(org_id, opts)
-        "drafts" -> Mailbox.list_drafts(org_id, opts)
-        "sent" -> Mailbox.list_deliveries(org_id, :sent, opts)
-        "refused" -> Mailbox.list_deliveries(org_id, :refused, opts)
+        "inbox" -> Mailbox.list_inbound(user, org_id, opts)
+        "drafts" -> Mailbox.list_drafts(user, org_id, opts)
+        "sent" -> Mailbox.list_deliveries(user, org_id, :sent, opts)
+        "refused" -> Mailbox.list_deliveries(user, org_id, :refused, opts)
       end
 
     provenance = if tab == "drafts", do: Drafts.provenance(rows), else: %{}
@@ -544,7 +571,8 @@ defmodule PlatformWeb.EmailLive do
   # refusal. It is not gated on what the UI chose to show.
   def handle_event("send", _params, socket) do
     with %{draft_id: id} when is_binary(id) <- socket.assigns.editor,
-         %{status: "draft"} = draft <- Drafts.get(socket.assigns.org_id, id) do
+         %{status: "draft"} = draft <-
+           Drafts.get_visible(socket.assigns.user, socket.assigns.org_id, id) do
       user = socket.assigns.user
 
       opts =
@@ -922,7 +950,7 @@ defmodule PlatformWeb.EmailLive do
   end
 
   defp reload_accounts(socket) do
-    socket = assign(socket, :accounts, Mail.list_accounts(socket.assigns.org_id))
+    socket = assign_accounts(socket)
 
     case socket.assigns.form_account do
       %Account{id: id} ->
@@ -945,7 +973,7 @@ defmodule PlatformWeb.EmailLive do
 
   defp new_editor(assigns) do
     from =
-      case Drafts.sendable_senders(assigns.org_id) do
+      case Drafts.sendable_senders(assigns.user, assigns.org_id) do
         [{account, sender}] -> from_value(account.id, sender.key)
         _ -> ""
       end
@@ -1177,7 +1205,7 @@ defmodule PlatformWeb.EmailLive do
   defp open_confirm(socket) do
     editor = socket.assigns.editor
 
-    case Drafts.get(socket.assigns.org_id, editor.draft_id) do
+    case Drafts.get_visible(socket.assigns.user, socket.assigns.org_id, editor.draft_id) do
       %{status: "draft"} = draft ->
         {account_id, key} = parse_from(editor.from)
 
@@ -1231,7 +1259,11 @@ defmodule PlatformWeb.EmailLive do
 
       {:error, :draft_changed} ->
         # Show the person what the draft holds now before they try again.
-        case Drafts.get(socket.assigns.org_id, socket.assigns.editor.draft_id) do
+        case Drafts.get_visible(
+               socket.assigns.user,
+               socket.assigns.org_id,
+               socket.assigns.editor.draft_id
+             ) do
           %{status: "draft"} = draft ->
             socket
             |> assign(:editor, %{

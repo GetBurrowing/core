@@ -7,8 +7,10 @@ defmodule Platform.Mail.Dispatch do
     1. `Platform.Mail.Config.enabled?/0` false → `{:error, :mail_disabled}`.
        No row, nothing sent.
     2. The actor is checked: a user must be a non-external member of the
-       draft's org (`Platform.Mail.can_use?/2`); the system may send; an agent
-       may not (agents draft, people send).
+       draft's org (`Platform.Mail.can_use?/2`) who can READ the sending
+       account (`Platform.Mail.Ownership.can_read_account?/2`, task 01a1ea5b
+       stage 2; an org admin's own Send test is the one exception); the
+       system may send; an agent may not (agents draft, people send).
     3. `(account, sender)` is resolved EXACTLY from the draft's
        `org_id + account_id + sender_key` with `Platform.Mail.resolve_sender/3`
        — never the org's first account, never a default sender.
@@ -69,6 +71,7 @@ defmodule Platform.Mail.Dispatch do
   alias Platform.Mail.Delivery
   alias Platform.Mail.Draft
   alias Platform.Mail.Internal
+  alias Platform.Mail.Ownership
   alias Platform.Mail.Sender
   alias Platform.Repo
 
@@ -107,6 +110,7 @@ defmodule Platform.Mail.Dispatch do
          :ok <- authorize(actor, draft.org_id),
          {:ok, {account, sender}} <-
            Mail.resolve_sender(draft.org_id, draft.account_id, draft.sender_key),
+         :ok <- authorize_account(actor, draft, account, opts),
          {:ok, recipients} <- expand_recipients(draft),
          {:ok, delivery} <- record(draft, account, sender, recipients, actor, opts) do
       send_recorded(delivery, draft)
@@ -250,6 +254,29 @@ defmodule Platform.Mail.Dispatch do
   defp authorize({:system, nil}, _org_id), do: :ok
   # Agents write drafts; a person (or the system, for deploys) sends them.
   defp authorize({:agent, _}, _org_id), do: {:error, :unauthorized}
+
+  # A user sends only from an account they can READ (task 01a1ea5b stage 2,
+  # `Platform.Mail.Ownership.can_read_account?/2`). The one exception is an
+  # org admin's own connection test (`Platform.Mail.send_test/3`): it passes
+  # `account_test: true`, and the draft must be that admin's
+  # `"mail_account_test"` draft, so the exception is not reachable from the
+  # editor (whose "send" passes no such option).
+  defp authorize_account({:user, id}, %Draft{} = draft, %Account{} = account, opts) do
+    cond do
+      Ownership.can_read_account?(%{id: id}, account) ->
+        :ok
+
+      Keyword.get(opts, :account_test) == true and draft.responsibility == "mail_account_test" and
+        draft.created_by_type == "user" and draft.created_by_id == id and
+          Mail.can_manage_accounts?(%{id: id}, draft.org_id) ->
+        :ok
+
+      true ->
+        {:error, :unauthorized}
+    end
+  end
+
+  defp authorize_account(_actor, _draft, _account, _opts), do: :ok
 
   defp expand_recipients(%Draft{} = draft) do
     addresses =

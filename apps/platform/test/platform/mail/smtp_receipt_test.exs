@@ -141,6 +141,8 @@ defmodule Platform.Mail.SmtpReceiptTest do
       )
 
     {:ok, _} = Mail.put_sender(admin, account, %{"key" => "ops", "address" => "ops@example.test"})
+    # Shared with the org's people, who send from it (task 01a1ea5b stage 2).
+    account = Platform.Test.MailPrivacyFixtures.share_with_org!(admin, account)
 
     %{admin: admin, account: account}
   end

@@ -88,6 +88,12 @@ defmodule PlatformWeb.EmailLiveTest do
     account
   end
 
+  defp shared_with!(admin, account, members) do
+    {:ok, shared} = Platform.Mail.Ownership.set_owner(admin, account, %{kind: "shared"})
+    for m <- members, do: {:ok, _} = Platform.Mail.Ownership.grant(admin, shared, {:user, m.id})
+    shared
+  end
+
   defp sender!(admin, account, key, address) do
     {:ok, sender} = Mail.put_sender(admin, account, %{"key" => key, "address" => address})
     sender
@@ -189,6 +195,9 @@ defmodule PlatformWeb.EmailLiveTest do
 
     account = account!(admin, org_id, "ops")
     sender!(admin, account, "ops", admin.email)
+    # A SHARED mailbox both people read (task 01a1ea5b stage 2): every
+    # account is unassigned, so readable by nobody, until it has an owner.
+    shared_with!(admin, account, [admin, member])
 
     %{
       org_id: org_id,
@@ -337,6 +346,7 @@ defmodule PlatformWeb.EmailLiveTest do
           %{imap: imap_pass}
         )
 
+      shared_with!(ctx.admin, reader, [ctx.admin])
       %{reader: reader, host: host, imap_pass: imap_pass}
     end
 
@@ -813,6 +823,93 @@ defmodule PlatformWeb.EmailLiveTest do
       })
 
       assert Repo.reload!(ctx.account).name == "ops"
+    end
+  end
+
+  # ── Mailbox ownership (task 01a1ea5b stage 2) ───────────────────────────
+
+  describe "mailbox ownership" do
+    setup ctx do
+      owner = user!("owner") |> member!(ctx.org_id, "member")
+      personal = account!(ctx.admin, ctx.org_id, "personal-#{System.unique_integer([:positive])}")
+
+      {:ok, personal} =
+        Platform.Mail.Ownership.set_owner(ctx.admin, personal, %{
+          kind: "personal",
+          owner_user_id: owner.id
+        })
+
+      row = inbound!(personal, %{subject: "SUBJ-P-#{System.unique_integer([:positive])}"})
+      %{owner: owner, personal: personal, row: row}
+    end
+
+    test "the owner's inbox lists the mail; a member's and an org admin's do not",
+         %{conn: conn} = ctx do
+      {:ok, view, html} = live(login(conn, ctx.owner), "/email")
+      assert has_element?(view, ~s([data-role="mail-inbox-row"][data-message-id="#{ctx.row.id}"]))
+      assert html =~ ctx.row.subject
+
+      for viewer <- [ctx.member, ctx.admin] do
+        {:ok, view, html} = live(login(conn, viewer), "/email")
+        refute has_element?(view, ~s([data-message-id="#{ctx.row.id}"]))
+        refute html =~ ctx.row.subject
+      end
+    end
+
+    test "a crafted ?account= for an unreadable mailbox lists nothing", %{conn: conn} = ctx do
+      {:ok, view, html} = live(login(conn, ctx.owner), "/email?account=#{ctx.personal.id}")
+      assert has_element?(view, ~s([data-message-id="#{ctx.row.id}"]))
+      assert html =~ ctx.row.subject
+
+      {:ok, view, html} = live(login(conn, ctx.member), "/email?account=#{ctx.personal.id}")
+      refute has_element?(view, ~s([data-role="mail-inbox-row"]))
+      refute html =~ ctx.row.subject
+    end
+
+    test "a deep link to an unreadable message takes the unknown-id path", %{conn: conn} = ctx do
+      {:ok, view, _} = live(login(conn, ctx.owner), "/email/messages/#{ctx.row.id}")
+      assert has_element?(view, ~s([data-role="mail-message-detail"]))
+
+      {:ok, unknown_view, _} =
+        live(login(conn, ctx.member), "/email/messages/#{Ecto.UUID.generate()}")
+
+      {:ok, view, _} = live(login(conn, ctx.member), "/email/messages/#{ctx.row.id}")
+      refute has_element?(view, ~s([data-role="mail-message-detail"]))
+      refute render(view) =~ ctx.row.subject
+      assert render(view) =~ "That email is not in this org"
+      assert render(unknown_view) =~ "That email is not in this org"
+    end
+
+    test "the account filter offers only readable mailboxes; the admin's Accounts pane lists all",
+         %{conn: conn} = ctx do
+      filter = ~s([data-role="mail-account-filter"] option[value="#{ctx.personal.id}"])
+
+      {:ok, view, _} = live(login(conn, ctx.owner), "/email")
+      assert has_element?(view, filter)
+
+      for viewer <- [ctx.member, ctx.admin] do
+        {:ok, view, _} = live(login(conn, viewer), "/email")
+        refute has_element?(view, filter)
+      end
+
+      card = ~s([data-role="mail-account-card"][data-account-id="#{ctx.personal.id}"])
+      {:ok, view, _} = live(login(conn, ctx.admin), "/email/accounts")
+      assert has_element?(view, card)
+      {:ok, view, _} = live(login(conn, ctx.member), "/email/accounts")
+      refute has_element?(view, card)
+    end
+
+    test "Add to files is refused for a crafted event on an unreadable message",
+         %{conn: conn} = ctx do
+      {:ok, project} =
+        Tasks.create_project(%{
+          name: "Own #{System.unique_integer([:positive])}",
+          org_id: ctx.org_id
+        })
+
+      {:ok, view, _} = live(login(conn, ctx.member), "/email/messages/#{ctx.row.id}")
+      render_hook(view, "add_to_files", %{"project_id" => project.id})
+      assert is_nil(Repo.reload!(ctx.row).file_id)
     end
   end
 end

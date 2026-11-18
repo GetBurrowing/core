@@ -69,7 +69,8 @@ defmodule Platform.Deploy.EmailTest do
       )
 
     {:ok, account} = Mail.create_account(admin, org_id, attrs, %{smtp: "#{name}-password"})
-    account
+    # Shared with the org's people, who draft on it (task 01a1ea5b stage 2).
+    Platform.Test.MailPrivacyFixtures.share_with_org!(admin, account)
   end
 
   defp sender!(admin, account, key, address, display_name) do

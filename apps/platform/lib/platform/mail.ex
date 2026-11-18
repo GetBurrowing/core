@@ -91,6 +91,33 @@ defmodule Platform.Mail do
   end
 
   @doc """
+  The non-archived accounts of `org_id` that `user` may READ
+  (`Platform.Mail.Ownership.readable_account_ids/2`), by name, with senders
+  preloaded (task 01a1ea5b stage 2). The Email switcher and account filter
+  use this; `list_accounts/1` stays the admin and settings read. Constrained
+  in the query, so an unreadable account never leaves the database.
+  """
+  @spec list_readable_accounts(any(), binary()) :: [Account.t()]
+  def list_readable_accounts(user, org_id) when is_binary(org_id) do
+    if Platform.UUID.valid?(org_id),
+      do: readable_accounts(user, org_id),
+      else: []
+  end
+
+  def list_readable_accounts(_user, _org_id), do: []
+
+  defp readable_accounts(user, org_id) do
+    readable = Platform.Mail.Ownership.readable_account_ids_query(user, org_id)
+
+    from(a in Account,
+      where: a.org_id == ^org_id and is_nil(a.archived_at) and a.id in subquery(readable),
+      order_by: [asc: a.name],
+      preload: [senders: ^from(s in Sender, order_by: [asc: s.key])]
+    )
+    |> Repo.all()
+  end
+
+  @doc """
   The account `id` IF it belongs to `org_id` (archived or not), else `nil`.
   An account of another org is `nil` here, never returned.
   """
@@ -579,7 +606,10 @@ defmodule Platform.Mail do
         |> Repo.insert()
 
       result =
-        Platform.Mail.Dispatch.dispatch(draft.id, actor, responsibility: "mail_account_test")
+        Platform.Mail.Dispatch.dispatch(draft.id, actor,
+          responsibility: "mail_account_test",
+          account_test: true
+        )
 
       case result do
         {:ok, _delivery} ->

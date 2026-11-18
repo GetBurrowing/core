@@ -27,6 +27,12 @@ config :platform, Platform.Mail.Inbound,
   initial_delay_ms: 1_000,
   client: Platform.Mail.Imap.WireClient
 
+# Access restriction providers (task 01a1ea5b stage 2): modules whose
+# `restricted_space_ids(scope, ids)` is merged into
+# `Platform.Access.restricted_space_ids/2`, so Access never names them.
+# `Platform.Mail.Ownership` gates mail-bound spaces on mailbox ownership.
+config :platform, Platform.Access, restriction_providers: [Platform.Mail.Ownership]
+
 # Responsibilities Registry boot flag (ADR-0041 M1 stage 4) — default
 # on. Disabled in config/test.exs so DataCase-sandboxed tests own their
 # own per-case instance.

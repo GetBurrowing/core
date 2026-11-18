@@ -55,23 +55,28 @@ defmodule Platform.Access.AgentWake do
 
   @doc """
   The ids among `agent_ids` the owner-or-agent decision refuses for
-  `permission` on `resource`, as a `MapSet`. With no grant reachable from
-  any of them this is ONE query and an empty set.
+  `permission` on `resource`, as a `MapSet`, plus every agent a restriction
+  provider refuses (task 01a1ea5b stage 2; one query per agent when
+  `resource` names a space). With no grant reachable from any of them the
+  grant part is ONE query and an empty set.
   """
   @spec denied([binary()], String.t(), term()) :: MapSet.t(binary())
   def denied(agent_ids, permission, resource) when is_list(agent_ids) and is_binary(permission) do
     ids = agent_ids |> Enum.filter(&valid_id?/1) |> Enum.uniq()
 
-    if ids == [] or not any_grants?(ids) do
-      MapSet.new()
-    else
-      runtimes = runtimes_by_agent(ids)
+    granted =
+      if ids == [] or not any_grants?(ids) do
+        MapSet.new()
+      else
+        runtimes = runtimes_by_agent(ids)
 
-      for id <- ids,
-          check(id, Map.get(runtimes, id), permission, resource) != :ok,
-          into: MapSet.new(),
-          do: id
-    end
+        for id <- ids,
+            check(id, Map.get(runtimes, id), permission, resource) != :ok,
+            into: MapSet.new(),
+            do: id
+      end
+
+    MapSet.union(granted, provider_refused(ids, permission, resource))
   end
 
   @doc """
@@ -86,10 +91,25 @@ defmodule Platform.Access.AgentWake do
 
   def check_agent(agent_id, runtime, permission, resource)
       when is_binary(agent_id) and is_binary(permission) do
-    if valid_id?(agent_id) and any_grants?([agent_id]),
-      do: check(agent_id, runtime, permission, resource),
-      else: :ok
+    cond do
+      not valid_id?(agent_id) -> :ok
+      provider_refused?(agent_id, permission, resource) -> {:error, :denied}
+      any_grants?([agent_id]) -> check(agent_id, runtime, permission, resource)
+      true -> :ok
+    end
   end
+
+  # A restriction provider (a mail-bound space whose mailbox the agent is not
+  # granted, task 01a1ea5b stage 2) refuses the wake whatever grants exist,
+  # so an ungranted participant is never handed the space's context. Asked
+  # of the AGENT only: the runtime owner reading a mailbox grants its agents
+  # nothing. One query per agent for a space resource; none for a task.
+  defp provider_refused(ids, permission, resource) do
+    for id <- ids, provider_refused?(id, permission, resource), into: MapSet.new(), do: id
+  end
+
+  defp provider_refused?(agent_id, permission, resource),
+    do: Access.provider_refuses?(%Scope{actor: {:agent, agent_id}}, permission, resource)
 
   # ── the decision: two Access.check/3 calls ───────────────────────────
 

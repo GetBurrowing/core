@@ -1,7 +1,8 @@
 defmodule Platform.Mail.Ownership do
   @moduledoc """
   The ONE decision point for who may read a mail account (task 01a1ea5b
-  stage 1, Email privacy).
+  stage 1, Email privacy), and the gate every surface that can show mail
+  asks (stage 2, "Gated surfaces" below).
 
   ## Kinds
 
@@ -50,6 +51,87 @@ defmodule Platform.Mail.Ownership do
   a shared-to-personal flip leaves no member row that a later flip back would
   revive.
 
+  ## Gated surfaces (stage 2)
+
+  Ownership is enforced in the query of every Mail read: `Platform.Mail.Mailbox`
+  (inbox, sent, refused, drafts, deep links, Add to files),
+  `Platform.Mail.Drafts` (visibility and editing), `Platform.Mail.Dispatch`
+  (a sender must read the account) and `Platform.Mail.list_readable_accounts/2`.
+
+  Mail also lands in chat (each inbound post) and in Files (Add to files).
+  Those are gated through two seams:
+
+    * `restricted_space_ids/2`, a RESTRICTION PROVIDER of `Platform.Access`
+      (`config :platform, Platform.Access, restriction_providers:`). Access
+      never names Mail; it merges a provider's ids into
+      `Platform.Access.restricted_space_ids/2`, which feeds `can?/3`,
+      `within?/4`, `check/3` and `restriction_ids/3` / `Platform.Access.Query`.
+      A mail-bound space is gated as a WHOLE: its name stays listed (as a
+      restricted row), nothing is deleted, nobody is removed, and joining it
+      grants nothing.
+    * `mail_file_ids_unreadable_by/2` / `unreadable_mail_file_ids_query/1`,
+      for every file read.
+
+  ## Consumers of chat messages (git grep at stage 2 base 4f81547b6)
+
+  `git grep -l "Chat.Message\|chat_messages\|list_messages\|search_messages"
+  -- lib` names 62 files. The ones that put message TEXT in front of a
+  person or an agent, each honouring the gate, with the test that pins it
+  (`test/platform_web/live/mail_privacy_surfaces_test.exs` unless noted):
+
+    * ChatLive opening a space (`internal_read_denied?/2` → `Access.within?/4`,
+      `restricted_space_denied?/2`): "opening the inbound space".
+    * Chat list excerpts (`PlatformWeb.ChatLive.ChatListData` via
+      `@restricted_channel_ids`): "the chat list excerpt".
+    * Chat search (`PlatformWeb.ChatLive.SearchHooks`, re-asked every search):
+      "chat search in an open space".
+    * Mobile API message routes (`Platform.Mobile.AppEntities.authorize_space/2`
+      → `Access.check/3`; `AppMessagesController`, `AppApiController`):
+      "the mobile API's space authorization".
+    * Inbox rows for a message (`Platform.Inbox.emit/1` → `Access.check/3`):
+      "an inbox row for a mail post".
+    * Meeting synthesis citations (`Platform.Meetings.Synthesis.Visibility`,
+      `:message`, `:canvas`, `:mail`): "meeting synthesis citations".
+    * Agent tools `space_get_messages`, `space_search_messages`,
+      `space_get_context` (`assert_agent_in_space/2` → `Access.can?/3`) and
+      `space_list`: "space_get_messages, space_search_messages,
+      space_get_context", "space_list marks the inbound space restricted".
+    * Waking an agent (`Platform.Access.AgentWake`: `@`-mention summon,
+      `Platform.Chat.AttentionRouter`, `PhaseRuntime`), so an ungranted
+      participant is never handed the space's context: "waking an agent".
+    * `memory_search` message hits (`Platform.Org.Wiki.Search`,
+      `drop_provider_restricted/3` on both lexical and semantic paths):
+      "memory_search message hits". The Org Memory pane searches as a person
+      (`agent: nil`), which gets no message hit at all: "the Org Memory pane".
+    * The Historian / activity digest and the friction watch
+      (`Platform.Chat.digest_eligible_messages_query/1`, which excludes every
+      mail-bound space): "the Historian / activity digest".
+    * Federation peer relay (`Platform.Federation.Peers.Relay.relayable?/1`
+      never relays an `email_inbound` post): "a federation peer relay".
+    * Canvas reads in a mail-bound space (`Platform.Chat.CanvasAccess`,
+      `Access.Query` via `restriction_ids/3`):
+      `test/platform/access/restriction_providers_test.exs`.
+
+  The rest read a message only inside a space the reader was already
+  admitted to (reply, quote, thread, edit, reaction and version hooks,
+  `Platform.Chat.ContextSummary`, `ReplyContext`, `ThreadActivity`), write
+  messages (`Chat.post_message`, `Messages.Edit`, `MentionBackfill`, deploy
+  and orchestration notices, onboarding, showrunner), or read metadata only
+  (`Platform.Inbox.mention_authors/1` on rows already reachable,
+  `Platform.Mobile.AppPeople` activity timestamps,
+  `Platform.Memory.Insights.Grounding` existence checks,
+  `Platform.Habits.LearnedAttention` on a person's own message,
+  `Platform.Sharing.Friction` on an agent's question,
+  `Platform.Responsibilities.Router`, which never fires on an
+  `email_inbound` post).
+
+  Files: FilesLive list, open and semantic search, `Platform.Files.Browser`
+  (recents, by type, search, one project, a direct fetch, stars), the
+  download route `/files/blob/:id`, and the agent tools `file_list`,
+  `file_get_text`, `file_get_metadata`, `file_search`. `memory_search`
+  never returns a `document` hit (`Platform.Org.Wiki.Search.semantic_corpus/1`
+  refuses the tag; tool_surface_files_test.exs holds it).
+
   ## Deleting a principal
 
   `principal_id` has no FK (it names a user or an agent). DB triggers
@@ -63,7 +145,8 @@ defmodule Platform.Mail.Ownership do
   alias Platform.Accounts.User
   alias Platform.Agents.Agent
   alias Platform.Audit
-  alias Platform.Mail.{Account, AccountGrant}
+  alias Platform.Chat.Message
+  alias Platform.Mail.{Account, AccountGrant, InboundMessage}
   alias Platform.Repo
   alias Platform.Tenancy
   alias Platform.Tenancy.OrgMembership
@@ -84,6 +167,19 @@ defmodule Platform.Mail.Ownership do
     case readable_query(user, org_id) do
       nil -> []
       query -> Repo.all(select(query, [a], a.id))
+    end
+  end
+
+  @doc """
+  `readable_account_ids/2` as a query selecting account ids, for a read to
+  constrain IN ITS QUERY (`account_id in subquery(...)`). Matches nothing
+  when `user` or `org_id` is not a valid id.
+  """
+  @spec readable_account_ids_query(any(), any()) :: Ecto.Query.t()
+  def readable_account_ids_query(user, org_id) do
+    case readable_query(user, org_id) do
+      nil -> from(a in Account, where: false, select: a.id)
+      query -> select(query, [a], a.id)
     end
   end
 
@@ -135,11 +231,132 @@ defmodule Platform.Mail.Ownership do
 
   def can_manage_access?(_user, _account), do: false
 
-  @doc "The grant rows on `account`, oldest first (for the Access panel)."
-  @spec list_grants(Account.t()) :: [AccountGrant.t()]
-  def list_grants(%Account{id: id}) do
-    from(g in AccountGrant, where: g.account_id == ^id, order_by: [asc: g.inserted_at])
+  @doc """
+  The grant rows on `account`, oldest first (for the Access panel), as
+  `actor`. `{:error, :unauthorized}` unless `can_manage_access?/2`: who can
+  read a personal mailbox is itself private, so a non-owner member and an
+  org admin of a personal mailbox are refused.
+  """
+  @spec list_grants(any(), Account.t() | any()) ::
+          {:ok, [AccountGrant.t()]} | {:error, :unauthorized}
+  def list_grants(actor, %Account{} = account) do
+    with %Account{} = current <- fresh(account) || {:error, :unauthorized},
+         :ok <- authorize_manage(actor, current) do
+      {:ok,
+       from(g in AccountGrant, where: g.account_id == ^current.id, order_by: [asc: g.inserted_at])
+       |> Repo.all()}
+    end
+  end
+
+  def list_grants(_actor, _account), do: {:error, :unauthorized}
+
+  # ── Gated surfaces (stage 2) ────────────────────────────────────────────
+
+  @doc """
+  Restriction provider for `Platform.Access` (`config :platform,
+  Platform.Access, restriction_providers:`): the MAIL-BOUND spaces among
+  `ids` (or all of them, for `:all`) that `scope`'s actor may not read.
+
+  A space is mail-bound when it is any account's `inbound_space_id`
+  (archived accounts included) or holds a chat message referenced by
+  `mail_inbound_messages.chat_message_id` (so moving `inbound_space_id`
+  later releases no old post). It is restricted unless the actor can read
+  EVERY account bound to it: a user by `readable_account_ids/2`'s rule, an
+  agent runtime by a grant on a non-unassigned account. Any other actor (a
+  meeting invitee, a role preview, an empty Scope) reads no mailbox, so
+  every mail-bound space is restricted for it. `:system` never reaches
+  here (`Platform.Access` short-circuits it).
+
+  ONE query whatever `ids` is: the union of the two binding clauses, each
+  constrained to accounts the actor cannot read.
+  """
+  @spec restricted_space_ids(Platform.Access.Scope.t() | any(), [binary()] | :all) :: [binary()]
+  def restricted_space_ids(_scope, []), do: []
+
+  def restricted_space_ids(scope, ids) do
+    readable = readable_ids_query(principal(scope))
+
+    by_inbound =
+      from(a in Account,
+        where: not is_nil(a.inbound_space_id) and a.id not in subquery(readable),
+        select: a.inbound_space_id
+      )
+
+    by_post =
+      from(i in InboundMessage,
+        join: m in Message,
+        on: m.id == i.chat_message_id,
+        where: i.account_id not in subquery(readable),
+        select: m.space_id
+      )
+
+    {by_inbound, by_post} =
+      case ids do
+        :all ->
+          {by_inbound, by_post}
+
+        ids when is_list(ids) ->
+          ids = Enum.filter(ids, &uuid?/1)
+
+          {where(by_inbound, [a], a.inbound_space_id in ^ids),
+           where(by_post, [_i, m], m.space_id in ^ids)}
+      end
+
+    by_inbound |> union(^by_post) |> Repo.all()
+  end
+
+  @doc """
+  The ids among `inbound_ids` (`mail_inbound_messages`) whose account
+  `principal` may read, as a MapSet. Same principals as
+  `mail_file_ids_unreadable_by/2`. One query.
+  """
+  @spec readable_inbound_ids(any(), [binary()]) :: MapSet.t()
+  def readable_inbound_ids(_principal, []), do: MapSet.new()
+
+  def readable_inbound_ids(principal, inbound_ids) when is_list(inbound_ids) do
+    ids = Enum.filter(inbound_ids, &uuid?/1)
+    readable = readable_ids_query(principal(principal))
+
+    from(i in InboundMessage,
+      where: i.id in ^ids and i.account_id in subquery(readable),
+      select: i.id
+    )
     |> Repo.all()
+    |> MapSet.new()
+  end
+
+  @doc """
+  The file ids among `file_ids` that mail was added to (`mail_inbound_messages.file_id`)
+  and that `principal` may not read, as a MapSet. `principal` is a user
+  (`%{id: _}` or `{:user, id}`), `{:agent, id}`, or a `%Platform.Access.Scope{}`
+  (its actor). Any other value reads no mailbox. One query.
+  """
+  @spec mail_file_ids_unreadable_by(any(), [binary()]) :: MapSet.t()
+  def mail_file_ids_unreadable_by(_principal, []), do: MapSet.new()
+
+  def mail_file_ids_unreadable_by(principal, file_ids) when is_list(file_ids) do
+    ids = Enum.filter(file_ids, &uuid?/1)
+
+    principal
+    |> unreadable_mail_file_ids_query()
+    |> where([i], i.file_id in ^ids)
+    |> Repo.all()
+    |> MapSet.new()
+  end
+
+  @doc """
+  The query form of `mail_file_ids_unreadable_by/2`: selects every mail-derived
+  file id `principal` may not read, for a file listing to exclude IN ITS
+  QUERY (`file.id not in subquery(...)`).
+  """
+  @spec unreadable_mail_file_ids_query(any()) :: Ecto.Query.t()
+  def unreadable_mail_file_ids_query(principal) do
+    readable = readable_ids_query(principal(principal))
+
+    from(i in InboundMessage,
+      where: not is_nil(i.file_id) and i.account_id not in subquery(readable),
+      select: i.file_id
+    )
   end
 
   # ── Writes ──────────────────────────────────────────────────────────────
@@ -261,30 +478,71 @@ defmodule Platform.Mail.Ownership do
   # Each `where` is one rule; see the moduledoc.
   defp readable_query(%{id: user_id}, org_id) do
     if uuid?(user_id) and uuid?(org_id) do
-      member =
-        from(m in OrgMembership,
-          where: m.user_id == ^user_id and m.org_id == ^org_id and m.external == false
-        )
-
-      user_grant =
-        from(g in AccountGrant,
-          where:
-            g.account_id == parent_as(:account).id and g.principal_type == "user" and
-              g.principal_id == ^user_id
-        )
-
-      from(a in Account,
-        as: :account,
-        where: a.org_id == ^org_id,
-        where: exists(subquery(member)),
-        where:
-          (a.owner_kind == "personal" and a.owner_user_id == ^user_id) or
-            (a.owner_kind == "shared" and exists(subquery(user_grant)))
-      )
+      user_id
+      |> user_readable_query()
+      |> where([a], a.org_id == ^org_id)
     end
   end
 
   defp readable_query(_user, _org_id), do: nil
+
+  # Every account (any org) `user_id` reads: the membership is correlated on
+  # the account's own org.
+  defp user_readable_query(user_id) do
+    member =
+      from(m in OrgMembership,
+        where:
+          m.user_id == ^user_id and m.org_id == parent_as(:account).org_id and
+            m.external == false
+      )
+
+    user_grant =
+      from(g in AccountGrant,
+        where:
+          g.account_id == parent_as(:account).id and g.principal_type == "user" and
+            g.principal_id == ^user_id
+      )
+
+    from(a in Account,
+      as: :account,
+      where: exists(subquery(member)),
+      where:
+        (a.owner_kind == "personal" and a.owner_user_id == ^user_id) or
+          (a.owner_kind == "shared" and exists(subquery(user_grant)))
+    )
+  end
+
+  # The ids of every account (any org) a principal reads, as a query.
+  defp readable_ids_query({:user, user_id}),
+    do: user_id |> user_readable_query() |> select([a], a.id)
+
+  defp readable_ids_query({:agent, agent_id}) do
+    from(a in Account,
+      join: g in AccountGrant,
+      on: g.account_id == a.id,
+      where: a.owner_kind != "unassigned",
+      where: g.principal_type == "agent" and g.principal_id == ^agent_id,
+      select: a.id
+    )
+  end
+
+  defp readable_ids_query(:nobody), do: from(a in Account, where: false, select: a.id)
+
+  # Who a Scope, a user or a tagged principal is, for the gated surfaces.
+  defp principal(%Platform.Access.Scope{actor: actor}), do: principal(actor)
+
+  defp principal(%Platform.Agents.AgentRuntime{agent_id: id}),
+    do: if(uuid?(id), do: {:agent, id}, else: :nobody)
+
+  defp principal(%Agent{id: id}), do: principal({:agent, id})
+
+  defp principal({type, id}) when type in [:user, :agent],
+    do: if(uuid?(id), do: {type, id}, else: :nobody)
+
+  defp principal(%{id: id}) when is_binary(id),
+    do: if(uuid?(id), do: {:user, id}, else: :nobody)
+
+  defp principal(_), do: :nobody
 
   defp manager?(%{id: user_id} = user, %Account{} = account) when is_binary(user_id) do
     case account.owner_kind do

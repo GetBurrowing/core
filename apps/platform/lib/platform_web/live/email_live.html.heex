@@ -32,7 +32,7 @@
         >
           <option value="" selected={is_nil(@account_filter)}>All accounts</option>
           <option
-            :for={account <- @accounts}
+            :for={account <- @readable_accounts}
             value={account.id}
             selected={account.id == @account_filter}
           >

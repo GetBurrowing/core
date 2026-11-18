@@ -241,7 +241,10 @@ defmodule PlatformWeb.ChatLiveFirstFrameBackfillTest do
   # `Meetings.call_disabled_for_space?/1` exists-query to the join (the
   # `:space_call_off?` assign), on top of main's own growth since 2026-10-27.
   # Measured 117 on the merged tree.
-  @message_window_query_budget 12
+  # 12 -> 13 with task 01a1ea5b stage 2: opening a space asks the Access
+  # restriction-provider hook (mail-bound spaces) once. Still under N, so a
+  # return to one COUNT per message (+12) trips it.
+  @message_window_query_budget 13
   @join_query_budget 117
 
   test "(f) the synchronous join stays inside its query budget", %{conn: conn, space: space} do

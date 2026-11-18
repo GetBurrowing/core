@@ -8346,16 +8346,23 @@ defmodule Platform.Federation.ToolSurface do
       limit = Map.get(args, "limit") |> normalize_limit(50, 200)
       content_type = Map.get(args, "content_type")
 
+      exclude = mail_file_exclude(context)
+
       files =
         Platform.Files.list_files_for_project(project.id,
           limit: limit,
-          content_type: content_type
+          content_type: content_type,
+          exclude: exclude
         )
 
       # Task 01a04a7a stage 2: `total` is counted in the database over the
       # same filters (shared query builder in `Platform.Files`); `count`
       # keeps meaning the page length. No offset, so the page starts at 0.
-      total = Platform.Files.count_files_for_project(project.id, content_type: content_type)
+      total =
+        Platform.Files.count_files_for_project(project.id,
+          content_type: content_type,
+          exclude: exclude
+        )
 
       {:ok,
        ResultBound.paged(:files, Enum.map(files, &file_summary/1), total, 0, %{
@@ -8513,7 +8520,8 @@ defmodule Platform.Federation.ToolSurface do
     with {:ok, file_id} <- require_string(args, "file_id", "file_get_metadata"),
          %Platform.Files.File{} = file <- Platform.Files.get_file(file_id),
          {:ok, project} <- fetch_project_for_files(file.project_id, "file_get_metadata"),
-         :ok <- authorize_file_access(context, project) do
+         :ok <- authorize_file_access(context, project),
+         :ok <- authorize_mail_file(context, file) do
       {:ok, file_metadata(file)}
     else
       nil ->
@@ -8550,6 +8558,7 @@ defmodule Platform.Federation.ToolSurface do
             results
             |> Enum.map(&format_file_hit(&1, project.id))
             |> Enum.reject(&is_nil/1)
+            |> drop_unreadable_mail_hits(context)
 
           {:ok,
            %{
@@ -13110,6 +13119,7 @@ defmodule Platform.Federation.ToolSurface do
          file when not is_nil(file) <- Platform.Files.get_file(file_id),
          {:ok, project} <- fetch_project_for_files(file.project_id, "file_get_text"),
          :ok <- authorize_file_access(context, project),
+         :ok <- authorize_mail_file(context, file),
          :ok <- ensure_content_readable_by_agents(file),
          text_row when not is_nil(text_row) <- Platform.Files.fetch_extracted_text(file.id) do
       page = Map.get(args, "page")
@@ -13195,6 +13205,7 @@ defmodule Platform.Federation.ToolSurface do
          %Platform.Files.File{} = file <- Platform.Files.get_file(file_id),
          {:ok, project} <- fetch_project_for_files(file.project_id, "file_get_text"),
          :ok <- authorize_file_access(context, project),
+         :ok <- authorize_mail_file(context, file),
          :ok <- ensure_content_readable_by_agents(file),
          :ok <- check_inline_file_read_size(file.byte_size),
          {:ok, bytes} <- read_file_bytes(file) do
@@ -14698,6 +14709,35 @@ defmodule Platform.Federation.ToolSurface do
   # cached extracted text via `Platform.Files.fetch_extracted_text/1` —
   # the same store `file_get_text` reads from, so callers see consistent
   # bodies between the two surfaces.
+  # A file mail was added to is readable only by an agent granted that mail's
+  # account (task 01a1ea5b stage 2, `Platform.Mail.Ownership`). A denied file
+  # is `:access_denied`, which every file tool reports as not-found.
+  defp mail_file_principal(context), do: {:agent, Map.get(context, :agent_id)}
+
+  defp mail_file_exclude(context),
+    do: Platform.Mail.Ownership.unreadable_mail_file_ids_query(mail_file_principal(context))
+
+  defp authorize_mail_file(context, %Platform.Files.File{id: id}) do
+    if MapSet.member?(
+         Platform.Mail.Ownership.mail_file_ids_unreadable_by(mail_file_principal(context), [id]),
+         id
+       ),
+       do: {:error, :access_denied},
+       else: :ok
+  end
+
+  # Memory hits come from the index, not the database, so they can only be
+  # filtered after the search.
+  defp drop_unreadable_mail_hits(hits, context) do
+    unreadable =
+      Platform.Mail.Ownership.mail_file_ids_unreadable_by(
+        mail_file_principal(context),
+        Enum.map(hits, & &1.file_id)
+      )
+
+    Enum.reject(hits, &MapSet.member?(unreadable, &1.file_id))
+  end
+
   defp format_file_hit(memory_result, project_id) do
     entry_id =
       Map.get(memory_result, :entry_id) || Map.get(memory_result, "entry_id")

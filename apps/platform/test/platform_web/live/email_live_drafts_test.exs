@@ -136,6 +136,12 @@ defmodule PlatformWeb.EmailLiveDraftsTest do
     {:ok, _} =
       Mail.put_sender(admin, account, %{"key" => "ops", "address" => "ops@initech.test"})
 
+    # A SHARED mailbox both people read (task 01a1ea5b stage 2).
+    {:ok, _} = Platform.Mail.Ownership.set_owner(admin, account, %{kind: "shared"})
+
+    for u <- [admin, member],
+        do: {:ok, _} = Platform.Mail.Ownership.grant(admin, account, {:user, u.id})
+
     {:ok, project} =
       Tasks.create_project(%{
         name: "Drafts #{System.unique_integer([:positive])}",
@@ -508,6 +514,29 @@ defmodule PlatformWeb.EmailLiveDraftsTest do
 
       refute has_element?(view, ~s([data-role="mail-draft-editor"]))
       refute render(view) =~ "theirs"
+    end
+  end
+
+  # ── Draft visibility (task 01a1ea5b stage 2) ────────────────────────────
+
+  describe "draft visibility" do
+    test "a draft on a mailbox the viewer cannot read opens as an unknown draft",
+         %{conn: conn} = ctx do
+      outsider = user!("outsider") |> member!(ctx.org_id, "member")
+      draft = agent_draft!(ctx)
+
+      {:ok, view, _} = live(login(conn, ctx.member), "/email/drafts/#{draft.id}")
+      assert has_element?(view, ~s([data-role="mail-draft-editor"]))
+
+      {:ok, unknown, _} = live(login(conn, outsider), "/email/drafts/#{Ecto.UUID.generate()}")
+      {:ok, view, _} = live(login(conn, outsider), "/email/drafts/#{draft.id}")
+      refute has_element?(view, ~s([data-role="mail-draft-editor"]))
+      refute render(view) =~ "Weekly digest"
+      assert render(view) =~ "That draft is not in this org."
+      assert render(unknown) =~ "That draft is not in this org."
+
+      {:ok, view, _} = live(login(conn, outsider), "/email?tab=drafts")
+      refute render(view) =~ "Weekly digest"
     end
   end
 end

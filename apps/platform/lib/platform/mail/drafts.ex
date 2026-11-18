@@ -8,10 +8,25 @@ defmodule Platform.Mail.Drafts do
   `Platform.Mail.Dispatch.dispatch/3`, which refuses an agent actor: agents
   draft, people send.
 
+  ## Who may see and write (task 01a1ea5b stage 2)
+
+  A draft is VISIBLE (`visible_query/2`, `get_visible/3`) to:
+
+    * a draft WITH an account: the people who can read that account
+      (`Platform.Mail.Ownership.readable_account_ids_query/2`), plus its
+      `on_behalf_of_user_id`;
+    * a draft WITHOUT an account: its creator (a user) and its
+      `on_behalf_of_user_id` only.
+
+  An unassigned account is read by nobody, so its drafts are visible only
+  to their `on_behalf_of_user_id`.
+
   ## Who may write
 
-    * `{:user, id}` / `%User{}` — any non-external member of the draft's org
-      (`Platform.Mail.can_use?/2`), on any open draft of that org.
+    * `{:user, id}` / `%User{}` — a non-external member of the draft's org
+      (`Platform.Mail.can_use?/2`) who can SEE the draft (the rule above).
+      A user may name only an account they can read; naming another is
+      `:account_not_found`, the same answer as an unknown account.
     * `{:agent, id}` — the `mail_draft_create` / `mail_draft_update` MCP
       tools. The tenant pin (a tenant-pinned agent may only write into its
       own org) is checked by the tool surface with the same rule the files
@@ -46,6 +61,7 @@ defmodule Platform.Mail.Drafts do
   alias Platform.Mail.Account
   alias Platform.Mail.Draft
   alias Platform.Mail.Internal
+  alias Platform.Mail.Ownership
   alias Platform.Repo
   alias Platform.Tasks.Project
   alias Platform.Tasks.Task
@@ -87,7 +103,8 @@ defmodule Platform.Mail.Drafts do
     with {:ok, actor} <- normalize_actor(actor),
          {:ok, org_id} <- fetch_org(org_id),
          :ok <- authorize_create(actor, org_id),
-         {:ok, changes} <- validate(org_id, %{}, normalize(attrs)) do
+         {:ok, changes} <- validate(org_id, %{}, normalize(attrs)),
+         :ok <- user_account_readable(actor, org_id, changes) do
       {type, id} = actor
 
       %Draft{}
@@ -163,7 +180,8 @@ defmodule Platform.Mail.Drafts do
          {:ok, draft} <- fetch_draft(draft_id),
          :ok <- authorize_edit(actor, draft),
          :ok <- editable(draft),
-         {:ok, changes} <- validate(draft.org_id, draft, normalize(attrs)) do
+         {:ok, changes} <- validate(draft.org_id, draft, normalize(attrs)),
+         :ok <- user_account_readable(actor, draft.org_id, changes) do
       draft |> Draft.changeset(changes) |> Repo.update()
     end
   end
@@ -194,6 +212,49 @@ defmodule Platform.Mail.Drafts do
   def get(_, _), do: nil
 
   @doc """
+  The draft `id` IF it belongs to `org_id` and `viewer` may see it (see the
+  moduledoc), else `nil`: a draft the viewer may not see is indistinguishable
+  from an unknown one.
+  """
+  @spec get_visible(any(), binary(), binary()) :: Draft.t() | nil
+  def get_visible(viewer, org_id, id) when is_binary(org_id) and is_binary(id) do
+    if Platform.UUID.valid?(id) do
+      viewer |> visible_query(org_id) |> where([d], d.id == ^id) |> Repo.one()
+    end
+  end
+
+  def get_visible(_, _, _), do: nil
+
+  @doc """
+  The drafts of `org_id` that `viewer` may see (any status), as a query, for
+  a read to constrain IN ITS QUERY. Matches nothing for an invalid viewer
+  or org id.
+  """
+  @spec visible_query(any(), any()) :: Ecto.Query.t()
+  def visible_query(viewer, org_id) do
+    viewer_id = viewer_id(viewer)
+
+    if Platform.UUID.valid?(org_id) and Platform.UUID.valid?(viewer_id) do
+      readable = Ownership.readable_account_ids_query(%{id: viewer_id}, org_id)
+
+      from(d in Draft,
+        where: d.org_id == ^org_id,
+        where:
+          (not is_nil(d.account_id) and d.account_id in subquery(readable)) or
+            d.on_behalf_of_user_id == ^viewer_id or
+            (is_nil(d.account_id) and d.created_by_type == "user" and
+               d.created_by_id == ^viewer_id)
+      )
+    else
+      from(d in Draft, where: false)
+    end
+  end
+
+  defp viewer_id(%{id: id}) when is_binary(id), do: id
+  defp viewer_id({:user, id}) when is_binary(id), do: id
+  defp viewer_id(_), do: nil
+
+  @doc """
   The draft `id` in any org, or `nil`. For the agent tool, which checks the
   caller's tenant pin against the returned row's `org_id`.
   """
@@ -201,13 +262,14 @@ defmodule Platform.Mail.Drafts do
   def fetch(id), do: fetch_draft(id)
 
   @doc """
-  `{account, sender}` pairs a draft of `org_id` may be sent from: every
-  sender of every non-archived account with Send on, by account name then
+  `{account, sender}` pairs `viewer` may send a draft of `org_id` from:
+  every sender of every non-archived account with Send on that `viewer` can
+  read (`Platform.Mail.list_readable_accounts/2`), by account name then
   sender key.
   """
-  @spec sendable_senders(binary()) :: [{Account.t(), Platform.Mail.Sender.t()}]
-  def sendable_senders(org_id) do
-    for account <- Mail.list_accounts(org_id),
+  @spec sendable_senders(any(), binary()) :: [{Account.t(), Platform.Mail.Sender.t()}]
+  def sendable_senders(viewer, org_id) do
+    for account <- Mail.list_readable_accounts(viewer, org_id),
         account.send_enabled,
         sender <- account.senders,
         do: {account, sender}
@@ -331,8 +393,12 @@ defmodule Platform.Mail.Drafts do
     if agent_exists?(id), do: :ok, else: {:error, :unauthorized}
   end
 
-  defp authorize_edit({:user, id}, %Draft{org_id: org_id}) do
-    if Mail.can_use?(%{id: id}, org_id), do: :ok, else: {:error, :unauthorized}
+  # A user edits a draft they can SEE (moduledoc), as a member of its org.
+  defp authorize_edit({:user, id}, %Draft{id: draft_id, org_id: org_id}) do
+    if Mail.can_use?(%{id: id}, org_id) and
+         {:user, id} |> visible_query(org_id) |> where([d], d.id == ^draft_id) |> Repo.exists?(),
+       do: :ok,
+       else: {:error, :unauthorized}
   end
 
   defp authorize_edit({:agent, id}, %Draft{created_by_type: "agent", created_by_id: id}) do
@@ -340,6 +406,18 @@ defmodule Platform.Mail.Drafts do
   end
 
   defp authorize_edit({:agent, _id}, %Draft{}), do: {:error, :unauthorized}
+
+  # A user may put a draft only on an account they can read. Agents are
+  # stage 3's (`mail_draft_create`), and the system writes through
+  # `create_system/3`.
+  defp user_account_readable({:user, id}, org_id, %{account_id: account_id})
+       when is_binary(account_id) do
+    if Ownership.can_read_account?(%{id: id}, %Account{id: account_id, org_id: org_id}),
+      do: :ok,
+      else: {:error, :account_not_found}
+  end
+
+  defp user_account_readable(_actor, _org_id, _changes), do: :ok
 
   defp agent_exists?(id) do
     Platform.UUID.valid?(id) and
