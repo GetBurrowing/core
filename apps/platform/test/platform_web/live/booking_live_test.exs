@@ -5,6 +5,8 @@ defmodule PlatformWeb.BookingLiveTest do
   alias Platform.Calendar.BookingLinks
   alias Platform.Access.Scope
 
+  doctest PlatformWeb.PublicBookingLive
+
   setup %{conn: conn} do
     Platform.Calendar.BookingRateLimit.reset()
     n = System.unique_integer([:positive])
@@ -849,5 +851,303 @@ defmodule PlatformWeb.BookingLiveTest do
       {:ok, view, _} = live(as(ctx.nathan), "/calendar/booking?cohost=#{host.id}")
       refute has_element?(view, "[data-role=booking-cohost-invite]")
     end
+  end
+
+  describe "shared links on the public page (task 01a1eff0-6880 stage 4)" do
+    alias Platform.Calendar.BookingHosts
+
+    setup do
+      n = System.unique_integer([:positive])
+      org = Platform.TenancyFixtures.tenant_org_id("booking_shared_public_#{n}")
+      ryan = host_user!("Ryan Milvenan", org)
+      jordan = host_user!("Jordan Coombs", org)
+      nathan = host_user!("Nathan Quill", org)
+      date = Date.add(Date.utc_today(), 7)
+
+      {:ok, link} =
+        BookingLinks.create(hosts_scope(ryan), %{
+          title: "Intro call",
+          time_zone: "Etc/UTC",
+          duration_minutes: 30,
+          start_date: date,
+          end_date: Date.add(date, 7),
+          windows: [%{"weekday" => Date.day_of_week(date), "start" => "09:00", "end" => "12:00"}]
+        })
+
+      {:ok, host} = BookingHosts.invite(hosts_scope(ryan), link.id, jordan.id)
+      {:ok, _} = BookingHosts.accept(hosts_scope(jordan), host.id)
+      %{ryan: ryan, jordan: jordan, nathan: nathan, link: link, date: date}
+    end
+
+    defp to_month(view, date) do
+      if date.month == Date.utc_today().month,
+        do: :ok,
+        else: render_click(view, "month", %{"direction" => "next"})
+    end
+
+    defp busy!(user, from, to, title) do
+      {:ok, _} =
+        Calendar.create_event(hosts_scope(user), %{title: title, starts_at: from, ends_at: to})
+    end
+
+    defp add_accepted!(ctx, user) do
+      {:ok, host} = BookingHosts.invite(hosts_scope(ctx.ryan), ctx.link.id, user.id)
+      {:ok, _} = BookingHosts.accept(hosts_scope(user), host.id)
+    end
+
+    test "two hosts: one host row under the title, Ryan & Jordan, with the org", ctx do
+      {:ok, view, html} = live(build_conn(), "/book/#{ctx.link.token}")
+      assert has_element?(view, ".cal-guest-host h1", "Intro call")
+      assert has_element?(view, ".cal-guest-host h1 + [data-role=booking-host-row]")
+      assert has_element?(view, "[data-role=booking-host-row] .truncate", "Ryan & Jordan")
+      assert has_element?(view, "[data-role=booking-host-row] .cal-guest-avatar.ring-base-100")
+
+      assert length(
+               Floki.find(
+                 Floki.parse_document!(html),
+                 "[data-role=booking-host-row] .cal-guest-avatar"
+               )
+             ) == 2
+
+      # The single-owner avatar and name line are not rendered beside it.
+      refute has_element?(view, ".cal-guest-host > .cal-guest-avatar")
+      refute has_element?(view, ".cal-guest-host > .cal-guest-who")
+
+      assert has_element?(
+               view,
+               ".cal-hint",
+               "Busy time on everyone's calendars is already taken out."
+             )
+    end
+
+    test "three hosts read Ryan, Jordan & 1 other", ctx do
+      add_accepted!(ctx, ctx.nathan)
+      {:ok, view, _} = live(build_conn(), "/book/#{ctx.link.token}")
+      assert has_element?(view, "[data-role=booking-host-row]", "Ryan, Jordan & 1 other")
+      refute has_element?(view, "[data-role=booking-host-row]", "Nathan")
+    end
+
+    test "the Book button names the time and the hosts; the notes label asks both", ctx do
+      {:ok, view, _} = live(build_conn(), "/book/#{ctx.link.token}")
+      to_month(view, ctx.date)
+      pick(view, ctx.date)
+      {:ok, [slot | _]} = BookingLinks.slots(ctx.link.token, ctx.date)
+      choose(view, slot)
+
+      assert has_element?(
+               view,
+               "#public-booking-form button[type=submit][aria-label='Book 09:00 with Ryan & Jordan']"
+             )
+
+      assert has_element?(
+               view,
+               "#public-booking-form button .shrink-0.whitespace-nowrap",
+               "Book 09:00"
+             )
+
+      assert has_element?(
+               view,
+               "#public-booking-form button .min-w-0.truncate",
+               "with Ryan & Jordan"
+             )
+
+      refute has_element?(view, "#public-booking-form button", "Confirm booking")
+      assert has_element?(view, ".cal-field", "Anything Ryan & Jordan should know?")
+    end
+
+    test "a month with no shared free time shows the everyone empty state, never a busy name",
+         ctx do
+      from = DateTime.new!(ctx.date, ~T[00:00:00])
+      busy!(ctx.jordan, from, DateTime.add(from, 9 * 86_400, :second), "Offsite")
+      {:ok, view, _} = live(build_conn(), "/book/#{ctx.link.token}")
+      to_month(view, ctx.date)
+
+      assert has_element?(
+               view,
+               "[data-role=booking-empty]",
+               "No times when everyone is free in this range."
+             )
+
+      refute render(view) =~ ~r/Jordan is busy|Ryan is busy/
+    end
+
+    test "a month with an open day shows no empty state", ctx do
+      {:ok, view, _} = live(build_conn(), "/book/#{ctx.link.token}")
+      to_month(view, ctx.date)
+      refute has_element?(view, "[data-role=booking-empty]")
+    end
+
+    test "a pending co-host closes the link with no host name and no title", ctx do
+      {:ok, _} = BookingHosts.invite(hosts_scope(ctx.ryan), ctx.link.id, ctx.nathan.id)
+      {:ok, view, html} = live(build_conn(), "/book/#{ctx.link.token}")
+
+      assert has_element?(
+               view,
+               ".cal-guest-card-empty [role=alert]",
+               "This link isn't taking bookings right now."
+             )
+
+      for word <- ["Nathan", "Jordan", "Ryan", "Intro call", "Availability cannot be confirmed"],
+          do: refute(html =~ word)
+
+      refute has_element?(view, "[data-role=booking-host-row]")
+    end
+
+    test "the confirmation lists every host and the .ics names them", ctx do
+      add_accepted!(ctx, ctx.nathan)
+      {:ok, view, _} = live(build_conn(), "/book/#{ctx.link.token}")
+      to_month(view, ctx.date)
+      pick(view, ctx.date)
+      {:ok, [slot | _]} = BookingLinks.slots(ctx.link.token, ctx.date)
+      choose(view, slot)
+      view |> form("#public-booking-form", guest: %{"name" => "Guest"}) |> render_submit()
+
+      assert has_element?(
+               view,
+               ".cal-guest-done p",
+               "Booked with Ryan Milvenan, Jordan Coombs and Nathan Quill"
+             )
+
+      assert has_element?(
+               view,
+               ".cal-guest-done",
+               "Ryan, Jordan and Nathan have it on their calendars."
+             )
+
+      [href] =
+        view
+        |> render()
+        |> Floki.parse_document!()
+        |> Floki.attribute("a[download='booking.ics']", "href")
+
+      assert URI.decode(href) =~ "SUMMARY:Intro call with Ryan\\, Jordan & 1 other"
+    end
+
+    test "two-host confirmation: Booked with Ryan Milvenan and Jordan Coombs", ctx do
+      {:ok, view, _} = live(build_conn(), "/book/#{ctx.link.token}")
+      to_month(view, ctx.date)
+      pick(view, ctx.date)
+      {:ok, [slot | _]} = BookingLinks.slots(ctx.link.token, ctx.date)
+      choose(view, slot)
+      view |> form("#public-booking-form", guest: %{"name" => "Guest"}) |> render_submit()
+
+      assert has_element?(
+               view,
+               ".cal-guest-done p",
+               "Booked with Ryan Milvenan and Jordan Coombs"
+             )
+
+      assert has_element?(view, ".cal-guest-done", "Ryan and Jordan have it on their calendars.")
+    end
+
+    test "no attribution: with Jordan busy, neither the HTML nor any diff names whose time it is",
+         ctx do
+      at = DateTime.new!(ctx.date, ~T[09:00:00])
+      busy!(ctx.jordan, at, DateTime.add(at, 3600, :second), "Jordan dentist appointment")
+
+      busy!(
+        ctx.ryan,
+        DateTime.add(at, 7200, :second),
+        DateTime.add(at, 9000, :second),
+        "Ryan quarterly review"
+      )
+
+      secrets = [
+        ctx.jordan.email,
+        ctx.jordan.id,
+        ctx.ryan.email,
+        ctx.ryan.id,
+        "dentist",
+        "quarterly"
+      ]
+
+      hint = "Busy time on everyone's calendars is already taken out."
+
+      # Every leak found in `text`, as a list, so a failure names it.
+      leaks = fn text ->
+        # The hint as written and as HTML-escaped (a LiveView render
+        # escapes the apostrophe).
+        text = String.replace(text, [hint, String.replace(hint, "'", "&#39;")], "")
+        words = Regex.scan(~r/.{0,40}(?:busy|blocked).{0,40}/is, text) |> List.flatten()
+        Enum.filter(secrets, &String.contains?(text, &1)) ++ words
+      end
+
+      dead = build_conn() |> get("/book/#{ctx.link.token}") |> html_response(200)
+      assert dead =~ hint
+      assert [] == leaks.(dead)
+
+      {:ok, view, html} = live(build_conn(), "/book/#{ctx.link.token}")
+      assert [] == leaks.(html)
+      :erlang.trace(view.pid, true, [:send])
+
+      to_month(view, ctx.date)
+      pick(view, ctx.date)
+      {:ok, slots} = BookingLinks.slots(ctx.link.token, ctx.date)
+
+      assert Enum.map(slots, &(&1.starts_at |> DateTime.to_time() |> Time.truncate(:second))) == [
+               ~T[10:00:00],
+               ~T[10:30:00],
+               ~T[11:30:00]
+             ]
+
+      refute has_element?(view, ".cal-guest-slot", "09:00")
+      picked = render(view)
+      assert [] == leaks.(picked)
+
+      # Slot buttons carry only phx-value-start; no data-* on them at all.
+      for button <- Floki.find(Floki.parse_document!(picked), ".cal-guest-slot"),
+          {name, _} <- elem(button, 1),
+          do: refute(String.starts_with?(name, "data-"), "slot button carries #{name}")
+
+      choose(view, hd(slots))
+      assert [] == leaks.(render(view))
+      view |> form("#public-booking-form", guest: %{"name" => "Guest"}) |> render_submit()
+      assert has_element?(view, ".cal-guest-done")
+      assert [] == leaks.(render(view))
+      :erlang.trace(view.pid, false, [:send])
+
+      # Every push and reply the LiveView sent its client after mount.
+      diffs =
+        view.pid
+        |> collect_sends([])
+        |> Enum.filter(
+          &(match?(%Phoenix.Socket.Message{}, &1) or match?(%Phoenix.Socket.Reply{}, &1))
+        )
+
+      assert Enum.any?(diffs, &(inspect(&1, limit: :infinity) =~ "Booked with")),
+             "the trace caught no diff: the check below would be vacuous"
+
+      for diff <- diffs,
+          do: assert([] == leaks.(inspect(diff, limit: :infinity, printable_limit: :infinity)))
+    end
+
+    defp collect_sends(pid, acc) do
+      receive do
+        {:trace, ^pid, :send, msg, _to} -> collect_sends(pid, [msg | acc])
+      after
+        200 -> Enum.reverse(acc)
+      end
+    end
+  end
+
+  test "a single-owner page keeps its one-host copy", %{conn: conn, link: link} do
+    {:ok, view, html} = live(conn, "/book/#{link.token}")
+    assert has_element?(view, ".cal-guest-host > .cal-guest-avatar", "B")
+    assert has_element?(view, ".cal-guest-host > .cal-guest-who", "Booking owner")
+    assert html =~ "Busy time on Booking’s calendars is already taken out."
+    refute html =~ "everyone"
+    refute has_element?(view, "[data-role=booking-host-row]")
+
+    if link.start_date.month == Date.utc_today().month,
+      do: :ok,
+      else: render_click(view, "month", %{"direction" => "next"})
+
+    refute has_element?(view, "[data-role=booking-empty]")
+    pick(view, link.start_date)
+    {:ok, [slot | _]} = BookingLinks.slots(link.token, link.start_date)
+    choose(view, slot)
+    assert has_element?(view, "#public-booking-form button[type=submit]", "Confirm booking")
+    assert has_element?(view, ".cal-field", "Anything Booking should know?")
+    refute has_element?(view, "#public-booking-form button[aria-label]")
   end
 end

@@ -15,15 +15,20 @@ defmodule PlatformWeb.PublicBookingLive do
   alias Platform.Calendar.{BookingLinks, BookingRateLimit}
 
   @unavailable "Availability cannot be confirmed right now. Try again later or contact the organizer."
+  # Shared links (task 01a1eff0-6880 stage 4): a co-host who is pending,
+  # declined, left or not ready closes the whole link. The copy names no
+  # host and no title, so a guest cannot tell who is holding it up.
+  @not_offered "This link isn't taking bookings right now."
 
   def mount(%{"token" => token}, _, socket) do
     peer = get_connect_info(socket, :peer_data)
     ip = if peer, do: peer.address, else: :http
 
-    {policy, zone} =
+    {policy, zone, closed} =
       case BookingLinks.public_policy(token) do
-        {:ok, policy} -> {policy, policy.time_zone}
-        _ -> {nil, "Etc/UTC"}
+        {:ok, policy} -> {policy, policy.time_zone, nil}
+        {:error, :hosts_not_ready} -> {nil, "Etc/UTC", @not_offered}
+        _ -> {nil, "Etc/UTC", @unavailable}
       end
 
     today = DateTime.utc_now() |> DateTime.shift_zone!(zone) |> DateTime.to_date()
@@ -45,7 +50,7 @@ defmodule PlatformWeb.PublicBookingLive do
        step: :pick,
        guest: %{"name" => "", "email" => "", "notes" => ""},
        errors: %{},
-       error: if(policy, do: nil, else: @unavailable),
+       error: if(policy, do: nil, else: closed),
        receipt: nil,
        key: new_key()
      )
@@ -190,6 +195,7 @@ defmodule PlatformWeb.PublicBookingLive do
          {:ok, open} <- BookingLinks.open_days(socket.assigns.token, socket.assigns.month) do
       assign(socket, open: open, error: nil)
     else
+      {:error, :hosts_not_ready} -> assign(socket, open: %{}, error: @not_offered)
       _ -> assign(socket, open: %{}, error: @unavailable)
     end
   end
@@ -201,6 +207,7 @@ defmodule PlatformWeb.PublicBookingLive do
          {:ok, slots} <- BookingLinks.slots(socket.assigns.token, socket.assigns.day) do
       assign(socket, slots: slots)
     else
+      {:error, :hosts_not_ready} -> assign(socket, slots: [], error: @not_offered)
       _ -> assign(socket, slots: [], error: @unavailable)
     end
   end
@@ -220,6 +227,46 @@ defmodule PlatformWeb.PublicBookingLive do
 
   defp first_name(nil), do: "the organizer"
   defp first_name(name), do: name |> String.split() |> List.first() || name
+
+  @doc """
+  The shared link's host row label, first names, owner first (task
+  01a1eff0-6880 stage 4).
+
+      iex> PlatformWeb.PublicBookingLive.host_label(["Ryan Milvenan", "Jordan Coombs"])
+      "Ryan & Jordan"
+      iex> PlatformWeb.PublicBookingLive.host_label(["Ryan M", "Jordan C", "Nathan Q"])
+      "Ryan, Jordan & 1 other"
+      iex> PlatformWeb.PublicBookingLive.host_label(["Ryan M", "Jordan C", "Nathan Q", "Ada L"])
+      "Ryan, Jordan & 2 others"
+  """
+  def host_label([a, b]), do: "#{first_name(a)} & #{first_name(b)}"
+
+  def host_label([a, b | rest]) do
+    others = if length(rest) == 1, do: "1 other", else: "#{length(rest)} others"
+    "#{first_name(a)}, #{first_name(b)} & #{others}"
+  end
+
+  def host_label([a]), do: first_name(a)
+  def host_label(_), do: first_name(nil)
+
+  @doc """
+  `A and B`, `A, B and C`: every host, for the confirmation lines.
+
+      iex> PlatformWeb.PublicBookingLive.and_join(["Ryan Milvenan", "Jordan Coombs", "Nathan Quill"])
+      "Ryan Milvenan, Jordan Coombs and Nathan Quill"
+  """
+  def and_join([one]), do: one
+
+  def and_join(names) when is_list(names) and names != [] do
+    {init, [last]} = Enum.split(names, -1)
+    Enum.join(init, ", ") <> " and " <> last
+  end
+
+  def and_join(_), do: ""
+
+  # No open day from today on in the visible month (shared links only).
+  defp no_open_day?(open, today),
+    do: not Enum.any?(open, fn {day, n} -> n > 0 and Date.compare(day, today) != :lt end)
 
   defp initial(nil), do: "?"
   defp initial(name), do: name |> String.first() |> String.upcase()
@@ -242,7 +289,7 @@ defmodule PlatformWeb.PublicBookingLive do
           "DTSTAMP:#{stamp.(DateTime.utc_now())}",
           "DTSTART:#{stamp.(receipt.starts_at)}",
           "DTEND:#{stamp.(receipt.ends_at)}",
-          "SUMMARY:#{ics_text("#{policy.title} with #{policy.owner_name}")}",
+          "SUMMARY:#{ics_text("#{policy.title} with #{ics_with(policy)}")}",
           "END:VEVENT",
           "END:VCALENDAR"
         ],
@@ -251,6 +298,14 @@ defmodule PlatformWeb.PublicBookingLive do
 
     "data:text/calendar;charset=utf-8," <> URI.encode(body, &URI.char_unreserved?/1)
   end
+
+  # The done screen's subline: unchanged for one owner; every host's full
+  # name on a shared link.
+  defp done_with(%{shared: true, host_names: names}), do: "Booked with " <> and_join(names)
+  defp done_with(policy), do: "#{policy.title} with #{policy.owner_name}"
+
+  defp ics_with(%{shared: true, host_names: names}), do: host_label(names)
+  defp ics_with(policy), do: policy.owner_name
 
   defp ics_text(text), do: String.replace(text, ~r/[\\;,]/, &("\\" <> &1))
 
@@ -270,7 +325,7 @@ defmodule PlatformWeb.PublicBookingLive do
         <div class="cal-guest-done">
           <span class="cal-guest-tick"><.icon name="hero-check" class="size-7" /></span>
           <h1>You’re booked</h1>
-          <p class="m-0 text-subtle">{@policy.title} with {@policy.owner_name}</p>
+          <p class="m-0 text-subtle">{done_with(@policy)}</p>
           <div class="cal-guest-box">
             <div><b>{long_day(DateTime.to_date(local(@receipt.starts_at, @zone)))}</b></div>
             <div>
@@ -299,6 +354,10 @@ defmodule PlatformWeb.PublicBookingLive do
               <p role="alert" class="m-0 max-w-[420px] text-error">
                 Your booking is saved, but the guest email could not be delivered. Contact the organizer for your invitation.
               </p>
+            <% @policy.shared -> %>
+              <p class="m-0 max-w-[420px] text-subtle">
+                {and_join(Enum.map(@policy.host_names, &first_name/1))} have it on their calendars. Save this page or add it to your calendar.
+              </p>
             <% true -> %>
               <p class="m-0 max-w-[420px] text-subtle">
                 {first_name(@policy.owner_name)} has it on their calendar. Save this page or add it to your calendar.
@@ -319,11 +378,35 @@ defmodule PlatformWeb.PublicBookingLive do
 
       <div :if={@policy && @step != :done} class="cal-guest-card" data-step={@step}>
         <div class="cal-guest-host">
-          <span class="cal-guest-avatar">{initial(@policy.owner_name)}</span>
-          <div class="cal-guest-who">
+          <span :if={!@policy.shared} class="cal-guest-avatar">{initial(@policy.owner_name)}</span>
+          <div :if={!@policy.shared} class="cal-guest-who">
             {@policy.owner_name}{if @policy.org_name, do: " · " <> @policy.org_name}
           </div>
           <h1>{@policy.title}</h1>
+          <%!-- Shared links: one line of people under the title, every
+             avatar the same neutral ground (no per-person colour). --%>
+          <div
+            :if={@policy.shared}
+            class="flex items-center gap-2.5 min-w-0"
+            data-role="booking-host-row"
+          >
+            <span class="flex shrink-0">
+              <span
+                :for={{name, i} <- Enum.with_index(Enum.take(@policy.host_names, 3))}
+                class={[
+                  "cal-guest-avatar !size-9 !text-sm shrink-0 ring-2 ring-base-100",
+                  i > 0 && "-ml-2.5"
+                ]}
+                aria-hidden="true"
+              >
+                {initial(name)}
+              </span>
+            </span>
+            <span class="cal-guest-who min-w-0 truncate">
+              {host_label(@policy.host_names)}{if @policy.org_name,
+                do: " · " <> @policy.org_name}
+            </span>
+          </div>
           <div class="cal-guest-ln">
             <.icon name="hero-clock" class="size-[18px]" />{@policy.duration_minutes} minutes
           </div>
@@ -395,8 +478,19 @@ defmodule PlatformWeb.PublicBookingLive do
                 </button>
               <% end %>
             </div>
-            <div class="cal-hint">
+            <p
+              :if={@policy.shared and is_nil(@error) and no_open_day?(@open, @today)}
+              class="cal-hint m-0"
+              role="status"
+              data-role="booking-empty"
+            >
+              No times when everyone is free in this range.
+            </p>
+            <div :if={!@policy.shared} class="cal-hint">
               Highlighted days have open times. Busy time on {first_name(@policy.owner_name)}’s calendars is already taken out.
+            </div>
+            <div :if={@policy.shared} class="cal-hint">
+              Highlighted days have open times. Busy time on everyone's calendars is already taken out.
             </div>
           </div>
           <div class="cal-guest-times">
@@ -406,7 +500,11 @@ defmodule PlatformWeb.PublicBookingLive do
               <button
                 :for={slot <- @slots}
                 type="button"
-                class="cal-guest-slot"
+                class={[
+                  "cal-guest-slot",
+                  @policy.shared &&
+                    "bg-base-200 focus-visible:outline-2 focus-visible:outline-offset-2 focus-visible:outline-primary"
+                ]}
                 phx-click="slot"
                 phx-value-start={DateTime.to_iso8601(slot.starts_at)}
                 aria-pressed={to_string(@slot == slot)}
@@ -471,12 +569,25 @@ defmodule PlatformWeb.PublicBookingLive do
               <span id="g-e-err" class="cal-err">{@errors[:email]}</span>
             </label>
             <label class="cal-field">
-              Anything {first_name(@policy.owner_name)} should know?
+              Anything {if @policy.shared,
+                do: host_label(@policy.host_names),
+                else: first_name(@policy.owner_name)} should know?
               <span class="cal-hint">(optional)</span>
               <textarea id="g-notes" name="guest[notes]" maxlength="2000" class="cal-input">{@guest["notes"]}</textarea>
             </label>
             <div class="cal-segs">
-              <button type="submit" class="cal-guest-confirm">Confirm booking</button>
+              <button
+                :if={@policy.shared}
+                type="submit"
+                class="cal-guest-confirm inline-flex items-center gap-1 min-w-0 max-w-full"
+                aria-label={"Book #{hm(@slot.starts_at, @zone)} with #{host_label(@policy.host_names)}"}
+              >
+                <span class="shrink-0 whitespace-nowrap">Book {hm(@slot.starts_at, @zone)}</span>
+                <span class="min-w-0 truncate">with {host_label(@policy.host_names)}</span>
+              </button>
+              <%= if !@policy.shared do %>
+                <button type="submit" class="cal-guest-confirm">Confirm booking</button>
+              <% end %>
               <button type="button" class="cal-guest-ghost !h-10" phx-click="change">Back</button>
             </div>
           </form>
