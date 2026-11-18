@@ -274,9 +274,9 @@ defmodule Platform.Memory.Insights.OutsideTest do
       assert drafts() == []
     end
 
-    test "Platform.Mail.Dispatch is never called, and the draft stays a draft" do
+    test "Platform.Mail.Dispatch is never called, and the draft stays a draft", %{agent: agent} do
       mail_on!()
-      account!(acme_org_id())
+      account!(acme_org_id(), agent)
       _insight = outside_insight!("trace-#{n()}@client.example")
 
       # Trace every call into Dispatch (and the Deliverer behind it) made by
