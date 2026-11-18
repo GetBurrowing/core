@@ -267,11 +267,53 @@ defmodule Platform.Social do
     end
   end
 
-  @doc "Deletes the profile and (FK `delete_all`) its accounts, posts and clips."
+  @doc """
+  Deletes the profile and (FK `delete_all`) its accounts, posts and clips.
+  Refused with `{:error, :has_studio_posts}`, then `{:error, :has_studio_clips}`
+  (in that order), while the profile holds a Studio post or clip.
+  """
   @spec delete_profile(Ecto.UUID.t(), Profile.t() | Ecto.UUID.t()) ::
           {:ok, Profile.t()} | {:error, term()}
   def delete_profile(org_id, profile) do
-    with {:ok, profile} <- fetch(Profile, org_id, profile), do: Repo.delete(profile)
+    # One transaction under the profile row lock (`lock_profile/3`, :update):
+    # `Studio.create_post/4` takes the same row `:share`, so a post is either
+    # committed before this check (and the delete is refused) or waits for the
+    # delete and then finds no profile. Never a post created and then cascaded.
+    Repo.transaction(fn ->
+      with %Profile{} = locked <- lock_profile(org_id, profile) || {:error, :not_found},
+           :ok <- refuse_studio_posts(locked),
+           :ok <- refuse_studio_clips(locked),
+           {:ok, deleted} <- Repo.delete(locked) do
+        deleted
+      else
+        {:error, reason} -> Repo.rollback(reason)
+      end
+    end)
+  end
+
+  # Social Studio: a profile that still holds Studio posts is never deleted by
+  # this code (the FK cascade would remove them; see `Platform.Social.Studio`
+  # for the documented limitation of a direct SQL delete).
+  defp refuse_studio_posts(%Profile{id: profile_id}) do
+    studio? =
+      Repo.exists?(
+        from(po in Post,
+          join: a in Account,
+          on: a.id == po.account_id,
+          where: a.profile_id == ^profile_id and po.flow == "studio"
+        )
+      )
+
+    if studio?, do: {:error, :has_studio_posts}, else: :ok
+  end
+
+  # Same rule for Studio clips (the FK would cascade them and their renders).
+  # Runs after the post check, inside the same `:update` profile lock.
+  defp refuse_studio_clips(%Profile{id: profile_id}) do
+    studio? =
+      Repo.exists?(from(c in Clip, where: c.profile_id == ^profile_id and c.flow == "studio"))
+
+    if studio?, do: {:error, :has_studio_clips}, else: :ok
   end
 
   defp validate_profile(changeset, org_id) do
@@ -608,7 +650,10 @@ defmodule Platform.Social do
 
   defp cancellable_query(%Account{id: account_id}) do
     Post
-    |> where([p], p.account_id == ^account_id and p.status in ^@cancellable_on_removal)
+    |> where(
+      [p],
+      p.account_id == ^account_id and p.status in ^@cancellable_on_removal and p.flow == "legacy"
+    )
     |> order_by([p], asc: p.inserted_at, asc: p.id)
   end
 
@@ -791,16 +836,86 @@ defmodule Platform.Social do
     end
   end
 
-  defp lock_profile(org_id, %Profile{id: id}), do: lock_profile(org_id, id)
+  @doc """
+  Locks one profile row inside the caller's transaction and returns it, or
+  `nil` when it does not exist in `org_id` (the caller maps that to
+  `:not_found`). Must run inside `Repo.transaction/1`.
 
-  defp lock_profile(org_id, id) do
+  Lock modes (`mode`):
+
+    * `:update` (default) is `FOR UPDATE`: the writer's lock. It conflicts with
+      every other mode, so it is the one that serialises the profile's
+      check-then-act sequences (account removal, connect, `delete_profile/2`).
+    * `:share` is `FOR SHARE`: it conflicts with `:update` (and any profile row
+      update or delete) but not with another `:share`. A writer that only needs
+      the profile to *stay* (Studio post creation) takes this, so concurrent
+      creators do not queue behind each other while `delete_profile/2` still
+      waits for them and they still wait for it.
+
+  ## Lock order (one order, everywhere)
+
+  The profile row is ALWAYS locked first; accounts and posts are locked or
+  written only after it, in the same transaction. Never take a post or account
+  row lock and then ask for the profile lock: that is the inversion that
+  deadlocks against `delete_profile/2`, which holds the profile and cascades to
+  accounts and posts. Anything that reads the profile after a post lock must do
+  so without locking it.
+  """
+  @spec lock_profile(Ecto.UUID.t(), Profile.t() | Ecto.UUID.t(), :update | :share) ::
+          Profile.t() | nil
+  def lock_profile(org_id, profile, mode \\ :update)
+
+  def lock_profile(org_id, %Profile{id: id}, mode), do: lock_profile(org_id, id, mode)
+
+  def lock_profile(org_id, id, mode) when mode in [:update, :share] do
     case Ecto.UUID.cast(id) do
       {:ok, id} ->
-        Profile
-        |> scoped_query(org_id)
-        |> where([x], x.id == ^id)
-        |> lock("FOR UPDATE")
-        |> Repo.one()
+        query = Profile |> scoped_query(org_id) |> where([x], x.id == ^id)
+
+        case mode do
+          :update -> query |> lock("FOR UPDATE") |> Repo.one()
+          :share -> query |> lock("FOR SHARE") |> Repo.one()
+        end
+
+      :error ->
+        nil
+    end
+  end
+
+  @doc """
+  Reads an account of `profile` UNDER a row lock, for a decision about who may
+  write to it. `profile` MUST be the row `lock_profile/3` returned in this
+  transaction (the profile is always locked first; see the lock order there).
+  Returns the account only when it belongs to that profile, else `nil`.
+
+  Modes are those of `lock_profile/3`; `:share` (default) is `FOR SHARE`, which
+  is what a creator takes. `set_account_owner/3`, `archive_account/2` and
+  `update_account/3` do not lock the account themselves, but their plain
+  `UPDATE` conflicts with `FOR SHARE`: such a writer WAITS for creates in
+  flight, and a create that starts after it commits reads the new owner or
+  `archived_at`. Creates do not queue behind each other.
+
+  ## Authority convention (Studio slices A, B and C)
+
+  A check made before the lock does not stand in for the one under it. After
+  the profile lock, re-read the account here and decide again on the locked
+  rows: `studio_enabled`, flow, account archived, then the actor
+  (`post_approver_check/4` on the locked profile and account, then
+  `Platform.Social.Studio.authorize_studio_actor/2`). A pre-lock check may
+  remain as a cheap early refusal; the decision of record is the one under
+  the lock.
+  """
+  @spec lock_account(Profile.t(), Ecto.UUID.t(), :update | :share) :: Account.t() | nil
+  def lock_account(%Profile{id: profile_id}, account_id, mode \\ :share)
+      when mode in [:update, :share] do
+    case Ecto.UUID.cast(account_id) do
+      {:ok, id} ->
+        query = from(a in Account, where: a.id == ^id and a.profile_id == ^profile_id)
+
+        case mode do
+          :update -> query |> lock("FOR UPDATE") |> Repo.one()
+          :share -> query |> lock("FOR SHARE") |> Repo.one()
+        end
 
       :error ->
         nil
@@ -1655,7 +1770,8 @@ defmodule Platform.Social do
   end
 
   @doc """
-  Lists the org's posts. Filters: `:account_id`, `:profile_id` (posts on any
+  Lists the org's LEGACY posts (`flow: "studio"` asks for Studio's instead).
+  Filters: `:account_id`, `:profile_id` (posts on any
   of the profile's accounts), `:status`, `:statuses` (a list), `:task_id`
   (Social 6/7: the drafts linked to one task), and `:placed_from` /
   `:placed_to` (Social 7/7's calendar: a half-open `[from, to)` range of
@@ -1675,6 +1791,8 @@ defmodule Platform.Social do
 
     Post
     |> scoped_query(org_id)
+    # Legacy lists never see Studio rows; Studio asks with `flow: "studio"`.
+    |> where([po], po.flow == ^Map.get(filters, :flow, "legacy"))
     |> then(fn q ->
       case filters[:account_id] do
         nil -> q
@@ -1837,7 +1955,8 @@ defmodule Platform.Social do
   @spec update_post(Ecto.UUID.t(), Post.t() | Ecto.UUID.t(), map()) ::
           {:ok, Post.t()} | {:error, term()}
   def update_post(org_id, post, attrs) do
-    with {:ok, post} <- fetch(Post, org_id, post) do
+    with {:ok, post} <- fetch(Post, org_id, post),
+         :ok <- refuse_studio(post) do
       changeset =
         post
         |> Post.changeset(attrs)
@@ -1879,6 +1998,7 @@ defmodule Platform.Social do
         locked = Repo.one(from(p in Post, where: p.id == ^post.id, lock: "FOR UPDATE"))
 
         with %Post{} <- locked || {:error, :not_found},
+             :ok <- refuse_studio(locked),
              :ok <- refuse_cover_locked(locked),
              {:ok, profile} <- profile_of_post(locked),
              account = Repo.get!(Account, locked.account_id),
@@ -1935,6 +2055,7 @@ defmodule Platform.Social do
         locked = Repo.one(from(p in Post, where: p.id == ^post.id, lock: "FOR UPDATE"))
 
         with %Post{} <- locked || {:error, :not_found},
+             :ok <- refuse_studio(locked),
              :ok <- refuse_cover_locked(locked),
              {:ok, profile} <- profile_of_post(locked),
              account = Repo.get!(Account, locked.account_id),
@@ -2026,6 +2147,9 @@ defmodule Platform.Social do
   failure is logged, never raised: the post is already saved.
   """
   @spec needs_approval_written(Post.t()) :: Post.t()
+  # A Studio post never gets an approval card: Studio approval is its own flow.
+  def needs_approval_written(%Post{flow: "studio"} = post), do: post
+
   def needs_approval_written(%Post{status: "needs_approval"} = post) do
     case Platform.Social.Approvals.request_approval(post) do
       {:ok, _} ->
@@ -2046,7 +2170,9 @@ defmodule Platform.Social do
   @spec delete_post(Ecto.UUID.t(), Post.t() | Ecto.UUID.t()) ::
           {:ok, Post.t()} | {:error, term()}
   def delete_post(org_id, post) do
-    with {:ok, post} <- fetch(Post, org_id, post), do: Repo.delete(post)
+    with {:ok, post} <- fetch(Post, org_id, post),
+         :ok <- refuse_studio(post),
+         do: Repo.delete(post)
   end
 
   @doc """
@@ -2073,6 +2199,7 @@ defmodule Platform.Social do
           {:ok, Post.t()} | {:error, term()}
   def approve_post(org_id, post, approver_user_id, opts \\ []) do
     with {:ok, post} <- fetch_for_approval(org_id, post, opts),
+         :ok <- refuse_studio(post),
          :ok <- refuse_approved_again(post),
          {:ok, profile} <- profile_of_post(post),
          {:ok, account} <- account_of_post(post) do
@@ -2091,6 +2218,12 @@ defmodule Platform.Social do
       end
     end
   end
+
+  # Social Studio: the legacy write paths act on legacy posts only.
+  @doc false
+  @spec refuse_studio(Post.t()) :: :ok | {:error, :studio_post}
+  def refuse_studio(%Post{flow: "studio"}), do: {:error, :studio_post}
+  def refuse_studio(%Post{}), do: :ok
 
   defp fetch_for_approval(org_id, post, opts) do
     if Keyword.get(opts, :lock, false) do
@@ -2369,7 +2502,8 @@ defmodule Platform.Social do
       from(po in Post,
         join: a in Account,
         on: a.id == po.account_id,
-        where: a.profile_id in ^profile_ids and po.status == "needs_approval",
+        where:
+          a.profile_id in ^profile_ids and po.status == "needs_approval" and po.flow == "legacy",
         group_by: a.profile_id,
         select: {a.profile_id, count(po.id)}
       )
@@ -2409,11 +2543,15 @@ defmodule Platform.Social do
   @spec get_clip(Ecto.UUID.t(), Ecto.UUID.t()) :: Clip.t() | nil
   def get_clip(org_id, id), do: scoped_get(Clip, org_id, id)
 
-  @doc "Lists the org's clips. Options: `:profile_id`, `:status`."
+  @doc """
+  Lists the org's LEGACY clips (`flow: "studio"` asks for Studio's).
+  Options: `:profile_id`, `:status`, `:flow`.
+  """
   @spec list_clips(Ecto.UUID.t(), keyword()) :: [Clip.t()]
   def list_clips(org_id, opts \\ []) do
     Clip
     |> scoped_query(org_id)
+    |> where([c], c.flow == ^Keyword.get(opts, :flow, "legacy"))
     |> filter_profile(opts[:profile_id])
     |> then(fn q ->
       case opts[:status] do

@@ -42,6 +42,9 @@ defmodule PlatformWeb.SocialCalendarTab do
   def all_brands?, do: true
 
   @impl true
+  def on_select(socket), do: load(socket)
+
+  @impl true
   def events,
     do:
       ~w(week_prev week_this week_next open_post close_post calendar_zone calendar_toggle_brand calendar_approve)
@@ -61,8 +64,11 @@ defmodule PlatformWeb.SocialCalendarTab do
   end
 
   @impl true
-  def load(%{assigns: %{scope: :all, user: user, week_start: monday}} = socket)
-      when not is_nil(user) do
+  def load(socket),
+    do: socket |> PlatformWeb.SocialTodayTab.refresh_authorization() |> load_calendar()
+
+  defp load_calendar(%{assigns: %{scope: :all, user: user, week_start: monday}} = socket)
+       when not is_nil(user) do
     profiles = PlatformWeb.SocialScope.visible_profiles(socket)
     brands = Cal.brands(profiles)
     ids = MapSet.new(brands, & &1.id)
@@ -97,7 +103,7 @@ defmodule PlatformWeb.SocialCalendarTab do
     |> stream_week(zone, items, slots, monday)
   end
 
-  def load(%{assigns: %{profile: nil}} = socket) do
+  defp load_calendar(%{assigns: %{profile: nil}} = socket) do
     socket
     |> assign(:calendar_empty?, true)
     |> assign(:calendar_slots?, false)
@@ -107,7 +113,7 @@ defmodule PlatformWeb.SocialCalendarTab do
     |> stream(:agenda_days, [], reset: true)
   end
 
-  def load(%{assigns: %{profile: profile, week_start: monday}} = socket) do
+  defp load_calendar(%{assigns: %{profile: profile, week_start: monday}} = socket) do
     zone = Clock.profile_zone(profile)
     accounts = Social.list_accounts(profile.org_id, profile_id: profile.id)
 
@@ -179,7 +185,16 @@ defmodule PlatformWeb.SocialCalendarTab do
   defp waiting_label(_profile, _account, _user), do: "Waiting on approval"
 
   @impl true
-  def handle_event("week_" <> which, _params, socket) when which in ~w(prev this next) do
+  def handle_event(event, params, socket),
+    do:
+      handle_calendar_event(
+        event,
+        params,
+        PlatformWeb.SocialTodayTab.refresh_authorization(socket)
+      )
+
+  defp handle_calendar_event("week_" <> which, _params, socket)
+       when which in ~w(prev this next) do
     week =
       case which do
         "prev" -> Date.add(socket.assigns.week_start, -7)
@@ -192,7 +207,7 @@ defmodule PlatformWeb.SocialCalendarTab do
 
   # Sent once by the SocialCalendarZone hook. Anything Tzdata does not know
   # is ignored (the week stays in UTC).
-  def handle_event("calendar_zone", %{"zone" => zone}, socket) do
+  defp handle_calendar_event("calendar_zone", %{"zone" => zone}, socket) do
     case Clock.valid_zone(zone) do
       nil ->
         {:noreply, socket}
@@ -210,7 +225,7 @@ defmodule PlatformWeb.SocialCalendarTab do
   end
 
   # Only ever toggles a brand the viewer can see: a forged id changes nothing.
-  def handle_event("calendar_toggle_brand", %{"id" => id}, socket) do
+  defp handle_calendar_event("calendar_toggle_brand", %{"id" => id}, socket) do
     if PlatformWeb.SocialScope.all?(socket) and
          Enum.any?(socket.assigns.calendar_brands, &(&1.id == id)) do
       hidden = socket.assigns.calendar_hidden
@@ -224,7 +239,7 @@ defmodule PlatformWeb.SocialCalendarTab do
     end
   end
 
-  def handle_event("open_post", %{"id" => id}, socket) do
+  defp handle_calendar_event("open_post", %{"id" => id}, socket) do
     detail = detail_for(socket, id)
 
     case detail && PlatformWeb.SocialIdeasTab.open_idea(socket, detail.post.idea_id) do
@@ -233,12 +248,13 @@ defmodule PlatformWeb.SocialCalendarTab do
     end
   end
 
-  def handle_event("close_post", _params, socket), do: {:noreply, assign(socket, :detail, nil)}
+  defp handle_calendar_event("close_post", _params, socket),
+    do: {:noreply, assign(socket, :detail, nil)}
 
   # The approve path is the approval card's: the post is re-found through
   # the scope, then `decide_approve/3` re-checks the owner/approver rule and
   # the fingerprint the viewer was shown.
-  def handle_event("calendar_approve", %{"id" => id} = params, socket) do
+  defp handle_calendar_event("calendar_approve", %{"id" => id} = params, socket) do
     with %{post: %{status: "needs_approval"} = post, can_approve?: true} <- detail_for(socket, id),
          %{canvas_id: canvas_id} <- Approvals.live_card(post.id),
          {:ok, %{post: approved}} <-
@@ -257,7 +273,7 @@ defmodule PlatformWeb.SocialCalendarTab do
     end
   end
 
-  def handle_event(_event, _params, socket), do: {:noreply, socket}
+  defp handle_calendar_event(_event, _params, socket), do: {:noreply, socket}
 
   defp detail_for(%{assigns: %{scope: :all} = assigns} = socket, id) do
     with %{id: user_id} <- assigns.user do
@@ -298,15 +314,66 @@ defmodule PlatformWeb.SocialCalendarTab do
 
   @impl true
   def pane(assigns) do
+    studio_posts =
+      Enum.reject(assigns.studio_today_posts, fn item ->
+        assigns.scope == :all and MapSet.member?(assigns.calendar_hidden, item.profile.id)
+      end)
+
+    studio_planned =
+      Enum.filter(studio_posts, fn item ->
+        case item.post do
+          %{status: "planned", scheduled_at: %DateTime{} = at} ->
+            local_date = at |> Clock.local(assigns.calendar_zone) |> DateTime.to_date()
+
+            Date.compare(local_date, assigns.week_start) != :lt and
+              Date.compare(local_date, Date.add(assigns.week_start, 7)) == :lt
+
+          _ ->
+            false
+        end
+      end)
+
     assigns =
       assign(assigns,
         days: Cal.days(assigns.week_start),
         all?: assigns.scope == :all,
-        zone_label: Clock.label(assigns.calendar_zone)
+        zone_label: Clock.label(assigns.calendar_zone),
+        studio_planned: studio_planned,
+        studio_needs_time: Enum.filter(studio_posts, &(&1.post.status == "approved"))
       )
 
     ~H"""
     <div class="space-y-4" data-role="social-calendar">
+      <section
+        :if={@studio_planned != [] or @studio_needs_time != []}
+        class="space-y-3"
+        data-role="studio-calendar"
+      >
+        <h2 class="text-lg font-semibold">Studio plans</h2>
+        <div
+          :for={item <- @studio_planned}
+          data-role="studio-calendar-planned"
+          data-post-id={item.post.id}
+        >
+          <span>Planned in Burrow</span>
+          ·
+          <button type="button" class="link" phx-click="studio_open_post" phx-value-id={item.post.id}>
+            {item.post.body || "Untitled post"}
+          </button>
+          · {Calendar.strftime(Clock.local(item.post.scheduled_at, @calendar_zone), "%a %d %b %H:%M")}
+        </div>
+        <div
+          :for={item <- @studio_needs_time}
+          data-role="studio-calendar-unscheduled"
+          data-post-id={item.post.id}
+        >
+          <span>Approved, needs a time</span>
+          ·
+          <button type="button" class="link" phx-click="studio_open_post" phx-value-id={item.post.id}>
+            {item.post.body || "Untitled post"}
+          </button>
+        </div>
+      </section>
       <span id="social-calendar-zone" phx-hook="SocialCalendarZone" class="hidden"></span>
       <div class="flex flex-wrap items-center gap-2" data-role="social-week-nav">
         <button type="button" class="btn btn-ghost btn-sm" phx-click="week_prev" data-role="week-prev">
@@ -380,10 +447,14 @@ defmodule PlatformWeb.SocialCalendarTab do
       </div>
 
       <p :if={@calendar_empty?} class="text-base-content" data-role="social-empty">
-        <%= if @all? do %>
-          Nothing scheduled in any brand this week.
+        <%= if @studio_planned != [] do %>
+          No other scheduled posts this week.
         <% else %>
-          Nothing scheduled for {@profile.name} this week.
+          <%= if @all? do %>
+            Nothing scheduled in any brand this week.
+          <% else %>
+            Nothing scheduled for {@profile.name} this week.
+          <% end %>
         <% end %>
       </p>
 

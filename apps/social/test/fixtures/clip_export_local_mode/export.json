@@ -1,0 +1,46 @@
+{
+  "version": 1,
+  "project": "synthetic-ep",
+  "clips": [
+    {
+      "external_ref": "synthetic-ep/0000000001",
+      "files": {
+        "captioned": "01_Synthetic-clip-one.mp4",
+        "srt": "01_Synthetic-clip-one.srt"
+      },
+      "size_bytes": 61,
+      "sha256": "69dd1ac68268f1babdbc4cada391eabe6484da2d050ee7ac195c95fa2cf0ef81",
+      "duration_s": 30.5,
+      "approval_claim": {
+        "status": "cut",
+        "approved": false,
+        "approval_recorded": false,
+        "approver_recorded": false,
+        "reapproval_pending": false
+      }
+    },
+    {
+      "external_ref": "synthetic-ep/0000000002",
+      "files": {
+        "captioned": "02_Synthetic-clip-two.mp4",
+        "srt": "02_Synthetic-clip-two.srt"
+      },
+      "size_bytes": 78,
+      "sha256": "563dc2d044ebfe0c0bed962d77d6ad0b809e1a46904f47106c26cf454353d266",
+      "duration_s": 35.25,
+      "approval_claim": {
+        "status": "approved",
+        "approved": true,
+        "approval_recorded": true,
+        "approver_recorded": false,
+        "reapproval_pending": false
+      }
+    }
+  ],
+  "skipped": [
+    {
+      "external_ref": "synthetic-ep/0000000003",
+      "reason": "no captioned file in final/"
+    }
+  ]
+}

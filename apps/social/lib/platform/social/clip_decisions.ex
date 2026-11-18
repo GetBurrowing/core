@@ -96,6 +96,7 @@ defmodule Platform.Social.ClipDecisions do
     attrs = if is_map(attrs), do: attrs, else: %{}
 
     with {:ok, clip} <- fetch_clip(org_id, clip_id),
+         :ok <- refuse_studio_clip(clip),
          :ok <- pending(clip),
          {:ok, profile} <- profile(org_id, clip),
          :ok <- Social.approver_check(org_id, profile, user_id),
@@ -225,6 +226,7 @@ defmodule Platform.Social.ClipDecisions do
     now = now(opts)
 
     with {:ok, clip} <- fetch_clip(org_id, clip_id),
+         :ok <- refuse_studio_clip(clip),
          :ok <- pending(clip),
          {:ok, profile} <- profile(org_id, clip),
          :ok <- Social.approver_check(org_id, profile, user_id),
@@ -282,6 +284,7 @@ defmodule Platform.Social.ClipDecisions do
     now = now(opts)
 
     with {:ok, clip} <- fetch_clip(org_id, clip_id),
+         :ok <- refuse_studio_clip(clip),
          {:ok, profile} <- profile(org_id, clip),
          :ok <- Social.approver_check(org_id, profile, user_id) do
       Repo.transaction(fn ->
@@ -305,6 +308,9 @@ defmodule Platform.Social.ClipDecisions do
           posts = posts_for_version(clip.id, id)
 
           cond do
+            Enum.any?(posts, &Post.studio?/1) ->
+              {:error, :studio_post}
+
             posts == [] ->
               {:error, :not_decided}
 
@@ -327,6 +333,13 @@ defmodule Platform.Social.ClipDecisions do
     end
   end
 
+  # Social Studio: a Studio clip has its own review; the legacy one-click
+  # approve (which approves and arms a publish timer) and its undo never act
+  # on it. The marker is the clip's own column, never the profile toggle, and it
+  # is never written after insert, so one check before the lock is enough.
+  defp refuse_studio_clip(%Clip{flow: "studio"}), do: {:error, :studio_clip}
+  defp refuse_studio_clip(%Clip{}), do: :ok
+
   defp reset_review(clip), do: clip |> Clip.review_changeset(:reset_pending) |> Repo.update()
 
   defp posts_for_version(clip_id, render_id) do
@@ -347,11 +360,16 @@ defmodule Platform.Social.ClipDecisions do
        ) do
     posts = posts_for_version(clip_id, render_id)
 
-    if posts != [] and Enum.all?(posts, &undoable?(&1, now)) do
-      Enum.each(posts, &Repo.delete!/1)
-      :ok
-    else
-      {:error, :window_closed}
+    cond do
+      Enum.any?(posts, &Post.studio?/1) ->
+        {:error, :studio_post}
+
+      posts != [] and Enum.all?(posts, &undoable?(&1, now)) ->
+        Enum.each(posts, &Repo.delete!/1)
+        :ok
+
+      true ->
+        {:error, :window_closed}
     end
   end
 

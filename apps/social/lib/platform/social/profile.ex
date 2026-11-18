@@ -53,6 +53,10 @@ defmodule Platform.Social.Profile do
     field(:notify_user_ids, {:array, :binary_id}, default: [])
     belongs_to(:drafting_agent, Platform.Agents.Agent)
 
+    # Social Studio slice A: off until a profile approver turns it on. In NO
+    # cast list; only `Platform.Social.Studio.set_enabled/4` writes it.
+    field(:studio_enabled, :boolean, default: false)
+
     has_many(:accounts, Platform.Social.Account)
     has_many(:clips, Platform.Social.Clip)
 

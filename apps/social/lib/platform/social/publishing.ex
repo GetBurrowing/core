@@ -97,6 +97,7 @@ defmodule Platform.Social.Publishing do
     {:ok, result} =
       Repo.transaction(fn ->
         with {:ok, post} <- lock(org_id, post_id),
+             :ok <- refuse_studio(post),
              :ok <- guard(post) do
           now_ms = System.system_time(:millisecond)
 
@@ -136,6 +137,7 @@ defmodule Platform.Social.Publishing do
           {:ok, Post.t()} | {:error, term()}
   def retry_publish(org_id, post_id, actor_user_id) do
     with %Post{} = post <- Social.get_post(org_id, post_id) || {:error, :not_found},
+         :ok <- refuse_studio(post),
          {:ok, account} <- account_any(org_id, post),
          %Social.Profile{} = profile <-
            Social.get_profile(org_id, account.profile_id) || {:error, :not_found},
@@ -243,6 +245,8 @@ defmodule Platform.Social.Publishing do
   # re-read. An approver that is not a user (an agent id, a random id) or
   # whose user row is archived does not count.
   @spec publishable?(Post.t()) :: boolean()
+  def publishable?(%Post{flow: "studio"}), do: false
+
   def publishable?(%Post{status: "approved", approved_by_user_id: approver})
       when is_binary(approver) do
     match?(%{archived_at: nil}, Platform.Accounts.get_user(approver))
@@ -251,6 +255,12 @@ defmodule Platform.Social.Publishing do
   def publishable?(%Post{}), do: false
 
   defp guard(post), do: if(publishable?(post), do: :ok, else: {:error, :not_approved})
+
+  # Social Studio: a Studio post is planned inside Burrow and never sent. Every
+  # send-side entry point calls this BEFORE any external call (the DB boundary
+  # CHECK behind it cannot undo a send).
+  defp refuse_studio(%Post{flow: "studio"}), do: {:error, :studio_post}
+  defp refuse_studio(%Post{}), do: :ok
 
   defp lock(org_id, post_id) do
     case Social.lock_post(org_id, post_id) do
@@ -538,7 +548,9 @@ defmodule Platform.Social.Publishing do
   def cancel_post(org_id, post_id) do
     {:ok, result} =
       Repo.transaction(fn ->
-        with {:ok, %Post{status: "scheduled"} = post} <- lock(org_id, post_id),
+        with {:ok, %Post{} = locked} <- lock(org_id, post_id),
+             :ok <- refuse_studio(locked),
+             {:ok, %Post{status: "scheduled"} = post} <- {:ok, locked},
              {:ok, account} <- account_any(org_id, post),
              adapter when is_atom(adapter) <- Publisher.impl(),
              :ok <- adapter.delete(account, post.external_id) do
@@ -559,8 +571,9 @@ defmodule Platform.Social.Publishing do
   @spec refresh_status(Ecto.UUID.t(), Ecto.UUID.t()) ::
           {:ok, Post.t() | :noop} | {:error, term()}
   def refresh_status(org_id, post_id) do
-    with %Post{external_id: external_id} = post when is_binary(external_id) <-
-           Social.get_post(org_id, post_id) || {:error, :not_found},
+    with %Post{} = found <- Social.get_post(org_id, post_id) || {:error, :not_found},
+         :ok <- refuse_studio(found),
+         %Post{external_id: external_id} = post when is_binary(external_id) <- found,
          {:ok, account} <- account_any(org_id, post),
          adapter when is_atom(adapter) <- Publisher.impl(),
          {:ok, %{status: status} = result} <- adapter.status(account, external_id) do
@@ -662,6 +675,7 @@ defmodule Platform.Social.Publishing do
   end
 
   defp transition(nil, _outcome), do: {:error, :not_found}
+  defp transition(%Post{flow: "studio"}, _outcome), do: {:error, :studio_post}
   defp transition(_post, %{kind: :ignored}), do: {:ok, :noop}
   defp transition(%Post{status: status}, _) when status in ~w(published failed), do: {:ok, :noop}
 
