@@ -249,8 +249,6 @@ defmodule Platform.Release do
     )
   end
 
-  defp mapping_user(_), do: nil
-
   defp mapping_accounts(address) do
     import Ecto.Query
 
