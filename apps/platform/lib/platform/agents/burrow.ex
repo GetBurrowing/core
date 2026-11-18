@@ -35,7 +35,7 @@ defmodule Platform.Agents.Burrow do
   ## Default roles
 
   `ensure/2` pins Burrow to each of `default_roles/0` (`historian`,
-  `meeting_scribe`, `meeting_producer`, `triage_officer`) that NO agent holds,
+  `meeting_scribe`, `triage_officer`) that NO agent holds,
   through `Platform.Roles.assign_role/2`, so historian curation (org-page
   writes, starting with `org/page/identity.md` in the setup guide) and the
   meeting roles work from the first run (task 01a19aa4 stage 2). A role
@@ -62,7 +62,7 @@ defmodule Platform.Agents.Burrow do
 
   @name "Burrow"
   @slug "burrow"
-  @default_roles ~w(historian meeting_scribe meeting_producer triage_officer)
+  @default_roles ~w(historian meeting_scribe triage_officer)
 
   @doc "The roles `ensure/2` gives Burrow when no agent holds them."
   @spec default_roles() :: [String.t()]

@@ -224,17 +224,15 @@ defmodule Platform.Responsibilities.ArchitectureContextBridgeTest do
     "people_staleness" => "hr.* assembles this itself in Handlers.Hr.gather_context/2",
     "people_own_words" => "hr.* assembles this itself in Handlers.Hr.gather_context/2",
     "canvas_snapshot" =>
-      "design.spec_writer / design.brand_check are placeholder handlers " <>
-        "returning `missing?: true` — no runtime yet. design.critique " <>
+      "design.critique " <>
         "materialises this itself (task 019fe844) by resolving a canvas and " <>
         "rendering it through Chat.Canvas.MarkdownExporter, refusing the " <>
         "dispatch when no canvas resolves — a refusal a shared slot resolver " <>
         "has no way to express",
     "grounding_notes" =>
-      "design.spec_writer placeholder — no runtime yet. design.critique " <>
+      "design.critique " <>
         "composes this itself from the requester's note plus the trigger's " <>
         "task row",
-    "brand_guidelines" => "design.brand_check placeholder — no runtime yet",
     "task_payload" =>
       "design.task_direction materialises this itself from " <>
         "Tasks.get_task_record/1 — the pre-plan step needs the task row, " <>

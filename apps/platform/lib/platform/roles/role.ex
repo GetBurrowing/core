@@ -8,7 +8,7 @@ defmodule Platform.Roles.Role do
   role fulfills.
 
     * `key` — the natural primary key. One of the closed enum
-      `designer | historian | meeting_scribe | meeting_producer |
+      `designer | historian | meeting_scribe |
       triage_officer | security_guard | architect | agents_leader |
       scientist | janitor | showrunner` (stack decision #2:
       role roster is fixed by the platform, not user-extensible).
@@ -22,7 +22,9 @@ defmodule Platform.Roles.Role do
       `experiments.label_signal`. `janitor` was added in task `019fa1ac-6685`
       stage 1 as the owner of `janitor.cron_drain`, the weekly chore drain.
       `showrunner` was added in task `01a1eaf6` stage 3 as the owner of the
-      How to Computer `showrunner.*` keys.
+      How to Computer `showrunner.*` keys. `meeting_producer` was merged
+      into `meeting_scribe` in the super agents restructure; see
+      `retired_keys/0`.
     * `name` — human-presentable label.
     * `description` — one-line explanation of what the role owns.
     * `icon` — hero-icon slug (e.g. `hero-paint-brush`).
@@ -44,7 +46,14 @@ defmodule Platform.Roles.Role do
   @derive {Phoenix.Param, key: :key}
   @foreign_key_type :string
 
-  @valid_keys ~w(designer historian meeting_scribe meeting_producer triage_officer security_guard architect agents_leader scientist janitor showrunner)
+  @valid_keys ~w(designer historian meeting_scribe triage_officer security_guard architect agents_leader scientist janitor showrunner)
+
+  # Role keys that no longer exist, mapped to the role that absorbed them.
+  # Read paths (`Platform.Roles.get_role/1`, `bundle_for/1`,
+  # `agent_id_for_role/1`, ...) resolve a retired key through
+  # `canonical_key/1`, so a caller or persisted reference still holding the
+  # old key reads the absorbing role instead of an empty one.
+  @retired_keys %{"meeting_producer" => "meeting_scribe"}
 
   schema "roles" do
     field(:name, :string)
@@ -64,6 +73,23 @@ defmodule Platform.Roles.Role do
   seed module so the canonical roster isn't string-duplicated.
   """
   def valid_keys, do: @valid_keys
+
+  @doc "Retired role keys mapped to the role that absorbed each one."
+  @spec retired_keys() :: %{String.t() => String.t()}
+  def retired_keys, do: @retired_keys
+
+  @doc """
+  The live role key for `key`: the absorbing role for a retired key, `key`
+  itself otherwise.
+
+      iex> Platform.Roles.Role.canonical_key("meeting_producer")
+      "meeting_scribe"
+
+      iex> Platform.Roles.Role.canonical_key("designer")
+      "designer"
+  """
+  @spec canonical_key(String.t()) :: String.t()
+  def canonical_key(key) when is_binary(key), do: Map.get(@retired_keys, key, key)
 
   @cast_fields ~w(key name description icon)a
   @required_fields ~w(key name description icon)a

@@ -74,11 +74,12 @@ defmodule Platform.Roles.RoleTest do
       assert %{key: ["is invalid"]} = errors_on(cs)
     end
 
-    test "accepts the meeting_producer key (task 019f2451 stage 1)" do
+    test "rejects the retired meeting_producer key (merged into meeting_scribe)" do
       cs =
         Role.changeset(%Role{}, base_attrs(%{key: "meeting_producer", name: "Meeting Producer"}))
 
-      assert cs.valid?, inspect(errors_on(cs))
+      refute cs.valid?
+      assert %{key: ["is invalid"]} = errors_on(cs)
     end
 
     test "accepts the architect key (ADR-0044 stage 1, task 019f3da3)" do
@@ -88,7 +89,7 @@ defmodule Platform.Roles.RoleTest do
   end
 
   describe "valid_keys/0" do
-    test "exposes the eleven canonical roles in a stable order" do
+    test "exposes the ten canonical roles in a stable order" do
       # `security_guard` added in task `019f3e8e-4406` stage 1 (ADR-0043).
       # `architect` added in task `019f3da3` stage 1 (ADR-0044). Order is
       # meaningful: the four legacy roles come first, then meeting_producer
@@ -96,9 +97,10 @@ defmodule Platform.Roles.RoleTest do
       # `agents_leader` added in task `01a0b491` stage 1; `scientist` added
       # in task `01a0d415` stage 3; `janitor` added in task `019fa1ac-6685`
       # stage 1; `showrunner` added in task `01a1eaf6` stage 3, last.
-      # Down-migrations rely on this append-only shape.
+      # Down-migrations rely on this append-only shape. `meeting_producer`
+      # was merged into `meeting_scribe` in the super agents restructure.
       assert Role.valid_keys() ==
-               ~w(designer historian meeting_scribe meeting_producer triage_officer security_guard architect agents_leader scientist janitor showrunner)
+               ~w(designer historian meeting_scribe triage_officer security_guard architect agents_leader scientist janitor showrunner)
     end
   end
 
@@ -158,16 +160,17 @@ defmodule Platform.Roles.RoleTest do
       end
     end
 
-    test "DB-side CHECK constraint admits meeting_producer on raw SQL insert (task 019f2451)" do
-      assert %{num_rows: 1} =
-               SQL.query!(
-                 Repo,
-                 """
-                 INSERT INTO roles (key, name, description, icon, inserted_at, updated_at)
-                 VALUES ('meeting_producer', 'Meeting Producer', 'placeholder', 'hero-video-camera', now(), now())
-                 """,
-                 []
-               )
+    test "DB-side CHECK constraint rejects the retired meeting_producer key on raw SQL insert" do
+      assert_raise Postgrex.Error, ~r/roles_key_check/, fn ->
+        SQL.query!(
+          Repo,
+          """
+          INSERT INTO roles (key, name, description, icon, inserted_at, updated_at)
+          VALUES ('meeting_producer', 'Meeting Producer', 'placeholder', 'hero-video-camera', now(), now())
+          """,
+          []
+        )
+      end
     end
 
     test "DB-side CHECK constraint admits architect on raw SQL insert (ADR-0044 stage 1, task 019f3da3)" do

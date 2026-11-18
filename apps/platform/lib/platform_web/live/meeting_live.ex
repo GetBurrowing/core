@@ -213,7 +213,7 @@ defmodule PlatformWeb.MeetingLive do
       string is defined locally here (`meeting_topic/1`).
     * `meeting:{id}:intents` — the per-meeting intent-queue event stream
       (task 019f70b8 stage 7) feeding the `.intents-collapse` bar.
-    * `roles:assignments` — so a `meeting_producer` appointed mid-meeting
+    * `roles:assignments` — so a `meeting_scribe` appointed mid-meeting
       gets the (DOM-absent) intents bar without a page reload.
 
   ## The intents-collapse bar (task 019f70b8 stage 7)
@@ -221,7 +221,7 @@ defmodule PlatformWeb.MeetingLive do
   Rendered as a sibling ABOVE the embedded chat LV inside the right
   rail, so the producer sees the queue and the discussion at once. The
   whole strip — and the expanded table — is `:if`-gated on
-  `@intents_visible?`, which is `Platform.Roles.agent_id_for_role("meeting_producer")`
+  `@intents_visible?`, which is `Platform.Roles.assignee_for("meetings.intent_classify")`
   resolved ONCE at mount into an assign. Unassigned means **absent from
   the DOM**, not hidden with CSS: an unfilled capability is not a denial,
   and there is nothing to reserve layout space for.
@@ -289,11 +289,17 @@ defmodule PlatformWeb.MeetingLive do
   alias PlatformWeb.PublicSite
   alias PlatformWeb.SpaceTopics
 
-  # The role that may see and drive the intents-collapse bar. Passed to
-  # `Platform.Roles.agent_id_for_role/1` as a STRING — that function is
-  # guarded `when is_binary(role_key)` and an atom raises
+  # The role whose assignment changes re-resolve the intents-collapse bar.
+  # Live intent classification moved from the retired `meeting_producer`
+  # role into `meeting_scribe` (super agents restructure). A STRING: the
+  # Roles functions are guarded `when is_binary/1` and an atom raises
   # FunctionClauseError.
-  @intent_producer_role "meeting_producer"
+  @intent_producer_role "meeting_scribe"
+
+  # The responsibility whose effective assignee opens the bar. Resolved
+  # through `Platform.Roles.assignee_for/1`, so a per-key override (the
+  # classifier kept on a fast agent of its own) opens it too.
+  @intent_responsibility "meetings.intent_classify"
 
   # The nine per-meeting intent-queue events. Every one carries the FULL
   # row map, so a subscriber can render without a second lookup.
@@ -326,8 +332,11 @@ defmodule PlatformWeb.MeetingLive do
     :intent_no_ack_spawn_failed
   ]
 
-  @doc "The role key gating the intents-collapse bar."
+  @doc "The role key whose assignment changes re-resolve the intents-collapse bar."
   def intent_producer_role, do: @intent_producer_role
+
+  @doc "The responsibility key whose effective assignee opens the intents-collapse bar."
+  def intent_responsibility, do: @intent_responsibility
 
   @doc "The nine per-meeting intent-queue event names the LV handles."
   def intent_events, do: @intent_events
@@ -4072,15 +4081,15 @@ defmodule PlatformWeb.MeetingLive do
   #
   # Authorization reuses `with_intents_gate/2`, the same gate governing
   # the per-row cancel and correct buttons. Read its real semantics at
-  # its definition: it asks whether `meeting_producer` is assigned to any
-  # agent ORG-WIDE, not whether this viewer holds it. Matching the
+  # its definition: it asks whether `meetings.intent_classify` has any
+  # assignee ORG-WIDE, not whether this viewer holds it. Matching the
   # existing posture is deliberate; tightening it to viewer identity is a
   # separate decision and is being raised as its own ticket.
   #
   # GUEST REJECTION (task 019fbaac stage 4). Guests SEE the muted state and
   # cannot change it. This clause must stay ABOVE the one below, and it is
   # not redundant with `with_intents_gate/2`: that helper asks whether
-  # `meeting_producer` is assigned to any agent ORG-WIDE, which says
+  # `meetings.intent_classify` has any assignee ORG-WIDE, which says
   # nothing about who is holding the socket. A guest is blocked by it today
   # only incidentally — `:intents_visible?` is `false` on the guest path
   # because `handle_params/3` no-ops and never resolves it, not because
@@ -4248,7 +4257,7 @@ defmodule PlatformWeb.MeetingLive do
   # Stop this candidate's countdown (task 01a03fba stage 4).
   #
   # Deliberately NOT wrapped in `with_intents_gate/2`. That gate resolves
-  # the `meeting_producer` role, and the requirement here is that stop
+  # the `meetings.intent_classify` assignee, and the requirement here is that stop
   # works from ANY participant's session — a guest holds
   # `"meeting:{id}"` and not `"meeting:{id}:intents"`, so gating this
   # would deny it to exactly the people the requirement is about.
@@ -4445,7 +4454,7 @@ defmodule PlatformWeb.MeetingLive do
   # Five handlers for the pencil on an armed card and the three choices
   # it opens. All five are UNGATED, and all five for the same documented
   # reason `stop_candidate` is: `with_intents_gate/2` resolves the
-  # `meeting_producer` role, a guest holds `"meeting:{id}"` and not
+  # `meetings.intent_classify` assignee, a guest holds `"meeting:{id}"` and not
   # `"meeting:{id}:intents"`, so gating these would deny correction to
   # exactly the participants the board exists for. It would also invert
   # the ticket's whole argument — correcting a card is meant to be
@@ -7297,18 +7306,20 @@ defmodule PlatformWeb.MeetingLive do
   # ── Intents-collapse helpers (task 019f70b8 stage 7) ─────────────────────
 
   @doc """
-  Resolve the `meeting_producer` role gate into `:intents_visible?`.
+  Resolve the intent-classifier gate into `:intents_visible?`: open when
+  some agent answers `meetings.intent_classify` (the `meeting_scribe`
+  role, or a per-key override).
 
   Computed ONCE per mount (and again on a role-change broadcast) into an
   assign, never called from the template: a template call would run this
   query on every diff of every meeting render.
 
-  The role key is passed as a STRING — `Platform.Roles.agent_id_for_role/1`
-  is guarded `when is_binary(role_key)` and an atom raises
-  FunctionClauseError, which in a LiveView mount is a blank meeting.
+  The key is passed as a STRING — `Platform.Roles.assignee_for/1` is
+  guarded `when is_binary/1` and an atom raises FunctionClauseError,
+  which in a LiveView mount is a blank meeting.
   """
   def assign_intents_gate(socket) do
-    visible? = not is_nil(Roles.agent_id_for_role(@intent_producer_role))
+    visible? = not is_nil(Roles.assignee_for(@intent_responsibility))
 
     socket
     |> assign(:intents_visible?, visible?)

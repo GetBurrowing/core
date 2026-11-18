@@ -10,14 +10,15 @@ defmodule Platform.Responsibilities.Providers.Design do
   `Platform.Responsibilities.Providers.Design` — **this module** — for
   its Provider callbacks.
 
-  The `design` feature owns four responsibilities that make up the
-  Designer role bundle:
+  The `design` feature owns the Designer role bundle's `design.*` keys
+  (`design.spec_writer` and `design.brand_check` were registration-only
+  stubs and were removed in the super agents restructure):
 
     * `design.critique` → handled by `Handlers.DesignCritique`
-    * `design.spec_writer` → handled by `Handlers.DesignSpecWriter`
-    * `design.brand_check` → handled by `Handlers.DesignBrandCheck`
     * `design.task_direction` → handled by `Handlers.DesignTaskDirection`
       (ADR-0046 stack member 7, task `019f9b29-5ecd` stage 3)
+    * `design.reflect`, `design.scout`, `design.prototype_eval` → the super
+      agent loop handlers (task 01a1f048)
 
   So this shim dispatches on `responsibility.key` via `handler_for/1`
   and hands off to the concrete handler module. Any unmapped key logs a
@@ -30,9 +31,8 @@ defmodule Platform.Responsibilities.Providers.Design do
   The Router probes `build_prompt/1` on the PROVIDER module, never on the
   handler (`Router.build_prompt_via_provider/2`), so a handler that owns
   its prompt end-to-end is unreachable unless this shim forwards to it.
-  Only `design.task_direction` owns its prompt today; the other three are
-  registration placeholders that still render through
-  `default_prompt_template`.
+  Only `design.task_direction` owns its prompt today; `design.critique`
+  renders through `default_prompt_template`.
 
   Note the narrow return contract. The Router reads
   `{:error, :no_build_prompt}` as "use the legacy template render", but
@@ -58,17 +58,13 @@ defmodule Platform.Responsibilities.Providers.Design do
   require Logger
 
   alias Platform.Responsibilities.Handlers
-  alias Platform.Responsibilities.Handlers.DesignBrandCheck
   alias Platform.Responsibilities.Handlers.DesignCritique
-  alias Platform.Responsibilities.Handlers.DesignSpecWriter
   alias Platform.Responsibilities.Handlers.DesignTaskDirection
   alias Platform.Responsibilities.Responsibility
 
   @impl true
   def register do
     DesignCritique.register() ++
-      DesignSpecWriter.register() ++
-      DesignBrandCheck.register() ++
       DesignTaskDirection.register() ++
       Handlers.DesignReflect.register() ++
       Handlers.DesignScout.register() ++
@@ -89,8 +85,6 @@ defmodule Platform.Responsibilities.Providers.Design do
   def handler_for(%Responsibility{key: key}), do: handler_for(key)
   def handler_for(%{key: key}), do: handler_for(key)
   def handler_for("design.critique"), do: Handlers.DesignCritique
-  def handler_for("design.spec_writer"), do: Handlers.DesignSpecWriter
-  def handler_for("design.brand_check"), do: Handlers.DesignBrandCheck
   def handler_for("design.task_direction"), do: Handlers.DesignTaskDirection
   # The UX super agent loop (task 01a1f048).
   def handler_for("design.reflect"), do: Handlers.DesignReflect

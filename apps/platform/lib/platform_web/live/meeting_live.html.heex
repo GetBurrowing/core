@@ -1312,8 +1312,8 @@
 
              It lives here in the top bar rather than in the intents
              collapse because that bar is gated on `@intents_visible?`
-             and leaves the DOM entirely when the `meeting_producer`
-             role is unassigned — so a mute indicator inside it would be
+             and leaves the DOM entirely when `meetings.intent_classify`
+             has no assignee — so a mute indicator inside it would be
              invisible to exactly the person waiting on an agent that a
              since-departed participant silenced. This cluster renders
              for every viewer of the meeting shell (it is NOT `@shell?`-

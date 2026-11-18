@@ -85,7 +85,9 @@ defmodule Platform.Responsibilities.ChatTriggerNamesARoleTest do
     test "every registered chat_pattern regex addresses a role, not a person", %{slugs: slugs} do
       chat_patterns = registered_chat_patterns()
 
-      assert length(chat_patterns) >= 3,
+      # Was `>= 3` until the super agents restructure removed the two design
+      # stubs and `tasks.unblock`; `design.critique` is the one left.
+      assert length(chat_patterns) >= 1,
              """
              Only #{length(chat_patterns)} chat_pattern responsibilities were scanned.
              A guard that silently scanned zero rows is what lets this whole class
@@ -133,13 +135,14 @@ defmodule Platform.Responsibilities.ChatTriggerNamesARoleTest do
     end
 
     test "a handle-free trigger passes", %{slugs: slugs} do
-      # `task_unblock` registers `(?i)\b(blocked|blocker|stuck)\b` — no `@`
-      # at all. If this fails the token extractor is over-eager.
-      unblock =
-        Enum.find(registered_chat_patterns(), &(&1.key == "tasks.unblock"))
+      # A regex with no `@` at all (the shape the removed `tasks.unblock`
+      # stub registered). If this fails the token extractor is over-eager.
+      handle_free = %{
+        key: "tasks.synthetic",
+        trigger_config: %{"regex" => "(?i)\\b(blocked|blocker|stuck)\\b"}
+      }
 
-      assert unblock, "expected tasks.unblock to register a chat_pattern trigger"
-      assert violations_for(unblock, slugs) == []
+      assert violations_for(handle_free, slugs) == []
     end
   end
 

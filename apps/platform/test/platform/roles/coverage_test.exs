@@ -78,7 +78,7 @@ defmodule Platform.Roles.CoverageTest do
   # ── Category 1: seed shape (canvas-aligned keys) ─────────────────────
 
   describe "stage-4 seeds — canonical bundle shape" do
-    test "Platform.Roles.list_roles/0 returns exactly the 11 canonical rows" do
+    test "Platform.Roles.list_roles/0 returns exactly the 10 canonical rows" do
       # `security_guard` added in task `019f3e8e-4406` stage 1 (ADR-0043).
       # `architect` added in task `019f3da3` stage 1 (ADR-0044). Both slot
       # into the alphabetical order returned by `list_roles/0`.
@@ -88,14 +88,14 @@ defmodule Platform.Roles.CoverageTest do
       # bumping the roster from 6→7; task 01a0b491 stage 1 added
       # `agents_leader`, 7→8, sorting first; task 01a0d415 stage 3 added
       # `scientist`, 8→9; task 019fa1ac-6685 stage 1 added `janitor`, 9→10;
-      # task 01a1eaf6 stage 3 added `showrunner`, 10→11.
+      # task 01a1eaf6 stage 3 added `showrunner`, 10→11; the super agents
+      # restructure merged `meeting_producer` into `meeting_scribe`, 11→10.
       assert keys == [
                "agents_leader",
                "architect",
                "designer",
                "historian",
                "janitor",
-               "meeting_producer",
                "meeting_scribe",
                "scientist",
                "security_guard",
@@ -111,14 +111,14 @@ defmodule Platform.Roles.CoverageTest do
       # `design.task_direction` from ADR-0046 stack member 7 (task
       # 019f9b29-5ecd stage 3) — the pre-plan design step — plus the two
       # mid-meeting intent keys added 2026-07-31.
+      # `design.spec_writer` / `design.brand_check` were stubs, removed in
+      # the super agents restructure.
       assert bundle == [
-               "design.brand_check",
                "design.critique",
                # Task 01a1f048: the UX super agent loop.
                "design.prototype_eval",
                "design.reflect",
                "design.scout",
-               "design.spec_writer",
                "design.task_direction",
                "meetings.interaction_design",
                "meetings.visual_adjust",
@@ -241,7 +241,7 @@ defmodule Platform.Roles.CoverageTest do
       override_agent = insert_agent!()
 
       {:ok, assignment} = Roles.assign_role("designer", role_agent.id)
-      {:ok, _} = Roles.set_override("design.brand_check", override_agent.id)
+      {:ok, _} = Roles.set_override("ux.friction_watch", override_agent.id)
 
       reloaded = Repo.get!(RoleAssignment, assignment.id)
       assert reloaded.agent_id == role_agent.id
@@ -260,17 +260,17 @@ defmodule Platform.Roles.CoverageTest do
       {:ok, _} = Roles.assign_role("designer", role_agent.id)
 
       # Pre-override: routes to the role holder.
-      assert %Agent{id: id} = Roles.assignee_for("design.brand_check")
+      assert %Agent{id: id} = Roles.assignee_for("ux.friction_watch")
       assert id == role_agent.id
 
       # Override flips it.
-      {:ok, _} = Roles.set_override("design.brand_check", override_agent.id)
-      assert %Agent{id: id} = Roles.assignee_for("design.brand_check")
+      {:ok, _} = Roles.set_override("ux.friction_watch", override_agent.id)
+      assert %Agent{id: id} = Roles.assignee_for("ux.friction_watch")
       assert id == override_agent.id
 
       # Clear flips it back.
-      :ok = Roles.clear_override("design.brand_check")
-      assert %Agent{id: id} = Roles.assignee_for("design.brand_check")
+      :ok = Roles.clear_override("ux.friction_watch")
+      assert %Agent{id: id} = Roles.assignee_for("ux.friction_watch")
       assert id == role_agent.id
 
       # And the role assignment row still exists, untouched.
@@ -295,7 +295,7 @@ defmodule Platform.Roles.CoverageTest do
       # minus exactly one key, so it grew with the bundle when the two
       # mid-meeting intent keys landed 2026-07-31 — an override removes
       # one key, it does not filter by namespace.
-      {:ok, _} = Roles.set_override("design.brand_check", override_agent.id)
+      {:ok, _} = Roles.set_override("ux.friction_watch", override_agent.id)
 
       assert Roles.responsibilities_for("designer", exclude_overridden: true) ==
                [
@@ -303,14 +303,13 @@ defmodule Platform.Roles.CoverageTest do
                  "design.prototype_eval",
                  "design.reflect",
                  "design.scout",
-                 "design.spec_writer",
                  "design.task_direction",
                  "meetings.interaction_design",
-                 "meetings.visual_adjust",
-                 "ux.friction_watch"
+                 "meetings.visual_adjust"
                ]
 
-      # All overridden → empty. Seven keys since task 01a1af00 stage 2 added
+      # All overridden → empty. Five keys since the super agents restructure
+      # removed the two stubs; seven since task 01a1af00 stage 2 added
       # `ux.friction_watch`; six since the 2026-07-31 intent keys (four
       # before that, since ADR-0046 stack member 7). Every
       # key has to be listed here for the "all" case to mean "all" —
@@ -319,12 +318,10 @@ defmodule Platform.Roles.CoverageTest do
       # than looped over `bundle_for/1` (looping would make the case
       # pass by construction no matter what the bundle held).
       {:ok, _} = Roles.set_override("design.critique", override_agent.id)
-      {:ok, _} = Roles.set_override("design.spec_writer", override_agent.id)
       {:ok, _} = Roles.set_override("design.task_direction", override_agent.id)
       {:ok, _} = Roles.set_override("meetings.interaction_design", override_agent.id)
       {:ok, _} = Roles.set_override("meetings.visual_adjust", override_agent.id)
-      {:ok, _} = Roles.set_override("ux.friction_watch", override_agent.id)
-      # Ten keys since task 01a1f048 (the super agent loop).
+      # Eight since the stubs left; ten since task 01a1f048 (the super agent loop).
       {:ok, _} = Roles.set_override("design.prototype_eval", override_agent.id)
       {:ok, _} = Roles.set_override("design.reflect", override_agent.id)
       {:ok, _} = Roles.set_override("design.scout", override_agent.id)
@@ -340,20 +337,20 @@ defmodule Platform.Roles.CoverageTest do
       agent_a = insert_agent!()
       agent_b = insert_agent!()
 
-      {:ok, _} = Roles.set_override("design.brand_check", agent_a.id)
+      {:ok, _} = Roles.set_override("ux.friction_watch", agent_a.id)
 
       assert Repo.aggregate(
                from(o in ResponsibilityOverride,
-                 where: o.responsibility_key == "design.brand_check"
+                 where: o.responsibility_key == "ux.friction_watch"
                ),
                :count
              ) == 1
 
-      {:ok, _} = Roles.set_override("design.brand_check", agent_b.id)
+      {:ok, _} = Roles.set_override("ux.friction_watch", agent_b.id)
 
       assert Repo.aggregate(
                from(o in ResponsibilityOverride,
-                 where: o.responsibility_key == "design.brand_check"
+                 where: o.responsibility_key == "ux.friction_watch"
                ),
                :count
              ) == 1
@@ -361,7 +358,7 @@ defmodule Platform.Roles.CoverageTest do
       [row] =
         Repo.all(
           from(o in ResponsibilityOverride,
-            where: o.responsibility_key == "design.brand_check"
+            where: o.responsibility_key == "ux.friction_watch"
           )
         )
 
@@ -375,16 +372,16 @@ defmodule Platform.Roles.CoverageTest do
     test "no assignment + no override → assignee_for/1 returns nil" do
       # The bundle row exists (seeded), but nobody holds the role and
       # there's no override.
-      assert Roles.assignee_for("design.brand_check") == nil
+      assert Roles.assignee_for("ux.friction_watch") == nil
     end
 
     test "override set with no role assignment → returns the override agent (standalone)" do
       standalone = insert_agent!()
 
       # No assign_role/2 call — the override stands on its own.
-      {:ok, _} = Roles.set_override("design.brand_check", standalone.id)
+      {:ok, _} = Roles.set_override("ux.friction_watch", standalone.id)
 
-      assert %Agent{id: id} = Roles.assignee_for("design.brand_check")
+      assert %Agent{id: id} = Roles.assignee_for("ux.friction_watch")
       assert id == standalone.id
     end
 

@@ -14,7 +14,7 @@ defmodule Platform.Responsibilities.TaskTriageRetireTest do
 
   ## Why each test has a control
 
-    * T1 fires `tasks.weekly_review` (same `Providers.Tasks` feature, same
+    * T1 fires the triage row minus its inert marker (same `Providers.Tasks` feature, same
       cron trigger kind, same assignee wiring, same instant) alongside the
       triage fire. Without it, `{:ok, :placeholder}` on triage would also be
       satisfied by a Router that refused everything.
@@ -35,7 +35,6 @@ defmodule Platform.Responsibilities.TaskTriageRetireTest do
   alias Platform.Responsibilities
   alias Platform.Responsibilities.Cron
   alias Platform.Responsibilities.Handlers.TaskTriage
-  alias Platform.Responsibilities.Handlers.TaskWeeklyReview
   alias Platform.Responsibilities.Providers
   alias Platform.Responsibilities.Router
   alias Platform.Roles
@@ -91,16 +90,18 @@ defmodule Platform.Responsibilities.TaskTriageRetireTest do
   end
 
   describe "T1: the cron fire is refused, with a live sibling as control" do
-    test "tasks.triage returns :placeholder while tasks.weekly_review dispatches" do
+    test "tasks.triage returns :placeholder while a live tasks sibling dispatches" do
       [triage_spec] = TaskTriage.register()
-      [weekly_spec] = TaskWeeklyReview.register()
 
       {:ok, triage_row} = Responsibilities.upsert_by_key(triage_spec)
-      {:ok, weekly_row} = Responsibilities.upsert_by_key(weekly_spec)
 
-      # Both keys to one role, one native assignee (role_assignments is
-      # unique on role_key, so the second key rides the same assignment).
-      _agent = wire_native_assignee([triage_row.key, weekly_row.key])
+      # The control used to be `tasks.weekly_review`, a registration-only
+      # stub removed in the super agents restructure. Now it is the triage
+      # row itself with only the inert marker dropped (in memory), so the
+      # marker is the ONLY difference: same key, handler, cron, wiring.
+      control_row = %{triage_row | metadata: Map.delete(triage_row.metadata, "dispatch")}
+
+      _agent = wire_native_assignee([triage_row.key])
 
       # PREMISE: the instant really is one the triage expression fires at.
       # (`Cron` returns microsecond precision {0, 6}, so compare, not ==.)
@@ -119,10 +120,10 @@ defmodule Platform.Responsibilities.TaskTriageRetireTest do
 
       # CONTROL: same instant, same wiring, same feature provider.
       assert {:ok, :dispatched} =
-               Router.fire_trigger(weekly_row, %{kind: :cron, fired_at: @monday_nine}, %{})
+               Router.fire_trigger(control_row, %{kind: :cron, fired_at: @monday_nine}, %{})
 
       assert_receive {:captured_signal, signal}
-      assert signal.metadata.responsibility_key == "tasks.weekly_review"
+      assert signal.metadata.responsibility_key == "tasks.triage"
     end
   end
 

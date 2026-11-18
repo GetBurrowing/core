@@ -40,8 +40,8 @@ defmodule Platform.Designer do
       dispatched and returns its verdict with `design_critique_complete`,
       which lands through the same `Critique.land_verdict/2` (task 01a1eb2f).
       Works natively.
-    * `design.spec_writer` / `design.brand_check` are placeholders on every
-      runtime.
+    * `design.spec_writer` / `design.brand_check` were placeholders on every
+      runtime and were removed in the super agents restructure.
     * `design.reflect`, `design.scout`, `design.prototype_eval` (the super
       agent loop, task 01a1f048): native dispatches fired by
       `Platform.Designer.Loop`; prototype evaluation runs server-side on an

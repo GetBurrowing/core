@@ -141,7 +141,7 @@ defmodule Platform.Meetings.InviteDelivery do
   agent is an authorship identity and nothing more — `chat_messages`
   points at a participant row and there is no `system` participant type,
   so "the platform sent this" needs an agent to be sent as. That is the
-  whole reason an invite cannot fail for want of a `meeting_producer`.
+  whole reason an invite cannot fail for want of an assigned meeting role.
 
   ## A branch that sends nothing RELEASES its claim
 
