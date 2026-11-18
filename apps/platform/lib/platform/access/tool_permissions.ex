@@ -28,7 +28,7 @@ defmodule Platform.Access.ToolPermissions do
               {"admin.use",
                ~w(admin_health admin_logs admin_env_names admin_migrations admin_rpc admin_restart admin_deploy admin_rollback)},
               {"mail.use",
-               ~w(mail_draft_create mail_draft_update mail_inbound_get mail_inbound_list)},
+               ~w(mail_digest mail_draft_create mail_draft_update mail_inbound_get mail_inbound_list)},
               {"meetings.join",
                ~w(intent_ack meeting_activity_push meeting_create meeting_say meeting_scribe_complete meeting_triage_file voice_ask_agent voice_ask_poll)},
               {"memory.journal", ~w(memory_create)},
@@ -67,7 +67,8 @@ defmodule Platform.Access.ToolPermissions do
     "federation" =>
       ~w(federation_status vault_fetch vault_list feedback_submit sharing_list sharing_set),
     "files" => ~w(file_list file_get_text file_get_metadata file_search file_add file_delete),
-    "mail" => ~w(mail_draft_create mail_draft_update mail_inbound_list mail_inbound_get),
+    "mail" =>
+      ~w(mail_draft_create mail_draft_update mail_inbound_list mail_inbound_get mail_digest),
     "meetings" =>
       ~w(meeting_create meeting_say meeting_scribe_complete meeting_triage_file meeting_activity_push intent_ack),
     "memory" =>

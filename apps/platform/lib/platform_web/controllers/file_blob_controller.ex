@@ -61,7 +61,8 @@ defmodule PlatformWeb.FileBlobController do
   def show(conn, %{"id" => file_id} = params) do
     with %Files.File{} = file <- Files.get_file(file_id),
          {:ok, project} <- authorize(conn, file),
-         :ok <- access_check(conn, project) do
+         :ok <- access_check(conn, project),
+         :ok <- mail_check(conn, file) do
       send_file_bytes(
         conn,
         file,
@@ -95,6 +96,18 @@ defmodule PlatformWeb.FileBlobController do
       end
 
     Platform.Access.check(scope, "files.read", {:project, project_id})
+  end
+
+  # A file mail was added to is readable only by people who can read that
+  # mail's account (task 01a1ea5b stage 2,
+  # `Platform.Mail.Ownership.mail_file_ids_unreadable_by/2`). A refusal is
+  # `:denied`, which answers exactly as an unknown file id does.
+  defp mail_check(conn, %Files.File{id: id}) do
+    viewer = %{id: get_session(conn, :current_user_id)}
+
+    if MapSet.member?(Platform.Mail.Ownership.mail_file_ids_unreadable_by(viewer, [id]), id),
+      do: {:error, :denied},
+      else: :ok
   end
 
   defp send_file_bytes(conn, file, force_download?, sandboxed_preview?) do

@@ -85,7 +85,8 @@ defmodule PlatformWeb.EmailLiveBackfillTest do
       )
 
     {:ok, account} = Mail.create_account(ctx.admin, ctx.org_id, attrs, %{imap: "imap-pass"})
-    account
+    # Shared with the org's people, who read it (task 01a1ea5b stage 2).
+    Platform.Test.MailPrivacyFixtures.share_with_org!(ctx.admin, account)
   end
 
   defp raw(days) do

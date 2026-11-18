@@ -1066,7 +1066,10 @@ defmodule Platform.InboxTest do
                "meeting_invited",
                "meeting_cancelled",
                "task_sponsor_assigned",
-               "lifecycle_step_failed"
+               "lifecycle_step_failed",
+               # Task 01a1ea5b stage 4: the previous-owner notice is read,
+               # not handled, so opening it acknowledges it.
+               "mailbox_reassigned"
              ]
 
       assert Inbox.action_kinds() == [

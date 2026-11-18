@@ -7,6 +7,10 @@ defmodule Platform.Mail.Mailbox do
   the viewer may use (`Platform.Mail.can_use?/2`). Nothing here widens
   across orgs: an id that belongs to another org reads as absent.
 
+  Every read also takes the VIEWER and is constrained, in its query, to the
+  accounts that viewer may read (`Platform.Mail.Ownership`, task 01a1ea5b
+  stage 2). A row of an unreadable account reads exactly as an unknown id.
+
   ## Add to files
 
   `add_to_files/3` renders an ingested email as a `text/markdown` document
@@ -31,7 +35,9 @@ defmodule Platform.Mail.Mailbox do
   alias Platform.Mail.Account
   alias Platform.Mail.Delivery
   alias Platform.Mail.Draft
+  alias Platform.Mail.Drafts
   alias Platform.Mail.InboundMessage
+  alias Platform.Mail.Ownership
   alias Platform.Repo
   alias Platform.Security.ExternalContent
   alias Platform.Tasks.Project
@@ -42,81 +48,106 @@ defmodule Platform.Mail.Mailbox do
   # ── Inbox ───────────────────────────────────────────────────────────────
 
   @doc """
-  Ingested mail of `org_id`, newest first. `opts[:account_id]` narrows to
-  one account; a malformed account id narrows to nothing.
+  Ingested mail of `org_id` that `viewer` may read, newest first.
+  `opts[:account_id]` narrows to one account; a malformed account id
+  narrows to nothing. Constrained to
+  `Platform.Mail.Ownership.readable_account_ids_query/2` in the query.
   """
-  @spec list_inbound(binary(), keyword()) :: [InboundMessage.t()]
-  def list_inbound(org_id, opts \\ []) do
-    org_id
-    |> inbound_query(opts)
+  @spec list_inbound(any(), binary(), keyword()) :: [InboundMessage.t()]
+  def list_inbound(viewer, org_id, opts \\ []) do
+    viewer
+    |> inbound_query(org_id, opts)
     |> order_by([m], desc: m.received_at, desc: m.id)
     |> limit(^Keyword.get(opts, :limit, @list_limit))
     |> Repo.all()
   end
 
-  @doc "How many ingested messages `list_inbound/2` would draw from."
-  @spec count_inbound(binary(), keyword()) :: non_neg_integer()
-  def count_inbound(org_id, opts \\ []) do
-    org_id |> inbound_query(opts) |> select([m], count(m.id)) |> Repo.one()
+  @doc "How many ingested messages `list_inbound/3` would draw from."
+  @spec count_inbound(any(), binary(), keyword()) :: non_neg_integer()
+  def count_inbound(viewer, org_id, opts \\ []) do
+    viewer |> inbound_query(org_id, opts) |> select([m], count(m.id)) |> Repo.one()
   end
 
-  defp inbound_query(org_id, opts) do
+  defp inbound_query(viewer, org_id, opts) do
     if Platform.UUID.valid?(org_id) do
-      from(m in InboundMessage, where: m.org_id == ^org_id)
+      from(m in InboundMessage,
+        where: m.org_id == ^org_id and m.account_id in subquery(readable(viewer, org_id))
+      )
       |> narrow_account(Keyword.get(opts, :account_id))
     else
       from(m in InboundMessage, where: false)
     end
   end
 
-  @doc "The ingested message `id` IF it belongs to `org_id`, else `nil`."
-  @spec get_inbound(binary(), binary()) :: InboundMessage.t() | nil
-  def get_inbound(org_id, id) when is_binary(org_id) and is_binary(id) do
+  @doc """
+  The ingested message `id` IF it belongs to `org_id` and `viewer` may read
+  its account, else `nil`: an unreadable message is indistinguishable from
+  an unknown one.
+  """
+  @spec get_inbound(any(), binary(), binary()) :: InboundMessage.t() | nil
+  def get_inbound(viewer, org_id, id) when is_binary(org_id) and is_binary(id) do
     if Platform.UUID.valid?(org_id) and Platform.UUID.valid?(id) do
-      from(m in InboundMessage, where: m.id == ^id and m.org_id == ^org_id)
+      from(m in InboundMessage,
+        where:
+          m.id == ^id and m.org_id == ^org_id and
+            m.account_id in subquery(readable(viewer, org_id))
+      )
       |> Repo.one()
     end
   end
 
-  def get_inbound(_, _), do: nil
+  def get_inbound(_, _, _), do: nil
 
   @doc """
-  The org id an ingested message belongs to, or `nil`. Lets a deep link
-  (`/email/messages/:id`) pick the org the viewer must be checked against.
+  The org id of an ingested message `viewer` may read, or `nil` (unknown and
+  unreadable alike). Lets a deep link (`/email/messages/:id`) pick the org
+  without becoming an existence oracle.
   """
-  @spec inbound_org_id(binary()) :: binary() | nil
-  def inbound_org_id(id) when is_binary(id) do
-    if Platform.UUID.valid?(id) do
-      from(m in InboundMessage, where: m.id == ^id, select: m.org_id) |> Repo.one()
+  @spec inbound_org_id(any(), binary()) :: binary() | nil
+  def inbound_org_id(viewer, id) when is_binary(id) do
+    with true <- Platform.UUID.valid?(id),
+         org_id when is_binary(org_id) <- raw_inbound_org_id(id),
+         %InboundMessage{} <- get_inbound(viewer, org_id, id) do
+      org_id
+    else
+      _ -> nil
     end
   end
 
-  def inbound_org_id(_), do: nil
+  def inbound_org_id(_, _), do: nil
+
+  defp raw_inbound_org_id(id),
+    do: from(m in InboundMessage, where: m.id == ^id, select: m.org_id) |> Repo.one()
+
+  defp readable(viewer, org_id), do: Ownership.readable_account_ids_query(viewer, org_id)
 
   # ── Sent / Refused / Drafts ─────────────────────────────────────────────
 
   @doc """
-  Deliveries of `org_id`, newest first. `:sent` is every status except
-  `refused`; `:refused` is refused only.
+  Deliveries of `org_id` from accounts `viewer` may read, newest first.
+  `:sent` is every status except `refused`; `:refused` is refused only.
   """
-  @spec list_deliveries(binary(), :sent | :refused, keyword()) :: [Delivery.t()]
-  def list_deliveries(org_id, which, opts \\ []) when which in [:sent, :refused] do
-    org_id
-    |> deliveries_query(which, opts)
+  @spec list_deliveries(any(), binary(), :sent | :refused, keyword()) :: [Delivery.t()]
+  def list_deliveries(viewer, org_id, which, opts \\ []) when which in [:sent, :refused] do
+    viewer
+    |> deliveries_query(org_id, which, opts)
     |> order_by([d], desc: d.inserted_at, desc: d.id)
     |> limit(^Keyword.get(opts, :limit, @list_limit))
     |> Repo.all()
   end
 
-  @doc "How many deliveries `list_deliveries/3` would draw from."
-  @spec count_deliveries(binary(), :sent | :refused, keyword()) :: non_neg_integer()
-  def count_deliveries(org_id, which, opts \\ []) when which in [:sent, :refused] do
-    org_id |> deliveries_query(which, opts) |> select([d], count(d.id)) |> Repo.one()
+  @doc "How many deliveries `list_deliveries/4` would draw from."
+  @spec count_deliveries(any(), binary(), :sent | :refused, keyword()) :: non_neg_integer()
+  def count_deliveries(viewer, org_id, which, opts \\ []) when which in [:sent, :refused] do
+    viewer |> deliveries_query(org_id, which, opts) |> select([d], count(d.id)) |> Repo.one()
   end
 
-  defp deliveries_query(org_id, which, opts) do
+  defp deliveries_query(viewer, org_id, which, opts) do
     if Platform.UUID.valid?(org_id) do
-      query = from(d in Delivery, where: d.org_id == ^org_id)
+      query =
+        from(d in Delivery,
+          where: d.org_id == ^org_id and d.account_id in subquery(readable(viewer, org_id))
+        )
 
       query =
         case which do
@@ -130,29 +161,30 @@ defmodule Platform.Mail.Mailbox do
     end
   end
 
-  @doc "Open drafts (status `draft`) of `org_id`, newest first."
-  @spec list_drafts(binary(), keyword()) :: [Draft.t()]
-  def list_drafts(org_id, opts \\ []) do
-    org_id
-    |> drafts_query(opts)
+  @doc """
+  Open drafts (status `draft`) of `org_id` that `viewer` may see
+  (`Platform.Mail.Drafts.visible_query/2`), newest first.
+  """
+  @spec list_drafts(any(), binary(), keyword()) :: [Draft.t()]
+  def list_drafts(viewer, org_id, opts \\ []) do
+    viewer
+    |> drafts_query(org_id, opts)
     |> order_by([d], desc: d.updated_at, desc: d.id)
     |> limit(^Keyword.get(opts, :limit, @list_limit))
     |> Repo.all()
   end
 
-  @doc "How many open drafts `list_drafts/2` would draw from."
-  @spec count_drafts(binary(), keyword()) :: non_neg_integer()
-  def count_drafts(org_id, opts \\ []) do
-    org_id |> drafts_query(opts) |> select([d], count(d.id)) |> Repo.one()
+  @doc "How many open drafts `list_drafts/3` would draw from."
+  @spec count_drafts(any(), binary(), keyword()) :: non_neg_integer()
+  def count_drafts(viewer, org_id, opts \\ []) do
+    viewer |> drafts_query(org_id, opts) |> select([d], count(d.id)) |> Repo.one()
   end
 
-  defp drafts_query(org_id, opts) do
-    if Platform.UUID.valid?(org_id) do
-      from(d in Draft, where: d.org_id == ^org_id and d.status == "draft")
-      |> narrow_account(Keyword.get(opts, :account_id))
-    else
-      from(d in Draft, where: false)
-    end
+  defp drafts_query(viewer, org_id, opts) do
+    viewer
+    |> Drafts.visible_query(org_id)
+    |> where([d], d.status == "draft")
+    |> narrow_account(Keyword.get(opts, :account_id))
   end
 
   # A malformed account id narrows to nothing — dropping the filter would
@@ -208,7 +240,8 @@ defmodule Platform.Mail.Mailbox do
 
   Refusals, before anything is written:
 
-    * `:not_found` — no such message;
+    * `:not_found` — no such message, or one whose account `actor` may not
+      read (`Platform.Mail.Ownership.can_read_account?/2`): the same answer;
     * `:unauthorized` — `actor` is not a non-external member of the
       message's org;
     * `:project_not_found` — the project is missing, archived, or owned by
@@ -222,8 +255,11 @@ defmodule Platform.Mail.Mailbox do
   @spec add_to_files(any(), binary(), binary()) ::
           {:ok, :created | :existing, Files.File.t()} | {:error, term()}
   def add_to_files(actor, inbound_id, project_id) do
-    with org_id when is_binary(org_id) <- inbound_org_id(inbound_id) || {:error, :not_found},
+    with true <-
+           (is_binary(inbound_id) and Platform.UUID.valid?(inbound_id)) || {:error, :not_found},
+         org_id when is_binary(org_id) <- raw_inbound_org_id(inbound_id) || {:error, :not_found},
          true <- Mail.can_use?(actor, org_id) || {:error, :unauthorized},
+         true <- readable_inbound?(actor, org_id, inbound_id) || {:error, :not_found},
          {:ok, project} <- fetch_org_project(org_id, project_id) do
       result =
         Repo.transaction(fn ->
@@ -249,6 +285,22 @@ defmodule Platform.Mail.Mailbox do
         {:error, reason} ->
           {:error, reason}
       end
+    end
+  end
+
+  # `can_read_account?/2` on the message's account, re-read here so the
+  # check is not only the lookup above.
+  defp readable_inbound?(actor, org_id, inbound_id) do
+    case from(m in InboundMessage,
+           where: m.id == ^inbound_id and m.org_id == ^org_id,
+           select: m.account_id
+         )
+         |> Repo.one() do
+      account_id when is_binary(account_id) ->
+        Ownership.can_read_account?(actor, %Account{id: account_id, org_id: org_id})
+
+      _ ->
+        false
     end
   end
 

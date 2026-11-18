@@ -518,6 +518,14 @@ defmodule Platform.Access do
   today's code serves. An allow cannot widen past a check the site still
   runs first, so it can add nothing here.
 
+  ## Restriction providers refuse first
+
+  A space a restriction provider refuses the actor (`provider_restricted_space_ids/2`,
+  e.g. a mail-bound space, task 01a1ea5b stage 2) is `{:error, :denied}`
+  for a `.read` whatever grants the Scope carries, because those providers
+  gate rows no legacy check knows about. A `nil` scope names no actor and is
+  not refused here.
+
   The ADR also requires the short-circuit to honour role restrictions
   (`access_space_restrictions`, stack member 8). That table does not exist
   on this member's base; whichever of members 7 and 8 lands second adds the
@@ -528,6 +536,7 @@ defmodule Platform.Access do
     cond do
       lock_refuses?(scope, permission) -> {:error, :denied}
       not fence_admits?(scope, resource) -> {:error, :denied}
+      provider_denied?(scope, permission, resource) -> {:error, :denied}
       not Scope.has_grants?(scope) -> :ok
       within?(scope, permission, resource, true) -> :ok
       true -> {:error, :denied}
@@ -779,14 +788,59 @@ defmodule Platform.Access do
   def module_access?(_scope, _module_key, _permission), do: false
 
   @doc """
-  Restricted channels the actor cannot read, in ONE query including org ancestry.
+  Restricted channels the actor cannot read, in ONE query including org ancestry,
+  merged with every RESTRICTION PROVIDER's answer (`provider_restricted_space_ids/2`).
   Rows remain listed; callers use this set to redact their descriptions.
   """
-  @spec restricted_space_ids(Scope.t(), [binary()]) :: MapSet.t()
+  @spec restricted_space_ids(Scope.t(), [binary()] | :all) :: MapSet.t()
   def restricted_space_ids(%Scope{actor: :system}, _ids), do: MapSet.new()
   def restricted_space_ids(_scope, []), do: MapSet.new()
 
   def restricted_space_ids(%Scope{} = scope, ids) do
+    scope
+    |> role_restricted_space_ids(ids)
+    |> MapSet.union(provider_restricted_space_ids(scope, ids))
+  end
+
+  @doc """
+  The spaces among `ids` (or every space, for `:all`) that a configured
+  RESTRICTION PROVIDER refuses `scope` (task 01a1ea5b stage 2).
+
+  A provider is a module exporting `restricted_space_ids(scope, ids)` that
+  returns the ids it restricts (a list or a `MapSet`), and must answer
+  `ids == :all` (what `restriction_ids/3` passes) with one query. Providers
+  are listed under `config :platform, Platform.Access, restriction_providers:
+  [...]`; `Platform.Mail.Ownership` (mail-bound spaces) is the first. Access
+  names no provider itself, so a context that already calls Access can add a
+  restriction here without Access depending on it.
+
+  `:system` is never restricted; with no providers configured the answer is
+  empty and every decision is what it was before the hook existed.
+  `restricted_space_ids/2` merges this into its set, so `can?/3`,
+  `within?/4`, `restriction_ids/3` (and through it `Platform.Access.Query`)
+  honour it, and `check/3` refuses on it even for a grant-less Scope.
+  """
+  @spec provider_restricted_space_ids(Scope.t() | term(), [binary()] | :all) :: MapSet.t()
+  def provider_restricted_space_ids(%Scope{actor: :system}, _ids), do: MapSet.new()
+  def provider_restricted_space_ids(_scope, []), do: MapSet.new()
+
+  def provider_restricted_space_ids(%Scope{} = scope, ids) do
+    Enum.reduce(restriction_providers(), MapSet.new(), fn provider, acc ->
+      scope |> provider.restricted_space_ids(ids) |> MapSet.new() |> MapSet.union(acc)
+    end)
+  end
+
+  def provider_restricted_space_ids(_scope, _ids), do: MapSet.new()
+
+  @doc "The configured restriction providers (`provider_restricted_space_ids/2`)."
+  @spec restriction_providers() :: [module()]
+  def restriction_providers do
+    :platform
+    |> Application.get_env(__MODULE__, [])
+    |> Keyword.get(:restriction_providers, [])
+  end
+
+  defp role_restricted_space_ids(%Scope{} = scope, ids) do
     held = held_restriction_keys(scope)
     filter = if ids == :all, do: "", else: "WHERE s.id = ANY($1::uuid[])"
     params = if ids == :all, do: [], else: [Enum.map(ids, &Ecto.UUID.dump!/1)]
@@ -841,41 +895,64 @@ defmodule Platform.Access do
 
   defp restriction_denied?(scope, permission, resource) do
     if String.ends_with?(permission, ".read") do
-      ids =
-        case Lineage.typed(resource) do
-          {:space, id} ->
-            [id]
+      MapSet.size(restricted_space_ids(scope, restriction_space_ids(permission, resource))) > 0
+    else
+      false
+    end
+  end
 
-          {:canvas, id} ->
-            Repo.all(from(c in Platform.Chat.Canvas, where: c.id == ^id, select: c.space_id))
+  @doc """
+  Does a restriction provider (`provider_restricted_space_ids/2`) refuse
+  `scope` the `.read` `permission` on `resource`? `check/3`'s provider
+  clause, public for surfaces that decide without a full Scope (e.g.
+  `Platform.Access.AgentWake`). Only the providers, so a grant-less Scope
+  keeps today's answer for role restrictions. A resource that names no
+  space (a task, a project) asks no provider and runs no query.
+  """
+  @spec provider_refuses?(Scope.t() | term(), String.t(), term()) :: boolean()
+  def provider_refuses?(scope, permission, resource),
+    do: provider_denied?(scope, permission, resource)
 
-          :untyped ->
-            case untyped_id(resource) do
-              id when is_binary(id) ->
-                cond do
-                  not Platform.UUID.valid?(id) ->
-                    []
+  defp provider_denied?(%Scope{actor: :system}, _permission, _resource), do: false
 
-                  permission == "canvas.read" ->
-                    Repo.all(
-                      from(c in Platform.Chat.Canvas, where: c.id == ^id, select: c.space_id)
-                    )
+  defp provider_denied?(%Scope{} = scope, permission, resource) do
+    String.ends_with?(permission, ".read") and restriction_providers() != [] and
+      MapSet.size(
+        provider_restricted_space_ids(scope, restriction_space_ids(permission, resource))
+      ) > 0
+  end
 
-                  true ->
-                    [id]
-                end
+  defp provider_denied?(_scope, _permission, _resource), do: false
 
-              _ ->
+  # The space ids a read of `resource` is restricted through.
+  defp restriction_space_ids(permission, resource) do
+    case Lineage.typed(resource) do
+      {:space, id} ->
+        [id]
+
+      {:canvas, id} ->
+        Repo.all(from(c in Platform.Chat.Canvas, where: c.id == ^id, select: c.space_id))
+
+      :untyped ->
+        case untyped_id(resource) do
+          id when is_binary(id) ->
+            cond do
+              not Platform.UUID.valid?(id) ->
                 []
+
+              permission == "canvas.read" ->
+                Repo.all(from(c in Platform.Chat.Canvas, where: c.id == ^id, select: c.space_id))
+
+              true ->
+                [id]
             end
 
           _ ->
             []
         end
 
-      MapSet.size(restricted_space_ids(scope, ids)) > 0
-    else
-      false
+      _ ->
+        []
     end
   end
 

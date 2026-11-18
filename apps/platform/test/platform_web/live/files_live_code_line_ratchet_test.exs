@@ -29,7 +29,10 @@ defmodule PlatformWeb.FilesLiveCodeLineRatchetTest do
   @app_root Path.expand("../../..", __DIR__)
   @files_live_path Path.join(@app_root, "lib/platform_web/live/files_live.ex")
 
-  @files_live_code_line_count 1240
+  # 1240 -> 1241 with task 01a1ea5b stage 2: the one-line semantic-search
+  # filter (`Browser.drop_mail_hits/3`); the mail helpers themselves live in
+  # `Platform.Files.Browser`.
+  @files_live_code_line_count 1241
 
   @doc_open ~r/^\s*@(module)?doc\s+"""/
 

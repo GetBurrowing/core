@@ -1,0 +1,8 @@
+{
+  "alex@example.com": {"kind": "personal", "owner_email": "alex@example.com"},
+  "support@example.com": {"kind": "shared", "member_emails": ["alex@example.com", "sam@example.com"]},
+  "sam@example.com": [
+    {"account_name": "Sam - personal", "kind": "personal", "owner_email": "sam@example.com"},
+    {"account_name": "Meetings", "kind": "shared", "member_emails": []}
+  ]
+}

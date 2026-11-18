@@ -8,9 +8,12 @@ defmodule Platform.Federation.Peers.Relay do
 
   A message is relayed when it is in a shared space, top-level (no
   `thread_id`), not deleted, `content_type: "text"` with non-empty content,
-  and NOT `metadata["source"] == "federation_inbound"`. That last rule is
+  and NOT `metadata["source"] == "federation_inbound"`. That rule is
   the loop guard: a message this install ingested from the peer is never
   sent back, and in v1 (one peer per space) it has nowhere else to go.
+  Inbound mail (`"email_inbound"`) never crosses either (task 01a1ea5b
+  stage 2): it belongs to a mailbox, and no mailbox owner shared it with
+  another install.
 
   ## Direction
 
@@ -45,6 +48,10 @@ defmodule Platform.Federation.Peers.Relay do
   @doc "True when `msg` should cross the relationship (see the moduledoc)."
   @spec relayable?(term()) :: boolean()
   def relayable?(%Message{metadata: %{"source" => "federation_inbound"}}), do: false
+  # Inbound mail is never relayed to a peer install (task 01a1ea5b stage 2):
+  # it belongs to a mailbox, and no mailbox owner shared it with another
+  # install, even when its channel is a shared space.
+  def relayable?(%Message{metadata: %{"source" => "email_inbound"}}), do: false
 
   def relayable?(%Message{
         thread_id: nil,

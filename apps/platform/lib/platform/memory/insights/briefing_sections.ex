@@ -2,13 +2,59 @@ defmodule Platform.Memory.Insights.BriefingSections do
   @moduledoc """
   Runs optional extension sections without coupling the briefing to an extension.
   Sections may deliver even when insights are disabled or have no dreaming agent.
+
+  ## Core providers (task 01a1ea5b stage 5)
+
+  A core context that is not a build-time module contributes sections through
+  the same contract (`t:Platform.Extension.briefing_section/0`) by being
+  listed under
+
+      config :platform, Platform.Memory.Insights.BriefingSections, providers: [...]
+
+  Each provider implements `briefing_sections/0`, read per call, exactly as an
+  extension's. The briefing never names a provider: Email's mail digest
+  (`Platform.Mail.Digest`) is the first, configured in `config/config.exs`.
+  Core providers run before extensions, and an extension section whose key a
+  core provider already uses is dropped (logged), so keys stay unique.
   """
   require Logger
   alias Platform.Access.Scope
   alias Platform.Memory.Insights.Briefings
 
+  @doc """
+  Every section on the briefing: core providers' first, then extensions'.
+  Read per call; an empty provider list and no extensions is `[]` with no
+  query.
+  """
+  @spec all() :: [Platform.Extension.briefing_section()]
+  def all do
+    core = Enum.flat_map(providers(), & &1.briefing_sections())
+    taken = MapSet.new(core, & &1.key)
+
+    extensions =
+      Enum.reject(Platform.Extensions.briefing_sections(), fn section ->
+        if MapSet.member?(taken, section.key) do
+          Logger.warning(
+            "briefing section #{section.key} is a core key; extension section dropped"
+          )
+
+          true
+        end
+      end)
+
+    core ++ extensions
+  end
+
+  @doc "The configured core providers (`providers:`), read per call."
+  @spec providers() :: [module()]
+  def providers do
+    :platform
+    |> Application.get_env(__MODULE__, [])
+    |> Keyword.get(:providers, [])
+  end
+
   def summaries(user_id, date) do
-    Enum.flat_map(Platform.Extensions.briefing_sections(), fn section ->
+    Enum.flat_map(all(), fn section ->
       safely(section.key, [], fn ->
         case section.summary.(user_id, date) do
           nil ->
@@ -44,7 +90,7 @@ defmodule Platform.Memory.Insights.BriefingSections do
   def for_view(_, _), do: []
 
   def prepare(user_id, date) do
-    Platform.Extensions.briefing_sections()
+    all()
     |> Enum.map(fn section ->
       safely(section.key, 0, fn ->
         case section.prepare.(user_id, date) do
