@@ -722,7 +722,7 @@ defmodule Platform.Mail.OwnershipTest do
 
   # ── The previous-owner notice (task 01a1ea5b stage 4) ─────────────────────
   #
-  # Ryan accepted the plan's question-4 proposal: when an admin reassigns a
+  # The plan's question-4 proposal, accepted: when an admin reassigns a
   # personal mailbox, its previous owner is told, with no mail content.
 
   describe "set_owner/3 notice to the previous owner" do

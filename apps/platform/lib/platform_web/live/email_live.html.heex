@@ -50,7 +50,7 @@
     <% end %>
     <p
       :if={@readable_accounts == []}
-      class="shrink-0 px-2 text-sm text-base-content/60"
+      class="shrink-0 px-2 text-sm text-subtle"
       data-role="mailbox-switcher-empty"
     >
       No mailboxes yet
@@ -1446,7 +1446,7 @@
        every write re-checks in Platform.Mail.Ownership. --%>
   <div
     :if={@access}
-    class="fixed inset-0 z-40 flex items-end justify-center bg-black/40 pb-[var(--bottom-nav-height,0px)] lg:static lg:z-auto lg:w-[30rem] lg:shrink-0 lg:items-stretch lg:border-l lg:border-edge lg:bg-transparent lg:pb-0"
+    class="fixed inset-0 z-40 flex items-end justify-center clears-tab-bar bg-black/40 lg:static lg:z-auto lg:w-[30rem] lg:shrink-0 lg:items-stretch lg:border-l lg:border-edge lg:bg-transparent"
     data-role="access-panel-backdrop"
   >
     <section

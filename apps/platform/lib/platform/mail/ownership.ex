@@ -677,7 +677,7 @@ defmodule Platform.Mail.Ownership do
   end
 
   # The previous owner of a personal mailbox hears that it moved (task
-  # 01a1ea5b stage 4; Ryan accepted the plan's question-4 proposal). ONE
+  # 01a1ea5b stage 4; the plan's question-4 proposal, accepted). ONE
   # Inbox row, to that person only, carrying no mail content: "<admin>
   # reassigned <address> to <new owner>". Nobody else is told: not the new
   # owner, not the actor, not the old owner when the owner did not change or
