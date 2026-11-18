@@ -54,9 +54,9 @@ defmodule PlatformWeb.SocialZeroDataConnectAcceptanceTest do
     user =
       %Platform.Accounts.User{}
       |> Platform.Accounts.User.changeset(%{
-        email: "zero-data-#{n}@example.com",
+        email: "zero-data-#{Platform.TenancyFixtures.run_token()}-#{n}@example.com",
         name: "Zero Data #{n}",
-        oidc_sub: "zero-data-#{n}"
+        oidc_sub: "zero-data-#{Platform.TenancyFixtures.run_token()}-#{n}"
       })
       |> Repo.insert!()
 

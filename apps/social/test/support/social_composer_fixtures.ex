@@ -47,7 +47,7 @@ defmodule Platform.SocialComposerFixtures do
     |> Agent.changeset(
       Map.merge(
         %{
-          slug: "composer-#{unique()}",
+          slug: "composer-#{Platform.TenancyFixtures.run_token()}-#{unique()}",
           name: "Composer drafter",
           status: "active",
           kind: "external",

@@ -22,7 +22,9 @@ defmodule Platform.Social.PostEvents do
 
   @doc """
   Records `action` on `post` by `actor`. `opts`: `:note`, and for
-  `edited` only, `:body_before` / `:body_after`. The idea is the post's.
+  `edited` only, `:body_before` / `:body_after`; `:version` and `:account_id`
+  (Social Studio) default to the post's own `version` and `account_id`. The
+  idea is the post's.
   Call inside the transaction that wrote the post.
   """
   @spec record!(Post.t(), String.t(), actor(), keyword()) :: PostEvent.t()
@@ -35,7 +37,9 @@ defmodule Platform.Social.PostEvents do
       actor_kind: kind,
       actor_id: id,
       action: action,
-      note: Keyword.get(opts, :note)
+      note: Keyword.get(opts, :note),
+      post_version: Keyword.get(opts, :version, post.version),
+      account_id: Keyword.get(opts, :account_id, post.account_id)
     }
 
     attrs =

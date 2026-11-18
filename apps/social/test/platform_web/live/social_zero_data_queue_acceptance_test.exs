@@ -45,9 +45,9 @@ defmodule PlatformWeb.SocialZeroDataQueueAcceptanceTest do
     user =
       %Platform.Accounts.User{}
       |> Platform.Accounts.User.changeset(%{
-        email: "zero-queue-#{n}@example.com",
+        email: "zero-queue-#{Platform.TenancyFixtures.run_token()}-#{n}@example.com",
         name: "Zero Queue #{n}",
-        oidc_sub: "zero-queue-#{n}"
+        oidc_sub: "zero-queue-#{Platform.TenancyFixtures.run_token()}-#{n}"
       })
       |> Repo.insert!()
 
@@ -62,7 +62,7 @@ defmodule PlatformWeb.SocialZeroDataQueueAcceptanceTest do
     {:ok, channel} =
       Platform.Chat.create_space(%{
         name: "Approvals #{n}",
-        slug: "approvals-#{n}",
+        slug: "approvals-#{Platform.TenancyFixtures.run_token()}-#{n}",
         kind: "channel",
         org_id: org_id
       })
@@ -76,7 +76,7 @@ defmodule PlatformWeb.SocialZeroDataQueueAcceptanceTest do
 
     agent =
       Repo.insert!(%Platform.Agents.Agent{
-        slug: "zero-queue-agent-#{n}",
+        slug: "zero-queue-agent-#{Platform.TenancyFixtures.run_token()}-#{n}",
         name: "Drafter #{n}",
         metadata: %{"org_id" => org_id}
       })

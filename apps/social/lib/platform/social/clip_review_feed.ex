@@ -59,8 +59,8 @@ defmodule Platform.Social.ClipReviewFeed do
   defp queue_query(%Profile{id: profile_id}) do
     from(c in Clip,
       where:
-        c.profile_id == ^profile_id and is_nil(c.removed_at) and c.review_status == "pending" and
-          not is_nil(c.render_file_id),
+        c.profile_id == ^profile_id and c.flow == "legacy" and is_nil(c.removed_at) and
+          c.review_status == "pending" and not is_nil(c.render_file_id),
       order_by: [asc: c.inserted_at, asc: c.id]
     )
   end
@@ -78,6 +78,7 @@ defmodule Platform.Social.ClipReviewFeed do
           left_join: c in Clip,
           on: c.id == j.clip_id,
           where: j.profile_id == ^id and j.status in @open_statuses and j.kind in @open_kinds,
+          where: is_nil(c.id) or c.flow == "legacy",
           order_by: [asc: j.inserted_at, asc: j.id],
           select: {j, c}
         )

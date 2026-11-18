@@ -76,6 +76,14 @@ defmodule Platform.Social.Clip do
     field(:title, :string)
     field(:episode_code, :string)
     field(:origin, :string, default: "burrow")
+    # Social Studio slice A: `legacy` or `studio` (DB CHECK). In NO cast list;
+    # Studio intake sets it at insert. Never inferred from the profile toggle.
+    field(:flow, :string, default: "legacy")
+    # Social Studio slice C: set only by `Platform.Social.Intake` (in no cast list).
+    # `external_ref` is the exporter's stable name for the clip, unique per profile;
+    # `import_claim` holds what the manifest said, never read as a decision.
+    field(:external_ref, :string)
+    field(:import_claim, :map)
     field(:source_label, :string)
     field(:review_status, :string)
     field(:review_note, :string)

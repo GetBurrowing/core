@@ -47,9 +47,9 @@ defmodule PlatformWeb.SocialZeroDataComposerAcceptanceTest do
     user =
       %Platform.Accounts.User{}
       |> Platform.Accounts.User.changeset(%{
-        email: "zero-composer-#{n}@example.com",
+        email: "zero-composer-#{Platform.TenancyFixtures.run_token()}-#{n}@example.com",
         name: "Zero Composer #{n}",
-        oidc_sub: "zero-composer-#{n}"
+        oidc_sub: "zero-composer-#{Platform.TenancyFixtures.run_token()}-#{n}"
       })
       |> Repo.insert!()
 
@@ -64,7 +64,7 @@ defmodule PlatformWeb.SocialZeroDataComposerAcceptanceTest do
     {:ok, channel} =
       Platform.Chat.create_space(%{
         name: "Approvals #{n}",
-        slug: "approvals-#{n}",
+        slug: "approvals-#{Platform.TenancyFixtures.run_token()}-#{n}",
         kind: "channel",
         org_id: org_id
       })
@@ -81,7 +81,7 @@ defmodule PlatformWeb.SocialZeroDataComposerAcceptanceTest do
     # stub, so no request leaves the BEAM.
     agent =
       Repo.insert!(%Platform.Agents.Agent{
-        slug: "zero-composer-agent-#{n}",
+        slug: "zero-composer-agent-#{Platform.TenancyFixtures.run_token()}-#{n}",
         name: "Drafter #{n}",
         status: "active",
         model: "agent-model",

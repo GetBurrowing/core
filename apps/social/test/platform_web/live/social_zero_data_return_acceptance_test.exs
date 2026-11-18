@@ -54,9 +54,9 @@ defmodule PlatformWeb.SocialZeroDataReturnAcceptanceTest do
     user =
       %Platform.Accounts.User{}
       |> Platform.Accounts.User.changeset(%{
-        email: "zero-return-#{n}@example.com",
+        email: "zero-return-#{Platform.TenancyFixtures.run_token()}-#{n}@example.com",
         name: "Zero Return #{n}",
-        oidc_sub: "zero-return-#{n}"
+        oidc_sub: "zero-return-#{Platform.TenancyFixtures.run_token()}-#{n}"
       })
       |> Repo.insert!()
 

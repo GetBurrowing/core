@@ -55,9 +55,9 @@ defmodule Platform.SocialApprovalFixtures do
 
     %Platform.Accounts.User{}
     |> Platform.Accounts.User.changeset(%{
-      email: "social-approver-#{n}@example.com",
+      email: "social-approver-#{Platform.TenancyFixtures.run_token()}-#{n}@example.com",
       name: name,
-      oidc_sub: "social-approver-#{n}"
+      oidc_sub: "social-approver-#{Platform.TenancyFixtures.run_token()}-#{n}"
     })
     |> Repo.insert!()
   end

@@ -90,7 +90,10 @@ defmodule Platform.Social.Ideas do
   def posts_by_idea([]), do: %{}
 
   def posts_by_idea(ids) do
-    from(p in Post, where: p.idea_id in ^ids, order_by: [asc: p.inserted_at, asc: p.id])
+    from(p in Post,
+      where: p.idea_id in ^ids and p.flow == "legacy",
+      order_by: [asc: p.inserted_at, asc: p.id]
+    )
     |> Repo.all()
     |> Enum.group_by(& &1.idea_id)
   end

@@ -227,7 +227,7 @@ defmodule Platform.Social.ClipLibrary do
       from(c in Clip,
         join: p in Profile,
         on: p.id == c.profile_id,
-        where: not is_nil(c.review_status) and is_nil(c.removed_at),
+        where: c.flow == "legacy" and not is_nil(c.review_status) and is_nil(c.removed_at),
         order_by: [desc_nulls_last: c.rendered_at, desc: c.id]
       )
 

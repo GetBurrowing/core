@@ -47,9 +47,11 @@ defmodule Platform.Social.TransportParityTest do
   setup do
     owner =
       Repo.insert!(%Platform.Accounts.User{
-        email: "social-parity-#{System.unique_integer([:positive])}@example.com",
+        email:
+          "social-parity-#{Platform.TenancyFixtures.run_token()}-#{System.unique_integer([:positive])}@example.com",
         name: "Social Parity Owner",
-        oidc_sub: "social-parity-#{System.unique_integer([:positive])}"
+        oidc_sub:
+          "social-parity-#{Platform.TenancyFixtures.run_token()}-#{System.unique_integer([:positive])}"
       })
 
     org = Platform.Tenancy.get_org_by_slug!("acme")
@@ -139,6 +141,37 @@ defmodule Platform.Social.TransportParityTest do
     # Twenty-two names, once per transport
     assert length(names) == 44
     assert Enum.filter(names, &(&1 =~ "publish" or &1 =~ "approve")) == []
+  end
+
+  # Social Studio slice B: approval, planning and
+  # cancelling are human-only context functions; no tool name can reach one.
+  test "no advertised social name can approve, plan, cancel, revoke, accept or retarget", ctx do
+    {runtime, token} = runtime_for(ctx, @granted)
+    {_socket, capabilities} = join_runtime(runtime, token)
+
+    names =
+      (Map.keys(http_tools_by_name(token)) ++ ws_tool_names(capabilities))
+      |> Enum.filter(&social?/1)
+
+    assert length(names) == 44
+
+    forbidden =
+      ~r/approv|plan|cancel|revok|revoke|retarget|accept|resubmit|request_changes|schedule/
+
+    assert Enum.filter(names, &(&1 =~ forbidden)) == []
+
+    # The Studio write functions are not exposed as tools by any other name either.
+    studio_writers =
+      ~w(approve_version plan_post cancel_plan revoke_approval request_changes resubmit save_version accept_render)
+
+    tool_source =
+      ["tools.ex", "tool_definitions.ex"]
+      |> Enum.map(&File.read!(Path.expand("../../lib/platform/social/#{&1}", __DIR__)))
+      |> Enum.join("\n")
+
+    for fun <- studio_writers do
+      refute tool_source =~ fun, "#{fun} is referenced from the agent tool modules"
+    end
   end
 
   test "publish and approve calls are denied on both transports, same text, nothing written",
@@ -231,7 +264,8 @@ defmodule Platform.Social.TransportParityTest do
     {:ok, agent} =
       %Agent{}
       |> Agent.changeset(%{
-        slug: "social-parity-agent-#{System.unique_integer([:positive])}",
+        slug:
+          "social-parity-agent-#{Platform.TenancyFixtures.run_token()}-#{System.unique_integer([:positive])}",
         name: "Social Parity Agent",
         status: "active"
       })
@@ -240,7 +274,8 @@ defmodule Platform.Social.TransportParityTest do
     {:ok, runtime} =
       %AgentRuntime{}
       |> AgentRuntime.changeset(%{
-        runtime_id: "social-parity-rt-#{System.unique_integer([:positive])}",
+        runtime_id:
+          "social-parity-rt-#{Platform.TenancyFixtures.run_token()}-#{System.unique_integer([:positive])}",
         owner_user_id: ctx.owner.id,
         agent_id: agent.id,
         auth_token_hash: AgentRuntime.hash_token(raw_token),

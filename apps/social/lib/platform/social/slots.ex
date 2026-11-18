@@ -150,7 +150,7 @@ defmodule Platform.Social.Slots do
       Repo.all(
         from(p in Post,
           where:
-            p.account_id == ^account_id and p.status in ^statuses and
+            p.account_id == ^account_id and p.flow == "legacy" and p.status in ^statuses and
               p.scheduled_at >= ^first and p.scheduled_at < ^last,
           select: p.scheduled_at
         )
