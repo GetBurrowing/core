@@ -61,7 +61,7 @@ defmodule Platform.Calendar.BookingHosts do
          :ok <- not_owner(owner_id, invitee.id),
          :ok <- shared_org(owner_id, invitee.id),
          {:ok, host} <- write_invite(link, owner_id, invitee.id, [:none, "declined", "left"]) do
-      notify_invite(host, link, owner)
+      host |> notify_invite(link, owner) |> tap(&changed(&1, link))
     end
   end
 
@@ -80,7 +80,7 @@ defmodule Platform.Calendar.BookingHosts do
          :ok <- not_owner(owner_id, invitee.id),
          :ok <- shared_org(owner_id, invitee.id),
          {:ok, host} <- write_invite(link, owner_id, invitee.id, ["declined", "left"]) do
-      notify_invite(host, link, owner)
+      host |> notify_invite(link, owner) |> tap(&changed(&1, link))
     end
   end
 
@@ -106,6 +106,7 @@ defmodule Platform.Calendar.BookingHosts do
         {:ok, host} -> dismiss_invite(host)
         _ -> :ok
       end)
+      |> tap(&changed(&1, link))
     end
   end
 
@@ -162,6 +163,54 @@ defmodule Platform.Calendar.BookingHosts do
   end
 
   def list_for_user(_), do: []
+
+  @doc """
+  The org members the owner may invite to co-host, for the settings picker
+  (task 01a1eff0-6880 stage 3): `Accounts.list_users(query:)` (name or email,
+  unarchived) restricted to users who share an org with the owner in which
+  neither of them is an external member, the same rule `invite/3` enforces.
+  The owner is never offered, nor is anyone with a row on `:link_id` already.
+  `Accounts.list_users/1` and `Meetings.resolve_invite_candidates/2` are
+  install-wide on their own, so the org restriction is applied here, in the
+  query, before any name is returned.
+
+  Options: `:link_id` (exclude that link's existing co-hosts), `:limit`
+  (default 8).
+  """
+  def search_candidates(scope, query, opts \\ [])
+
+  def search_candidates(%Scope{actor: %Accounts.User{id: owner_id}}, query, opts) do
+    existing =
+      case Keyword.get(opts, :link_id) do
+        id when is_binary(id) ->
+          Repo.all(from(h in BookingLinkHost, where: h.link_id == ^id, select: h.user_id))
+
+        _ ->
+          []
+      end
+
+    excluded = MapSet.new([owner_id | existing])
+    ids = Repo.all(shared_org_member_ids_query(owner_id))
+
+    [query: to_string(query), ids: ids]
+    |> Accounts.list_users()
+    |> Enum.reject(&MapSet.member?(excluded, &1.id))
+    |> Enum.take(Keyword.get(opts, :limit, 8))
+  end
+
+  def search_candidates(_, _, _), do: []
+
+  @doc """
+  The PubSub topic a user's host-set changes are broadcast on. Every
+  invite, re-invite, remove, accept, decline and leave broadcasts
+  `{:booking_hosts_changed, link_id}` to the owner's and the co-host's
+  topic, so both settings pages update live.
+  """
+  def topic(user_id) when is_binary(user_id), do: "booking_hosts:" <> user_id
+
+  @doc "Subscribe the calling process to `topic/1` for `user_id`."
+  def subscribe(user_id) when is_binary(user_id),
+    do: Phoenix.PubSub.subscribe(Platform.PubSub, topic(user_id))
 
   @doc """
   The users whose calendars a link books against: `{:ok, [owner | accepted
@@ -258,6 +307,7 @@ defmodule Platform.Calendar.BookingHosts do
         {:ok, updated} -> dismiss_invite(updated)
         _ -> :ok
       end)
+      |> tap(&changed(&1, link))
     else
       {:error, _} = error -> error
       _ -> {:error, :not_found}
@@ -354,6 +404,33 @@ defmodule Platform.Calendar.BookingHosts do
 
   defp not_owner(id, id), do: {:error, :owner_cannot_cohost}
   defp not_owner(_, _), do: :ok
+
+  defp changed({:ok, %BookingLinkHost{} = host}, %BookingLink{} = link) do
+    for user_id <- Enum.uniq([link.owner_id, host.user_id]) do
+      Phoenix.PubSub.broadcast(
+        Platform.PubSub,
+        topic(user_id),
+        {:booking_hosts_changed, link.id}
+      )
+    end
+
+    :ok
+  end
+
+  defp changed(_, _), do: :ok
+
+  # Every user who shares an org with `owner_id` in which neither of them is
+  # an external member (the set `shared_org/2` accepts), owner excluded.
+  defp shared_org_member_ids_query(owner_id) do
+    from(m in OrgMembership,
+      join: o in OrgMembership,
+      on: o.org_id == m.org_id,
+      where: o.user_id == ^owner_id and m.user_id != ^owner_id,
+      where: not coalesce(o.external, false) and not coalesce(m.external, false),
+      select: m.user_id,
+      distinct: true
+    )
+  end
 
   # True when some org holds both users and neither is an external member
   # of it.

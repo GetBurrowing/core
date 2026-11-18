@@ -516,4 +516,238 @@ defmodule PlatformWeb.BookingLiveTest do
              "30 min · 1 day a week · with Burrow meeting"
            )
   end
+
+  describe "co-hosts in booking settings (task 01a1eff0-6880 stage 3)" do
+    alias Platform.Calendar.BookingHosts
+    alias Platform.Tenancy.OrgMembership
+
+    defp host_user!(name, org_id, extra \\ %{}) do
+      n = System.unique_integer([:positive])
+
+      user =
+        Repo.insert!(%Platform.Accounts.User{
+          email: "booking-cohost-#{n}@example.com",
+          name: name,
+          oidc_sub: "booking-cohost-#{n}"
+        })
+
+      if org_id,
+        do:
+          Repo.insert!(
+            struct(%OrgMembership{user_id: user.id, org_id: org_id, role: "member"}, extra)
+          )
+
+      user
+    end
+
+    defp as(user), do: init_test_session(build_conn(), current_user_id: user.id)
+
+    defp hosts_scope(user), do: Scope.for_user(Repo.get!(Platform.Accounts.User, user.id))
+
+    setup do
+      n = System.unique_integer([:positive])
+      org = Platform.TenancyFixtures.tenant_org_id("booking_cohosts_ui_#{n}")
+      other_org = Platform.TenancyFixtures.tenant_org_id("booking_cohosts_other_#{n}")
+      ryan = host_user!("Ryan Milvenan", org)
+      jordan = host_user!("Jordan Quill", org)
+      nathan = host_user!("Nathan Quill", org)
+      outsider = host_user!("Outside Quill", other_org)
+      external = host_user!("Guest Quill", org, %{external: true})
+      date = Date.add(Date.utc_today(), 7)
+
+      {:ok, link} =
+        BookingLinks.create(hosts_scope(ryan), %{
+          title: "Intro call",
+          time_zone: "Etc/UTC",
+          duration_minutes: 30,
+          start_date: date,
+          end_date: Date.add(date, 7),
+          windows: [%{"weekday" => Date.day_of_week(date), "start" => "09:00", "end" => "12:00"}]
+        })
+
+      %{
+        ryan: ryan,
+        jordan: jordan,
+        nathan: nathan,
+        outsider: outsider,
+        external: external,
+        shared: link
+      }
+    end
+
+    test "a single-owner link shows the owner row and renders no blocked strip", ctx do
+      {:ok, view, _} = live(as(ctx.ryan), "/calendar/booking?link=#{ctx.shared.id}")
+
+      assert has_element?(
+               view,
+               "[data-role=booking-editor] [data-role=booking-hosts] h3",
+               "Hosts"
+             )
+
+      assert has_element?(view, "[data-role=booking-host-owner]", "You (owner)")
+      assert has_element?(view, "[data-role=booking-host-owner]", "Owner")
+      refute has_element?(view, "[data-role=booking-host-row]")
+      refute has_element?(view, "[data-role=booking-hosts-blocked]")
+      refute has_element?(view, "[data-role=booking-cohosted]")
+    end
+
+    test "+ Add co-host invites from the picker; the row shows Pending (info) and the strip",
+         ctx do
+      {:ok, view, _} = live(as(ctx.ryan), "/calendar/booking?link=#{ctx.shared.id}")
+
+      view |> element("[data-role=booking-host-add]", "+ Add co-host") |> render_click()
+      assert has_element?(view, "[data-role=booking-host-picker] input[name=q]")
+      view |> form("#booking-host-search", %{"q" => "Jordan"}) |> render_change()
+
+      view
+      |> element("[data-role=booking-host-candidate][phx-value-user='#{ctx.jordan.id}']")
+      |> render_click()
+
+      assert [%{status: "pending", user_id: user_id}] = BookingHosts.list_for_link(ctx.shared)
+      assert user_id == ctx.jordan.id
+      refute has_element?(view, "[data-role=booking-host-picker]")
+
+      assert has_element?(view, "[data-role=booking-host-row]", "Jordan Quill")
+      assert has_element?(view, "[data-role=booking-host-row] .badge.badge-info", "Pending")
+      assert has_element?(view, "[data-role=booking-host-row] button", "Remove")
+
+      assert has_element?(
+               view,
+               "[data-role=booking-hosts-blocked]",
+               "Not offering times until Jordan accepts"
+             )
+
+      # Two pending co-hosts are both named, first names only.
+      view |> element("[data-role=booking-host-add]") |> render_click()
+      view |> form("#booking-host-search", %{"q" => "Nathan"}) |> render_change()
+
+      view
+      |> element("[data-role=booking-host-candidate][phx-value-user='#{ctx.nathan.id}']")
+      |> render_click()
+
+      assert has_element?(
+               view,
+               "[data-role=booking-hosts-blocked]",
+               "Not offering times until Jordan and Nathan accept"
+             )
+    end
+
+    test "the picker offers org members only: never a non-org user, an external member, the owner or an existing co-host",
+         ctx do
+      {:ok, view, _} = live(as(ctx.ryan), "/calendar/booking?link=#{ctx.shared.id}")
+      view |> element("[data-role=booking-host-add]") |> render_click()
+      html = view |> form("#booking-host-search", %{"q" => "Quill"}) |> render_change()
+
+      assert has_element?(
+               view,
+               "[data-role=booking-host-candidate][phx-value-user='#{ctx.jordan.id}']"
+             )
+
+      refute html =~ "Outside Quill"
+      refute html =~ "Guest Quill"
+      refute has_element?(view, "[phx-value-user='#{ctx.outsider.id}']")
+      refute has_element?(view, "[phx-value-user='#{ctx.external.id}']")
+
+      view |> form("#booking-host-search", %{"q" => "Ryan"}) |> render_change()
+      refute has_element?(view, "[phx-value-user='#{ctx.ryan.id}']")
+
+      {:ok, _} = BookingHosts.invite(hosts_scope(ctx.ryan), ctx.shared.id, ctx.jordan.id)
+
+      assert [%{id: id}] =
+               BookingHosts.search_candidates(hosts_scope(ctx.ryan), "Quill",
+                 link_id: ctx.shared.id
+               )
+
+      assert id == ctx.nathan.id
+    end
+
+    test "Accept on the invite card clears the Pending badge and the strip on the owner's open page",
+         ctx do
+      {:ok, host} = BookingHosts.invite(hosts_scope(ctx.ryan), ctx.shared.id, ctx.jordan.id)
+      {:ok, owner_view, _} = live(as(ctx.ryan), "/calendar/booking?link=#{ctx.shared.id}")
+      assert has_element?(owner_view, "[data-role=booking-host-row] .badge-info", "Pending")
+      assert has_element?(owner_view, "[data-role=booking-hosts-blocked]")
+
+      {:ok, view, _} = live(as(ctx.jordan), "/calendar/booking?cohost=#{host.id}")
+
+      assert has_element?(
+               view,
+               "[data-role=booking-cohost-invite]",
+               "Your free/busy times will be used to offer slots on Ryan's link. Guests never see your calendar."
+             )
+
+      assert has_element?(view, "[data-role=booking-cohost-invite] button.bg-primary", "Accept")
+      assert has_element?(view, "[data-role=booking-cohost-invite] button", "Decline")
+
+      view |> element("[data-role=booking-cohost-invite] button", "Accept") |> render_click()
+      refute has_element?(view, "[data-role=booking-cohost-invite]")
+
+      assert has_element?(
+               view,
+               "[data-role=booking-cohosted-row][data-status=accepted]",
+               "Intro call"
+             )
+
+      # The owner's page hears it over PubSub, no reload.
+      assert has_element?(owner_view, "[data-role=booking-host-row][data-status=accepted]")
+      refute has_element?(owner_view, "[data-role=booking-host-row] .badge", "Pending")
+      refute has_element?(owner_view, "[data-role=booking-hosts-blocked]")
+    end
+
+    test "Leave from Links you co-host brings the strip back with Left; Remove clears it", ctx do
+      {:ok, host} = BookingHosts.invite(hosts_scope(ctx.ryan), ctx.shared.id, ctx.jordan.id)
+      {:ok, _} = BookingHosts.accept(hosts_scope(ctx.jordan), host.id)
+      {:ok, owner_view, _} = live(as(ctx.ryan), "/calendar/booking?link=#{ctx.shared.id}")
+      refute has_element?(owner_view, "[data-role=booking-hosts-blocked]")
+
+      {:ok, view, _} = live(as(ctx.jordan), "/calendar/booking")
+      assert has_element?(view, "[data-role=booking-cohosted] h3", "Links you co-host")
+      assert has_element?(view, "[data-role=booking-cohosted-row]", "Ryan Milvenan’s link")
+      view |> element("[data-role=booking-cohosted-row] button", "Leave") |> render_click()
+      assert Repo.get!(Platform.Calendar.BookingLinkHost, host.id).status == "left"
+      refute has_element?(view, "[data-role=booking-cohosted]")
+
+      assert has_element?(owner_view, "[data-role=booking-host-row] .badge-neutral", "Left")
+      assert has_element?(owner_view, "[data-role=booking-host-row] button", "Invite again")
+
+      assert has_element?(
+               owner_view,
+               "[data-role=booking-hosts-blocked]",
+               "Not offering times until you remove or re-invite Jordan"
+             )
+
+      owner_view |> element("[data-role=booking-host-row] button", "Remove") |> render_click()
+      refute has_element?(owner_view, "[data-role=booking-host-row]")
+      refute has_element?(owner_view, "[data-role=booking-hosts-blocked]")
+      assert BookingHosts.list_for_link(ctx.shared) == []
+    end
+
+    test "Decline from the invite card leaves the owner a Declined row and the D2 strip", ctx do
+      {:ok, host} = BookingHosts.invite(hosts_scope(ctx.ryan), ctx.shared.id, ctx.jordan.id)
+      {:ok, view, _} = live(as(ctx.jordan), "/calendar/booking?cohost=#{host.id}")
+      view |> element("[data-role=booking-cohost-invite] button", "Decline") |> render_click()
+      refute has_element?(view, "[data-role=booking-cohost-invite]")
+
+      {:ok, owner_view, _} = live(as(ctx.ryan), "/calendar/booking?link=#{ctx.shared.id}")
+      assert has_element?(owner_view, "[data-role=booking-host-row] .badge-neutral", "Declined")
+
+      owner_view
+      |> element("[data-role=booking-host-row] button", "Invite again")
+      |> render_click()
+
+      assert has_element?(owner_view, "[data-role=booking-host-row] .badge-info", "Pending")
+
+      assert has_element?(
+               owner_view,
+               "[data-role=booking-hosts-blocked]",
+               "Not offering times until Jordan accepts"
+             )
+    end
+
+    test "an invite card for someone else's invite is not shown", ctx do
+      {:ok, host} = BookingHosts.invite(hosts_scope(ctx.ryan), ctx.shared.id, ctx.jordan.id)
+      {:ok, view, _} = live(as(ctx.nathan), "/calendar/booking?cohost=#{host.id}")
+      refute has_element?(view, "[data-role=booking-cohost-invite]")
+    end
+  end
 end

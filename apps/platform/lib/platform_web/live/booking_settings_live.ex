@@ -17,6 +17,7 @@ defmodule PlatformWeb.BookingSettingsLive do
   import PlatformWeb.CalendarLive.Components
 
   alias Platform.Calendar.{BookingLink, BookingLinks}
+  alias PlatformWeb.BookingSettingsLive.Hosts
   alias PlatformWeb.CalendarLive, as: Cal
   alias PlatformWeb.MeetingLive.CalendarWindow
 
@@ -61,6 +62,7 @@ defmodule PlatformWeb.BookingSettingsLive do
         selected: nil
       )
       |> reload()
+      |> Hosts.init()
 
     {:ok, socket}
   end
@@ -72,8 +74,21 @@ defmodule PlatformWeb.BookingSettingsLive do
     selected =
       Enum.find(links, &(&1.id == params["link"])) || current(socket) || List.first(links)
 
-    {:noreply, socket |> assign(:selected, selected && selected.id) |> load_preview()}
+    {:noreply,
+     socket
+     |> assign(:selected, selected && selected.id)
+     |> Hosts.open_invite(params["cohost"])
+     |> Hosts.load()
+     |> load_preview()}
   end
+
+  # A host-set change on any link this user owns or co-hosts
+  # (`BookingHosts.topic/1`), from this page or another session.
+  @impl true
+  def handle_info({:booking_hosts_changed, _link_id}, socket),
+    do: {:noreply, socket |> reload() |> Hosts.load() |> load_preview()}
+
+  def handle_info(_, socket), do: {:noreply, socket}
 
   # ── list pane (shared with CalendarLive) ────────────────────────────────
 
@@ -104,6 +119,10 @@ defmodule PlatformWeb.BookingSettingsLive do
 
   def handle_event("select_link", %{"id" => id}, socket),
     do: {:noreply, push_patch(socket, to: ~p"/calendar/booking?#{%{link: id}}")}
+
+  # Co-hosts: the Hosts section, the invite card and Links you co-host.
+  def handle_event("host_" <> _ = event, params, socket),
+    do: Hosts.handle_event(event, params, socket)
 
   # app.js `ds.newLink`: an untitled 30-minute link, Mon–Fri 09:00–17:00,
   # 4 hours' notice. PR #51 also needs a zone and a bookable range.
@@ -335,6 +354,9 @@ defmodule PlatformWeb.BookingSettingsLive do
           from = DateTime.utc_now() |> DateTime.shift_zone!(link.time_zone) |> DateTime.to_date()
 
           case BookingLinks.preview(socket.assigns.access_scope, link.id, from, 14) do
+            {:error, :hosts_not_ready} ->
+              :blocked
+
             {:ok, slots} ->
               slots
               |> Enum.map(&DateTime.shift_zone!(&1.starts_at, link.time_zone))
@@ -431,6 +453,7 @@ defmodule PlatformWeb.BookingSettingsLive do
           <div class="cal-page cal-page-wide" data-role="booking-links">
             <h2>Booking links</h2>
             <div class="cal-sub">People outside Burrow pick a time; it lands on your calendar.</div>
+            <Hosts.invite_card invite={@cohost_invite} />
             <div class="cal-links">
               <div class="flex flex-col gap-2">
                 <button
@@ -618,6 +641,7 @@ defmodule PlatformWeb.BookingSettingsLive do
                     </button>
                   </div>
                 </div>
+                <Hosts.hosts_section hosts={@hosts} blocked={@hosts_blocked} picker={@host_picker} />
                 <div :if={@meetings_on} class="cal-meetopt" data-role="booking-meeting-option">
                   <div class="flex items-center gap-3">
                     <span class="min-w-0 flex-1">
@@ -666,6 +690,8 @@ defmodule PlatformWeb.BookingSettingsLive do
                 <div class="cal-field" data-role="booking-preview">
                   Next open slots (what a guest sees)
                   <%= case @preview do %>
+                    <% :blocked -> %>
+                      <span class="cal-hint">No times are offered until every co-host is ready.</span>
                     <% :unknown -> %>
                       <span class="cal-hint">
                         Availability can’t be confirmed until every external calendar has refreshed.
@@ -698,6 +724,7 @@ defmodule PlatformWeb.BookingSettingsLive do
                 </div>
               </div>
             </div>
+            <Hosts.cohosted rows={@cohosted} />
             <section
               :if={@receipts != []}
               class="cal-panel flex flex-col gap-2"
