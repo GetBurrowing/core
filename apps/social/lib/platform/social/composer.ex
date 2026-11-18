@@ -405,7 +405,7 @@ defmodule Platform.Social.Composer do
     from(p in Post,
       join: a in Account,
       on: a.id == p.account_id,
-      where: a.profile_id == ^profile_id and not is_nil(p.body),
+      where: a.profile_id == ^profile_id and p.flow == "legacy" and not is_nil(p.body),
       order_by: [desc: p.inserted_at],
       limit: @recent_posts,
       select: p.body

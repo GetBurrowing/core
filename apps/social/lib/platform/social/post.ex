@@ -22,6 +22,20 @@ defmodule Platform.Social.Post do
   @statuses ~w(draft needs_approval approved scheduled published failed)
   @approved_statuses ~w(approved scheduled published)
 
+  # Social Studio (slice A). A post is `legacy` (every pre-Studio row and every
+  # row a legacy writer inserts) or `studio`. `flow` is in NO cast list: only
+  # `studio_changeset/2`'s caller sets it, on the struct, at insert, and
+  # nothing changes it afterwards. A Studio row is confined to
+  # `@studio_statuses` and holds no vendor id (DB CHECKs, the second line of
+  # defence behind the code refusals on every send-side path).
+  @max_body 10_000
+  @max_reason 2_000
+
+  @duplicate_destination "duplicate_destination"
+  @flows ~w(legacy studio)
+  @studio_statuses ~w(draft needs_approval approved planned)
+  @studio_creatable ~w(draft needs_approval)
+
   @type t :: %__MODULE__{}
 
   schema "social_posts" do
@@ -113,6 +127,15 @@ defmodule Platform.Social.Post do
     # `options_changeset/2`, called by `Platform.Social.set_platform_options/4`.
     field(:platform_options, :map, default: %{})
 
+    # Social Studio (slice A). In NO cast list.
+    field(:flow, :string, default: "legacy")
+    field(:version, :integer, default: 1)
+    field(:state_rev, :integer, default: 0)
+    # The destination named at creative acceptance: written once, never cast.
+    field(:accepted_account_id, :binary_id)
+    belongs_to(:planned_by_user, Platform.Accounts.User)
+    field(:planned_set_at, :utc_datetime_usec)
+
     timestamps()
   end
 
@@ -141,6 +164,78 @@ defmodule Platform.Social.Post do
   @doc "Accepted `status` values."
   @spec statuses() :: [String.t()]
   def statuses, do: @statuses
+
+  @doc "Accepted `flow` values."
+  @spec flows() :: [String.t()]
+  def flows, do: @flows
+
+  @doc "The statuses a Studio post can hold (the DB boundary CHECK)."
+  @spec studio_statuses() :: [String.t()]
+  def studio_statuses, do: @studio_statuses
+
+  @doc "Whether the post belongs to the Studio flow."
+  @spec studio?(t() | term()) :: boolean()
+  def studio?(%__MODULE__{flow: "studio"}), do: true
+  def studio?(_), do: false
+
+  @doc """
+  The ONLY creation changeset for a Studio post (`Platform.Social.Studio`).
+  Casts the content fields a human drafts, allows only `draft` and
+  `needs_approval`, and never casts `flow`, `version`, the plan columns or
+  the approver. The caller sets `flow: "studio"` on the struct.
+  """
+  @spec studio_create_changeset(t(), map()) :: Ecto.Changeset.t()
+  def studio_create_changeset(%__MODULE__{} = post, attrs) do
+    post
+    |> cast(attrs, ~w(body media_file_ids link_url status)a)
+    |> cast(attrs, @publisher_fields)
+    |> validate_required([:body, :status])
+    |> validate_inclusion(:status, @studio_creatable)
+    |> validate_length(:body, max: @max_body)
+    |> unique_constraint(:account_id,
+      name: :social_posts_studio_destination_key,
+      message: @duplicate_destination
+    )
+    |> db_constraints()
+  end
+
+  @studio_content ~w(body media_file_ids link_url cover_file_id cover_offset_ms platform_options
+                     is_aigc ai_disclosure)a
+
+  @doc "The content fields `Platform.Social.Studio.save_version/5` accepts (plus `account_id`)."
+  @spec studio_content_fields() :: [atom()]
+  def studio_content_fields, do: @studio_content
+
+  @doc """
+  The changes a Studio version save would make to `post`: only the content
+  fields that really differ (an empty map means nothing to save). Validated
+  against a copy of the post in an editable status, because the legacy
+  cover rule locks past `needs_approval`, while a Studio edit of an approved
+  post is allowed and revokes the approval instead. Returns
+  `{:ok, changes}` or `{:error, changeset}`.
+  """
+  @spec studio_content_changes(t(), map(), Platform.Social.Cover.ctx()) ::
+          {:ok, map()} | {:error, Ecto.Changeset.t()}
+  def studio_content_changes(%__MODULE__{} = post, attrs, ctx) do
+    validated =
+      %{post | status: "draft"}
+      |> cast(attrs, @studio_content)
+      |> validate_required([:body])
+      |> validate_length(:body, max: @max_body)
+      |> Platform.Social.Cover.validate(attrs, ctx)
+
+    if validated.valid?, do: {:ok, validated.changes}, else: {:error, validated}
+  end
+
+  @doc """
+  Whether `changeset` failed on the one-Studio-post-per-render-and-destination
+  index (`social_posts_studio_destination_key`); callers answer
+  `{:error, :duplicate_destination}`.
+  """
+  @spec duplicate_destination?(Ecto.Changeset.t()) :: boolean()
+  def duplicate_destination?(%Ecto.Changeset{errors: errors}) do
+    match?({@duplicate_destination, _}, errors[:account_id])
+  end
 
   @doc "Statuses a post may hold only once a human has approved it."
   @spec approved_statuses() :: [String.t()]
@@ -256,9 +351,6 @@ defmodule Platform.Social.Post do
   @spec refusal_cleared() :: keyword()
   def refusal_cleared, do: [refused_reason: nil, refused_at: nil, retry_after: nil]
 
-  @max_body 10_000
-  @max_reason 2_000
-
   @doc """
   A human approver's edit on the approval card (Social 3/7): casts ONLY
   `body`. The status stays `needs_approval`.
@@ -308,6 +400,10 @@ defmodule Platform.Social.Post do
   defp db_constraints(changeset) do
     changeset
     |> check_constraint(:status, name: :social_posts_status_check)
+    |> check_constraint(:status, name: :social_posts_planned_only_studio_check)
+    |> check_constraint(:status, name: :social_posts_studio_boundary_check)
+    |> check_constraint(:version, name: :social_posts_version_check)
+    |> check_constraint(:state_rev, name: :social_posts_state_rev_check)
     |> check_constraint(:approved_by_user_id,
       name: :social_posts_approved_needs_approver_check,
       message: "is required once a post is approved, scheduled or published"

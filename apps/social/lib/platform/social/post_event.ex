@@ -16,7 +16,8 @@ defmodule Platform.Social.PostEvent do
   @timestamps_opts [type: :utc_datetime_usec, updated_at: false]
 
   @actor_kinds ~w(agent human system)
-  @actions ~w(created edited submitted approved rejected revision_requested published failed refused)
+  @actions ~w(created edited submitted approved rejected revision_requested published failed refused
+              version_saved approval_revoked planned plan_cancelled retargeted)
 
   @type t :: %__MODULE__{}
 
@@ -29,6 +30,9 @@ defmodule Platform.Social.PostEvent do
     field(:body_before, :string)
     field(:body_after, :string)
     field(:note, :string)
+    # Social Studio slice A: the version and account the entry is about.
+    field(:post_version, :integer)
+    field(:account_id, :binary_id)
 
     timestamps()
   end
@@ -45,7 +49,8 @@ defmodule Platform.Social.PostEvent do
   @spec changeset(t(), map()) :: Ecto.Changeset.t()
   def changeset(%__MODULE__{} = event, attrs) do
     event
-    |> cast(attrs, ~w(post_id idea_id actor_kind actor_id action body_before body_after note)a)
+    |> cast(attrs, ~w(post_id idea_id actor_kind actor_id action body_before body_after note
+         post_version account_id)a)
     |> validate_required([:post_id, :actor_kind, :action])
     |> validate_inclusion(:actor_kind, @actor_kinds)
     |> validate_inclusion(:action, @actions)

@@ -85,6 +85,7 @@ defmodule PlatformWeb.SocialLive do
       |> assign(:invite_nonce, nil)
 
     socket = SocialTabs.reduce(tabs, socket, fn mod, acc -> mod.init(acc) end)
+    socket = PlatformWeb.SocialTodayTab.init(socket)
     socket = SocialScope.load_profile(socket, List.first(profiles))
     query = session["query"]
 
@@ -202,7 +203,10 @@ defmodule PlatformWeb.SocialLive do
     |> then(
       &SocialTabs.reduce(&1.assigns.tabs, &1, fn mod, acc -> mod.from_query(acc, query) end)
     )
-    |> SocialScope.select_tab(query["tab"])
+    |> then(fn socket ->
+      tab = query["tab"] || if(SocialTabs.get(socket.assigns.tabs, "today"), do: "today")
+      SocialScope.select_tab(socket, tab)
+    end)
   end
 
   defp select_from_query(socket, _profiles, _query), do: socket
@@ -232,7 +236,7 @@ defmodule PlatformWeb.SocialLive do
             tab_items={@tab_items}
           />
           <section
-            class="min-h-0 flex-1 overflow-y-auto px-4 py-4 sm:px-6"
+            class="min-h-0 flex-1 overflow-y-auto px-4 pt-4 pb-[calc(env(safe-area-inset-bottom)+var(--bottom-nav-height,0px)+var(--bottom-nav-gap,0px)+1rem)] sm:px-6"
             data-role="social-tab-body"
             data-tab={@tab}
           >
