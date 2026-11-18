@@ -10,7 +10,8 @@ defmodule Platform.Roles.Role do
     * `key` — the natural primary key. One of the closed enum
       `designer | historian | meeting_scribe |
       triage_officer | security_guard | architect | agents_leader |
-      scientist | janitor | showrunner` (stack decision #2:
+      scientist | janitor | showrunner | doctor | relationship_steward`
+      (stack decision #2:
       role roster is fixed by the platform, not user-extensible).
       Enforced by both the changeset and a DB CHECK constraint,
       mirroring `org_memberships.role`. `architect` was added in
@@ -24,7 +25,9 @@ defmodule Platform.Roles.Role do
       `showrunner` was added in task `01a1eaf6` stage 3 as the owner of the
       How to Computer `showrunner.*` keys. `meeting_producer` was merged
       into `meeting_scribe` in the super agents restructure; see
-      `retired_keys/0`.
+      `retired_keys/0`. `doctor` (`doctor.checkup`) and
+      `relationship_steward` (`relationships.follow_up_sweep`) are the two
+      super-agent roles the sponsor approved on 2026-11-18.
     * `name` — human-presentable label.
     * `description` — one-line explanation of what the role owns.
     * `icon` — hero-icon slug (e.g. `hero-paint-brush`).
@@ -46,7 +49,7 @@ defmodule Platform.Roles.Role do
   @derive {Phoenix.Param, key: :key}
   @foreign_key_type :string
 
-  @valid_keys ~w(designer historian meeting_scribe triage_officer security_guard architect agents_leader scientist janitor showrunner)
+  @valid_keys ~w(designer historian meeting_scribe triage_officer security_guard architect agents_leader scientist janitor showrunner doctor relationship_steward)
 
   # Role keys that no longer exist, mapped to the role that absorbed them.
   # Read paths (`Platform.Roles.get_role/1`, `bundle_for/1`,

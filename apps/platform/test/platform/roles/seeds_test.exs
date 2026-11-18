@@ -97,15 +97,15 @@ defmodule Platform.Roles.SeedsTest do
   end
 
   describe "seed_defaults/0" do
-    test "inserts ten roles and forty bundle rows on a fresh DB" do
+    test "inserts twelve roles and forty-two bundle rows on a fresh DB" do
       assert :ok = Seeds.seed_defaults()
 
       # 10 roles: designer, historian, meeting_producer, meeting_scribe,
       # triage_officer, security_guard, architect (ADR-0044 stage 1),
       # agents_leader (task 01a0b491 stage 1), scientist (task 01a0d415
       # stage 3), janitor (task 019fa1ac-6685 stage 1), showrunner (task
-      # 01a1eaf6 stage 3).
-      assert Repo.aggregate(Role, :count, :key) == 10
+      # 01a1eaf6 stage 3), doctor and relationship_steward (super agents).
+      assert Repo.aggregate(Role, :count, :key) == 12
 
       # 26 bundle rows = 6 (designer) + 4 (historian) + 1 (meeting_producer)
       #                + 4 (meeting_scribe) + 4 (triage_officer)
@@ -175,20 +175,25 @@ defmodule Platform.Roles.SeedsTest do
       # count does not change for it) and four registration-only stubs left
       # (`design.spec_writer`, `design.brand_check`, `tasks.unblock`,
       # `tasks.weekly_review`).
-      assert Repo.aggregate(RoleResponsibility, :count, :id) == 40
+      # 40 -> 42 with the super agents: `doctor` (`doctor.checkup`) and
+      # `relationship_steward` (`relationships.follow_up_sweep`) moved BOTH
+      # numbers (roster 10 -> 12). Each is its own role because each is a
+      # permission split: install-wide health reads for the doctor, granted
+      # mail content for the steward.
+      assert Repo.aggregate(RoleResponsibility, :count, :id) == 42
     end
 
     test "is idempotent — calling twice does not duplicate rows" do
       assert :ok = Seeds.seed_defaults()
       assert :ok = Seeds.seed_defaults()
 
-      assert Repo.aggregate(Role, :count, :key) == 10
+      assert Repo.aggregate(Role, :count, :key) == 12
 
-      # Same 40 as the fresh-DB case above — the point of this test is
+      # Same 42 as the fresh-DB case above — the point of this test is
       # that the SECOND `seed_defaults/0` adds nothing, so the number
       # must be read off the same breakdown rather than drifting into
       # an independent literal.
-      assert Repo.aggregate(RoleResponsibility, :count, :id) == 40
+      assert Repo.aggregate(RoleResponsibility, :count, :id) == 42
     end
 
     test "each role's bundle round-trips via Platform.Roles.bundle_for/1" do

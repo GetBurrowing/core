@@ -36,6 +36,12 @@ defmodule Platform.Roles.Seeds do
       is a Router cron responsibility. No assignment is seeded.
     * `showrunner` — the weekly How to Computer prep: pitch, research brief,
       run sheet (added in task `01a1eaf6` stage 3). No assignment is seeded.
+    * `doctor` — heals the install itself: crashed or logged-out agents,
+      stuck dispatches, unreachable responsibilities, held updates. Safe
+      heals only; everything destructive escalates. No assignment is seeded.
+    * `relationship_steward` — follow-ups owed, quiet threads and meeting
+      commitments for client and partner relationships. Drafts; never
+      sends. No assignment is seeded.
     * `security_guard` — periodic scans for CVEs, code patterns,
       deploy config drift, and leaked secrets (see ADR-0043 for the
       runtime design; the four bundled keys register as placeholders
@@ -263,6 +269,37 @@ defmodule Platform.Roles.Seeds do
         "showrunner.recording_prep",
         "showrunner.post_show",
         "showrunner.retro"
+      ]
+    },
+    %{
+      key: "doctor",
+      name: "Doctor",
+      description:
+        "Watches install health and heals what it safely can: crashed agents, stuck dispatches, failing responsibilities, held updates",
+      icon: "hero-heart",
+      # Super agents (sponsor-approved 2026-11-18). Its own role, not a key on
+      # an existing bundle: it reads install-wide health no product role
+      # should hold, and it judges other agents' failures, so it must not be
+      # one of them. Existing DBs pick it up from
+      # `20261118230000_add_doctor_and_relationship_steward_roles.exs`. NO
+      # ASSIGNMENT IS SEEDED: until an agent is pinned
+      # (`Platform.Doctor.provision/1`), every fire is `{:ok, :unfilled}`.
+      bundle: [
+        "doctor.checkup"
+      ]
+    },
+    %{
+      key: "relationship_steward",
+      name: "Relationship Steward",
+      description:
+        "Keeps track of client and partner relationships: follow-ups owed, quiet threads, meeting commitments. Drafts; never sends",
+      icon: "hero-user-group",
+      # Super agents (sponsor-approved 2026-11-18). Its own role: it reads
+      # granted mail content, which no other role does (the Scientist's
+      # labeller is deliberately blind). Same migration as `doctor`. NO
+      # ASSIGNMENT IS SEEDED (`Handlers.RelationshipsFollowUpSweep.provision/1`).
+      bundle: [
+        "relationships.follow_up_sweep"
       ]
     }
   ]

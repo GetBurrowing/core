@@ -1583,7 +1583,7 @@ defmodule PlatformWeb.ControlCenterLiveTest do
   end
 
   describe "Roles panel (M7 stage 5)" do
-    test "GET /control with no agent selected renders 10 role rows + UNFILLED pills", %{
+    test "GET /control with no agent selected renders 12 role rows + UNFILLED pills", %{
       conn: conn
     } do
       conn = authenticated_conn(conn)
@@ -1596,8 +1596,9 @@ defmodule PlatformWeb.ControlCenterLiveTest do
       # added `agents_leader`, 7→8; task 01a0d415 stage 3 added `scientist`,
       # 8→9; task 019fa1ac-6685 stage 1 added `janitor`, 9→10; task 01a1eaf6
       # stage 3 added `showrunner`, 10→11; the super agents restructure
-      # merged `meeting_producer` into `meeting_scribe`, 11→10.
-      assert html =~ "Roles (10)"
+      # merged `meeting_producer` into `meeting_scribe`, 11→10; the super agents `doctor` and
+      # `relationship_steward`, 10→12.
+      assert html =~ "Roles (12)"
 
       # Each of the ten seeded roles renders with name + icon class.
       assert html =~ "Agents Leader"
@@ -1605,6 +1606,10 @@ defmodule PlatformWeb.ControlCenterLiveTest do
       assert html =~ "hero-wrench-screwdriver"
       assert html =~ "Showrunner"
       assert html =~ "hero-video-camera"
+      assert html =~ "Doctor"
+      assert html =~ "hero-heart"
+      assert html =~ "Relationship Steward"
+      assert html =~ "hero-user-group"
       assert html =~ "Scientist"
       assert html =~ "Architect"
       assert html =~ "Designer"

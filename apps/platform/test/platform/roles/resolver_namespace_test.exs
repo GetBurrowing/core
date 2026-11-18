@@ -102,7 +102,8 @@ defmodule Platform.Roles.ResolverNamespaceTest do
       # 9 -> 10: `janitor` (task 019fa1ac-6685 stage 1).
       # 10 -> 11: `showrunner` (task 01a1eaf6 stage 3).
       # 11 -> 10: `meeting_producer` merged into `meeting_scribe`.
-      assert MapSet.size(role_keys) == 10
+      # 10 -> 12: `doctor` and `relationship_steward` (super agents).
+      assert MapSet.size(role_keys) == 12
       refute Enum.empty?(bundled_keys)
 
       assert MapSet.disjoint?(role_keys, bundled_keys),
