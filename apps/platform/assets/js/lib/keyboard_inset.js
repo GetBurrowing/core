@@ -51,6 +51,13 @@ function startWatcher(win, vv, root) {
   let width = win.innerWidth
   let baseline = Math.max(vv.height, win.innerHeight || 0)
   let last = { open: false, inset: 0, height: 0 }
+  // The no-keyboard height per width, so rotating back to a width already
+  // seen restores its real baseline. Without it, a keyboard that stays up
+  // through a rotation became the new baseline and read as closed: back in
+  // portrait the dock sat behind the keyboard with the @mention list
+  // (measured, iOS 26.3 Simulator Safari, task 01a1c863 stage 3: vv 409 of
+  // 714 after landscape -> portrait, data-keyboard-open absent).
+  const baselines = new Map([[width, baseline]])
 
   const apply = (state) => {
     if (state.open === last.open && state.inset === last.inset && state.height === last.height) return
@@ -70,7 +77,7 @@ function startWatcher(win, vv, root) {
     // A rotation or window resize changes what "no keyboard" means.
     if (win.innerWidth !== width) {
       width = win.innerWidth
-      baseline = vv.height
+      baseline = baselines.get(width) ?? vv.height
     }
     const state = keyboardState({
       innerHeight: win.innerHeight,
@@ -79,6 +86,7 @@ function startWatcher(win, vv, root) {
       baseline,
     })
     if (!state.open) baseline = Math.max(baseline, vv.height)
+    baselines.set(width, baseline)
     apply({ ...state, height: state.open ? Math.round(vv.height) : 0 })
   }
 
@@ -120,4 +128,69 @@ export function watchKeyboard(win = globalThis.window, doc = globalThis.document
     watchers.delete(vv)
     watcher.stop()
   }
+}
+
+// The visible viewport in CLIENT coordinates, the space getBoundingClientRect
+// returns (task 01a1c863). Every "room above the composer" measurement must
+// subtract this top, never `visualViewport.offsetTop` directly.
+//
+// Why not offsetTop. Client rects are relative to the layout viewport, and
+// offsetTop is the visual viewport's offset from it, so in Chromium (pinch
+// zoom, the CDP keyboard of #150) `offsetTop` IS the visible top in client
+// space. iOS WebKit with the keyboard up disagrees with itself: it scrolls the
+// document (scrollY 337) and reports client rects against that scrolled view,
+// so the visible band is client 0..visualViewport.height, yet it still reports
+// offsetTop 337. Subtracting it counted the pan twice and clamped the
+// @mention list to 0px (measured, iOS 26.3 Simulator Mobile Safari).
+//
+// `pageTop - scrollY` is the same quantity in both engines: pageTop is the
+// visual viewport's top in document coordinates and scrollY is the layout
+// viewport's, so their difference is the visible top in client space
+// (Chromium: scrollY + offsetTop - scrollY = offsetTop; WebKit: 337 - 337 =
+// 0). Where either is missing (older engines, the unit tests' mocks), fall
+// back to offsetTop, which is what #150 used.
+function clientOffset(page, scroll, offset) {
+  if (Number.isFinite(page) && Number.isFinite(scroll)) return page - scroll
+  return offset || 0
+}
+
+export function visibleViewportRect(win = globalThis.window) {
+  const vv = win?.visualViewport
+  const width = vv?.width ?? win?.innerWidth ?? Infinity
+  const height = vv?.height ?? win?.innerHeight ?? Infinity
+  if (!vv) return { top: 0, left: 0, width, height }
+  return {
+    top: clientOffset(vv.pageTop, win.scrollY, vv.offsetTop),
+    left: clientOffset(vv.pageLeft, win.scrollX, vv.offsetLeft),
+    width,
+    height,
+  }
+}
+
+// Where `position: fixed` puts (0, 0), in CLIENT coordinates (task 01a1c863
+// stage 3). Fixed boxes are laid out against the layout viewport. Chromium
+// reports client rects against that same viewport, so the origin is 0. iOS
+// WebKit with the keyboard up scrolls the document and reports client rects
+// against the scrolled view, while the layout viewport stays put: the origin
+// sits at client -offsetTop. Measured in iOS 26.3 Simulator Safari: a thread
+// reply's fixed @ panel given `top: 336.5px` (the field's client top) drew
+// its bottom edge at client -0.5, wholly off screen. visibleTop - offsetTop
+// gives 0 in Chromium (pageTop - scrollY = offsetTop) and -offsetTop in
+// panned WebKit (pageTop - scrollY = 0). Subtract it from a client
+// coordinate to get the value to write into a fixed box's top/left.
+export function fixedOriginInClient(win = globalThis.window) {
+  const vv = win?.visualViewport
+  if (!vv) return { top: 0, left: 0 }
+  const visible = visibleViewportRect(win)
+  return { top: visible.top - (vv.offsetTop || 0), left: visible.left - (vv.offsetLeft || 0) }
+}
+
+// The room for an upward-opening list whose bottom edge sits on `anchorTop`
+// (a client y), bounded by the visible viewport's top and by `ceilingTop`
+// (a client y such as the chat zone's top, below the header), less `gap`.
+// Shared by the channel composer (ChatDock) and the thread reply
+// (ComposeInput) so the two cannot drift apart again.
+export function roomAbove(anchorTop, { win = globalThis.window, ceilingTop = -Infinity, gap = 0 } = {}) {
+  const top = Math.max(visibleViewportRect(win).top, ceilingTop)
+  return Math.max(0, Math.floor(anchorTop - top - gap))
 }
