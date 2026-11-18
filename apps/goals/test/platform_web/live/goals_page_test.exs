@@ -734,6 +734,7 @@ defmodule PlatformWeb.GoalsPageTest do
       child |> element("[data-role='goal-coach-change']") |> render_click()
 
       doc = child |> render() |> Floki.parse_fragment!()
+
       classes = fn node ->
         node |> Floki.attribute("class") |> Enum.join(" ") |> String.split()
       end
