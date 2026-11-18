@@ -114,6 +114,10 @@ defmodule Platform.Roles.CoverageTest do
       assert bundle == [
                "design.brand_check",
                "design.critique",
+               # Task 01a1f048: the UX super agent loop.
+               "design.prototype_eval",
+               "design.reflect",
+               "design.scout",
                "design.spec_writer",
                "design.task_direction",
                "meetings.interaction_design",
@@ -296,6 +300,9 @@ defmodule Platform.Roles.CoverageTest do
       assert Roles.responsibilities_for("designer", exclude_overridden: true) ==
                [
                  "design.critique",
+                 "design.prototype_eval",
+                 "design.reflect",
+                 "design.scout",
                  "design.spec_writer",
                  "design.task_direction",
                  "meetings.interaction_design",
@@ -317,6 +324,10 @@ defmodule Platform.Roles.CoverageTest do
       {:ok, _} = Roles.set_override("meetings.interaction_design", override_agent.id)
       {:ok, _} = Roles.set_override("meetings.visual_adjust", override_agent.id)
       {:ok, _} = Roles.set_override("ux.friction_watch", override_agent.id)
+      # Ten keys since task 01a1f048 (the super agent loop).
+      {:ok, _} = Roles.set_override("design.prototype_eval", override_agent.id)
+      {:ok, _} = Roles.set_override("design.reflect", override_agent.id)
+      {:ok, _} = Roles.set_override("design.scout", override_agent.id)
 
       assert Roles.responsibilities_for("designer", exclude_overridden: true) == []
 

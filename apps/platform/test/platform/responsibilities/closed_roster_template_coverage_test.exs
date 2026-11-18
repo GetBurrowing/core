@@ -106,6 +106,12 @@ defmodule Platform.Responsibilities.ClosedRosterTemplateCoverageTest do
     "architecture.review_plan.v1",
     "design.brand_check.v1",
     "design.critique.v1",
+    # Task 01a1f048: the UX super agent loop. Reference rows (each handler
+    # owns build_prompt/1) seeded by
+    # `20261118220000_seed_designer_loop_templates_and_bundle.exs`.
+    "design.prototype_eval.v1",
+    "design.reflect.v1",
+    "design.scout.v1",
     "design.spec_writer.v1",
     "design.task_direction.v1",
     # Task 01a0d415 stage 3: `experiments.label_signal` (the scientist

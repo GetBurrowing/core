@@ -122,6 +122,42 @@ defmodule Platform.Designer.ProvisionTest do
     assert Repo.get!(Agent, agent.id).metadata["ux_digest_space_id"] == digest.id
   end
 
+  test "phase 1's keep-rate goal is retargeted to friction drop in place, keeping its id",
+       %{attrs: attrs} do
+    {:ok, phase1} =
+      %Goal{}
+      |> Goal.changeset(%{
+        "statement" => Designer.keep_rate_statement(),
+        "metric_spec" => %{"kind" => "registered", "slug" => Designer.keep_rate_metric()},
+        "status" => "active"
+      })
+      |> Repo.insert()
+
+    assert {:ok, %{goal: {:retargeted, id}}} = Designer.provision(attrs)
+    assert id == phase1.id
+    goal = Repo.get!(Goal, id)
+    assert goal.metric_spec["slug"] == "ux_friction_drop"
+    assert goal.statement =~ "ux_finding_keep_rate"
+
+    assert {:ok, %{goal: {:exists, ^id}}} = Designer.provision(attrs)
+  end
+
+  test "seeds the pattern cards into the home space, once", %{
+    agent: agent,
+    attrs: attrs,
+    digest: digest
+  } do
+    assert {:ok, %{cards: %{written: n, kept: 0}}} = Designer.provision(attrs)
+    assert n >= 20
+
+    agent = Repo.get!(Agent, agent.id)
+    assert agent.metadata[Platform.Designer.Cards.home_key()] == digest.id
+
+    assert {:ok, %{cards: %{written: 0, kept: ^n}}} = Designer.provision(attrs)
+
+    assert {:ok, %{cards: :skipped}} = Designer.provision(Map.put(attrs, :seed_cards, false))
+  end
+
   test "a role held by another agent is refused unless reassign: true", %{attrs: attrs} do
     other = agent!("other")
     {:ok, _} = Platform.Roles.assign_role("designer", other.id)

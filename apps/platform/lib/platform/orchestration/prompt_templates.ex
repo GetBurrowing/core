@@ -1536,6 +1536,45 @@ defmodule Platform.Orchestration.PromptTemplates do
         """
       },
       %{
+        slug: "design.reflect.v1",
+        name: "Designer — Reflect",
+        description:
+          "Reference row for the `design.reflect` responsibility (designer bundle, task 01a1f048). " <>
+            "Its prompt is built in code by `Platform.Responsibilities.Handlers.DesignReflect.build_prompt/1`, so editing this row " <>
+            "changes nothing a dispatch says. Seeded by " <>
+            "`20261118220000_seed_designer_loop_templates_and_bundle.exs`.",
+        variables: [],
+        content: """
+        The `design.reflect` prompt is built in code by Platform.Responsibilities.Handlers.DesignReflect.build_prompt/1, so the designer's rules (outcome-only card moves, the 0.7 reflection cap, the scout budget, the cross-vendor evaluator) cannot be edited away here. This row exists so the responsibility names a seeded template.
+        """
+      },
+      %{
+        slug: "design.scout.v1",
+        name: "Designer — Scout",
+        description:
+          "Reference row for the `design.scout` responsibility (designer bundle, task 01a1f048). " <>
+            "Its prompt is built in code by `Platform.Responsibilities.Handlers.DesignScout.build_prompt/1`, so editing this row " <>
+            "changes nothing a dispatch says. Seeded by " <>
+            "`20261118220000_seed_designer_loop_templates_and_bundle.exs`.",
+        variables: [],
+        content: """
+        The `design.scout` prompt is built in code by Platform.Responsibilities.Handlers.DesignScout.build_prompt/1, so the designer's rules (outcome-only card moves, the 0.7 reflection cap, the scout budget, the cross-vendor evaluator) cannot be edited away here. This row exists so the responsibility names a seeded template.
+        """
+      },
+      %{
+        slug: "design.prototype_eval.v1",
+        name: "Designer — Prototype Eval",
+        description:
+          "Reference row for the `design.prototype_eval` responsibility (designer bundle, task 01a1f048). " <>
+            "Its prompt is built in code by `Platform.Responsibilities.Handlers.DesignPrototypeEval.build_prompt/1`, so editing this row " <>
+            "changes nothing a dispatch says. Seeded by " <>
+            "`20261118220000_seed_designer_loop_templates_and_bundle.exs`.",
+        variables: [],
+        content: """
+        The `design.prototype_eval` prompt is built in code by Platform.Responsibilities.Handlers.DesignPrototypeEval.build_prompt/1, so the designer's rules (outcome-only card moves, the 0.7 reflection cap, the scout budget, the cross-vendor evaluator) cannot be edited away here. This row exists so the responsibility names a seeded template.
+        """
+      },
+      %{
         slug: "ux.friction_watch.v1",
         name: "UX — Friction Watch Grouping",
         description:

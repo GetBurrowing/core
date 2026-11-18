@@ -250,7 +250,7 @@ defmodule Platform.Responsibilities.Handlers.DesignTaskDirectionTest do
   # ── role bundle ───────────────────────────────────────────────────────────
 
   describe "the designer role bundle" do
-    test "seed_defaults/0 lands all six keys, and a second run inserts nothing" do
+    test "seed_defaults/0 lands all ten keys, and a second run inserts nothing" do
       # The migration already seeded this DB, so clear the designer pairs
       # first — otherwise "seed_defaults inserted the key" would be
       # indistinguishable from "the key was already there".
@@ -271,6 +271,10 @@ defmodule Platform.Responsibilities.Handlers.DesignTaskDirectionTest do
       assert Roles.bundle_for("designer") == [
                "design.brand_check",
                "design.critique",
+               # Seven → ten, task 01a1f048: the super agent loop.
+               "design.prototype_eval",
+               "design.reflect",
+               "design.scout",
                "design.spec_writer",
                "design.task_direction",
                "meetings.interaction_design",
@@ -280,7 +284,7 @@ defmodule Platform.Responsibilities.Handlers.DesignTaskDirectionTest do
              ]
 
       after_first = Repo.aggregate(RoleResponsibility, :count, :id)
-      assert after_first == before + 7
+      assert after_first == before + 10
 
       assert :ok = Platform.Roles.Seeds.seed_defaults()
       assert Repo.aggregate(RoleResponsibility, :count, :id) == after_first

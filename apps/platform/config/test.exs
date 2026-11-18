@@ -672,3 +672,8 @@ config :platform, :start_calendar_refresh, false
 # mechanism is covered by a test-only reader with a fixed uuid.
 config :platform, Platform.Vault,
   system_principals: %{"test-reader" => "5b6195d9-a785-48ac-b3b5-619708e4130e"}
+
+# The designer's super agent loop (`Platform.Designer.Loop`) fires inline in
+# tests, so its responsibility dispatch runs inside the test's sandbox rather
+# than in an unowned task.
+config :platform, :designer_loop_mode, :sync
