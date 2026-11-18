@@ -411,6 +411,33 @@ defmodule Platform.MeetingsTest do
       assert selected.status == "failed"
     end
 
+    test "get_summarizable_transcript_for_room/1 picks the later call's RECORDING row over an earlier call's larger COMPLETE row" do
+      # One room per space: an earlier call left a big complete row; a later
+      # call is still recording with fewer segments. Ranking by segment count
+      # alone picked the complete row, the webhook answered "already
+      # finalized", and the later call stayed `recording` forever.
+      room_id = invented_room()
+      base = ~U[2026-01-01 10:00:00.000000Z]
+
+      earlier = transcript_at(room_id, 9, base, "complete")
+      later = transcript_at(room_id, 3, DateTime.add(base, 86_400, :second), "recording")
+
+      # Anti-vacuity: the earlier row really does hold more segments.
+      assert length(earlier.segments) > length(later.segments)
+
+      assert Meetings.get_summarizable_transcript_for_room(room_id).id == later.id
+    end
+
+    test "get_summarizable_transcript_for_room/1 does not let an EMPTY recording row outrank content" do
+      room_id = invented_room()
+      base = ~U[2026-01-01 10:00:00.000000Z]
+
+      populated = transcript_at(room_id, 7, base, "processing")
+      _empty_recording = transcript_at(room_id, 0, DateTime.add(base, 600, :second), "recording")
+
+      assert Meetings.get_summarizable_transcript_for_room(room_id).id == populated.id
+    end
+
     test "get_summarizable_transcript_for_room/1 is nil for a room with no rows" do
       assert Meetings.get_summarizable_transcript_for_room(invented_room()) == nil
     end

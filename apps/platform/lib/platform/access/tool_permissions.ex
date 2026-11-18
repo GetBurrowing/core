@@ -30,7 +30,7 @@ defmodule Platform.Access.ToolPermissions do
               {"mail.use",
                ~w(mail_digest mail_draft_create mail_draft_update mail_inbound_get mail_inbound_list)},
               {"meetings.join",
-               ~w(intent_ack meeting_activity_push meeting_create meeting_say meeting_scribe_complete meeting_triage_file voice_ask_agent voice_ask_poll)},
+               ~w(intent_ack meeting_activity_push meeting_create meeting_say meeting_scribe_complete meeting_summary_complete meeting_triage_file voice_ask_agent voice_ask_poll)},
               {"memory.journal", ~w(memory_create)},
               {"memory.read",
                ~w(memory_search memory_view org_memory_feedback_at_path org_memory_recently_deleted org_memory_recently_edited)},
@@ -70,7 +70,7 @@ defmodule Platform.Access.ToolPermissions do
     "mail" =>
       ~w(mail_draft_create mail_draft_update mail_inbound_list mail_inbound_get mail_digest),
     "meetings" =>
-      ~w(meeting_create meeting_say meeting_scribe_complete meeting_triage_file meeting_activity_push intent_ack),
+      ~w(meeting_create meeting_say meeting_scribe_complete meeting_triage_file meeting_summary_complete meeting_activity_push intent_ack),
     "memory" =>
       ~w(memory_view memory_create memory_str_replace memory_insert memory_delete memory_rename memory_search org_memory_recently_edited org_memory_recently_deleted org_memory_feedback_at_path),
     "messaging" => ~w(send_media react),
