@@ -299,10 +299,13 @@
 
   <%!-- The detail pane. At lg and up it is always there; below lg only on
        /inbox/briefing/:date, where it is the whole screen. Stage 5 mounts the
-       briefing's own component in place of the header placeholder below. --%>
+       briefing's own component in place of the header placeholder below.
+       clears-tab-bar (task 01a1ecb3 stage 3): below lg this pane is the
+       scroller a briefing ends in, and the glass rail floated over its last
+       controls (the settings note's links) at the end of the scroll. --%>
   <section
     class={[
-      "min-w-0 flex-1 overflow-auto bg-base-200",
+      "min-w-0 flex-1 overflow-auto bg-base-200 clears-tab-bar",
       @live_action not in [:briefing, :meeting_briefing, :ux_decision] && "max-lg:hidden"
     ]}
     data-role="inbox-detail-pane"
