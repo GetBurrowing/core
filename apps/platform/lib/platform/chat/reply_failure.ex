@@ -91,6 +91,15 @@ defmodule Platform.Chat.ReplyFailure do
 
   @kind "reply_failure"
   @chat_declined_cause "chat_declined"
+
+  # Routing reasons that mean a person addressed this agent (an @mention, a
+  # DM, a reply to its message). Only these are watched for a missing reply:
+  # an ambient delivery (`:active_agent`, `:watch`) reaches the agent because
+  # it holds the channel, and saying nothing to "Bingo" or a pasted link is
+  # the right answer, not a failure (legacy-pie, 2026-11-16..18: every
+  # "Something went wrong before Butter could reply" sat under a message
+  # nobody had addressed to Butter).
+  @addressed_reasons [:mention, :directed, :multi_mention, :reply]
   @causes ~w(needs_login stopped crashed unknown)a
   @default_dedupe_s 300
 
@@ -210,11 +219,23 @@ defmodule Platform.Chat.ReplyFailure do
     })
   end
 
+  @doc "The routing reasons that mean a person addressed the agent."
+  @spec addressed_reasons() :: [atom()]
+  def addressed_reasons, do: @addressed_reasons
+
+  @doc "Whether `reason` means a person addressed the agent (`addressed_reasons/0`)."
+  @spec addressed_reason?(term()) :: boolean()
+  def addressed_reason?(reason), do: reason in @addressed_reasons
+
   @doc """
   Remember that `context`'s message was delivered to the agent's runtime, so
   a failure the agent host observes afterwards can still be reported for it
   (`notify_pending/1`). Only the last delivery per agent is kept, for
   `Dedupe.pending_ttl_ms/0`.
+
+  The no-reply watchdog is armed only when `context.reason` says a person
+  addressed the agent (`addressed_reason?/1`); an ambient delivery is
+  remembered for the host-observed path but never watched.
   """
   @spec remember_delivery(map()) :: :ok
   def remember_delivery(%{agent: %Agent{id: agent_id}, message: %Message{} = message} = context) do
