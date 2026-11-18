@@ -721,7 +721,7 @@ defmodule PlatformWeb.SocialTodayTab do
           <h2 class="text-lg font-semibold">Needs attention</h2>
           <p
             :if={@studio_today_posts == [] and @studio_today_clips == []}
-            class="text-base-content/70"
+            class="text-subtle"
           >
             Nothing needs your attention yet.
           </p>
@@ -788,7 +788,7 @@ defmodule PlatformWeb.SocialTodayTab do
             >
               {item.post.body || "Untitled post"}
             </button>
-            <p class="text-sm text-base-content/70">{item.profile.name}</p>
+            <p class="text-sm text-subtle">{item.profile.name}</p>
           </div>
         </section>
         <div class="min-w-0 space-y-3">
@@ -810,7 +810,7 @@ defmodule PlatformWeb.SocialTodayTab do
             :if={is_nil(@studio_post_detail)}
             class="rounded-box border border-base-content/25 bg-base-100 p-4"
           >
-            <p class="text-base-content/70">Select a post to review its content and history.</p>
+            <p class="text-subtle">Select a post to review its content and history.</p>
           </section>
           <section
             :if={@studio_post_detail}
