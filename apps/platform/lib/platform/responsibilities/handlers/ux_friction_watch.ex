@@ -106,9 +106,9 @@ defmodule Platform.Responsibilities.Handlers.UxFrictionWatch do
   end
 
   @impl true
-  def gather_context(%Responsibility{key: @key}, ctx) when is_map(ctx) do
+  def gather_context(%Responsibility{key: @key} = row, ctx) when is_map(ctx) do
     agent = safe_assignee()
-    opts = run_opts(ctx)
+    opts = run_opts(ctx, row)
     {:ok, summary} = FrictionWatch.run(agent, opts)
     digest = maybe_digest(agent, ctx, opts)
 
@@ -158,12 +158,15 @@ defmodule Platform.Responsibilities.Handlers.UxFrictionWatch do
   defp digest_tag({:error, _}), do: "failed"
   defp digest_tag(:not_run), do: "not_run"
 
-  defp run_opts(ctx) do
+  # The recipient is the fire's own `recipient_user_id`, else the designer's
+  # configured escalation human (`Platform.Designer.escalate_user_id/1`), else
+  # `FrictionWatch` falls back to the install owner.
+  defp run_opts(ctx, row) do
     [
       now: fetch(ctx, :fired_at),
       workspace_id: fetch(ctx, :workspace_id),
       org_id: fetch(ctx, :org_id),
-      recipient_user_id: fetch(ctx, :recipient_user_id)
+      recipient_user_id: fetch(ctx, :recipient_user_id) || Platform.Designer.escalate_user_id(row)
     ]
     |> Enum.reject(fn {_k, v} -> is_nil(v) end)
   end
