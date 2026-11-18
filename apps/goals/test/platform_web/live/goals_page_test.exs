@@ -765,8 +765,19 @@ defmodule PlatformWeb.GoalsPageTest do
       join_space!(space.id, :agent, a.id)
       {:ok, _} = Goals.open_goal(c.owner, g2.id, {:space, space.id})
 
-      wake1 = Platform.Goals.OutcomeFixtures.fire(c.goal)
-      wake2 = Platform.Goals.OutcomeFixtures.fire(g2)
+      # One tick fires both check-ins: firing them one after the other moves
+      # the clock past the first one's respond_by.
+      Platform.Goals.Clock.tick(Platform.Goals.Clock.now())
+
+      at =
+        [c.goal, g2]
+        |> Enum.map(&Repo.get_by!(Platform.Goals.GoalClock, goal_id: &1.id).next_wake_at)
+        |> Enum.max(DateTime)
+
+      Platform.Goals.OutcomeFixtures.put_now(at)
+      :ok = Platform.Goals.Clock.tick(at)
+      wake1 = Repo.get_by!(Platform.Goals.WakeUp, goal_id: c.goal.id, status: "open")
+      wake2 = Repo.get_by!(Platform.Goals.WakeUp, goal_id: g2.id, status: "open")
 
       for goal <- [c.goal, g2] do
         child = page(conn, c.owner, goal)
