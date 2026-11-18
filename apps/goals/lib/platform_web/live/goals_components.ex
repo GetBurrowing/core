@@ -71,20 +71,36 @@ defmodule PlatformWeb.GoalsComponents do
   that sends `more_event`. Clicking a card sends `event` with
   `phx-value-agent_id`; the screen that owns the event decides nothing from
   it except what to send to the server. Free of any screen's state, so the
-  goal page's Change sheet (stage 3) reuses it.
+  goal page's Change sheet (stage 3) reuses it with `layout: :sheet`.
   """
   attr :id, :string, required: true, doc: "id prefix for the group and its cards"
   attr :coaches, :list, required: true, doc: "`Platform.Goals.Coaches.coach()` maps"
   attr :selected_id, :string, default: nil
   attr :default_id, :string, default: nil
+
+  attr :keep_id, :string,
+    default: nil,
+    doc: "another card kept in view when collapsed, unlabelled (the goal page's current coach)"
+
   attr :expanded?, :boolean, default: false
   attr :event, :string, required: true
   attr :more_event, :string, default: nil
   attr :label, :string, default: "Who should coach you?"
 
+  attr :layout, :atom,
+    default: :row,
+    values: [:row, :sheet],
+    doc:
+      "`:row` (New goal: up to 4 across at lg) or `:sheet` (the goal page's Change sheet: at most 2 across)"
+
   def coach_cards(assigns) do
     {shown, hidden} =
-      visible_coaches(assigns.coaches, assigns.selected_id, assigns.expanded?, assigns.default_id)
+      visible_coaches(
+        assigns.coaches,
+        assigns.selected_id,
+        assigns.expanded?,
+        [assigns.default_id, assigns.keep_id]
+      )
 
     assigns = assign(assigns, shown: shown, hidden: hidden)
 
@@ -96,7 +112,10 @@ defmodule PlatformWeb.GoalsComponents do
       <div
         role="radiogroup"
         aria-labelledby={@id <> "-label"}
-        class="grid grid-cols-1 gap-2 sm:grid-cols-2 lg:grid-cols-4"
+        class={[
+          "grid grid-cols-1 gap-2 sm:grid-cols-2",
+          @layout == :row && "lg:grid-cols-4"
+        ]}
       >
         <button
           :for={coach <- @shown}
@@ -189,14 +208,16 @@ defmodule PlatformWeb.GoalsComponents do
     """
   end
 
-  # More than 4 and collapsed: 3 cards, in list order, the default and the
-  # selected one always among them; the rest fill up from the top.
+  # More than 4 and collapsed: 3 cards, in list order, the selected one and
+  # the pinned ones (the default; the goal page's current coach) always
+  # among them; the rest fill up from the top.
   @doc false
-  def visible_coaches(coaches, selected_id, expanded?, default_id \\ nil) do
+  def visible_coaches(coaches, selected_id, expanded?, pin_ids \\ []) do
     if expanded? or length(coaches) <= 4 do
       {coaches, 0}
     else
-      pinned = Enum.filter(coaches, &(&1.id in [selected_id, default_id]))
+      pin_ids = List.wrap(pin_ids)
+      pinned = Enum.filter(coaches, &(&1.id in [selected_id | pin_ids]))
       keep = MapSet.new(Enum.take(pinned ++ (coaches -- pinned), 3), & &1.id)
 
       {Enum.filter(coaches, &MapSet.member?(keep, &1.id)), length(coaches) - 3}

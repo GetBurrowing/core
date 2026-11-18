@@ -13,6 +13,7 @@ defmodule PlatformWeb.GoalsPageTest do
   import Platform.GoalsFixtures
 
   alias Platform.Goals
+  alias Platform.Repo
 
   setup do
     enable_goals!()
@@ -67,7 +68,7 @@ defmodule PlatformWeb.GoalsPageTest do
       held = %{"assignee_type" => "agent", "assignee_id" => agent.id}
 
       task =
-        Platform.Repo.insert!(%Platform.Tasks.Task{
+        Repo.insert!(%Platform.Tasks.Task{
           project_id: project.id,
           title: title,
           status: status,
@@ -456,7 +457,7 @@ defmodule PlatformWeb.GoalsPageTest do
     test "a task-count goal: no form, a crafted submit writes nothing, and an archived project reads Target only",
          %{conn: conn, owner: owner, org_id: org_id} do
       project =
-        Platform.Repo.insert!(%Platform.Tasks.Project{
+        Repo.insert!(%Platform.Tasks.Project{
           org_id: org_id,
           name: "Redesign",
           slug: "rd-#{unique()}"
@@ -464,7 +465,7 @@ defmodule PlatformWeb.GoalsPageTest do
 
       for i <- 1..2,
           do:
-            Platform.Repo.insert!(%Platform.Tasks.Task{
+            Repo.insert!(%Platform.Tasks.Task{
               project_id: project.id,
               title: "p#{i}",
               status: "backlog"
@@ -486,7 +487,7 @@ defmodule PlatformWeb.GoalsPageTest do
       render_hook(child, "log_value", %{"value" => "7"})
       assert length(readings(owner, goal)) == 1
 
-      project |> Ecto.Changeset.change(archived_at: DateTime.utc_now()) |> Platform.Repo.update!()
+      project |> Ecto.Changeset.change(archived_at: DateTime.utc_now()) |> Repo.update!()
       child = page(conn, owner, goal)
       number = text(child, "[data-role='goal-number']")
       assert String.starts_with?(number, "Target: 24 pieces.")
@@ -567,6 +568,230 @@ defmodule PlatformWeb.GoalsPageTest do
              )
 
       assert has_element?(child, "a[data-role='goal-back'][href='/m/goals']")
+    end
+  end
+
+  # ── task 01a1eab7 stage 3: Change coach ───────────────────────────────────
+
+  defp named_coach!(owner, name),
+    do: owner |> coach_agent!() |> Ecto.Changeset.change(name: name) |> Repo.update!()
+
+  defp coaches!(owner) do
+    a = named_coach!(owner, "Avery")
+    b = named_coach!(owner, "Blake")
+    c = owner |> named_coach!("Casey") |> grant_goals_tools!(["messaging"])
+    {a, b, c}
+  end
+
+  defp coach_id(goal), do: Repo.get!(Platform.Goals.Goal, goal.id).coach_agent_id
+
+  defp card_ids(child),
+    do:
+      child
+      |> render()
+      |> Floki.parse_fragment!()
+      |> Floki.find("[data-role='goal-coach-sheet'] [data-role='goals-coach-card']")
+      |> Enum.flat_map(&Floki.attribute(&1, "data-agent-id"))
+
+  describe "change coach" do
+    test "the owner changes A to B: only eligible cards, confirm line, Save, header re-renders",
+         %{conn: conn, owner: owner, org_id: org_id} do
+      {a, b, c} = coaches!(owner)
+      goal = goal!(owner, org_id, %{coach_agent_id: a.id, agent_mode: "advise"})
+      child = page(conn, owner, goal)
+
+      assert text(child, "[data-role='goal-coach']") =~ "Coach"
+      assert text(child, "[data-role='goal-coach-name']") == "Avery"
+      refute has_element?(child, "[data-role='goal-coach-sheet']")
+
+      child |> element("[data-role='goal-coach-change']") |> render_click()
+
+      assert card_ids(child) == [a.id, b.id]
+      refute render(child) =~ c.id
+
+      assert has_element?(
+               child,
+               "[data-role='goals-coach-card'][data-agent-id='#{a.id}'][data-selected='true'][aria-checked='true']"
+             )
+
+      refute has_element?(child, "[data-role='goal-coach-confirm']")
+      assert has_element?(child, "[data-role='goal-coach-save'][disabled]")
+
+      child
+      |> element("[data-role='goals-coach-card'][data-agent-id='#{b.id}']")
+      |> render_click()
+
+      assert text(child, "[data-role='goal-coach-confirm']") ==
+               "Blake will take the next check-in. Avery stops coaching this goal."
+
+      refute has_element?(child, "[data-role='goal-coach-save'][disabled]")
+      assert coach_id(goal) == a.id
+
+      child |> element("[data-role='goal-coach-save']") |> render_click()
+
+      assert coach_id(goal) == b.id
+      refute has_element?(child, "[data-role='goal-coach-sheet']")
+      assert text(child, "[data-role='goal-coach-name']") == "Blake"
+      assert text(child, "[data-role='goal-roles']") == "Blake advises. You do the work."
+      assert text(child, "[data-role='goal-meta']") =~ "Blake"
+      refute text(child, "[data-role='goal-meta']") =~ "Avery"
+    end
+
+    test "a forged save of an ineligible agent shows the refusal and changes nothing",
+         %{conn: conn, owner: owner, org_id: org_id} do
+      {a, b, c} = coaches!(owner)
+      goal = goal!(owner, org_id, %{coach_agent_id: a.id})
+      child = page(conn, owner, goal)
+
+      # Forged straight at the server, before the sheet was ever opened.
+      render_hook(child, "coach_save", %{"agent_id" => c.id})
+      assert coach_id(goal) == a.id
+
+      assert has_element?(
+               child,
+               "[data-role='goal-coach-sheet'] [data-role='goal-coach-refused']",
+               "That agent can't coach goals"
+             )
+
+      child |> element("[data-role='goal-coach-sheet'] .sheet-backdrop") |> render_click()
+      refute has_element?(child, "[data-role='goal-coach-sheet']")
+
+      for forged <- [c.id, Ecto.UUID.generate(), "not-a-uuid"] do
+        child |> element("[data-role='goal-coach-change']") |> render_click()
+        refute has_element?(child, "[data-role='goal-coach-refused']")
+
+        # The picked card is B; the forged save names someone else.
+        child
+        |> element("[data-role='goals-coach-card'][data-agent-id='#{b.id}']")
+        |> render_click()
+
+        render_hook(child, "coach_save", %{"agent_id" => forged})
+
+        assert coach_id(goal) == a.id
+
+        assert has_element?(
+                 child,
+                 "[data-role='goal-coach-refused']",
+                 "That agent can't coach goals"
+               )
+
+        assert has_element?(
+                 child,
+                 "[data-role='goals-coach-card'][data-agent-id='#{a.id}'][data-selected='true']"
+               )
+
+        refute has_element?(child, "[data-role='goal-coach-confirm']")
+        assert text(child, "[data-role='goal-coach-name']") == "Avery"
+
+        render_click(child, "close_coach", %{})
+      end
+    end
+
+    test "more than 4 coaches: the current coach stays in view after another is picked",
+         %{conn: conn, owner: owner, org_id: org_id} do
+      [first | _] =
+        coaches = for name <- ~w(Avery Blake Casey Devon Ellis), do: named_coach!(owner, name)
+
+      current = List.last(coaches)
+      goal = goal!(owner, org_id, %{coach_agent_id: current.id})
+      child = page(conn, owner, goal)
+      child |> element("[data-role='goal-coach-change']") |> render_click()
+
+      assert length(card_ids(child)) == 3
+      assert current.id in card_ids(child)
+      assert has_element?(child, "[data-role='goal-coach-sheet'] [data-role='goals-coach-more']")
+
+      refute has_element?(
+               child,
+               "[data-role='goal-coach-sheet'] [data-role='goals-coach-default']"
+             )
+
+      child
+      |> element("[data-role='goals-coach-card'][data-agent-id='#{first.id}']")
+      |> render_click()
+
+      ids = card_ids(child)
+      assert length(ids) == 3 and first.id in ids and current.id in ids
+
+      child
+      |> element("[data-role='goal-coach-sheet'] [data-role='goals-coach-more']")
+      |> render_click()
+
+      assert card_ids(child) == Enum.map(coaches, & &1.id)
+    end
+
+    test "a non-owner sees the coach name only; a forged save changes nothing",
+         %{conn: conn, owner: owner, org_id: org_id} do
+      {a, b, _c} = coaches!(owner)
+      goal = goal!(owner, org_id, %{coach_agent_id: a.id})
+      viewer = member!(org_id)
+      {:ok, _} = Goals.open_goal(owner, goal.id, {:user, viewer.id})
+
+      child = page(conn, viewer, goal)
+      assert text(child, "[data-role='goal-coach-name']") == "Avery"
+      refute has_element?(child, "[data-role='goal-coach-change']")
+      refute has_element?(child, "[data-role='goal-coach'] button")
+      refute has_element?(child, "[data-role='goal-coach'] [disabled]")
+      refute text(child, "[data-role='goal-coach']") =~ "Change"
+
+      render_hook(child, "coach_save", %{"agent_id" => b.id})
+      assert coach_id(goal) == a.id
+
+      render_hook(child, "open_coach", %{})
+      refute has_element?(child, "[data-role='goal-coach-sheet']")
+      render_hook(child, "coach_save", %{})
+      assert coach_id(goal) == a.id
+      assert text(child, "[data-role='goal-coach-name']") == "Avery"
+    end
+
+    test "after a UI change from A to B, B closes the check-ins and A is refused",
+         %{conn: conn} do
+      c = Platform.Goals.OutcomeFixtures.setup_outcome()
+      a = c.coach
+      b = named_coach!(c.owner, "Blake")
+
+      g2 =
+        goal!(c.owner, c.org, %{
+          coach_agent_id: a.id,
+          agent_mode: "do",
+          outreach: "pushy",
+          rhythm: "daily",
+          source_key: "self_reported",
+          unit: "steps"
+        })
+
+      space = space!(c.org)
+      join_space!(space.id, :user, c.owner.id)
+      join_space!(space.id, :agent, a.id)
+      {:ok, _} = Goals.open_goal(c.owner, g2.id, {:space, space.id})
+
+      wake1 = Platform.Goals.OutcomeFixtures.fire(c.goal)
+      wake2 = Platform.Goals.OutcomeFixtures.fire(g2)
+
+      for goal <- [c.goal, g2] do
+        child = page(conn, c.owner, goal)
+        child |> element("[data-role='goal-coach-change']") |> render_click()
+
+        child
+        |> element("[data-role='goals-coach-card'][data-agent-id='#{b.id}']")
+        |> render_click()
+
+        child |> element("[data-role='goal-coach-save']") |> render_click()
+        assert coach_id(goal) == b.id
+      end
+
+      assert Goals.close_wake_up(a, wake1.id, "wait", %{reason: "Old coach"}) ==
+               {:error, :not_found}
+
+      assert Goals.close_wake_up(a, wake2.id, "wait", %{reason: "Old coach"}) ==
+               {:error, :forbidden}
+
+      for wake <- [wake1, wake2] do
+        assert Repo.get!(Platform.Goals.WakeUp, wake.id).status == "open"
+        assert {:ok, result} = Goals.close_wake_up(b, wake.id, "wait", %{reason: "New coach"})
+        assert result.wake_up.status == "closed"
+        assert result.entry.body == "New coach"
+      end
     end
   end
 end
