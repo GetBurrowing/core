@@ -18,8 +18,13 @@ defmodule Platform.Chat.ReplyFailure.Watchdog do
   ## What it does
 
   `arm/1` is called when a message is delivered to a native agent's runtime
-  (`Platform.Chat.ReplyFailure.remember_delivery/1`). After the window
-  (`window_ms/0`) the watch fires:
+  (`Platform.Chat.ReplyFailure.remember_delivery/1`), and arms a watch only
+  when the message was addressed to the agent (`context.reason` in
+  `Platform.Chat.ReplyFailure.addressed_reasons/0`): a message routed to the
+  channel's active agent that nobody addressed to it may rightly get no
+  reply, and watching it posted "Something went wrong" under "Bingo"
+  (legacy-pie, 2026-11-16..18). After the window (`window_ms/0`) the watch
+  fires:
 
     * the agent has posted in the space since the message: nothing;
     * the agent showed TURN ACTIVITY since it was armed (`activity/1`: a
@@ -96,7 +101,8 @@ defmodule Platform.Chat.ReplyFailure.Watchdog do
   """
   @spec arm(map()) :: :armed | :ignored
   def arm(%{agent: %Agent{} = agent, message: %Message{id: message_id}} = context) do
-    with window when is_integer(window) <- window_ms(),
+    with true <- Platform.Chat.ReplyFailure.addressed_reason?(context[:reason]),
+         window when is_integer(window) <- window_ms(),
          pid when is_pid(pid) <- Process.whereis(__MODULE__),
          true <- NativeAgents.managed?(agent) do
       GenServer.cast(

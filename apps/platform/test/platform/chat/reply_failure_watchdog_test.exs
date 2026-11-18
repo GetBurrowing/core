@@ -135,7 +135,8 @@ defmodule Platform.Chat.ReplyFailureWatchdogTest do
       ReplyFailure.remember_delivery(%{
         agent: agent,
         message: message,
-        agent_participant: agent_p
+        agent_participant: agent_p,
+        reason: :mention
       })
 
     message
@@ -300,6 +301,40 @@ defmodule Platform.Chat.ReplyFailureWatchdogTest do
       # would fire after this test: the native agent is managed, this one not.
       assert NativeAgents.managed?(ctx.agent)
       refute NativeAgents.managed?(agent)
+    end
+
+    # Mutant: drop the `addressed_reason?` clause from `Watchdog.arm/1` → the
+    # ambient delivery is watched and this fails on `watches/0`.
+    test "a message nobody addressed to the agent (routed as :active_agent)", ctx do
+      %{space: space, user: user, agent: agent, agent_p: agent_p} = ctx
+
+      {:ok, message} =
+        Chat.post_message(%{
+          space_id: space.id,
+          participant_id: user.id,
+          content_type: "text",
+          content: "Bingo"
+        })
+
+      for reason <- [:active_agent, :watch] do
+        :ok =
+          ReplyFailure.remember_delivery(%{
+            agent: agent,
+            message: message,
+            agent_participant: agent_p,
+            reason: reason
+          })
+
+        assert Watchdog.watches() == [], "an ambient #{reason} delivery armed a watch"
+        # Still remembered for the host-observed path (a crash is a crash).
+        assert %{message_id: _} = Dedupe.take_pending(agent.id)
+      end
+
+      # Positive control for the discriminator, without arming a watch that
+      # would fire after this test (the addressed tests above do that).
+      refute ReplyFailure.addressed_reason?(:active_agent)
+      refute ReplyFailure.addressed_reason?(:watch)
+      assert ReplyFailure.addressed_reason?(:mention)
     end
 
     test "anything, while the watchdog is off", ctx do

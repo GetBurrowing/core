@@ -142,7 +142,7 @@ defmodule Platform.Chat.AgentResponder do
   # Reasons that mean a person's chat message reached this agent. The
   # addressed ones get the one-line notice; ambient ones (`:active_agent`,
   # `:watch`) are skipped silently, because nobody asked this agent.
-  @addressed_reasons [:mention, :directed, :multi_mention, :reply]
+  @addressed_reasons ReplyFailure.addressed_reasons()
   @chat_reasons @addressed_reasons ++ [:active_agent, :watch]
 
   @spec respond(map()) :: :ok | {:error, term()}
@@ -422,7 +422,7 @@ defmodule Platform.Chat.AgentResponder do
               Logger.info("[AgentResponder] broadcast sent successfully to #{topic}")
               # Delivered; a failure the agent host observes next is still
               # reported for this message (ReplyFailure.notify_pending/1).
-              :ok = ReplyFailure.remember_delivery(context)
+              :ok = ReplyFailure.remember_delivery(Map.put(context, :reason, signal.reason))
 
               :telemetry.execute(
                 [:platform, :federation, :delivery_success],
