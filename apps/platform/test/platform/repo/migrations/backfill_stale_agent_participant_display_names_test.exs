@@ -1,7 +1,7 @@
 defmodule Platform.Repo.Migrations.BackfillStaleAgentParticipantDisplayNamesTest do
   @moduledoc """
   Task 01a1f0d1 stage 2: behavioural coverage of
-  `20261118230000_backfill_stale_agent_participant_display_names`.
+  `20261118233000_backfill_stale_agent_participant_display_names`.
 
   The suite migrates an empty database, where the UPDATE matches nothing, so
   this file seeds the stale shapes directly with `Repo.insert!` (bypassing the
@@ -20,7 +20,7 @@ defmodule Platform.Repo.Migrations.BackfillStaleAgentParticipantDisplayNamesTest
 
   @migration_path Path.expand(
                     "../../../../priv/repo/migrations/" <>
-                      "20261118230000_backfill_stale_agent_participant_display_names.exs",
+                      "20261118233000_backfill_stale_agent_participant_display_names.exs",
                     __DIR__
                   )
 
