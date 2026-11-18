@@ -296,7 +296,14 @@ defmodule PlatformWeb.GoalsPage do
         ‹ Goals
       </.link>
       <header>
-        <div class="flex flex-wrap items-start justify-between gap-x-4 gap-y-2">
+        <%!-- `relative`: the Change coach popover's containing block at lg is
+        this whole header row, not the coach row, so a right-anchored
+        popover capped at 100% of it cannot cross the pane's left edge
+        (task 01a1ecb3 stage 2). --%>
+        <div
+          class="relative flex flex-wrap items-start justify-between gap-x-4 gap-y-2"
+          data-role="goal-header-row"
+        >
           <h2 class="min-w-0 text-2xl font-bold text-base-content" data-role="goal-title">
             {@goal.title}
             <span
@@ -618,13 +625,15 @@ defmodule PlatformWeb.GoalsPage do
   # "Coach (avatar) Name · Change" beside the title (canvas 01a1eab7-ddae
   # node `md`, goal page header). Change is the owner's only, by the same
   # gate as the Edit button; a non-owner sees the name and nothing else.
-  # The row is the popover's `relative` anchor at lg.
+  # The row is NOT the popover's anchor: at lg the popover is positioned
+  # against the header row above it (task 01a1ecb3 stage 2), so it spans
+  # the content column instead of reaching left out of the pane.
   attr(:page, :map, required: true)
   attr(:picker, :map, default: nil)
 
   defp coach_row(assigns) do
     ~H"""
-    <div class="relative flex min-h-11 items-center gap-2 text-sm" data-role="goal-coach">
+    <div class="flex min-h-11 items-center gap-2 text-sm" data-role="goal-coach">
       <span class="text-subtle">Coach</span>
       <span
         data-agent-slot={@page.coach.slot}
@@ -729,7 +738,7 @@ defmodule PlatformWeb.GoalsPage do
       Enum.join(
         [
           PlatformWeb.GoalsOpenUp.sheet_class(),
-          "lg:absolute lg:inset-auto lg:right-0 lg:top-[calc(100%+0.375rem)] lg:w-[34rem]",
+          "lg:absolute lg:inset-auto lg:right-0 lg:top-[calc(100%+0.375rem)] lg:w-[min(34rem,100%)]",
           "lg:[&_.sheet-backdrop]:fixed lg:[&_.sheet-backdrop]:bg-transparent",
           "lg:[&_.sheet-panel]:relative lg:[&_.sheet-panel]:inset-auto lg:[&_.sheet-panel]:w-full",
           "lg:[&_.sheet-panel]:max-h-[min(36rem,75vh)] lg:[&_.sheet-panel]:transform-none",

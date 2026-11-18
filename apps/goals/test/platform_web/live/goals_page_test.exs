@@ -720,6 +720,39 @@ defmodule PlatformWeb.GoalsPageTest do
       assert card_ids(child) == Enum.map(coaches, & &1.id)
     end
 
+    # Task 01a1ecb3 stage 2. At lg the sheet is an absolute popover. Anchored
+    # on the coach row, a right-anchored 34rem box reached left out of the
+    # overflow-auto detail pane and was clipped behind the Goals list. Its
+    # containing block is now the header row, and its width is capped at
+    # that row's width. Class strings cannot prove geometry: the CDP
+    # elementFromPoint run on the task's canvas is the regression evidence.
+    test "the lg popover is anchored on the header row and never wider than it",
+         %{conn: conn, owner: owner, org_id: org_id} do
+      {a, _b, _c} = coaches!(owner)
+      goal = goal!(owner, org_id, %{coach_agent_id: a.id})
+      child = page(conn, owner, goal)
+      child |> element("[data-role='goal-coach-change']") |> render_click()
+
+      doc = child |> render() |> Floki.parse_fragment!()
+      classes = fn node -> node |> Floki.attribute("class") |> Enum.join(" ") |> String.split() end
+
+      [header_row] = Floki.find(doc, "[data-role='goal-header-row']")
+      assert "relative" in classes.(header_row)
+      assert [_] = Floki.find(header_row, "[data-role='goal-title']")
+      assert [coach_row] = Floki.find(header_row, "[data-role='goal-coach']")
+      refute "relative" in classes.(coach_row)
+
+      # Nothing between the header row and the sheet is positioned, so the
+      # header row is the popover's containing block.
+      assert [_] = Floki.find(coach_row, "[data-role='goal-coach-sheet']")
+
+      sheet = PlatformWeb.GoalsPage.coach_sheet_class() |> String.split()
+      assert "lg:w-[min(34rem,100%)]" in sheet
+      refute "lg:w-[34rem]" in sheet
+      assert "lg:right-0" in sheet
+      assert "lg:absolute" in sheet
+    end
+
     test "a non-owner sees the coach name only; a forged save changes nothing",
          %{conn: conn, owner: owner, org_id: org_id} do
       {a, b, _c} = coaches!(owner)
