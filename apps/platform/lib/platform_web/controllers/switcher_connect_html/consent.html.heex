@@ -35,6 +35,9 @@
     >
       Signed in to {@install_name} as {@user_label}
     </p>
+    <p data-role="switcher-consent-either-way" class="mt-2 text-xs text-subtle">
+      Either answer keeps {@install_name} in {@origin_host}'s switcher. Not now only leaves out the unread count.
+    </p>
     <form
       id="switcher-consent-form"
       action={~p"/switcher/connect"}
@@ -48,7 +51,7 @@
         data-role="switcher-consent-cancel"
         class="inline-flex items-center rounded-full border border-edge px-4 py-2 text-sm font-semibold text-base-content hover:bg-base-content/8"
       >
-        Cancel
+        Not now
       </a>
       <button
         type="submit"

@@ -119,7 +119,11 @@ export function validEntry(raw) {
     key: validBadgeKey(raw.key) ? raw.key : null,
     added_at: validIso(raw.added_at) ? raw.added_at : null,
     unread: Number.isInteger(raw.unread) && raw.unread >= 0 ? raw.unread : null,
-    as_of: validIso(raw.as_of) ? raw.as_of : null
+    as_of: validIso(raw.as_of) ? raw.as_of : null,
+    // True only when a 401 dropped the key (revoked or expired): the row
+    // asks to Reconnect. An entry added with "Not now" has no key AND no
+    // `paused`, and is a plain row you switch to, with no nag.
+    paused: raw.paused === true && !validBadgeKey(raw.key)
   }
 }
 
@@ -300,7 +304,7 @@ async function readCapped(res, ctrl) {
 /**
  * The next row state after an answer. A row state is
  * `{status, unread, as_of}` with status one of loading | ok | stale |
- * unreachable | reconnect | rejected.
+ * unreachable | reconnect | rejected | plain (no unread asked for).
  */
 export function applyResult(prev, result) {
   const last = prev || { status: "loading", unread: null, as_of: null }
@@ -327,7 +331,7 @@ export function applyResult(prev, result) {
 
 /** The initial row state from what storage holds, before any fetch. */
 export function initialState(entry) {
-  if (!entry.key) return { status: "reconnect", unread: null, as_of: null }
+  if (!entry.key) return { status: entry.paused ? "reconnect" : "plain", unread: null, as_of: null }
   return { status: "loading", unread: entry.unread, as_of: entry.as_of }
 }
 

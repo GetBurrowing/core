@@ -15,8 +15,10 @@ defmodule PlatformWeb.SwitcherConnectController do
     * `allow/2` (POST, CSRF protected) mints a badge key bound to A and
       redirects to `<A>/switcher/connected#key=...&name=...&host=...`. The key
       is in the FRAGMENT, so A's server never receives it.
-    * Cancel is a link to the same address without `key`: A adds the install
-      without its unread.
+    * "Not now" (the cancel link) is the same address without `key`: A adds
+      the install without its unread. Where the browser goes after that is
+      A's call (`switcher_connected.js`): on to this install after Add an
+      install, back to A after Reconnect.
   """
   use PlatformWeb, :controller
 
