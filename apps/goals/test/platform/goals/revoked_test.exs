@@ -112,6 +112,7 @@ defmodule Platform.Goals.RevokedTest do
       get_proposal: [u, missing],
       list_proposals: [u],
       conversation: [u, missing],
+      opening_message: [u, missing],
       say_in_conversation: [u, missing, "More"],
       propose_goal: [u, missing, %{}],
       confirm_proposal: [u, missing, 1],
