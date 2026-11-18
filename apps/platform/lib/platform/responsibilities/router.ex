@@ -1441,13 +1441,33 @@ defmodule Platform.Responsibilities.Router do
         {:ok, :handled}
 
       {:ok, ctx} ->
-        context = Map.put(ctx, :__responsibility__, responsibility)
+        context =
+          ctx
+          |> Map.put(:__responsibility__, responsibility)
+          |> put_agent_kind(agent)
+
         rendered = build_prompt_via_provider(provider_module, context)
 
         case kind do
           "external" -> dispatch_external(responsibility, agent, trigger_meta, context, rendered)
           _ -> dispatch_native(responsibility, agent, trigger_meta, kind, context, rendered)
         end
+    end
+  end
+
+  # The prompt a provider renders can depend on HOW the answer comes back:
+  # an external agent's HTTP reply is read and handed to `handle_output/3`,
+  # while a native/federated agent gets a one-way signal and must return its
+  # work through a tool. `ExternalDispatcher` already classified the agent,
+  # but only AFTER `build_prompt/1` ran and only on the external path, so a
+  # native assignee's prompt was rendered with `agent_kind: nil` and told it
+  # to reply in plain text (`Handlers.MeetingSummarize`, the lost-summary
+  # bug). Classifying here, above the branch, gives both paths the same
+  # answer before rendering. A kind the gatherer already set wins.
+  defp put_agent_kind(context, agent) do
+    case Map.get(context, :agent_kind) do
+      nil -> Map.put(context, :agent_kind, Platform.Agents.Kind.classify(agent))
+      _ -> context
     end
   end
 

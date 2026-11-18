@@ -384,29 +384,28 @@ defmodule Platform.Review.RouterHeartbeatE2EReviewTest do
       assert log =~ "[SummarizerSweeper] fallback firing transcript_id=#{transcript.id}"
       assert log =~ "stalled_for="
 
-      # (c) System message posted to the meeting space content-matches
-      # "Summary fallback" and mentions the stub agent's slug. The sweeper
-      # posts asynchronously after the fallback task DOWN — poll for it.
+      # (c) System message posted to the meeting space names the stub
+      # agent's slug. The sweeper posts asynchronously after the fallback
+      # task DOWN — poll for it. Test env configures no summary provider, so
+      # there is no legacy body to fall back to: the sweeper records the
+      # agent timeout and posts the `timed_out` notice ("Summary timed out").
       notice = wait_for_fallback_notice(space.id, transcript.id, 3_000)
 
       assert notice, "expected a fallback notice message in the meeting space"
       assert notice.content_type == "system"
-      assert notice.content =~ "Summary fallback"
+      assert notice.content =~ "Summary timed out"
       assert notice.content =~ "@#{agent.slug}"
       assert notice.content =~ "/control-center/roles"
 
-      # (d) Transcript reached a non-processing terminal state via the
-      # legacy body. In test env, `Meetings.Config.summary().provider == :none`
-      # so run_summary_legacy fails at the LLM step and transitions the
-      # transcript to `"failed"` (not `"complete"`). The sweeper posts the
-      # `also_failed` variant of the fallback notice — verified above by
-      # content-match on "Summary fallback". If a real LLM adapter were
-      # wired the transcript would reach `"complete"` and the notice would
-      # read "Summary fallback" (completed variant). Either way, the
-      # sweeper-contract clauses (warning + telemetry + system message +
-      # legacy body ran) are satisfied.
+      # (d) Transcript reached a terminal state. With no summary provider
+      # (test env) the sweeper fails it with the timeout as the reason and
+      # releases the router claim so it can be dispatched again. With a real
+      # provider the legacy body would run and the notice would read
+      # "Summary fallback".
       reloaded = Meetings.get_transcript(transcript.id)
-      assert reloaded.status in ["complete", "failed"]
+      assert reloaded.status == "failed"
+      assert reloaded.failure_reason =~ "summary_agent_timeout"
+      assert is_nil(reloaded.router_dispatched_at)
       # Wait for pending sweeper follow-ups to drain their DB conn.
       await_task_supervisor_children()
     end

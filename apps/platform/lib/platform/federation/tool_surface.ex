@@ -3454,6 +3454,7 @@ defmodule Platform.Federation.ToolSurface do
     [
       meeting_completion_tool("meeting_scribe_complete"),
       meeting_completion_tool("meeting_triage_file"),
+      meeting_summary_complete_tool(),
       %{
         name: "meeting_create",
         description:
@@ -3605,6 +3606,43 @@ defmodule Platform.Federation.ToolSurface do
     else
       _ -> {:error, :unauthorized}
     end
+  end
+
+  # The return path for a delegated `meetings.summarize` job. A native or
+  # federated assignee is sent a one-way signal, so its reply is never read;
+  # without this tool the summary it wrote was lost and the transcript stayed
+  # `processing`. Not `meeting_scribe_complete`: that completes the later
+  # scribe CANVAS step of a durable meeting's completion run and needs a
+  # run_id/canvas_id a summarize dispatch never has.
+  defp meeting_summary_complete_tool do
+    %{
+      name: "meeting_summary_complete",
+      description:
+        "Return the meeting summary you were dispatched to write (a `meetings.summarize` job). The summary is saved on the transcript and posted to the meeting's chat space. A chat reply is NOT saved — this call is the only way the summary reaches the meeting.",
+      parameters: %{
+        transcript_id: %{
+          type: "string",
+          required: true,
+          description: "The transcript_id named in the summarize dispatch."
+        },
+        summary: %{
+          type: "string",
+          required: true,
+          description: "The full summary, markdown. Blank is refused."
+        },
+        summary_input_hash: %{
+          type: "string",
+          required: false,
+          description:
+            "The summary_input_hash named in the dispatch, when it names one. Refused as stale if the transcript changed after the dispatch."
+        }
+      },
+      returns:
+        "%{transcript_id, status: \"complete\", posted}. `posted` is false when the summary was saved but the chat post failed.",
+      limitations:
+        "Only the agent currently assigned `meetings.summarize` may call it, and only while the transcript is awaiting its summary (`processing`, dispatched). Errors: not_summary_assignee, transcript_not_found, not_awaiting_summary, already_complete, blank_summary, stale_summary_input, persist_failed.",
+      when_to_use: "When you finish a summarize dispatch for a meeting transcript."
+    }
   end
 
   defp meeting_completion_tool(name) do
@@ -5748,6 +5786,35 @@ defmodule Platform.Federation.ToolSurface do
         {:error,
          %{
            error: "#{name}: no authenticated calling agent",
+           code: :unauthorized,
+           recoverable: false
+         }}
+    end
+  end
+
+  def execute("meeting_summary_complete", args, context) do
+    case load_agent(context) do
+      %Agent{id: agent_id} ->
+        case Platform.Responsibilities.Handlers.MeetingSummarize.complete_from_agent(
+               agent_id,
+               args
+             ) do
+          {:ok, response} ->
+            {:ok, response}
+
+          {:error, reason} ->
+            {:error,
+             %{
+               error: "meeting_summary_complete: #{reason}",
+               code: reason,
+               recoverable: reason == :blank_summary
+             }}
+        end
+
+      _ ->
+        {:error,
+         %{
+           error: "meeting_summary_complete: no authenticated calling agent",
            code: :unauthorized,
            recoverable: false
          }}
