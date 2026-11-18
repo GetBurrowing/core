@@ -2,7 +2,7 @@ defmodule Platform.Designer.Evaluator do
   @moduledoc """
   The UX super agent's evaluator: grades the designer's published work on a
   model from a DIFFERENT vendor than the one doing the work (task 01a1f048;
-  Jordan: "claude does, openai grades"). The designer never grades itself,
+  the sponsor: "claude does, openai grades"). The designer never grades itself,
   and it cannot see or edit the rubric below: the evaluator runs server-side,
   tool-less, and only its scorecard reaches the designer.
 

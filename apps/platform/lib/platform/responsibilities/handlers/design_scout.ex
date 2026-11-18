@@ -2,7 +2,7 @@ defmodule Platform.Responsibilities.Handlers.DesignScout do
   @moduledoc """
   `design.scout`: the designer searches the web for new designs, patterns
   and inspiration, and writes what it keeps as `untested` pattern cards (L5
-  of the UX super agent spec; task 01a1f048; Jordan, 2026-11-18).
+  of the UX super agent spec; task 01a1f048; sponsor decision, 2026-11-18).
 
   ## Trigger and budget
 

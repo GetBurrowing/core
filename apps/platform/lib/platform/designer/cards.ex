@@ -1,7 +1,7 @@
 defmodule Platform.Designer.Cards do
   @moduledoc """
   The designer's pattern cards: a best-practice store that learns (task
-  01a1f048; Jordan, 2026-11-18).
+  01a1f048; sponsor decision, 2026-11-18).
 
   ## Where they live
 

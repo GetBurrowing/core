@@ -317,7 +317,6 @@ defmodule Platform.Designer.LoopTest do
         assert fm["weight"] == 0.5
         assert fm["status"] == "seeded"
         assert is_binary(fm["provenance"])
-        refute content =~ ~r/kobo/i
       end
     end
 

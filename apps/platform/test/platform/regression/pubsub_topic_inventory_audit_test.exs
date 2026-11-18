@@ -307,6 +307,11 @@ defmodule Platform.Regression.PubSubTopicInventoryAuditTest do
     {"plan:submitted", :global},
     {"stage:completed", :global},
     {"task:planning_started", :global},
+    # Task 01a1f048: declared by design.reflect / design.prototype_eval and
+    # fired directly by Platform.Designer.Loop; no publisher in lib, so a
+    # non-member receives nothing.
+    {"design:job_finished", :global},
+    {"prototype:published", :global},
     {"projects:lifecycle", :global},
     # Task 01a0e882 stage 2. Payload is the bare `{:responsibilities_changed,
     # :cron}`: no row, no key, no actor, no schedule. The one subscriber is the
@@ -371,6 +376,8 @@ defmodule Platform.Regression.PubSubTopicInventoryAuditTest do
     {"plan:submitted", :global},
     {"stage:completed", :global},
     {"task:planning_started", :global},
+    {"design:job_finished", :global},
+    {"prototype:published", :global},
     # Sentinel. Four security.* handlers declare it and no publisher exists, by
     # design (ADR-0043): the sweeper fires them, not the Router.
     {"platform.security.sweeper_only", :global},

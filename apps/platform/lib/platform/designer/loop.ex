@@ -171,6 +171,11 @@ defmodule Platform.Designer.Loop do
   defp safe(fun) do
     fun.()
   rescue
+    # An `async: true` test (manual sandbox mode) gives this child no
+    # connection; the trigger is best-effort and never takes the tool call down.
+    DBConnection.OwnershipError ->
+      {:error, :sandbox_ownership}
+
     error ->
       Logger.warning("[designer.loop] trigger raised: #{Exception.message(error)}")
       {:error, :raised}
