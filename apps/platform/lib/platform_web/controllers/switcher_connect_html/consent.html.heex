@@ -35,8 +35,16 @@
     >
       Signed in to {@install_name} as {@user_label}
     </p>
+    <p data-role="switcher-consent-either-way" class="mt-2 text-xs text-subtle">
+      Either answer keeps {@install_name} in {@origin_host}'s switcher. Not now only leaves out the unread count.
+    </p>
+    <p data-role="switcher-consent-reciprocal" class="mt-2 text-xs text-subtle">
+      {@origin_host} is added to {@install_name}'s switcher on this browser too.
+    </p>
     <form
       id="switcher-consent-form"
+      data-reciprocal-origin={@origin}
+      data-reciprocal-name={@origin_name}
       action={~p"/switcher/connect"}
       method="post"
       class="mt-6 flex justify-end gap-2"
@@ -48,7 +56,7 @@
         data-role="switcher-consent-cancel"
         class="inline-flex items-center rounded-full border border-edge px-4 py-2 text-sm font-semibold text-base-content hover:bg-base-content/8"
       >
-        Cancel
+        Not now
       </a>
       <button
         type="submit"

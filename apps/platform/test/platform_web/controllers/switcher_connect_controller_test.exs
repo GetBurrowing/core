@@ -33,6 +33,40 @@ defmodule PlatformWeb.SwitcherConnectControllerTest do
       html |> query(selector) |> LazyHTML.text() |> String.replace(~r/\s+/, " ") |> String.trim()
 
   describe "GET /switcher/connect" do
+    # Reciprocal add: the form carries A's validated origin and public name so
+    # this install's switcher can list A back (switcher_consent_reciprocal.js).
+    test "the form carries A's origin and a cleaned name for the reciprocal add", %{conn: conn} do
+      user = member!()
+
+      form = fn query ->
+        html =
+          build_conn()
+          |> signed_in(user)
+          |> get("/switcher/connect?" <> query)
+          |> html_response(200)
+
+        [form] = html |> query("#switcher-consent-form") |> Enum.to_list()
+
+        {LazyHTML.attribute(form, "data-reciprocal-origin"),
+         LazyHTML.attribute(form, "data-reciprocal-name"), html}
+      end
+
+      {[@a], ["Main team"], html} =
+        form.(URI.encode_query(%{origin: @a, name: "  Main\u0007 team "}))
+
+      assert text(html, "[data-role=switcher-consent-reciprocal]") ==
+               "a.example is added to #{Platform.Branding.app_name()}'s switcher on this browser too."
+
+      assert {[@a], ["a.example"], _} = form.(URI.encode_query(%{origin: @a}))
+      assert {[@a], ["a.example"], _} = form.(URI.encode_query(%{origin: @a, name: " \n "}))
+
+      long = String.duplicate("n", 300)
+      assert {[@a], [capped], _} = form.(URI.encode_query(%{origin: @a, name: long}))
+      assert String.length(capped) == 120
+
+      _ = conn
+    end
+
     test "signed in: the consent page in the canvas copy", %{conn: conn} do
       user = member!()
       conn = conn |> signed_in(user) |> get(~p"/switcher/connect?origin=#{@a}")
@@ -52,7 +86,11 @@ defmodule PlatformWeb.SwitcherConnectControllerTest do
                "Signed in to #{name} as #{user.name}"
 
       assert text(html, "[data-role=switcher-consent-allow]") == "Allow"
-      assert text(html, "[data-role=switcher-consent-cancel]") == "Cancel"
+      assert text(html, "[data-role=switcher-consent-cancel]") == "Not now"
+
+      assert text(html, "[data-role=switcher-consent-either-way]") ==
+               "Either answer keeps #{name} in a.example's switcher. " <>
+                 "Not now only leaves out the unread count."
 
       [form] = query(html, "#switcher-consent-form") |> Enum.to_list()
       assert LazyHTML.attribute(form, "method") == ["post"]

@@ -12,8 +12,12 @@ import {
   runPool,
   applyResult,
   safeReturnPath,
-  fetchUnread
+  fetchUnread,
+  RECIPROCAL_KEY,
+  rememberReciprocal,
+  adoptReciprocal
 } from "../../js/lib/install_switch_store.js"
+import { installConsentReciprocal } from "../../js/lib/switcher_consent_reciprocal.js"
 import SwitcherConnected, { completeConnect } from "../../js/hooks/switcher_connected.js"
 import { fakeDoc, fakeStorage, switchButton } from "../lib/switcher_fake_dom.js"
 
@@ -296,6 +300,15 @@ describe("the web path", () => {
     expect(row.querySelector("[data-role='install-row-count']")).toBe(null)
     expect(panel.querySelector("[data-role='install-row-reconnect']").textContent).toBe("Reconnect")
     expect(readList(ctx.local)[0].key).toBe(null)
+    expect(readList(ctx.local)[0].paused).toBe(true)
+  })
+
+  it("a key lost to a 401 still asks to Reconnect after a reload", async () => {
+    const ctx = setup({ entries: [entry("https://b.example", { key: null, paused: true })] })
+    await flush()
+    const panel = await open(ctx)
+    expect(rowFor(panel, "https://b.example").getAttribute("data-status")).toBe("reconnect")
+    expect(panel.querySelector("[data-role='install-row-reconnect']")).not.toBe(null)
   })
 
   it("a network failure keeps the last count, marks it stale, and the stale count still lights the dot", async () => {
@@ -561,6 +574,49 @@ describe("entries and rendering", () => {
   })
 })
 
+describe("an install added with Not now (no unread)", () => {
+  const plain = () => entry("https://b.example", { name: "Bravo", key: null })
+
+  it("is a plain row: its host, no Unread paused, no Reconnect, never fetched", async () => {
+    const ctx = setup({ entries: [plain()] })
+    await flush()
+    expect(ctx.win.fetch).not.toHaveBeenCalled()
+    const panel = await open(ctx)
+    const row = rowFor(panel, "https://b.example")
+    expect(row.getAttribute("data-status")).toBe("plain")
+    expect(row.querySelector("[data-role='install-row-sub']").textContent).toBe("b.example")
+    expect(panel.querySelector("[data-role='install-row-reconnect']")).toBe(null)
+    expect(visible(ctx.dot)).toBe(false)
+  })
+
+  it("a click switches straight to it: no hop, no consent page", async () => {
+    const ctx = setup({ entries: [plain()] })
+    const panel = await open(ctx)
+    rowFor(panel, "https://b.example").click()
+    expect(ctx.location.assign).toHaveBeenCalledWith("https://b.example/")
+    expect(ctx.sess.getItem(PENDING_KEY)).toBe(null)
+  })
+
+  it("unread is opt-in from Manage installs, and that hop returns here", async () => {
+    vi.useFakeTimers()
+    const ctx = setup({ entries: [plain()] })
+    ctx.button.click()
+    ctx.menu.querySelector("[data-role='install-switch-manage']").click()
+    const show = ctx.doc.body.querySelector("[data-role='install-manage-show-unread']")
+    expect(show.textContent).toBe("Show unread")
+    expect(ctx.doc.body.querySelector("[data-role='install-manage-reconnect']")).toBe(null)
+    show.click()
+    expect(ctx.doc.body.querySelector("[data-role='install-switch-modal']").textContent).toContain(
+      "You'll come back to Acme when that's done."
+    )
+    await vi.advanceTimersByTimeAsync(1000)
+    expect(ctx.location.assign).toHaveBeenCalledWith(
+      "https://b.example/switcher/connect?origin=https%3A%2F%2Fa.example&name=Acme"
+    )
+    expect(JSON.parse(ctx.sess.getItem(PENDING_KEY)).then).toBe("return")
+  })
+})
+
 describe("add and remove", () => {
   function fakeImage(ok) {
     return class {
@@ -603,18 +659,21 @@ describe("add and remove", () => {
     const modal = ctx.doc.body.querySelector("[data-role='install-switch-modal']")
     expect(modal.getAttribute("data-kind")).toBe("hop")
     expect(modal.textContent).toContain("Opening burrow.team.example")
-    expect(modal.textContent).toContain("You'll come back to Acme when that's done.")
+    // Add an install ends IN the added install, whatever B's answer.
+    expect(modal.textContent).toContain("you end up in burrow.team.example")
+    expect(modal.textContent).not.toContain("You'll come back to")
 
     expect(ctx.doc.head.querySelector("meta[name='referrer']")).toBe(null)
     await vi.advanceTimersByTimeAsync(1000)
     // Stage 4: the hop to B carries no Referer either.
     expect(ctx.doc.head.querySelector("meta[name='referrer']").getAttribute("content")).toBe("no-referrer")
     expect(ctx.location.assign).toHaveBeenCalledWith(
-      "https://burrow.team.example/switcher/connect?origin=https%3A%2F%2Fa.example"
+      "https://burrow.team.example/switcher/connect?origin=https%3A%2F%2Fa.example&name=Acme"
     )
     const pending = JSON.parse(ctx.sess.getItem(PENDING_KEY))
     expect(pending.origin).toBe("https://burrow.team.example")
     expect(pending.return).toBe("/chat/general?x=1")
+    expect(pending.then).toBe("open")
   })
 
   it("Remove deletes the entry and its key, best-effort revokes on B, and toasts", async () => {
@@ -682,6 +741,27 @@ describe("/switcher/connected", () => {
     expect(readList(local)[0].key).toBe(null)
   })
 
+  it("after Add an install, either answer goes ON to B, with no toast left on A", () => {
+    for (const hash of [`#host=b.example&key=${KEY_B}&name=Bravo`, "#host=b.example&name=Bravo"]) {
+      const local = fakeStorage()
+      const r = completeConnect({ hash, session: pending({ then: "open" }), local, now: 2000 })
+      expect(r.ok).toBe(true)
+      expect(r.returnTo).toBe("https://b.example/")
+      expect(r.toast).toBe(null)
+      expect(readList(local)).toMatchObject([{ origin: "https://b.example", name: "Bravo" }])
+    }
+  })
+
+  it("the place it goes on to is the hop's own origin, never the fragment's", () => {
+    const r = completeConnect({
+      hash: "#host=b.example&name=Bravo&origin=https%3A%2F%2Fevil.example&return=https%3A%2F%2Fevil.example",
+      session: pending({ then: "open" }),
+      local: fakeStorage(),
+      now: 2000
+    })
+    expect(r.returnTo).toBe("https://b.example/")
+  })
+
   it("refuses with no pending hop, a host that is not the hop's, a bad key, or an old hop", () => {
     const local = fakeStorage()
     const hash = `#host=b.example&key=${KEY_B}&name=B`
@@ -735,6 +815,17 @@ describe("/switcher/connected", () => {
     expect(root.getAttribute("data-state")).toBe("added")
   })
 
+  it("Not now after Add an install lands in B, not back on A", () => {
+    const session = pending({ at: Date.now(), then: "open" })
+    const { calls, root } = mountConnected({ hash: "#host=b.example&name=Bravo", session })
+    expect(calls).toEqual([
+      ["replaceState", "/switcher/connected"],
+      ["replace", "https://b.example/"]
+    ])
+    expect(root.getAttribute("data-state")).toBe("added")
+    expect(session.getItem(TOAST_KEY)).toBe(null)
+  })
+
   it("strips the fragment even when it refuses the link (M11)", () => {
     const { calls, root } = mountConnected({
       hash: `#host=evil.example&key=${KEY_B}&name=Evil`,
@@ -755,5 +846,114 @@ describe("/switcher/connected", () => {
   it("parseUnread is strict", () => {
     expect(parseUnread({ unread: 3, as_of: AS_OF })).toEqual({ unread: 3, as_of: AS_OF })
     expect(parseUnread({ unread: 3, as_of: "2026-11-12" })).toBe(null)
+  })
+})
+
+// Adding B from A lists A on B too: B's consent page remembers A when the
+// person answers it, and B's switcher adds A as a plain row.
+describe("reciprocal add", () => {
+  const HERE = "https://a.example" // the switcher's own origin in setup()
+  const marker = (over = {}) =>
+    fakeStorage({ [RECIPROCAL_KEY]: JSON.stringify({ origin: "https://main.example", name: "Main", at: 1000, ...over }) })
+
+  it("adopts the install that asked, as a plain row with no key, once", () => {
+    const session = marker()
+    const local = fakeStorage()
+    const added = adoptReciprocal(session, local, HERE, 2000)
+    expect(added).toMatchObject({ origin: "https://main.example", name: "Main", key: null, paused: false })
+    expect(readList(local).map(e => e.origin)).toEqual(["https://main.example"])
+    expect(session.getItem(RECIPROCAL_KEY)).toBe(null)
+    expect(adoptReciprocal(session, local, HERE, 2000)).toBe(null)
+  })
+
+  it("never touches a row already there (its key and name stay)", () => {
+    const local = fakeStorage({
+      [STORAGE_KEY]: JSON.stringify([entry("https://main.example", { name: "Ours" })])
+    })
+    expect(adoptReciprocal(marker({ name: "Theirs" }), local, HERE, 2000)).toBe(null)
+    expect(readList(local)).toMatchObject([{ name: "Ours", key: KEY_B }])
+  })
+
+  it("refuses an old marker, its own origin, a bad origin or garbage, and always clears it", () => {
+    const old = 1000 + 31 * 60 * 1000
+    const cases = [
+      [marker(), old],
+      [marker({ origin: HERE }), 2000],
+      [marker({ origin: "http://main.example" }), 2000],
+      [marker({ origin: "https://main.example/path" }), 2000],
+      [marker({ at: "soon" }), 2000],
+      [fakeStorage({ [RECIPROCAL_KEY]: "{not json" }), 2000]
+    ]
+    for (const [session, now] of cases) {
+      const local = fakeStorage()
+      expect(adoptReciprocal(session, local, HERE, now)).toBe(null)
+      expect(readList(local)).toEqual([])
+      expect(session.getItem(RECIPROCAL_KEY)).toBe(null)
+    }
+  })
+
+  it("rememberReciprocal keeps only a valid other origin and a clean name", () => {
+    const session = fakeStorage()
+    expect(rememberReciprocal(session, { origin: HERE, name: "Me" }, HERE, 5)).toBe(null)
+    expect(rememberReciprocal(session, { origin: "javascript:alert(1)" }, HERE, 5)).toBe(null)
+    expect(session.getItem(RECIPROCAL_KEY)).toBe(null)
+    rememberReciprocal(session, { origin: "https://main.example", name: " Main\u0007 " }, HERE, 5)
+    expect(JSON.parse(session.getItem(RECIPROCAL_KEY))).toEqual({ origin: "https://main.example", name: "Main", at: 5 })
+    rememberReciprocal(session, { origin: "https://main.example" }, HERE, 5)
+    expect(JSON.parse(session.getItem(RECIPROCAL_KEY)).name).toBe("main.example")
+  })
+
+  it("the switcher on B lists A after the hop, plain, with a toast and no unread fetch", async () => {
+    const fetch = vi.fn(async () => answer(200, { unread: 3, as_of: AS_OF }))
+    const session = fakeStorage({
+      [RECIPROCAL_KEY]: JSON.stringify({ origin: "https://main.example", name: "Main", at: Date.now() })
+    })
+    const ctx = setup({ session, fetch })
+    await flush()
+    expect(ctx.doc.body.querySelector("[data-role='install-switch-toast']").textContent).toBe(
+      "Added Main to this switcher"
+    )
+    const panel = await open(ctx)
+    const row = rowFor(panel, "https://main.example")
+    expect(row.getAttribute("data-status")).toBe("plain")
+    expect(row.textContent).toContain("Main")
+    expect(fetch).not.toHaveBeenCalled()
+    expect(visible(ctx.dot)).toBe(false)
+  })
+
+  function consentPage(origin = "https://main.example", name = "Main") {
+    const doc = fakeDoc()
+    const form = doc.createElement("form")
+    form.setAttribute("id", "switcher-consent-form")
+    if (origin) form.setAttribute("data-reciprocal-origin", origin)
+    if (name) form.setAttribute("data-reciprocal-name", name)
+    const cancel = doc.createElement("a")
+    cancel.setAttribute("data-role", "switcher-consent-cancel")
+    form.appendChild(cancel)
+    doc.body.appendChild(form)
+    const session = fakeStorage()
+    const win = { location: { origin: "https://hosted.example" }, sessionStorage: session }
+    return { doc, form, cancel, session, win }
+  }
+
+  it("B's consent page remembers A only when answered: Allow or Not now", () => {
+    for (const answerWith of ["submit", "cancel"]) {
+      const page = consentPage()
+      expect(installConsentReciprocal(page.doc, page.win)).toBe(true)
+      expect(page.session.getItem(RECIPROCAL_KEY)).toBe(null)
+      if (answerWith === "submit") page.form.fire("submit")
+      else page.cancel.click()
+      expect(JSON.parse(page.session.getItem(RECIPROCAL_KEY))).toMatchObject({
+        origin: "https://main.example",
+        name: "Main"
+      })
+    }
+  })
+
+  it("does nothing on a page without the consent form's origin", () => {
+    const page = consentPage(null)
+    expect(installConsentReciprocal(page.doc, page.win)).toBe(false)
+    page.form.fire("submit")
+    expect(page.session.getItem(RECIPROCAL_KEY)).toBe(null)
   })
 })

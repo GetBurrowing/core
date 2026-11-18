@@ -939,6 +939,50 @@ describe("thread mention viewport and ancestor focus", () => {
     expect(observers.every(o => o.disconnect.mock.calls.length === 1)).toBe(true)
   })
 
+  it("restores focus after a move that fired no blur (WebKit)", () => {
+    vi.stubGlobal("MutationObserver", class {
+      constructor(fn) { this.fn = fn; this.observe = vi.fn(); this.disconnect = vi.fn() }
+    })
+    const c = richComposer({ thread: "root-1" })
+    c.doc.body = c.doc.createElement("body")
+    const moved = c.doc.createElement("div")
+    moved.appendChild(c.form)
+    c.el.isConnected = true
+    c.el.fire("focus")
+    c.el.focus()
+    // The patch moves the field; WebKit drops focus to <body> with no blur.
+    c.doc.activeElement = c.doc.body
+    c.hook._moveObserver.fn([{ removedNodes: [moved] }])
+    expect(c.doc.activeElement).toBe(c.el)
+    c.hook.destroyed()
+  })
+
+  it("does not steal focus back after a real blur, or when nothing moved the field", () => {
+    vi.stubGlobal("MutationObserver", class {
+      constructor(fn) { this.fn = fn; this.observe = vi.fn(); this.disconnect = vi.fn() }
+    })
+    const c = richComposer({ thread: "root-1" })
+    c.doc.body = c.doc.createElement("body")
+    const moved = c.doc.createElement("div")
+    moved.appendChild(c.form)
+    c.el.isConnected = true
+    c.el.fire("focus")
+    c.el.focus()
+
+    // Focus silently lost, but the patch did not touch the field: leave it.
+    c.doc.activeElement = c.doc.body
+    c.hook._moveObserver.fn([{ removedNodes: [] }])
+    expect(c.doc.activeElement).toBe(c.doc.body)
+
+    // A real blur (keyboard Done), then a later patch moves the field: leave it.
+    c.el.fire("blur")
+    return Promise.resolve().then(() => {
+      c.hook._moveObserver.fn([{ removedNodes: [moved] }])
+      expect(c.doc.activeElement).toBe(c.doc.body)
+      c.hook.destroyed()
+    })
+  })
+
   it("clamps above the field after a viewport pan and cleans up every listener", () => {
     const listeners = new Map()
     const target = () => ({
