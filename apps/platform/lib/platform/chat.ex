@@ -6784,6 +6784,31 @@ defmodule Platform.Chat do
     |> Repo.all()
   end
 
+  @doc """
+  Every summonable agent (`summonable_agents_query/1`) ordered by name, each
+  tagged `present?` when it already has an agent participant row in `space`.
+  This is what the members panel's "Add agent" picker renders: a present
+  agent is listed as "Already here" rather than hidden, so it never looks
+  missing (task 01a1f0d1 stage 3). `list_addable_agents/1` stays the
+  eligibility set for the summon path.
+  """
+  @spec list_agent_picker_options(Space.t()) :: [%{agent: Agent.t(), present?: boolean()}]
+  def list_agent_picker_options(%Space{id: space_id} = space) do
+    present =
+      from(p in Participant,
+        where: p.space_id == ^space_id and p.participant_type == "agent",
+        select: p.participant_id
+      )
+      |> Repo.all()
+      |> MapSet.new()
+
+    space
+    |> summonable_agents_query()
+    |> order_by([a], asc: a.name)
+    |> Repo.all()
+    |> Enum.map(&%{agent: &1, present?: MapSet.member?(present, &1.id)})
+  end
+
   # Tell the author's own process that its mention was refused (task 01a0fd62
   # stage 2). `reinvite_and_pin_mentioned/1` runs synchronously inside the
   # caller, and both UI send paths pass `from_pid: self()`, so `from_pid` IS

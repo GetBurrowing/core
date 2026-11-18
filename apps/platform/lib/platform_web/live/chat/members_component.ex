@@ -42,8 +42,11 @@ defmodule PlatformWeb.ChatLive.MembersComponent do
   and `Chat.admin_remove_agent/3` re-authorize every call, so a forged
   `members_add_agent` from a member's socket is refused by the context.
 
-  The picker offers `Chat.list_addable_agents/1`, the same eligibility set the
-  mention path matches against.
+  The picker offers `Chat.list_agent_picker_options/1`, the same eligibility
+  set the mention path matches against. An agent already in the space is
+  listed as a disabled "<name> · Already here" option rather than hidden, so
+  it never looks missing (task 01a1f0d1); the context still refuses a forged
+  add of a present agent.
 
   ## Adding people (task 01a199e4 stage 2)
 
@@ -160,6 +163,7 @@ defmodule PlatformWeb.ChatLive.MembersComponent do
         |> assign_new(:people, fn -> [] end)
         |> assign_new(:presence, fn -> {:ok, %{online: [], away: []}} end)
         |> assign_new(:attention, fn -> nil end)
+        |> assign_new(:agent_options, fn -> [] end)
         |> assign_new(:available_agents, fn -> [] end)
         |> assign_new(:available_people, fn -> [] end)
       end
@@ -196,7 +200,8 @@ defmodule PlatformWeb.ChatLive.MembersComponent do
       |> Enum.map(&Chat.member_row(&1, viewer_id))
       |> Chat.sort_members()
 
-    available = if socket.assigns[:can_manage?], do: Chat.list_addable_agents(space), else: []
+    agent_options =
+      if socket.assigns[:can_manage?], do: Chat.list_agent_picker_options(space), else: []
 
     available_people =
       if socket.assigns[:can_manage_roles?], do: Chat.list_addable_people(space), else: []
@@ -205,7 +210,8 @@ defmodule PlatformWeb.ChatLive.MembersComponent do
     |> assign(:people, people)
     |> assign(:presence, Chat.space_member_presence(space_id, viewer))
     |> assign(:attention, Chat.agent_attention_state(space_id))
-    |> assign(:available_agents, available)
+    |> assign(:agent_options, agent_options)
+    |> assign(:available_agents, for(%{present?: false, agent: a} <- agent_options, do: a))
     |> assign(:available_people, available_people)
   end
 
@@ -226,26 +232,13 @@ defmodule PlatformWeb.ChatLive.MembersComponent do
         {:noreply, socket}
 
       space ->
-        case Chat.admin_add_agent(space, socket.assigns[:current_user_id], agent_id) do
-          {:ok, participant} ->
-            send(self(), {:members_flash, :info, "#{participant.display_name} added."})
+        case present_agent(socket, space, agent_id) do
+          %{name: name} ->
+            send(self(), {:members_flash, :error, "#{name} is already in this channel."})
             {:noreply, load_members(socket)}
 
-          {:error, :unauthorized} ->
-            send(
-              self(),
-              {:members_flash, :error, agent_authority_error(space, :add)}
-            )
-
-            {:noreply, socket}
-
-          {:error, :not_found} ->
-            send(self(), {:members_flash, :error, "Pick an agent to add."})
-            {:noreply, socket}
-
-          {:error, _} ->
-            send(self(), {:members_flash, :error, "Could not add the agent."})
-            {:noreply, socket}
+          nil ->
+            add_agent(socket, space, agent_id)
         end
     end
   end
@@ -334,6 +327,46 @@ defmodule PlatformWeb.ChatLive.MembersComponent do
     end
   end
 
+  # `Chat.admin_add_agent/3` is idempotent (it returns the existing row), which
+  # would flash "<name> added." for an agent that was already here. The picker
+  # renders present agents disabled, so this refuses a forged or stale submit
+  # from a fresh read (task 01a1f0d1 stage 3). Only for a viewer who can
+  # manage, so a member still gets the authority refusal.
+  defp present_agent(socket, space, agent_id) when is_binary(agent_id) do
+    if socket.assigns[:can_manage?] do
+      Enum.find_value(Chat.list_agent_picker_options(space), fn
+        %{present?: true, agent: %{id: ^agent_id} = agent} -> agent
+        _ -> nil
+      end)
+    end
+  end
+
+  defp present_agent(_socket, _space, _agent_id), do: nil
+
+  defp add_agent(socket, space, agent_id) do
+    case Chat.admin_add_agent(space, socket.assigns[:current_user_id], agent_id) do
+      {:ok, participant} ->
+        send(self(), {:members_flash, :info, "#{participant.display_name} added."})
+        {:noreply, load_members(socket)}
+
+      {:error, :unauthorized} ->
+        send(
+          self(),
+          {:members_flash, :error, agent_authority_error(space, :add)}
+        )
+
+        {:noreply, socket}
+
+      {:error, :not_found} ->
+        send(self(), {:members_flash, :error, "Pick an agent to add."})
+        {:noreply, socket}
+
+      {:error, _} ->
+        send(self(), {:members_flash, :error, "Could not add the agent."})
+        {:noreply, socket}
+    end
+  end
+
   defp agent_authority_error(%{kind: "channel"}, :add),
     do: "Only a channel, org, or root admin can bring agents into this channel."
 
@@ -407,6 +440,7 @@ defmodule PlatformWeb.ChatLive.MembersComponent do
             attention={@attention}
             can_manage?={@can_manage?}
             can_manage_roles?={@can_manage_roles?}
+            agent_options={@agent_options}
             available_agents={@available_agents}
             available_people={@available_people}
           />
@@ -442,6 +476,7 @@ defmodule PlatformWeb.ChatLive.MembersComponent do
           attention={@attention}
           can_manage?={@can_manage?}
           can_manage_roles?={@can_manage_roles?}
+          agent_options={@agent_options}
           available_agents={@available_agents}
           available_people={@available_people}
         />
@@ -458,6 +493,7 @@ defmodule PlatformWeb.ChatLive.MembersComponent do
   attr(:attention, :any, required: true)
   attr(:can_manage?, :boolean, required: true)
   attr(:can_manage_roles?, :boolean, required: true)
+  attr(:agent_options, :list, required: true)
   attr(:available_agents, :list, required: true)
   attr(:available_people, :list, required: true)
 
@@ -588,7 +624,15 @@ defmodule PlatformWeb.ChatLive.MembersComponent do
           <option value="">
             {if @available_agents == [], do: "No agents left to add", else: "Add agent"}
           </option>
-          <option :for={agent <- @available_agents} value={agent.id}>{agent.name}</option>
+          <option
+            :for={%{agent: agent, present?: present?} <- @agent_options}
+            value={agent.id}
+            disabled={present?}
+            data-present={to_string(present?)}
+            class={present? && "text-subtle"}
+          >
+            {if present?, do: "#{agent.name} · Already here", else: agent.name}
+          </option>
         </select>
         <button
           type="submit"

@@ -306,6 +306,82 @@ defmodule PlatformWeb.ChatLiveMembersTest do
     assert has_element?(view, "#{@add_form} button", "Add agent")
   end
 
+  describe "Add agent picker: present agents read Already here (task 01a1f0d1 stage 3)" do
+    defp agent_option(agent), do: "#{@add_form} option[value='#{agent.id}']"
+
+    test "a present agent is a disabled Already here option; an absent one is enabled",
+         %{conn: conn} do
+      admin = user!("admin")
+      space = owned_channel!(admin)
+      present = agent!("Present")
+      absent = agent!("Absent")
+      {:ok, _} = Chat.admin_add_agent(space, admin.id, present.id)
+
+      view = conn |> live_as(admin, ~p"/chat/#{space.slug}") |> open_members()
+
+      assert has_element?(view, "#{agent_option(present)}[disabled]", "Already here")
+      assert has_element?(view, agent_option(present), "#{present.name} · Already here")
+      assert has_element?(view, "#{agent_option(absent)}:not([disabled])", absent.name)
+      refute has_element?(view, agent_option(absent), "Already here")
+      assert has_element?(view, "#{@add_form} select:not([disabled])")
+      refute has_element?(view, @add_form, "No agents left to add")
+    end
+
+    test "with only present agents the picker says none are left", %{conn: conn} do
+      admin = user!("admin")
+      space = owned_channel!(admin)
+      present = agent!("OnlyPresent")
+      {:ok, _} = Chat.admin_add_agent(space, admin.id, present.id)
+
+      # Archive every other summonable agent the shared DB may hold for this
+      # test's view: the space has no workspace, so all agents are eligible.
+      from(a in Agent, where: a.id != ^present.id and a.status != "archived")
+      |> Repo.update_all(set: [status: "archived"])
+
+      view = conn |> live_as(admin, ~p"/chat/#{space.slug}") |> open_members()
+
+      assert has_element?(view, "#{agent_option(present)}[disabled]", "Already here")
+      assert has_element?(view, @add_form, "No agents left to add")
+      assert has_element?(view, "#{@add_form} select[disabled]")
+    end
+
+    test "a renamed present agent reads under its new name", %{conn: conn} do
+      admin = user!("admin")
+      space = owned_channel!(admin)
+      agent = agent!("UX")
+      {:ok, _} = Chat.admin_add_agent(space, admin.id, agent.id)
+      {:ok, _} = agent |> Agent.changeset(%{name: "Loki"}) |> Repo.update()
+
+      view = conn |> live_as(admin, ~p"/chat/#{space.slug}") |> open_members()
+
+      assert has_element?(view, "#{agent_option(agent)}[disabled]", "Loki · Already here")
+
+      option_texts =
+        view
+        |> render()
+        |> LazyHTML.from_fragment()
+        |> LazyHTML.query(agent_option(agent))
+        |> Enum.map(&LazyHTML.text/1)
+
+      assert Enum.map(option_texts, &String.trim/1) == ["Loki · Already here"]
+    end
+
+    test "forcing a present agent through is refused with no duplicate row", %{conn: conn} do
+      admin = user!("admin")
+      space = owned_channel!(admin)
+      agent = agent!("Dup")
+      {:ok, _} = Chat.admin_add_agent(space, admin.id, agent.id)
+      view = conn |> live_as(admin, ~p"/chat/#{space.slug}") |> open_members()
+
+      view
+      |> with_target("#chat-members")
+      |> render_hook("members_add_agent", %{"agent_id" => agent.id})
+
+      assert render(view) =~ "is already in this channel."
+      assert length(agent_rows(space.id, agent.id)) == 1
+    end
+  end
+
   test "a member forging members_add_agent gets a flash and the DB is unchanged",
        %{conn: conn} do
     admin = user!("admin")

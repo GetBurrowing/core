@@ -195,6 +195,32 @@ defmodule Platform.Chat.ChannelMembersAdminTest do
     end
   end
 
+  describe "list_agent_picker_options/1 (task 01a1f0d1 stage 3)" do
+    test "lists every summonable agent by name, tagging present ones" do
+      space = channel!()
+      admin = user!()
+      user_participant!(space.id, admin, "admin")
+      present = agent!(%{name: "Aaa Present #{System.unique_integer([:positive])}"})
+      absent = agent!(%{name: "Bbb Absent #{System.unique_integer([:positive])}"})
+      archived = agent!(%{status: "archived"})
+      {:ok, _} = Chat.admin_add_agent(space, admin.id, present.id)
+
+      options = Chat.list_agent_picker_options(space)
+      by_id = Map.new(options, &{&1.agent.id, &1.present?})
+
+      assert by_id[present.id] == true
+      assert by_id[absent.id] == false
+      refute Map.has_key?(by_id, archived.id)
+
+      names = Enum.map(options, & &1.agent.name)
+      assert names == Enum.sort(names)
+
+      # The non-present subset is exactly the summon path's addable set.
+      addable = space |> Chat.list_addable_agents() |> Enum.map(& &1.id)
+      assert addable == for(%{present?: false, agent: a} <- options, do: a.id)
+    end
+  end
+
   describe "admin_remove_agent/3" do
     test "an admin remove deletes the row and clears the active-agent mutex" do
       space = channel!()
