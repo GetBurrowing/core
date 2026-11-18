@@ -12,8 +12,12 @@ import {
   runPool,
   applyResult,
   safeReturnPath,
-  fetchUnread
+  fetchUnread,
+  RECIPROCAL_KEY,
+  rememberReciprocal,
+  adoptReciprocal
 } from "../../js/lib/install_switch_store.js"
+import { installConsentReciprocal } from "../../js/lib/switcher_consent_reciprocal.js"
 import SwitcherConnected, { completeConnect } from "../../js/hooks/switcher_connected.js"
 import { fakeDoc, fakeStorage, switchButton } from "../lib/switcher_fake_dom.js"
 
@@ -607,7 +611,7 @@ describe("an install added with Not now (no unread)", () => {
     )
     await vi.advanceTimersByTimeAsync(1000)
     expect(ctx.location.assign).toHaveBeenCalledWith(
-      "https://b.example/switcher/connect?origin=https%3A%2F%2Fa.example"
+      "https://b.example/switcher/connect?origin=https%3A%2F%2Fa.example&name=Acme"
     )
     expect(JSON.parse(ctx.sess.getItem(PENDING_KEY)).then).toBe("return")
   })
@@ -664,7 +668,7 @@ describe("add and remove", () => {
     // Stage 4: the hop to B carries no Referer either.
     expect(ctx.doc.head.querySelector("meta[name='referrer']").getAttribute("content")).toBe("no-referrer")
     expect(ctx.location.assign).toHaveBeenCalledWith(
-      "https://burrow.team.example/switcher/connect?origin=https%3A%2F%2Fa.example"
+      "https://burrow.team.example/switcher/connect?origin=https%3A%2F%2Fa.example&name=Acme"
     )
     const pending = JSON.parse(ctx.sess.getItem(PENDING_KEY))
     expect(pending.origin).toBe("https://burrow.team.example")
@@ -842,5 +846,114 @@ describe("/switcher/connected", () => {
   it("parseUnread is strict", () => {
     expect(parseUnread({ unread: 3, as_of: AS_OF })).toEqual({ unread: 3, as_of: AS_OF })
     expect(parseUnread({ unread: 3, as_of: "2026-11-12" })).toBe(null)
+  })
+})
+
+// Adding B from A lists A on B too: B's consent page remembers A when the
+// person answers it, and B's switcher adds A as a plain row.
+describe("reciprocal add", () => {
+  const HERE = "https://a.example" // the switcher's own origin in setup()
+  const marker = (over = {}) =>
+    fakeStorage({ [RECIPROCAL_KEY]: JSON.stringify({ origin: "https://main.example", name: "Main", at: 1000, ...over }) })
+
+  it("adopts the install that asked, as a plain row with no key, once", () => {
+    const session = marker()
+    const local = fakeStorage()
+    const added = adoptReciprocal(session, local, HERE, 2000)
+    expect(added).toMatchObject({ origin: "https://main.example", name: "Main", key: null, paused: false })
+    expect(readList(local).map(e => e.origin)).toEqual(["https://main.example"])
+    expect(session.getItem(RECIPROCAL_KEY)).toBe(null)
+    expect(adoptReciprocal(session, local, HERE, 2000)).toBe(null)
+  })
+
+  it("never touches a row already there (its key and name stay)", () => {
+    const local = fakeStorage({
+      [STORAGE_KEY]: JSON.stringify([entry("https://main.example", { name: "Ours" })])
+    })
+    expect(adoptReciprocal(marker({ name: "Theirs" }), local, HERE, 2000)).toBe(null)
+    expect(readList(local)).toMatchObject([{ name: "Ours", key: KEY_B }])
+  })
+
+  it("refuses an old marker, its own origin, a bad origin or garbage, and always clears it", () => {
+    const old = 1000 + 31 * 60 * 1000
+    const cases = [
+      [marker(), old],
+      [marker({ origin: HERE }), 2000],
+      [marker({ origin: "http://main.example" }), 2000],
+      [marker({ origin: "https://main.example/path" }), 2000],
+      [marker({ at: "soon" }), 2000],
+      [fakeStorage({ [RECIPROCAL_KEY]: "{not json" }), 2000]
+    ]
+    for (const [session, now] of cases) {
+      const local = fakeStorage()
+      expect(adoptReciprocal(session, local, HERE, now)).toBe(null)
+      expect(readList(local)).toEqual([])
+      expect(session.getItem(RECIPROCAL_KEY)).toBe(null)
+    }
+  })
+
+  it("rememberReciprocal keeps only a valid other origin and a clean name", () => {
+    const session = fakeStorage()
+    expect(rememberReciprocal(session, { origin: HERE, name: "Me" }, HERE, 5)).toBe(null)
+    expect(rememberReciprocal(session, { origin: "javascript:alert(1)" }, HERE, 5)).toBe(null)
+    expect(session.getItem(RECIPROCAL_KEY)).toBe(null)
+    rememberReciprocal(session, { origin: "https://main.example", name: " Main\u0007 " }, HERE, 5)
+    expect(JSON.parse(session.getItem(RECIPROCAL_KEY))).toEqual({ origin: "https://main.example", name: "Main", at: 5 })
+    rememberReciprocal(session, { origin: "https://main.example" }, HERE, 5)
+    expect(JSON.parse(session.getItem(RECIPROCAL_KEY)).name).toBe("main.example")
+  })
+
+  it("the switcher on B lists A after the hop, plain, with a toast and no unread fetch", async () => {
+    const fetch = vi.fn(async () => answer(200, { unread: 3, as_of: AS_OF }))
+    const session = fakeStorage({
+      [RECIPROCAL_KEY]: JSON.stringify({ origin: "https://main.example", name: "Main", at: Date.now() })
+    })
+    const ctx = setup({ session, fetch })
+    await flush()
+    expect(ctx.doc.body.querySelector("[data-role='install-switch-toast']").textContent).toBe(
+      "Added Main to this switcher"
+    )
+    const panel = await open(ctx)
+    const row = rowFor(panel, "https://main.example")
+    expect(row.getAttribute("data-status")).toBe("plain")
+    expect(row.textContent).toContain("Main")
+    expect(fetch).not.toHaveBeenCalled()
+    expect(visible(ctx.dot)).toBe(false)
+  })
+
+  function consentPage(origin = "https://main.example", name = "Main") {
+    const doc = fakeDoc()
+    const form = doc.createElement("form")
+    form.setAttribute("id", "switcher-consent-form")
+    if (origin) form.setAttribute("data-reciprocal-origin", origin)
+    if (name) form.setAttribute("data-reciprocal-name", name)
+    const cancel = doc.createElement("a")
+    cancel.setAttribute("data-role", "switcher-consent-cancel")
+    form.appendChild(cancel)
+    doc.body.appendChild(form)
+    const session = fakeStorage()
+    const win = { location: { origin: "https://hosted.example" }, sessionStorage: session }
+    return { doc, form, cancel, session, win }
+  }
+
+  it("B's consent page remembers A only when answered: Allow or Not now", () => {
+    for (const answerWith of ["submit", "cancel"]) {
+      const page = consentPage()
+      expect(installConsentReciprocal(page.doc, page.win)).toBe(true)
+      expect(page.session.getItem(RECIPROCAL_KEY)).toBe(null)
+      if (answerWith === "submit") page.form.fire("submit")
+      else page.cancel.click()
+      expect(JSON.parse(page.session.getItem(RECIPROCAL_KEY))).toMatchObject({
+        origin: "https://main.example",
+        name: "Main"
+      })
+    }
+  })
+
+  it("does nothing on a page without the consent form's origin", () => {
+    const page = consentPage(null)
+    expect(installConsentReciprocal(page.doc, page.win)).toBe(false)
+    page.form.fire("submit")
+    expect(page.session.getItem(RECIPROCAL_KEY)).toBe(null)
   })
 })

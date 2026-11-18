@@ -251,7 +251,15 @@ export function createWebSwitch(env = {}) {
     win.addEventListener("storage", onStorage)
     ctl.timer = setInterval(onTick, S.REFRESH_MS)
     showPendingToast()
+    adoptReciprocal()
     refresh()
+  }
+
+  // The install that added this one (see `rememberReciprocal`), as a plain
+  // row, once.
+  function adoptReciprocal() {
+    const added = S.adoptReciprocal(session, local, win.location.origin, now())
+    if (added) showToast(`Added ${added.name} to this switcher`)
   }
 
   function stop() {
@@ -661,7 +669,10 @@ export function createWebSwitch(env = {}) {
     showModal({ kind: "hop", origin: target, label: label || S.hostOf(target), then })
     setTimeout(() => {
       dropReferrer(doc)
-      win.location.assign(`${target}/switcher/connect?origin=${encodeURIComponent(win.location.origin)}`)
+      // A's public name rides along so B's switcher can list A back
+      // (reciprocal add); B's server checks `origin` as before.
+      const query = `origin=${encodeURIComponent(win.location.origin)}&name=${encodeURIComponent(current().name)}`
+      win.location.assign(`${target}/switcher/connect?${query}`)
     }, HOP_DELAY_MS)
   }
 

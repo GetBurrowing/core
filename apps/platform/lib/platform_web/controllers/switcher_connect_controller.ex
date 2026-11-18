@@ -2,7 +2,8 @@ defmodule PlatformWeb.SwitcherConnectController do
   @moduledoc """
   The connect hop of the web install switcher, on install B (task 01a1ccd4
   stage 2). Install A sends the browser here with its own origin:
-  `GET /switcher/connect?origin=<A origin>`.
+  `GET /switcher/connect?origin=<A origin>&name=<A name>` (`name` is optional
+  display text, used only so this install's switcher can list A back).
 
   Behind `:browser` + `:require_auth`, so a signed-out visitor signs in with
   B's own OIDC first and lands back here through the return path
@@ -40,6 +41,7 @@ defmodule PlatformWeb.SwitcherConnectController do
           page_title: "Show unread in another install",
           origin: origin,
           origin_host: host_of(origin),
+          origin_name: origin_name(params["name"], origin),
           install_name: Platform.Branding.app_name(),
           install_host: own_host(conn),
           user_label: user.name || user.email,
@@ -59,6 +61,24 @@ defmodule PlatformWeb.SwitcherConnectController do
       _ -> invalid(conn)
     end
   end
+
+  # A's public display name, passed by A's switcher so this install's
+  # switcher can list A back (reciprocal add, `switcher_consent_reciprocal.js`).
+  # Display text only: control characters stripped, capped, and A's host when
+  # absent. HEEx escapes it.
+  @max_name 120
+
+  defp origin_name(name, origin) when is_binary(name) do
+    case name
+         |> String.replace(~r/[\x00-\x1f\x7f]/u, "")
+         |> String.trim()
+         |> String.slice(0, @max_name) do
+      "" -> host_of(origin)
+      clean -> clean
+    end
+  end
+
+  defp origin_name(_name, origin), do: host_of(origin)
 
   defp no_referrer(conn, _opts), do: put_resp_header(conn, "referrer-policy", "no-referrer")
 
