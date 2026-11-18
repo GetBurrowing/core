@@ -296,7 +296,14 @@ defmodule PlatformWeb.GoalsPage do
         ‹ Goals
       </.link>
       <header>
-        <div class="flex flex-wrap items-start justify-between gap-x-4 gap-y-2">
+        <%!-- `relative`: the Change coach popover's containing block at lg is
+        this whole header row, not the coach row, so a right-anchored
+        popover capped at 100% of it cannot cross the pane's left edge
+        (task 01a1ecb3 stage 2). --%>
+        <div
+          class="relative flex flex-wrap items-start justify-between gap-x-4 gap-y-2"
+          data-role="goal-header-row"
+        >
           <h2 class="min-w-0 text-2xl font-bold text-base-content" data-role="goal-title">
             {@goal.title}
             <span
@@ -618,13 +625,15 @@ defmodule PlatformWeb.GoalsPage do
   # "Coach (avatar) Name · Change" beside the title (canvas 01a1eab7-ddae
   # node `md`, goal page header). Change is the owner's only, by the same
   # gate as the Edit button; a non-owner sees the name and nothing else.
-  # The row is the popover's `relative` anchor at lg.
+  # The row is NOT the popover's anchor: at lg the popover is positioned
+  # against the header row above it (task 01a1ecb3 stage 2), so it spans
+  # the content column instead of reaching left out of the pane.
   attr(:page, :map, required: true)
   attr(:picker, :map, default: nil)
 
   defp coach_row(assigns) do
     ~H"""
-    <div class="relative flex min-h-11 items-center gap-2 text-sm" data-role="goal-coach">
+    <div class="flex min-h-11 items-center gap-2 text-sm" data-role="goal-coach">
       <span class="text-subtle">Coach</span>
       <span
         data-agent-slot={@page.coach.slot}
@@ -679,6 +688,7 @@ defmodule PlatformWeb.GoalsPage do
       on_close="close_coach"
       class={coach_sheet_class()}
       data-role="goal-coach-sheet"
+      data-return-focus="[data-role=goal-coach-change]"
     >
       <:title>Change coach</:title>
       <GoalsComponents.coach_cards
@@ -729,7 +739,7 @@ defmodule PlatformWeb.GoalsPage do
       Enum.join(
         [
           PlatformWeb.GoalsOpenUp.sheet_class(),
-          "lg:absolute lg:inset-auto lg:right-0 lg:top-[calc(100%+0.375rem)] lg:w-[34rem]",
+          "lg:absolute lg:inset-auto lg:right-0 lg:top-[calc(100%+0.375rem)] lg:w-[min(34rem,100%)]",
           "lg:[&_.sheet-backdrop]:fixed lg:[&_.sheet-backdrop]:bg-transparent",
           "lg:[&_.sheet-panel]:relative lg:[&_.sheet-panel]:inset-auto lg:[&_.sheet-panel]:w-full",
           "lg:[&_.sheet-panel]:max-h-[min(36rem,75vh)] lg:[&_.sheet-panel]:transform-none",
@@ -896,6 +906,10 @@ defmodule PlatformWeb.GoalsPage do
 
   attr(:error, :string, default: nil)
 
+  # Log sits on the field's row at every width, as the New goal box's Send
+  # does, so the browser's own focus scroll (a phone keyboard rising) reveals
+  # the field and its button together (task 01a1ecb3 stage 4). The error line
+  # still wraps under both.
   defp log_form(assigns) do
     ~H"""
     <form
@@ -904,7 +918,7 @@ defmodule PlatformWeb.GoalsPage do
       class="mt-3 flex flex-wrap items-end gap-2"
       data-role="goal-log-form"
     >
-      <div class="w-full min-w-0 sm:w-auto sm:flex-1">
+      <div class="min-w-0 flex-1" data-role="goal-log-field">
         <label class="mb-1 block text-xs text-subtle" for="goal-log-value">New value</label>
         <input
           id="goal-log-value"
@@ -912,10 +926,13 @@ defmodule PlatformWeb.GoalsPage do
           inputmode="decimal"
           name="value"
           autocomplete="off"
+          data-hides-tab-bar
           class={[field_class(), "min-h-11 tabular-nums"]}
         />
       </div>
-      <button type="submit" class={btn_primary()} data-role="goal-log-submit">Log a value</button>
+      <button type="submit" class={[btn_primary(), "shrink-0"]} data-role="goal-log-submit">
+        Log a value
+      </button>
       <p :if={@error} class="w-full text-sm text-error" data-role="goal-log-error">{@error}</p>
     </form>
     """

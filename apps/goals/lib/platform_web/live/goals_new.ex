@@ -628,11 +628,10 @@ defmodule PlatformWeb.GoalsNew do
       )
 
     ~H"""
-    <%!-- The bottom padding clears the phone bottom nav (the same recipe as
-         goals_open_up.ex's toast): with the coach cards the box is the last
-         thing in a pane that scrolls under the nav. --%>
+    <%!-- No bottom-nav offset here: the detail pane hosting this screen
+         carries clears-tab-bar (goals_live.ex, task 01a1ecb3). --%>
     <div
-      class="mx-auto max-w-3xl p-6 pb-[calc(env(safe-area-inset-bottom)+1.5rem+var(--bottom-nav-height,0px))]"
+      class="mx-auto max-w-3xl p-6"
       data-role="goals-new"
     >
       <.link
@@ -874,6 +873,7 @@ defmodule PlatformWeb.GoalsNew do
             aria-label="What do you want to achieve?"
             placeholder="For example: start a small woodworking business, run a half marathon by spring, or get our first 10 paying customers"
             autocomplete="off"
+            data-hides-tab-bar
             phx-mounted={@new.fill > 0 && JS.focus()}
             class={field_class()}
           />

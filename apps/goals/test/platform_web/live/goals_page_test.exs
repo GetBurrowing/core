@@ -435,6 +435,32 @@ defmodule PlatformWeb.GoalsPageTest do
       assert length(readings(owner, goal)) == 1
     end
 
+    # Task 01a1ecb3 stage 4. Below sm the field took the full width and Log
+    # wrapped under it, so a phone keyboard's focus scroll revealed the field
+    # and left Log under the keyboard. Log now shares the field's row at every
+    # width. Class strings cannot prove geometry: the CDP keyboard-shrink run
+    # on the task's canvas is the regression evidence.
+    test "Log shares the log field's row at every width", %{
+      conn: conn,
+      owner: owner,
+      goal: goal
+    } do
+      doc = conn |> page(owner, goal) |> render() |> Floki.parse_fragment!()
+
+      classes = fn node ->
+        node |> Floki.attribute("class") |> Enum.join(" ") |> String.split()
+      end
+
+      [field] = Floki.find(doc, "#goal-log-form [data-role='goal-log-field']")
+      assert [_] = Floki.find(field, "#goal-log-value")
+      assert "flex-1" in classes.(field)
+      refute "w-full" in classes.(field)
+      refute Enum.any?(classes.(field), &String.starts_with?(&1, "sm:"))
+
+      [submit] = Floki.find(doc, "#goal-log-form [data-role='goal-log-submit']")
+      assert "shrink-0" in classes.(submit)
+    end
+
     test "a viewer sees the number and no form; a crafted submit writes nothing", %{
       conn: conn,
       owner: owner,
@@ -718,6 +744,71 @@ defmodule PlatformWeb.GoalsPageTest do
       |> render_click()
 
       assert card_ids(child) == Enum.map(coaches, & &1.id)
+    end
+
+    # Task 01a1ecb3 stage 4. The sheet renders under `:if`, so closing it
+    # unmounts it and the Sheet hook's destroyed() returns focus. A JS click
+    # leaves <body> focused, so the hook needs the trigger's selector, and the
+    # selector must name exactly the Change control that stays rendered.
+    test "the coach sheet names the Change control as its focus return",
+         %{conn: conn, owner: owner, org_id: org_id} do
+      {a, b, _c} = coaches!(owner)
+      goal = goal!(owner, org_id, %{coach_agent_id: a.id})
+      child = page(conn, owner, goal)
+      child |> element("[data-role='goal-coach-change']") |> render_click()
+
+      doc = child |> render() |> Floki.parse_fragment!()
+      [sheet] = Floki.find(doc, "#goals-coach-sheet")
+      assert Floki.attribute(sheet, "phx-hook") == ["Sheet"]
+      assert [selector] = Floki.attribute(sheet, "data-return-focus")
+      assert [_] = Floki.find(doc, selector)
+      assert selector == "[data-role=goal-coach-change]"
+
+      child |> element("[data-role='goal-coach-sheet'] .sheet-backdrop") |> render_click()
+      refute has_element?(child, "[data-role='goal-coach-sheet']")
+      assert has_element?(child, selector)
+
+      child |> element("[data-role='goal-coach-change']") |> render_click()
+      render_click(child, "coach_pick", %{"agent_id" => b.id})
+      child |> element("[data-role='goal-coach-save']") |> render_click()
+      refute has_element?(child, "[data-role='goal-coach-sheet']")
+      assert has_element?(child, selector)
+    end
+
+    # Task 01a1ecb3 stage 2. At lg the sheet is an absolute popover. Anchored
+    # on the coach row, a right-anchored 34rem box reached left out of the
+    # overflow-auto detail pane and was clipped behind the Goals list. Its
+    # containing block is now the header row, and its width is capped at
+    # that row's width. Class strings cannot prove geometry: the CDP
+    # elementFromPoint run on the task's canvas is the regression evidence.
+    test "the lg popover is anchored on the header row and never wider than it",
+         %{conn: conn, owner: owner, org_id: org_id} do
+      {a, _b, _c} = coaches!(owner)
+      goal = goal!(owner, org_id, %{coach_agent_id: a.id})
+      child = page(conn, owner, goal)
+      child |> element("[data-role='goal-coach-change']") |> render_click()
+
+      doc = child |> render() |> Floki.parse_fragment!()
+
+      classes = fn node ->
+        node |> Floki.attribute("class") |> Enum.join(" ") |> String.split()
+      end
+
+      [header_row] = Floki.find(doc, "[data-role='goal-header-row']")
+      assert "relative" in classes.(header_row)
+      assert [_] = Floki.find(header_row, "[data-role='goal-title']")
+      assert [coach_row] = Floki.find(header_row, "[data-role='goal-coach']")
+      refute "relative" in classes.(coach_row)
+
+      # Nothing between the header row and the sheet is positioned, so the
+      # header row is the popover's containing block.
+      assert [_] = Floki.find(coach_row, "[data-role='goal-coach-sheet']")
+
+      sheet = PlatformWeb.GoalsPage.coach_sheet_class() |> String.split()
+      assert "lg:w-[min(34rem,100%)]" in sheet
+      refute "lg:w-[34rem]" in sheet
+      assert "lg:right-0" in sheet
+      assert "lg:absolute" in sheet
     end
 
     test "a non-owner sees the coach name only; a forged save changes nothing",

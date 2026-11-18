@@ -172,6 +172,29 @@ defmodule PlatformWeb.GoalsNewTest do
            ) != []
   end
 
+  # Task 01a1ecb3 stage 1: the pane pads for the rail once; the screen no
+  # longer adds its own bottom-nav offset, which would double the clearance.
+  test "New goal relies on the pane's rail clearance, not its own", %{conn: conn, user: user} do
+    _lead = lead!(user)
+    child = open(conn, user)
+
+    assert has_element?(
+             child,
+             "[data-role=goals-detail-pane].clears-tab-bar [data-role=goals-new]"
+           )
+
+    [new_class] =
+      child
+      |> render()
+      |> Floki.parse_fragment!()
+      |> Floki.find("[data-role=goals-new]")
+      |> Floki.attribute("class")
+
+    refute new_class =~ "bottom-nav-height"
+    refute new_class =~ "safe-area-inset-bottom"
+    assert has_element?(child, "[data-role=goals-new-box] input[type=text][data-hides-tab-bar]")
+  end
+
   test "before sending: header, greeting, box and examples; an example fills the box only", %{
     conn: conn,
     user: user

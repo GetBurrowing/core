@@ -216,6 +216,7 @@ defmodule PlatformWeb.GoalsBriefCards do
         name="question"
         type="text"
         maxlength="500"
+        data-hides-tab-bar
         class={field()}
         placeholder={if @blank, do: "Type a question first", else: "Ask #{@coach_name} about this"}
       />

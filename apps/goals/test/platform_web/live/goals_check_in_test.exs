@@ -187,6 +187,18 @@ defmodule PlatformWeb.GoalsCheckInTest do
     assert text =~ "not_now"
   end
 
+  # Task 01a1ecb3 stage 1: the open check-in renders inside the detail pane,
+  # which pads its end clear of the phone's glass rail.
+  test "an open check-in sits in the detail pane that clears the bottom rail", c do
+    {ask, _takeaway} = fixture(c)
+    child = open(c.conn, c.owner, c.goal, ask)
+
+    assert has_element?(
+             child,
+             "[data-role=goals-detail-pane].clears-tab-bar [data-role=goals-check-in]"
+           )
+  end
+
   test "all suggestions declined and an empty check-in are both recorded correctly", c do
     {ask, _} = fixture(c)
     child = open(c.conn, c.owner, c.goal, ask)

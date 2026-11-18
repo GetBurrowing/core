@@ -294,6 +294,71 @@ describe("Sheet hook focus return", () => {
   })
 })
 
+// A sheet rendered under `:if` (the Goals Change coach sheet, task 01a1ecb3
+// stage 4) closes by unmounting, so updated() never sees data-open "false".
+// destroyed() must hand focus back to the trigger.
+describe("Sheet hook focus return on unmount", () => {
+  function openSheet({ active, returnFocus } = {}) {
+    const firstCard = { focus: vi.fn() }
+    const s = buildSheet({ swipe: false, open: true })
+    if (returnFocus) s.el.dataset.returnFocus = returnFocus
+    s.el.querySelector = (sel) =>
+      sel.includes("[href]") ? firstCard : FakeNode.prototype.querySelector.call(s.el, sel)
+    document.body = { focus: vi.fn() }
+    document.activeElement = active ?? document.body
+    s.hook.mounted()
+    expect(firstCard.focus).toHaveBeenCalled()
+    // Removing the sheet's node drops focus to <body>, as a browser does.
+    document.activeElement = document.body
+    return s
+  }
+
+  it("a trigger a pointer focused gets focus back when the open sheet unmounts", () => {
+    const change = { focus: vi.fn(), isConnected: true }
+    const s = openSheet({ active: change })
+    s.hook.destroyed()
+    expect(change.focus).toHaveBeenCalledTimes(1)
+  })
+
+  it("a click that left <body> focused falls back to data-return-focus", () => {
+    const change = { focus: vi.fn(), isConnected: true }
+    document.querySelector = (sel) =>
+      sel === "[data-role=goal-coach-change]" ? change : null
+    const s = openSheet({ returnFocus: "[data-role=goal-coach-change]" })
+    s.hook.destroyed()
+    expect(change.focus).toHaveBeenCalledTimes(1)
+  })
+
+  it("a trigger torn down with the page (navigation) is not focused", () => {
+    const change = { focus: vi.fn(), isConnected: false }
+    const s = openSheet({ active: change })
+    s.hook.destroyed()
+    expect(change.focus).not.toHaveBeenCalled()
+  })
+
+  it("focus another element took in the same patch is not stolen", () => {
+    const change = { focus: vi.fn(), isConnected: true }
+    const s = openSheet({ active: change })
+    let frame
+    globalThis.requestAnimationFrame = (fn) => {
+      frame = fn
+    }
+    s.hook.destroyed()
+    document.activeElement = { focus: vi.fn() }
+    frame()
+    expect(change.focus).not.toHaveBeenCalled()
+  })
+
+  it("a sheet that closed through updated() does not restore a second time on unmount", () => {
+    const change = { focus: vi.fn(), isConnected: true }
+    const s = openSheet({ active: change })
+    s.el.dataset.open = "false"
+    s.hook.updated()
+    s.hook.destroyed()
+    expect(change.focus).toHaveBeenCalledTimes(1)
+  })
+})
+
 describe("Sheet hook keyboard", () => {
   // A 375x812 phone; the keyboard takes 336px of the visual viewport.
   const LAYOUT = 812

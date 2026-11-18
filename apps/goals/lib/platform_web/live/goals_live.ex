@@ -824,9 +824,12 @@ defmodule PlatformWeb.GoalsLive do
       >
         <GoalsList.desktop_list rows={@rows} selected_id={@card && @card.goal.id} />
       </div>
+      <%!-- clears-tab-bar: below lg this pane is the scroller every Goals
+           screen (goal page, check-in, New goal, retro, idea, read) ends in,
+           and the glass rail floats over its end (task 01a1ecb3). --%>
       <section
         class={[
-          "min-w-0 flex-1 overflow-auto bg-base-200",
+          "min-w-0 flex-1 overflow-auto bg-base-200 clears-tab-bar",
           is_nil(@card) && is_nil(@new) && "max-lg:hidden"
         ]}
         data-role="goals-detail-pane"

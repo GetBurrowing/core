@@ -198,6 +198,21 @@ defmodule PlatformWeb.InboxLiveBriefingTest do
              )
     end
 
+    test "the briefing detail pane clears the phone tab bar (task 01a1ecb3 stage 3)",
+         %{conn: conn, user: user} do
+      # Below lg the detail pane is the scroller a briefing ends in; without
+      # the clearance the settings note's links sat under the glass rail.
+      briefing!(user, [insight!(addressee: user)])
+      lv = open!(conn, user)
+
+      assert has_element?(lv, ~s([data-role="inbox-detail-pane"].clears-tab-bar))
+
+      assert has_element?(
+               lv,
+               ~s([data-role="inbox-detail-pane"] [data-role=briefing-settings-link])
+             )
+    end
+
     test "a second user's GET of the date shows nothing of the first user's",
          %{conn: conn, user: user} do
       q = question!(user)
