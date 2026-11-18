@@ -435,6 +435,32 @@ defmodule PlatformWeb.GoalsPageTest do
       assert length(readings(owner, goal)) == 1
     end
 
+    # Task 01a1ecb3 stage 4. Below sm the field took the full width and Log
+    # wrapped under it, so a phone keyboard's focus scroll revealed the field
+    # and left Log under the keyboard. Log now shares the field's row at every
+    # width. Class strings cannot prove geometry: the CDP keyboard-shrink run
+    # on the task's canvas is the regression evidence.
+    test "Log shares the log field's row at every width", %{
+      conn: conn,
+      owner: owner,
+      goal: goal
+    } do
+      doc = conn |> page(owner, goal) |> render() |> Floki.parse_fragment!()
+
+      classes = fn node ->
+        node |> Floki.attribute("class") |> Enum.join(" ") |> String.split()
+      end
+
+      [field] = Floki.find(doc, "#goal-log-form [data-role='goal-log-field']")
+      assert [_] = Floki.find(field, "#goal-log-value")
+      assert "flex-1" in classes.(field)
+      refute "w-full" in classes.(field)
+      refute Enum.any?(classes.(field), &String.starts_with?(&1, "sm:"))
+
+      [submit] = Floki.find(doc, "#goal-log-form [data-role='goal-log-submit']")
+      assert "shrink-0" in classes.(submit)
+    end
+
     test "a viewer sees the number and no form; a crafted submit writes nothing", %{
       conn: conn,
       owner: owner,
@@ -718,6 +744,35 @@ defmodule PlatformWeb.GoalsPageTest do
       |> render_click()
 
       assert card_ids(child) == Enum.map(coaches, & &1.id)
+    end
+
+    # Task 01a1ecb3 stage 4. The sheet renders under `:if`, so closing it
+    # unmounts it and the Sheet hook's destroyed() returns focus. A JS click
+    # leaves <body> focused, so the hook needs the trigger's selector, and the
+    # selector must name exactly the Change control that stays rendered.
+    test "the coach sheet names the Change control as its focus return",
+         %{conn: conn, owner: owner, org_id: org_id} do
+      {a, b, _c} = coaches!(owner)
+      goal = goal!(owner, org_id, %{coach_agent_id: a.id})
+      child = page(conn, owner, goal)
+      child |> element("[data-role='goal-coach-change']") |> render_click()
+
+      doc = child |> render() |> Floki.parse_fragment!()
+      [sheet] = Floki.find(doc, "#goals-coach-sheet")
+      assert Floki.attribute(sheet, "phx-hook") == ["Sheet"]
+      assert [selector] = Floki.attribute(sheet, "data-return-focus")
+      assert [_] = Floki.find(doc, selector)
+      assert selector == "[data-role=goal-coach-change]"
+
+      child |> element("[data-role='goal-coach-sheet'] .sheet-backdrop") |> render_click()
+      refute has_element?(child, "[data-role='goal-coach-sheet']")
+      assert has_element?(child, selector)
+
+      child |> element("[data-role='goal-coach-change']") |> render_click()
+      render_click(child, "coach_pick", %{"agent_id" => b.id})
+      child |> element("[data-role='goal-coach-save']") |> render_click()
+      refute has_element?(child, "[data-role='goal-coach-sheet']")
+      assert has_element?(child, selector)
     end
 
     # Task 01a1ecb3 stage 2. At lg the sheet is an absolute popover. Anchored

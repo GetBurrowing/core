@@ -283,7 +283,9 @@ describe("app.css — the jump-to-latest control is unconditional", () => {
       // native tab bar, and the hide rules restate the drop to 0. Still the
       // bottom nav's clearance, still no `.chat-jump` selector.
       ":root[data-native-tab-bar]:has([data-bottom-rail]:not([data-web-tabs]))",
-      ':root[data-native-tab-bar]:has([data-bottom-rail]):has([phx-hook="ComposeInput"]:focus),\n  :root[data-native-tab-bar]:has([data-bottom-rail]):has([data-fullscreen-viewer]),\n  :root[data-native-tab-bar]:has([data-bottom-rail]):has([data-in-call])',
+      // Task 01a1ecb3 stage 1: a focused Goals field ([data-hides-tab-bar])
+      // hides the native tab bar as a focused composer does.
+      ':root[data-native-tab-bar]:has([data-bottom-rail]):has([phx-hook="ComposeInput"]:focus),\n  :root[data-native-tab-bar]:has([data-bottom-rail]):has([data-hides-tab-bar]:focus),\n  :root[data-native-tab-bar]:has([data-bottom-rail]):has([data-fullscreen-viewer]),\n  :root[data-native-tab-bar]:has([data-bottom-rail]):has([data-in-call])',
       ".compose-input-area",
       ".sheet-panel .compose-input-area",
       ".clears-tab-bar",

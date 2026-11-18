@@ -688,6 +688,7 @@ defmodule PlatformWeb.GoalsPage do
       on_close="close_coach"
       class={coach_sheet_class()}
       data-role="goal-coach-sheet"
+      data-return-focus="[data-role=goal-coach-change]"
     >
       <:title>Change coach</:title>
       <GoalsComponents.coach_cards
@@ -905,6 +906,10 @@ defmodule PlatformWeb.GoalsPage do
 
   attr(:error, :string, default: nil)
 
+  # Log sits on the field's row at every width, as the New goal box's Send
+  # does, so the browser's own focus scroll (a phone keyboard rising) reveals
+  # the field and its button together (task 01a1ecb3 stage 4). The error line
+  # still wraps under both.
   defp log_form(assigns) do
     ~H"""
     <form
@@ -913,7 +918,7 @@ defmodule PlatformWeb.GoalsPage do
       class="mt-3 flex flex-wrap items-end gap-2"
       data-role="goal-log-form"
     >
-      <div class="w-full min-w-0 sm:w-auto sm:flex-1">
+      <div class="min-w-0 flex-1" data-role="goal-log-field">
         <label class="mb-1 block text-xs text-subtle" for="goal-log-value">New value</label>
         <input
           id="goal-log-value"
@@ -925,7 +930,9 @@ defmodule PlatformWeb.GoalsPage do
           class={[field_class(), "min-h-11 tabular-nums"]}
         />
       </div>
-      <button type="submit" class={btn_primary()} data-role="goal-log-submit">Log a value</button>
+      <button type="submit" class={[btn_primary(), "shrink-0"]} data-role="goal-log-submit">
+        Log a value
+      </button>
       <p :if={@error} class="w-full text-sm text-error" data-role="goal-log-error">{@error}</p>
     </form>
     """
