@@ -24,6 +24,7 @@ import shutil
 import sys
 import tempfile
 import unittest
+from unittest import mock
 
 HERE = os.path.dirname(os.path.abspath(__file__))
 INSTALLER = os.path.dirname(HERE)
@@ -40,7 +41,7 @@ GOLDEN = os.path.join(HERE, "golden")
 sys.path.insert(0, INSTALLER)
 
 from identity_terms import identity_hits
-from render_identity_scan import identity_scan_text
+from render_identity_scan import identity_scan_text, planted_like
 
 from burrow_install import registry
 from burrow_install.__main__ import main
@@ -226,11 +227,44 @@ class MacKnobTest(PositiveControlMixin, unittest.TestCase):
     MEETINGS_LITERALS = ("livekit", "LIVEKIT_", "7881", "7882", "meeting-transcriber")
 
     def test_mac_contains_every_meetings_literal_and_mac_lite_none(self):
-        on = all_text(mac_build(manifest_from(MAC)))
-        off = all_text(mac_build(manifest_from(MAC_LITE)))
+        # Both sides scan with generated values redacted: a random hex password
+        # holds '7881' or '7882' in about 0.4% of renders (task 01a1ef1b).
+        on = identity_scan_text(mac_build(manifest_from(MAC)))
+        off = identity_scan_text(mac_build(manifest_from(MAC_LITE)))
         # Positive control first: the same search hits the meetings render.
         self.assertEqual([s for s in self.MEETINGS_LITERALS if s not in on], [])
         self.assertEqual([s for s in self.MEETINGS_LITERALS if s in off], [])
+
+    def test_mac_lite_literal_search_ignores_generated_values_that_contain_them(self):
+        # Plant same-length, same-alphabet values holding every literal in each
+        # generated secret mac-lite uses; the scans must not see them.
+        names = sorted(mac_build(manifest_from(MAC_LITE)).generated)
+        self.assertGreater(len(names), 0)
+        planted = {}
+        with contextlib.ExitStack() as stack:
+            for index, name in enumerate(names):
+                secret = registry.SECRETS[name]
+                planted[name] = planted_like(secret.generate(), index)
+                stack.enter_context(
+                    mock.patch.object(secret, "generate", lambda v=planted[name]: v)
+                )
+            rendered = mac_build(manifest_from(MAC_LITE))
+        # Positive control: the planted values reached the rendered text.
+        # assertTrue, not assertIn: a failure must not print the render.
+        self.assertTrue(rendered.generated == planted, "patched generators not used")
+        raw = all_text(rendered)
+        for literal in ("7881", "7882", ":4080"):
+            self.assertTrue(literal in raw, f"planted {literal!r} absent from the raw render")
+        off = identity_scan_text(rendered)
+        self.assertEqual([s for s in self.MEETINGS_LITERALS if s in off], [])
+        self.assertNotIn(":4080", off)
+
+    def test_mac_lite_scan_text_is_identical_across_renders(self):
+        first = mac_build(manifest_from(MAC_LITE))
+        second = mac_build(manifest_from(MAC_LITE))
+        # Positive control: the raw renders differ (fresh secrets each time).
+        self.assertTrue(all_text(first) != all_text(second), "renders did not regenerate")
+        self.assertEqual(identity_scan_text(first), identity_scan_text(second))
 
     def pair(self, mutate):
         on = load(MAC)
@@ -239,8 +273,10 @@ class MacKnobTest(PositiveControlMixin, unittest.TestCase):
         return valid(on), valid(off)
 
     def assert_owns(self, containers, on, off):
-        on_text = all_text(mac_build(on))
-        off_text = all_text(mac_build(off))
+        # Generated values redacted: an identifier as short as 'livekit' must
+        # not be found by chance inside a random secret (task 01a1ef1b).
+        on_text = identity_scan_text(mac_build(on))
+        off_text = identity_scan_text(mac_build(off))
         for container in containers:
             ids = registry.identifiers(container, registry.Ctx(on))
             with self.subTest(service=container):
@@ -256,7 +292,7 @@ class MacKnobTest(PositiveControlMixin, unittest.TestCase):
     def test_transcription_knob_owns_the_transcriber_only(self):
         on, off = self.pair(lambda raw: raw["meetings"].update(transcription=False))
         self.assert_owns(["meeting-transcriber"], on, off)
-        self.assertIn("livekit", all_text(mac_build(off)))
+        self.assertTrue("livekit" in identity_scan_text(mac_build(off)), "livekit absent")
 
     def test_meetings_identifiers_are_the_expected_literal_sets(self):
         ctx = registry.Ctx(manifest_from(MAC))
@@ -365,7 +401,7 @@ class MacEdgeTest(PositiveControlMixin, unittest.TestCase):
         text = all_text(rendered)
         self.assertNotIn("core-platform:4000/api", text)
         # mac-lite runs nothing that calls core, so it has no such listener.
-        self.assertNotIn(":4080", all_text(mac_build(manifest_from(MAC_LITE))))
+        self.assertNotIn(":4080", identity_scan_text(mac_build(manifest_from(MAC_LITE))))
 
     def test_only_livekit_publishes_host_ports_and_only_7881_7882(self):
         compose = mac_build(manifest_from(MAC)).files["compose.yaml"][0]
@@ -490,11 +526,13 @@ class MacModelsTest(PositiveControlMixin, unittest.TestCase):
 
     def test_no_local_model_container_or_gpu(self):
         for path in (MAC, MAC_LITE):
-            text = all_text(mac_build(manifest_from(path)))
+            # Generated values redacted: 'nvidia' is six urlsafe characters.
+            text = identity_scan_text(mac_build(manifest_from(path)))
             for word in ("speaches", "llama.cpp", "embeddings:8188", "nvidia", "/models"):
                 self.assertNotIn(word, text)
-        # Positive control: the single-host example does run a local model.
-        self.assertIn("llama.cpp", all_text(build(manifest_from(SINGLE_HOST))))
+        # Positive control: the same search finds the single-host local model.
+        single = identity_scan_text(build(manifest_from(SINGLE_HOST)))
+        self.assertTrue("llama.cpp" in single, "llama.cpp absent from single-host")
 
     def test_transcriber_speaks_to_the_named_hosted_endpoint(self):
         rendered = mac_build(manifest_from(MAC))

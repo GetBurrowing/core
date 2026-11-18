@@ -331,7 +331,13 @@ class FullMachineTest(unittest.TestCase):
         self.assertIn(f"AGENT_HOST_TOKEN={token}\n", self.rendered.files["secrets.env"][0])
         self.assertIn("AGENT_HOST_PROFILE=full_machine\n", text)
         self.assertIn("BURROW_CORE_URL=https://burrow-01a0d69d.test\n", text)
-        self.assertNotIn("SUITE_", text)
+        # Generated values redacted: 'SUITE_' is six urlsafe characters and the
+        # file carries AGENT_HOST_TOKEN. Positive control: the same search finds
+        # the BURROW_ names the file does carry.
+        scan = write_files(self.rendered.redacted()["user-data"])[agents.HOST_ENV_PATH][1]
+        self.assertTrue("BURROW_CORE_URL=" in scan, "BURROW_CORE_URL absent")
+        self.assertTrue("AGENT_HOST_TOKEN=<secret:AGENT_HOST_TOKEN>\n" in scan, "not redacted")
+        self.assertNotIn("SUITE_", scan)
         # Only that: no other secret of the install reaches the host daemon.
         others = [v for k, v in self.rendered.generated.items() if k != "AGENT_HOST_TOKEN"]
         self.assertTrue(others)
