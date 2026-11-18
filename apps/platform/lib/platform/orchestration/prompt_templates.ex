@@ -3000,39 +3000,45 @@ defmodule Platform.Orchestration.PromptTemplates do
         # `20260726051346_seed_design_task_direction.exs` claimed this slug on
         # every migrated environment, so the row is reached only by
         # `20260727210000_force_update_design_task_direction_decline.exs`.
-        content: """
-        You are the Designer. A task is about to be planned and it touches a user-facing surface. Produce DESIGN DIRECTION for that surface now, before the plan is written.
+        # UX super agent phase 1: the end-of-job reflection, until a real
+        # `design.reflect` responsibility exists. Deployed rows get it from
+        # `20261118190000_append_designer_reflection.exs` (append-only).
+        content:
+          """
+          You are the Designer. A task is about to be planned and it touches a user-facing surface. Produce DESIGN DIRECTION for that surface now, before the plan is written.
 
-        Low-fi and directional is correct. This is advice, not a gate: it does not block development, and the direction is expected to be iterated.
+          Low-fi and directional is correct. This is advice, not a gate: it does not block development, and the direction is expected to be iterated.
 
-        ## The task
+          ## The task
 
-        {{task_summary}}
+          {{task_summary}}
 
-        ## Brand context
+          ## Brand context
 
-        {{brand_context}}
+          {{brand_context}}
 
-        ## Canvases already attached to this task
+          ## Canvases already attached to this task
 
-        {{attached_canvases}}
+          {{attached_canvases}}
 
-        ## Deliverable
+          ## Deliverable
 
-        Produce direction in exactly this shape:
+          Produce direction in exactly this shape:
 
-        - Opening line pins the subject: what this surface is, who uses it, and the one job it does.
-        - Palette: 4–6 named color values (from brand tokens if they exist; provisional if exploring).
-        - Type: 2–3 roles (display used with restraint, body, optional utility).
-        - Layout: one sentence of intent + a rough wireframe; name ONE signature element — spend boldness in one place.
-        - Self-critique before handoff: revise anything that reads like the generic default for this kind of page, and say what changed.
+          - Opening line pins the subject: what this surface is, who uses it, and the one job it does.
+          - Palette: 4–6 named color values (from brand tokens if they exist; provisional if exploring).
+          - Type: 2–3 roles (display used with restraint, body, optional utility).
+          - Layout: one sentence of intent + a rough wireframe; name ONE signature element — spend boldness in one place.
+          - Self-critique before handoff: revise anything that reads like the generic default for this kind of page, and say what changed.
 
-        ## Delivery
+          ## Delivery
 
-        Write the direction to a canvas and attach that canvas to the task with the `task_attach_canvas` MCP tool, using the task_id above. The attachment IS the completion signal the planner waits on — direction posted only as a chat message is not delivered.
+          Write the direction to a canvas and attach that canvas to the task with the `task_attach_canvas` MCP tool, using the task_id above. The attachment IS the completion signal the planner waits on — direction posted only as a chat message is not delivered.
 
-        If, having read the task, you judge that this surface needs no design direction — the change is not visual, or the surface already has direction that still holds — do NOT attach a canvas you do not believe in and do NOT go silent. Call `task_design_decline` with the task_id above and a one-sentence reason. That records the step as not-applicable and releases the planner immediately. Going silent instead costs 30 minutes and records a failure.
-        """
+          If, having read the task, you judge that this surface needs no design direction — the change is not visual, or the surface already has direction that still holds — do NOT attach a canvas you do not believe in and do NOT go silent. Call `task_design_decline` with the task_id above and a one-sentence reason. That records the step as not-applicable and releases the planner immediately. Going silent instead costs 30 minutes and records a failure.
+
+          """ <>
+            Platform.Designer.reflection_instruction()
       },
       %{
         slug: "experiments.labeler.v1",

@@ -1213,6 +1213,10 @@ defmodule Platform.RepoLookupBoundaryTest do
      "agent/1 takes the operator-supplied `agent_id` of provision/1 (the mix task flag or an rpc map); it checks Platform.UUID.valid?/1 before Repo.get(Agent, id), and a malformed id is {:error, {:not_found, :agent_id}}"},
     {"platform/showrunner.ex", :platform_uuid_guard, "-", 2, :must_cast,
      "agent/1 and space/1 guard provision/1's operator-supplied `agent_id` and `space_id` before Repo.get(Agent, _) and Chat.get_space/1; a malformed id is {:error, {:not_found, field}}"},
+    {"platform/designer.ex", :get, "Agent", 1, :must_cast,
+     "agent/1 takes the operator-supplied `agent_id` of provision/1 and install_files/3 (an rpc map); it checks Platform.UUID.valid?/1 before Repo.get(Agent, id), and a malformed id is {:error, {:not_found, :agent_id}}"},
+    {"platform/designer.ex", :platform_uuid_guard, "-", 4, :must_cast,
+     "agent/1, user/1 and spaces/2 guard provision/1's operator-supplied agent, escalation-user and space ids before Repo.get/Accounts.get_user/Chat.get_space (malformed = {:error, {:not_found, field}}); escalate_user_id/1 reads the operator-written trigger_config and turns a malformed value into nil"},
     {"platform/showrunner/config.ex", :platform_uuid_guard, "-", 1, :must_cast,
      "uuid/1 reads id fields out of a responsibility's operator-written `trigger_config` JSON; a malformed value becomes nil (the unconfigured path) before any lookup uses it"},
     {"platform/responsibilities/handlers/showrunner_recording_prep.ex", :get, "Agent", 1,
@@ -1227,6 +1231,8 @@ defmodule Platform.RepoLookupBoundaryTest do
   # statically needs dataflow the scanner does not do. A count change
   # here is a prompt to triage the new call by hand.
   @repo_one_counts %{
+    # goal/1 pins a module-attribute metric slug and status; no id from a boundary.
+    "platform/designer.ex" => 1,
     # Target lookups compare string slugs and lock existing skill/prompt rows.
     "platform/instruction_packs/targets.ex" => 2,
     # Publisher lookup pins the validated manifest pack_id string; no UUID input.
