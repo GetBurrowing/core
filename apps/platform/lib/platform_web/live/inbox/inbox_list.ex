@@ -50,6 +50,7 @@ defmodule PlatformWeb.Inbox.InboxList do
   | `briefing`               | Briefing       |
   | `meeting_briefing`       | Meeting        |
   | `mailbox_reassigned`     | Mailbox        |
+  | `booking_cohost_invite`  | Co-host        |
   | an extension's kind      | its declared `label` (`Platform.Extension` `inbox_kinds/0`) |
   | anything else            | the humanized key |
 

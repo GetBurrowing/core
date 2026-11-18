@@ -58,13 +58,18 @@ defmodule Platform.Inbox.Item do
   # `mail_accounts` id. Its title names the admin, the address and the new
   # owner and carries no mail content. A final fact: no `row_stale?/1`
   # clause, acknowledged on open.
-  @kinds ~w(chat_mention task_plan_review review_request_pending meeting_starting meeting_invited meeting_cancelled task_sponsor_assigned lifecycle_step_failed briefing meeting_briefing ux_decision mailbox_reassigned)
+  # `booking_cohost_invite` (task 01a1eff0-6880 stage 1) asks one person to
+  # co-host a booking link (`Platform.Calendar.BookingHosts.invite/3`), with
+  # `source_type: "booking_link_host"` and `source_id` = the
+  # `calendar_booking_link_hosts` id. Listed on open (it is answered, not
+  # read) and dismissed when accepted, declined or removed.
+  @kinds ~w(chat_mention task_plan_review review_request_pending meeting_starting meeting_invited meeting_cancelled task_sponsor_assigned lifecycle_step_failed briefing meeting_briefing ux_decision mailbox_reassigned booking_cohost_invite)
   # `task_review` is the per-task rollup source for review-gate attention rows:
   # one durable row per (sponsor, task) regardless of how many review requests
   # the task fans out (see `Platform.Tasks.ReviewRequests`). Kept distinct from
   # the plain `task` source so a rollup dismissal never touches a
   # `task_sponsor_assigned` / `task_plan_review` row that shares the task id.
-  @source_types ~w(chat_message task review_request meeting task_review briefing meeting_briefing ux_finding mail_account)
+  @source_types ~w(chat_message task review_request meeting task_review briefing meeting_briefing ux_finding mail_account booking_link_host)
 
   # `inbox_items.title` is `varchar(255)` (`add(:title, :string)` in
   # `20260723185711_create_inbox_items.exs`). Producers build titles as a

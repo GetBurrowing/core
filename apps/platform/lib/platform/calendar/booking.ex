@@ -15,6 +15,11 @@ defmodule Platform.Calendar.Booking do
     field(:ends_at, :utc_datetime_usec)
     field(:reserved_start, :utc_datetime_usec)
     field(:reserved_end, :utc_datetime_usec)
+    # Every host this booking reserved, owner included, and each host's
+    # native event (`Platform.Calendar.BookingHosts`). No foreign key: a
+    # deleted host event leaves a dangling id the busy query ignores.
+    field(:host_user_ids, {:array, :binary_id}, default: [])
+    field(:host_event_ids, {:array, :binary_id}, default: [])
     belongs_to(:delivery, Platform.Mail.Delivery)
     field(:delivery_error, :string)
     timestamps(type: :utc_datetime_usec)

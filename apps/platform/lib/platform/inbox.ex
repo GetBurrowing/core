@@ -99,7 +99,11 @@ defmodule Platform.Inbox do
   # question is reading it, and the row stays until it is answered
   # (`Platform.Ux.Decisions.answer/4` dismisses it) or dismissed. NOT an
   # approval, so never in `@action_kinds`.
-  @listed_on_open ~w(briefing meeting_briefing ux_decision)
+  # `booking_cohost_invite` (task 01a1eff0-6880 stage 1) mirrors
+  # `ux_decision`: opening the invite is reading it, and the row stays until
+  # the co-host accepts or declines, or the owner removes them
+  # (`Platform.Calendar.BookingHosts` dismisses it). NOT an approval.
+  @listed_on_open ~w(briefing meeting_briefing ux_decision booking_cohost_invite)
 
   # The inbox kinds an EXTERNAL viewer has a destination for on their surface.
   # A new kind is excluded by default: the rule holds without anyone
@@ -194,6 +198,11 @@ defmodule Platform.Inbox do
       _ -> nil
     end
   end
+
+  # A co-host invite has no shared resource: its recipient is the invited
+  # user and the only reader (`Platform.Calendar.BookingHosts`' reads are
+  # keyed on that user).
+  def resource_for("booking_link_host", _id), do: nil
 
   def resource_for(_, _), do: nil
 

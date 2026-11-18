@@ -1079,7 +1079,10 @@ defmodule Platform.InboxTest do
                "meeting_briefing",
                # Task 01a1af00 stage 3: opening the UX question is reading
                # it; it stays listed until answered.
-               "ux_decision"
+               "ux_decision",
+               # Task 01a1eff0-6880 stage 1: opening a co-host invite is
+               # reading it; it stays listed until accepted or declined.
+               "booking_cohost_invite"
              ]
 
       assert Inbox.core_action_kinds() == Platform.Mobile.AppEntities.approval_kinds()

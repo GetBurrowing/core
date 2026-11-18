@@ -222,7 +222,9 @@ defmodule PlatformWeb.Components.InboxItem do
     # chip its own row renders.
     "ux_decision" => %{long: "UX decision", short: "UX"},
     # Task 01a1ea5b stage 4: an admin moved the viewer's personal mailbox.
-    "mailbox_reassigned" => %{long: "Mailbox reassigned", short: "Mailbox"}
+    "mailbox_reassigned" => %{long: "Mailbox reassigned", short: "Mailbox"},
+    # Task 01a1eff0-6880 stage 1: an invitation to co-host a booking link.
+    "booking_cohost_invite" => %{long: "Co-host invite", short: "Co-host"}
   }
 
   @doc "The core kinds `kind_label/2` has an explicit entry for."
@@ -267,6 +269,8 @@ defmodule PlatformWeb.Components.InboxItem do
   def kind_icon("meeting_briefing"), do: "hero-video-camera"
   # The UX role's question. Above the catch-all.
   def kind_icon("ux_decision"), do: "hero-light-bulb"
+  # A booking link co-host invite. Above the catch-all.
+  def kind_icon("booking_cohost_invite"), do: "hero-user-plus"
 
   def kind_icon(other) do
     case Platform.Extensions.inbox_kind(other) do
@@ -286,6 +290,8 @@ defmodule PlatformWeb.Components.InboxItem do
   defp needs_action?(%Item{kind: "briefing"}), do: false
   defp needs_action?(%Item{kind: "meeting_briefing"}), do: false
   defp needs_action?(%Item{kind: "ux_decision"}), do: false
+  # Answered on its own invite card, not a review.
+  defp needs_action?(%Item{kind: "booking_cohost_invite"}), do: false
   defp needs_action?(%Item{kind: kind}), do: kind in Platform.Inbox.action_kinds()
 
   defp present?(value) when is_binary(value), do: String.trim(value) != ""

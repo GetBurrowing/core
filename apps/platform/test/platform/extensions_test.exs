@@ -361,10 +361,11 @@ defmodule Platform.ExtensionsTest do
       # Core's non-approval `briefing` and `meeting_briefing` stay listed on
       # open but are never core (Mobile approval) action kinds (tasks 01a15ee1
       # stage 1 and 01a1694a stage 2), and neither is the UX role's
-      # `ux_decision` (task 01a1af00 stage 3).
+      # `ux_decision` (task 01a1af00 stage 3), nor the booking co-host
+      # invite (task 01a1eff0-6880 stage 1).
       assert Platform.Inbox.action_kinds() ==
                Platform.Inbox.core_action_kinds() ++
-                 ["briefing", "meeting_briefing", "ux_decision"]
+                 ["briefing", "meeting_briefing", "ux_decision", "booking_cohost_invite"]
 
       assert PlatformWeb.Components.InboxItem.kind_label("fixture_request") == "Fixture request"
       assert PlatformWeb.Components.InboxItem.kind_icon("fixture_request") == "hero-bell"
