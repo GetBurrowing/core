@@ -1233,6 +1233,15 @@ defmodule Platform.RepoLookupBoundaryTest do
     {"platform/responsibilities/handlers/showrunner_recording_prep.ex", :get, "Agent", 1,
      :flagged_sibling_owned,
      "under the responsibilities/ sibling prefix, so flagged rather than classified; the id is internal regardless: runtime_scope/1 takes ctx.agent_id, built by Showrunner.Board.context/3 from the %Agent{} that Roles.assignee_for/1 loads through role_assignments.agent_id (a :binary_id FK to agents); no params, MCP payload or URL segment reaches it"},
+    # ── Super agents: doctor + relationship steward ─────────────────────
+    {"platform/super_agents.ex", :get, "Agent", 1, :must_cast,
+     "agent/1 takes the operator-supplied `agent_id` of provision/3 (an rpc map); it checks Platform.UUID.valid?/1 before Repo.get(Agent, id), and a malformed id is {:error, {:not_found, :agent_id}}"},
+    {"platform/super_agents.ex", :platform_uuid_guard, "-", 3, :must_cast,
+     "agent/1 and user/1 guard provision/3's operator-supplied agent and escalation-user ids (malformed = {:error, {:not_found, field}}); escalate_user_id/1 reads the operator-written trigger_config and turns a malformed value into nil"},
+    {"platform/doctor.ex", :get, "Platform.Agents.Agent", 1, :safe_internal,
+     "heal_agent/4 reads agent_id off the checkup, which unwell_agents/0 builds from the %Agent{} rows NativeAgents.list/0 selects (agents.id, a :binary_id primary key); no params, MCP payload or URL segment reaches it"},
+    {"platform/doctor.ex", :platform_uuid_guard, "-", 1, :must_cast,
+     "audit/4 guards the acting agent id before it becomes audit_events.actor_id (a UUID column); a malformed or absent id is written as nil"},
     {"platform/showrunner/social_bundle.ex", :get, "Agent", 1, :safe_internal,
      "guard/4 takes ctx.agent_id, built by Showrunner.Board.context/3 from the %Agent{} that Roles.assignee_for/1 loads through role_assignments.agent_id (a :binary_id FK to agents); no params, MCP payload or URL segment reaches it"}
   ]

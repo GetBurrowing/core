@@ -68,12 +68,14 @@ defmodule Platform.Responsibilities.Providers do
   alias Platform.Responsibilities.Providers.Agents
   alias Platform.Responsibilities.Providers.Architecture
   alias Platform.Responsibilities.Providers.Design
+  alias Platform.Responsibilities.Providers.Doctor
   alias Platform.Responsibilities.Providers.Experiments
   alias Platform.Responsibilities.Providers.Feedback
   alias Platform.Responsibilities.Providers.Hr
   alias Platform.Responsibilities.Providers.Janitor
   alias Platform.Responsibilities.Providers.Meetings
   alias Platform.Responsibilities.Providers.Memory
+  alias Platform.Responsibilities.Providers.Relationships
   alias Platform.Responsibilities.Providers.Showrunner
   alias Platform.Responsibilities.Providers.Tasks
   alias Platform.Responsibilities.Providers.Ux
@@ -82,6 +84,8 @@ defmodule Platform.Responsibilities.Providers do
     "agents" => Agents,
     "architecture" => Architecture,
     "design" => Design,
+    # Super agents: `doctor.checkup` (doctor role).
+    "doctor" => Doctor,
     "experiments" => Experiments,
     "feedback" => Feedback,
     # Task 01a1aa47 stage 4: `hr.daily_sweep` + `hr.meeting_completed`.
@@ -91,6 +95,8 @@ defmodule Platform.Responsibilities.Providers do
     "janitor" => Janitor,
     "meetings" => Meetings,
     "memory" => Memory,
+    # Super agents: `relationships.follow_up_sweep` (relationship_steward role).
+    "relationships" => Relationships,
     # Task 01a1eaf6 stage 3: the How to Computer showrunner's three keys.
     "showrunner" => Showrunner,
     "tasks" => Tasks,

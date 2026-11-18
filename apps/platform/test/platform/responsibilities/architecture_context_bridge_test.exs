@@ -278,6 +278,18 @@ defmodule Platform.Responsibilities.ArchitectureContextBridgeTest do
       "the showrunner.* handlers (task 01a1eaf6 stage 4) serve this themselves in " <>
         "gather_context/2 from the episode board and the row's trigger_config; it is " <>
         "per-show state, not a row a shared resolver could read",
+    "findings" =>
+      "doctor.checkup serves this itself in gather_context/3: Platform.Doctor's " <>
+        "checkup and heal results, rendered after the server healed and escalated",
+    "report_space_id" =>
+      "the super-agent handlers (doctor.checkup, relationships.follow_up_sweep) serve " <>
+        "this themselves: the DM between the assignee and the role's escalation human",
+    "meetings" =>
+      "relationships.follow_up_sweep serves this itself, scoped to the meetings its " <>
+        "escalation human can see; there is no install-wide meeting resolver to share",
+    "window_days" =>
+      "relationships.follow_up_sweep serves this itself: a constant of the handler",
+    "quiet_days" => "relationships.follow_up_sweep serves this itself: a constant of the handler",
     "host_calendars" =>
       "the showrunner.* handlers (task 01a1eaf6 stage 4) serve this themselves in " <>
         "gather_context/2 from the episode board and the row's trigger_config; it is " <>
