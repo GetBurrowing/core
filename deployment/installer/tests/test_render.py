@@ -296,8 +296,10 @@ class KnobTest(PositiveControlMixin, unittest.TestCase):
                 ids = registry.identifiers(container, registry.Ctx(on))
                 self.assertIn(container, ids)
                 self.assertGreater(len(ids), 1, f"{container} declares only its name")
-                on_text = all_text(build(on))
-                off_text = all_text(build(off))
+                # Generated values redacted: a short identifier such as
+                # 'livekit' must not be found inside a random secret.
+                on_text = identity_scan_text(build(on))
+                off_text = identity_scan_text(build(off))
                 missing = sorted(i for i in ids if i not in on_text)
                 self.assertEqual(missing, [], f"{container} on: identifiers not rendered")
                 leaked = sorted(i for i in ids if i in off_text)
@@ -479,7 +481,11 @@ class SecretsTest(PositiveControlMixin, TempDirMixin, unittest.TestCase):
         self.assertIn("customer-value-01a0d69d", rendered.files["customer-secrets.env"][0])
         for rel in ("secrets.env", "compose.yaml", "Caddyfile", "models.json"):
             self.assertNotIn("customer-value-01a0d69d", rendered.files[rel][0], rel)
-        self.assertNotIn("UNUSED", all_text(rendered))
+        # Generated values redacted: 'UNUSED' is six urlsafe characters.
+        scan = identity_scan_text(rendered)
+        # Positive control: the same search finds the customer name that IS used.
+        self.assertTrue("OWN_LLM_API_KEY" in scan, "OWN_LLM_API_KEY absent")
+        self.assertNotIn("UNUSED", scan)
 
     def test_customer_ref_cannot_shadow_a_generated_name(self):
         raw = load(BYO)
@@ -651,7 +657,12 @@ class GpuTest(PositiveControlMixin, unittest.TestCase):
     def test_voice_off_renders_no_speaches(self):
         raw = load(VOICE_CUDA)
         raw["services"]["voice"] = False
-        text = all_text(build(valid(raw)))
+        # Generated values redacted: 'nvidia' is six urlsafe characters.
+        text = identity_scan_text(build(valid(raw)))
+        # Positive control: the same search finds all three with voice on.
+        voiced = identity_scan_text(build(manifest_from(VOICE_CUDA)))
+        for name in ("speaches", "STT_BASE_URL", "nvidia"):
+            self.assertTrue(name in voiced, f"{name!r} absent with voice on")
         self.assertNotIn("speaches", text)
         self.assertNotIn("STT_BASE_URL", text)
         self.assertNotIn("nvidia", text)

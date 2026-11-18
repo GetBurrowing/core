@@ -31,6 +31,7 @@ import subprocess
 import sys
 import tempfile
 import unittest
+from unittest import mock
 
 HERE = os.path.dirname(os.path.abspath(__file__))
 INSTALLER = os.path.dirname(HERE)
@@ -48,6 +49,7 @@ sys.path.insert(0, INSTALLER)
 sys.path.insert(0, HERE)
 
 from identity_terms import identity_hits
+from render_identity_scan import identity_scan_files, planted_like
 from setup_fakes import FakePocketId, _Server, write_secret_file
 
 from burrow_install import registry, templates
@@ -211,13 +213,48 @@ class DropletMeetingsRenderTest(unittest.TestCase):
     def setUpClass(cls):
         cls.rendered = meetings_droplet()
         cls.files = {rel: text for rel, (text, _mode) in cls.rendered.files.items()}
-        cls.base = {rel: text for rel, (text, _mode) in droplet().files.items()}
+        cls.base_rendered = droplet()
+        cls.base = {rel: text for rel, (text, _mode) in cls.base_rendered.files.items()}
+        # Literal searches run over these: secrets.env and the user-data carry
+        # random generated values, and a 48-char hex password holds '7881' or
+        # '7882' in about 0.3% of renders (task 01a1ef1b).
+        cls.scan = identity_scan_files(cls.rendered)
+        cls.base_scan = identity_scan_files(cls.base_rendered)
         cls.primary = load(DO_MEETINGS)["domain"]["primary"]
 
+    MEETINGS_LITERALS = ("livekit", "LIVEKIT_", "meeting-transcriber", ":4080", "7881", "7882")
+
     def test_00_positive_control_the_pre_meetings_droplet_has_none_of_it(self):
-        for absent in ("livekit", "LIVEKIT_", "meeting-transcriber", ":4080", "7881", "7882"):
+        for absent in self.MEETINGS_LITERALS:
             with self.subTest(absent=absent):
-                self.assertFalse([r for r, t in self.base.items() if absent in t])
+                # Positive control first: the same search hits the meetings droplet.
+                self.assertTrue([r for r, t in self.scan.items() if absent in t])
+                self.assertFalse([r for r, t in self.base_scan.items() if absent in t])
+
+    def test_00_literal_search_ignores_generated_values_that_contain_them(self):
+        # Plant same-length, same-alphabet values holding every port literal in
+        # each generated secret the droplet uses; the search must not see them.
+        names = sorted(self.base_rendered.generated)
+        self.assertGreater(len(names), 0)
+        planted = {}
+        with contextlib.ExitStack() as stack:
+            for index, name in enumerate(names):
+                secret = registry.SECRETS[name]
+                planted[name] = planted_like(secret.generate(), index)
+                stack.enter_context(
+                    mock.patch.object(secret, "generate", lambda v=planted[name]: v)
+                )
+            rendered = droplet()
+        # Positive control: the planted values reached the rendered files.
+        # assertTrue, not assertIn: a failure must not print the render.
+        self.assertTrue(rendered.generated == planted, "patched generators not used")
+        raw = "\n".join(text for text, _mode in rendered.files.values())
+        for literal in ("7881", "7882", ":4080"):
+            self.assertTrue(literal in raw, f"planted {literal!r} absent from the raw render")
+        scan = identity_scan_files(rendered)
+        for absent in self.MEETINGS_LITERALS:
+            with self.subTest(absent=absent):
+                self.assertFalse([r for r, t in scan.items() if absent in t])
 
     def test_fixture_is_do_droplet_plus_meetings_only(self):
         base, meet = load(DO_DROPLET), load(DO_MEETINGS)
@@ -366,8 +403,11 @@ class DropletMeetingsRenderTest(unittest.TestCase):
         raw["services"]["voice"] = True
         raw["voice"]["accelerator"] = "cpu"
         voiced = build(valid(raw), registry_auth=DO_AUTH, customer_secrets=DO_MEETINGS_CUSTOMER)
-        self.assertIn("speaches", voiced.files["compose.yaml"][0])  # positive control
-        for rel, text in self.files.items():
+        # Positive control: the same (redacted) search finds speaches when voiced.
+        voiced_scan = identity_scan_files(voiced)["compose.yaml"]
+        self.assertTrue("speaches" in voiced_scan, "speaches absent when voiced")
+        # Generated values redacted: 'TTS_' is four urlsafe characters.
+        for rel, text in self.scan.items():
             for absent in ("speaches", "voice-worker", "burrow-voice", "TTS_"):
                 with self.subTest(file=rel, absent=absent):
                     self.assertNotIn(absent, text)

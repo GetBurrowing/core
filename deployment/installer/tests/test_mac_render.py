@@ -41,7 +41,7 @@ GOLDEN = os.path.join(HERE, "golden")
 sys.path.insert(0, INSTALLER)
 
 from identity_terms import identity_hits
-from render_identity_scan import identity_scan_text
+from render_identity_scan import identity_scan_text, planted_like
 
 from burrow_install import registry
 from burrow_install.__main__ import main
@@ -81,17 +81,6 @@ def mac_build(manifest, **kwargs):
 
 def all_text(rendered):
     return "\n".join(text for text, _mode in rendered.files.values())
-
-
-def planted_like(sample, index):
-    """A value of ``sample``'s length and alphabet holding 4080, 7881 and 7882.
-
-    Digits and a-f are in the hex, urlsafe and base64 alphabets alike; base64
-    '=' padding is kept. A leading 4080 makes ':4080' appear in a DB URL.
-    """
-    pad = len(sample) - len(sample.rstrip("="))
-    body = f"4080{index:02x}7881{index:02x}7882" + "abcdef" * len(sample)
-    return body[: len(sample) - pad] + "=" * pad
 
 
 def compose_block(compose, service):
@@ -284,8 +273,10 @@ class MacKnobTest(PositiveControlMixin, unittest.TestCase):
         return valid(on), valid(off)
 
     def assert_owns(self, containers, on, off):
-        on_text = all_text(mac_build(on))
-        off_text = all_text(mac_build(off))
+        # Generated values redacted: an identifier as short as 'livekit' must
+        # not be found by chance inside a random secret (task 01a1ef1b).
+        on_text = identity_scan_text(mac_build(on))
+        off_text = identity_scan_text(mac_build(off))
         for container in containers:
             ids = registry.identifiers(container, registry.Ctx(on))
             with self.subTest(service=container):
@@ -301,7 +292,7 @@ class MacKnobTest(PositiveControlMixin, unittest.TestCase):
     def test_transcription_knob_owns_the_transcriber_only(self):
         on, off = self.pair(lambda raw: raw["meetings"].update(transcription=False))
         self.assert_owns(["meeting-transcriber"], on, off)
-        self.assertIn("livekit", all_text(mac_build(off)))
+        self.assertTrue("livekit" in identity_scan_text(mac_build(off)), "livekit absent")
 
     def test_meetings_identifiers_are_the_expected_literal_sets(self):
         ctx = registry.Ctx(manifest_from(MAC))
@@ -535,11 +526,13 @@ class MacModelsTest(PositiveControlMixin, unittest.TestCase):
 
     def test_no_local_model_container_or_gpu(self):
         for path in (MAC, MAC_LITE):
-            text = all_text(mac_build(manifest_from(path)))
+            # Generated values redacted: 'nvidia' is six urlsafe characters.
+            text = identity_scan_text(mac_build(manifest_from(path)))
             for word in ("speaches", "llama.cpp", "embeddings:8188", "nvidia", "/models"):
                 self.assertNotIn(word, text)
-        # Positive control: the single-host example does run a local model.
-        self.assertIn("llama.cpp", all_text(build(manifest_from(SINGLE_HOST))))
+        # Positive control: the same search finds the single-host local model.
+        single = identity_scan_text(build(manifest_from(SINGLE_HOST)))
+        self.assertTrue("llama.cpp" in single, "llama.cpp absent from single-host")
 
     def test_transcriber_speaks_to_the_named_hosted_endpoint(self):
         rendered = mac_build(manifest_from(MAC))
