@@ -58,17 +58,13 @@ defmodule Platform.ExternalAgents.DispatcherTest do
   # rather than a silent addition. Re-measured against c44a6663 — the
   # ticket's table says ten and omits `memory.daily_summary`.
   @builder_less_keys [
-    "design.brand_check",
     "design.critique",
-    "design.spec_writer",
     "meetings.attendance_followup",
     "meetings.intent_classify",
     "memory.daily_summary",
     "memory.dreaming",
     "memory.propose_long_term",
-    "tasks.triage",
-    "tasks.unblock",
-    "tasks.weekly_review"
+    "tasks.triage"
   ]
 
   # The roster slug with NO `prompt_templates` row — not in
@@ -878,7 +874,8 @@ defmodule Platform.ExternalAgents.DispatcherTest do
 
       # A zero-length or short sweep would make every per-key test below
       # vacuous, so the count is asserted before anything uses it.
-      assert length(@builder_less_keys) == 11
+      # 11 -> 7: the super agents restructure removed four stub keys.
+      assert length(@builder_less_keys) == 7
 
       Enum.each(@builder_less_keys, fn key ->
         assert Map.has_key?(registry, key),

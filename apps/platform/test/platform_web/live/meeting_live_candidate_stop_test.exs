@@ -302,7 +302,7 @@ defmodule PlatformWeb.MeetingLiveCandidateStopTest do
     end
   end
 
-  describe "the rail is not behind the meeting_producer gate" do
+  describe "the rail is not behind the meeting_scribe gate" do
     test "it renders for a participant who cannot see the intents bar", %{conn: conn} do
       {conn, user} = authenticated_conn(conn)
       {meeting, _participant} = meeting!(user)
@@ -310,7 +310,7 @@ defmodule PlatformWeb.MeetingLiveCandidateStopTest do
 
       {:ok, view, _html} = live(conn, "/meetings/#{meeting.slug}?no_autojoin=true&tab=canvas")
 
-      # No `meeting_producer` role is assigned anywhere in this test, so
+      # No `meeting_scribe` role is assigned anywhere in this test, so
       # the intents bar is absent — that is the control proving the gate
       # really is closed here...
       refute has_element?(view, "[data-role=meeting-intent-mute-toggle]")

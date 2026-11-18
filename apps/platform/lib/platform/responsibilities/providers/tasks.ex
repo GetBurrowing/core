@@ -10,12 +10,11 @@ defmodule Platform.Responsibilities.Providers.Tasks do
   `Platform.Responsibilities.Providers.Tasks` — **this module** — for
   its Provider callbacks.
 
-  The `tasks` feature owns three responsibilities that make up the
-  Triage Officer role bundle:
+  The `tasks` feature owns one responsibility in the Triage Officer role
+  bundle (`tasks.unblock` and `tasks.weekly_review` were registration-only
+  stubs and were removed in the super agents restructure):
 
     * `tasks.triage` → handled by `Handlers.TaskTriage`
-    * `tasks.unblock` → handled by `Handlers.TaskUnblock`
-    * `tasks.weekly_review` → handled by `Handlers.TaskWeeklyReview`
 
   So this shim dispatches on `responsibility.key` via `handler_for/1`
   and hands off to the concrete handler module. Any unmapped key logs a
@@ -39,15 +38,11 @@ defmodule Platform.Responsibilities.Providers.Tasks do
 
   alias Platform.Responsibilities.Handlers
   alias Platform.Responsibilities.Handlers.TaskTriage
-  alias Platform.Responsibilities.Handlers.TaskUnblock
-  alias Platform.Responsibilities.Handlers.TaskWeeklyReview
   alias Platform.Responsibilities.Responsibility
 
   @impl true
   def register do
-    TaskTriage.register() ++
-      TaskUnblock.register() ++
-      TaskWeeklyReview.register()
+    TaskTriage.register()
   end
 
   @doc """
@@ -64,8 +59,6 @@ defmodule Platform.Responsibilities.Providers.Tasks do
   def handler_for(%Responsibility{key: key}), do: handler_for(key)
   def handler_for(%{key: key}), do: handler_for(key)
   def handler_for("tasks.triage"), do: Handlers.TaskTriage
-  def handler_for("tasks.unblock"), do: Handlers.TaskUnblock
-  def handler_for("tasks.weekly_review"), do: Handlers.TaskWeeklyReview
   def handler_for(_), do: nil
 
   @impl true

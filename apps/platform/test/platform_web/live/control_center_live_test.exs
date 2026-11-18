@@ -1583,7 +1583,7 @@ defmodule PlatformWeb.ControlCenterLiveTest do
   end
 
   describe "Roles panel (M7 stage 5)" do
-    test "GET /control with no agent selected renders 11 role rows + UNFILLED pills", %{
+    test "GET /control with no agent selected renders 10 role rows + UNFILLED pills", %{
       conn: conn
     } do
       conn = authenticated_conn(conn)
@@ -1595,8 +1595,9 @@ defmodule PlatformWeb.ControlCenterLiveTest do
       # added `architect` bumping the count 6→7; task 01a0b491 stage 1
       # added `agents_leader`, 7→8; task 01a0d415 stage 3 added `scientist`,
       # 8→9; task 019fa1ac-6685 stage 1 added `janitor`, 9→10; task 01a1eaf6
-      # stage 3 added `showrunner`, 10→11.
-      assert html =~ "Roles (11)"
+      # stage 3 added `showrunner`, 10→11; the super agents restructure
+      # merged `meeting_producer` into `meeting_scribe`, 11→10.
+      assert html =~ "Roles (10)"
 
       # Each of the ten seeded roles renders with name + icon class.
       assert html =~ "Agents Leader"
@@ -1608,14 +1609,13 @@ defmodule PlatformWeb.ControlCenterLiveTest do
       assert html =~ "Architect"
       assert html =~ "Designer"
       assert html =~ "Historian"
-      assert html =~ "Meeting Producer"
+      refute html =~ "Meeting Producer"
       assert html =~ "Meeting Scribe"
       assert html =~ "Triage Officer"
       assert html =~ "Security Guard"
       assert html =~ "hero-cube-transparent"
       assert html =~ "hero-paint-brush"
       assert html =~ "hero-book-open"
-      assert html =~ "hero-signal"
       assert html =~ "hero-calendar-days"
       assert html =~ "hero-clipboard-document-check"
       assert html =~ "hero-shield-check"

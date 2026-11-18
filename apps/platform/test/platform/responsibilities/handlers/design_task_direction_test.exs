@@ -203,8 +203,9 @@ defmodule Platform.Responsibilities.Handlers.DesignTaskDirectionTest do
     # distinguishes that.
     test "the other design keys still resolve to their own handlers" do
       assert Providers.Design.handler_for("design.critique") == Handlers.DesignCritique
-      assert Providers.Design.handler_for("design.spec_writer") == Handlers.DesignSpecWriter
-      assert Providers.Design.handler_for("design.brand_check") == Handlers.DesignBrandCheck
+      # Removed stubs (super agents restructure) resolve to nothing.
+      assert Providers.Design.handler_for("design.spec_writer") == nil
+      assert Providers.Design.handler_for("design.brand_check") == nil
       assert Providers.Design.handler_for("design.not_a_key") == nil
     end
 
@@ -230,17 +231,17 @@ defmodule Platform.Responsibilities.Handlers.DesignTaskDirectionTest do
     # than the legacy render path it falls back to.
     test "provider build_prompt/1 returns exactly :no_build_prompt for a handler without one" do
       # Was `design.critique` until task `019fe844` stage 1 gave that key
-      # a builder of its own. `design.spec_writer` is still builder-less
-      # and is pinned as such in
-      # `builderless_key_template_coverage_test.exs`.
-      spec_writer = %Responsibility{
+      # a builder of its own, then `design.spec_writer` until the super
+      # agents restructure removed it. Every live design key now has a
+      # builder, so an unmapped key carries the contract.
+      unmapped = %Responsibility{
         id: Ecto.UUID.generate(),
-        key: "design.spec_writer",
+        key: "design.not_a_key",
         feature: "design"
       }
 
       assert {:error, :no_build_prompt} =
-               Providers.Design.build_prompt(%{__responsibility__: spec_writer})
+               Providers.Design.build_prompt(%{__responsibility__: unmapped})
 
       assert {:error, :no_build_prompt} = Providers.Design.build_prompt(%{})
       assert {:error, :no_build_prompt} = Providers.Design.build_prompt(nil)
@@ -250,7 +251,7 @@ defmodule Platform.Responsibilities.Handlers.DesignTaskDirectionTest do
   # ── role bundle ───────────────────────────────────────────────────────────
 
   describe "the designer role bundle" do
-    test "seed_defaults/0 lands all six keys, and a second run inserts nothing" do
+    test "seed_defaults/0 lands all five keys, and a second run inserts nothing" do
       # The migration already seeded this DB, so clear the designer pairs
       # first — otherwise "seed_defaults inserted the key" would be
       # indistinguishable from "the key was already there".
@@ -269,18 +270,17 @@ defmodule Platform.Responsibilities.Handlers.DesignTaskDirectionTest do
       # membership check here would stay green through a re-seed that
       # dropped every other key.
       assert Roles.bundle_for("designer") == [
-               "design.brand_check",
                "design.critique",
-               "design.spec_writer",
                "design.task_direction",
                "meetings.interaction_design",
                "meetings.visual_adjust",
-               # Six → seven, task 01a1af00 stage 2.
+               # Six → seven, task 01a1af00 stage 2. Seven → five in the
+               # super agents restructure (the two stubs left).
                "ux.friction_watch"
              ]
 
       after_first = Repo.aggregate(RoleResponsibility, :count, :id)
-      assert after_first == before + 7
+      assert after_first == before + 5
 
       assert :ok = Platform.Roles.Seeds.seed_defaults()
       assert Repo.aggregate(RoleResponsibility, :count, :id) == after_first

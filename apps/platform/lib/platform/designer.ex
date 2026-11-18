@@ -40,8 +40,8 @@ defmodule Platform.Designer do
       and the async `@designer critique` verdict only lands on a review
       request through `handle_output/3`. Degraded natively; reported as a
       warning.
-    * `design.spec_writer` / `design.brand_check` are placeholders on every
-      runtime.
+    * `design.spec_writer` / `design.brand_check` were placeholders on every
+      runtime and were removed in the super agents restructure.
 
   An external endpoint has no tools, no subagents and no web, so it cannot be
   the lead. `provision/1` therefore accepts a native or federated runtime and

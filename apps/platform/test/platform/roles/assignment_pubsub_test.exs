@@ -3,7 +3,7 @@ defmodule Platform.Roles.AssignmentPubSubTest do
   Tests for the `roles:assignments` broadcast added by task 019f70b8
   stage 7.
 
-  The intents-collapse bar is DOM-absent when `meeting_producer` is
+  The intents-collapse bar is DOM-absent when `meeting_scribe` is
   unassigned (AC13). Without a notification, a producer appointed
   mid-meeting would not see the panel until they reloaded — which, for
   a live meeting surface, is the same as never. This is the seam that
@@ -33,7 +33,7 @@ defmodule Platform.Roles.AssignmentPubSubTest do
   test "assign_role/2 broadcasts the post-state" do
     agent = create_agent!()
 
-    {:ok, _} = Roles.assign_role("meeting_producer", agent.id)
+    {:ok, _} = Roles.assign_role("meeting_scribe", agent.id)
 
     # Pinned to this agent's id inside the pattern rather than asserted
     # after the match: the topic is suite-wide, so a bare binding would
@@ -41,18 +41,17 @@ defmodule Platform.Roles.AssignmentPubSubTest do
     # comparison.
     agent_id = agent.id
 
-    assert_receive {:role_assignment_changed,
-                    %{role_key: "meeting_producer", agent_id: ^agent_id}}
+    assert_receive {:role_assignment_changed, %{role_key: "meeting_scribe", agent_id: ^agent_id}}
   end
 
   test "unassign_role/1 broadcasts a nil agent_id" do
     agent = create_agent!()
-    {:ok, _} = Roles.assign_role("meeting_producer", agent.id)
-    assert_receive {:role_assignment_changed, %{role_key: "meeting_producer"}}
+    {:ok, _} = Roles.assign_role("meeting_scribe", agent.id)
+    assert_receive {:role_assignment_changed, %{role_key: "meeting_scribe"}}
 
-    :ok = Roles.unassign_role("meeting_producer")
+    :ok = Roles.unassign_role("meeting_scribe")
 
-    assert_receive {:role_assignment_changed, %{role_key: "meeting_producer", agent_id: nil}}
+    assert_receive {:role_assignment_changed, %{role_key: "meeting_scribe", agent_id: nil}}
   end
 
   test "the payload carries the CURRENT assignment, not the caller's intent" do
@@ -64,16 +63,16 @@ defmodule Platform.Roles.AssignmentPubSubTest do
 
     first_id = first.id
 
-    {:ok, _} = Roles.assign_role("meeting_producer", first.id)
+    {:ok, _} = Roles.assign_role("meeting_scribe", first.id)
     assert_receive {:role_assignment_changed, %{agent_id: ^first_id}}
 
-    assert {:error, _changeset} = Roles.assign_role("meeting_producer", second.id)
+    assert {:error, _changeset} = Roles.assign_role("meeting_scribe", second.id)
 
     # A rejected insert publishes nothing at all — there is no change.
     #
     # Scoped to `second`, not a bare wildcard: `roles:assignments` is a
     # process-group broadcast and does NOT respect the Ecto sandbox, so
-    # any other async test assigning `meeting_producer` at the same
+    # any other async test assigning `meeting_scribe` at the same
     # moment lands in this mailbox. A wildcard refute makes this test a
     # function of the whole suite's scheduling — it failed exactly that
     # way once the stage-7 UI tests added more producer fixtures. The
@@ -83,9 +82,9 @@ defmodule Platform.Roles.AssignmentPubSubTest do
   end
 
   test "unassigning a role nobody holds is still an idempotent :ok" do
-    assert :ok = Roles.unassign_role("meeting_producer")
+    assert :ok = Roles.unassign_role("meeting_scribe")
 
-    assert_receive {:role_assignment_changed, %{role_key: "meeting_producer", agent_id: nil}}
+    assert_receive {:role_assignment_changed, %{role_key: "meeting_scribe", agent_id: nil}}
   end
 
   test "a subscriber only hears about roles, not every agent write" do

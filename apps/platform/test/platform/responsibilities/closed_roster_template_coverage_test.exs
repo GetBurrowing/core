@@ -104,9 +104,7 @@ defmodule Platform.Responsibilities.ClosedRosterTemplateCoverageTest do
     "architecture.audit_diff.v1",
     "architecture.cron_sweep.v1",
     "architecture.review_plan.v1",
-    "design.brand_check.v1",
     "design.critique.v1",
-    "design.spec_writer.v1",
     "design.task_direction.v1",
     # Task 01a0d415 stage 3: `experiments.label_signal` (the scientist
     # role's blind labeler) points at this slug, seeded by
@@ -155,8 +153,6 @@ defmodule Platform.Responsibilities.ClosedRosterTemplateCoverageTest do
     "showrunner.run_sheet.v1",
     "showrunner.weekly_pitch.v1",
     "tasks.triage.v1",
-    "tasks.unblock.v1",
-    "tasks.weekly_review.v1",
     # Task 01a1af00 stage 2: `ux.friction_watch` (designer bundle) points at
     # this slug; descriptor in `default_templates/0`, row seeded by
     # `20261107184211_seed_ux_friction_watch_template_and_bundle.exs`.

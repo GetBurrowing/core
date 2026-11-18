@@ -125,11 +125,13 @@ defmodule Platform.Responsibilities.BuilderlessKeyTemplateCoverageTest do
   # a builder; `meetings.summarize` / `meetings.action_items` are
   # absent for the return-value reason in the moduledoc.
   @builder_less_keys [
-    "design.brand_check",
+    # `design.spec_writer`, `design.brand_check`, `tasks.unblock` and
+    # `tasks.weekly_review` LEFT this set in the super agents restructure:
+    # they were registration-only stubs and were removed.
+    #
     # `design.critique` LEFT this set in task `019fe844` stage 1: the
     # handler grew its own `build_prompt/1` so the Router stops rendering
     # the seeded `design.critique.v1` body, which names the wrong agent.
-    "design.spec_writer",
     # Task 01a0d415 stage 3. `Providers.Experiments.build_prompt/1` returns
     # `:no_build_prompt` on purpose: the Router never fires this key (null
     # topic); the MailSubscriber drives the tool-less Labeler, which renders
@@ -143,9 +145,7 @@ defmodule Platform.Responsibilities.BuilderlessKeyTemplateCoverageTest do
     "memory.daily_summary",
     "memory.dreaming",
     "memory.propose_long_term",
-    "tasks.triage",
-    "tasks.unblock",
-    "tasks.weekly_review"
+    "tasks.triage"
   ]
 
   # Slugs among the above that have NO `prompt_templates` row on a

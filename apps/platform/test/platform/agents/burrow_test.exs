@@ -305,12 +305,13 @@ defmodule Platform.Agents.BurrowTest do
       |> Repo.insert!()
     end
 
-    test "the four default roles are historian and the meeting roles" do
+    test "the three default roles are historian, the scribe and triage" do
+      # `meeting_producer` was merged into `meeting_scribe`.
       assert Burrow.default_roles() ==
-               ~w(historian meeting_scribe meeting_producer triage_officer)
+               ~w(historian meeting_scribe triage_officer)
     end
 
-    for role <- ~w(historian meeting_scribe meeting_producer triage_officer) do
+    for role <- ~w(historian meeting_scribe triage_officer) do
       test "an unassigned #{role} goes to Burrow" do
         owner = admin!()
         assert {:ok, agent} = Burrow.ensure(owner.id, "codex")

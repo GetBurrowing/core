@@ -1,7 +1,9 @@
 defmodule Platform.Roles.MeetingProducerTest do
   @moduledoc """
-  End-to-end integration test for the Meeting Producer role wiring
-  (task `019f2451-6728` stage 4).
+  End-to-end integration test for the live intent classifier wiring
+  (task `019f2451-6728` stage 4). The `meeting_producer` role it was
+  written for was merged into `meeting_scribe` in the super agents
+  restructure, so the role under test is now the scribe.
 
   Stages 1-3 landed four independently-tested layers:
 
@@ -55,7 +57,7 @@ defmodule Platform.Roles.MeetingProducerTest do
   alias Platform.Roles
   alias Platform.Roles.Role
 
-  @role_key "meeting_producer"
+  @role_key "meeting_scribe"
   @responsibility_key "meetings.intent_classify"
   @feature "meetings"
 
@@ -91,38 +93,23 @@ defmodule Platform.Roles.MeetingProducerTest do
     {pid, name}
   end
 
-  describe "role → bundle wiring" do
-    test "Platform.Roles.list_roles/0 includes meeting_producer" do
-      # The stage-2 re-seed migration
-      # (`20260702200500_seed_meeting_producer_role.exs`) runs on the
-      # test DB during `mix ecto.migrate`, so the row is already there.
-      # Test asserts observable via the context module, not the seed
-      # module directly — this is the surface the UI (agent picker,
-      # rolodex) reads through.
+  describe "role → bundle wiring (producer merged into scribe)" do
+    test "meeting_producer is retired and reads as meeting_scribe" do
+      # The super agents restructure merged the producer into the scribe
+      # (`20261118200000_merge_meeting_producer_into_scribe.exs`).
       keys = Roles.list_roles() |> Enum.map(& &1.key)
 
-      assert @role_key in keys,
-             """
-             #{@role_key} missing from Roles.list_roles/0. Either the
-             seed migration didn't run or the schema enum in
-             Platform.Roles.Role rejects the key.
-             Seen keys: #{inspect(keys)}
-             """
+      assert @role_key in keys
+      refute "meeting_producer" in keys
+      refute "meeting_producer" in Role.valid_keys()
 
-      # The role must also be admitted by the schema enum — otherwise
-      # any assignment insertion would fail at the changeset layer even
-      # if the row exists.
-      assert @role_key in Role.valid_keys(),
-             "#{@role_key} missing from Role.valid_keys/0 — schema enum drifted from seed"
+      assert Role.canonical_key("meeting_producer") == @role_key
+      assert %Role{key: @role_key} = Roles.get_role("meeting_producer")
+      assert Roles.bundle_for("meeting_producer") == Roles.bundle_for(@role_key)
     end
 
-    test "Platform.Roles.bundle_for/1 returns the meetings.intent_classify bundle" do
-      # Stage-2's seed defined this exact bundle. The order is stable
-      # (alphabetical per `bundle_for/1`'s query), and this bundle has
-      # exactly one element so ordering is a non-issue today — a
-      # future addition of a second key SHOULD break this test until
-      # the assertion is updated deliberately.
-      assert Roles.bundle_for(@role_key) == [@responsibility_key]
+    test "Platform.Roles.bundle_for/1 puts meetings.intent_classify in the scribe bundle" do
+      assert @responsibility_key in Roles.bundle_for(@role_key)
     end
   end
 
