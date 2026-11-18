@@ -2386,6 +2386,44 @@ defmodule Platform.Chat do
     end
   end
 
+  @doc """
+  Carry an agent rename onto its participant rows (task 01a1f0d1).
+
+  `chat_participants.display_name` is a stored copy of the agent's name, and
+  every mention and members-sheet reader keys on that copy, so a rename that
+  leaves it behind keeps the old name resolving and hides the new one.
+
+  Rewrites the agent's rows whose `display_name` still equals `old_name` or is
+  NULL/blank. A row holding any other name was named deliberately and keeps
+  it. Takes the `repo` so `Platform.Agents.Agent.changeset/2` can call it from
+  `prepare_changes/2`, inside the rename's own transaction. Returns the number
+  of rows updated.
+  """
+  @spec rename_agent_participants(module(), binary(), String.t() | nil, String.t()) ::
+          non_neg_integer()
+  def rename_agent_participants(repo, agent_id, old_name, new_name)
+      when is_binary(agent_id) and is_binary(new_name) do
+    base =
+      from(p in Participant,
+        where: p.participant_type == "agent" and p.participant_id == ^agent_id
+      )
+
+    query =
+      if is_binary(old_name) and old_name != "" do
+        where(
+          base,
+          [p],
+          p.display_name == ^old_name or is_nil(p.display_name) or
+            fragment("btrim(?) = ''", p.display_name)
+        )
+      else
+        where(base, [p], is_nil(p.display_name) or fragment("btrim(?) = ''", p.display_name))
+      end
+
+    {count, _} = repo.update_all(query, set: [display_name: new_name])
+    count
+  end
+
   # Resolve an agent by UUID *or* slug, returning nil for anything that is
   # neither. Every caller below receives `agent_id` from an MCP tool argument
   # (`dm_create`, `add_participant`) or a LiveView param, where an agent slug
