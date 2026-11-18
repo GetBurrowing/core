@@ -4,6 +4,10 @@ defmodule Platform.Calendar.BookingLinksTest do
   alias Platform.Calendar.{BookingLinks, Booking, Subscription}
   alias Platform.Access.Scope
   alias Platform.Accounts.User
+  alias Platform.Calendar.{BookingHosts, BookingLinkHost}
+  import Ecto.Query
+
+  doctest Platform.Calendar.BookingConfirmation
 
   defp scope do
     n = System.unique_integer([:positive])
@@ -580,5 +584,286 @@ defmodule Platform.Calendar.BookingLinksTest do
     {:ok, _} = BookingLinks.revoke(owner, link.id)
     assert {:error, :not_found} = BookingLinks.preview(owner, link.id, date, 1)
     assert {:error, :not_found} = BookingLinks.open_days(link.token, date)
+  end
+
+  # ── Shared links: every host's calendar, every host's lock ─────────────
+  # Task 01a1eff0-6880 stage 2.
+
+  defp host_user!(name, org_id) do
+    n = System.unique_integer([:positive])
+
+    user =
+      Repo.insert!(%User{
+        email: "shared-host-#{n}@example.com",
+        oidc_sub: "shared-host-#{n}",
+        name: name
+      })
+
+    Repo.insert!(%Platform.Tenancy.OrgMembership{
+      user_id: user.id,
+      org_id: org_id,
+      role: "member"
+    })
+
+    Platform.Accounts.get_user(user.id)
+  end
+
+  defp cohost!(owner, link, cohost) do
+    {:ok, host} = BookingHosts.invite(Scope.for_user(owner), link.id, cohost.id)
+    {:ok, host} = BookingHosts.accept(Scope.for_user(cohost), host.id)
+    host
+  end
+
+  defp shared_setup(extra \\ %{}) do
+    Platform.Calendar.BookingRateLimit.reset()
+    org_id = Platform.TenancyFixtures.acme_org_id()
+    ryan = host_user!("Ryan Milvenan", org_id)
+    jordan = host_user!("Jordan Coombs", org_id)
+    link = create(Scope.for_user(ryan), extra)
+    cohost!(ryan, link, jordan)
+    %{org_id: org_id, ryan: ryan, jordan: jordan, link: link}
+  end
+
+  defp event_count, do: Repo.aggregate(Calendar.Event, :count)
+
+  test "a time free for the owner but busy for a co-host is hidden and cannot be forged" do
+    %{jordan: jordan, link: link} = shared_setup()
+    {:ok, [first, second | _] = before} = BookingLinks.slots(link.token, link.start_date)
+    assert length(before) == 6
+
+    {:ok, _} =
+      Calendar.create_event(Scope.for_user(jordan), %{
+        title: "Jordan busy",
+        starts_at: first.starts_at,
+        ends_at: first.ends_at
+      })
+
+    {:ok, slots} = BookingLinks.slots(link.token, link.start_date)
+    refute Enum.any?(slots, &(&1.starts_at == first.starts_at))
+    assert Enum.any?(slots, &(&1.starts_at == second.starts_at))
+    # Same public shape as a single-owner link: start and end only.
+    assert Enum.all?(slots, &(Map.keys(&1) |> Enum.sort() == [:ends_at, :starts_at]))
+
+    events = event_count()
+
+    assert {:error, :slot_unavailable} =
+             BookingLinks.book(link.token, guest(first, %{"email" => ""}), "forged-shared-key-1")
+
+    assert Repo.aggregate(Booking, :count) == 0
+    assert event_count() == events
+  end
+
+  test "a pending, declined or left co-host fails slots, open_days, preview and book closed" do
+    %{ryan: ryan, link: link} = shared_setup()
+    {:ok, [slot | _]} = BookingLinks.slots(link.token, link.start_date)
+    [host] = BookingHosts.list_for_link(link)
+
+    for status <- ~w(pending declined left) do
+      Repo.update!(Ecto.Changeset.change(host, status: status))
+      assert {:error, :hosts_not_ready} = BookingLinks.slots(link.token, link.start_date)
+      assert {:error, :hosts_not_ready} = BookingLinks.open_days(link.token, link.start_date)
+
+      assert {:error, :hosts_not_ready} =
+               BookingLinks.preview(Scope.for_user(ryan), link.id, link.start_date, 1)
+
+      assert {:error, :hosts_not_ready} = BookingLinks.public_policy(link.token)
+
+      assert {:error, :hosts_not_ready} =
+               BookingLinks.book(
+                 link.token,
+                 guest(slot, %{"email" => ""}),
+                 "not-ready-#{status}-0"
+               )
+    end
+
+    assert Repo.aggregate(Booking, :count) == 0
+  end
+
+  test "a pending co-host's stale subscription is never read: :hosts_not_ready, not coverage" do
+    %{jordan: jordan, link: link} = shared_setup()
+
+    Repo.insert!(%Subscription{
+      owner_id: jordan.id,
+      name: "Not refreshed",
+      url: "https://example.com/feed.ics"
+    })
+
+    # Accepted: the co-host's calendar is read and its stale feed fails closed.
+    assert {:error, :external_coverage_unknown} =
+             BookingLinks.slots(link.token, link.start_date)
+
+    Repo.update_all(from(h in BookingLinkHost, where: h.link_id == ^link.id),
+      set: [status: "pending"]
+    )
+
+    assert {:error, :hosts_not_ready} = BookingLinks.slots(link.token, link.start_date)
+  end
+
+  test "a booking on a shared link blocks that slot on the co-host's own single-owner link" do
+    %{jordan: jordan, ryan: ryan, link: link} = shared_setup()
+    own = create(Scope.for_user(jordan))
+    {:ok, [slot | _]} = BookingLinks.slots(link.token, link.start_date)
+
+    assert {:ok, booking} =
+             BookingLinks.book(link.token, guest(slot, %{"email" => ""}), "shared-cross-key-01")
+
+    assert Enum.sort(booking.host_user_ids) == Enum.sort([ryan.id, jordan.id])
+    # The co-host's busy event alone would also hide the slot; remove it so
+    # only the reservation row's host_user_ids can block it.
+    Repo.delete_all(from(e in Calendar.Event, where: e.owner_id == ^jordan.id))
+
+    {:ok, own_slots} = BookingLinks.slots(own.token, own.start_date)
+    refute Enum.any?(own_slots, &(&1.starts_at == slot.starts_at))
+
+    assert {:error, :slot_unavailable} =
+             BookingLinks.book(own.token, guest(slot, %{"email" => ""}), "shared-cross-key-02")
+  end
+
+  test "a co-host's reservation on their own link, widened by that link's buffer, blocks the shared link" do
+    %{jordan: jordan, link: link} = shared_setup()
+    own = create(Scope.for_user(jordan), %{buffer_after_minutes: 30})
+    {:ok, [first, second | _]} = BookingLinks.slots(link.token, link.start_date)
+
+    assert {:ok, booking} =
+             BookingLinks.book(own.token, guest(first, %{"email" => ""}), "own-buffer-key-0001")
+
+    assert booking.reserved_end == second.ends_at
+    Repo.delete_all(from(e in Calendar.Event, where: e.owner_id == ^jordan.id))
+
+    {:ok, slots} = BookingLinks.slots(link.token, link.start_date)
+    refute Enum.any?(slots, &(&1.starts_at in [first.starts_at, second.starts_at]))
+  end
+
+  test "a shared booking creates one busy event in every host's own calendar" do
+    %{jordan: jordan, ryan: ryan, link: link} = shared_setup()
+    {:ok, [slot | _]} = BookingLinks.slots(link.token, link.start_date)
+
+    assert {:ok, booking} =
+             BookingLinks.book(link.token, guest(slot, %{"email" => ""}), "shared-events-key-1")
+
+    assert [owner_event_id, cohost_event_id] = booking.host_event_ids
+    assert booking.event_id == owner_event_id
+    assert booking.owner_id == ryan.id
+    assert Repo.get!(Calendar.Event, owner_event_id).owner_id == ryan.id
+    cohost_event = Repo.get!(Calendar.Event, cohost_event_id)
+    assert cohost_event.owner_id == jordan.id
+    assert cohost_event.visibility == "busy"
+    assert cohost_event.starts_at == slot.starts_at
+    assert Booking.owns_event?(owner_event_id)
+    assert Booking.owns_event?(cohost_event_id)
+  end
+
+  test "the hourly cap counts every host's bookings" do
+    %{jordan: jordan, link: link} = shared_setup()
+    own = create(Scope.for_user(jordan))
+    {:ok, [slot | _]} = BookingLinks.slots(link.token, link.start_date)
+
+    for n <- 1..20 do
+      Repo.insert!(%Booking{
+        link_id: own.id,
+        owner_id: jordan.id,
+        idempotency_key: "cohost-existing-#{n}",
+        name: "Existing",
+        starts_at: DateTime.add(slot.starts_at, -86400),
+        ends_at: DateTime.add(slot.ends_at, -86400),
+        reserved_start: DateTime.add(slot.starts_at, -86400),
+        reserved_end: DateTime.add(slot.ends_at, -86400)
+      })
+    end
+
+    assert {:error, :rate_limited} =
+             BookingLinks.book(link.token, guest(slot, %{"email" => ""}), "cohost-cap-key-0001")
+  end
+
+  test "public_policy names every host, owner first, and says the link is shared" do
+    %{link: link} = shared_setup()
+    assert {:ok, policy} = BookingLinks.public_policy(link.token)
+    assert policy.host_names == ["Ryan Milvenan", "Jordan Coombs"]
+    assert policy.shared
+    assert policy.owner_name == "Ryan Milvenan"
+  end
+
+  test "a single-owner link is unchanged: one host, its own event, not shared" do
+    owner = scope()
+    link = create(owner)
+    assert {:ok, %{shared: false, host_names: ["Owner"]}} = BookingLinks.public_policy(link.token)
+    {:ok, [slot | _]} = BookingLinks.slots(link.token, link.start_date)
+    assert {:ok, booking} = BookingLinks.book(link.token, guest(slot), "single-owner-key-01")
+    assert booking.host_user_ids == [owner.actor.id]
+    assert booking.host_event_ids == [booking.event_id]
+  end
+
+  test "a shared meeting booking invites every host and mails no co-host" do
+    keys = [:meetings_enabled, :mail_enabled, :calendar_booking_mail_senders]
+    prior = for key <- keys, into: %{}, do: {key, Application.fetch_env(:platform, key)}
+    Application.put_env(:platform, :meetings_enabled, true)
+    Application.put_env(:platform, :mail_enabled, true)
+    Application.delete_env(:platform, :calendar_booking_mail_senders)
+
+    on_exit(fn ->
+      for {key, value} <- prior do
+        case value do
+          {:ok, v} -> Application.put_env(:platform, key, v)
+          :error -> Application.delete_env(:platform, key)
+        end
+      end
+    end)
+
+    org_id = Platform.TenancyFixtures.acme_org_id()
+
+    project =
+      Repo.insert!(%Platform.Tasks.Project{
+        name: "Shared bookings",
+        slug: "shared-bookings-#{System.unique_integer([:positive])}",
+        org_id: org_id
+      })
+
+    account =
+      Repo.insert!(%Platform.Mail.Account{
+        org_id: org_id,
+        name: "Shared sender #{System.unique_integer([:positive])}",
+        smtp_host: "smtp.example.com",
+        smtp_port: 2525,
+        smtp_tls: "none",
+        internal_only: false
+      })
+
+    Repo.insert!(%Platform.Mail.Sender{
+      account_id: account.id,
+      key: "meetings",
+      address: "meetings@example.com"
+    })
+
+    %{ryan: ryan, jordan: jordan, link: link} =
+      shared_setup(%{create_meeting: true, project_id: project.id})
+
+    {:ok, [slot | _]} = BookingLinks.slots(link.token, link.start_date)
+    assert {:ok, booking} = BookingLinks.book(link.token, guest(slot), "shared-meeting-key1")
+    assert booking.meeting_id
+    assert booking.host_user_ids == [ryan.id, jordan.id]
+    meeting = Repo.get!(Platform.Meetings.Meeting, booking.meeting_id)
+    assert Platform.Meetings.host_user_id(meeting) == ryan.id
+
+    invited =
+      booking.meeting_id
+      |> Platform.Meetings.list_invites()
+      |> Enum.map(& &1.user_id)
+
+    assert ryan.id in invited
+    assert jordan.id in invited
+
+    assert Repo.exists?(
+             from(p in Platform.Chat.Participant,
+               where:
+                 p.space_id == ^meeting.chat_space_id and p.participant_type == "user" and
+                   p.participant_id == ^jordan.id
+             )
+           )
+
+    deliveries = Repo.all(Platform.Mail.Delivery)
+    refute Enum.any?(deliveries, &(jordan.email in &1.recipients))
+    refute Enum.any?(deliveries, &(ryan.email in &1.recipients))
+    assert [confirmed] = Enum.filter(deliveries, &(&1.recipients == ["guest@example.com"]))
+    assert confirmed.body =~ "With Ryan Milvenan and Jordan Coombs."
   end
 end

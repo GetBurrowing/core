@@ -11,7 +11,13 @@ defmodule Platform.Calendar.BookingConfirmation do
   """
   alias Platform.{Mail, Repo}
 
-  def enqueue(meeting, owner_id, guest, slot, guest_url) do
+  @doc """
+  Queue the guest's `Booking confirmed:` email. `host_names` is the link's
+  host set, owner first; a shared link (two or more) adds
+  `With A and B.` to the body (task 01a1eff0-6880 stage 2). Only the guest
+  is addressed: no co-host is mailed.
+  """
+  def enqueue(meeting, owner_id, guest, slot, guest_url, host_names \\ []) do
     project = Repo.get(Platform.Tasks.Project, meeting.project_id)
 
     with %{org_id: org_id} when is_binary(org_id) <- project,
@@ -24,7 +30,8 @@ defmodule Platform.Calendar.BookingConfirmation do
              to_addresses: [guest["email"]],
              subject: "Booking confirmed: #{meeting.name}",
              body:
-               "Your booking is confirmed for #{DateTime.to_iso8601(slot.starts_at)}.\n\nJoin your meeting: #{guest_url}",
+               "Your booking is confirmed for #{DateTime.to_iso8601(slot.starts_at)}." <>
+                 with_hosts(host_names) <> "\n\nJoin your meeting: #{guest_url}",
              on_behalf_of_user_id: owner_id,
              responsibility: "calendar.booking_confirmation"
            }),
@@ -38,4 +45,22 @@ defmodule Platform.Calendar.BookingConfirmation do
         {nil, "Confirmation email unavailable; owner must share the guest invite"}
     end
   end
+
+  @doc ~S"""
+  The shared-link line: `" With A and B."` for two hosts, `" With A, B and
+  C."` for three or more, `""` for a single host.
+
+      iex> Platform.Calendar.BookingConfirmation.with_hosts(["Ryan Milvenan", "Jordan Coombs"])
+      " With Ryan Milvenan and Jordan Coombs."
+      iex> Platform.Calendar.BookingConfirmation.with_hosts(["A", "B", "C"])
+      " With A, B and C."
+      iex> Platform.Calendar.BookingConfirmation.with_hosts(["Ryan Milvenan"])
+      ""
+  """
+  def with_hosts(names) when is_list(names) and length(names) > 1 do
+    {init, [last]} = Enum.split(names, -1)
+    " With " <> Enum.join(init, ", ") <> " and " <> last <> "."
+  end
+
+  def with_hosts(_), do: ""
 end

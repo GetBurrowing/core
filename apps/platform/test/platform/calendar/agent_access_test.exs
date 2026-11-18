@@ -364,6 +364,59 @@ defmodule Platform.Calendar.AgentAccessTest do
     assert Repo.aggregate(Consent, :count) == 0
   end
 
+  # Task 01a1eff0-6880 stage 2 (architecture must-have): a shared booking
+  # stores each co-host's event in `host_event_ids`, not `event_id`. An agent
+  # granted on the CO-HOST must be refused a move of that event exactly as
+  # one granted on the owner is.
+  test "a co-host's event on a shared booking cannot be moved by the co-host's agent", ctx do
+    grant(ctx)
+    day = Date.add(Date.utc_today(), 7)
+    boss = Platform.ExternalUserFixtures.create_user!()
+    Platform.ExternalUserFixtures.plain_member!(boss, Platform.Tenancy.get_org_by_slug!("globex"))
+    boss_scope = Scope.for_user(boss)
+
+    {:ok, link} =
+      Calendar.BookingLinks.create(boss_scope, %{
+        title: "Shared",
+        start_date: day,
+        end_date: day,
+        time_zone: "Etc/UTC",
+        duration_minutes: 30,
+        windows: [%{"weekday" => Date.day_of_week(day), "start" => "10:00", "end" => "11:00"}]
+      })
+
+    {:ok, host} = Calendar.BookingHosts.invite(boss_scope, link.id, ctx.owner.actor.id)
+    {:ok, _} = Calendar.BookingHosts.accept(ctx.owner, host.id)
+    {:ok, [slot | _]} = Calendar.BookingLinks.slots(link.token, day)
+
+    {:ok, booking} =
+      Calendar.BookingLinks.book(
+        link.token,
+        %{"name" => "Guest", "starts_at" => DateTime.to_iso8601(slot.starts_at)},
+        "agent-cohost-reservation"
+      )
+
+    [_, cohost_event_id] = booking.host_event_ids
+    assert Repo.get!(Event, cohost_event_id).owner_id == ctx.owner.actor.id
+    refute booking.event_id == cohost_event_id
+
+    assert {:error, :unsupported_move} =
+             AgentAccess.propose(
+               ctx.scope,
+               ctx.owner.actor.id,
+               "move",
+               %{
+                 starts_at: DateTime.add(slot.starts_at, 3600),
+                 ends_at: DateTime.add(slot.starts_at, 5400)
+               },
+               "move-cohost-booked",
+               cohost_event_id
+             )
+
+    assert Repo.get!(Event, cohost_event_id).starts_at == slot.starts_at
+    assert Repo.aggregate(Consent, :count) == 0
+  end
+
   test "shared busy-only events do not expose private details through a read grant", ctx do
     grant(ctx, %{read_private: false})
 

@@ -1,9 +1,15 @@
 defmodule Platform.Calendar.BookingLinks do
-  @moduledoc "Public reservations recheck owner availability under a shared owner row lock."
+  @moduledoc """
+  Public reservations recheck every host's availability under the hosts' row
+  locks. A link's hosts are its owner plus every accepted co-host
+  (`Platform.Calendar.BookingHosts`, task 01a1eff0-6880): a time is offered
+  only when it is free for all of them, and a link with any co-host not
+  ready offers nothing (`:hosts_not_ready`) before any calendar is read.
+  """
   import Ecto.Query
   alias Platform.{Access, Accounts, Repo}
   alias Platform.Access.Scope
-  alias Platform.Calendar.{Booking, BookingLink, Subscriptions}
+  alias Platform.Calendar.{Booking, BookingHosts, BookingLink}
   alias PlatformWeb.MeetingLive.CalendarWindow
 
   def list(%Scope{actor: %Accounts.User{id: id}} = scope) do
@@ -31,7 +37,7 @@ defmodule Platform.Calendar.BookingLinks do
     with :ok <- Access.authorize(scope, "calendar.write"),
          %BookingLink{} = link <- Enum.find(list(scope), &(&1.id == id)) do
       Repo.transaction(fn ->
-        lock_owner(link.owner_id)
+        BookingHosts.lock_hosts([link.owner_id])
         current = Repo.get!(BookingLink, link.id)
         cs = BookingLink.changeset(current, attrs)
 
@@ -53,7 +59,7 @@ defmodule Platform.Calendar.BookingLinks do
       # Same lock ordering as book: owner before link. A completed revoke
       # cannot be followed by a reservation admitted from an old link read.
       Repo.transaction(fn ->
-        lock_owner(link.owner_id)
+        BookingHosts.lock_hosts([link.owner_id])
         link |> Ecto.Changeset.change(revoked_at: DateTime.utc_now()) |> Repo.update!()
       end)
     else
@@ -93,7 +99,7 @@ defmodule Platform.Calendar.BookingLinks do
   whether a meeting is created) alongside the original zone/email policy.
   """
   def public_policy(token) do
-    with {:ok, link, scope} <- resolve(token),
+    with {:ok, link, scope, hosts} <- resolve(token),
          :ok <- meeting_policy(scope, link) do
       org =
         case Platform.Tenancy.list_user_memberships(scope.actor) do
@@ -109,7 +115,11 @@ defmodule Platform.Calendar.BookingLinks do
          duration_minutes: link.duration_minutes,
          create_meeting: link.create_meeting,
          owner_name: scope.actor.name,
-         org_name: org
+         org_name: org,
+         # Shared links (task 01a1eff0-6880 stage 2): names only, owner
+         # first. Nothing here says which host is busy when.
+         host_names: BookingHosts.names(hosts),
+         shared: length(hosts) > 1
        }}
     end
   end
@@ -119,10 +129,10 @@ defmodule Platform.Calendar.BookingLinks do
   end
 
   def slots(token, %Date{} = date) do
-    with {:ok, link, scope} <- resolve(token),
+    with {:ok, link, scope, hosts} <- resolve(token),
          :ok <- rate_limit(token, "slots", 120),
          :ok <- meeting_policy(scope, link) do
-      available(link, scope, date, date)
+      available(link, hosts, date, date)
     end
   end
 
@@ -135,11 +145,11 @@ defmodule Platform.Calendar.BookingLinks do
   spend 28-31.
   """
   def open_days(token, %Date{} = month) do
-    with {:ok, link, scope} <- resolve(token),
+    with {:ok, link, scope, hosts} <- resolve(token),
          :ok <- rate_limit(token, "slots", 120),
          :ok <- meeting_policy(scope, link),
          {:ok, rows} <-
-           available(link, scope, Date.beginning_of_month(month), Date.end_of_month(month)) do
+           available(link, hosts, Date.beginning_of_month(month), Date.end_of_month(month)) do
       {:ok,
        rows
        |> Enum.group_by(
@@ -162,16 +172,21 @@ defmodule Platform.Calendar.BookingLinks do
   def preview(%Scope{actor: %Accounts.User{}} = scope, link_id, %Date{} = from, days)
       when is_integer(days) and days in 1..62 do
     case Enum.find(list(scope), &(&1.id == link_id and is_nil(&1.revoked_at))) do
-      %BookingLink{} = link -> available(link, scope, from, Date.add(from, days - 1))
-      nil -> {:error, :not_found}
+      %BookingLink{} = link ->
+        with {:ok, hosts} <- BookingHosts.hosts_ready(link),
+             do: available(link, hosts, from, Date.add(from, days - 1))
+
+      nil ->
+        {:error, :not_found}
     end
   end
 
   def preview(_, _, _, _), do: {:error, :not_found}
 
-  # Candidate starts on every date in first..last, minus busy time and
-  # existing reservations (each widened by the link's buffers).
-  defp available(link, scope, first, last) do
+  # Candidate starts on every date in first..last, minus every host's busy
+  # time and every reservation that holds any host (each widened by the
+  # link's buffers).
+  defp available(link, hosts, first, last) do
     candidates =
       Date.range(first, last)
       |> Enum.flat_map(fn date ->
@@ -184,16 +199,14 @@ defmodule Platform.Calendar.BookingLinks do
     reserved_from = DateTime.add(from, -86400)
     reserved_to = DateTime.add(to, 86400)
 
-    with {:ok, busy} <-
-           Subscriptions.availability(scope, reserved_from, reserved_to,
-             time_zone: link.time_zone
-           ) do
+    host_ids = Enum.map(hosts, & &1.id)
+
+    with {:ok, busy} <- BookingHosts.busy(hosts, reserved_from, reserved_to, link.time_zone) do
       reservations =
         Repo.all(
           from(b in Booking,
-            where:
-              b.owner_id == ^link.owner_id and b.reserved_start < ^reserved_to and
-                b.reserved_end > ^reserved_from
+            where: b.reserved_start < ^reserved_to and b.reserved_end > ^reserved_from,
+            where: ^holds_any_host(host_ids)
           )
         )
 
@@ -206,20 +219,32 @@ defmodule Platform.Calendar.BookingLinks do
 
   def book(token, attrs, key)
       when is_map(attrs) and is_binary(key) and byte_size(key) in 16..128 do
-    with {:ok, link, _} <- resolve(token),
+    with {:ok, _link, _, hosts} <- resolve(token),
          :ok <- rate_limit(token, "book", 30),
          start_text when is_binary(start_text) <- Map.get(attrs, "starts_at", ""),
          {:ok, start, _} <- DateTime.from_iso8601(start_text),
          :ok <- validate_guest(attrs) do
+      host_ids = Enum.map(hosts, & &1.id)
+
       Repo.transaction(fn ->
-        lock_owner(link.owner_id)
-        # Re-resolve under lock: revocation, owner grants and module switches
-        # can change between rendering a slot and submitting it.
-        {link, scope} =
+        # Every host's user row, sorted by id (BookingHosts.lock_hosts/1), so
+        # two links sharing a co-host serialise and opposite host orders
+        # cannot deadlock.
+        BookingHosts.lock_hosts(host_ids)
+        # Re-resolve under lock: revocation, owner grants, module switches
+        # and the host set can change between rendering a slot and
+        # submitting it.
+        {link, scope, hosts} =
           case resolve(token) do
-            {:ok, l, s} -> {l, s}
+            {:ok, l, s, h} -> {l, s, h}
+            {:error, :hosts_not_ready} -> Repo.rollback(:hosts_not_ready)
             _ -> Repo.rollback(:not_found)
           end
+
+        # A host joined or left after the unlocked read: the locks taken do
+        # not cover the set now in force, so refuse rather than book on it.
+        if Enum.sort(Enum.map(hosts, & &1.id)) != Enum.sort(host_ids),
+          do: Repo.rollback(:slot_unavailable)
 
         existing = Repo.get_by(Booking, link_id: link.id, idempotency_key: key)
 
@@ -233,7 +258,10 @@ defmodule Platform.Calendar.BookingLinks do
 
           count =
             Repo.aggregate(
-              from(b in Booking, where: b.owner_id == ^link.owner_id and b.inserted_at > ^cutoff),
+              from(b in Booking,
+                where: b.inserted_at > ^cutoff,
+                where: ^holds_any_host(host_ids)
+              ),
               :count
             )
 
@@ -253,8 +281,8 @@ defmodule Platform.Calendar.BookingLinks do
             {:error, reason} -> Repo.rollback(reason)
           end
 
-          {event_id, meeting_id, delivery_id, delivery_error} =
-            create_destination(scope, link, available, attrs)
+          {event_id, host_event_ids, meeting_id, delivery_id, delivery_error} =
+            create_destination(scope, hosts, link, available, attrs)
 
           Repo.insert!(%Booking{
             owner_id: link.owner_id,
@@ -267,6 +295,8 @@ defmodule Platform.Calendar.BookingLinks do
             reserved_start: DateTime.add(available.starts_at, -60 * link.buffer_before_minutes),
             reserved_end: DateTime.add(available.ends_at, 60 * link.buffer_after_minutes),
             event_id: event_id,
+            host_user_ids: host_ids,
+            host_event_ids: host_event_ids,
             meeting_id: meeting_id,
             delivery_id: delivery_id,
             delivery_error: delivery_error
@@ -282,20 +312,28 @@ defmodule Platform.Calendar.BookingLinks do
 
   def book(_, _, _), do: {:error, :invalid_booking}
 
-  defp create_destination(scope, %{create_meeting: false} = link, slot, attrs) do
-    case Platform.Calendar.create_event(scope, %{
-           title: link.title <> " · " <> attrs["name"],
-           starts_at: slot.starts_at,
-           ends_at: slot.ends_at,
-           time_zone: link.time_zone,
-           visibility: "busy"
-         }) do
-      {:ok, event} -> {event.id, nil, nil, nil}
-      {:error, reason} -> Repo.rollback(reason)
-    end
+  # One native busy event per host, each in that host's own calendar
+  # (native events have no attendee model). The owner's id is `event_id`;
+  # every host's, owner first, is `host_event_ids`.
+  defp create_destination(_scope, hosts, %{create_meeting: false} = link, slot, attrs) do
+    ids =
+      Enum.map(hosts, fn host ->
+        case Platform.Calendar.create_event(Scope.for_user(host), %{
+               title: link.title <> " · " <> attrs["name"],
+               starts_at: slot.starts_at,
+               ends_at: slot.ends_at,
+               time_zone: link.time_zone,
+               visibility: "busy"
+             }) do
+          {:ok, event} -> event.id
+          {:error, reason} -> Repo.rollback(reason)
+        end
+      end)
+
+    {hd(ids), ids, nil, nil, nil}
   end
 
-  defp create_destination(scope, link, slot, attrs) do
+  defp create_destination(scope, hosts, link, slot, attrs) do
     if is_nil(blank_nil(attrs["email"])), do: Repo.rollback(:email_required)
 
     with {:ok, meeting} <-
@@ -320,6 +358,9 @@ defmodule Platform.Calendar.BookingLinks do
          # gets the `Booking confirmed:` email below, not a second message.
          {:ok, _owner_invite} <-
            Platform.Meetings.invite_user(meeting, scope.actor.id, notify_email: false),
+         # Co-hosts join as participants and invitees with no email and no
+         # .ics (task 01a1eff0-6880 stage 2): the in-app meeting is theirs.
+         :ok <- invite_cohosts(meeting, tl(hosts)),
          {:ok, bundle} <-
            Platform.Meetings.invite_guest(meeting, %{
              display_name: attrs["name"],
@@ -335,21 +376,45 @@ defmodule Platform.Calendar.BookingLinks do
           scope.actor.id,
           attrs,
           slot,
-          bundle.url
+          bundle.url,
+          BookingHosts.names(hosts)
         )
 
-      {nil, meeting.id, delivery_id, error}
+      {nil, [], meeting.id, delivery_id, error}
     else
       {:error, reason} -> Repo.rollback(reason)
     end
   end
 
+  defp invite_cohosts(meeting, cohosts) do
+    Enum.reduce_while(cohosts, :ok, fn cohost, :ok ->
+      with {:ok, _} <-
+             Platform.Chat.add_participant(meeting.chat_space_id, %{
+               participant_type: "user",
+               participant_id: cohost.id,
+               role: "member",
+               joined_at: DateTime.utc_now()
+             }),
+           {:ok, _} <- Platform.Meetings.invite_user(meeting, cohost.id, notify_email: false) do
+        {:cont, :ok}
+      else
+        {:error, _} = error -> {:halt, error}
+      end
+    end)
+  end
+
+  # `{:ok, link, owner_scope, hosts}`, `hosts` being the owner then every
+  # accepted co-host. A link with any co-host not ready is
+  # `:hosts_not_ready`, decided before any calendar is read.
   defp resolve(token) when is_binary(token) and byte_size(token) == 43 do
     with %BookingLink{revoked_at: nil} = link <- Repo.get_by(BookingLink, token: token),
          %Accounts.User{archived_at: nil} = user <- Accounts.get_user(link.owner_id),
          scope <- Scope.for_user(user),
          true <- Access.can?(scope, "calendar.write") do
-      {:ok, link, scope}
+      case BookingHosts.hosts_ready(link) do
+        {:ok, hosts} -> {:ok, link, scope, hosts}
+        {:error, :hosts_not_ready} = error -> error
+      end
     else
       _ -> {:error, :not_found}
     end
@@ -454,8 +519,16 @@ defmodule Platform.Calendar.BookingLinks do
   defp blank_nil(""), do: nil
   defp blank_nil(value), do: value
 
-  defp lock_owner(id),
-    do: Repo.one!(from(u in Accounts.User, where: u.id == ^id, lock: "FOR UPDATE"))
+  # A reservation holds a host when the host owns it (single-owner bookings,
+  # and every booking made before co-hosts existed) or is in its
+  # `host_user_ids` (a shared booking holds each co-host too).
+  defp holds_any_host(host_ids) do
+    dynamic(
+      [b],
+      b.owner_id in ^host_ids or
+        fragment("? && ?", b.host_user_ids, type(^host_ids, {:array, Ecto.UUID}))
+    )
+  end
 
   defp token, do: Base.url_encode64(:crypto.strong_rand_bytes(32), padding: false)
 end

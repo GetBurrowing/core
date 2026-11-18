@@ -1,6 +1,7 @@
 defmodule Platform.Calendar.Booking do
   @moduledoc "A reservation and its idempotent receipt; public responses omit owner calendar details."
   use Ecto.Schema
+  import Ecto.Query
   @primary_key {:id, Platform.Types.UUIDv7, autogenerate: true}
   @foreign_key_type :binary_id
   schema "calendar_bookings" do
@@ -24,4 +25,24 @@ defmodule Platform.Calendar.Booking do
     field(:delivery_error, :string)
     timestamps(type: :utc_datetime_usec)
   end
+
+  @doc """
+  True when `event_id` is the native event of some booking, for ANY of its
+  hosts: the owner's `event_id` or a co-host's entry in `host_event_ids`
+  (task 01a1eff0-6880 stage 2). Agent calendar access refuses to move or
+  revert such an event, so a grant on a co-host cannot shift a booked slot
+  out from under its reservation.
+  """
+  def owns_event?(event_id) when is_binary(event_id) do
+    Platform.UUID.valid?(event_id) and
+      Platform.Repo.exists?(
+        from(b in __MODULE__,
+          where:
+            b.event_id == ^event_id or
+              fragment("? = ANY(?)", type(^event_id, Ecto.UUID), b.host_event_ids)
+        )
+      )
+  end
+
+  def owns_event?(_), do: false
 end

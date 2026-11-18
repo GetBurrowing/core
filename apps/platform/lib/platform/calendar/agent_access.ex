@@ -433,7 +433,7 @@ defmodule Platform.Calendar.AgentAccess do
 
     if event.tentative || event.cancelled_at || event.recurrence || event.all_day ||
          (not grant.read_private and is_nil(event.space_id) and is_nil(event.project_id)) ||
-         Repo.exists?(from(b in Booking, where: b.event_id == ^id)),
+         Booking.owns_event?(id),
        do: Repo.rollback(:unsupported_move)
 
     event
@@ -482,7 +482,7 @@ defmodule Platform.Calendar.AgentAccess do
     if event.sequence != consent.committed_sequence or event.cancelled_at,
       do: Repo.rollback(:stale)
 
-    if Repo.exists?(from(b in Booking, where: b.event_id == ^event.id)),
+    if Booking.owns_event?(event.id),
       do: Repo.rollback(:unsupported_move)
 
     if consent.operation == "create" do

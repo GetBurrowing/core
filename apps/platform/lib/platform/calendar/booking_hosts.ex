@@ -30,7 +30,7 @@ defmodule Platform.Calendar.BookingHosts do
   import Ecto.Query
   alias Platform.{Access, Accounts, Inbox, Repo, Tenancy}
   alias Platform.Access.Scope
-  alias Platform.Calendar.{BookingLink, BookingLinkHost}
+  alias Platform.Calendar.{BookingLink, BookingLinkHost, Subscriptions}
   alias Platform.Tenancy.OrgMembership
 
   @kind "booking_cohost_invite"
@@ -179,6 +179,25 @@ defmodule Platform.Calendar.BookingHosts do
   end
 
   def hosts_ready(_), do: {:error, :hosts_not_ready}
+
+  @doc """
+  The union of every host's busy time over `from..to`, read through
+  `Subscriptions.availability/4` under each host's own scope (task
+  01a1eff0-6880 stage 2). External calendars are only read. Any host's
+  error fails the whole read with that error, which names no host, so a
+  guest cannot tell whose calendar was unknown.
+  """
+  def busy(hosts, from, to, time_zone) when is_list(hosts) do
+    Enum.reduce_while(hosts, {:ok, []}, fn host, {:ok, acc} ->
+      case Subscriptions.availability(Scope.for_user(host), from, to, time_zone: time_zone) do
+        {:ok, rows} -> {:cont, {:ok, rows ++ acc}}
+        {:error, _} = error -> {:halt, error}
+      end
+    end)
+  end
+
+  @doc "The display names of a ready host set, owner first."
+  def names(hosts) when is_list(hosts), do: Enum.map(hosts, &(&1.name || "Host"))
 
   @doc """
   Lock the given users' rows in one global order: de-duplicated, sorted,
