@@ -212,7 +212,7 @@ defmodule Platform.Calendar.BookingHostsTest do
       assert {:ok, %{status: "pending"}} =
                BookingHosts.invite(scope(ctx.owner), ctx.link.id, ctx.jordan.id)
 
-      other = user!("Nobody Here")
+      other = "Never Invited" |> user!() |> member!(ctx.org)
 
       assert {:error, :not_found} =
                BookingHosts.reinvite(scope(ctx.owner), ctx.link.id, other.id)
