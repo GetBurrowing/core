@@ -628,7 +628,13 @@ defmodule PlatformWeb.GoalsNew do
       )
 
     ~H"""
-    <div class="mx-auto max-w-3xl p-6" data-role="goals-new">
+    <%!-- The bottom padding clears the phone bottom nav (the same recipe as
+         goals_open_up.ex's toast): with the coach cards the box is the last
+         thing in a pane that scrolls under the nav. --%>
+    <div
+      class="mx-auto max-w-3xl p-6 pb-[calc(env(safe-area-inset-bottom)+1.5rem+var(--bottom-nav-height,0px))]"
+      data-role="goals-new"
+    >
       <.link
         navigate="/m/goals"
         class="-ml-2 mb-3 inline-flex min-h-11 items-center rounded px-2 font-semibold text-interactive focus-visible-ring lg:hidden"
