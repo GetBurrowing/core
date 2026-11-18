@@ -69,7 +69,10 @@ defmodule Platform.Responsibilities.Providers.Design do
     DesignCritique.register() ++
       DesignSpecWriter.register() ++
       DesignBrandCheck.register() ++
-      DesignTaskDirection.register()
+      DesignTaskDirection.register() ++
+      Handlers.DesignReflect.register() ++
+      Handlers.DesignScout.register() ++
+      Handlers.DesignPrototypeEval.register()
   end
 
   @doc """
@@ -89,6 +92,10 @@ defmodule Platform.Responsibilities.Providers.Design do
   def handler_for("design.spec_writer"), do: Handlers.DesignSpecWriter
   def handler_for("design.brand_check"), do: Handlers.DesignBrandCheck
   def handler_for("design.task_direction"), do: Handlers.DesignTaskDirection
+  # The UX super agent loop (task 01a1f048).
+  def handler_for("design.reflect"), do: Handlers.DesignReflect
+  def handler_for("design.scout"), do: Handlers.DesignScout
+  def handler_for("design.prototype_eval"), do: Handlers.DesignPrototypeEval
   def handler_for(_), do: nil
 
   @impl true

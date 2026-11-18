@@ -1221,6 +1221,15 @@ defmodule Platform.RepoLookupBoundaryTest do
      "agent/1, user/1 and spaces/2 guard provision/1's operator-supplied agent, escalation-user and space ids before Repo.get/Accounts.get_user/Chat.get_space (malformed = {:error, {:not_found, field}}); escalate_user_id/1 reads the operator-written trigger_config and turns a malformed value into nil"},
     {"platform/showrunner/config.ex", :platform_uuid_guard, "-", 1, :must_cast,
      "uuid/1 reads id fields out of a responsibility's operator-written `trigger_config` JSON; a malformed value becomes nil (the unconfigured path) before any lookup uses it"},
+    {"platform/responsibilities/handlers/design_prototype_eval.ex", :get, "Agent", 1,
+     :flagged_sibling_owned,
+     "assignee/0 takes the id of the %Agent{} that Roles.assignee_for/1 loads through role_assignments.agent_id or responsibility_overrides.agent_id (:binary_id FKs to agents); no params, MCP payload or URL segment reaches it"},
+    {"platform/responsibilities/handlers/design_reflect.ex", :get, "Agent", 1,
+     :flagged_sibling_owned,
+     "assignee/0 takes the id of the %Agent{} that Roles.assignee_for/1 loads through role_assignments.agent_id or responsibility_overrides.agent_id (:binary_id FKs to agents); no params, MCP payload or URL segment reaches it"},
+    {"platform/responsibilities/handlers/design_scout.ex", :get, "Agent", 1,
+     :flagged_sibling_owned,
+     "assignee/0 takes the id of the %Agent{} that Roles.assignee_for/1 loads through role_assignments.agent_id or responsibility_overrides.agent_id (:binary_id FKs to agents); no params, MCP payload or URL segment reaches it"},
     {"platform/responsibilities/handlers/showrunner_recording_prep.ex", :get, "Agent", 1,
      :flagged_sibling_owned,
      "under the responsibilities/ sibling prefix, so flagged rather than classified; the id is internal regardless: runtime_scope/1 takes ctx.agent_id, built by Showrunner.Board.context/3 from the %Agent{} that Roles.assignee_for/1 loads through role_assignments.agent_id (a :binary_id FK to agents); no params, MCP payload or URL segment reaches it"},
@@ -1235,6 +1244,9 @@ defmodule Platform.RepoLookupBoundaryTest do
   @repo_one_counts %{
     # goal/1 pins a module-attribute metric slug and status; no id from a boundary.
     "platform/designer.ex" => 1,
+    # tokens_between/3 pins agent_usage_events.agent_id to the caller's
+    # runtime agent id (ToolCall.build_context/2) or an assignee's FK id.
+    "platform/designer/loop.ex" => 1,
     # Target lookups compare string slugs and lock existing skill/prompt rows.
     "platform/instruction_packs/targets.ex" => 2,
     # Publisher lookup pins the validated manifest pack_id string; no UUID input.

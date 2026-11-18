@@ -202,6 +202,27 @@ case meetings_intent_env.("MEETINGS_INTENT_PROVIDER") do
     }
 end
 
+# DESIGN_EVALUATOR_PROVIDER  the designer's independent evaluator (task
+#                     01a1f048): grades published prototypes on a DIFFERENT
+#                     vendor's model than the designer runs on. Only `openai`
+#                     is accepted; unset or anything else leaves it off.
+# DESIGN_EVALUATOR_MODEL     model name; unset uses the adapter's default.
+# DESIGN_EVALUATOR_API_KEY   the provider API key. Only its NAME is stored in
+#                     config; unset falls back to the platform Vault `openai`
+#                     credential. See Platform.Designer.Evaluator.
+case meetings_intent_env.("DESIGN_EVALUATOR_PROVIDER") do
+  nil ->
+    :ok
+
+  provider ->
+    config :platform, :design_evaluator_model, %{
+      provider: if(String.downcase(provider) == "openai", do: :openai, else: :none),
+      model: meetings_intent_env.("DESIGN_EVALUATOR_MODEL"),
+      api_key_env:
+        if(meetings_intent_env.("DESIGN_EVALUATOR_API_KEY"), do: "DESIGN_EVALUATOR_API_KEY")
+    }
+end
+
 # ── Session cookie domain (cross-subdomain OIDC login fix) ────────────────────
 # The `_platform_session` cookie is host-only by default (no `Domain`), so a
 # login started on `chat.example.com` loses its OIDC `state` cookie when

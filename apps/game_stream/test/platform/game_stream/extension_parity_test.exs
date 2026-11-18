@@ -464,7 +464,9 @@ defmodule Platform.GameStream.ExtensionParityTest do
     # only), re-pinned from bfd76bb5...
     # Task 01a1b6a1 stage 1 adds habits.prefill_accept_rate, re-pinned from
     # 45f69629....
-    @main_metrics_catalog_digest "ef621bde5a17502b4e2007151052d9afdb3f808a47f1c0f14517d9332492aea9"
+    # Task 01a1f048 adds ux_friction_drop (the UX super agent's north star),
+    # re-pinned from ef621bde....
+    @main_metrics_catalog_digest "a1ca862e36cb1e4480f123ce10fe81a025d06b4b2dfdbc7b865fabda15b9034d"
     @main_bundles ~w(canvas messaging task plan review space context_read federation memory skill attachment files meetings mail experiments code_mode prototype access admin voice_ask play)
     @main_valid_bundles ~w(federation space context_read messaging review canvas task plan memory skill attachment files meetings mail experiments code_mode prototype access admin voice_ask play)
     # Activity left the rail with its page (task 01a1557a-7a71 stage 4).
@@ -490,7 +492,7 @@ defmodule Platform.GameStream.ExtensionParityTest do
       :changelog,
       :admin
     ]
-    @main_metrics ~w(cycle_time game_stream_input_to_photon game_stream_input_to_photon_worst_slot_p95 habits.prefill_accept_rate insight_acceptance_rate manual_gate_rejection_rate meeting_synthesis_resolution_rate overscoped_gate_count plan_revision_count stages_per_plan time_in_phase ux_finding_keep_rate validation_failure_rate)
+    @main_metrics ~w(cycle_time game_stream_input_to_photon game_stream_input_to_photon_worst_slot_p95 habits.prefill_accept_rate insight_acceptance_rate manual_gate_rejection_rate meeting_synthesis_resolution_rate overscoped_gate_count plan_revision_count stages_per_plan time_in_phase ux_finding_keep_rate ux_friction_drop validation_failure_rate)
     # main's ORDER: dispatch.prompt, mail.draft.generator, planner.stage_budget,
     # chat.context_summary, game_stream.encoder_preset, game_stream.roster,
     # meetings.open_question_classifier. The stage appends extension surfaces

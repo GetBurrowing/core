@@ -94,6 +94,10 @@ defmodule Platform.Federation.ToolCall do
         context = args |> build_context(runtime) |> Map.put(:tool_call_id, call_id)
         result = canonical |> ToolArguments.dispatch(args, context) |> normalize()
         record(call_id, name, args, runtime, opts, started, result)
+        # The designer's super agent loop watches a handful of tool calls
+        # (a prototype published, a design job finished). A cheap name check;
+        # the rest runs off this process.
+        _ = Platform.Designer.Loop.observe(canonical, args, context, result)
         result
 
       {:error, :forbidden} ->
