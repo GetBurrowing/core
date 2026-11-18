@@ -626,7 +626,7 @@ defmodule Platform.Federation.ToolAliasesTest do
       assert {:ok, %{ok: true, result: [true, true]}} = Run.execute(ctx.runtime, script)
 
       assert {:ok, index} = ToolCall.invoke("burrow_run_describe", %{}, ctx.runtime)
-      text = inspect(index)
+      text = inspect(index, limit: :infinity)
       assert text =~ "canvas_describe"
       assert text =~ "burrow_run_describe"
 

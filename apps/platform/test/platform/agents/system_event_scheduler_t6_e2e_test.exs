@@ -780,7 +780,10 @@ defmodule Platform.Agents.SystemEventSchedulerT6E2ETest do
     # +1 `meeting_summary_complete` in the meetings bundle, the delegated
     # meeting-summary return path; it adds no historian scheduler endpoint
     # or T6 trigger.
-    @t6_baseline_tool_count 159
+    # +1 `design_critique_complete` in the review bundle, the native
+    # Designer's critique return path; it adds no historian scheduler
+    # endpoint or T6 trigger.
+    @t6_baseline_tool_count 160
 
     defp t6_root, do: Mix.Project.project_file() |> Path.dirname()
 

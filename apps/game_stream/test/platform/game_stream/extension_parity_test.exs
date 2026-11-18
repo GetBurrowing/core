@@ -443,10 +443,15 @@ defmodule Platform.GameStream.ExtensionParityTest do
     # and the metrics catalog are unchanged. Measured locally at the stage's
     # branch. Stage 1's core surface `showrunner.run_sheet` joins both surface
     # lists after habits.learned_defaults.
-    @previous_tool_digest_off "5976a72c4fea2969704f91ac51da93dc80a3351a27a511b8df51ca7ba1cae40b"
-    @previous_tool_digest_on "3f2f3d246b473a800a5b238ba0bcfad08239c8cb8cc85c568e67a28ea4b4ed07"
-    @main_tool_digest_off "d3135897984c1c07a35fe10b195e11ddee71db2b541ecd5a099ae9bd44f1ab9e"
-    @main_tool_digest_on "39f65904806f27357a8f969ee013d34111f8c5891631e61344809d48057ee8a1"
+    # Re-pinned by task 01a1eb2f: `design_critique_request`'s description,
+    # returns and limitations now describe the native Designer's dispatched
+    # (`pending`) critique, so all six tool-definition digests move (flag
+    # off and on). Names, bundles, kinds and metrics are unchanged; the new
+    # `design_critique_complete` is set aside as additive. Measured locally.
+    @previous_tool_digest_off "1ca472098cf7b3a25e9229e0b8f29eb0d492606eaec95ba9fec8c3cc73dcd58c"
+    @previous_tool_digest_on "d8459be664a46689367f43ef681cc35d37323b5adaa74a5ffd217c8f21ebdabc"
+    @main_tool_digest_off "ef9635eb32aece1110bf3805def2b2e3ce7bab10767a9fd20e57726963a4f926"
+    @main_tool_digest_on "26f8399443085f47697180ebdb0d7063bd245bff882b1021e13fa96522c9df77"
     @main_kinds_summaries_digest_off "5c9857dfe4ee0ea14d427072988cb574b74aba8bf8fe458030961cd96fd85564"
     @main_kinds_summaries_digest_on "2fc4005890d690f0d25da590378066518bf925ce91a7b865065d02fc8ab2163f"
     @main_kinds_tool_schemas_digest_off "cebd9c6810c617499002b615a3e0bdf9e058cd1ca9d5b2bcaa471b2b04e20b82"
@@ -626,11 +631,18 @@ defmodule Platform.GameStream.ExtensionParityTest do
     # `meeting_summary_complete` (the delegated meeting-summary return path)
     # is additive the same way: set aside and pinned by name and bundle, so
     # every earlier definition stays byte-for-byte pinned without a re-pin.
+    #
+    # `design_critique_complete` (the native Designer's critique return
+    # path, task 01a1eb2f) is additive the same way.
     defp pre_calendar_tool_definitions do
       {summary_return, defs} =
-        Enum.split_with(ToolSurface.tool_definitions(), &(&1.name == "meeting_summary_complete"))
+        Enum.split_with(
+          ToolSurface.tool_definitions(),
+          &(&1.name in ["meeting_summary_complete", "design_critique_complete"])
+        )
 
       assert Enum.map(summary_return, &{&1.name, &1.bundle}) == [
+               {"design_critique_complete", "review"},
                {"meeting_summary_complete", "meetings"}
              ]
 
@@ -663,7 +675,7 @@ defmodule Platform.GameStream.ExtensionParityTest do
              ] == [
                @previous_tool_digest_off,
                @main_tool_digest_off,
-               "10637c3ef958f36ab40ec19585f67613fa6135000a5d25b85669481267c1e389"
+               "275c9aff02eec08d527833efe18ae0d4a6b6218b6748653c205ff91a4284392a"
              ]
     end
 
@@ -686,7 +698,7 @@ defmodule Platform.GameStream.ExtensionParityTest do
              ] == [
                @previous_tool_digest_on,
                @main_tool_digest_on,
-               "f1cab2dd11ff9e7e9d4e25a8c05308888bdb2824edd4ec83ff9f086f9a194d1b"
+               "58a01fe5dc6351cd4ae45bafc0100ad89d69aa8d478e35c4a56929e892ea052b"
              ]
     end
 
