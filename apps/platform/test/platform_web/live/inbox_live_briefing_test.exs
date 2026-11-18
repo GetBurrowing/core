@@ -206,6 +206,7 @@ defmodule PlatformWeb.InboxLiveBriefingTest do
       lv = open!(conn, user)
 
       assert has_element?(lv, ~s([data-role="inbox-detail-pane"].clears-tab-bar))
+
       assert has_element?(
                lv,
                ~s([data-role="inbox-detail-pane"] [data-role=briefing-settings-link])
