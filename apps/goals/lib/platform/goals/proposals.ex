@@ -55,7 +55,7 @@ defmodule Platform.Goals.Proposals do
   alias Platform.Agents.Agent
   alias Platform.Chat
   alias Platform.Goals
-  alias Platform.Goals.{Clock, Goal, Limits, Proposal, Signals, Sources, Stop}
+  alias Platform.Goals.{Clock, Coaches, Goal, Limits, Proposal, Signals, Sources, Stop}
   alias Platform.Repo
 
   @goal_keys ~w(title why unit target_value source_key source_settings agent_mode rhythm
@@ -165,9 +165,21 @@ defmodule Platform.Goals.Proposals do
 
   Answers `{:error, :lead_missing_goals_tools}`, writing no row, when the
   lead's runtime cannot use the Goals tools (`check_lead_tools/1`).
+
+  `opts[:coach_agent_id]` (task 01a1eab7 stage 1) names the agent the person
+  picked instead of the lead. It must pass `Platform.Goals.Coaches`'s one
+  predicate, checked before the transaction: an unknown, malformed or
+  ineligible id answers the same `{:error, :lead_missing_goals_tools}` and
+  writes nothing (no proposal, space, message or signal). The picked agent
+  then takes the lead's path unchanged, and becomes the goal's coach on
+  confirmation (`goal_attrs/1`). Absent or nil, the lead runs as before.
   """
-  def start_goal_conversation(%User{id: user_id} = user, text) when is_binary(user_id) do
-    with {:ok, text} <- message_text(text) do
+  def start_goal_conversation(user, text, opts \\ [])
+
+  def start_goal_conversation(%User{id: user_id} = user, text, opts)
+      when is_binary(user_id) and is_list(opts) do
+    with {:ok, text} <- message_text(text),
+         {:ok, picked} <- picked_coach(user, opts) do
       now = Clock.now()
 
       # The scope holds the opening message's publish (telemetry, broadcast)
@@ -179,7 +191,7 @@ defmodule Platform.Goals.Proposals do
             expire_stale(user, now)
 
             with :ok <- no_open_proposal(user),
-                 {:ok, agent} <- resolve_lead(),
+                 {:ok, agent} <- intake_agent(picked),
                  :ok <- check_lead_tools(agent),
                  {:ok, org_id} <- pick_org(user),
                  {:ok, space} <- create_goal_space(user, agent, org_id),
@@ -198,7 +210,20 @@ defmodule Platform.Goals.Proposals do
     end
   end
 
-  def start_goal_conversation(_actor, _text), do: {:error, :not_found}
+  def start_goal_conversation(_actor, _text, _opts), do: {:error, :not_found}
+
+  # nil: the lead runs the intake. Otherwise the picked agent, re-read and
+  # checked by `Coaches.fetch_eligible/2`, whose only refusal is
+  # `{:error, :lead_missing_goals_tools}`.
+  defp picked_coach(user, opts) do
+    case Keyword.get(opts, :coach_agent_id) do
+      nil -> {:ok, nil}
+      id -> Coaches.fetch_eligible(user, id)
+    end
+  end
+
+  defp intake_agent(nil), do: resolve_lead()
+  defp intake_agent(%Agent{} = agent), do: {:ok, agent}
 
   @doc """
   Re-sends the `goals.new_goal` signal for an OPEN, unexpired proposal and

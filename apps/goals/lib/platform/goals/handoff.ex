@@ -140,12 +140,14 @@ defmodule Platform.Goals.Handoff do
        when is_binary(id),
        do: {:ok, goal}
 
-  # Setting the coach stays the owner's: it goes through update_goal/3, the
-  # same path the owner's own edit takes, so the clock is synced.
+  # Setting the coach stays the owner's: it goes through the same path the
+  # owner's own edit takes (`Goals.hand_off_coach/3`), so the clock is
+  # synced. It skips update_goal/3's eligible-coach check (task 01a1eab7),
+  # which keeps the hand-off's behaviour as it was.
   defp ensure_coach(actor, goal, true, space_id) do
     case Platform.Chat.Sidebar.agents_leader(Platform.Chat.get_space(space_id)) do
       %Agent{id: leader_id} ->
-        Platform.Goals.update_goal(actor, goal.id, %{coach_agent_id: leader_id})
+        Platform.Goals.hand_off_coach(actor, goal.id, leader_id)
 
       _ ->
         {:error, :no_coach}

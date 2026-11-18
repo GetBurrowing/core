@@ -905,4 +905,98 @@ defmodule Platform.Goals.ProposalsTest do
     assert counts() == before
     assert row(proposal) == stored
   end
+
+  # ── a picked coach (task 01a1eab7 stage 1) ────────────────────────────────
+
+  describe "start_goal_conversation/3 with a picked coach" do
+    defp picked_counts,
+      do: Enum.map([Proposal, Chat.Space, Chat.Message], &Repo.aggregate(&1, :count))
+
+    test "the picked eligible agent runs the intake, gets the signal and becomes the coach", c do
+      lead = lead!(c)
+      picked = c.person |> external_agent!() |> grant_goals_tools!()
+
+      assert {:ok, %Proposal{} = proposal} =
+               Goals.start_goal_conversation(c.person, @opening, coach_agent_id: picked.id)
+
+      assert proposal.agent_id == picked.id
+      refute proposal.agent_id == lead.id
+
+      assert_received {:signal, signal}
+      assert signal.metadata.agent_id == picked.id
+      assert signal.metadata.responsibility_key == "goals.new_goal"
+      assert signal.metadata.space_id == proposal.space_id
+
+      # The proposal's own space holds the person and the PICKED agent.
+      agents =
+        from(p in Chat.Participant,
+          where: p.space_id == ^proposal.space_id and p.participant_type == "agent",
+          select: p.participant_id
+        )
+        |> Repo.all()
+
+      assert agents == [picked.id]
+
+      proposal = ready!(picked, proposal)
+
+      assert {:ok, %{goal: goal}} =
+               Goals.confirm_proposal(c.person, proposal.id, proposal.revision)
+
+      assert goal.coach_agent_id == picked.id
+    end
+
+    test "no :coach_agent_id (or nil) keeps the lead path", c do
+      lead = lead!(c)
+
+      assert {:ok, %Proposal{agent_id: id}} =
+               Goals.start_goal_conversation(c.person, @opening, coach_agent_id: nil)
+
+      assert id == lead.id
+    end
+
+    test "a forged id is refused with 01a1eab6's atom and writes nothing", c do
+      lead!(c)
+      no_bundle = c.person |> external_agent!() |> grant_goals_tools!(["messaging"])
+      no_profile = external_agent!(c.person)
+      built_in = agent!()
+      paused = c.person |> external_agent!() |> grant_goals_tools!()
+      paused = paused |> Ecto.Changeset.change(status: "paused") |> Repo.update!()
+
+      for id <- [
+            no_bundle.id,
+            no_profile.id,
+            built_in.id,
+            paused.id,
+            Ecto.UUID.generate(),
+            "not-a-uuid",
+            42
+          ] do
+        before = picked_counts()
+
+        assert Goals.start_goal_conversation(c.person, @opening, coach_agent_id: id) ==
+                 {:error, :lead_missing_goals_tools},
+               "#{inspect(id)} was not refused"
+
+        assert picked_counts() == before
+        refute_received {:signal, _}
+        assert Goals.current_proposal(c.person) == {:ok, nil}
+      end
+    end
+
+    test "an agent the external user may not DM is refused and writes nothing", c do
+      lead!(c)
+      picked = c.person |> external_agent!() |> grant_goals_tools!()
+      join_org!(c.person, org_id!(), external: true)
+      assert Platform.Tenancy.external_user?(c.person)
+      refute Chat.external_dm_permitted?(c.person.id, "agent", picked.id)
+
+      before = picked_counts()
+
+      assert Goals.start_goal_conversation(c.person, @opening, coach_agent_id: picked.id) ==
+               {:error, :lead_missing_goals_tools}
+
+      assert picked_counts() == before
+      refute_received {:signal, _}
+    end
+  end
 end

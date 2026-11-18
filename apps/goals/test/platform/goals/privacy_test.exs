@@ -161,7 +161,7 @@ defmodule Platform.Goals.PrivacyTest do
   describe "agents" do
     test "the coach reads and updates but cannot open or close; another agent sees nothing",
          %{org_id: org_id, owner: owner, goal: goal} do
-      coach = agent!()
+      coach = coach_agent!()
       {:ok, _} = Goals.update_goal(owner, goal.id, %{coach_agent_id: coach.id})
 
       assert {:ok, %Goal{}} = Goals.get_goal(coach, goal.id)

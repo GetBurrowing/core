@@ -178,7 +178,7 @@ defmodule PlatformWeb.GoalsOpenUpTest do
   end
 
   test "settings save every rhythm, weekday, outreach and coach mode", c do
-    coach = agent!()
+    coach = coach_agent!()
     {:ok, _} = Goals.update_goal(c.owner, c.goal.id, %{coach_agent_id: coach.id})
     owner = page(c.owner, c.goal)
 

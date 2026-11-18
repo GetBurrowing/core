@@ -22,6 +22,17 @@ defmodule PlatformWeb.GoalsNew do
   `Platform.Chat.ContentRenderer.render_message/1`; avatars through
   `PlatformWeb.AvatarComponents`.
 
+  ## The coach (task 01a1eab7 stage 2)
+
+  Before a proposal exists the screen shows `GoalsComponents.coach_cards/1`
+  for the coaches `Platform.Goals.list_coaches/1` returned, preselects its
+  `default_id`, and the send button reads "Start with <name>". A pick only
+  records the id; the start passes it as `coach_agent_id` and the server
+  decides (`Platform.Goals.Coaches`). A refusal writes nothing: the page
+  shows "That agent can't coach goals" and falls back to the default. With
+  no eligible coach the start goes the lead's way unchanged (01a1eab6's
+  refusal when its runtime lacks the Goals tools).
+
   ## Trust
 
   Every read goes through `Platform.Goals` (and core's public chat
@@ -87,7 +98,12 @@ defmodule PlatformWeb.GoalsNew do
       fill: 0,
       refused: false,
       created: nil,
-      subscribed: MapSet.new()
+      subscribed: MapSet.new(),
+      coaches: [],
+      default_coach_id: nil,
+      selected_coach_id: nil,
+      coaches_expanded: false,
+      coach_refused: false
     })
     |> refresh()
   end
@@ -115,13 +131,27 @@ defmodule PlatformWeb.GoalsNew do
         _ -> []
       end
 
+    # Task 01a1eab7 stage 2: the coaches come from the context only. The
+    # selection is whatever the person last picked (validity is the
+    # server's call at send), else the context's default.
+    {coaches, default_id} =
+      case Goals.list_coaches(user) do
+        {:ok, %{coaches: coaches, default_id: default_id}} -> {coaches, default_id}
+        _ -> {[], nil}
+      end
+
+    selected = Map.get(new, :selected_coach_id) || default_id
+
     new =
       Map.merge(new, %{
         lead: lead,
         proposal: proposal,
-        agent: agent_view(lead, proposal),
+        agent: agent_view(lead, proposal, Enum.find(coaches, &(&1.id == selected)), coaches),
         messages: messages,
-        sources: sources
+        sources: sources,
+        coaches: coaches,
+        default_coach_id: default_id,
+        selected_coach_id: selected
       })
 
     socket
@@ -163,6 +193,22 @@ defmodule PlatformWeb.GoalsNew do
   end
 
   defp subscribe(socket, _proposal), do: socket
+
+  # Before a proposal exists the screen speaks as the selected coach; once
+  # one exists, as the proposal's agent (the coach the person started with).
+  defp agent_view(_lead, nil, %{} = selected, _coaches), do: coach_view(selected)
+
+  defp agent_view(lead, %{agent_id: agent_id} = proposal, _selected, coaches) do
+    case Enum.find(coaches, &(&1.id == agent_id)) do
+      %{} = coach -> coach_view(coach)
+      nil -> agent_view(lead, proposal)
+    end
+  end
+
+  defp agent_view(lead, proposal, _selected, _coaches), do: agent_view(lead, proposal)
+
+  defp coach_view(coach),
+    do: %{name: coach.name, slot: coach.slot, avatar_url: Map.get(coach, :avatar_url)}
 
   defp agent_view(%{id: id} = agent, proposal)
        when is_nil(proposal) or (is_map(proposal) and :erlang.map_get(:agent_id, proposal) == id),
@@ -214,6 +260,14 @@ defmodule PlatformWeb.GoalsNew do
       send_text(socket, text)
     end
   end
+
+  # Task 01a1eab7 stage 2: a pick only records the selection. Whether the
+  # agent may coach is decided by the server at send, never here.
+  def handle_event("new_pick_coach", %{"agent_id" => id}, socket) when is_binary(id),
+    do: {:noreply, socket |> put_new(selected_coach_id: id, coach_refused: false) |> refresh()}
+
+  def handle_event("new_more_coaches", _params, socket),
+    do: {:noreply, put_new(socket, coaches_expanded: true)}
 
   def handle_event("new_reply", %{"index" => index}, socket) do
     with %{} = proposal <- acting_proposal(socket),
@@ -283,17 +337,32 @@ defmodule PlatformWeb.GoalsNew do
   defp send_text(socket, text) do
     user = socket.assigns.new.user
 
-    result =
+    # Only the start carries the picked coach; the server decides whether
+    # that agent may coach (Platform.Goals.Coaches) and writes nothing if not.
+    {result, picked} =
       case acting_proposal(socket) do
-        nil -> Goals.start_goal_conversation(user, text)
-        proposal -> Goals.say_in_conversation(user, proposal.id, text)
+        nil -> start(user, text, socket.assigns.new.selected_coach_id)
+        proposal -> {Goals.say_in_conversation(user, proposal.id, text), nil}
       end
 
     case result do
       {:ok, _} ->
         {:noreply,
          socket
-         |> put_new(text: "", fill: socket.assigns.new.fill + 1, refused: false)
+         |> put_new(
+           text: "",
+           fill: socket.assigns.new.fill + 1,
+           refused: false,
+           coach_refused: false
+         )
+         |> refresh()}
+
+      # The picked agent can't coach goals (task 01a1eab7): nothing was
+      # written. Keep the text, say so, and fall back to the default.
+      {:error, :lead_missing_goals_tools} when is_binary(picked) ->
+        {:noreply,
+         socket
+         |> put_new(text: text, coach_refused: true, selected_coach_id: nil)
          |> refresh()}
 
       # The lead's runtime cannot use the Goals tools (task 01a1eab6 stage
@@ -308,6 +377,11 @@ defmodule PlatformWeb.GoalsNew do
         {:noreply, refresh(socket)}
     end
   end
+
+  defp start(user, text, coach_id) when is_binary(coach_id),
+    do: {Goals.start_goal_conversation(user, text, coach_agent_id: coach_id), coach_id}
+
+  defp start(user, text, _coach_id), do: {Goals.start_goal_conversation(user, text), nil}
 
   @doc "PubSub: a conversation message or a proposal change re-reads the screen."
   def handle_info({:new_message, _}, %{assigns: %{new: %{}}} = socket), do: refresh(socket)
@@ -547,12 +621,20 @@ defmodule PlatformWeb.GoalsNew do
         ready?: open? and proposal.ready,
         created: created,
         offline?: match?(%{delivery: d} when d in ["offline", "no_runtime"], proposal),
+        picker?: is_nil(proposal) and Map.get(new, :coaches, []) != [],
+        send_label: send_label(proposal, new),
         examples: @examples,
         settings: @settings
       )
 
     ~H"""
-    <div class="mx-auto max-w-3xl p-6" data-role="goals-new">
+    <%!-- The bottom padding clears the phone bottom nav (the same recipe as
+         goals_open_up.ex's toast): with the coach cards the box is the last
+         thing in a pane that scrolls under the nav. --%>
+    <div
+      class="mx-auto max-w-3xl p-6 pb-[calc(env(safe-area-inset-bottom)+1.5rem+var(--bottom-nav-height,0px))]"
+      data-role="goals-new"
+    >
       <.link
         navigate="/m/goals"
         class="-ml-2 mb-3 inline-flex min-h-11 items-center rounded px-2 font-semibold text-interactive focus-visible-ring lg:hidden"
@@ -598,7 +680,18 @@ defmodule PlatformWeb.GoalsNew do
           </button>
         </header>
 
-        <div class="flex flex-col gap-2" data-role="goals-new-stream">
+        <GoalsComponents.coach_cards
+          :if={@picker?}
+          id="goals-new-coaches"
+          coaches={@new.coaches}
+          selected_id={@new.selected_coach_id}
+          default_id={@new.default_coach_id}
+          expanded?={@new.coaches_expanded}
+          event="new_pick_coach"
+          more_event="new_more_coaches"
+        />
+
+        <div class={["flex flex-col gap-2", @picker? && "mt-4"]} data-role="goals-new-stream">
           <.agent_message agent={@agent} id="goals-new-greeting" role="goals-new-greeting">
             Hi {first_name(@new.user)}. What do you want to achieve? It can be anything. Say it however it comes to mind, and I'll help turn it into something we can steer by.
           </.agent_message>
@@ -757,6 +850,16 @@ defmodule PlatformWeb.GoalsNew do
           </PlatformWeb.Components.EmptyState.empty_state>
         </div>
 
+        <p
+          :if={@new[:coach_refused]}
+          class="mt-4 flex items-center gap-2 text-sm text-warning"
+          role="status"
+          data-role="goals-new-coach-refused"
+        >
+          <.icon name="hero-exclamation-triangle" class="size-4 shrink-0" />
+          <span>That agent can't coach goals</span>
+        </p>
+
         <form
           phx-submit="new_send"
           phx-change="new_type"
@@ -776,17 +879,28 @@ defmodule PlatformWeb.GoalsNew do
           />
           <button
             type="submit"
-            phx-disable-with="Send"
+            phx-disable-with={@send_label}
             class="btn btn-primary min-h-11 shrink-0 focus-visible-ring lg:h-9 lg:min-h-9"
             data-role="goals-new-send"
           >
-            Send
+            {@send_label}
           </button>
         </form>
       <% end %>
     </div>
     """
   end
+
+  # The signature (canvas 01a1eab7-ddae node `md`): before a proposal exists
+  # the button names the selected coach; after that it keeps "Send".
+  defp send_label(nil, new) do
+    case Enum.find(Map.get(new, :coaches, []), &(&1.id == new[:selected_coach_id])) do
+      %{name: name} when is_binary(name) -> "Start with " <> name
+      _ -> "Send"
+    end
+  end
+
+  defp send_label(_proposal, _new), do: "Send"
 
   defp chip_class, do: @chip
   defp field_class, do: @field
