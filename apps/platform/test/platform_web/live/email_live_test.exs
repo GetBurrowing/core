@@ -1159,6 +1159,42 @@ defmodule PlatformWeb.EmailLiveTest do
       assert render(view) =~ "You cannot change who reads this mailbox."
     end
 
+    test "the owner turns the briefing digest on and off; a crafted toggle by anyone else writes nothing (stage 5)",
+         %{conn: conn} = ctx do
+      {:ok, view, _} = live(login(conn, ctx.owner), "/email?account=#{ctx.personal.id}")
+      view |> element(~s([data-role="access-line-open"])) |> render_click()
+      assert has_element?(view, ~s([data-role="access-digest-opt-in"]))
+
+      view
+      |> form("#access-digest-form", %{"digest_opt_in" => "true"})
+      |> render_change()
+
+      assert Repo.reload!(ctx.personal).digest_opt_in
+      assert render(view) =~ "This mailbox now feeds the morning briefing."
+
+      view
+      |> form("#access-digest-form", %{"digest_opt_in" => "false"})
+      |> render_change()
+
+      refute Repo.reload!(ctx.personal).digest_opt_in
+
+      # Not shown on a shared mailbox, even to the admin who manages it.
+      {:ok, admin_view, _} = live(login(conn, ctx.admin), "/email")
+      render_hook(admin_view, "open_access", %{"account_id" => ctx.account.id})
+      refute has_element?(admin_view, ~s([data-role="access-digest-opt-in"]))
+
+      for viewer <- [ctx.member, ctx.admin] do
+        {:ok, crafted, _} = live(login(conn, viewer), "/email")
+
+        render_hook(crafted, "set_digest_opt_in", %{
+          "account_id" => ctx.personal.id,
+          "digest_opt_in" => "true"
+        })
+
+        refute Repo.reload!(ctx.personal).digest_opt_in
+      end
+    end
+
     test "a member who cannot manage gets the read-only panel", %{conn: conn} = ctx do
       agent = agent!("Golf agent")
       {:ok, _} = Ownership.grant(ctx.admin, ctx.account, {:agent, agent.id})

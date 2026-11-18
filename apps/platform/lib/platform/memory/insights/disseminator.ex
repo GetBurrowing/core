@@ -169,7 +169,7 @@ defmodule Platform.Memory.Insights.Disseminator do
   end
 
   defp deliver_sections(result, now, opts) do
-    if Platform.Extensions.briefing_sections() == [] do
+    if Platform.Memory.Insights.BriefingSections.all() == [] do
       result
     else
       date = local_date(now)

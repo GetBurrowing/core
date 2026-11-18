@@ -445,8 +445,9 @@ defmodule Platform.Federation.ToolSurfaceMailTest do
       # of those sends, posts or writes anything.
       mail_tools = Enum.filter(names, &(&1 =~ ~r/mail/i))
 
+      # Plus task 01a1ea5b stage 5's metadata-only `mail_digest`, also a read.
       assert Enum.sort(mail_tools) ==
-               Enum.sort(@draft_tools ++ ~w(mail_inbound_list mail_inbound_get))
+               Enum.sort(@draft_tools ++ ~w(mail_inbound_list mail_inbound_get mail_digest))
 
       refute Enum.any?(names, &(&1 =~ ~r/(mail|email).*(send|dispatch|deliver)/i)),
              "an agent-facing mail send tool exists: #{inspect(names)}"

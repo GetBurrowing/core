@@ -8529,6 +8529,42 @@ defmodule Platform.Federation.ToolSurface do
     end
   end
 
+  # The metadata-only mail digest (task 01a1ea5b stage 5): no grant needed,
+  # the briefing's audience rule applied to the humans of the named space
+  # (`Platform.Mail.Digest.for_audience/2`), org-pinned like mail_inbound_list.
+  def execute("mail_digest", args, context) do
+    with :ok <- mail_enabled("mail_digest"),
+         {:ok, agent} <- mail_agent(context, "mail_digest"),
+         {:ok, org_id} <- require_string(args, "org_id", "mail_digest"),
+         :ok <- authorize_mail_read_org(agent, org_id) do
+      case Platform.Mail.InboundAccess.space_audience(
+             agent.id,
+             mail_optional_string(args, "space_id")
+           ) do
+        {:ok, audience} ->
+          digest = Platform.Mail.Digest.for_audience(audience, org_id)
+
+          {:ok,
+           %{
+             org_id: digest.org_id,
+             mailboxes: digest.mailboxes,
+             rows: Enum.map(digest.rows, &mail_digest_row/1),
+             audience: Enum.map(audience, &(&1.name || "a person"))
+           }}
+
+        :not_found ->
+          {:error,
+           %{
+             error: "mail_digest: space not found",
+             code: :not_found,
+             recoverable: false,
+             suggestion:
+               "Pass `space_id`: the id of the space you are answering in, which you must be a participant of."
+           }}
+      end
+    end
+  end
+
   def execute("file_get_metadata", args, context) do
     with {:ok, file_id} <- require_string(args, "file_id", "file_get_metadata"),
          %Platform.Files.File{} = file <- Platform.Files.get_file(file_id),
@@ -14330,6 +14366,20 @@ defmodule Platform.Federation.ToolSurface do
       :not_found ->
         {:error, mail_inbound_not_found("mail_inbound_get")}
     end
+  end
+
+  defp mail_digest_row(row) do
+    base = %{
+      customer: row.customer,
+      mailbox: row.mailbox,
+      readable: row.readable,
+      people: row.people,
+      agents: row.agents,
+      open_threads: row.open_threads,
+      last_activity_at: row.last_activity_at && DateTime.to_iso8601(row.last_activity_at)
+    }
+
+    if row.readable, do: Map.put(base, :account_id, row.account_id), else: base
   end
 
   defp mail_inbound_not_found(tool) do

@@ -1675,6 +1675,31 @@
           </form>
         </div>
 
+        <form
+          :if={@access.manage? and @access.account.owner_kind == "personal"}
+          id="access-digest-form"
+          phx-change="set_digest_opt_in"
+          class="flex items-start gap-3 border-t border-edge pt-3"
+          data-role="access-digest-opt-in"
+        >
+          <input type="hidden" name="account_id" value={@access.account.id} />
+          <input type="hidden" name="digest_opt_in" value="false" />
+          <input
+            type="checkbox"
+            id="access-digest-opt-in"
+            name="digest_opt_in"
+            value="true"
+            checked={@access.account.digest_opt_in}
+            class="checkbox checkbox-sm mt-0.5"
+          />
+          <label for="access-digest-opt-in" class="min-w-0 text-sm text-base-content">
+            Include this mailbox in the morning briefing
+            <span class="block text-xs text-subtle">
+              Customers, counts and times only, never subjects or bodies. Org admins see it as private.
+            </span>
+          </label>
+        </form>
+
         <p class="text-sm text-warning" data-role="access-admin-note">
           Admins can change connection settings. They cannot read this mail.
         </p>

@@ -651,8 +651,16 @@ defmodule Platform.Mail.Ownership do
 
   defp write_owner(actor, current, kind, owner_id) do
     Repo.transaction(fn ->
+      # A digest opt-in is the previous owner's consent; an owner change
+      # (or a kind change) clears it (task 01a1ea5b stage 5).
+      changed? = {current.owner_kind, current.owner_user_id} != {kind, owner_id}
+
       changeset =
-        Account.ownership_changeset(current, %{owner_kind: kind, owner_user_id: owner_id})
+        Account.ownership_changeset(
+          current,
+          %{owner_kind: kind, owner_user_id: owner_id}
+          |> then(&if(changed?, do: Map.put(&1, :digest_opt_in, false), else: &1))
+        )
 
       updated =
         case Repo.update(changeset) do
@@ -675,6 +683,34 @@ defmodule Platform.Mail.Ownership do
       updated
     end)
   end
+
+  @doc """
+  Turn the morning-briefing digest on or off for a PERSONAL mailbox, as
+  `actor` (task 01a1ea5b stage 5). Only its owner may (`{:error,
+  :unauthorized}` otherwise, admins included); a shared mailbox always feeds
+  the digest and an unassigned one never does (`{:error, :not_personal}`).
+  Audited. The digest carries metadata only (`Platform.Mail.Digest`).
+  """
+  @spec set_digest_opt_in(any(), Account.t(), boolean()) ::
+          {:ok, Account.t()} | {:error, term()}
+  def set_digest_opt_in(actor, %Account{} = account, opt_in) when is_boolean(opt_in) do
+    with %Account{} = current <- fresh(account) || {:error, :not_found},
+         :ok <- if(current.owner_kind == "personal", do: :ok, else: {:error, :not_personal}),
+         :ok <- authorize_manage(actor, current) do
+      Repo.transaction(fn ->
+        case Repo.update(Account.ownership_changeset(current, %{digest_opt_in: opt_in})) do
+          {:ok, updated} ->
+            audit!(actor, updated, "set_digest_opt_in", %{digest_opt_in: opt_in})
+            updated
+
+          {:error, changeset} ->
+            Repo.rollback(changeset)
+        end
+      end)
+    end
+  end
+
+  def set_digest_opt_in(_actor, _account, _opt_in), do: {:error, :unauthorized}
 
   # The previous owner of a personal mailbox hears that it moved (task
   # 01a1ea5b stage 4; the plan's question-4 proposal, accepted). ONE

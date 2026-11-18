@@ -82,14 +82,14 @@ defmodule Platform.Mail.Account do
 
   @doc """
   Changeset for the ownership fields, used ONLY by
-  `Platform.Mail.Ownership.set_owner/3`. `owner_user_id` is set iff the kind
+  `Platform.Mail.Ownership.set_owner/3` and `set_digest_opt_in/3`. `owner_user_id` is set iff the kind
   is `"personal"` (the DB check `mail_accounts_owner_user_iff_personal` holds
   the same rule).
   """
   @spec ownership_changeset(t(), map()) :: Ecto.Changeset.t()
   def ownership_changeset(%__MODULE__{} = account, attrs) do
     account
-    |> cast(attrs, [:owner_kind, :owner_user_id])
+    |> cast(attrs, [:owner_kind, :owner_user_id, :digest_opt_in])
     |> validate_required([:owner_kind])
     |> validate_inclusion(:owner_kind, @owner_kinds)
     |> check_constraint(:owner_kind, name: :mail_accounts_owner_kind_check)

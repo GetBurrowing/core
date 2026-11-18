@@ -848,4 +848,45 @@ defmodule Platform.Mail.OwnershipTest do
       assert {:error, :unauthorized} = Ownership.audience(ctx.admin, account)
     end
   end
+
+  describe "set_digest_opt_in/3 (stage 5)" do
+    test "only the owner of a personal mailbox may opt in or out; audited", ctx do
+      account = personal!(ctx, ctx.owner)
+
+      for actor <- [ctx.other, ctx.admin, ctx.support] do
+        assert {:error, :unauthorized} = Ownership.set_digest_opt_in(actor, account, true)
+      end
+
+      refute Repo.one!(from(a in Account, where: a.id == ^account.id)).digest_opt_in
+      before = Repo.aggregate(Event, :count)
+
+      assert {:ok, %{digest_opt_in: true}} = Ownership.set_digest_opt_in(ctx.owner, account, true)
+      assert Repo.aggregate(Event, :count) == before + 1
+
+      assert {:ok, %{digest_opt_in: false}} =
+               Ownership.set_digest_opt_in(ctx.owner, account, false)
+    end
+
+    test "a shared or unassigned mailbox has no opt-in", ctx do
+      assert {:error, :not_personal} = Ownership.set_digest_opt_in(ctx.admin, shared!(ctx), true)
+
+      unassigned = account!(ctx.admin, ctx.org_id, "unassigned")
+      assert {:error, :not_personal} = Ownership.set_digest_opt_in(ctx.admin, unassigned, true)
+    end
+
+    test "an owner change clears the opt-in; re-saving the same owner keeps it", ctx do
+      account = personal!(ctx, ctx.owner)
+      {:ok, _} = Ownership.set_digest_opt_in(ctx.owner, account, true)
+
+      {:ok, same} =
+        Ownership.set_owner(ctx.admin, account, %{kind: "personal", owner_user_id: ctx.owner.id})
+
+      assert same.digest_opt_in
+
+      {:ok, moved} =
+        Ownership.set_owner(ctx.admin, account, %{kind: "personal", owner_user_id: ctx.other.id})
+
+      refute moved.digest_opt_in
+    end
+  end
 end

@@ -261,6 +261,17 @@ defmodule Platform.Mail.InboundAccess do
 
   # ── The PARTICIPANT check and the audience ──────────────────────────────
 
+  @doc """
+  The audience an agent answers in `space_id`: `{:ok, [%{id, name}]}`, the
+  space's current human participants, when `agent_id` is a current
+  participant of the non-archived space; `:not_found` otherwise. The same
+  rule `list/4` and `get/3` use; `mail_digest` reads it too (stage 5).
+  """
+  @spec space_audience(any(), any()) :: {:ok, [map()]} | :not_found
+  def space_audience(agent_id, space_id) do
+    if Platform.UUID.valid?(agent_id), do: audience(agent_id, space_id), else: :not_found
+  end
+
   # `{:ok, [%{id, name}]}` — the space's current human participants — when
   # `agent_id` is a current participant of the non-archived `space_id`;
   # `:not_found` otherwise.

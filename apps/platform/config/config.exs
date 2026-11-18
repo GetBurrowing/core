@@ -33,6 +33,12 @@ config :platform, Platform.Mail.Inbound,
 # `Platform.Mail.Ownership` gates mail-bound spaces on mailbox ownership.
 config :platform, Platform.Access, restriction_providers: [Platform.Mail.Ownership]
 
+# Core daily-briefing section providers (task 01a1ea5b stage 5): modules whose
+# `briefing_sections/0` joins the extensions' sections, so the briefing never
+# names them. `Platform.Mail.Digest` is Email's metadata-only mail section; it
+# contributes nothing while the Email module is off.
+config :platform, Platform.Memory.Insights.BriefingSections, providers: [Platform.Mail.Digest]
+
 # Responsibilities Registry boot flag (ADR-0041 M1 stage 4) — default
 # on. Disabled in config/test.exs so DataCase-sandboxed tests own their
 # own per-case instance.
