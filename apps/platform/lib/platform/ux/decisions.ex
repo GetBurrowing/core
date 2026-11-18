@@ -201,6 +201,9 @@ defmodule Platform.Ux.Decisions do
     case result do
       {:ok, finding} ->
         {:ok, _count} = Inbox.dismiss_by_source(user_id, @source_type, finding.id, kind: @kind)
+        # Morning review (off unless configured): an approval files the fix
+        # as a task and links it; a decline is journaled.
+        finding = Platform.Ux.MorningReview.after_answer(finding)
         post_to_task(finding)
         {:ok, finding}
 

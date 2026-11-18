@@ -296,7 +296,8 @@ defmodule Platform.Ux.FrictionWatch do
         question: clip(ExternalContent.escape_mentions(question), 300),
         similarity: similarity / 1,
         signal_ids: Enum.uniq(ids),
-        options: options(g["options"])
+        options: options(g["options"]),
+        meaning: meaning(g["meaning"])
       }
     end
   end
@@ -333,6 +334,16 @@ defmodule Platform.Ux.FrictionWatch do
   end
 
   defp options(_), do: []
+
+  # Optional: what the model thinks the group means (the morning review shows it).
+  defp meaning(text) when is_binary(text) do
+    case String.trim(text) do
+      "" -> nil
+      text -> text |> ExternalContent.escape_mentions() |> clip(400)
+    end
+  end
+
+  defp meaning(_), do: nil
 
   # ── writing ─────────────────────────────────────────────────────────────
 
@@ -426,19 +437,21 @@ defmodule Platform.Ux.FrictionWatch do
       kind: group.kind,
       group_key: group.group_key,
       variant: variant,
-      evidence: %{
-        "count" => length(cited),
-        "spaces" => cited |> Enum.map(& &1.space_id) |> Enum.uniq() |> length(),
-        "quotes" =>
-          cited
-          |> Enum.take(2)
-          |> Enum.map(
-            &(&1.content
-              |> ExternalContent.escape_mentions()
-              |> clip(@max_quote_chars))
-          ),
-        "citations" => Enum.map(cited, &Finding.citation(&1.space_id, &1.id))
-      },
+      evidence:
+        %{
+          "count" => length(cited),
+          "spaces" => cited |> Enum.map(& &1.space_id) |> Enum.uniq() |> length(),
+          "quotes" =>
+            cited
+            |> Enum.take(2)
+            |> Enum.map(
+              &(&1.content
+                |> ExternalContent.escape_mentions()
+                |> clip(@max_quote_chars))
+            ),
+          "citations" => Enum.map(cited, &Finding.citation(&1.space_id, &1.id))
+        }
+        |> then(&if(group.meaning, do: Map.put(&1, "meaning", group.meaning), else: &1)),
       options: fix_recommended(group.options, group.kind)
     }
   end
