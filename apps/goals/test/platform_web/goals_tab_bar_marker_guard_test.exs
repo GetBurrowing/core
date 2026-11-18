@@ -19,14 +19,31 @@ defmodule PlatformWeb.GoalsTabBarMarkerGuardTest do
   @non_text ~w(hidden checkbox radio submit button reset image file range color)
 
   # Every `<input ...>` / `<textarea ...>` opening tag in `src`, with its line.
+  # The tag ends at the first `>` outside `{...}` and quotes: an attribute
+  # expression such as `id={"q-" <> @id}` holds a `>` that is not the tag's end.
   defp fields(src) do
-    ~r/<(input|textarea)\b[^>]*>/s
+    ~r/<(input|textarea)\b/
     |> Regex.scan(src, return: :index)
-    |> Enum.map(fn [{at, len} | _] ->
-      tag = binary_part(src, at, len)
+    |> Enum.map(fn [{at, _} | _] ->
+      rest = binary_part(src, at, byte_size(src) - at)
+      tag = binary_part(rest, 0, tag_end(rest, 1, 0, nil))
       line = src |> binary_part(0, at) |> String.split("\n") |> length()
       {line, tag}
     end)
+  end
+
+  defp tag_end(s, i, _depth, _quote) when i >= byte_size(s), do: byte_size(s)
+
+  defp tag_end(s, i, depth, quote) do
+    case {:binary.at(s, i), quote} do
+      {q, q} -> tag_end(s, i + 1, depth, nil)
+      {_, q} when q != nil -> tag_end(s, i + 1, depth, q)
+      {?", nil} -> tag_end(s, i + 1, depth, ?")
+      {?{, nil} -> tag_end(s, i + 1, depth + 1, nil)
+      {?}, nil} -> tag_end(s, i + 1, depth - 1, nil)
+      {?>, nil} when depth == 0 -> i + 1
+      _ -> tag_end(s, i + 1, depth, nil)
+    end
   end
 
   defp text_entry?(tag) do
@@ -52,9 +69,11 @@ defmodule PlatformWeb.GoalsTabBarMarkerGuardTest do
     <input type="checkbox" name="c" />
     <textarea name="d"></textarea>
     <input name="e" data-hides-tab-bar />
+    <input id={"q-" <> @id} name="f" data-hides-tab-bar />
+    <input id={"q-" <> @id} name="g" />
     """
 
-    assert unmarked(planted) == [2, 7]
+    assert unmarked(planted) == [2, 7, 10]
   end
 
   test "every Goals text input and textarea carries data-hides-tab-bar" do

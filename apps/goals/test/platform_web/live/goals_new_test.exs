@@ -178,8 +178,18 @@ defmodule PlatformWeb.GoalsNewTest do
     _lead = lead!(user)
     child = open(conn, user)
 
-    assert has_element?(child, "[data-role=goals-detail-pane].clears-tab-bar [data-role=goals-new]")
-    [new_class] = child |> render() |> Floki.parse_fragment!() |> Floki.find("[data-role=goals-new]") |> Floki.attribute("class")
+    assert has_element?(
+             child,
+             "[data-role=goals-detail-pane].clears-tab-bar [data-role=goals-new]"
+           )
+
+    [new_class] =
+      child
+      |> render()
+      |> Floki.parse_fragment!()
+      |> Floki.find("[data-role=goals-new]")
+      |> Floki.attribute("class")
+
     refute new_class =~ "bottom-nav-height"
     refute new_class =~ "safe-area-inset-bottom"
     assert has_element?(child, "[data-role=goals-new-box] input[type=text][data-hides-tab-bar]")
