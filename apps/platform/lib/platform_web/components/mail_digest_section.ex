@@ -60,7 +60,7 @@ defmodule PlatformWeb.Components.MailDigestSection do
 
           <p
             :if={org.rows == []}
-            class="rounded-box border border-base-300 bg-base-100 px-4 py-6 text-center text-sm text-subtle"
+            class="rounded-box border border-edge bg-base-100 px-4 py-6 text-center text-sm text-subtle"
             data-role="mail-digest-empty"
           >
             Nothing to show yet
@@ -69,7 +69,7 @@ defmodule PlatformWeb.Components.MailDigestSection do
           <div :if={org.rows != []}>
             <%!-- Desktop: a table. --%>
             <table
-              class="hidden w-full table-fixed border-separate border-spacing-0 overflow-hidden rounded-box border border-base-300 bg-base-100 text-sm sm:table"
+              class="hidden w-full table-fixed border-separate border-spacing-0 overflow-hidden rounded-box border border-edge bg-base-100 text-sm sm:table"
               data-role="mail-digest-table"
             >
               <thead>
@@ -83,21 +83,21 @@ defmodule PlatformWeb.Components.MailDigestSection do
               <tbody>
                 <tr
                   :for={row <- org.rows}
-                  class="border-t border-base-300 align-top"
+                  class="border-t border-edge align-top"
                   data-role="mail-digest-row"
                   data-readable={to_string(row.readable)}
                 >
-                  <td class="border-t border-base-300 px-3 py-2">
+                  <td class="border-t border-edge px-3 py-2">
                     <p class="truncate font-medium text-base-content">{row.customer}</p>
                     <.mailbox row={row} />
                   </td>
-                  <td class="border-t border-base-300 px-3 py-2 text-base-content">
+                  <td class="border-t border-edge px-3 py-2 text-base-content">
                     <.who row={row} />
                   </td>
-                  <td class="border-t border-base-300 px-3 py-2 text-right font-mono text-xs text-subtle">
+                  <td class="border-t border-edge px-3 py-2 text-right font-mono text-xs text-subtle">
                     {row.open_threads}
                   </td>
-                  <td class="border-t border-base-300 px-3 py-2 text-right font-mono text-xs text-subtle">
+                  <td class="border-t border-edge px-3 py-2 text-right font-mono text-xs text-subtle">
                     <.when_ row={row} />
                   </td>
                 </tr>
@@ -108,7 +108,7 @@ defmodule PlatformWeb.Components.MailDigestSection do
             <ul role="list" class="space-y-2 sm:hidden" data-role="mail-digest-cards">
               <li
                 :for={row <- org.rows}
-                class="rounded-box border border-base-300 bg-base-100 px-4 py-3"
+                class="rounded-box border border-edge bg-base-100 px-4 py-3"
                 data-role="mail-digest-card"
                 data-readable={to_string(row.readable)}
               >
