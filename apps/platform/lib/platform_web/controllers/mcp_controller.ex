@@ -94,7 +94,7 @@ defmodule PlatformWeb.MCPController do
     # framing stays HERE: a JSON-RPC -32001 error, not a tool result.
     # A tool call is turn activity for the no-reply watchdog (task 01a10322
     # stage 7): a native agent working through Burrow's tools is not silent.
-    Platform.Chat.ReplyFailure.Watchdog.activity(Map.get(runtime, :agent_id))
+    Platform.Chat.ReplyFailure.Watchdog.activity(Map.get(runtime, :agent_id), {:tool, name, args})
 
     case ToolCall.invoke(name, args, runtime) do
       {:ok, data} ->

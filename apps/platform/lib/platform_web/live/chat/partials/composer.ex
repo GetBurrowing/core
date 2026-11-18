@@ -550,6 +550,11 @@ defmodule PlatformWeb.ChatLive.Partials.Composer do
   attr(:agent_typing_pids, :any, required: true)
   attr(:streaming_replies, :map, required: true)
   attr(:participants_map, :map, required: true)
+  # Agents a message here is waiting on (`PresenceHooks`' `:agent_busy`):
+  # "<Agent> is busy · <activity> · since <time>" while its runtime is
+  # connected and it is working on something else, "Waiting for <Agent>"
+  # while its runtime is offline and the message is held for it.
+  attr(:agent_busy, :map, default: %{})
 
   @doc """
   The agent-typing dots. Suppressed while a stream is in flight — the
@@ -575,18 +580,44 @@ defmodule PlatformWeb.ChatLive.Partials.Composer do
           assigns.streaming_replies == %{}
       )
 
+    busy =
+      assigns.agent_busy
+      |> Enum.reject(fn {pid, _} -> MapSet.member?(assigns.agent_typing_pids, pid) end)
+      |> Enum.sort_by(fn {pid, _} -> pid end)
+
+    assigns =
+      assigns
+      |> assign(:busy_entries, busy)
+      |> assign(:shown?, assigns.typing? or busy != [])
+
     ~H"""
     <%!-- Typing indicator --%>
     <div
       id="chat-typing-indicator"
       data-role="typing-indicator"
       data-typing={to_string(@typing?)}
-      hidden={!@typing?}
+      hidden={!@shown?}
       class={[
-        "flex-shrink-0 px-5 pb-1 items-center gap-2 text-xs text-subtle",
-        if(@typing?, do: "flex", else: "hidden")
+        "flex-shrink-0 px-5 pb-1 items-center gap-x-2 gap-y-0.5 flex-wrap text-xs text-subtle",
+        if(@shown?, do: "flex", else: "hidden")
       ]}
     >
+      <span
+        :for={{pid, busy} <- @busy_entries}
+        id={"agent-busy-#{pid}"}
+        data-role="agent-busy"
+        data-state={busy[:state]}
+        class="basis-full"
+      >
+        {busy_line(busy, busy_name(@participants_map, pid, busy))}
+        <span :if={busy[:state] == "busy" && match?(%DateTime{}, busy[:since])}>
+          · since
+          <PlatformWeb.Components.ChatMessage.local_time
+            id={"agent-busy-since-#{pid}"}
+            timestamp={busy[:since]}
+          />
+        </span>
+      </span>
       <span :if={@typing?} class="flex gap-0.5 items-center">
         <span
           class="inline-block size-1.5 rounded-full bg-base-content/40 animate-bounce"
@@ -609,6 +640,27 @@ defmodule PlatformWeb.ChatLive.Partials.Composer do
       </span>
     </div>
     """
+  end
+
+  @doc """
+  The text of one busy line, before its "since" time: "<Agent> is busy",
+  with " · <activity>" when the agent's activity is known; or, for a message
+  held for an offline runtime, "Waiting for <Agent> · your message will be
+  delivered when it reconnects".
+  """
+  @spec busy_line(map(), String.t()) :: String.t()
+  def busy_line(%{state: "queued"}, name),
+    do: "Waiting for #{name} · your message will be delivered when it reconnects"
+
+  def busy_line(%{activity: activity}, name) when is_binary(activity) and activity != "",
+    do: "#{name} is busy · #{activity}"
+
+  def busy_line(_busy, name), do: "#{name} is busy"
+
+  defp busy_name(participants_map, pid, busy) do
+    if Map.has_key?(participants_map, pid),
+      do: PresenceHooks.sender_name(participants_map, pid),
+      else: busy[:agent_name] || "This agent"
   end
 
   attr(:active_space, :any, required: true)

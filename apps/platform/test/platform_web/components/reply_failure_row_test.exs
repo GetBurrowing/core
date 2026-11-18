@@ -125,6 +125,41 @@ defmodule PlatformWeb.Components.ReplyFailureRowTest do
     assert LazyHTML.attribute(action, "href") == ["/control/#{burrow.slug}"]
   end
 
+  # The reported bug: people pressed Restart on an agent that was only busy,
+  # and the restart killed its work in progress. Restart is offered only
+  # while the runtime is down; a connected runtime gets "Open <Name>".
+  # Mutant: drop the heartbeat check → the alive half fails; offer Open
+  # always → the test above (runtime down) fails.
+  test "Restart only while the runtime is down; a connected agent gets Open", %{
+    owner: owner,
+    agent: agent
+  } do
+    presence =
+      Process.whereis(Platform.Federation.RuntimePresence) ||
+        start_supervised!(Platform.Federation.RuntimePresence)
+
+    Ecto.Adapters.SQL.Sandbox.allow(Repo, self(), presence)
+    runtime = Platform.Federation.get_runtime_for_agent(agent)
+    Platform.Federation.RuntimePresence.track(runtime.runtime_id)
+    on_exit(fn -> Platform.Federation.RuntimePresence.untrack(runtime.runtime_id) end)
+
+    for cause <- ["crashed", "unknown"] do
+      doc = notice(agent, cause) |> row_html(owner) |> LazyHTML.from_fragment()
+      [action] = doc |> LazyHTML.query(~s([data-role="reply-failure-action"])) |> Enum.to_list()
+      assert String.trim(LazyHTML.text(action)) == "Open Ada"
+    end
+
+    # Causes whose action is not a restart are unchanged.
+    doc = notice(agent, "stopped") |> row_html(owner) |> LazyHTML.from_fragment()
+    [action] = doc |> LazyHTML.query(~s([data-role="reply-failure-action"])) |> Enum.to_list()
+    assert String.trim(LazyHTML.text(action)) == "Start Ada"
+
+    Platform.Federation.RuntimePresence.untrack(runtime.runtime_id)
+    doc = notice(agent, "unknown") |> row_html(owner) |> LazyHTML.from_fragment()
+    [action] = doc |> LazyHTML.query(~s([data-role="reply-failure-action"])) |> Enum.to_list()
+    assert String.trim(LazyHTML.text(action)) == "Restart Ada"
+  end
+
   test "an admin who does not own the agent is a manager too", %{agent: agent} do
     admin = user!("admin", "admin")
     html = row_html(notice(agent, "stopped"), admin)

@@ -658,6 +658,9 @@ config :platform, :intent_queue_mirror_fatal, true
 # Task 01a10322 stage 7: the native no-reply watchdog is off, so a watch armed
 # by one test never fires a verdict into a later one. Its tests turn it on.
 config :platform, :native_reply_watchdog_ms, false
+# The delivery queue holds and redelivers on timers; a test that wants it
+# turns it on (test/platform/federation/delivery_queue_test.exs).
+config :platform, :delivery_queue_enabled, false
 
 # Chat async fault seam (task 01a17bf4): compile-time gate for the dev/test-only
 # `:chat_async_fault` env (a list of segment atoms, e.g. [:history_backfill]).

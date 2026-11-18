@@ -282,6 +282,128 @@ defmodule Platform.Chat.ReplyFailureWatchdogTest do
     end
   end
 
+  # The reported bug: a Claude Code agent in a multi-minute tool call shows no
+  # turn activity, so after one window the watch posted "Something went
+  # wrong" with a Restart button, and a Restart killed the work. Busy is not
+  # a failure: with the runtime's heartbeat present, the space is told
+  # "<Agent> is busy", the watch keeps going, and no notice is posted until
+  # the busy cap or the runtime goes down.
+  describe "a busy agent: runtime connected, no reply yet" do
+    setup %{agent: agent} do
+      Application.put_env(:platform, :native_reply_busy_max_ms, 60_000)
+      on_exit(fn -> Application.delete_env(:platform, :native_reply_busy_max_ms) end)
+
+      runtime = Platform.Federation.get_runtime_for_agent(agent)
+      RuntimePresence.track(runtime.runtime_id)
+
+      on_exit(fn ->
+        # A busy watch outlives its test otherwise, re-checking every window.
+        Watchdog.disarm(agent.id)
+        RuntimePresence.untrack(runtime.runtime_id)
+      end)
+
+      %{runtime: runtime}
+    end
+
+    test "no notice: the space is told busy, with the activity and since when", ctx do
+      %{channel: channel, agent: agent, space: space, agent_p: agent_p} = ctx
+      :ok = ChatPubSub.subscribe(space.id)
+
+      # What the agent was doing before the message arrived: a Burrow tool.
+      :ok = Watchdog.activity(agent.id, {:tool, "plan_get", %{"plan_id" => "p"}})
+      message = delivered!(ctx, "@bea quick question")
+
+      answer_auth!(channel, agent, "ok")
+
+      pid = agent_p.id
+
+      assert_receive {:agent_busy,
+                      %{
+                        participant_id: ^pid,
+                        busy: %{state: "busy", activity: "using plan_get"} = busy
+                      }},
+                     2_000
+
+      assert %DateTime{} = busy.since
+      # Busy replaces thinking, rather than sitting under it.
+      assert_receive {:agent_typing, %{participant_id: ^pid, typing: false}}
+
+      Process.sleep(@window_ms * 3)
+      assert notices(space) == []
+      assert [%{message_id: message_id, busy: %{state: "busy"}}] = Watchdog.watches()
+      assert message_id == message.id
+      assert %{^pid => %{state: "busy"}} = Watchdog.busy_in_space(space.id)
+
+      # The busy re-check never asks the host about the key again.
+      agent_id = agent.id
+      refute_push "agent.check_auth", %{"agent_id" => ^agent_id}, 0
+
+      # The agent answers: the watch ends and busy is cleared.
+      {:ok, _} =
+        Chat.post_message(%{
+          space_id: space.id,
+          participant_id: agent_p.id,
+          content_type: "text",
+          content: "here you go"
+        })
+
+      assert_receive {:agent_busy, %{participant_id: ^pid, busy: nil}}, 2_000
+      assert_eventually(fn -> Watchdog.watches() == [] end)
+      assert notices(space) == []
+    end
+
+    test "the activity names the task the agent is working on", ctx do
+      %{channel: channel, agent: agent, space: space, agent_p: agent_p} = ctx
+      :ok = ChatPubSub.subscribe(space.id)
+      task = insert_task!("Ship the federation ack")
+
+      :ok = Watchdog.activity(agent.id, {:tool, "task_get", %{"task_id" => task.id}})
+      _ = delivered!(ctx, "@bea status?")
+      answer_auth!(channel, agent, "ok")
+
+      pid = agent_p.id
+      expected = "working on “Ship the federation ack”"
+
+      assert_receive {:agent_busy, %{participant_id: ^pid, busy: %{activity: ^expected}}},
+                     2_000
+    end
+
+    test "the runtime losing its heartbeat ends busy: the notice, with Restart", ctx do
+      %{channel: channel, agent: agent, space: space, runtime: runtime} = ctx
+      :ok = ChatPubSub.subscribe(space.id)
+      _ = delivered!(ctx, "@bea still there?")
+      answer_auth!(channel, agent, "ok")
+      assert_receive {:agent_busy, %{busy: %{state: "busy"}}}, 2_000
+      assert notices(space) == []
+
+      RuntimePresence.untrack(runtime.runtime_id)
+
+      [notice] = assert_eventually(fn -> notices(space) |> then(&(&1 != [] && &1)) end)
+      assert notice.metadata["cause"] == "unknown"
+      refute ReplyFailure.runtime_alive?(agent)
+
+      assert ReplyFailureRow.action_label("unknown", agent.name, true, true) ==
+               "Restart #{agent.name}"
+    end
+
+    test "past the busy cap the notice comes anyway, offering Open, not Restart", ctx do
+      Application.put_env(:platform, :native_reply_busy_max_ms, @window_ms * 3)
+      %{channel: channel, agent: agent, space: space} = ctx
+      _ = delivered!(ctx, "@bea a very long wait")
+      answer_auth!(channel, agent, "ok")
+
+      [notice] = assert_eventually(fn -> notices(space) |> then(&(&1 != [] && &1)) end, 3_000)
+      assert notice.metadata["cause"] == "unknown"
+      assert_eventually(fn -> Watchdog.watches() == [] end)
+
+      # The runtime is still up: a restart would kill whatever it is doing.
+      assert ReplyFailure.runtime_alive?(agent)
+
+      assert ReplyFailureRow.action_label("unknown", agent.name, true, false) ==
+               "Open #{agent.name}"
+    end
+  end
+
   describe "what is never watched" do
     test "a federated agent", ctx do
       %{space: space, user: user} = ctx
@@ -364,6 +486,16 @@ defmodule Platform.Chat.ReplyFailureWatchdogTest do
       # Positive control: another message of the same agent is not.
       assert Dedupe.claim(agent_id, "m2", 0, 12) == :ok
     end
+  end
+
+  defp insert_task!(title) do
+    n = System.unique_integer([:positive])
+
+    {:ok, project} =
+      Platform.Tasks.create_project(%{name: "Busy #{n}", slug: "busy-#{n}"})
+
+    {:ok, task} = Platform.Tasks.create_task(%{project_id: project.id, title: title})
+    task
   end
 
   defp from_agent(%Agent{id: agent_id}, space) do
