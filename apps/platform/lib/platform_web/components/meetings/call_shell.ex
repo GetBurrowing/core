@@ -94,6 +94,8 @@ defmodule PlatformWeb.Components.Meetings.CallShell do
 
   use Phoenix.Component
 
+  alias Phoenix.LiveView.JS
+
   import PlatformWeb.Components.Meetings.CandidateRail
   import PlatformWeb.Components.Meetings.ParticipantRail
   import PlatformWeb.Components.Meetings.TranscriptPane
@@ -1279,6 +1281,17 @@ defmodule PlatformWeb.Components.Meetings.CallShell do
     """
   )
 
+  attr(:speaker_id, :string,
+    default: nil,
+    doc: """
+    DOM id of the Speaker button. Rendered only in native mode and only when
+    an id is given (one per pane, so two panes never share an id). It
+    renders `hidden`; the `MeetingSpeakerButton` hook shows it when the iOS
+    build reports `capabilities().speaker` and drives the native call's
+    speakerphone, because WKWebView cannot route audio (`setSinkId`).
+    """
+  )
+
   attr(:show_leave, :boolean,
     default: true,
     doc: "hide Leave on a surface where the viewer has not joined the call yet"
@@ -1378,6 +1391,26 @@ defmodule PlatformWeb.Components.Meetings.CallShell do
         <.toggling_label on={@sharing} when_on="Stop sharing" when_off="Share" />
       </button>
 
+      <%!-- Speaker (native only). The hook owns `hidden`, `aria-pressed`,
+           `aria-label`, `aria-busy` and `data-on`; LiveView leaves them be. --%>
+      <button
+        :if={@native && @speaker_id}
+        type="button"
+        id={@speaker_id}
+        phx-hook="MeetingSpeakerButton"
+        phx-mounted={
+          JS.ignore_attributes(["hidden", "aria-pressed", "aria-label", "aria-busy", "data-on"])
+        }
+        hidden
+        data-role="call-control-speaker"
+        aria-pressed="false"
+        aria-label="Switch audio to the speaker"
+        class={speaker_class()}
+      >
+        <span class="hero-speaker-wave size-4" aria-hidden="true"></span>
+        <span class="call-control-label">Speaker</span>
+      </button>
+
       {render_slot(@before_leave)}
 
       <button
@@ -1456,6 +1489,9 @@ defmodule PlatformWeb.Components.Meetings.CallShell do
   defp camera_class(nil, _camera_on, _pending), do: @camera_class
   defp camera_class(_native, _camera_on, true), do: [@camera_class, "ring-2! ring-warning"]
   defp camera_class(_native, _camera_on, _pending), do: @camera_class
+
+  # The Speaker button: the camera's ground; on adds the primary ring.
+  defp speaker_class, do: [@camera_class, "aria-pressed:ring-2 aria-pressed:ring-primary"]
 
   attr(:on, :boolean, required: true)
   attr(:when_on, :string, required: true)

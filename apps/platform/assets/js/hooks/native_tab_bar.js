@@ -40,8 +40,9 @@
  * `visible` is false wherever the web bar itself would be hidden (app.css:
  * a focused ComposeInput, a full-screen viewer, the in-call room), at the
  * desktop width (min-width 1024px, where the web shows its rail), and while
- * any sheet other than the More sheet is open: on the web those sheets cover
- * the bar, and a native bar cannot be covered, so it gets out of the way.
+ * any sheet other than the More sheet is open (a `.sheet-open` Sheet, or any
+ * element marked `data-covers-tab-bar`): on the web those sheets cover the
+ * bar, and a native bar cannot be covered, so it gets out of the way.
  *
  * A tap clicks the matching `#bottom-nav [data-destination]` element, so it
  * reuses the bar's navigate links and the More button's phx-click. A
@@ -57,7 +58,11 @@ export const ATTR = "data-native-tab-bar"
 export const DESKTOP_QUERY = "(min-width: 1024px)"
 export const HIDE_SELECTOR =
   ':root:has([phx-hook="ComposeInput"]:focus), :root:has([data-fullscreen-viewer]), :root:has([data-in-call])'
-export const OTHER_SHEET_SELECTOR = ".sheet-open:not(#more-sheet)"
+// `.sheet-open` is the shared Sheet component. `[data-covers-tab-bar]` marks
+// hand-rolled bottom sheets that cover the web bar the same way (Calendar's
+// event details and its editor / feed / new-room modals). Without it the
+// native bar stayed up over the details sheet's footer and hid its Join.
+export const OTHER_SHEET_SELECTOR = ".sheet-open:not(#more-sheet), [data-covers-tab-bar]"
 // A tab change remounts the LiveView, and with it this span. The hide that
 // `destroyed()` sends waits this long, and a mount inside it cancels the
 // hide, so moving between tabs never blinks the native bar.

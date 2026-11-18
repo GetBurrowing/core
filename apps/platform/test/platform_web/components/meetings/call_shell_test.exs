@@ -1214,6 +1214,25 @@ defmodule PlatformWeb.Components.Meetings.CallShellTest do
       assert controls(native: @native) =~ "Audio only in the app"
     end
 
+    # WKWebView cannot route audio (no setSinkId), so in the app the Speaker
+    # button drives the native call's speakerphone. It renders hidden, with
+    # the hook that reveals it on a speaker-capable build, and only in native
+    # mode with an id (one per pane).
+    test "native mode with a speaker_id renders the hidden Speaker button and its hook" do
+      html = controls(native: @companion, speaker_id: "meeting-speaker-btn-stage")
+
+      speaker =
+        html |> LazyHTML.from_fragment() |> LazyHTML.query(~s([data-role="call-control-speaker"]))
+
+      assert LazyHTML.attribute(speaker, "id") == ["meeting-speaker-btn-stage"]
+      assert LazyHTML.attribute(speaker, "phx-hook") == ["MeetingSpeakerButton"]
+      assert LazyHTML.attribute(speaker, "hidden") == [""]
+      assert LazyHTML.attribute(speaker, "aria-pressed") == ["false"]
+
+      refute role?(controls(speaker_id: "meeting-speaker-btn-stage"), "call-control-speaker")
+      refute role?(controls(native: @companion), "call-control-speaker")
+    end
+
     test "a pending companion camera is disabled, aria-busy, with the warning ring; settled is not" do
       html = controls(native: @companion, camera_pending: true)
 

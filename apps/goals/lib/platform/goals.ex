@@ -499,17 +499,6 @@ defmodule Platform.Goals do
   @doc "Subscribes the caller to every proposal `user` starts (their own topic)."
   def subscribe_proposals(user), do: proposals(:subscribe_proposals, [user])
 
-  @doc """
-  Operator command (task 01a1eab6 stage 4): re-sends `goals.new_goal` for an
-  open proposal after `20261117220000_move_goal_proposals_out_of_dms` moved
-  it into its own space. No actor; see
-  `Platform.Goals.Proposals.resend_start_signal/1` for the release-eval
-  command and the errors, including `{:error, :lead_missing_goals_tools}`.
-  """
-  def resend_start_signal(proposal_id) do
-    with :ok <- check_enabled(), do: Platform.Goals.Proposals.resend_start_signal(proposal_id)
-  end
-
   # A proposal is not a goal, so `visible_goals/1` does not gate it: the
   # actor (the first argument) is checked here (task 01a1e229).
   defp proposals(fun, [actor | _] = args),

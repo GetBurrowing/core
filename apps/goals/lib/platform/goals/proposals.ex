@@ -228,17 +228,15 @@ defmodule Platform.Goals.Proposals do
   @doc """
   Re-sends the `goals.new_goal` signal for an OPEN, unexpired proposal and
   stores the delivery (task 01a1eab6 stage 4). An operator command, not a
-  person's action, so it takes no actor.
+  person's action, so it takes no actor. Its only caller is
+  `Platform.Goals.Ops.resend_start_signal/1` (task 01a1eb3f), which adds the
+  `GOALS_ENABLED` check; the release `rpc` command lives on that module.
 
   `20261117220000_move_goal_proposals_out_of_dms` moves proposals written
   before stage 2 out of the person's DM into their own space and dispatches
   nothing; the agent still holds the DM as the conversation. After that
-  migration the deployer runs this once per migrated open proposal, so the
-  agent learns the new space id, in the RUNNING node (`rpc`, not `eval`: the
-  signal goes out through the live node's runtime connections, which a
-  fresh `eval` node does not hold):
-
-      /app/bin/platform rpc 'IO.inspect(Platform.Goals.resend_start_signal("<proposal id>"))'
+  migration the deployer runs the Ops command once per migrated open
+  proposal, so the agent learns the new space id.
 
   `{:ok, %Platform.Goals.Proposal{delivery: "sent"}}` is the success shape.
 

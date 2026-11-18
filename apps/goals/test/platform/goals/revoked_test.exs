@@ -118,8 +118,6 @@ defmodule Platform.Goals.RevokedTest do
       cancel_proposal: [u, missing],
       subscribe_proposal: [u, missing],
       subscribe_proposals: [u],
-      # Operator command with no actor (task 01a1eab6 stage 4): an unknown id.
-      resend_start_signal: [missing],
       list_wake_ups: [u, c.offer_goal.id, []],
       get_wake_up: [u, c.wake.id],
       clock_status: [u, g],

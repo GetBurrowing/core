@@ -29,6 +29,9 @@ private final class FakeMedia: MeetingMediaControl {
     var isWaiting: Bool { pending != nil }
 
     func setVideoActive(_ active: Bool) { videoActive.append(active) }
+
+    var speakerRequests: [Bool] = []
+    func setSpeaker(_ on: Bool) { speakerRequests.append(on) }
 }
 
 private struct SDKRefused: Error {}
@@ -61,7 +64,7 @@ final class BurrowMeetingsPluginTests: XCTestCase {
 
     func testTheNewMethodsAreRegistered() {
         let names = BurrowMeetingsPlugin().pluginMethods.map(\.name)
-        for name in ["join", "state", "leave", "capabilities", "setMuted", "setVideoActive"] {
+        for name in ["join", "state", "leave", "capabilities", "setMuted", "setVideoActive", "setSpeaker"] {
             XCTAssertTrue(names.contains(name), name)
         }
     }
@@ -73,7 +76,8 @@ final class BurrowMeetingsPluginTests: XCTestCase {
         XCTAssertEqual(resolved?["mic"] as? Bool, true)
         XCTAssertEqual(resolved?["camera"] as? Bool, true, "the page may open its video-only companion (task 01a13ca2)")
         XCTAssertEqual(resolved?["activeSpeakers"] as? Bool, true)
-        XCTAssertEqual(resolved?.count, 3)
+        XCTAssertEqual(resolved?["speaker"] as? Bool, true, "the page may show its Speaker button (WKWebView has no setSinkId)")
+        XCTAssertEqual(resolved?.count, 4)
     }
 
     func testStateShapeCarriesTheConfirmedMicAndEverySpeaker() {
@@ -161,11 +165,51 @@ final class BurrowMeetingsPluginTests: XCTestCase {
         XCTAssertEqual(media.videoActive, [])
     }
 
-    func testAppStateEventsFollowResignAndBecomeActive() {
-        XCTAssertEqual(BurrowMeetingsPlugin.appStateEvent(UIApplication.willResignActiveNotification)?["active"] as? Bool, false)
+    func testAppStateEventsFollowResignBackgroundAndBecomeActive() {
+        let resign = BurrowMeetingsPlugin.appStateEvent(UIApplication.willResignActiveNotification)
+        XCTAssertEqual(resign?["active"] as? Bool, false)
+        XCTAssertEqual(resign?["background"] as? Bool, false, "the camera permission alert resigns active; it is not leaving")
+        let background = BurrowMeetingsPlugin.appStateEvent(UIApplication.didEnterBackgroundNotification)
+        XCTAssertEqual(background?["active"] as? Bool, false)
+        XCTAssertEqual(background?["background"] as? Bool, true)
         XCTAssertEqual(BurrowMeetingsPlugin.appStateEvent(UIApplication.didBecomeActiveNotification)?["active"] as? Bool, true)
-        XCTAssertNil(BurrowMeetingsPlugin.appStateEvent(UIApplication.didEnterBackgroundNotification))
+        XCTAssertNil(BurrowMeetingsPlugin.appStateEvent(UIApplication.willEnterForegroundNotification))
         XCTAssertLessThanOrEqual(BurrowMeetingsPlugin.resignGrace, 3)
+    }
+
+    // MARK: Speaker (WKWebView has no setSinkId)
+
+    func testCapabilitiesAdvertiseTheSpeaker() {
+        XCTAssertEqual(BurrowMeetingsPlugin.capabilities["speaker"] as? Bool, true)
+    }
+
+    func testSetSpeakerForwardsThePreference() async {
+        let media = FakeMedia()
+        let plugin = makePlugin(media)
+        let on = expectation(description: "on")
+        plugin.setSpeaker(makeCall("setSpeaker", ["on": true], done: on))
+        await fulfillment(of: [on], timeout: 1)
+        XCTAssertEqual(resolved?["speaker"] as? Bool, true)
+        let off = expectation(description: "off")
+        plugin.setSpeaker(makeCall("setSpeaker", ["on": false], done: off))
+        await fulfillment(of: [off], timeout: 1)
+        XCTAssertEqual(media.speakerRequests, [true, false])
+        XCTAssertNil(rejected)
+    }
+
+    func testSetSpeakerWithoutOnRejects() {
+        let media = FakeMedia()
+        let done = expectation(description: "settled")
+        makePlugin(media).setSpeaker(makeCall("setSpeaker", ["speaker": true], done: done))
+        wait(for: [done], timeout: 1)
+        XCTAssertEqual(rejected, "on is required")
+        XCTAssertEqual(media.speakerRequests, [])
+    }
+
+    func testStateReportsTheSpeaker() {
+        let media = FakeMedia()
+        media.state = CallState.reduce(CallState(), .speakerChanged(true))
+        XCTAssertEqual(BurrowMeetingsPlugin.statePayload(media)["speaker"] as? Bool, true)
     }
 
     // MARK: Listeners
@@ -203,6 +247,14 @@ final class BurrowMeetingsPluginTests: XCTestCase {
         let events = MeetingMediaSnapshot.events(from: MeetingMediaSnapshot(before), to: MeetingMediaSnapshot(after))
         XCTAssertEqual(events.map(\.name), ["activeSpeakers"])
         XCTAssertEqual(events.first?.data["identities"] as? [String], ["user:me"])
+    }
+
+    func testASpeakerChangeEmitsAudioRouteChanged() {
+        let before = connected()
+        let after = CallState.reduce(before, .speakerChanged(true))
+        let events = MeetingMediaSnapshot.events(from: MeetingMediaSnapshot(before), to: MeetingMediaSnapshot(after))
+        XCTAssertEqual(events.map(\.name), ["audioRouteChanged"])
+        XCTAssertEqual(events.first?.data["speaker"] as? Bool, true)
     }
 
     func testTheFirstObservationIsABaselineAndEmitsNothing() {

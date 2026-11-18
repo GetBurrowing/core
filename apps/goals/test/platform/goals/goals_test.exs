@@ -234,6 +234,224 @@ defmodule Platform.Goals.GoalsTest do
       assert found == []
     end
 
+    # Task 01a1eb3f: the text scan above misses a by-id read written as a query,
+    # `Repo.one(from(p in Proposal, where: p.id == ^id))`, which loads any row whose
+    # id the caller holds. This scan reads the AST instead of the text, so line
+    # breaks, pipes, the Repo wrapper (`one`, `one!`, `exists?`, `update_all`) and
+    # extra keywords (`lock:`, `preload:`) do not hide a hit, and each hit names
+    # its enclosing function for a stable allowlist key. It flags
+    # `from(x in Schema, ...)` where Schema is a Goals-owned schema named by its
+    # alias and `where:` compares `x.id` with a pinned value. A `from` whose source
+    # is a call (`visible_proposals(actor)`, `children(actor, Stop, id)`,
+    # `rows(...)`) is scoped and is not flagged.
+    #
+    # Out of scope: by-id loads of CORE schemas (Platform.Agents.Agent,
+    # Platform.Accounts.User, Platform.Tasks.Task). They are not Goals rows and
+    # Goals does not gate them by actor; task 01a1eb3f lists them as findings.
+    @goals_schemas ~w(Goal Stop Entry Grant Reading WakeUp GoalClock Ask AskAnswer TaskLink BriefItem Proposal)a
+
+    @unscoped_by_id_allowed [
+      {"platform/goals/proposals.ex", {:fetch_open, 1},
+       "the only reader is Proposals.resend_start_signal/1, whose only caller is the " <>
+         "operator-only Platform.Goals.Ops.resend_start_signal/1, run by a deployer in a " <>
+         "release rpc with no actor (task 01a1eb3f)"},
+      {"platform/goals/proposals.ex", {:lock_live, 1},
+       "every caller (confirm_proposal/3, cancel_proposal/2, propose_goal/3) first reads the " <>
+         "same id through addressed/2 or get_proposal/2, which are actor-scoped"},
+      {"platform/goals/proposals.ex", {:claim, 2},
+       "a conditional update of the row confirm_proposal/3 already read through addressed/2 " <>
+         "and locked with lock_live/1"},
+      {"platform/goals/clock.ex", {:claim, 4},
+       "the clock acts with no actor by design; same file is already allowed in the " <>
+         "goal-binding scan"},
+      {"platform/goals/clock.ex", {:sweep, 1},
+       "the clock acts with no actor by design; same file is already allowed in the " <>
+         "goal-binding scan"},
+      {"platform/goals.ex", {:claim_close, 3},
+       "a conditional update of the wake-up close_wake_up/4 and close_retro/3 already read " <>
+         "through editable_wake/2, which reads Clock.visible_wakes(actor)"},
+      {"platform/goals.ex", {:answer_ask, 4},
+       "the query inner-joins subquery(Visibility.visible_goals(actor)), so it is scoped"},
+      {"platform/goals/space_updates.ex", {:claim, 4},
+       "the update is restricted to gr.goal_id in subquery(visible_goals(coach)), and the " <>
+         "grant came from space_grants(coach, goal_id)"},
+      {"platform/goals/space_updates.ex", {:number_now, 3},
+       "the query inner-joins subquery(Visibility.visible_goals(coach)), so it is scoped"}
+    ]
+
+    defp by_id_reads(source) do
+      {_ast, {_stack, hits}} =
+        source
+        |> Code.string_to_quoted!()
+        |> Macro.traverse({[], []}, &by_id_pre/2, &by_id_post/2)
+
+      Enum.reverse(hits)
+    end
+
+    defp by_id_pre({kind, _, [head | _]} = node, {stack, hits}) when kind in [:def, :defp],
+      do: {node, {[fun_key(head) | stack], hits}}
+
+    defp by_id_pre(
+           {:from, meta, [{:in, _, [{var, _, ctx}, {:__aliases__, _, parts}]}, kw]} = node,
+           {stack, hits}
+         )
+         when is_atom(var) and is_atom(ctx) and is_list(kw) do
+      if goals_schema?(parts) and by_id_where?(kw, var),
+        do: {node, {stack, [{List.first(stack), meta[:line]} | hits]}},
+        else: {node, {stack, hits}}
+    end
+
+    defp by_id_pre(node, acc), do: {node, acc}
+
+    defp by_id_post({kind, _, [_ | _]} = node, {[_ | stack], hits}) when kind in [:def, :defp],
+      do: {node, {stack, hits}}
+
+    defp by_id_post(node, acc), do: {node, acc}
+
+    defp fun_key({:when, _, [call | _]}), do: fun_key(call)
+    defp fun_key({name, _, args}) when is_atom(name), do: {name, length(List.wrap(args))}
+    defp fun_key(_head), do: :unknown
+
+    defp goals_schema?([schema]), do: schema in @goals_schemas
+    defp goals_schema?([:Platform, :Goals, schema]), do: schema in @goals_schemas
+    defp goals_schema?(_parts), do: false
+
+    defp by_id_where?(kw, var) do
+      Enum.any?(kw, fn
+        {:where, expr} -> id_compare?(expr, var)
+        _ -> false
+      end)
+    end
+
+    defp id_compare?(expr, var) do
+      {_expr, found?} =
+        Macro.prewalk(expr, false, fn
+          {:==, _, [a, b]} = node, acc ->
+            {node,
+             acc or (id_field?(a, var) and pinned?(b)) or (id_field?(b, var) and pinned?(a))}
+
+          node, acc ->
+            {node, acc}
+        end)
+
+      found?
+    end
+
+    defp id_field?({{:., _, [{var, _, ctx}, :id]}, _, _}, var) when is_atom(ctx), do: true
+    defp id_field?(_ast, _var), do: false
+
+    defp pinned?({:^, _, _}), do: true
+    defp pinned?(_ast), do: false
+
+    defp lib_by_id_reads do
+      for file <- Path.wildcard(Path.join(@lib, "**/*.{ex,exs}")),
+          relative = Path.relative_to(file, @lib),
+          {fun, line} <- by_id_reads(File.read!(file)),
+          do: {relative, fun, line}
+    end
+
+    test "the by-id scan can hit (positive control)" do
+      flagged = fn source -> by_id_reads(source) |> Enum.map(&elem(&1, 0)) end
+
+      assert flagged.("def f(id), do: Repo.one(from(p in Proposal, where: p.id == ^id))") ==
+               [{:f, 1}]
+
+      assert flagged.("""
+             defp g(id) do
+               Repo.one(
+                 from(p in Proposal,
+                   where:
+                     p.id == ^id
+                 )
+               )
+             end
+             """) == [{:g, 1}]
+
+      assert flagged.("""
+             def h(id) do
+               from(g in Goal, where: g.id == ^id)
+               |> Repo.one()
+             end
+             """) == [{:h, 1}]
+
+      assert flagged.("def i(id), do: Repo.one(from(p in Proposal, where: ^id == p.id))") ==
+               [{:i, 1}]
+
+      assert flagged.(
+               "def j(id), do: Repo.one(from(g in Platform.Goals.Goal, where: g.id == ^id))"
+             ) ==
+               [{:j, 1}]
+
+      assert flagged.(
+               ~S|def k(id), do: Repo.one(from(p in Proposal, where: p.id == ^id, lock: "FOR UPDATE"))|
+             ) == [{:k, 1}]
+
+      assert flagged.("""
+             def l(id) when is_binary(id) do
+               from p in Stop, where: p.id == ^id
+             end
+             """) == [{:l, 1}]
+
+      assert flagged.("def m(row), do: from(w in WakeUp, where: w.id == ^row.id and w.x == 1)") ==
+               [{:m, 1}]
+
+      for schema <- @goals_schemas do
+        assert flagged.("def n(id), do: from(x in #{schema}, where: x.id == ^id)") == [{:n, 1}]
+      end
+
+      assert flagged.("""
+             defmodule M do
+               def outer(id), do: id
+               defp inner(id), do: Repo.exists?(from(a in Ask, where: a.id == ^id))
+             end
+             """) == [{:inner, 1}]
+
+      assert flagged.(
+               "def o(actor, id), do: from(p in visible_proposals(actor), where: p.id == ^id)"
+             ) ==
+               []
+
+      assert flagged.("def p(id), do: from(p in Proposal, where: p.goal_id == ^id)") == []
+      assert flagged.("def q(id), do: from(a in Agent, where: a.id == ^id)") == []
+
+      assert flagged.("def r(id), do: from(c in GoalClock, join: g in Goal, where: g.id == ^id)") ==
+               []
+
+      assert flagged.("def s(id), do: from(row in schema, where: row.id == ^id)") == []
+    end
+
+    test "apps/goals/lib has no unscoped by-id read" do
+      allowed = MapSet.new(@unscoped_by_id_allowed, fn {file, fun, _} -> {file, fun} end)
+
+      found =
+        for {file, fun, line} <- lib_by_id_reads(),
+            {file, fun} not in allowed,
+            do: "#{file}:#{line} in #{inspect(fun)}"
+
+      assert found == [],
+             "unscoped by-id read of a Goals schema; read through an actor-scoped query " <>
+               "(visible_*/children/rows) or justify it in @unscoped_by_id_allowed:\n" <>
+               Enum.join(found, "\n")
+    end
+
+    test "every by-id allowlist entry still matches a read" do
+      hits = MapSet.new(lib_by_id_reads(), fn {file, fun, _line} -> {file, fun} end)
+
+      stale =
+        for {file, fun, _reason} <- @unscoped_by_id_allowed,
+            {file, fun} not in hits,
+            do: {file, fun}
+
+      assert stale == [], "allowlist entries that match no read: #{inspect(stale)}"
+    end
+
+    test "every by-id allowlist entry carries a reason" do
+      for {file, fun, reason} <- @unscoped_by_id_allowed do
+        assert is_binary(reason) and String.trim(reason) != "",
+               "#{file} #{inspect(fun)} has no reason"
+      end
+    end
+
     defp actorless_goal_binding?(text) do
       Regex.match?(~r/\b(?:from|join:?)\s*\(?\s*\w+\s+in\s+(?:Platform\.Goals\.)?Goal\b/, text)
     end

@@ -45,6 +45,11 @@ const LEGACY_NATIVE_CAPABILITIES = Object.freeze({
 // `failed: "camera"` (task 01a13ca2 stage 3). The same budget as the mic.
 export const COMPANION_CAMERA_TIMEOUT_MS = 3000
 
+// How long the companion camera track may stay `mute`d before the page turns
+// the camera OFF. Longer than livekit-client's own 5 s upstream pause, so a
+// short iOS capture interruption recovers by itself.
+export const COMPANION_CAMERA_MUTE_GRACE_MS = 8000
+
 // The Rooms this page opened as a person's video-only COMPANION connection
 // (`video:user:<uuid>`, task 01a13ca2 stage 3). Module-level, not a hook
 // field, because the Room outlives the hook (pinned on window) and a
@@ -1188,9 +1193,13 @@ const MeetingClient = {
     }
   },
 
-  // The camera track ending or being muted by the system (the camera taken
-  // by another app, the app suspended) turns the companion camera OFF, so
-  // remote tiles show the avatar rather than a frozen frame.
+  // The camera track ending turns the companion camera OFF, so remote tiles
+  // show the avatar rather than a frozen frame. A `mute` only does so if it
+  // outlasts COMPANION_CAMERA_MUTE_GRACE_MS: iOS WebKit mutes a capture
+  // track for every short interruption (the camera permission alert, Siri,
+  // the call's audio session activating) and unmutes it after, and
+  // livekit-client already pauses and resumes the upstream for those. An
+  // immediate OFF made each of them permanent: the camera "never worked".
   _watchCompanionTrack(room) {
     const pub = this._localCameraPublication(room)
     const mst = pub && pub.track && pub.track.mediaStreamTrack
@@ -1198,9 +1207,23 @@ const MeetingClient = {
     if (!this._watchedCompanionTracks) this._watchedCompanionTracks = new WeakSet()
     if (this._watchedCompanionTracks.has(mst)) return
     this._watchedCompanionTracks.add(mst)
-    const off = () => this._companionCameraOff()
-    mst.addEventListener("ended", off)
-    mst.addEventListener("mute", off)
+    let muteTimer = null
+    const clearMute = () => {
+      if (muteTimer) clearTimeout(muteTimer)
+      muteTimer = null
+    }
+    mst.addEventListener("ended", () => {
+      clearMute()
+      this._companionCameraOff()
+    })
+    mst.addEventListener("mute", () => {
+      clearMute()
+      muteTimer = setTimeout(() => {
+        muteTimer = null
+        if (mst.muted !== false) this._companionCameraOff()
+      }, COMPANION_CAMERA_MUTE_GRACE_MS)
+    })
+    mst.addEventListener("unmute", clearMute)
   },
 
   async _joinCompanion({ token, url, room_name } = {}) {
@@ -1415,10 +1438,16 @@ const MeetingClient = {
       })
     }
     if (!this._nativeAppStateHandle) {
-      // Stage 4's plugin fires this on willResignActive, BEFORE the web view
-      // is suspended: the last moment to take the companion camera down.
+      // Only a REAL background turns the companion camera down. Resigning
+      // active is not leaving: the camera permission alert, Control Center
+      // and the notification shade all resign the app, and an OFF on them
+      // undid the first Camera tap behind its own permission alert (the
+      // off waits for the pending publish, then mutes it). Newer builds
+      // send `background: true` on didEnterBackground; older ones send
+      // only `{active: false}` on resign, and for them `visibilitychange`
+      // to hidden (above) still takes the camera down on a real background.
       this._nativeAppStateHandle = native.addListener("appStateChanged", (data = {}) => {
-        if (data.active === false) this._companionCameraOff()
+        if (data.active === false && data.background === true) this._companionCameraOff()
       })
     }
     if (!this._nativeSpeakersHandle) {
