@@ -287,6 +287,24 @@ defmodule Platform.Chat.PubSub do
   end
 
   @doc """
+  Broadcast that the agent behind `participant_id` has a message from this
+  space waiting on it, or that it no longer has (`busy: nil`).
+
+  `busy` is `%{state: "busy" | "queued", activity: String.t() | nil,
+  since: DateTime.t(), agent_name: String.t() | nil}`: `"busy"` when the
+  runtime is connected and the agent is in the middle of something else,
+  `"queued"` when the runtime is offline and the message waits for it to
+  reconnect (`Platform.Federation.DeliveryQueue`).
+  """
+  @spec broadcast_agent_busy(binary(), binary(), map() | nil) :: :ok | {:error, term()}
+  def broadcast_agent_busy(space_id, participant_id, busy) when is_map(busy) or is_nil(busy) do
+    broadcast(
+      space_id,
+      {:agent_busy, %{space_id: space_id, participant_id: participant_id, busy: busy}}
+    )
+  end
+
+  @doc """
   Broadcast `event` from `from_pid` — the sender will *not* receive it.
 
   Useful in LiveViews that want to optimistically update their own state

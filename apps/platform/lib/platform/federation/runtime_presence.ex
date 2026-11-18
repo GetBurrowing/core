@@ -121,6 +121,27 @@ defmodule Platform.Federation.RuntimePresence do
   @doc false
   def local_online?(runtime_id), do: Agent.get(__MODULE__, &Map.has_key?(&1, runtime_id))
 
+  @heartbeat_max_age_ms 90_000
+
+  @doc """
+  True when `runtime_id` is connected AND core has heard from it within
+  `max_age_ms` (default 90 s). A live channel process re-touches its entry
+  every 30 s (`RuntimeChannel`'s presence retrack) and every inbound frame
+  touches it, so an entry older than three ticks belongs to a socket that
+  is not really there. This is "the runtime is up", the bar a Restart
+  action has to clear; `online?/1` alone is "an entry exists".
+  """
+  @spec heartbeat?(binary(), pos_integer()) :: boolean()
+  def heartbeat?(runtime_id, max_age_ms \\ @heartbeat_max_age_ms) do
+    case status(runtime_id) do
+      %{last_seen_at: %DateTime{} = at} ->
+        DateTime.diff(DateTime.utc_now(), at, :millisecond) <= max_age_ms
+
+      _ ->
+        false
+    end
+  end
+
   @doc """
   Update the last_seen_at timestamp for a runtime (call on any incoming message).
 

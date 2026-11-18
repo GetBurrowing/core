@@ -23,7 +23,15 @@ defmodule Platform.Chat.AgentResponder do
   alias Platform.Chat.{ContextPlane, Message, Participant, ReplyContext, ReplyFailure}
   alias Platform.Chat.PubSub, as: ChatPubSub
   alias Platform.ExternalAgents.Dispatcher, as: ExternalDispatcher
-  alias Platform.Federation.{AttentionDispatch, DeadLetters, RuntimePresence, ToolSurface}
+
+  alias Platform.Federation.{
+    AttentionDispatch,
+    DeadLetters,
+    DeliveryQueue,
+    RuntimePresence,
+    ToolSurface
+  }
+
   alias Platform.Repo
   alias Platform.Responsibilities.Responsibility
   alias Platform.Tasks.Task, as: TaskRecord
@@ -215,6 +223,27 @@ defmodule Platform.Chat.AgentResponder do
   # A person's question addressed to an agent is one friction occurrence (task
   # 01a1b678 stage 3). Only a hash of the normalized question is kept; the
   # recorder never raises and is a no-op unless friction reports are on.
+  @doc """
+  Dispatch `signal` again, as attempt number `attempt`, for
+  `Platform.Federation.DeliveryQueue`: the runtime rejoined, or did not ack
+  the previous attempt. Runs the whole of `respond/1`, so the context,
+  history and tools are rebuilt now, from the message id, rather than
+  replayed from what was built for the first attempt.
+  """
+  @spec redeliver(map(), pos_integer()) :: :ok | {:error, term()}
+  def redeliver(signal, attempt) when is_map(signal) and is_integer(attempt) do
+    Logger.info(
+      "[AgentResponder] redelivering message=#{inspect(Map.get(signal, :message_id))} attempt=#{attempt}"
+    )
+
+    respond(Map.put(signal, :delivery_attempt, attempt))
+  end
+
+  # A redelivery is the same question, already counted.
+  defp observe_question(_reason, %{signal: %{delivery_attempt: attempt}})
+       when is_integer(attempt) and attempt > 1,
+       do: :ok
+
   defp observe_question(reason, %{agent: %Agent{} = agent, message: %Message{} = message})
        when reason in @addressed_reasons,
        do: Platform.Sharing.Friction.record_question(agent, message)
@@ -346,108 +375,152 @@ defmodule Platform.Chat.AgentResponder do
       if runtime do
         topic = AttentionDispatch.topic(runtime.runtime_id)
 
-        # Pre-check: is the runtime actually connected?
-        unless RuntimePresence.online?(runtime.runtime_id) do
-          Logger.error(
-            "[AgentResponder] DEAD LETTER: runtime #{runtime.runtime_id} not in presence — agent #{context.agent.slug} unreachable (topic=#{topic})"
-          )
+        # Pre-check: is the runtime actually connected? When it is not, the
+        # message is HELD for it (a deploy restart drops every runtime socket
+        # for a few seconds) and redelivered when it rejoins; only a message
+        # the queue will not take is failed as before.
+        offline? = not RuntimePresence.online?(runtime.runtime_id)
 
-          # Counted, never replayed. The chat envelope is DERIVED at dispatch
-          # time from a ContextPlane bundle, a 12-message history snapshot and
-          # the live tool surface; storing it would let a replay deliver a
-          # stale context bundle hours later. The correct fix is to rebuild
-          # from the persisted `message_id` at replay time, which is a
-          # different design and a different task — so the row is written
-          # terminal, with `payload: nil` and the refusal recorded as its
-          # reason rather than discovered later by a policy that has nothing
-          # to inspect.
-          _ =
-            DeadLetters.record(%{
-              runtime_id: runtime.runtime_id,
-              runtime_pk: runtime.id,
-              agent_id: context.agent.id,
-              agent_slug: context.agent.slug,
-              space_id: space_id,
-              source: "chat",
-              payload: nil,
-              disposition: "dropped_policy",
-              reason: "chat_payload_not_replayable",
-              occurred_at: DateTime.utc_now()
-            })
+        held =
+          if offline?,
+            do: DeliveryQueue.hold(runtime.runtime_id, signal, delivery_info(context)),
+            else: :not_held
 
-          :telemetry.execute(
-            [:platform, :federation, :delivery_failed],
-            %{system_time: System.system_time()},
-            %{
-              runtime_id: runtime.runtime_id,
-              agent_id: context.agent.id,
-              reason: :runtime_offline
+        cond do
+          held == :queued ->
+            Logger.warning(
+              "[AgentResponder] runtime #{runtime.runtime_id} offline — holding message=#{context.message.id} for agent #{context.agent.slug} until it reconnects"
+            )
+
+            # "Waiting for <Agent>" (broadcast by the queue) replaces thinking.
+            ChatPubSub.broadcast_agent_typing(space_id, agent_participant_id, false)
+            :ok
+
+          offline? ->
+            Logger.error(
+              "[AgentResponder] DEAD LETTER: runtime #{runtime.runtime_id} not in presence — agent #{context.agent.slug} unreachable (topic=#{topic})"
+            )
+
+            # Counted, never replayed. The chat envelope is DERIVED at dispatch
+            # time from a ContextPlane bundle, a 12-message history snapshot and
+            # the live tool surface; storing it would let a replay deliver a
+            # stale context bundle hours later. The correct fix is to rebuild
+            # from the persisted `message_id` at replay time, which is a
+            # different design and a different task — so the row is written
+            # terminal, with `payload: nil` and the refusal recorded as its
+            # reason rather than discovered later by a policy that has nothing
+            # to inspect.
+            _ =
+              DeadLetters.record(%{
+                runtime_id: runtime.runtime_id,
+                runtime_pk: runtime.id,
+                agent_id: context.agent.id,
+                agent_slug: context.agent.slug,
+                space_id: space_id,
+                source: "chat",
+                payload: nil,
+                disposition: "dropped_policy",
+                reason: "chat_payload_not_replayable",
+                occurred_at: DateTime.utc_now()
+              })
+
+            :telemetry.execute(
+              [:platform, :federation, :delivery_failed],
+              %{system_time: System.system_time()},
+              %{
+                runtime_id: runtime.runtime_id,
+                agent_id: context.agent.id,
+                reason: :runtime_offline
+              }
+            )
+
+            _ = ReplyFailure.notify(context, :runtime_offline)
+            {:error, :runtime_offline}
+
+          true ->
+            bundle = ContextPlane.build_context_bundle(space_id)
+            tools = ToolSurface.tool_definitions()
+
+            author_participant = Chat.get_participant(context.message.participant_id)
+
+            payload = %{
+              signal: build_external_signal(signal, space_id, context.agent),
+              message: external_message(context, author_participant),
+              history: Enum.map(context.history, &external_history_entry/1),
+              context: bundle,
+              tools: tools
             }
-          )
 
-          _ = ReplyFailure.notify(context, :runtime_offline)
-          {:error, :runtime_offline}
-        else
-          bundle = ContextPlane.build_context_bundle(space_id)
-          tools = ToolSurface.tool_definitions()
+            Logger.info("[AgentResponder] broadcasting attention to #{topic}")
 
-          author_participant = Chat.get_participant(context.message.participant_id)
+            # Through the funnel like every other attention broadcast, and
+            # EXPECTED TO BE A NO-OP: `load_context/1` already refuses to build
+            # this context unless `Chat.get_agent_participant/2` resolves, so a
+            # channel dispatch reaches here only when the agent is already a
+            # member (`outcome: :already_member`) and a DM dispatch is refused by
+            # the funnel's privacy guard (`outcome: :direct_space`). The value is
+            # the invariant, not a change: routing this site keeps the source-scan
+            # guard's "exactly one broadcaster" claim true, so a future edit here
+            # cannot quietly reintroduce a dispatch that skips the invite. Tests
+            # assert both outcomes by name rather than asserting nothing.
+            case AttentionDispatch.broadcast(runtime.runtime_id, payload,
+                   space_id: space_id,
+                   agent_id: context.agent,
+                   source: :agent_responder
+                 ) do
+              :ok ->
+                acks? = DeliveryQueue.acks?(runtime)
 
-          payload = %{
-            signal: build_external_signal(signal, space_id, context.agent),
-            message: external_message(context, author_participant),
-            history: Enum.map(context.history, &external_history_entry/1),
-            context: bundle,
-            tools: tools
-          }
+                # A broadcast going out is not a delivery. A runtime that acks
+                # (`attention_ack`) is redelivered to until it does; one that
+                # does not cannot tell us, and the log says so.
+                Logger.info(
+                  "[AgentResponder] broadcast sent to #{topic} (" <>
+                    if(acks?, do: "awaiting attention_ack", else: "runtime does not ack") <>
+                    ") message=#{context.message.id}"
+                )
 
-          Logger.info("[AgentResponder] broadcasting attention to #{topic}")
+                :ok =
+                  DeliveryQueue.sent(runtime.runtime_id, signal, delivery_info(context), acks?)
 
-          # Through the funnel like every other attention broadcast, and
-          # EXPECTED TO BE A NO-OP: `load_context/1` already refuses to build
-          # this context unless `Chat.get_agent_participant/2` resolves, so a
-          # channel dispatch reaches here only when the agent is already a
-          # member (`outcome: :already_member`) and a DM dispatch is refused by
-          # the funnel's privacy guard (`outcome: :direct_space`). The value is
-          # the invariant, not a change: routing this site keeps the source-scan
-          # guard's "exactly one broadcaster" claim true, so a future edit here
-          # cannot quietly reintroduce a dispatch that skips the invite. Tests
-          # assert both outcomes by name rather than asserting nothing.
-          case AttentionDispatch.broadcast(runtime.runtime_id, payload,
-                 space_id: space_id,
-                 agent_id: context.agent,
-                 source: :agent_responder
-               ) do
-            :ok ->
-              Logger.info("[AgentResponder] broadcast sent successfully to #{topic}")
-              # Delivered; a failure the agent host observes next is still
-              # reported for this message (ReplyFailure.notify_pending/1).
-              :ok = ReplyFailure.remember_delivery(Map.put(context, :reason, signal.reason))
+                # Delivered; a failure the agent host observes next is still
+                # reported for this message (ReplyFailure.notify_pending/1).
+                :ok = ReplyFailure.remember_delivery(Map.put(context, :reason, signal.reason))
 
-              :telemetry.execute(
-                [:platform, :federation, :delivery_success],
-                %{system_time: System.system_time()},
-                %{runtime_id: runtime.runtime_id, agent_id: context.agent.id}
-              )
+                :telemetry.execute(
+                  [:platform, :federation, :delivery_success],
+                  %{system_time: System.system_time()},
+                  %{runtime_id: runtime.runtime_id, agent_id: context.agent.id}
+                )
 
-              :ok
+                :ok
 
-            {:error, reason} ->
-              Logger.error("[AgentResponder] broadcast failed to #{topic}: #{inspect(reason)}")
+              {:error, reason} ->
+                Logger.error("[AgentResponder] broadcast failed to #{topic}: #{inspect(reason)}")
 
-              # Passed through rather than flattened to `:broadcast_failed`.
-              # Before the funnel an unready endpoint raised ArgumentError out
-              # of this function entirely (there was no rescue here); collapsing
-              # the two atoms now would trade an unhandled raise for a reason
-              # collapse, and this task exists to stop doing that.
-              {:error, reason}
-          end
+                # Passed through rather than flattened to `:broadcast_failed`.
+                # Before the funnel an unready endpoint raised ArgumentError out
+                # of this function entirely (there was no rescue here); collapsing
+                # the two atoms now would trade an unhandled raise for a reason
+                # collapse, and this task exists to stop doing that.
+                {:error, reason}
+            end
         end
       else
         Logger.warning("[AgentResponder] runtime #{runtime_id} not found")
         {:error, :runtime_not_found}
       end
     end
+  end
+
+  defp delivery_info(context) do
+    %{
+      agent_id: context.agent.id,
+      agent_name: context.agent.name,
+      message_id: context.message.id,
+      space_id: context.message.space_id,
+      agent_participant_id: context.agent_participant.id
+    }
   end
 
   @doc """

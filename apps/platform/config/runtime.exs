@@ -104,6 +104,39 @@ case System.get_env("NATIVE_REPLY_WATCHDOG_MAX_S") do
     end
 end
 
+case System.get_env("NATIVE_REPLY_BUSY_MAX_S") do
+  nil ->
+    :ok
+
+  value ->
+    case Integer.parse(String.trim(value)) do
+      {seconds, ""} when seconds > 0 ->
+        config :platform, :native_reply_busy_max_ms, seconds * 1000
+
+      _ ->
+        :ok
+    end
+end
+
+# Platform.Federation.DeliveryQueue: how long a chat message waits for its
+# offline runtime to come back (default 900 s). 0 turns the queue off.
+case System.get_env("DELIVERY_QUEUE_TTL_S") do
+  nil ->
+    :ok
+
+  value ->
+    case Integer.parse(String.trim(value)) do
+      {0, ""} ->
+        config :platform, :delivery_queue_enabled, false
+
+      {seconds, ""} when seconds > 0 ->
+        config :platform, :delivery_queue_ttl_ms, seconds * 1000
+
+      _ ->
+        :ok
+    end
+end
+
 case System.get_env("FIRST_AGENT_BUNDLES") do
   nil -> :ok
   value -> config :platform, :first_agent_bundles, String.trim(value)

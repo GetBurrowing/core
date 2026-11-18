@@ -20,6 +20,11 @@ defmodule PlatformWeb.Components.ReplyFailureRow do
     * everyone else reads "Someone who manages <Name> can fix this in Agent
       Resources."
 
+  Restart is offered only when the agent's runtime is actually down (no
+  heartbeat, `Platform.Chat.ReplyFailure.runtime_alive?/1` false) at render
+  time. A runtime that is connected may be in the middle of long work, and a
+  restart kills that work; such a row offers "Open <Name>" instead.
+
   A declined-chat notice (`cause: "chat_declined"`, task 01a1b20f) is one
   line, "<Name> doesn't take chat messages.", with no action and no
   hand-off: nothing is broken, so there is nothing to fix.
@@ -62,6 +67,11 @@ defmodule PlatformWeb.Components.ReplyFailureRow do
       |> assign(:can_manage?, NativeAgents.can_manage?(assigns.viewer_user_id, agent))
       |> assign(:native?, NativeAgents.managed?(agent))
       |> assign(:action_path, action_path(cause, agent))
+      |> then(fn a ->
+        # Only a manager's row has an action; only then is the runtime asked.
+        down? = a.can_manage? and restart_cause?(cause) and not ReplyFailure.runtime_alive?(agent)
+        assign(a, :runtime_down?, down?)
+      end)
 
     ~H"""
     <div
@@ -91,7 +101,7 @@ defmodule PlatformWeb.Components.ReplyFailureRow do
             @cause not in ["needs_login", "stopped"] && "btn-outline"
           ]}
         >
-          {action_label(@cause, @name, @native?)}
+          {action_label(@cause, @name, @native?, @runtime_down?)}
         </.link>
         <p
           :if={!@declined? && !@can_manage?}
@@ -142,6 +152,22 @@ defmodule PlatformWeb.Components.ReplyFailureRow do
 
   def action_label(_unknown, name, true), do: "Restart #{name}"
   def action_label(cause, name, _native?), do: action_label(cause, name)
+
+  @doc """
+  The action, given also whether the agent's runtime is down right now.
+  A cause whose action would be Restart (`crashed`, or `unknown` for a native
+  agent) offers "Open <Name>" while the runtime has a heartbeat: the agent
+  may be busy, and a restart would kill its work in progress.
+  """
+  @spec action_label(String.t() | nil, String.t(), boolean(), boolean()) :: String.t()
+  def action_label(cause, name, native?, runtime_down?) do
+    case action_label(cause, name, native?) do
+      "Restart " <> _ = restart -> if runtime_down?, do: restart, else: "Open #{name}"
+      other -> other
+    end
+  end
+
+  defp restart_cause?(cause), do: cause not in ["needs_login", "stopped", "chat_declined"]
 
   # The posted text is the record of what was true when it was posted; fall
   # back to the canvas copy when the body is not the two-line shape.
