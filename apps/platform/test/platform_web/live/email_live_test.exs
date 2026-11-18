@@ -1127,6 +1127,18 @@ defmodule PlatformWeb.EmailLiveTest do
         }
       })
 
+      outsider = user!("outsider") |> member!(ctx.org_id, "member")
+
+      render_hook(view, "grant_member", %{
+        "account_id" => ctx.account.id,
+        "user_id" => outsider.id
+      })
+
+      render_hook(view, "revoke_member", %{
+        "account_id" => ctx.account.id,
+        "user_id" => ctx.owner.id
+      })
+
       {:ok, admin_view, _} = live(login(conn, ctx.admin), "/email")
 
       render_hook(admin_view, "grant_agent", %{
@@ -1142,6 +1154,8 @@ defmodule PlatformWeb.EmailLiveTest do
       assert agent_grants(ctx.personal.id) == [kept.id]
       assert agent_grants(ctx.account.id) == []
       assert Repo.reload!(ctx.personal).owner_user_id == ctx.owner.id
+      refute ctx.account.id in Ownership.readable_account_ids(outsider, ctx.org_id)
+      assert ctx.account.id in Ownership.readable_account_ids(ctx.owner, ctx.org_id)
       assert render(view) =~ "You cannot change who reads this mailbox."
     end
 
@@ -1183,6 +1197,31 @@ defmodule PlatformWeb.EmailLiveTest do
       {:ok, view, _} = live(login(conn, ctx.admin), "/email/accounts/#{ctx.account.id}")
       assert has_element?(view, ~s([data-role="mail-account-form"]))
       refute has_element?(view, ~s([data-role="settings-only-note"]))
+    end
+
+    test "an admin adds and removes a shared mailbox's members from the Access panel",
+         %{conn: conn} = ctx do
+      newcomer = user!("newcomer") |> member!(ctx.org_id, "member")
+      {:ok, view, _} = live(login(conn, ctx.admin), "/email/accounts/#{ctx.account.id}")
+      view |> element(~s([data-role="mail-account-manage-access"])) |> render_click()
+      assert has_element?(view, ~s([data-role="access-panel"][data-mode="manage"]))
+
+      view
+      |> form("#access-member-form", %{"account_id" => ctx.account.id, "user_id" => newcomer.id})
+      |> render_submit()
+
+      assert ctx.account.id in Ownership.readable_account_ids(newcomer, ctx.org_id)
+
+      assert has_element?(
+               view,
+               ~s([data-role="access-member-row"][data-user-id="#{newcomer.id}"])
+             )
+
+      view
+      |> element(~s([data-role="access-member-row"][data-user-id="#{newcomer.id}"] button))
+      |> render_click()
+
+      refute ctx.account.id in Ownership.readable_account_ids(newcomer, ctx.org_id)
     end
 
     test "an admin assigns an owner from the account editor", %{conn: conn} = ctx do

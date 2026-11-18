@@ -30,7 +30,7 @@
         :for={account <- accounts}
         patch={tab_path(%{assigns | account_filter: account.id}, @tab)}
         class={[
-          "flex min-h-11 min-w-0 shrink-0 items-center gap-2 rounded-box px-2 hover:bg-base-300 lg:min-h-8",
+          "flex min-h-11 min-w-0 max-w-[16rem] shrink-0 items-center gap-2 rounded-box px-2 hover:bg-base-300 lg:min-h-8 lg:max-w-none",
           @mailbox && @mailbox.id == account.id && "bg-base-300"
         ]}
         aria-current={if(@mailbox && @mailbox.id == account.id, do: "page")}
@@ -144,7 +144,7 @@
           class="min-w-0 truncate"
           data-role="access-line-agents"
         >
-          <span :for={name <- elem(access_line_agents(@mailbox_audience), 0)}>· {name}</span>
+          {"· " <> Enum.join(elem(access_line_agents(@mailbox_audience), 0), " · ")}
         </span>
         <span
           :if={elem(access_line_agents(@mailbox_audience), 1) > 0}
@@ -1602,8 +1602,25 @@
         </p>
 
         <div class="flex flex-col gap-2 border-t border-edge pt-3" data-role="access-people">
-          <p class="text-sm text-base-content">
+          <p
+            :if={not (@access.manage? and @access.account.owner_kind == "shared")}
+            class="text-sm text-base-content"
+          >
             People: {people_text(@access, @user)}
+          </p>
+          <p
+            :if={@access.manage? and @access.account.owner_kind == "shared"}
+            class="text-sm text-base-content"
+          >
+            People who read this mailbox
+          </p>
+          <p
+            :if={
+              @access.manage? and @access.account.owner_kind == "shared" and @access.people == []
+            }
+            class="text-sm text-subtle"
+          >
+            Nobody yet. Add a person below.
           </p>
           <ul
             :if={
