@@ -201,7 +201,9 @@ defmodule Platform.Federation.ToolSurfaceTest do
       # +2 `sharing_list` and `sharing_set` in `federation` (task 01a1b678 stage 3).
       # +1 `meeting_summary_complete` in `meetings`: the return path for a
       # delegated meeting summary.
-      assert length(tools) == 159
+      # +1 `design_critique_complete` in `review`: the return path for a
+      # critique dispatched to a native Designer.
+      assert length(tools) == 160
 
       tool_names = Enum.map(tools, & &1.name)
       assert "calendar_list" in tool_names
