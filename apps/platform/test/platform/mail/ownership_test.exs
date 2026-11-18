@@ -719,4 +719,133 @@ defmodule Platform.Mail.OwnershipTest do
       assert Enum.any?(rows, fn [def] -> def =~ "(principal_type, principal_id)" end)
     end
   end
+
+  # ── The previous-owner notice (task 01a1ea5b stage 4) ─────────────────────
+  #
+  # Ryan accepted the plan's question-4 proposal: when an admin reassigns a
+  # personal mailbox, its previous owner is told, with no mail content.
+
+  describe "set_owner/3 notice to the previous owner" do
+    alias Platform.Inbox.Item
+
+    defp notices(account_id) do
+      Repo.all(
+        from(i in Item,
+          where:
+            i.kind == "mailbox_reassigned" and i.source_type == "mail_account" and
+              i.source_id == ^account_id
+        )
+      )
+    end
+
+    test "the previous owner gets exactly one notice naming the admin, address and new owner",
+         ctx do
+      account = personal!(ctx, ctx.owner)
+      token = "SUBJ-NOTICE-#{System.unique_integer([:positive])}"
+
+      Repo.insert!(%Platform.Mail.InboundMessage{
+        account_id: account.id,
+        org_id: account.org_id,
+        folder: "INBOX",
+        uidvalidity: 1,
+        uid: System.unique_integer([:positive]),
+        message_id_key: "#{token}@example.test",
+        raw: "raw",
+        subject: token,
+        text_body: "BODY-" <> token,
+        received_at: DateTime.utc_now()
+      })
+
+      {:ok, _} =
+        Ownership.set_owner(ctx.admin, account, %{kind: "personal", owner_user_id: ctx.other.id})
+
+      assert [notice] = notices(account.id)
+      assert notice.user_id == ctx.owner.id
+      assert notice.title == "#{ctx.admin.name} reassigned #{account.name} to #{ctx.other.name}"
+      assert is_nil(notice.body)
+      refute notice.title =~ token
+    end
+
+    test "nobody else is notified: not the new owner, not the admin, not a bystander", ctx do
+      account = personal!(ctx, ctx.owner)
+
+      {:ok, _} =
+        Ownership.set_owner(ctx.admin, account, %{kind: "personal", owner_user_id: ctx.other.id})
+
+      recipients = account.id |> notices() |> Enum.map(& &1.user_id)
+      assert recipients == [ctx.owner.id]
+
+      for id <- [ctx.other.id, ctx.admin.id, ctx.support.id] do
+        refute Repo.exists?(
+                 from(i in Item, where: i.user_id == ^id and i.kind == "mailbox_reassigned")
+               )
+      end
+    end
+
+    test "personal to shared tells the previous owner it became a shared mailbox", ctx do
+      account = personal!(ctx, ctx.owner)
+      {:ok, _} = Ownership.set_owner(ctx.admin, account, %{kind: "shared"})
+
+      assert [notice] = notices(account.id)
+      assert notice.user_id == ctx.owner.id
+      assert notice.title == "#{ctx.admin.name} reassigned #{account.name} to a shared mailbox"
+    end
+
+    test "no notice when there was no previous owner, or the owner did not change", ctx do
+      # unassigned -> personal (personal!/2), then the same owner again.
+      account = personal!(ctx, ctx.owner)
+      assert notices(account.id) == []
+
+      {:ok, _} =
+        Ownership.set_owner(ctx.admin, account, %{kind: "personal", owner_user_id: ctx.owner.id})
+
+      assert notices(account.id) == []
+
+      shared = shared!(ctx)
+      {:ok, _} = Ownership.set_owner(ctx.admin, shared, %{kind: "unassigned"})
+      assert notices(shared.id) == []
+    end
+
+    test "a refused reassignment notifies nobody", ctx do
+      account = personal!(ctx, ctx.owner)
+
+      assert {:error, :unauthorized} =
+               Ownership.set_owner(ctx.other, account, %{
+                 kind: "personal",
+                 owner_user_id: ctx.other.id
+               })
+
+      assert notices(account.id) == []
+    end
+  end
+
+  # ── Reader-only audience (task 01a1ea5b stage 4) ──────────────────────────
+
+  describe "audience/2" do
+    test "the owner reads it; a non-owner member and an org admin are refused", ctx do
+      account = personal!(ctx, ctx.owner)
+      agent = agent!()
+      {:ok, _} = Ownership.grant(ctx.owner, account, {:agent, agent.id})
+
+      assert {:ok, %{kind: "personal", people: [%{id: owner_id}], agents: [%{id: agent_id}]}} =
+               Ownership.audience(ctx.owner, account)
+
+      assert owner_id == ctx.owner.id
+      assert agent_id == agent.id
+
+      for viewer <- [ctx.other, ctx.admin, ctx.support] do
+        assert {:error, :unauthorized} = Ownership.audience(viewer, account)
+      end
+    end
+
+    test "a shared mailbox lists its internal members to a member", ctx do
+      account = shared!(ctx)
+      {:ok, _} = Ownership.grant(ctx.admin, account, {:user, ctx.other.id})
+      {:ok, _} = Ownership.grant(ctx.admin, account, {:user, ctx.owner.id})
+
+      assert {:ok, %{people: people}} = Ownership.audience(ctx.other, account)
+      assert Enum.sort(Enum.map(people, & &1.id)) == Enum.sort([ctx.other.id, ctx.owner.id])
+      assert {:error, :unauthorized} = Ownership.audience(ctx.admin, account)
+    end
+  end
 end

@@ -1,4 +1,62 @@
-<div class="flex h-full min-h-0 w-full bg-base-100" data-role="mail-module">
+<div class="flex h-full min-h-0 w-full flex-col bg-base-100 lg:flex-row" data-role="mail-module">
+  <%!-- MAILBOX SWITCHER (task 01a1ea5b stage 4): ONE node at every width,
+       a horizontal strip below lg and the left rail at lg. Only readable
+       mailboxes are listed; an unreadable one is absent, never greyed. --%>
+  <nav
+    class="flex shrink-0 items-center gap-2 overflow-x-auto border-b border-edge bg-base-200 px-4 py-2 lg:w-60 lg:flex-col lg:items-stretch lg:gap-1 lg:overflow-x-visible lg:overflow-y-auto lg:border-b-0 lg:border-r lg:px-2 lg:py-3"
+    aria-label="Mailboxes"
+    data-role="mailbox-switcher"
+  >
+    <.link
+      :if={length(@readable_accounts) > 1}
+      patch={tab_path(%{assigns | account_filter: nil}, @tab)}
+      class={[
+        "flex min-h-11 shrink-0 items-center rounded-box px-2 text-sm text-base-content hover:bg-base-300 lg:min-h-8",
+        is_nil(@account_filter) && "bg-base-300"
+      ]}
+      aria-current={if(is_nil(@account_filter), do: "page")}
+      data-role="mailbox-switcher-all"
+    >
+      All mailboxes
+    </.link>
+    <%= for {key, label, chip, accounts} <- switcher_groups(@readable_accounts, @user) do %>
+      <p
+        class="shrink-0 px-2 text-xs font-medium uppercase tracking-widest text-subtle lg:pt-2"
+        data-role={"mailbox-switcher-group-#{key}"}
+      >
+        {label}
+      </p>
+      <.link
+        :for={account <- accounts}
+        patch={tab_path(%{assigns | account_filter: account.id}, @tab)}
+        class={[
+          "flex min-h-11 min-w-0 shrink-0 items-center gap-2 rounded-box px-2 hover:bg-base-300 lg:min-h-8",
+          @mailbox && @mailbox.id == account.id && "bg-base-300"
+        ]}
+        aria-current={if(@mailbox && @mailbox.id == account.id, do: "page")}
+        data-role="mailbox-switcher-row"
+        data-account-id={account.id}
+      >
+        <span class="min-w-0 truncate font-mono text-xs text-base-content">
+          {dispatch_address(account)}
+        </span>
+        <span
+          class="badge badge-outline badge-info badge-sm shrink-0"
+          data-role="mailbox-switcher-chip"
+        >
+          {chip}
+        </span>
+      </.link>
+    <% end %>
+    <p
+      :if={@readable_accounts == []}
+      class="shrink-0 px-2 text-sm text-base-content/60"
+      data-role="mailbox-switcher-empty"
+    >
+      No mailboxes yet
+    </p>
+  </nav>
+
   <%!-- LIST: header, tabs, rows. --%>
   <div class="flex min-h-0 min-w-0 flex-1 flex-col overflow-hidden">
     <div class="flex flex-wrap items-center gap-3 border-b border-edge px-4 py-3">
@@ -23,22 +81,7 @@
           </option>
         </select>
         <input :if={length(@orgs) <= 1} type="hidden" name="org" value={@org_id} />
-
-        <select
-          name="account"
-          class="select select-bordered select-sm max-w-[16rem] font-mono"
-          aria-label="Account"
-          data-role="mail-account-filter"
-        >
-          <option value="" selected={is_nil(@account_filter)}>All accounts</option>
-          <option
-            :for={account <- @readable_accounts}
-            value={account.id}
-            selected={account.id == @account_filter}
-          >
-            {dispatch_address(account)}
-          </option>
-        </select>
+        <input type="hidden" name="account" value={@account_filter || ""} />
       </form>
 
       <span class="flex-1" aria-hidden="true"></span>
@@ -73,6 +116,55 @@
       >
         <span class="hero-pencil-square size-4" aria-hidden="true"></span> New email
       </.link>
+    </div>
+
+    <%!-- MAILBOX HEADER + ACCESS LINE (task 01a1ea5b stage 4). The owner's
+         name is the page's one display-weight text; the access line is the
+         canvas's signature element, in the info tone. --%>
+    <div :if={@mailbox} class="flex flex-col border-b border-edge" data-role="mailbox-header">
+      <div class="flex flex-wrap items-baseline gap-x-3 gap-y-0.5 px-4 pb-2 pt-3">
+        <h2 class="text-lg font-semibold text-base-content" data-role="mailbox-title">
+          {mailbox_title(@mailbox, @mailbox_audience)}
+        </h2>
+        <span class="break-all font-mono text-xs text-subtle" data-role="mailbox-address">
+          {dispatch_address(@mailbox)}
+        </span>
+      </div>
+      <div
+        :if={@mailbox_audience}
+        class="flex min-w-0 items-center gap-1.5 bg-info/10 px-4 py-1.5 text-sm text-info"
+        data-role="access-line"
+      >
+        <span class="hero-lock-closed size-4 shrink-0" aria-hidden="true"></span>
+        <span class="shrink-0" data-role="access-line-who">
+          Visible to {access_who(@mailbox_audience)}
+        </span>
+        <span
+          :if={elem(access_line_agents(@mailbox_audience), 0) != []}
+          class="min-w-0 truncate"
+          data-role="access-line-agents"
+        >
+          <span :for={name <- elem(access_line_agents(@mailbox_audience), 0)}>· {name}</span>
+        </span>
+        <span
+          :if={elem(access_line_agents(@mailbox_audience), 1) > 0}
+          class="shrink-0"
+          data-role="access-line-more"
+        >
+          +{elem(access_line_agents(@mailbox_audience), 1)}
+        </span>
+        <span class="flex-1" aria-hidden="true"></span>
+        <button
+          type="button"
+          phx-click="open_access"
+          phx-value-account_id={@mailbox.id}
+          class="btn btn-ghost btn-xs min-h-11 shrink-0 gap-0.5 px-1 text-info lg:min-h-6"
+          aria-haspopup="dialog"
+          data-role="access-line-open"
+        >
+          Access <span class="hero-chevron-right size-3.5" aria-hidden="true"></span>
+        </button>
+      </div>
     </div>
 
     <nav
@@ -732,6 +824,18 @@
           <p class="break-all font-mono text-sm font-semibold text-base-content">
             {dispatch_address(account)}
           </p>
+          <p class="flex flex-wrap items-center gap-2 text-xs" data-role="mail-account-owner">
+            <span class="badge badge-outline badge-info badge-sm">
+              {kind_text(account, @owner_names)}
+            </span>
+            <span
+              :if={@is_admin and not MapSet.member?(@readable_ids, account.id)}
+              class="text-warning"
+              data-role="mail-account-settings-only"
+            >
+              Settings only
+            </span>
+          </p>
           <p class="text-xs text-subtle">
             {account.name} · SMTP {account.smtp_host || "(no host)"}:{account.smtp_port ||
               "default"} · {if account.imap_host,
@@ -813,6 +917,94 @@
 
       <%!-- ACCOUNT FORM (admins only; the route bounces members) --%>
       <div :if={@pane in [:account, :new_account] and @form} class="flex flex-col gap-4">
+        <%!-- An account this admin cannot read: connection fields only,
+             and no inbox preview anywhere on this pane (task 01a1ea5b
+             stage 4). --%>
+        <p
+          :if={@form_account && not MapSet.member?(@readable_ids, @form_account.id)}
+          class="flex items-start gap-2 rounded-box border border-warning/40 bg-warning/10 p-3 text-sm text-warning"
+          data-role="settings-only-note"
+        >
+          <span class="hero-exclamation-triangle size-4 shrink-0" aria-hidden="true"></span>
+          Settings only; reading this mailbox needs the owner's grant
+        </p>
+
+        <%!-- OWNER (admins only; set_owner re-checks). Changing it clears
+             every grant and tells a personal mailbox's previous owner. --%>
+        <form
+          :if={@form_account}
+          phx-submit="set_owner"
+          id="mail-account-owner-form"
+          class="flex flex-col gap-2 rounded-box border border-edge p-3"
+          data-role="mail-account-owner-form"
+        >
+          <input type="hidden" name="owner[account_id]" value={@form_account.id} />
+          <p class="text-xs font-medium uppercase tracking-widest text-base-content">Owner</p>
+          <div class="grid grid-cols-1 gap-2 sm:grid-cols-2">
+            <label class="flex flex-col gap-1 text-xs font-medium text-base-content">
+              Kind
+              <select
+                name="owner[kind]"
+                class="select select-bordered select-sm text-base-content"
+                data-role="mail-account-owner-kind"
+              >
+                <option
+                  :for={
+                    {kind, label} <- [
+                      {"unassigned", "Unassigned"},
+                      {"personal", "Personal"},
+                      {"shared", "Shared"}
+                    ]
+                  }
+                  value={kind}
+                  selected={@form_account.owner_kind == kind}
+                >
+                  {label}
+                </option>
+              </select>
+            </label>
+            <label class="flex flex-col gap-1 text-xs font-medium text-base-content">
+              Owner (personal only)
+              <select
+                name="owner[owner_user_id]"
+                class="select select-bordered select-sm text-base-content"
+                data-role="mail-account-owner-user"
+              >
+                <option value="">Nobody</option>
+                <option
+                  :for={person <- @org_people}
+                  value={person.id}
+                  selected={@form_account.owner_user_id == person.id}
+                >
+                  {person.name || person.email}
+                </option>
+              </select>
+            </label>
+          </div>
+          <p class="text-xs text-subtle">
+            Changing the owner removes every agent and member grant on this mailbox. A previous owner is told.
+          </p>
+          <div class="flex flex-wrap items-center gap-2">
+            <button
+              type="submit"
+              class="btn btn-sm min-h-11 lg:min-h-8"
+              data-confirm="Change who owns this mailbox? Every grant on it is removed."
+              data-role="mail-account-owner-save"
+            >
+              Save owner
+            </button>
+            <button
+              :if={@form_account.owner_kind == "shared"}
+              type="button"
+              phx-click="open_access"
+              phx-value-account_id={@form_account.id}
+              class="btn btn-ghost btn-sm min-h-11 lg:min-h-8"
+              data-role="mail-account-manage-access"
+            >
+              Members and agents
+            </button>
+          </div>
+        </form>
         <div
           :if={@form_account}
           class="flex flex-col gap-2 rounded-box border border-edge p-3"
@@ -1159,6 +1351,7 @@
                     {backfill_noun(@backfill.imported)} since <span class="font-mono text-xs">{backfill_day(@backfill.since_date)}</span>.
                   </p>
                   <.link
+                    :if={MapSet.member?(@readable_ids, @form_account.id)}
                     patch={backfill_inbox_path(assigns, @form_account.id)}
                     class="btn btn-ghost btn-sm min-h-11 w-full lg:min-h-8 sm:w-auto"
                     data-role="mail-backfill-open-inbox"
@@ -1247,10 +1440,238 @@
     </div>
   </aside>
 
+  <%!-- ACCESS PANEL (task 01a1ea5b stage 4): ONE node at every width. Below
+       lg a bottom sheet over a backdrop that clears the bottom nav; at lg
+       the right-hand pane, in the detail pane's place. Presentation only:
+       every write re-checks in Platform.Mail.Ownership. --%>
+  <div
+    :if={@access}
+    class="fixed inset-0 z-40 flex items-end justify-center bg-black/40 pb-[var(--bottom-nav-height,0px)] lg:static lg:z-auto lg:w-[30rem] lg:shrink-0 lg:items-stretch lg:border-l lg:border-edge lg:bg-transparent lg:pb-0"
+    data-role="access-panel-backdrop"
+  >
+    <section
+      class="flex max-h-[75vh] w-full max-w-lg flex-col overflow-y-auto rounded-t-2xl bg-base-100 pb-[env(safe-area-inset-bottom)] shadow-2xl lg:h-full lg:max-h-none lg:max-w-none lg:rounded-none lg:pb-0 lg:shadow-none"
+      role="dialog"
+      aria-labelledby="access-panel-heading"
+      data-role="access-panel"
+      data-account-id={@access.account.id}
+      data-mode={if(@access.manage?, do: "manage", else: "read-only")}
+    >
+      <div class="flex items-center gap-2 border-b border-edge px-4 py-3">
+        <div class="flex min-w-0 flex-1 flex-col">
+          <h2 id="access-panel-heading" class="text-sm font-medium text-base-content">
+            Agents who can read this mailbox
+          </h2>
+          <span class="truncate font-mono text-xs text-subtle">
+            {dispatch_address(@access.account)}
+          </span>
+        </div>
+        <button
+          type="button"
+          phx-click="close_access"
+          class="btn btn-ghost btn-sm btn-square min-h-11 min-w-11 lg:min-h-8 lg:min-w-8"
+          aria-label="Close Access"
+          data-role="access-panel-close"
+        >
+          <span class="hero-x-mark size-4" aria-hidden="true"></span>
+        </button>
+      </div>
+
+      <div class="flex flex-col gap-4 p-4">
+        <ul
+          :if={@access.agents != []}
+          class="flex flex-col divide-y divide-edge"
+          data-role="access-agents"
+        >
+          <li
+            :for={agent <- @access.agents}
+            class="flex min-h-11 items-center gap-3 py-2"
+            data-role="access-agent-row"
+            data-agent-id={agent.id}
+          >
+            <.agent_avatar name={agent.name} avatar_url={agent.avatar_url} size="sm" />
+            <span class="min-w-0 flex-1 truncate text-sm text-base-content">{agent.name}</span>
+            <span
+              :if={granted_text(agent.granted_at)}
+              class="shrink-0 font-mono text-xs text-subtle"
+              data-role="access-agent-granted"
+            >
+              {granted_text(agent.granted_at)}
+            </span>
+            <button
+              :if={@access.manage?}
+              type="button"
+              phx-click="confirm_revoke"
+              phx-value-agent_id={agent.id}
+              class="btn btn-ghost btn-xs min-h-11 shrink-0 lg:min-h-6"
+              data-role="access-revoke"
+            >
+              Revoke
+            </button>
+          </li>
+        </ul>
+        <p
+          :if={@access.agents == []}
+          class="text-sm text-subtle"
+          data-role="access-no-agents"
+        >
+          No agents can read this mailbox
+        </p>
+
+        <div
+          :if={@access.manage? and @revoke_confirm}
+          class="flex flex-col gap-2 rounded-box border border-warning/40 bg-warning/10 p-3"
+          role="alertdialog"
+          aria-label="Confirm revoke"
+          data-role="access-revoke-confirm"
+        >
+          <p class="text-sm text-warning">
+            Revoke {@revoke_confirm.name}'s access? This takes effect on its next read.
+          </p>
+          <div class="flex flex-wrap items-center gap-2">
+            <button
+              type="button"
+              phx-click="revoke_agent"
+              phx-value-account_id={@access.account.id}
+              phx-value-agent_id={@revoke_confirm.id}
+              class="btn btn-warning btn-sm min-h-11 lg:min-h-8"
+              data-role="access-revoke-yes"
+            >
+              Revoke
+            </button>
+            <button
+              type="button"
+              phx-click="cancel_revoke"
+              class="btn btn-ghost btn-sm min-h-11 lg:min-h-8"
+              data-role="access-revoke-cancel"
+            >
+              Cancel
+            </button>
+          </div>
+        </div>
+
+        <button
+          :if={@access.manage? and not @grant_picker}
+          type="button"
+          phx-click="open_grant_picker"
+          class="btn btn-primary btn-sm min-h-11 self-start lg:min-h-8"
+          data-role="access-grant-open"
+        >
+          + Grant an agent
+        </button>
+        <form
+          :if={@access.manage? and @grant_picker}
+          phx-submit="grant_agent"
+          id="access-grant-form"
+          class="flex flex-col gap-2 sm:flex-row sm:items-end"
+          data-role="access-grant-picker"
+        >
+          <input type="hidden" name="account_id" value={@access.account.id} />
+          <label class="flex min-w-0 flex-1 flex-col gap-1 text-xs font-medium text-base-content">
+            Agent
+            <select
+              name="agent_id"
+              class="select select-bordered select-sm w-full text-base-content"
+              disabled={@access.candidates == []}
+              data-role="access-grant-agent"
+            >
+              <option :for={agent <- @access.candidates} value={agent.id}>{agent.name}</option>
+            </select>
+          </label>
+          <button
+            type="submit"
+            class="btn btn-primary btn-sm min-h-11 lg:min-h-8"
+            disabled={@access.candidates == []}
+            data-role="access-grant-submit"
+          >
+            Grant access
+          </button>
+          <button
+            type="button"
+            phx-click="close_grant_picker"
+            class="btn btn-ghost btn-sm min-h-11 lg:min-h-8"
+          >
+            Cancel
+          </button>
+        </form>
+        <p
+          :if={@access.manage? and @grant_picker and @access.candidates == []}
+          class="text-xs text-subtle"
+        >
+          Every agent can already read this mailbox.
+        </p>
+
+        <div class="flex flex-col gap-2 border-t border-edge pt-3" data-role="access-people">
+          <p class="text-sm text-base-content">
+            People: {people_text(@access, @user)}
+          </p>
+          <ul
+            :if={
+              @access.manage? and @access.account.owner_kind == "shared" and @access.people != []
+            }
+            class="flex flex-col divide-y divide-edge"
+          >
+            <li
+              :for={person <- @access.people}
+              class="flex min-h-11 items-center gap-2 py-1"
+              data-role="access-member-row"
+              data-user-id={person.id}
+            >
+              <span class="min-w-0 flex-1 truncate text-sm text-base-content">{person.name}</span>
+              <button
+                type="button"
+                phx-click="revoke_member"
+                phx-value-account_id={@access.account.id}
+                phx-value-user_id={person.id}
+                data-confirm={"Remove #{person.name} from this mailbox? They stop reading it at once."}
+                class="btn btn-ghost btn-xs min-h-11 lg:min-h-6"
+              >
+                Remove
+              </button>
+            </li>
+          </ul>
+          <form
+            :if={@access.manage? and @access.account.owner_kind == "shared"}
+            phx-submit="grant_member"
+            id="access-member-form"
+            class="flex flex-col gap-2 sm:flex-row sm:items-end"
+            data-role="access-member-add"
+          >
+            <input type="hidden" name="account_id" value={@access.account.id} />
+            <select
+              name="user_id"
+              class="select select-bordered select-sm w-full min-w-0 text-base-content sm:flex-1"
+              aria-label="Add a person"
+              disabled={@access.member_candidates == []}
+            >
+              <option :for={person <- @access.member_candidates} value={person.id}>
+                {person.name || person.email}
+              </option>
+            </select>
+            <button
+              type="submit"
+              class="btn btn-sm min-h-11 lg:min-h-8"
+              disabled={@access.member_candidates == []}
+            >
+              Add person
+            </button>
+          </form>
+        </div>
+
+        <p class="text-sm text-warning" data-role="access-admin-note">
+          Admins can change connection settings. They cannot read this mail.
+        </p>
+        <p :if={not @access.manage?} class="text-xs text-subtle" data-role="access-read-only">
+          Only an org admin can change who reads this mailbox.
+        </p>
+      </div>
+    </section>
+  </div>
+
   <%!-- Mobile FAB: New email. Same position math as the Tasks "+" and the
        Files upload FAB so it clears the safe area and the bottom nav. --%>
   <.link
-    :if={is_nil(@pane) and is_nil(@editor)}
+    :if={is_nil(@pane) and is_nil(@editor) and is_nil(@access)}
     patch={email_path(assigns, "/email/drafts/new")}
     class="btn btn-primary btn-circle fixed bottom-[calc(env(safe-area-inset-bottom)+1.5rem+var(--bottom-nav-height,0px))] right-6 z-30 shadow-lg md:hidden"
     aria-label="New email"

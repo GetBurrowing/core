@@ -49,7 +49,9 @@ defmodule Platform.Mail.Ownership do
   grant on the account whenever the kind or owner changes (each deletion
   audited), so a new owner inherits no reader the previous owner chose, and
   a shared-to-personal flip leaves no member row that a later flip back would
-  revive.
+  revive. Moving a personal mailbox away from its owner tells that previous
+  owner, and only them, through one Inbox row that carries no mail content
+  (stage 4).
 
   ## Gated surfaces (stage 2)
 
@@ -338,6 +340,111 @@ defmodule Platform.Mail.Ownership do
 
   def list_grants(_actor, _account), do: {:error, :unauthorized}
 
+  @doc """
+  Who can read `account`, for a READER of it (task 01a1ea5b stage 4: the
+  Email access line and the read-only Access panel). `{:ok, %{kind, people,
+  agents}}` where `people` are the users who read it (the owner of a
+  personal mailbox; the internal members holding a user grant on a shared
+  one) and `agents` the agents granted it, each `%{id, name, avatar_url}`
+  sorted by name. `{:error, :unauthorized}` unless `can_read_account?/2`:
+  a mailbox you cannot read does not tell you who can. Grant rows (who
+  granted, when) stay behind `list_grants/2`. Reads grants and names, never
+  mail.
+  """
+  @spec audience(any(), Account.t() | any()) ::
+          {:ok, %{kind: String.t(), people: [map()], agents: [map()]}}
+          | {:error, :unauthorized}
+  def audience(viewer, %Account{} = account) do
+    with %Account{} = current <- fresh(account) || {:error, :unauthorized},
+         true <- can_read_account?(viewer, current) || {:error, :unauthorized} do
+      {:ok,
+       %{kind: current.owner_kind, people: readers(current), agents: granted_agents(current)}}
+    end
+  end
+
+  def audience(_viewer, _account), do: {:error, :unauthorized}
+
+  @doc """
+  `%{{type, id} => %{id, name, avatar_url}}` for the principals of `grants`
+  (`%AccountGrant{}` rows from `list_grants/2`), so the Access panel can name
+  them. Names only; a principal whose row is gone is absent. Two queries at
+  most, whatever the count.
+  """
+  @spec principal_names([AccountGrant.t()]) :: %{{String.t(), binary()} => map()}
+  def principal_names(grants) when is_list(grants) do
+    ids = fn type ->
+      for %AccountGrant{principal_type: ^type, principal_id: id} <- grants, uuid?(id), do: id
+    end
+
+    agents =
+      case ids.("agent") do
+        [] ->
+          []
+
+        agent_ids ->
+          from(ag in Agent,
+            where: ag.id in ^agent_ids,
+            select: %{id: ag.id, name: ag.name, avatar_url: ag.avatar_url}
+          )
+          |> Repo.all()
+          |> Enum.map(&{{"agent", &1.id}, &1})
+      end
+
+    users =
+      case ids.("user") do
+        [] ->
+          []
+
+        user_ids ->
+          from(u in User,
+            where: u.id in ^user_ids,
+            select: %{id: u.id, name: coalesce(u.name, u.email), avatar_url: u.avatar_url}
+          )
+          |> Repo.all()
+          |> Enum.map(&{{"user", &1.id}, &1})
+      end
+
+    Map.new(agents ++ users)
+  end
+
+  def principal_names(_grants), do: %{}
+
+  defp readers(%Account{owner_kind: "personal", owner_user_id: owner_id})
+       when is_binary(owner_id) do
+    from(u in User,
+      where: u.id == ^owner_id,
+      select: %{id: u.id, name: coalesce(u.name, u.email), avatar_url: u.avatar_url}
+    )
+    |> Repo.all()
+  end
+
+  defp readers(%Account{owner_kind: "shared", id: id, org_id: org_id}) do
+    from(u in User,
+      join: g in AccountGrant,
+      on: g.principal_type == "user" and g.principal_id == u.id,
+      join: m in OrgMembership,
+      on: m.user_id == u.id and m.org_id == ^org_id and m.external == false,
+      where: g.account_id == ^id,
+      distinct: true,
+      order_by: [asc: coalesce(u.name, u.email), asc: u.id],
+      select: %{id: u.id, name: coalesce(u.name, u.email), avatar_url: u.avatar_url}
+    )
+    |> Repo.all()
+  end
+
+  defp readers(%Account{}), do: []
+
+  defp granted_agents(%Account{id: id}) do
+    from(g in AccountGrant,
+      join: ag in Agent,
+      on: ag.id == g.principal_id,
+      where: g.account_id == ^id and g.principal_type == "agent",
+      order_by: [asc: ag.name, asc: ag.id],
+      select: %{id: ag.id, name: ag.name, avatar_url: ag.avatar_url}
+    )
+    |> Repo.all()
+  end
+
   # ── Gated surfaces (stage 2) ────────────────────────────────────────────
 
   @doc """
@@ -523,7 +630,10 @@ defmodule Platform.Mail.Ownership do
   account's org only (`{:error, :unauthorized}` otherwise). A personal owner
   must be an internal member of that org (`{:error, :unknown_principal}`).
   When the kind or owner changes, every grant on the account is deleted.
-  Audited, with the previous and new owner.
+  Audited, with the previous and new owner. When a personal mailbox leaves
+  its owner, that previous owner gets ONE Inbox notice (kind
+  `"mailbox_reassigned"`) naming the admin, the address and the new owner,
+  with no mail content; nobody else is notified.
   """
   @spec set_owner(any(), Account.t(), map()) :: {:ok, Account.t()} | {:error, term()}
   def set_owner(actor, %Account{} = account, attrs) when is_map(attrs) do
@@ -532,32 +642,93 @@ defmodule Platform.Mail.Ownership do
 
     with %Account{} = current <- fresh(account) || {:error, :not_found},
          :ok <- authorize_admin(actor, current),
-         :ok <- owner_allowed(current, kind, owner_id) do
-      Repo.transaction(fn ->
-        changeset =
-          Account.ownership_changeset(current, %{owner_kind: kind, owner_user_id: owner_id})
+         :ok <- owner_allowed(current, kind, owner_id),
+         {:ok, updated} <- write_owner(actor, current, kind, owner_id) do
+      notify_previous_owner(actor, current, updated)
+      {:ok, updated}
+    end
+  end
 
-        updated =
-          case Repo.update(changeset) do
-            {:ok, updated} -> updated
-            {:error, changeset} -> Repo.rollback(changeset)
-          end
+  defp write_owner(actor, current, kind, owner_id) do
+    Repo.transaction(fn ->
+      changeset =
+        Account.ownership_changeset(current, %{owner_kind: kind, owner_user_id: owner_id})
 
-        if {current.owner_kind, current.owner_user_id} !=
-             {updated.owner_kind, updated.owner_user_id} do
-          clear_grants!(actor, current)
+      updated =
+        case Repo.update(changeset) do
+          {:ok, updated} -> updated
+          {:error, changeset} -> Repo.rollback(changeset)
         end
 
-        audit!(actor, updated, "set_owner", %{
-          previous_kind: current.owner_kind,
-          previous_owner_user_id: current.owner_user_id,
-          kind: updated.owner_kind,
-          owner_user_id: updated.owner_user_id
-        })
+      if {current.owner_kind, current.owner_user_id} !=
+           {updated.owner_kind, updated.owner_user_id} do
+        clear_grants!(actor, current)
+      end
 
-        updated
-      end)
+      audit!(actor, updated, "set_owner", %{
+        previous_kind: current.owner_kind,
+        previous_owner_user_id: current.owner_user_id,
+        kind: updated.owner_kind,
+        owner_user_id: updated.owner_user_id
+      })
+
+      updated
+    end)
+  end
+
+  # The previous owner of a personal mailbox hears that it moved (task
+  # 01a1ea5b stage 4; Ryan accepted the plan's question-4 proposal). ONE
+  # Inbox row, to that person only, carrying no mail content: "<admin>
+  # reassigned <address> to <new owner>". Nobody else is told: not the new
+  # owner, not the actor, not the old owner when the owner did not change or
+  # when they made the change themselves. Sent after the write commits; a
+  # notice that fails to insert never undoes the reassignment.
+  defp notify_previous_owner(actor, %Account{} = before, %Account{} = updated) do
+    previous = before.owner_kind == "personal" && before.owner_user_id
+
+    if is_binary(previous) and previous != updated.owner_user_id and
+         previous != Map.get(actor, :id) do
+      names = user_names([Map.get(actor, :id), updated.owner_user_id])
+
+      title =
+        "#{Map.get(names, Map.get(actor, :id), "An org admin")} reassigned " <>
+          "#{mailbox_address(updated)} to #{new_owner_text(updated, names)}"
+
+      Platform.Inbox.emit(%{
+        user_id: previous,
+        kind: "mailbox_reassigned",
+        source_type: "mail_account",
+        source_id: updated.id,
+        title: title,
+        url: "/email"
+      })
     end
+
+    :ok
+  end
+
+  defp new_owner_text(%Account{owner_kind: "personal", owner_user_id: id}, names),
+    do: Map.get(names, id, "another person")
+
+  defp new_owner_text(%Account{owner_kind: "shared"}, _names), do: "a shared mailbox"
+  defp new_owner_text(%Account{}, _names), do: "no owner"
+
+  @doc """
+  The address a person knows a mailbox by: its login username, else its
+  name. Metadata only; used in the reassignment notice.
+  """
+  @spec mailbox_address(Account.t()) :: String.t()
+  def mailbox_address(%Account{username: username}) when is_binary(username) and username != "",
+    do: username
+
+  def mailbox_address(%Account{name: name}), do: name || "a mailbox"
+
+  defp user_names(ids) do
+    ids = Enum.filter(ids, &uuid?/1)
+
+    from(u in User, where: u.id in ^ids, select: {u.id, coalesce(u.name, u.email)})
+    |> Repo.all()
+    |> Map.new()
   end
 
   # ── Internals ───────────────────────────────────────────────────────────
