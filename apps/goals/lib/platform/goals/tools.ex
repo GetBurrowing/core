@@ -125,8 +125,10 @@ defmodule Platform.Goals.Tools do
 
   defp run("goal_proposal_get", %{"proposal_id" => id}, agent) when not is_nil(id) do
     with {:ok, proposal} <- own_proposal(agent, id),
-         {:ok, sources} <- Goals.list_sources(agent) do
-      {:ok, proposal_json(proposal, sources)}
+         {:ok, sources} <- Goals.list_sources(agent),
+         # Read only after own_proposal/2: another agent never reaches it.
+         {:ok, opening} <- Goals.opening_message(agent, proposal.id) do
+      {:ok, proposal_json(proposal, sources, opening)}
     else
       {:error, %{code: _} = envelope} -> {:error, envelope}
       {:error, reason} -> {:error, context_error(reason)}
@@ -660,7 +662,7 @@ defmodule Platform.Goals.Tools do
     }
   end
 
-  defp proposal_json(proposal, sources \\ nil) do
+  defp proposal_json(proposal, sources \\ nil, opening \\ nil) do
     base = %{
       id: proposal.id,
       space_id: proposal.space_id,
@@ -676,6 +678,7 @@ defmodule Platform.Goals.Tools do
     if sources do
       Map.merge(base, %{
         person: person_json(proposal),
+        opening_message: opening_json(opening),
         sources: Enum.map(sources, &%{key: &1.key, label: &1.label, kind: &1.kind}),
         allowed: %{
           agent_mode: Goal.agent_modes(),
@@ -688,6 +691,13 @@ defmodule Platform.Goals.Tools do
       base
     end
   end
+
+  # The person's first message (task 01a1ebab): text already sanitized and
+  # mention-escaped by Proposals.opening_message/2; nil when it is gone.
+  defp opening_json(nil), do: nil
+
+  defp opening_json(%{text: text, sent_at: sent_at, from: from, note: note}),
+    do: %{text: text, sent_at: time(sent_at), from: from, note: note}
 
   defp person_json(%{user: %{id: id, name: name}}), do: %{user_id: id, name: name}
   defp person_json(%{user_id: id}), do: %{user_id: id, name: nil}

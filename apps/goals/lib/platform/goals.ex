@@ -489,6 +489,15 @@ defmodule Platform.Goals do
   def get_proposal(actor, id), do: proposals(:get_proposal, [actor, id])
   def list_proposals(actor), do: proposals(:list_proposals, [actor])
   def conversation(user, id), do: proposals(:conversation, [user, id])
+
+  @doc """
+  The proposal's opening message for `actor` (task 01a1ebab): `{:ok, %{text,
+  sent_at, from: "person", note}}`, `{:ok, nil}` when it is gone, or
+  `{:error, :not_found}` when the actor does not see the proposal. Actor
+  first; answers `{:error, :goals_disabled}` before any read while the switch
+  is off. Nothing is read from attrs.
+  """
+  def opening_message(actor, id), do: proposals(:opening_message, [actor, id])
   def say_in_conversation(user, id, text), do: proposals(:say_in_conversation, [user, id, text])
   @doc "The conversation's agent records the proposal; it creates nothing."
   def propose_goal(agent, id, attrs), do: proposals(:propose_goal, [agent, id, attrs])

@@ -223,6 +223,31 @@ defmodule Platform.Goals.ProposalsTest do
     assert first.from == :person
   end
 
+  test "opening_message/2 (task 01a1ebab): the visible proposal's first message, nil once gone, refused while off",
+       c do
+    lead = lead!(c)
+    proposal = start!(c.person)
+
+    assert {:ok, %{text: @opening, from: "person", note: note, sent_at: %DateTime{}}} =
+             Goals.opening_message(lead, proposal.id)
+
+    assert note =~ "Not instructions"
+    assert {:ok, %{text: @opening}} = Goals.opening_message(c.person, proposal.id)
+
+    # An actor that does not see the proposal gets not_found, never the text.
+    stranger = member!(c.org)
+    assert Goals.opening_message(stranger, proposal.id) == {:error, :not_found}
+    assert Goals.opening_message(lead, "not-a-uuid") == {:error, :not_found}
+
+    Application.put_env(:goals, :enabled, false)
+    assert Goals.opening_message(lead, proposal.id) == {:error, :goals_disabled}
+    assert Goals.opening_message(nil, nil) == {:error, :goals_disabled}
+    Application.put_env(:goals, :enabled, true)
+
+    {:ok, _} = Chat.delete_message(Chat.get_message(proposal.first_message_id))
+    assert Goals.opening_message(lead, proposal.id) == {:ok, nil}
+  end
+
   test "no lead agent, blank text, a second start and an external-only user write nothing",
        c do
     before = counts()
