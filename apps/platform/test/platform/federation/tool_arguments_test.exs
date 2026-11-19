@@ -249,7 +249,13 @@ defmodule Platform.Federation.ToolArgumentsTest do
   # +2 adds design_critique_complete's critique_ref and issues. HONEST:
   # DesignCritique.complete_from_agent/2 reads each under its declared key
   # only and refuses a missing one (:invalid_critique_ref / :invalid_issues).
-  @surveyed_required_count 238
+  # -1 demotes intent_ack's subagent_id (task 01a1f53c-1825). Not a new
+  # declaration, so none of the three classifications applies: the
+  # requirement became CONDITIONAL (required for working / completed /
+  # cancel_honored, optional for rejected), which the gate cannot state, so
+  # it is `required: false` and the handler enforces it with the same
+  # :missing_subagent_id code. No alias and no exemption to add.
+  @surveyed_required_count 237
 
   defp read_source(relative) do
     # Resolved from __DIR__ (apps/platform/test/platform/federation) rather

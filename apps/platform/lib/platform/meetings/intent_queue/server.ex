@@ -703,16 +703,29 @@ defmodule Platform.Meetings.IntentQueue.Server do
   already been shape-validated by the tool surface — this function
   stamps it, it does not police it.
 
+  `subagent_id` may be `nil` only when `ack_status` is `:rejected`
+  (task 01a1f53c-1825): declining an intent needs no subagent. A nil
+  is never stamped — the row keeps whatever it held, so a `:rejected`
+  after a `:working` ack keeps the real id `:working` recorded. A nil
+  with any other status matches no clause.
+
   Returns `{:ok, row}`, `{:error, :not_found}`,
   `{:error, {:invalid_ack_status, status}}`, or
   `{:error, {:invalid_ack_state, current_status}}` when the row is not
   in a state that ack means anything for (e.g. acking a `:queued` row).
   """
-  @spec ack(binary(), binary(), binary(), atom(), binary() | nil) ::
+  @spec ack(binary(), binary(), binary() | nil, atom(), binary() | nil) ::
           {:ok, row()} | {:error, term()}
   def ack(meeting_id, intent_id, subagent_id, ack_status, note \\ nil)
+
+  def ack(meeting_id, intent_id, subagent_id, ack_status, note)
       when is_binary(meeting_id) and is_binary(intent_id) and is_binary(subagent_id) do
     GenServer.call(via(meeting_id), {:ack, intent_id, subagent_id, ack_status, note})
+  end
+
+  def ack(meeting_id, intent_id, nil, :rejected, note)
+      when is_binary(meeting_id) and is_binary(intent_id) do
+    GenServer.call(via(meeting_id), {:ack, intent_id, nil, :rejected, note})
   end
 
   @doc """
@@ -1307,7 +1320,9 @@ defmodule Platform.Meetings.IntentQueue.Server do
             {:reply, {:error, reason}, state}
 
           {:ok, destination} ->
-            attrs = %{subagent_id: subagent_id}
+            # A nil subagent_id (`:rejected` only) is not stamped: the row
+            # keeps nil, or the real id an earlier `:working` recorded.
+            attrs = if is_nil(subagent_id), do: %{}, else: %{subagent_id: subagent_id}
 
             {reply, updated, state} = apply_transition(row, destination, attrs, state)
 

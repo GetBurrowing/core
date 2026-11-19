@@ -171,14 +171,20 @@ defmodule Platform.Federation.ToolArguments do
 
   One documented casualty, recorded rather than papered over:
   `ToolSurface.validate_subagent_id/1` is KEPT even though `subagent_id` is
-  declared required on both `task_ack` and `intent_ack`, because it also
-  enforces a whitespace rule and a 128-byte cap, and because for `intent_ack` a
-  rejected id has a side effect the gate does not reproduce
-  (`IntentQueue.record_rejected_ack/2`, which is what splits a later timeout
-  into `:no_ack_spawn_failed` rather than `:timed_out`). Through `dispatch/3`
-  an absent or blank `subagent_id` is now refused before that evidence is
-  recorded — see `tool_surface_intent_ack_test.exs` for the test that pins both
-  halves of that seam.
+  declared required on `task_ack`, because it also enforces a whitespace rule
+  and a 128-byte cap. For `intent_ack` the casualty has since been repaired
+  (task 01a1f53c-1825). Its `subagent_id` is required for `working`,
+  `completed` and `cancel_honored` but optional for `rejected` — declining
+  needs no subagent — and a per-parameter gate cannot state a requirement
+  conditional on another argument's value, so the descriptor now says
+  `required: false` and the handler enforces the rule, `skill_get`-style (see
+  "Conditional requirements leave this module" below). That also ended the
+  seam where the gate refused an absent id before the handler could record
+  the attempt: the handler's refusal keeps the gate's `:missing_subagent_id`
+  code and calls `IntentQueue.record_rejected_ack/2`, which is what splits a
+  later timeout into `:no_ack_spawn_failed` rather than `:timed_out`. A blank
+  id now reaches `validate_subagent_id/1` and is counted too. See
+  `tool_surface_intent_ack_test.exs` for the tests that pin it.
 
   ## Conditional requirements leave this module
 

@@ -254,13 +254,26 @@ defmodule Platform.Meetings.IntentQueue do
   @doc """
   Land an `intent_ack` from a target runtime. See
   `Platform.Meetings.IntentQueue.Server.ack/5` for the status table.
+
+  `subagent_id` may be `nil` only for `:rejected` (task 01a1f53c-1825):
+  declining needs no subagent. A nil with any other status matches no
+  clause.
   """
-  @spec ack(binary(), binary(), binary(), atom(), binary() | nil) ::
+  @spec ack(binary(), binary(), binary() | nil, atom(), binary() | nil) ::
           {:ok, row()} | {:error, term()}
   def ack(meeting_id, intent_id, subagent_id, ack_status, note \\ nil)
+
+  def ack(meeting_id, intent_id, subagent_id, ack_status, note)
       when is_binary(meeting_id) and is_binary(intent_id) and is_binary(subagent_id) do
     with_queue(meeting_id, {:error, :not_found}, fn ->
       Server.ack(meeting_id, intent_id, subagent_id, ack_status, note)
+    end)
+  end
+
+  def ack(meeting_id, intent_id, nil, :rejected, note)
+      when is_binary(meeting_id) and is_binary(intent_id) do
+    with_queue(meeting_id, {:error, :not_found}, fn ->
+      Server.ack(meeting_id, intent_id, nil, :rejected, note)
     end)
   end
 

@@ -3478,8 +3478,9 @@ defmodule Platform.Federation.ToolSurface do
   # contact and a refusal is not contact) and then landed plain `:timed_out`,
   # indistinguishable from an offline runtime.
   #
-  # `intent_ack`'s descriptor still says "same contract and the same validation
-  # as `task_ack`", and that is still true after the move: the pairing is a
+  # `intent_ack`'s descriptor used to say "same contract and the same
+  # validation as `task_ack`"; task 01a1f53c-1825 dropped that sentence when
+  # subagent_id became optional for `rejected`. The pairing was always a
   # NAMING symmetry, not a capability one. The two serve different queues with
   # different lifetimes — `task_ack` writes `execution_leases`, `intent_ack`
   # writes meeting-lifetime ETS — so the descriptor moved VERBATIM and the
@@ -3591,7 +3592,7 @@ defmodule Platform.Federation.ToolSurface do
       %{
         name: "intent_ack",
         description:
-          "Ack a meeting-intent dispatch: report that you spawned a subagent for the intent, and later report how it ended (task 019f70b8 stage 3). The meeting's intent queue is ack-gated and SERIAL — it holds at most one intent per meeting in flight, and the next queued intent does not go out until this one reaches a terminal status. `status: working` says \"I spawned the subagent\" and does NOT advance the queue; `completed`, `rejected` and `cancel_honored` do. Requires a subagent_id — spawn the subagent FIRST, then include its returned handle in the ack. Same contract and the same validation as `task_ack`.",
+          "Ack a meeting-intent dispatch: report that you spawned a subagent for the intent, and later report how it ended (task 019f70b8 stage 3). The meeting's intent queue is ack-gated and SERIAL — it holds at most one intent per meeting in flight, and the next queued intent does not go out until this one reaches a terminal status. `status: working` says \"I spawned the subagent\" and does NOT advance the queue; `completed`, `rejected` and `cancel_honored` do. `working`, `completed` and `cancel_honored` require a subagent_id — spawn the subagent FIRST, then include its returned handle in the ack. `rejected` is the one exception: declining an intent needs no subagent, so subagent_id may be omitted and is then recorded as null.",
         parameters: %{
           intent_id: %{
             type: "string",
@@ -3601,9 +3602,9 @@ defmodule Platform.Federation.ToolSurface do
           },
           subagent_id: %{
             type: "string",
-            required: true,
+            required: false,
             description:
-              "Opaque handle identifying the subagent working this intent — the runtime slug (e.g. `agent-1.host-a`) for openclaw agents, or the Task-tool `agentId` returned by the Agent spawn call for Claude Code (e.g. `afd767f1e0cc81633`). Must be non-empty and ≤128 bytes. The server checks presence and size only — it does not verify that the id names a real spawn — so pass the id of the subagent you actually spawned. It is also what a later cancellation is addressed to, so it must identify the ACTUAL subagent."
+              "Required for `working`, `completed` and `cancel_honored`; may be omitted for `rejected`, because declining an intent needs no subagent — an omitted id is recorded as null, never invented. Opaque handle identifying the subagent working this intent — the runtime slug (e.g. `agent-1.host-a`) for openclaw agents, or the Task-tool `agentId` returned by the Agent spawn call for Claude Code (e.g. `afd767f1e0cc81633`). Must be non-empty and ≤128 bytes. The server checks presence and size only — it does not verify that the id names a real spawn — so pass the id of the subagent you actually spawned. It is also what a later cancellation is addressed to, so it must identify the ACTUAL subagent."
           },
           status: %{
             type: "string",
@@ -3622,7 +3623,7 @@ defmodule Platform.Federation.ToolSurface do
         returns:
           "%{intent_id, meeting_id, status, subagent_id, acked_at}. `status` is the intent's NEW queue status, which is not the same word you sent: `working` → `acked`, `completed` and `rejected` → `completed`, `cancel_honored` → `cancelled` (or `cancelled_late` if the work had already completed).",
         limitations:
-          "Invalid subagent_id returns `{:error, :invalid_subagent_id}` — one of `missing` (key absent or nil), `empty_or_whitespace`, or `oversized` (> 128 bytes) — and leaves the queue row COMPLETELY untouched: a schema-rejected ack is never a partial ack. Repeated rejected attempts are counted, and if the intent then times out it is reported as `no_ack_spawn_failed` (the runtime tried and could not spawn) rather than `timed_out` (nothing came back at all). Unknown `intent_id`, or one whose meeting has ended, returns `{:error, :not_found}` — the queue is meeting-lifetime and holds nothing after the meeting. Acking an intent that has not been dispatched, or one already terminal, returns `{:error, :invalid_ack_state}`. If no ack of any kind arrives within the meeting's ack window (default 90s) the intent is timed out and the queue moves on.",
+          "subagent_id is required for `working`, `completed` and `cancel_honored`: omitting it on one of those returns `code: :missing_subagent_id` (recoverable). It may be omitted for `rejected` — declining needs no subagent — and is then recorded as null; a `rejected` after an earlier `working` keeps the id that `working` stamped. A supplied subagent_id is validated the same way for every status: `empty_or_whitespace` or `oversized` (> 128 bytes) is refused. Any refused ack leaves the queue row COMPLETELY untouched: a schema-rejected ack is never a partial ack. Repeated rejected attempts are counted, and if the intent then times out it is reported as `no_ack_spawn_failed` (the runtime tried and could not spawn) rather than `timed_out` (nothing came back at all). Unknown `intent_id`, or one whose meeting has ended, returns `{:error, :not_found}` — the queue is meeting-lifetime and holds nothing after the meeting. Acking an intent that has not been dispatched, or one already terminal, returns `{:error, :invalid_ack_state}`. If no ack of any kind arrives within the meeting's ack window (default 90s) the intent is timed out and the queue moves on.",
         when_to_use:
           "IMMEDIATELY after spawning a subagent in response to a `meeting_intent_dispatch` attention signal — the meeting's whole queue is waiting behind this one intent. Then again when the work ends, or as soon as you decide the intent isn't yours (`rejected`) — an honest early `rejected` unblocks the meeting AND improves future targeting."
       }
@@ -6759,9 +6760,10 @@ defmodule Platform.Federation.ToolSurface do
 
   # ── intent_ack (task 019f70b8 stage 3) ────────────────────────────────
   # The runtime-facing half of the meeting intent queue's ack contract.
-  # Shares `validate_subagent_id/1` with task_ack verbatim — same three-way
-  # error envelope, same 128-byte cap — because it is the same contract:
-  # requires a subagent_id; does not verify it (task 01a0ac55).
+  # Shares `validate_subagent_id/1` with task_ack for any SUPPLIED id — same
+  # error envelope, same 128-byte cap; does not verify it (task 01a0ac55).
+  # Unlike task_ack the id is conditional: `rejected` may omit it (task
+  # 01a1f53c-1825), see `validate_intent_subagent_id/4`.
   #
   # ORDERING IS LOAD-BEARING. The subagent_id is validated BEFORE the queue
   # is touched, and a rejected ack records only a counter in the queue
@@ -6778,7 +6780,7 @@ defmodule Platform.Federation.ToolSurface do
     with {:ok, meeting_id} <- locate_intent_meeting(intent_id),
          {:ok, ack_status} <- validate_intent_ack_status(supplied_status),
          {:ok, subagent_id} <-
-           validate_intent_subagent_id(meeting_id, intent_id, supplied_subagent_id) do
+           validate_intent_subagent_id(meeting_id, intent_id, ack_status, supplied_subagent_id) do
       apply_intent_ack(meeting_id, intent_id, subagent_id, ack_status, note)
     end
   end
@@ -11259,7 +11261,32 @@ defmodule Platform.Federation.ToolSurface do
   # those attempts so an eventual timeout is reported as
   # `:no_ack_spawn_failed` (broken target) rather than `:timed_out`
   # (nothing came back). Recording the attempt does not touch the row.
-  defp validate_intent_subagent_id(meeting_id, intent_id, supplied) do
+  #
+  # Task 01a1f53c-1825: the requirement is CONDITIONAL on status, which the
+  # per-parameter gate in `ToolArguments` cannot express, so the descriptor
+  # declares `required: false` and this function enforces it. `rejected` may
+  # omit the id — declining needs no subagent — and the id is then nil, never
+  # derived or defaulted, and no rejected-ack attempt is counted. Every other
+  # status still refuses an absent id, with the gate's `:missing_subagent_id`
+  # code so clients branching on it see no change, and that refusal is now
+  # counted (the gate used to answer first and swallow the evidence).
+  defp validate_intent_subagent_id(_meeting_id, _intent_id, :rejected, nil), do: {:ok, nil}
+
+  defp validate_intent_subagent_id(meeting_id, intent_id, ack_status, nil) do
+    _ = Meetings.IntentQueue.record_rejected_ack(meeting_id, intent_id)
+
+    {:error,
+     %{
+       error: "intent_ack: subagent_id is required for status #{ack_status}",
+       code: :missing_subagent_id,
+       recoverable: true,
+       suggestion:
+         "Spawn the subagent FIRST, then pass its returned agent id as `subagent_id`. " <>
+           "Only `rejected` needs no subagent: to decline an intent, ack `rejected` without a subagent_id."
+     }}
+  end
+
+  defp validate_intent_subagent_id(meeting_id, intent_id, _ack_status, supplied) do
     case validate_subagent_id(supplied) do
       {:ok, subagent_id} ->
         {:ok, subagent_id}
