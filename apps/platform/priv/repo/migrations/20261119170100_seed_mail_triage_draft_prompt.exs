@@ -32,6 +32,7 @@ defmodule Platform.Repo.Migrations.SeedMailTriageDraftPrompt do
   only, which hides the rollback rather than undoing it.
   """
   use Ecto.Migration
+  # old-code-compatible: inserts a new prompt template slug; the previous release ignores it.
 
   def up do
     seed_prompt_template!()

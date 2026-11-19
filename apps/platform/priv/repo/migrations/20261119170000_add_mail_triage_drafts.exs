@@ -26,6 +26,8 @@ defmodule Platform.Repo.Migrations.AddMailTriageDrafts do
   """
   use Ecto.Migration
 
+  # old-code-compatible: adds nullable columns and indexes; the trigger on mail_drafts only writes mail_triage_items, which the previous release never reads.
+
   def up do
     alter table(:mail_drafts) do
       add(

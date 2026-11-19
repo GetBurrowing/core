@@ -23,6 +23,8 @@ defmodule Platform.Repo.Migrations.AddMailTriage do
   """
   use Ecto.Migration
 
+  # old-code-compatible: two new tables (mail_triage_items, mail_triage_feedback) the previous release never reads or writes; drop/null:false/unique_index apply to them only.
+
   def up do
     create table(:mail_triage_items, primary_key: false) do
       add(:id, :binary_id, primary_key: true)

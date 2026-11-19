@@ -44,6 +44,8 @@ defmodule Platform.Repo.Migrations.SeedMailTriageClassifyPrompt do
   """
   use Ecto.Migration
 
+  # old-code-compatible: inserts a new prompt template slug and a bundle key; the previous release ignores both.
+
   @role "relationship_steward"
   @key "mail.triage"
 
