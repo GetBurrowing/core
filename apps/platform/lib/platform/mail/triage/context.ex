@@ -105,7 +105,7 @@ defmodule Platform.Mail.Triage.Context do
       task_titles: Enum.map(tasks, &%{id: &1.id, title: &1.title}),
       meeting_titles: Enum.map(meetings, &%{id: &1.id, title: &1.name}),
       person: person && Map.take(person, [:slug, :relation]),
-      feedback: feedback(user, domain)
+      feedback: feedback(user, address, domain)
     }
   end
 
@@ -171,10 +171,10 @@ defmodule Platform.Mail.Triage.Context do
   def missed?(_ctx), do: false
 
   @doc """
-  Is this reader's most recent verdict on the sender's domain
-  `not_important`? One tap is enough: a reader who said "not important"
-  once expects the next email from that sender to stay out of the call-out
-  list. A later `missed` verdict makes `latest` "missed" and lifts it.
+  Is this reader's most recent verdict on the sender's domain (on a
+  freemail domain, the sender's address) `not_important`? One tap is
+  enough: a reader who said "not important" once expects the next email
+  from that sender to stay out of the call-out list. A later `missed` verdict makes `latest` "missed" and lifts it.
   Per reader: the counts come from this reader's feedback rows only.
   """
   @spec demoted?(t()) :: boolean()
@@ -384,15 +384,19 @@ defmodule Platform.Mail.Triage.Context do
 
   # ── feedback priors ──────────────────────────────────────────────────────
 
-  defp feedback(_user, nil), do: %{not_important: 0, missed: 0, latest: nil}
+  # A reader's verdict applies to the sender's domain, except on a freemail
+  # domain: one "Not important" tap on news@gmail.com must not demote every
+  # other gmail.com sender, so there the verdict is matched by address.
+  defp feedback(_user, _address, nil), do: %{not_important: 0, missed: 0, latest: nil}
 
-  defp feedback(%{id: user_id}, domain) do
+  defp feedback(%{id: user_id}, address, domain) do
     rows =
       from(f in Feedback,
-        where: f.user_id == ^user_id and f.sender_domain == ^domain,
+        where: f.user_id == ^user_id,
         order_by: [desc: f.inserted_at, desc: f.id],
         select: f.verdict
       )
+      |> feedback_sender(address, domain)
       |> Repo.all(quiet())
 
     %{
@@ -400,6 +404,12 @@ defmodule Platform.Mail.Triage.Context do
       missed: Enum.count(rows, &(&1 == "missed")),
       latest: List.first(rows)
     }
+  end
+
+  defp feedback_sender(query, address, domain) do
+    if freemail?(domain),
+      do: where(query, [f], f.sender_address == ^address),
+      else: where(query, [f], f.sender_domain == ^domain)
   end
 
   defp quiet, do: Platform.Mail.Triage.quiet_opts()

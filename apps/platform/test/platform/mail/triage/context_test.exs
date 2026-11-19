@@ -178,6 +178,37 @@ defmodule Platform.Mail.Triage.ContextTest do
       assert Context.model_facts(other_built)["reader_said_sender_not_important"] == false
     end
 
+    test "a freemail sender's feedback is matched by address, a company's by domain", ctx do
+      news = inbound!(ctx.box, %{from_address: "news@gmail.com"})
+      {:ok, _} = Triage.record_feedback(ctx.reader, news, "not_important")
+      vendor = inbound!(ctx.box, %{from_address: "news@vendor.test"})
+      {:ok, _} = Triage.record_feedback(ctx.reader, vendor, "not_important")
+
+      client =
+        Context.build(ctx.reader, inbound!(ctx.box, %{from_address: "client@gmail.com"}),
+          roster: []
+        )
+
+      assert client.feedback == %{not_important: 0, missed: 0, latest: nil}
+      assert Context.model_facts(client)["reader_said_sender_not_important"] == false
+
+      again =
+        Context.build(ctx.reader, inbound!(ctx.box, %{from_address: "news@gmail.com"}),
+          roster: []
+        )
+
+      assert again.feedback.not_important == 1
+      assert Context.model_facts(again)["reader_said_sender_not_important"] == true
+
+      peer =
+        Context.build(ctx.reader, inbound!(ctx.box, %{from_address: "deals@vendor.test"}),
+          roster: []
+        )
+
+      assert peer.feedback.not_important == 1
+      assert Context.model_facts(peer)["reader_said_sender_not_important"] == true
+    end
+
     test "signals and model facts carry no text", ctx do
       project = project!(ctx.org_id)
 

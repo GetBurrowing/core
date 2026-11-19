@@ -292,6 +292,39 @@ defmodule Platform.Mail.TriageTest do
       refute Enum.any?(Triage.called_out(ctx.a, Triage.briefing_today()), &(&1.id == demoted.id))
     end
 
+    # Auditor's must (task 01a1f426): a freemail domain is not one sender,
+    # so a verdict on it is matched by address, not by domain.
+    test "one not_important tap on a freemail sender demotes that address only", ctx do
+      Stub.reply!(Stub.json(verdict(%{"tier" => "action"})))
+      first = inbound!(ctx.shared, %{from_address: "News <news@gmail.com>"})
+      assert {:ok, %Item{tier: "action"} = item} = Triage.classify_for_reader(ctx.a, first)
+      _ = stub_calls()
+
+      assert {:ok, %Feedback{sender_address: "news@gmail.com", sender_domain: "gmail.com"}} =
+               Triage.record_feedback(ctx.a, item, "not_important")
+
+      # Another gmail.com sender is not demoted by that tap.
+      Stub.reply!(Stub.json(verdict(%{"tier" => "action"})))
+      client = inbound!(ctx.shared, %{from_address: "client@gmail.com"})
+
+      assert {:ok, %Item{tier: "action", classifier: "agent:" <> _} = called} =
+               Triage.classify_for_reader(ctx.a, client)
+
+      refute Enum.any?(called.signals, &(&1["kind"] == "feedback_not_important"))
+      assert Enum.any?(Triage.called_out(ctx.a, Triage.briefing_today()), &(&1.id == called.id))
+      [[_system, user]] = stub_calls()
+      assert user.content =~ ~s("reader_said_sender_not_important":false)
+
+      # The same tap still demotes the next email from news@gmail.com.
+      Stub.reply!(Stub.json(verdict(%{"tier" => "action"})))
+      again = inbound!(ctx.shared, %{from_address: "news@gmail.com"})
+
+      assert {:ok, %Item{tier: "routine", classifier: "rule:feedback_not_important"}} =
+               Triage.classify_for_reader(ctx.a, again)
+
+      assert stub_calls() == []
+    end
+
     test "after one not_important tap, a reply we are waiting on from that domain is still called out",
          ctx do
       first = inbound!(ctx.shared, %{from_address: "billing@vendor.test"})
