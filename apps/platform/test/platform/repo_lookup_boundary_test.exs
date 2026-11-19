@@ -297,6 +297,11 @@ defmodule Platform.RepoLookupBoundaryTest do
      "`complete/1` receives the `%User{}` the OIDC callback just inserted or loaded; the Platform.UUID.valid?/1 check is belt and braces before `FirstRunGoal.mark_owner/1`, and a bad id answers :ok and does nothing"},
     {"platform/agents/workspace_bootstrap.ex", :get!, "Agent", 1, :safe_internal,
      "`agent.id` read off the `%Agent{}` `upsert_agent!/1` just returned in the same function"},
+    # Task 01a1f42d stage 2/4: NativeAgents.transfer_owner/4 (Owner control on /control/<slug>).
+    {"platform/agents/native_agents.ex", :platform_uuid_guard, "-", 2, :must_cast,
+     "`actor_id/1` guards the actor id (a `%User{}` from the LiveView session, or a raw binary from iex/RPC callers) and `check_new_owner/1` guards the new owner id, which arrives from the Owner control's select (a LiveView form param, forgeable). Both are BOOLEANS and the string is discarded on failure: a malformed actor is :forbidden and a malformed new owner :invalid_owner. Pinned by native_agents_transfer_owner_test.exs \"a nil actor, or an actor id that is not a UUID, is forbidden\" and \":invalid_owner for ... an unknown id\" (\"not-a-uuid\")"},
+    {"platform/agents/native_agents.ex", :get, "Platform.Accounts.User", 1, :must_cast,
+     "`check_new_owner/1` reads the new owner id from the Owner control's LiveView param; it runs only after Platform.UUID.valid?/1 in the same `with`, so a malformed id is :invalid_owner and never reaches Repo.get"},
     # ── Architecture (ADR-0046, task 019fa61c) ─────────────────────────
     {"platform/architecture/stage_audit.ex", :platform_uuid_guard, "-", 2, :safe_internal,
      "`resolve_stage/1`'s binary clause. `StageAudit.read/1` is the question every other module asks about `stages.architecture_audit`, and a later stage exposes it behind an MCP tool taking a caller-supplied `stage_id` — so the guard is here from the start rather than added once the tool ships. Count 1 -> 2 with stage 5: `audit_rows/1` guards `coverage/1`'s `project_id` before it reaches `where: t.project_id == ^project_id`, returning an empty coverage rather than raising Ecto.Query.CastError. The classification is unchanged because the guard, not the caller, is what makes the lookup safe — and `coverage/1` is the read an operator reaches for while chasing a responsibility that has gone silent, so raising on a fat-fingered id would send them after a second bug"},
@@ -1287,6 +1292,10 @@ defmodule Platform.RepoLookupBoundaryTest do
     # `Starter.state/1` pins `a.id == ^id` with the id of a loaded `%Agent{}`
     # (Burrow.get/0 or NativeAgents.create/2), never a boundary value.
     "platform/agents/burrow/starter.ex" => 1,
+    # `lock_runtime/1` pins `r.id == ^runtime_pk` with `Agent.runtime_id`, the
+    # :binary_id FK on a loaded `%Agent{}` (FOR UPDATE in transfer_owner/4), written
+    # by the runtime insert; never a boundary value.
+    "platform/agents/native_agents.ex" => 1,
     # Canonical publication is keyed by id from a loaded %Canvas{} and locks
     # that same row, ordering its delivery before any ownership move.
     "platform/chat/canvas/broadcasts.ex" => 1,
