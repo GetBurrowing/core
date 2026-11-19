@@ -393,6 +393,9 @@ defmodule Platform.Regression.PubSubTopicInventoryAuditTest do
     # design: signed GitHub `issues` deliveries drive Platform.Feedback.Intake
     # and its tool-less classifier, never a Router fire (task 01a11ec3 stage 3).
     {"platform.feedback.intake_only", :global},
+    # Sentinel. `mail.triage` declares it and no publisher exists, by design:
+    # Platform.Mail.Triage runs the tool-less classifier (task 01a1f426 stage 1).
+    {"platform.mail.triage_only", :global},
     {"(dynamic) entry.topic", :global}
   ]
 

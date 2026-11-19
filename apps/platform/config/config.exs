@@ -115,6 +115,8 @@ config :platform, Platform.Responsibilities,
     Platform.Responsibilities.Handlers.AgentsGoalHeartbeat,
     Platform.Responsibilities.Handlers.ExperimentsLabelSignal,
     Platform.Responsibilities.Handlers.ExperimentsScientist,
+    # Task 01a1f426 stage 1: mail triage for the morning briefing (null topic).
+    Platform.Responsibilities.Handlers.MailTriage,
     # Task 01a11ec3 stage 3: external-feedback intake (never the janitor).
     Platform.Responsibilities.Handlers.FeedbackIntake,
     # Task 019fa1ac-6685 stage 1: the janitor's weekly chore drain.

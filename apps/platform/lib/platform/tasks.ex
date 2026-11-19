@@ -6814,6 +6814,82 @@ defmodule Platform.Tasks do
   def list_my_open_tasks(_user_id, _opts), do: []
 
   @doc """
+  The open tasks `user` may see whose title or description names any of
+  `terms` (case-insensitive substring), newest first, at most `limit`
+  (capped at 50). Task 01a1f426 stage 1: the mail triage context asks "does
+  the reader have open work that names this sender's organisation?" through
+  this function, so the task-visibility rule lives here and nowhere in Mail.
+
+  The visibility rule is the one the board applies, IN THE QUERY:
+
+    * the task's project is in the viewer's tenancy visibility
+      (`Platform.Tenancy.visibility/1` + `Platform.Tenancy.scope/3`, as in
+      `list_projects_for_user/2`), and
+    * `Platform.Access.Scope.for_user/1` grants `tasks.read` on the task
+      (`scope_by/3`, as `maybe_scope_by/3` applies for the board).
+
+  Open means every `Task.statuses/0` member except `done` and `cancelled`;
+  soft-deleted tasks are excluded. Terms are trimmed, blanks dropped, and
+  `%`/`_` escaped so a term matches literally. No usable term, a nil or
+  id-less user, or a malformed id answers `[]`.
+
+  Options: `:org_id` narrows (never widens) to one org's projects.
+  """
+  @spec list_open_tasks_matching_for_user(map() | nil, [String.t()], pos_integer(), keyword()) ::
+          [Task.t()]
+  def list_open_tasks_matching_for_user(user, terms, limit \\ 10, opts \\ [])
+
+  def list_open_tasks_matching_for_user(%{id: user_id} = user, terms, limit, opts)
+      when is_binary(user_id) and is_list(terms) and is_integer(limit) and limit > 0 do
+    patterns =
+      terms
+      |> Enum.filter(&is_binary/1)
+      |> Enum.map(&String.trim/1)
+      |> Enum.reject(&(&1 == ""))
+      |> Enum.uniq_by(&String.downcase/1)
+      |> Enum.map(&("%" <> escape_like(&1) <> "%"))
+
+    if Platform.UUID.valid?(user_id) and patterns != [] do
+      open = Task.statuses() -- ~w(done cancelled)
+
+      projects =
+        Project
+        |> Platform.Tenancy.scope(Platform.Tenancy.visibility(user))
+        |> maybe_filter_projects_org(Keyword.get(opts, :org_id))
+        |> select([p], p.id)
+
+      matches =
+        Enum.reduce(patterns, dynamic(false), fn pattern, acc ->
+          dynamic(
+            [t],
+            ^acc or ilike(t.title, ^pattern) or ilike(coalesce(t.description, ""), ^pattern)
+          )
+        end)
+
+      Task
+      |> where([t], is_nil(t.deleted_at))
+      |> where([t], t.status in ^open)
+      |> where([t], t.project_id in subquery(projects))
+      |> where(^matches)
+      |> scope_by(Platform.Access.Scope.for_user(user), :task)
+      |> order_by([t], desc: t.inserted_at, desc: t.id)
+      |> limit(^min(limit, 50))
+      |> Repo.all()
+    else
+      []
+    end
+  end
+
+  def list_open_tasks_matching_for_user(_user, _terms, _limit, _opts), do: []
+
+  defp escape_like(term) do
+    term
+    |> String.replace("\\", "\\\\")
+    |> String.replace("%", "\\%")
+    |> String.replace("_", "\\_")
+  end
+
+  @doc """
   True when `task` is the user's: they sponsor it, or they are a `"user"`
   assignee in ANY phase (the flat current-phase column or any
   `phase_assignees` slot).

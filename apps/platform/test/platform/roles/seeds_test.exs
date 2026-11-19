@@ -180,7 +180,9 @@ defmodule Platform.Roles.SeedsTest do
       # numbers (roster 10 -> 12). Each is its own role because each is a
       # permission split: install-wide health reads for the doctor, granted
       # mail content for the steward.
-      assert Repo.aggregate(RoleResponsibility, :count, :id) == 42
+      # 42 -> 43 with task 01a1f426 stage 1: `mail.triage` joined the
+      # `relationship_steward` bundle (roster unchanged).
+      assert Repo.aggregate(RoleResponsibility, :count, :id) == 43
     end
 
     test "is idempotent — calling twice does not duplicate rows" do
@@ -189,11 +191,11 @@ defmodule Platform.Roles.SeedsTest do
 
       assert Repo.aggregate(Role, :count, :key) == 12
 
-      # Same 42 as the fresh-DB case above — the point of this test is
+      # Same 43 as the fresh-DB case above — the point of this test is
       # that the SECOND `seed_defaults/0` adds nothing, so the number
       # must be read off the same breakdown rather than drifting into
       # an independent literal.
-      assert Repo.aggregate(RoleResponsibility, :count, :id) == 42
+      assert Repo.aggregate(RoleResponsibility, :count, :id) == 43
     end
 
     test "each role's bundle round-trips via Platform.Roles.bundle_for/1" do

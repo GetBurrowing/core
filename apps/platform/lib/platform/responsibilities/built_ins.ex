@@ -73,6 +73,9 @@ defmodule Platform.Responsibilities.BuiltIns do
       Handlers.AgentsGoalHeartbeat,
       Handlers.ExperimentsLabelSignal,
       Handlers.ExperimentsScientist,
+      # Task 01a1f426 stage 1: mail triage for the morning briefing. A null
+      # topic; Platform.Mail.Triage runs the tool-less classifier itself.
+      Handlers.MailTriage,
       # Task 01a11ec3 stage 3: external-feedback intake. A dedicated
       # responsibility, never the janitor; the Router never fires it.
       Handlers.FeedbackIntake,
