@@ -30,7 +30,9 @@ defmodule PlatformWeb.Components.InboxItemKindLabelTest do
     # Task 01a1af00 stage 3: a new kind, the UX role's question.
     "ux_decision" => "UX decision",
     # Task 01a1ea5b stage 4: a new kind, the previous-owner notice.
-    "mailbox_reassigned" => "Mailbox reassigned"
+    "mailbox_reassigned" => "Mailbox reassigned",
+    # Task 01a1f426 stage 3: a new kind, a top-tier email between briefings.
+    "mail_priority" => "Email needs you"
   }
 
   describe "desktop labels are unchanged" do

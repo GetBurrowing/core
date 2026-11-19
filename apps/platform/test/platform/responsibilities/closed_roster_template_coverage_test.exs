@@ -135,6 +135,10 @@ defmodule Platform.Responsibilities.ClosedRosterTemplateCoverageTest do
     # at this slug; descriptor in `default_templates/0`, row seeded by
     # `20261009060918_add_janitor_role.exs`.
     "janitor.cron_drain.v1",
+    # Task 01a1f426 stage 1: `mail.triage` (relationship_steward bundle)
+    # points at this slug; descriptor in `default_templates/0`, row seeded by
+    # `20261119150100_seed_mail_triage_classify_prompt.exs`.
+    "mail.triage.classify.v1",
     "meetings.action_items.v1",
     "meetings.attendance_followup.v1",
     "meetings.brief_synthesis.v1",

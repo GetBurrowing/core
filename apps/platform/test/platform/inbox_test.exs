@@ -1069,7 +1069,10 @@ defmodule Platform.InboxTest do
                "lifecycle_step_failed",
                # Task 01a1ea5b stage 4: the previous-owner notice is read,
                # not handled, so opening it acknowledges it.
-               "mailbox_reassigned"
+               "mailbox_reassigned",
+               # Task 01a1f426 stage 3: the between-briefings email notice
+               # points at the briefing, so opening it acknowledges it.
+               "mail_priority"
              ]
 
       assert Inbox.action_kinds() == [

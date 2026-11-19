@@ -405,8 +405,9 @@ defmodule Platform.Mail.DigestTest do
 
   describe "the briefing section" do
     test "a core provider contributes the mail section only while Email is on", ctx do
-      assert [%{key: "mail"}] = BriefingSections.all()
-      assert BriefingSections.providers() == [Digest]
+      # Task 01a1f426 stage 2 lists the called-out email section first.
+      assert ["mail_priority", "mail"] = Enum.map(BriefingSections.all(), & &1.key)
+      assert BriefingSections.providers() == [Platform.Mail.Triage.BriefingSection, Digest]
       Application.put_env(:platform, :mail_enabled, false)
       assert BriefingSections.all() == []
       _ = ctx

@@ -138,6 +138,11 @@ defmodule Platform.Responsibilities.BuilderlessKeyTemplateCoverageTest do
     # `experiments.labeler.v1` itself. The slug is seeded, so it is not in
     # the no-row list below.
     "experiments.label_signal",
+    # Task 01a1f426 stage 1. `Providers.Mail.build_prompt/1` returns
+    # `:no_build_prompt` on purpose: the Router never fires this key (null
+    # topic); Platform.Mail.Triage renders `mail.triage.classify.v1` itself.
+    # The slug is seeded, so it is not in the no-row list below.
+    "mail.triage",
     "meetings.attendance_followup",
     # Native tool-free synthesis renders the DB template itself.
     "meetings.brief_synthesis",

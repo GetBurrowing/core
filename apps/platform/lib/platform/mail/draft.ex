@@ -17,6 +17,14 @@ defmodule Platform.Mail.Draft do
   calendar invite: `calendar_method` (`REQUEST` | `CANCEL`) with its
   `calendar_ics` text. The two calendar fields are set together or not at
   all. `Platform.Mail.Deliverer` renders them.
+
+  ## The email it answers (task 01a1f426 stage 4)
+
+  `in_reply_to_inbound_id` names the inbound email this draft replies to
+  (FK ON DELETE SET NULL). Only a system or agent write may set it
+  (`Platform.Mail.Drafts`), and it must be an email of the draft's own
+  account. `Platform.Mail.Deliverer` turns it into `In-Reply-To` and
+  `References`.
   """
   use Ecto.Schema
   import Ecto.Changeset
@@ -49,6 +57,7 @@ defmodule Platform.Mail.Draft do
     field(:responsibility, :string)
     field(:task_id, :binary_id)
     field(:stage_id, :binary_id)
+    field(:in_reply_to_inbound_id, :binary_id)
     field(:status, :string, default: "draft")
 
     timestamps()
@@ -84,6 +93,7 @@ defmodule Platform.Mail.Draft do
       :responsibility,
       :task_id,
       :stage_id,
+      :in_reply_to_inbound_id,
       :status
     ])
     |> validate_required([:org_id, :created_by_type, :status])
@@ -93,6 +103,7 @@ defmodule Platform.Mail.Draft do
     |> validate_calendar_pair()
     |> foreign_key_constraint(:org_id)
     |> foreign_key_constraint(:account_id)
+    |> foreign_key_constraint(:in_reply_to_inbound_id)
     |> check_constraint(:status, name: :mail_drafts_status_check)
     |> check_constraint(:calendar_method, name: :mail_drafts_calendar_method_check)
   end
