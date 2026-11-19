@@ -233,7 +233,7 @@ defmodule Platform.Mail.TriageTest do
       assert items_for(ctx.a) == []
 
       view = Triage.section_view(ctx.a, Triage.briefing_today())
-      assert view.agent == nil
+      refute Map.has_key?(view, :agent)
       assert view.agents_by_account == %{}
       assert ctx.shared.id in Enum.map(view.ungranted, & &1.id)
     end
@@ -256,7 +256,7 @@ defmodule Platform.Mail.TriageTest do
       assert {:ok, %{status: :no_triage_agent, classified: 0}} = run(ctx.a)
       assert stub_calls() == []
       assert items_for(ctx.a) == []
-      assert Triage.section_view(ctx.a, Triage.briefing_today()).agent == nil
+      assert Triage.section_view(ctx.a, Triage.briefing_today()).agents_by_account == %{}
     end
   end
 

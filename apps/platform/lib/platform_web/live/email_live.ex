@@ -83,7 +83,10 @@ defmodule PlatformWeb.EmailLive do
   it, read from `Platform.Mail.Ownership.audience/2`, which answers only a
   reader. Access opens the Access panel (`access-panel`): the right-hand
   pane at `lg`, a bottom sheet below it. A manager (`can_manage_access?/2`)
-  gets `Ownership.list_grants/2`'s rows with Revoke, the revoke confirm
+  gets `Ownership.list_grants/2`'s rows folded to one row per agent
+  (`access-agent-row`; the flag agent carries `access-agent-flag`), with
+  Revoke on an access grant (the flag grant stays; a flag-only agent gets
+  `access-agent-turn-off`, a link to Email > Accounts), the revoke confirm
   (`access-revoke-confirm`) and Grant; anyone else who reads it gets the
   same panel read-only. The account editor carries the admin-only owner
   form (`set_owner`) and, for an account the admin cannot read, the
@@ -133,6 +136,7 @@ defmodule PlatformWeb.EmailLive do
 
   use PlatformWeb, :live_view
 
+  import PlatformWeb.Components.Mail.AccessAgentRow, only: [access_agent_row: 1]
   import PlatformWeb.Components.Mail.FlagImportant, only: [flag_important: 1]
 
   alias Platform.Mail
@@ -1302,15 +1306,16 @@ defmodule PlatformWeb.EmailLive do
   # The Access panel's data. A manager reads `Ownership.list_grants/2` (the
   # grant rows, with when each agent was granted); anyone else who reads the
   # mailbox gets `Ownership.audience/2`, read-only. Neither: nil, no panel.
+  #
+  # ONE row per agent (task 01a1f5cc stage 4): `list_grants/2` returns rows of
+  # both purposes, so an agent holding an access AND a flag_important grant
+  # has two rows. `agent_rows/2` folds them here, at the panel's one reader,
+  # rather than in `list_grants/2`, which stays the raw grant list.
   defp load_access(user, %Account{} = account) do
     case Ownership.list_grants(user, account) do
       {:ok, grants} ->
         names = Ownership.principal_names(grants)
-
-        agents =
-          for %{principal_type: "agent", principal_id: id} = grant <- grants,
-              %{} = agent <- [names[{"agent", id}]],
-              do: Map.put(agent, :granted_at, grant.inserted_at)
+        agents = agent_rows(grants, names)
 
         people =
           case account.owner_kind do
@@ -1320,10 +1325,13 @@ defmodule PlatformWeb.EmailLive do
             _ ->
               for %{principal_type: "user", principal_id: id} <- grants,
                   %{} = p <- [names[{"user", id}]],
+                  uniq: true,
                   do: p
           end
 
-        granted = MapSet.new(agents, & &1.id)
+        # Only an ACCESS grant makes an agent a non-candidate: the flag agent
+        # can still be given an ordinary grant.
+        granted = for %{access?: true, id: id} <- agents, into: MapSet.new(), do: id
         member_ids = MapSet.new(people, & &1.id)
 
         %{
@@ -1344,10 +1352,16 @@ defmodule PlatformWeb.EmailLive do
       {:error, _} ->
         case Ownership.audience(user, account) do
           {:ok, %{agents: agents, people: people}} ->
+            flag_id = Ownership.flag_important_agent_ids([account.id])[account.id]
+
             %{
               account: account,
               manage?: false,
-              agents: Enum.map(agents, &Map.put(&1, :granted_at, nil)),
+              agents:
+                Enum.map(
+                  agents,
+                  &Map.merge(&1, %{granted_at: nil, access?: true, flag?: &1.id == flag_id})
+                ),
               people: people,
               candidates: [],
               member_candidates: []
@@ -1357,6 +1371,36 @@ defmodule PlatformWeb.EmailLive do
             nil
         end
     end
+  end
+
+  # The agent grant rows folded to one entry per agent, in first-granted
+  # order: `access?` / `flag?` say which purposes it holds, and `granted_at`
+  # is the access grant's time (the flag grant's when it holds only that).
+  defp agent_rows(grants, names) do
+    grants
+    |> Enum.filter(&(&1.principal_type == "agent"))
+    |> Enum.group_by(& &1.principal_id)
+    |> Enum.flat_map(fn {id, rows} ->
+      case names[{"agent", id}] do
+        %{} = agent ->
+          access = Enum.find(rows, &(&1.purpose == "access"))
+          first = Enum.min_by(rows, & &1.inserted_at, DateTime)
+
+          [
+            {first.inserted_at,
+             Map.merge(agent, %{
+               granted_at: (access || first).inserted_at,
+               access?: access != nil,
+               flag?: Enum.any?(rows, &(&1.purpose == "flag_important"))
+             })}
+          ]
+
+        _ ->
+          []
+      end
+    end)
+    |> Enum.sort_by(&elem(&1, 0), DateTime)
+    |> Enum.map(&elem(&1, 1))
   end
 
   defp owner_people(%Account{owner_user_id: id}) when is_binary(id) do
@@ -1426,10 +1470,6 @@ defmodule PlatformWeb.EmailLive do
 
   def people_text(%{people: people}, user),
     do: Enum.map_join(people, ", ", &if(&1.id == user.id, do: "you", else: &1.name))
-
-  defp granted_text(%DateTime{} = at), do: "granted " <> Calendar.strftime(at, "%m-%d %H:%M")
-  defp granted_text(%NaiveDateTime{} = at), do: "granted " <> Calendar.strftime(at, "%m-%d %H:%M")
-  defp granted_text(_), do: nil
 
   # The switcher's groups, each `{key, label, chip, accounts}`; an empty
   # group is dropped. Personal mailboxes the viewer owns, then shared ones.

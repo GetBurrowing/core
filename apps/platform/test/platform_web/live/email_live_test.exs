@@ -1648,4 +1648,106 @@ defmodule PlatformWeb.EmailLiveTest do
              )
     end
   end
+
+  # Task 01a1f5cc stage 4: an agent can hold an access AND a flag_important
+  # grant on one mailbox; the Access panel shows it once.
+  describe "Access panel with a flag agent" do
+    alias Platform.Mail.AccountGrant
+    alias Platform.Mail.Ownership
+
+    setup ctx do
+      owner = user!("owner") |> member!(ctx.org_id, "member")
+      personal = account!(ctx.admin, ctx.org_id, "a#{System.unique_integer([:positive])}")
+
+      {:ok, personal} =
+        Ownership.set_owner(ctx.admin, personal, %{kind: "personal", owner_user_id: owner.id})
+
+      n = System.unique_integer([:positive])
+      %{owner: owner, personal: personal, ivy: agent!("Ivy#{n}"), octo: agent!("Octo#{n}")}
+    end
+
+    defp grant_purposes(account, agent) do
+      Repo.all(
+        from(g in AccountGrant,
+          where: g.account_id == ^account.id and g.principal_id == ^agent.id,
+          order_by: g.purpose,
+          select: g.purpose
+        )
+      )
+    end
+
+    defp open_access(conn, user, account) do
+      {:ok, view, _} = live(login(conn, user), "/email?account=#{account.id}")
+      view |> element(~s([data-role="access-line-open"])) |> render_click()
+      assert has_element?(view, ~s([data-role="access-panel"][data-mode="manage"]))
+      view
+    end
+
+    defp agent_row(agent), do: ~s([data-role="access-agent-row"][data-agent-id="#{agent.id}"])
+
+    test "the Access panel lists an agent holding both grants once", %{conn: conn} = ctx do
+      {:ok, _} = Ownership.grant(ctx.owner, ctx.personal, {:agent, ctx.ivy.id})
+      {:ok, _} = Ownership.set_flag_important_agent(ctx.owner, ctx.personal, ctx.ivy.id)
+      {:ok, _} = Ownership.set_flag_important_agent(ctx.owner, ctx.personal, ctx.ivy.id)
+      assert grant_purposes(ctx.personal, ctx.ivy) == ["access", "flag_important"]
+
+      view = open_access(conn, ctx.owner, ctx.personal)
+      html = render(view)
+
+      assert [_] = Regex.scan(~r/data-role="access-agent-row"/, html)
+
+      assert has_element?(
+               view,
+               agent_row(ctx.ivy) <> ~s( [data-role="access-agent-flag"]),
+               "Flags important email"
+             )
+
+      assert has_element?(view, agent_row(ctx.ivy) <> ~s( [data-role="access-revoke"]))
+      refute has_element?(view, ~s([data-role="access-agent-turn-off"]))
+
+      # The access line names Ivy once.
+      line = view |> element(~s([data-role="access-line-agents"])) |> render()
+      assert [_] = Regex.scan(~r/#{ctx.ivy.name}/, line)
+
+      # Ivy holds an access grant, so it is no grant candidate; Octo is.
+      view |> element(~s([data-role="access-grant-open"])) |> render_click()
+      picker = view |> element("#access-grant-form") |> render()
+      refute picker =~ ctx.ivy.name
+      assert picker =~ ctx.octo.name
+    end
+
+    test "Revoke on the Access panel keeps the flag grant", %{conn: conn} = ctx do
+      {:ok, _} = Ownership.grant(ctx.owner, ctx.personal, {:agent, ctx.ivy.id})
+      {:ok, _} = Ownership.set_flag_important_agent(ctx.owner, ctx.personal, ctx.ivy.id)
+
+      view = open_access(conn, ctx.owner, ctx.personal)
+      view |> element(agent_row(ctx.ivy) <> ~s( [data-role="access-revoke"])) |> render_click()
+      view |> element(~s([data-role="access-revoke-yes"])) |> render_click()
+
+      assert grant_purposes(ctx.personal, ctx.ivy) == ["flag_important"]
+
+      # Still one row, now flag-only: no Revoke, a link to Email > Accounts.
+      assert has_element?(view, agent_row(ctx.ivy) <> ~s( [data-role="access-agent-flag"]))
+      refute has_element?(view, agent_row(ctx.ivy) <> ~s( [data-role="access-revoke"]))
+
+      assert has_element?(
+               view,
+               agent_row(ctx.ivy) <>
+                 ~s( a[data-role="access-agent-turn-off"][href="/email/accounts"]),
+               "Turn off in Email > Accounts"
+             )
+
+      # A flag-only agent may still be given an ordinary grant.
+      view |> element(~s([data-role="access-grant-open"])) |> render_click()
+      assert view |> element("#access-grant-form") |> render() =~ ctx.ivy.name
+
+      # A crafted revoke of the flag-only agent removes nothing.
+      render_click(view, "revoke_agent", %{
+        "account_id" => ctx.personal.id,
+        "agent_id" => ctx.ivy.id
+      })
+
+      assert grant_purposes(ctx.personal, ctx.ivy) == ["flag_important"]
+    end
+  end
 end

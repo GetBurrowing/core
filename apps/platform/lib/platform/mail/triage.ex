@@ -561,12 +561,9 @@ defmodule Platform.Mail.Triage do
   What the briefing's `mail_priority` section shows `user` for `date`: a
   pure read. Returns
 
-    * `:agent` — `%{id, name}` of one flag agent of the reader's readable
-      mailboxes (the first by mailbox name), or nil when none of them has
-      an active flag agent. Kept for the component until task 01a1f5cc
-      stage 4; `:agents_by_account` is the per-mailbox truth;
     * `:agents_by_account` — `%{account_id => %{id, name}}`: the active flag
-      agent of each eligible mailbox;
+      agent of each eligible mailbox (empty: no readable mailbox has one).
+      There is no single agent: each mailbox has its own;
     * `:readable?` — whether the reader may read any non-archived mailbox
       (no mailbox at all means the section is absent);
     * `:called_out` — the reader's `top` / `action` items of `date` whose
@@ -625,7 +622,6 @@ defmodule Platform.Mail.Triage do
     {called_out, others} = Enum.split_with(rows, &(&1.tier in @called_out_tiers))
 
     %{
-      agent: Enum.find_value(readable, &Map.get(agents_by_account, &1.id)),
       agents_by_account: agents_by_account,
       readable?: readable != [],
       called_out: called_out,
@@ -639,7 +635,6 @@ defmodule Platform.Mail.Triage do
 
   def section_view(_user, _date, _opts),
     do: %{
-      agent: nil,
       agents_by_account: %{},
       readable?: false,
       called_out: [],

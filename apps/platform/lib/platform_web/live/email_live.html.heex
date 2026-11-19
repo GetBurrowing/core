@@ -1546,32 +1546,12 @@
           class="flex flex-col divide-y divide-edge"
           data-role="access-agents"
         >
-          <li
+          <.access_agent_row
             :for={agent <- @access.agents}
-            class="flex min-h-11 items-center gap-3 py-2"
-            data-role="access-agent-row"
-            data-agent-id={agent.id}
-          >
-            <.agent_avatar name={agent.name} avatar_url={agent.avatar_url} size="sm" />
-            <span class="min-w-0 flex-1 truncate text-sm text-base-content">{agent.name}</span>
-            <span
-              :if={granted_text(agent.granted_at)}
-              class="shrink-0 font-mono text-xs text-subtle"
-              data-role="access-agent-granted"
-            >
-              {granted_text(agent.granted_at)}
-            </span>
-            <button
-              :if={@access.manage?}
-              type="button"
-              phx-click="confirm_revoke"
-              phx-value-agent_id={agent.id}
-              class="btn btn-ghost btn-xs min-h-11 shrink-0 lg:min-h-6"
-              data-role="access-revoke"
-            >
-              Revoke
-            </button>
-          </li>
+            agent={agent}
+            manage?={@access.manage?}
+            accounts_path={email_path(%{assigns | account_filter: nil}, "/email/accounts")}
+          />
         </ul>
         <p
           :if={@access.agents == []}
