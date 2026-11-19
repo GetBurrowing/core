@@ -222,7 +222,9 @@ defmodule PlatformWeb.Components.InboxItem do
     # chip its own row renders.
     "ux_decision" => %{long: "UX decision", short: "UX"},
     # Task 01a1ea5b stage 4: an admin moved the viewer's personal mailbox.
-    "mailbox_reassigned" => %{long: "Mailbox reassigned", short: "Mailbox"}
+    "mailbox_reassigned" => %{long: "Mailbox reassigned", short: "Mailbox"},
+    # Task 01a1f426 stage 3: a top-tier email landed between briefings.
+    "mail_priority" => %{long: "Email needs you", short: "Email"}
   }
 
   @doc "The core kinds `kind_label/2` has an explicit entry for."

@@ -577,10 +577,225 @@ defmodule Platform.Mail.Triage do
       |> Repo.update(quiet_opts())
 
     Logger.info("[Mail.Triage] done item=#{item.id} user=#{user_id}")
+    Platform.Mail.Triage.Metrics.emit(updated, "acted_manual")
     {:ok, updated}
   end
 
   def mark_done(_user, _item), do: {:error, :not_found}
+
+  # ── Between briefings (task 01a1f426 stage 3) ───────────────────────────
+
+  @doc """
+  A newly ingested email `inbound_id`, triaged for every reader of its
+  mailbox for whom the mailbox is eligible (`eligible?/3`: readable by them
+  AND granted to the triage agent), and a `top` result notified at once
+  (`notify_top/2`). Driven by `Platform.Mail.Triage.Subscriber`.
+
+  A backfilled import (`ingest_source == "backfill"`) is skipped: a quiet
+  import must not page anyone. Calls no send path. Returns `:ok`.
+
+  Options: `:agent` (default `triage_agent/0`), `:now`.
+  """
+  @spec on_inbound(binary(), keyword()) :: :ok
+  def on_inbound(inbound_id, opts \\ []) when is_binary(inbound_id) do
+    with true <- Platform.UUID.valid?(inbound_id),
+         %Agent{} = agent <- Keyword.get_lazy(opts, :agent, &triage_agent/0),
+         %InboundMessage{ingest_source: source} = inbound when source != "backfill" <-
+           Repo.get(InboundMessage, inbound_id) do
+      for user <- reader_candidates(inbound.account_id) do
+        triage_and_notify(user, inbound, agent, opts)
+      end
+    end
+
+    :ok
+  end
+
+  @doc """
+  The start-up pass of `Platform.Mail.Triage.Subscriber`: every live
+  (non-backfill) email of the last 24 hours that has no item yet for some
+  reader of its mailbox goes through `on_inbound/2`. At most
+  #{@candidate_cap} emails per pass. Returns the number of emails visited.
+  """
+  @spec reconcile(keyword()) :: non_neg_integer()
+  def reconcile(opts \\ []) do
+    case Keyword.get_lazy(opts, :agent, &triage_agent/0) do
+      %Agent{} = agent ->
+        now = Keyword.get(opts, :now, DateTime.utc_now())
+        since = DateTime.add(now, -86_400, :second)
+
+        ids =
+          from(m in InboundMessage,
+            join: a in Account,
+            on: a.id == m.account_id and is_nil(a.archived_at),
+            where: m.ingest_source != "backfill",
+            where: coalesce(m.received_at, m.inserted_at) >= ^since,
+            order_by: [asc: m.inserted_at, asc: m.id],
+            limit: @candidate_cap,
+            select: m.id
+          )
+          |> Repo.all()
+
+        Enum.each(ids, &on_inbound(&1, Keyword.put(opts, :agent, agent)))
+        length(ids)
+
+      _ ->
+        0
+    end
+  end
+
+  # The people who may read an account by its ownership: the owner of a
+  # personal one, the user-grant holders of a shared one. A CANDIDATE list
+  # only: `classify_for_reader/3` decides eligibility for each (readable
+  # AND granted to the agent), so this list is never the permission.
+  defp reader_candidates(account_id) do
+    owner =
+      from(a in Account,
+        where: a.id == ^account_id and a.owner_kind == "personal",
+        where: not is_nil(a.owner_user_id),
+        select: a.owner_user_id
+      )
+
+    members =
+      from(g in Platform.Mail.AccountGrant,
+        join: a in Account,
+        on: a.id == g.account_id and a.owner_kind == "shared",
+        where: g.account_id == ^account_id and g.principal_type == "user",
+        select: g.principal_id
+      )
+
+    ids = Repo.all(owner) ++ Repo.all(members)
+
+    if ids == [] do
+      []
+    else
+      from(u in Platform.Accounts.User,
+        where: u.id in ^Enum.uniq(ids) and is_nil(u.archived_at)
+      )
+      |> Repo.all()
+    end
+  end
+
+  defp triage_and_notify(user, inbound, agent, opts) do
+    case classify_for_reader(user, inbound, agent: agent, now: opts[:now] || DateTime.utc_now()) do
+      {:ok, %Item{tier: "top"} = item} -> notify_top(item, Keyword.put(opts, :agent, agent))
+      _ -> :ok
+    end
+  end
+
+  @push_cap_per_day 3
+
+  @doc "At most this many between-briefing pushes per reader per (UTC) day."
+  @spec push_cap_per_day() :: pos_integer()
+  def push_cap_per_day, do: @push_cap_per_day
+
+  @doc """
+  Tell the reader a `top` item landed between briefings. Only an item whose
+  `notified_at` is nil: the same `UPDATE` sets it, so a second event, a
+  reconcile or a concurrent task notifies nothing (the dedupe). The
+  mailbox must still be eligible for the reader now.
+
+    * an Inbox row of kind `mail_priority` (`source_type`
+      `mail_triage_item`): title "An email needs you", body
+      "In <mailbox name>. Open the briefing to see why.";
+    * a push, the same text, through `Platform.Notifications.fan_out_to_user/3`
+      (`:notifications_module` in tests). Skipped when the reader's
+      notification level is `"direct"` (only direct mentions may interrupt
+      them, `Platform.Accounts.notification_level/1`) and once
+      #{@push_cap_per_day} items were notified for the reader that UTC day:
+      the rest wait for the briefing (their Inbox row is still written).
+
+  Neither carries the subject, the why line, the sender or the body. Both
+  open the briefing of the item's day (`Platform.Inbox.briefing_url/1`).
+
+  Returns `{:ok, :notified | :row_only}` or `{:ok, :skipped}`.
+  """
+  @spec notify_top(Item.t(), keyword()) :: {:ok, :notified | :row_only | :skipped}
+  def notify_top(item, opts \\ [])
+
+  def notify_top(%Item{tier: "top", notified_at: nil} = item, opts) do
+    agent = Keyword.get_lazy(opts, :agent, &triage_agent/0)
+    now = Keyword.get(opts, :now, DateTime.utc_now())
+    user = Repo.get(Platform.Accounts.User, item.user_id)
+
+    with %Platform.Accounts.User{} <- user,
+         true <- eligible?(user, item, agent),
+         {:ok, {:claimed, earlier}} <- claim_notification(item, now) do
+      deliver_notification(user, item, earlier, now)
+    else
+      _ -> {:ok, :skipped}
+    end
+  end
+
+  def notify_top(_item, _opts), do: {:ok, :skipped}
+
+  # Set `notified_at` iff it is still nil, under a per-reader transaction
+  # lock so the day's count and the claim are one step. Returns how many of
+  # the reader's items were notified earlier that UTC day.
+  defp claim_notification(%Item{id: id, user_id: user_id}, now) do
+    {:ok, day_start} = DateTime.new(DateTime.to_date(now), ~T[00:00:00], "Etc/UTC")
+
+    Repo.transaction(fn ->
+      Repo.query!(
+        "SELECT pg_advisory_xact_lock(hashtext($1))",
+        ["mail_triage_notify:" <> user_id],
+        quiet_opts()
+      )
+
+      earlier =
+        from(i in Item,
+          where: i.user_id == ^user_id and i.notified_at >= ^day_start,
+          select: count(i.id)
+        )
+        |> Repo.one()
+
+      case from(i in Item, where: i.id == ^id and is_nil(i.notified_at) and i.tier == "top")
+           |> Repo.update_all([set: [notified_at: now, updated_at: now]], quiet_opts()) do
+        {1, _} -> {:claimed, earlier}
+        _ -> Repo.rollback(:already_notified)
+      end
+    end)
+  end
+
+  defp deliver_notification(user, item, earlier, now) do
+    mailbox =
+      Repo.one(from(a in Account, where: a.id == ^item.account_id, select: a.name)) ||
+        "your mailbox"
+
+    url = Platform.Inbox.briefing_url(DateTime.to_date(item.inserted_at || now))
+    title = "An email needs you"
+    body = "In #{mailbox}. Open the briefing to see why."
+
+    _ =
+      Platform.Inbox.emit(%{
+        user_id: user.id,
+        kind: "mail_priority",
+        source_type: "mail_triage_item",
+        source_id: item.id,
+        title: title,
+        body: body,
+        url: url
+      })
+
+    pushed? =
+      earlier < @push_cap_per_day and Platform.Accounts.notification_level(user) != "direct"
+
+    if pushed?, do: push(user.id, %{title: title, body: body, url: url})
+
+    Platform.Mail.Triage.Metrics.emit(item, "notified")
+
+    Logger.info(
+      "[Mail.Triage] notified item=#{item.id} user=#{user.id} push=#{pushed?} earlier_today=#{earlier}"
+    )
+
+    {:ok, if(pushed?, do: :notified, else: :row_only)}
+  end
+
+  defp push(user_id, payload) do
+    notifications = Application.get_env(:platform, :notifications_module, Platform.Notifications)
+    notifications.fan_out_to_user(user_id, payload)
+  rescue
+    e -> Logger.warning("[Mail.Triage] push raised: #{inspect(e.__struct__)}")
+  end
 
   # ── Feedback ────────────────────────────────────────────────────────────
 
@@ -681,7 +896,11 @@ defmodule Platform.Mail.Triage do
   end
 
   defp apply_verdict(item, "not_important") do
-    item |> Item.update_changeset(%{status: "dismissed"}) |> Repo.update!(quiet_opts())
+    updated =
+      item |> Item.update_changeset(%{status: "dismissed"}) |> Repo.update!(quiet_opts())
+
+    Platform.Mail.Triage.Metrics.emit(updated, "dismissed")
+    updated
   end
 
   defp apply_verdict(item, "missed") do

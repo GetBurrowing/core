@@ -272,7 +272,8 @@ defmodule Platform.Regression.PubSubTopicInventoryAuditTest do
     {"mail:outbox", :global},
     # Task 01a0d415 stage 3. Payload is `{:mail_inbound_ingested, %{id,
     # account_id, org_id}}` — IDs only, never body, subject or addresses — and
-    # the one subscriber is the supervised Experiments MailSubscriber, which
+    # the subscribers are the supervised Experiments MailSubscriber and (task
+    # 01a1f426 stage 3) Platform.Mail.Triage.Subscriber, each of which
     # re-reads the row itself. A non-member learns that an inbound mail row
     # with that id exists in that org, and nothing of its content.
     # Task 01a10322 stage 2. `{:agent_host_status, event}` where event is an
