@@ -376,14 +376,18 @@ defmodule Platform.Mail.Digest do
     |> user_names()
   end
 
-  # Shared mailbox members: the internal-member user grants.
+  # Shared mailbox members: the internal-member user grants. DISTINCT by
+  # principal (task 01a1f5cc): a principal is named once per account
+  # whatever purposes its grants carry. The ORDER BY columns are selected,
+  # as SELECT DISTINCT requires.
   defp member_names(ids) do
     from(g in AccountGrant,
       join: u in User,
       on: u.id == g.principal_id,
       where: g.account_id in ^ids and g.principal_type == "user",
+      distinct: true,
       order_by: [asc: u.name, asc: u.id],
-      select: {g.account_id, coalesce(u.name, u.email)}
+      select: {g.account_id, coalesce(u.name, u.email), u.name, u.id}
     )
     |> Repo.all()
     |> Enum.group_by(&elem(&1, 0), &elem(&1, 1))

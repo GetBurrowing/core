@@ -53,6 +53,16 @@ defmodule Platform.Mail.Ownership do
   owner, and only them, through one Inbox row that carries no mail content
   (stage 4).
 
+  ## Grant purposes (task 01a1f5cc stage 1)
+
+  A grant row has a `purpose`: `"access"` (written by `grant/3`, removed by
+  `revoke/3`) or `"flag_important"` (the one agent the mailbox's manager
+  chose to read new mail and flag what is important, written only by
+  `set_flag_important_agent/3`). BOTH purposes grant read: choosing an agent
+  grants it read through the grant model. An agent may hold one row of each
+  on a mailbox, so every reader that lists principals de-duplicates by
+  principal, and `revoke/3` and Off each delete only their own purpose.
+
   ## Gated surfaces (stage 2)
 
   Ownership is enforced in the query of every Mail read: `Platform.Mail.Mailbox`
@@ -293,12 +303,15 @@ defmodule Platform.Mail.Ownership do
   def granted_agent_names(account_ids) when is_list(account_ids) do
     ids = Enum.filter(account_ids, &uuid?/1)
 
+    # DISTINCT by principal: an agent holding both an access and a
+    # flag_important grant on one account is named once.
     from(g in AccountGrant,
       join: ag in Agent,
       on: ag.id == g.principal_id,
       where: g.account_id in ^ids and g.principal_type == "agent",
+      distinct: true,
       order_by: [asc: ag.name, asc: ag.id],
-      select: {g.account_id, ag.name}
+      select: {g.account_id, ag.name, ag.id}
     )
     |> Repo.all()
     |> Enum.group_by(&elem(&1, 0), &elem(&1, 1))
@@ -373,7 +386,10 @@ defmodule Platform.Mail.Ownership do
   @spec principal_names([AccountGrant.t()]) :: %{{String.t(), binary()} => map()}
   def principal_names(grants) when is_list(grants) do
     ids = fn type ->
-      for %AccountGrant{principal_type: ^type, principal_id: id} <- grants, uuid?(id), do: id
+      for %AccountGrant{principal_type: ^type, principal_id: id} <- grants,
+          uuid?(id),
+          uniq: true,
+          do: id
     end
 
     agents =
@@ -439,6 +455,8 @@ defmodule Platform.Mail.Ownership do
       join: ag in Agent,
       on: ag.id == g.principal_id,
       where: g.account_id == ^id and g.principal_type == "agent",
+      # DISTINCT by principal: one entry per agent whatever its purposes.
+      distinct: true,
       order_by: [asc: ag.name, asc: ag.id],
       select: %{id: ag.id, name: ag.name, avatar_url: ag.avatar_url}
     )
@@ -562,7 +580,8 @@ defmodule Platform.Mail.Ownership do
   `can_manage_access?/2`; `{:error, :not_shared}` for a user grant on a
   non-shared mailbox; `{:error, :unknown_principal}` for a user who is not an
   internal member of the account's org or an agent that does not exist;
-  `{:error, :already_granted}` when the grant exists.
+  `{:error, :already_granted}` when the grant exists. Writes an `"access"`
+  grant only; the flag-important grant is `set_flag_important_agent/3`'s.
   """
   @spec grant(any(), Account.t(), principal()) :: {:ok, AccountGrant.t()} | {:error, term()}
   def grant(actor, %Account{} = account, principal) do
@@ -577,6 +596,7 @@ defmodule Platform.Mail.Ownership do
             account_id: current.id,
             principal_type: type,
             principal_id: id,
+            purpose: "access",
             granted_by_user_id: actor.id
           })
 
@@ -596,7 +616,9 @@ defmodule Platform.Mail.Ownership do
 
   @doc """
   Revoke `principal`'s grant on `account`, as `actor` (same authorization as
-  `grant/3`). Deletes the row; `{:error, :not_found}` when there is none.
+  `grant/3`). Deletes the `"access"` row; `{:error, :not_found}` when there
+  is none. A `"flag_important"` grant the same principal holds is left in
+  place (Off is `set_flag_important_agent(actor, account, nil)`).
   """
   @spec revoke(any(), Account.t(), principal()) :: {:ok, AccountGrant.t()} | {:error, term()}
   def revoke(actor, %Account{} = account, principal) do
@@ -608,7 +630,7 @@ defmodule Platform.Mail.Ownership do
           from(g in AccountGrant,
             where:
               g.account_id == ^current.id and g.principal_type == ^type and
-                g.principal_id == ^id
+                g.principal_id == ^id and g.purpose == "access"
           )
 
         case Repo.one(query) do
@@ -621,6 +643,154 @@ defmodule Platform.Mail.Ownership do
             grant
         end
       end)
+    end
+  end
+
+  @doc """
+  Choose the ONE agent that reads new mail in `account` and flags what is
+  important (task 01a1f5cc), as `actor`; `nil` turns it off.
+
+  Authorized exactly like `grant/3` (`can_manage_access?/2`): the owner of
+  a personal mailbox, an org admin of a shared one. It reads no
+  `Platform.Access` and no root-admin rule, so an org or install admin on
+  someone else's personal mailbox gets `{:error, :unauthorized}` and nothing
+  is written. `{:error, :unassigned}` for an unassigned mailbox;
+  `{:error, :unknown_principal}` for an agent that does not exist or is not
+  active.
+
+  One transaction: the account row is locked (`FOR UPDATE`, so concurrent
+  sets serialize), only the `"flag_important"` row is deleted (an `"access"`
+  grant the same or the previous agent holds stays), the new row is
+  inserted, and one audit row `"set_flag_important"` records
+  `previous_agent_id` and `agent_id`, ids only. Choosing the agent already
+  set returns `{:ok, :unchanged}` and writes nothing.
+  """
+  @spec set_flag_important_agent(any(), Account.t() | any(), binary() | nil) ::
+          {:ok, AccountGrant.t() | nil | :unchanged} | {:error, term()}
+  def set_flag_important_agent(actor, %Account{} = account, agent_id) do
+    with %Account{} = current <- fresh(account) || {:error, :not_found},
+         :ok <- if(current.owner_kind == "unassigned", do: {:error, :unassigned}, else: :ok),
+         :ok <- authorize_manage(actor, current),
+         :ok <- active_agent(agent_id) do
+      Repo.transaction(fn ->
+        from(a in Account, where: a.id == ^current.id, lock: "FOR UPDATE", select: a.id)
+        |> Repo.one!()
+
+        previous = Repo.one(flag_grant_query(current.id))
+        previous_id = previous && previous.principal_id
+
+        if previous_id == agent_id do
+          :unchanged
+        else
+          if previous, do: Repo.delete!(previous)
+
+          grant = agent_id && insert_flag_grant!(actor, current, agent_id)
+
+          audit!(actor, current, "set_flag_important", %{
+            previous_agent_id: previous_id,
+            agent_id: agent_id
+          })
+
+          grant
+        end
+      end)
+    end
+  end
+
+  def set_flag_important_agent(_actor, _account, _agent_id), do: {:error, :unauthorized}
+
+  defp active_agent(nil), do: :ok
+
+  defp active_agent(agent_id) do
+    if uuid?(agent_id) and
+         Repo.exists?(from(a in Agent, where: a.id == ^agent_id and a.status == "active")),
+       do: :ok,
+       else: {:error, :unknown_principal}
+  end
+
+  defp insert_flag_grant!(actor, %Account{id: account_id}, agent_id) do
+    %AccountGrant{}
+    |> AccountGrant.changeset(%{
+      account_id: account_id,
+      principal_type: "agent",
+      principal_id: agent_id,
+      purpose: "flag_important",
+      granted_by_user_id: actor.id
+    })
+    |> Repo.insert()
+    |> case do
+      {:ok, grant} -> grant
+      {:error, changeset} -> Repo.rollback(changeset)
+    end
+  end
+
+  defp flag_grant_query(account_id) do
+    from(g in AccountGrant,
+      where: g.account_id == ^account_id and g.purpose == "flag_important"
+    )
+  end
+
+  @doc """
+  The agent holding `account`'s flag-important grant (any status), or nil.
+  Reads grants, never mail.
+  """
+  @spec flag_important_agent(Account.t() | any()) :: Agent.t() | nil
+  def flag_important_agent(%Account{id: id}) when is_binary(id) do
+    if uuid?(id) do
+      from(ag in Agent,
+        join: g in AccountGrant,
+        on: g.principal_type == "agent" and g.principal_id == ag.id,
+        where: g.account_id == ^id and g.purpose == "flag_important"
+      )
+      |> Repo.one()
+    end
+  end
+
+  def flag_important_agent(_account), do: nil
+
+  @doc """
+  `%{account_id => agent_id}` of the flag-important grant on each of
+  `account_ids` that has one (any agent status). One query.
+  """
+  @spec flag_important_agent_ids([binary()]) :: %{binary() => binary()}
+  def flag_important_agent_ids(account_ids) when is_list(account_ids) do
+    case Enum.filter(account_ids, &uuid?/1) do
+      [] ->
+        %{}
+
+      ids ->
+        from(g in AccountGrant,
+          where: g.account_id in ^ids and g.purpose == "flag_important",
+          select: {g.account_id, g.principal_id}
+        )
+        |> Repo.all()
+        |> Map.new()
+    end
+  end
+
+  def flag_important_agent_ids(_account_ids), do: %{}
+
+  @doc """
+  A query selecting the ids of the accounts of `org_id` that are neither
+  unassigned nor archived and have a flag-important grant held by an ACTIVE
+  agent, for a read to constrain in its query. Matches nothing for a
+  malformed id.
+  """
+  @spec flag_important_account_ids_query(any()) :: Ecto.Query.t()
+  def flag_important_account_ids_query(org_id) do
+    if uuid?(org_id) do
+      from(a in Account,
+        join: g in AccountGrant,
+        on: g.account_id == a.id and g.purpose == "flag_important",
+        join: ag in Agent,
+        on: ag.id == g.principal_id and g.principal_type == "agent",
+        where: a.org_id == ^org_id,
+        where: a.owner_kind != "unassigned" and is_nil(a.archived_at),
+        where: ag.status == "active",
+        select: a.id
+      )
+    else
+      none_query()
     end
   end
 

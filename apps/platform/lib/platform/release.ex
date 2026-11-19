@@ -404,6 +404,7 @@ defmodule Platform.Release do
 
     from(g in Platform.Mail.AccountGrant,
       where: g.account_id == ^account.id and g.principal_type == "user",
+      distinct: true,
       select: g.principal_id
     )
     |> Platform.Repo.all()
