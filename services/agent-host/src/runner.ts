@@ -1,11 +1,18 @@
 /**
  * What `burrow-agent@<id>.service` runs, AS THE AGENT'S OWN USER.
  *
- * 1. `suite claude --session suite-agent` in the agent's work dir, with no
- *    terminal. suite-cli does all the Claude wiring (plugin checkout, MCP
- *    entries, CLAUDE.md if absent), creates the tmux session, answers the
- *    launch dialogs it knows, and returns. Its tmux server's socket is under
- *    $TMUX_TMPDIR, this agent's 0700 runtime dir (see units.ts).
+ * 1. `burrow claude --session suite-agent --remote-terminal` (CLAUDE_LAUNCH)
+ *    in the agent's work dir, with no terminal. burrow-cli does all the Claude
+ *    wiring (plugin checkout, MCP entries, CLAUDE.md if absent), creates the
+ *    tmux session, answers the launch dialogs it knows, and returns. Its tmux
+ *    server's socket is under $TMUX_TMPDIR, this agent's 0700 runtime dir (see
+ *    units.ts). `--remote-terminal` records the owner's terminal opt-in on the
+ *    folder's record (`remoteTerminal`); every start re-runs it, so the opt-in
+ *    is back after any restart or image update with no owner action.
+ *    Then the terminal host child (terminal_host.ts): `burrow watch
+ *    --no-install --host-only`, which serves that terminal to the runtime's
+ *    current owner, never types, and is restarted 5 s after it exits. It
+ *    never ends the runner.
  * 2. Every few seconds, `burrow pane-status --session suite-agent --answer`:
  *    suite-cli looks at the pane, answers a known dialog if one is up, and
  *    writes the status file the agent host reads. There is no pane classifier
@@ -15,8 +22,10 @@
  *    if it keeps failing. On SIGTERM (systemctl stop), kill this agent's tmux
  *    server and exit 0.
  *
- * Nothing here ever types into the pane. Logging in is the person's, through
- * Anthropic's own flow.
+ * Nothing here ever types into the pane, the terminal host included
+ * (`--host-only`). Logging in is the person's, through Anthropic's own flow;
+ * the owner's own keystrokes reach the pane only through the terminal core
+ * lets that owner open.
  *
  * HARNESS `codex` (core task 01a10315 stage 4; the env file's
  * BURROW_AGENT_HARNESS says which):
@@ -35,6 +44,7 @@
  */
 import { mkdirSync } from "node:fs";
 import { SESSION, statusFile } from "./ids.ts";
+import { superviseTerminalHost, type TerminalHostIo } from "./terminal_host.ts";
 import {
   codexEnv,
   codexHomeFor,
@@ -62,11 +72,20 @@ export async function alive(io: RunnerIo, session: string): Promise<boolean> {
   return (await io.spawn(["tmux", "has-session", "-t", `=${session}`])).exitCode === 0;
 }
 
-export async function runAgent(io: RunnerIo, session: string = SESSION): Promise<number> {
-  const launched = await io.spawn(["burrow", "claude", "--session", session]);
+/** Step 1's launch. `--remote-terminal` is the owner's terminal opt-in, re-recorded on every start. */
+export function claudeLaunch(session: string = SESSION): string[] {
+  return ["burrow", "claude", "--session", session, "--remote-terminal"];
+}
+export const CLAUDE_LAUNCH = claudeLaunch(SESSION);
+
+export async function runAgent(io: RunnerIo, session: string = SESSION, terminal?: TerminalHostIo): Promise<number> {
+  const launched = await io.spawn(claudeLaunch(session));
   // `burrow claude` ends by trying to attach, which fails with no terminal; its
   // exit code says nothing about the session. The session is the truth.
   io.log(`burrow claude returned ${launched.exitCode}`);
+  // After the launch, so the record already carries remoteTerminal. Not awaited:
+  // it runs for the agent's life and never decides the runner's exit.
+  if (terminal !== undefined) void superviseTerminalHost(terminal);
   for (;;) {
     if (io.stopping()) return 0;
     if (!(await alive(io, session))) {
@@ -152,5 +171,12 @@ if (import.meta.main) {
     const runBridge = async (argv: string[]) => await Bun.spawn(argv, { stdin: "ignore", stdout: "inherit", stderr: "inherit" }).exited;
     process.exit(await runCodexAgent(io, login, agentId, opts, runBridge));
   }
-  process.exit(await runAgent(io));
+  const terminal: TerminalHostIo = {
+    // Its own output goes to the journal (`terminal <runtime_id>: attached for session suite-agent`).
+    start: (argv) => ({ exited: Bun.spawn(argv, { stdin: "ignore", stdout: "inherit", stderr: "inherit" }).exited }),
+    sleep: io.sleep,
+    log: io.log,
+    stopping: io.stopping,
+  };
+  process.exit(await runAgent(io, SESSION, terminal));
 }
