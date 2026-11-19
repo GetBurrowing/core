@@ -16,8 +16,19 @@ defmodule PlatformWeb.Components.MailPrioritySection do
   acted) and "Not important" (feedback `not_important`, item dismissed).
   Below, a collapsed "N other emails" disclosure lists the routine and promo
   items (sender and subject only), each with "This needed me" (feedback
-  `missed`). The body is never rendered. There is no send control here:
-  drafts only, and sending happens in Email by a person.
+  `missed`). The inbound body is never rendered.
+
+  Level 2 (task 01a1f426 stage 5): an item whose drafter reply is ready
+  shows "Draft ready", a two-line preview of the draft and a link that
+  opens it in Email's editor (`/email/drafts/:id`, where
+  `Platform.Mail.Drafts.get_visible/3` decides again); a sent one shows
+  "Draft sent". An item with a fulfilment plan shows its summary and an
+  expandable, numbered step list. Which draft an item shows is decided by
+  `Triage.section_view/3` (the item's own mailbox, this reader as the
+  on-behalf person, the draft visibility rule); a forged or stale draft id
+  renders nothing and links nowhere. There is no send control here, and
+  no event of this component reaches `Platform.Mail.Dispatch`: drafts
+  only, and sending happens in Email's confirm pane, by a person.
 
   Every event handler resolves the item as the reader's OWN item
   (`Triage.reader_item/2`) and then re-checks `Triage.eligible?/3` (the
@@ -151,8 +162,9 @@ defmodule PlatformWeb.Components.MailPrioritySection do
         <ul :if={@view.called_out != []} role="list" class="space-y-2" data-role="mail-priority-list">
           <li
             :for={item <- @view.called_out}
+            id={"mail-priority-item-" <> item.id}
             class={[
-              "rounded-box border border-edge bg-base-100 px-4 py-3",
+              "scroll-mt-20 rounded-box border border-edge bg-base-100 px-4 py-3",
               item.status != "open" && "opacity-70"
             ]}
             data-role="mail-priority-item"
@@ -183,6 +195,9 @@ defmodule PlatformWeb.Components.MailPrioritySection do
             >
               {item.why}
             </p>
+
+            <.draft_ready :if={item.draft} draft={item.draft} />
+            <.plan :if={item.plan} plan={item.plan} item_id={item.id} />
 
             <p
               class="mt-1 flex items-center gap-1 text-xs text-subtle"
@@ -270,6 +285,80 @@ defmodule PlatformWeb.Components.MailPrioritySection do
     </section>
     """
   end
+
+  attr :draft, :map, required: true
+
+  defp draft_ready(%{draft: %{status: "draft"}} = assigns) do
+    ~H"""
+    <div
+      class="mt-2 rounded-box border border-edge bg-base-200/40 px-3 py-2"
+      data-role="mail-priority-draft"
+      data-draft-id={@draft.id}
+    >
+      <div class="flex flex-wrap items-center justify-between gap-2">
+        <span class="inline-flex items-center gap-1 text-xs font-semibold text-success">
+          <span class="hero-pencil-square size-4" aria-hidden="true"></span> Draft ready
+        </span>
+        <.link
+          navigate={"/email/drafts/" <> @draft.id}
+          class="btn btn-sm min-h-11 sm:min-h-8"
+          data-role="mail-priority-draft-open"
+        >
+          Open draft <span class="hero-arrow-right size-4" aria-hidden="true"></span>
+        </.link>
+      </div>
+      <p
+        :if={@draft.preview != []}
+        class="mt-1 min-w-0 text-sm text-base-content"
+        data-role="mail-priority-draft-preview"
+      >
+        <span :for={line <- @draft.preview} class="block truncate">{line}</span>
+      </p>
+    </div>
+    """
+  end
+
+  defp draft_ready(assigns) do
+    ~H"""
+    <p
+      class="mt-2 inline-flex items-center gap-1 text-xs text-subtle"
+      data-role="mail-priority-draft-sent"
+    >
+      <span class="hero-paper-airplane size-3.5" aria-hidden="true"></span> Draft sent
+    </p>
+    """
+  end
+
+  attr :plan, :map, required: true
+  attr :item_id, :string, required: true
+
+  defp plan(assigns) do
+    ~H"""
+    <details
+      class="mt-2 rounded-box border border-edge bg-base-200/40"
+      data-role="mail-priority-plan"
+    >
+      <summary class="flex min-h-11 cursor-pointer items-start gap-2 px-3 py-2 text-sm sm:min-h-0">
+        <span class="hero-list-bullet mt-0.5 size-4 shrink-0 text-subtle" aria-hidden="true"></span>
+        <span class="min-w-0 flex-1">
+          <span class="block font-medium text-base-content" data-role="mail-priority-plan-summary">
+            {@plan.summary || "A plan to fulfil this"}
+          </span>
+          <span class="block text-xs text-subtle">{steps_label(length(@plan.steps))}</span>
+        </span>
+      </summary>
+      <ol
+        class="list-decimal space-y-1 border-t border-edge py-2 pl-9 pr-3 text-sm text-base-content"
+        data-role="mail-priority-plan-steps"
+      >
+        <li :for={step <- @plan.steps} class="break-words">{step}</li>
+      </ol>
+    </details>
+    """
+  end
+
+  defp steps_label(1), do: "1 step"
+  defp steps_label(n), do: "#{n} steps"
 
   attr :tier, :string, required: true
 

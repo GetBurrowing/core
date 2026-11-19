@@ -174,7 +174,7 @@ defmodule Platform.Mail.Triage.Drafter do
         where: i.inserted_at >= ^from and i.inserted_at < ^to,
         order_by: [asc: i.inserted_at, asc: i.id]
       )
-      |> Repo.all()
+      |> Repo.all(Triage.quiet_opts())
     end)
     |> Enum.sort_by(&{tier_rank(&1.tier), DateTime.to_unix(&1.inserted_at, :microsecond)})
   end
@@ -205,7 +205,8 @@ defmodule Platform.Mail.Triage.Drafter do
       with {:agent, %Agent{}} <- {:agent, agent},
            {:draftable, true} <- {:draftable, draftable?(item)},
            {:eligible, true} <- {:eligible, Triage.eligible?(user, item, agent)},
-           %InboundMessage{} = inbound <- Repo.get(InboundMessage, item.inbound_message_id),
+           %InboundMessage{} = inbound <-
+             Repo.get(InboundMessage, item.inbound_message_id, Triage.quiet_opts()),
            {:sender, sender} when sender != :none or item.needs != "reply" <-
              {:sender, pick_sender(user, inbound)},
            :claimed <- claim(item, now) do
@@ -311,7 +312,7 @@ defmodule Platform.Mail.Triage.Drafter do
   defp refusal_code({code, _detail}) when is_atom(code), do: code
   defp refusal_code(_), do: :invalid
 
-  defp fresh(%Item{id: id}), do: Repo.get!(Item, id)
+  defp fresh(%Item{id: id}), do: Repo.get!(Item, id, Triage.quiet_opts())
 
   # ── The claim (dedupe + daily cap) ──────────────────────────────────────
 

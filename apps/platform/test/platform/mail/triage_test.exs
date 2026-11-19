@@ -371,7 +371,9 @@ defmodule Platform.Mail.TriageTest do
       # and into the stored item, and the debug query log was really on.
       assert seen(stub_calls()) =~ sentinel
       assert Repo.get_by!(Item, inbound_message_id: inbound.id).why =~ sentinel
-      assert log =~ "mail_triage"
+      # Every triage read of an item or an inbound row is quiet (stage 5),
+      # so the proof that the debug query log was on is any query line.
+      assert log =~ "QUERY OK"
       assert log =~ "[Mail.Triage] classified"
 
       refute log =~ sentinel

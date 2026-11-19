@@ -271,7 +271,7 @@ defmodule Platform.Mail.Triage do
 
   defp get_item(user_id, inbound_id) do
     from(i in Item, where: i.inbound_message_id == ^inbound_id and i.user_id == ^user_id)
-    |> Repo.one()
+    |> Repo.one(quiet_opts())
   end
 
   # ── Run ─────────────────────────────────────────────────────────────────
@@ -372,7 +372,7 @@ defmodule Platform.Mail.Triage do
       order_by: [asc: coalesce(m.received_at, m.inserted_at), asc: m.id],
       limit: @candidate_cap
     )
-    |> Repo.all()
+    |> Repo.all(quiet_opts())
   end
 
   defp org_ids(user) do
@@ -414,12 +414,12 @@ defmodule Platform.Mail.Triage do
             where: i.tier in ^tiers,
             where: i.inserted_at >= ^from and i.inserted_at < ^to
           )
-          |> Repo.all()
+          |> Repo.all(quiet_opts())
         end)
         |> Enum.sort_by(fn i ->
           {tier_rank(i.tier), -DateTime.to_unix(i.inserted_at, :microsecond)}
         end)
-        |> Repo.preload([:inbound_message, :account])
+        |> Repo.preload([:inbound_message, :account], quiet_opts())
 
       _ ->
         []
@@ -448,8 +448,19 @@ defmodule Platform.Mail.Triage do
       are NOT granted to the triage agent (metadata only: the name).
 
   Each row is a plain map of display fields only (`id`, `inbound_id`,
-  `account_id`, `tier`, `status`, `why`, `from`, `subject`, `mailbox`,
-  `received_at`). The body is never selected.
+  `account_id`, `tier`, `status`, `acted_how`, `why`, `from`, `subject`,
+  `mailbox`, `received_at`, `plan` and `draft`). The inbound body is never
+  selected.
+
+  `:plan` is `%{summary, steps}` when the drafter produced a fulfilment
+  plan, else nil. `:draft` (task 01a1f426 stage 5) is `%{id, status,
+  preview}` only for a draft that is the item's `draft_id` AND in the
+  item's own mailbox AND written on behalf of THIS reader AND visible to
+  the reader (`Platform.Mail.Drafts.visible_query/2`) AND not discarded;
+  anything else (a forged or stale id, another reader's draft, a draft of
+  another mailbox) is nil, so it renders nothing and links nowhere.
+  `preview` is at most the first two non-blank lines of the draft's body,
+  each capped at 160 characters, read with `quiet_opts/0`.
 
   Options: `:agent` (default `triage_agent/0`).
   """
@@ -512,11 +523,16 @@ defmodule Platform.Mail.Triage do
       where: i.inserted_at >= ^from and i.inserted_at < ^to,
       select: %{
         id: i.id,
+        org_id: i.org_id,
         inbound_id: i.inbound_message_id,
         account_id: i.account_id,
         tier: i.tier,
         status: i.status,
+        acted_how: i.acted_how,
         why: i.why,
+        draft_id: i.draft_id,
+        plan_summary: i.plan_summary,
+        plan_steps: i.plan_steps,
         inserted_at: i.inserted_at,
         from: m.from_address,
         subject: m.subject,
@@ -525,11 +541,70 @@ defmodule Platform.Mail.Triage do
       }
     )
     |> Repo.all(quiet_opts())
+    |> with_drafts(user_id)
     |> Enum.sort_by(fn row ->
       {row.status != "open", tier_rank(row.tier),
        -DateTime.to_unix(row.received_at, :microsecond)}
     end)
   end
+
+  @preview_line_cap 160
+
+  # Each row's own draft, read in ONE query per org through the draft
+  # visibility rule, pinned to the row's mailbox and to this reader as the
+  # on-behalf person; the body is read only to cut the preview.
+  defp with_drafts(rows, user_id) do
+    drafts =
+      rows
+      |> Enum.filter(& &1.draft_id)
+      |> Enum.group_by(&org_of/1, & &1.draft_id)
+      |> Enum.flat_map(fn {org_id, ids} ->
+        %{id: user_id}
+        |> Platform.Mail.Drafts.visible_query(org_id)
+        |> where([d], d.id in ^ids and d.on_behalf_of_user_id == ^user_id)
+        |> where([d], d.status in ["draft", "dispatched"])
+        |> select([d], %{id: d.id, account_id: d.account_id, status: d.status, body: d.body})
+        |> Repo.all(quiet_opts())
+      end)
+      |> Map.new(&{&1.id, &1})
+
+    Enum.map(rows, fn row ->
+      draft =
+        case Map.get(drafts, row.draft_id) do
+          %{account_id: account_id} = d when account_id == row.account_id ->
+            %{id: d.id, status: d.status, preview: preview(d.body)}
+
+          _ ->
+            nil
+        end
+
+      plan =
+        case row.plan_steps do
+          steps when is_list(steps) and steps != [] ->
+            %{summary: row.plan_summary, steps: Enum.filter(steps, &is_binary/1)}
+
+          _ ->
+            nil
+        end
+
+      row
+      |> Map.drop([:draft_id, :plan_summary, :plan_steps, :org_id])
+      |> Map.merge(%{draft: draft, plan: plan})
+    end)
+  end
+
+  defp org_of(row), do: row.org_id
+
+  defp preview(body) when is_binary(body) do
+    body
+    |> String.split(~r/\r?\n/)
+    |> Enum.map(&String.trim/1)
+    |> Enum.reject(&(&1 == ""))
+    |> Enum.take(2)
+    |> Enum.map(&String.slice(&1, 0, @preview_line_cap))
+  end
+
+  defp preview(_), do: []
 
   @doc """
   The reader's OWN item `item_id`, whatever its mailbox's eligibility now
@@ -539,7 +614,7 @@ defmodule Platform.Mail.Triage do
   @spec reader_item(map(), any()) :: Item.t() | nil
   def reader_item(%{id: user_id}, item_id) when is_binary(user_id) and is_binary(item_id) do
     if Platform.UUID.valid?(item_id) and Platform.UUID.valid?(user_id) do
-      Repo.one(from(i in Item, where: i.id == ^item_id and i.user_id == ^user_id))
+      Repo.one(from(i in Item, where: i.id == ^item_id and i.user_id == ^user_id), quiet_opts())
     end
   end
 
@@ -603,7 +678,7 @@ defmodule Platform.Mail.Triage do
     with true <- Platform.UUID.valid?(inbound_id),
          %Agent{} = agent <- Keyword.get_lazy(opts, :agent, &triage_agent/0),
          %InboundMessage{ingest_source: source} = inbound when source != "backfill" <-
-           Repo.get(InboundMessage, inbound_id) do
+           Repo.get(InboundMessage, inbound_id, quiet_opts()) do
       for user <- reader_candidates(inbound.account_id) do
         triage_and_notify(user, inbound, agent, opts)
       end
@@ -835,7 +910,10 @@ defmodule Platform.Mail.Triage do
       when is_binary(user_id) do
     with true <- Platform.UUID.valid?(item_id) and Platform.UUID.valid?(user_id),
          %Item{} = item <-
-           Repo.one(from(i in Item, where: i.id == ^item_id and i.user_id == ^user_id)),
+           Repo.one(
+             from(i in Item, where: i.id == ^item_id and i.user_id == ^user_id),
+             quiet_opts()
+           ),
          %InboundMessage{} = inbound <- readable_inbound(user, item.inbound_message_id) do
       write_feedback(user, inbound, item, verdict)
     else

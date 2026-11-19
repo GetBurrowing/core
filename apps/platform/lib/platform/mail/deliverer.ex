@@ -116,6 +116,14 @@ defmodule Platform.Mail.Deliverer do
     |> put_calendar(delivery.calendar_method, delivery.calendar_ics)
   end
 
+  # The parent's Message-ID and the value of its References header, and
+  # NOTHING else of it: References is cut out of the header block in SQL
+  # (the fragment below), so the parent's body (and its subject) is never a
+  # result row. The read runs with `log: false, telemetry_event: nil`
+  # because repo query telemetry carries the params AND the result rows
+  # (Moore's must-fix, task 01a1f426 stage 5).
+  @references_re "(?:^|\\n)references:[ \\t]*((?:[^\\r\\n]|\\r?\\n[ \\t])*)"
+
   defp put_threading(email, %Delivery{draft_id: draft_id, account_id: account_id})
        when is_binary(draft_id) and is_binary(account_id) do
     parent =
@@ -123,9 +131,17 @@ defmodule Platform.Mail.Deliverer do
         join: m in Platform.Mail.InboundMessage,
         on: m.id == d.in_reply_to_inbound_id and m.account_id == ^account_id,
         where: d.id == ^draft_id,
-        select: %{message_id: m.message_id_header, raw: m.raw}
+        select: %{
+          message_id: m.message_id_header,
+          references:
+            fragment(
+              "(regexp_match(split_part(split_part(encode(substring(? from 1 for 65536), 'escape'), E'\\r\\n\\r\\n', 1), E'\\n\\n', 1), ?, 'i'))[1]",
+              m.raw,
+              ^@references_re
+            )
+        }
       )
-      |> Repo.one()
+      |> Repo.one(log: false, telemetry_event: nil)
 
     case parent && message_id(parent.message_id) do
       nil ->
@@ -133,9 +149,7 @@ defmodule Platform.Mail.Deliverer do
 
       message_id ->
         references =
-          parent.raw
-          |> Platform.Mail.Triage.Classifier.headers()
-          |> Map.get("references", "")
+          (parent.references || "")
           |> String.split(~r/\s+/, trim: true)
           |> Enum.filter(&String.match?(&1, ~r/\A<[^<>\s]+>\z/))
           |> Enum.take(-20)

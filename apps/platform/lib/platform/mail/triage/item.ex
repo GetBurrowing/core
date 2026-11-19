@@ -120,6 +120,19 @@ defmodule Platform.Mail.Triage.Item do
     |> common_validations()
   end
 
+  @doc """
+  Changeset for a sent triage draft (task 01a1f426 stage 5): the item is
+  acted (`acted_how` `"draft_sent"`), the edit ratio is recorded, and
+  `draft_original_body` is cleared because the ratio was its only use.
+  """
+  def draft_sent_changeset(%__MODULE__{} = item, attrs) do
+    item
+    |> cast(attrs, [:status, :acted_at, :acted_how, :edit_ratio])
+    |> put_change(:draft_original_body, nil)
+    |> validate_number(:edit_ratio, greater_than_or_equal_to: 0.0, less_than_or_equal_to: 1.0)
+    |> common_validations()
+  end
+
   defp common_validations(changeset) do
     changeset
     |> validate_inclusion(:tier, @tiers)

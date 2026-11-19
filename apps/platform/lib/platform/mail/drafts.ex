@@ -389,10 +389,19 @@ defmodule Platform.Mail.Drafts do
   end
 
   @doc """
-  `%{draft_id => %{drafted_by: name, task_title: title_or_nil}}` for a list
-  of drafts, in three queries whatever the list length.
+  `%{draft_id => %{drafted_by: name, task_title: title_or_nil, briefing:
+  briefing_or_nil}}` for a list of drafts, in four queries whatever the
+  list length.
+
+  `briefing` (task 01a1f426 stage 5) is `%{item_id, user_id, date}` for an
+  agent draft the mail triage drafter prepared from a called-out email
+  (`mail_triage_items.draft_id`, same mailbox), else nil: the editor then
+  reads "Prepared by <agent> from the morning briefing" and, for the
+  reader the item belongs to, links back to the item. Ids and a date only.
   """
-  @spec provenance([Draft.t()]) :: %{binary() => %{drafted_by: String.t(), task_title: any()}}
+  @spec provenance([Draft.t()]) :: %{
+          binary() => %{drafted_by: String.t(), task_title: any(), briefing: map() | nil}
+        }
   def provenance(drafts) when is_list(drafts) do
     agent_ids =
       for d <- drafts, d.created_by_type == "agent", d.created_by_id, do: d.created_by_id
@@ -403,6 +412,7 @@ defmodule Platform.Mail.Drafts do
     agents = names_by_id(Agent, agent_ids)
     users = names_by_id(User, user_ids)
     tasks = titles_by_id(task_ids)
+    briefings = briefing_items(for d <- drafts, d.created_by_type == "agent", do: d)
 
     Map.new(drafts, fn d ->
       drafted_by =
@@ -412,7 +422,32 @@ defmodule Platform.Mail.Drafts do
           _ -> "the system"
         end
 
-      {d.id, %{drafted_by: drafted_by, task_title: d.task_id && Map.get(tasks, d.task_id)}}
+      {d.id,
+       %{
+         drafted_by: drafted_by,
+         task_title: d.task_id && Map.get(tasks, d.task_id),
+         briefing: Map.get(briefings, d.id)
+       }}
+    end)
+  end
+
+  defp briefing_items([]), do: %{}
+
+  defp briefing_items(drafts) do
+    ids = drafts |> Enum.map(& &1.id) |> Enum.filter(&Platform.UUID.valid?/1)
+    account_of = Map.new(drafts, &{&1.id, &1.account_id})
+
+    from(i in Platform.Mail.Triage.Item,
+      where: i.draft_id in ^ids,
+      order_by: [asc: i.inserted_at],
+      select: {i.draft_id, i.account_id, i.id, i.user_id, i.inserted_at}
+    )
+    |> Repo.all()
+    |> Enum.filter(fn {draft_id, account_id, _, _, _} ->
+      account_id == Map.get(account_of, draft_id)
+    end)
+    |> Map.new(fn {draft_id, _account_id, item_id, user_id, at} ->
+      {draft_id, %{item_id: item_id, user_id: user_id, date: DateTime.to_date(at)}}
     end)
   end
 

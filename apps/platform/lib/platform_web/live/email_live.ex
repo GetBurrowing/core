@@ -1705,9 +1705,19 @@ defmodule PlatformWeb.EmailLive do
 
   defp drafted_by_text(nil), do: nil
 
+  defp drafted_by_text(%{drafted_by: by, briefing: %{}}),
+    do: "Prepared by #{by} from the morning briefing"
+
   defp drafted_by_text(%{drafted_by: by, task_title: title}) do
     "Drafted by #{by}" <> if(title, do: " · task #{title}", else: "")
   end
+
+  # The link back to the called-out item (task 01a1f426 stage 5): only for
+  # the reader the item belongs to, whose briefing it is.
+  defp briefing_link(%{provenance: %{briefing: %{user_id: user_id} = b}}, %{id: user_id}),
+    do: Platform.Inbox.briefing_url(b.date) <> "#mail-priority-item-" <> b.item_id
+
+  defp briefing_link(_editor, _user), do: nil
 
   defp editor_drafted_by(%{provenance: %{} = provenance}), do: drafted_by_text(provenance)
   defp editor_drafted_by(_editor), do: "Drafted by you"
@@ -1722,6 +1732,7 @@ defmodule PlatformWeb.EmailLive do
 
     [
       "drafted by #{drafter}",
+      provenance && provenance[:briefing] && "from the morning briefing",
       provenance && provenance.task_title && "task #{provenance.task_title}",
       if(edited?, do: "edited and sent by you", else: "sent by you")
     ]
