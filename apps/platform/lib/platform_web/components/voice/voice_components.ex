@@ -33,6 +33,10 @@ defmodule PlatformWeb.Components.Voice do
   rules that read them are held by
   `test/platform/design/voice_tab_contrast_guard_test.exs`. Text is
   text-base-content or text-subtle, plus text-error for the unreachable line.
+  The mic's "Sound and video" control (task 01a1f4c5 stage 4) is the
+  shared `DevicePanel` with MICROPHONE and SPEAKER only, opened by a caret
+  beside #mic at `sm` with a fine pointer and by a 44px button on a phone.
+
   No `hover:` classes: these are phone surfaces. The one exception is
   `lg:hover:bg-base-200` on the popover variant's rows, which only exist as
   popovers at lg. The pills' focus-visible ring is a primary outline.
@@ -41,6 +45,9 @@ defmodule PlatformWeb.Components.Voice do
 
   import PlatformWeb.CoreComponents, only: [icon: 1, input: 1]
   import PlatformWeb.Components.Sheet, only: [sheet: 1]
+
+  alias Phoenix.LiveView.JS
+  alias PlatformWeb.Components.Meetings.DevicePanel
 
   @idle_line "hold to talk · tap to toggle"
 
@@ -334,23 +341,103 @@ defmodule PlatformWeb.Components.Voice do
       >
         <i :for={_ <- 1..14} data-meter-bar></i>
       </div>
+      <%!-- #mic and its device control (task 01a1f4c5 stage 4). The control
+           is a SIBLING of #mic, never inside it: VoiceTab starts a turn only
+           for a pointerdown whose target is #mic or inside it, so a press on
+           the caret can never start a turn or steal the hold gesture. It
+           sits to the right of the centred mic without moving it. --%>
+      <div class="relative flex items-center justify-center">
+        <button
+          type="button"
+          id="mic"
+          class={[
+            "voice-mic flex size-24 items-center justify-center rounded-full disabled:opacity-60",
+            if(live?(@state),
+              do: "on scale-[1.06] bg-primary text-primary-content",
+              else: "bg-base-100 text-base-content"
+            )
+          ]}
+          aria-pressed={if live?(@state), do: "true", else: "false"}
+          aria-label={mic_aria(@partner)}
+          disabled={not talkable?(@partner)}
+        >
+          <.icon name="hero-microphone" class="size-10" />
+        </button>
+        <.voice_devices_triggers />
+      </div>
+      <.voice_devices />
+      <div id="voice-audio" class="hidden" phx-update="ignore"></div>
+    </div>
+    """
+  end
+
+  # ── sound and video (task 01a1f4c5 stage 4) ─────────────────────────────
+
+  @voice_devices_id "voice-devices"
+
+  # Desktop (`sm` with a fine pointer): a caret beside #mic opens the
+  # popover on MICROPHONE. Phone: one 44px "Sound and video" button opens
+  # the bottom sheet. Both are outside #mic (see voice_area/1).
+  defp voice_devices_triggers(assigns) do
+    assigns = assign(assigns, :id, @voice_devices_id)
+
+    ~H"""
+    <div class="absolute left-full ml-3 flex items-center">
       <button
         type="button"
-        id="mic"
-        class={[
-          "voice-mic flex size-24 items-center justify-center rounded-full disabled:opacity-60",
-          if(live?(@state),
-            do: "on scale-[1.06] bg-primary text-primary-content",
-            else: "bg-base-100 text-base-content"
-          )
-        ]}
-        aria-pressed={if live?(@state), do: "true", else: "false"}
-        aria-label={mic_aria(@partner)}
-        disabled={not talkable?(@partner)}
+        data-role="voice-devices-caret"
+        data-devices-for={@id}
+        data-devices-container="popover"
+        data-devices-section="audioinput"
+        phx-mounted={JS.ignore_attributes(["aria-expanded"])}
+        aria-haspopup="dialog"
+        aria-expanded="false"
+        aria-controls={"#{@id}-popover"}
+        aria-label="Choose microphone"
+        title="Choose microphone"
+        class="btn btn-sm btn-square hidden rounded-field border-edge bg-base-100 font-normal text-base-content sm:pointer-fine:inline-flex"
       >
-        <.icon name="hero-microphone" class="size-10" />
+        <span class="hero-chevron-up size-4" aria-hidden="true"></span>
       </button>
-      <div id="voice-audio" class="hidden" phx-update="ignore"></div>
+      <button
+        type="button"
+        data-role="voice-devices"
+        data-devices-for={@id}
+        data-devices-container="sheet"
+        data-devices-section="audioinput"
+        phx-mounted={JS.ignore_attributes(["aria-expanded"])}
+        aria-haspopup="dialog"
+        aria-expanded="false"
+        aria-controls={"#{@id}-sheet"}
+        aria-label="Sound and video"
+        class="btn btn-sm btn-square min-h-11 min-w-11 rounded-field border-edge bg-base-100 font-normal text-base-content sm:pointer-fine:hidden"
+      >
+        <span class="hero-adjustments-horizontal size-5" aria-hidden="true"></span>
+      </button>
+    </div>
+    """
+  end
+
+  # The panel root. MICROPHONE and SPEAKER only: the Voice tab has no
+  # video, so there is no CAMERA section. `data-devices-surface="voice"`:
+  # the panel drives the Voice tab's OWN registered room, never the
+  # meeting's (`window.__livekit_room`); before the first press there is
+  # no room and a pick only persists. No notice slot: the strap belongs to
+  # the meeting surfaces.
+  defp voice_devices(assigns) do
+    assigns = assign(assigns, id: @voice_devices_id, sections: ~w(audioinput audiooutput))
+
+    ~H"""
+    <div
+      id={@id}
+      phx-hook="MeetingDevicePanel"
+      phx-update="ignore"
+      data-role="meeting-devices"
+      data-devices-surface="voice"
+      class="contents"
+    >
+      <DevicePanel.device_panel id={"#{@id}-popover"} container={:popover} sections={@sections} />
+      <DevicePanel.device_panel id={"#{@id}-sheet"} container={:sheet} sections={@sections} />
     </div>
     """
   end

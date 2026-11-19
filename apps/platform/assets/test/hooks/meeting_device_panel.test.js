@@ -674,3 +674,138 @@ describe("the lobby: an auto trigger, the inline accordion and the sheet", () =>
     expect(bh.getAttribute("aria-checked")).toBe("true")
   })
 })
+
+// ── the compact surfaces (task 01a1f4c5 stage 4) ─────────────────────────
+//
+// The markup MeetingBarLive renders: the panel root is a SIBLING of the bar
+// (`data-devices-notice="when-alone"`, a `meeting-bar-device-notice` slot,
+// popover + sheet) and the bar's carets open the popover BELOW themselves.
+
+function buildBarDom() {
+  const root = h(
+    "div",
+    { id: "bar-devs", "data-role": "meeting-devices", "data-devices-notice": "when-alone" },
+    [
+      h("div", {
+        id: "bar-devs-notice",
+        "data-role": "meeting-bar-device-notice",
+        role: "status",
+        "aria-live": "polite",
+      }),
+      panel("bar-devs-popover", "popover"),
+      panel("bar-devs-sheet", "sheet"),
+    ],
+  )
+  const caret = (kind, flag) =>
+    h("button", {
+      [flag]: "",
+      "data-devices-for": "bar-devs",
+      "data-devices-container": "popover",
+      "data-devices-section": kind,
+      "data-devices-placement": "below",
+      "aria-expanded": "false",
+    })
+  const micCaret = caret("audioinput", "data-bar-mic-devices")
+  const camCaret = caret("videoinput", "data-bar-camera-devices")
+  const bar = h("div", { id: "meeting-top-bar" }, [micCaret, camCaret])
+  return { root, bar, micCaret, camCaret }
+}
+
+function mountBarPanel({ withCallControls = false } = {}) {
+  let call = null
+  if (withCallControls) {
+    call = mount()
+  } else {
+    body = h("body")
+  }
+  const dom = buildBarDom()
+  body.appendChild(dom.bar)
+  body.appendChild(dom.root)
+  const hook = Object.create(MeetingDevicePanel)
+  hook.el = dom.root
+  hook.mounted()
+  return { hook, call, ...dom }
+}
+
+const barFallback = (detail = {}) =>
+  win.dispatchEvent(
+    new CustomEvent(DEVICE_FALLBACK_EVENT, {
+      detail: { kind: "audioinput", fromLabel: "AirPods Pro", toLabel: "MacBook Pro Microphone", ...detail },
+    }),
+  )
+
+describe("the top bar's panel", () => {
+  it("opens the popover BELOW the caret (the bar is at the top of the page)", async () => {
+    const { micCaret } = mountBarPanel()
+    micCaret.getBoundingClientRect = () => ({ left: 600, top: 8, bottom: 36, right: 630 })
+    click(micCaret)
+    await settle()
+
+    const pop = body.querySelector("#bar-devs-popover")
+    expect(pop.hasAttribute("hidden")).toBe(false)
+    expect(pop.style.top).toBe("44px")
+    expect(pop.style.bottom).toBe("")
+    expect(micCaret.getAttribute("aria-expanded")).toBe("true")
+  })
+
+  it("renders the strap under the bar, in meeting-bar-device-notice, polite and untimed", async () => {
+    vi.useFakeTimers()
+    mountBarPanel()
+    barFallback({ surface: "meeting" })
+    const strap = body.querySelector('[data-role="meeting-device-notice"]')
+    expect(strap).not.toBeNull()
+    const region = strap.closest('[aria-live="polite"]')
+    expect(region.getAttribute("data-role")).toBe("meeting-bar-device-notice")
+    expect(strap.querySelector("[data-notice-text]").textContent).toBe(
+      "AirPods Pro disconnected. Now using MacBook Pro Microphone.",
+    )
+    await vi.advanceTimersByTimeAsync(60_000)
+    expect(body.querySelector('[data-role="meeting-device-notice"]')).not.toBeNull()
+  })
+
+  it("gives way to a call surface's own strap on the same page: one fallback, one strap", () => {
+    mountBarPanel({ withCallControls: true })
+    barFallback({ surface: "meeting" })
+    const straps = body.querySelectorAll('[data-role="meeting-device-notice"]')
+    expect(straps).toHaveLength(1)
+    expect(straps[0].closest('[aria-live="polite"]').getAttribute("data-role")).toBe(
+      "meeting-device-notice-slot",
+    )
+  })
+
+  it("Change with no visible trigger (the phone strip) opens the sheet", async () => {
+    const { micCaret, camCaret } = mountBarPanel()
+    micCaret.getClientRects = () => []
+    camCaret.getClientRects = () => []
+    barFallback({ surface: "meeting" })
+    click(body.querySelector("[data-notice-change]"))
+    await settle()
+    expect(body.querySelector("#bar-devs-sheet").hasAttribute("hidden")).toBe(false)
+    expect(body.querySelector("#bar-devs-popover").hasAttribute("hidden")).toBe(true)
+  })
+})
+
+describe("a panel drives its own surface's room only", () => {
+  it("a fallback in the Voice tab's room shows no strap on a meeting panel", () => {
+    mount()
+    barFallback({ surface: "voice" })
+    expect(body.querySelector('[data-role="meeting-device-notice"]')).toBeNull()
+    barFallback({ surface: "meeting" })
+    expect(body.querySelector('[data-role="meeting-device-notice"]')).not.toBeNull()
+  })
+
+  it("a voice-surface panel switches the voice room, never the meeting room", async () => {
+    const meeting = fakeRoom({ audioinput: "air-1" })
+    const voice = fakeRoom({ audioinput: "air-1" })
+    registerRoom(voice, "voice")
+    registerRoom(meeting, "meeting")
+    const { hook, root, micCaret } = mount()
+    root.setAttribute("data-devices-surface", "voice")
+    await hook.open({ container: "popover", section: "audioinput", opener: micCaret })
+    await settle()
+    click(rows("audioinput")[2])
+    await settle()
+    expect(voice.switched).toEqual([["audioinput", "mbp-1", true]])
+    expect(meeting.switched).toEqual([])
+  })
+})

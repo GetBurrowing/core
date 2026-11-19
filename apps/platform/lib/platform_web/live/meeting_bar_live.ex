@@ -27,9 +27,39 @@ defmodule PlatformWeb.MeetingBarLive do
     * `:meeting_here_count` — how many participants are in the call
     * `:meeting_can_end` — the viewer hosts the meeting, so the desktop bar
       offers "End for everyone" next to Leave (the server re-checks)
+
+  ## The "Sound and video" panel (task 01a1f4c5 stage 4)
+
+  At `sm` and up the Mic and Cam chips are split buttons: a caret
+  (`data-bar-mic-devices` / `data-bar-camera-devices`) opens the shared
+  `DevicePanel.device_panel/1` popover under the bar, on that section. Below
+  `sm` the bar is the phone strip, whose whole job is to return to the call
+  (where the room's own control is), so it gets NO device control.
+
+  The panel is a FUNCTION-COMPONENT child rendered inside this
+  LiveComponent's template (`devices/1` below), and its markup carries no
+  `phx-target`. That is deliberate and safe: the `MeetingDevicePanel` hook
+  pushes no server events at all, and device ids and labels never reach the
+  server. Do not "fix" it into a `phx-target={@myself}` or a LiveComponent
+  of its own: there is no event for it to target, and a hook's `pushEvent`
+  ignores `phx-target` anyway (see `CallShell`'s moduledoc).
+
+  The device-switched strap renders under the bar
+  (`meeting-bar-device-notice`), because a person on another page is the one
+  most likely to miss a fallback; it gives way to a call surface's own strap
+  on the same page (`data-devices-notice="when-alone"`).
+
+  Never in the iOS app: the carets and the panel are left out while the
+  native call owns media (`@native`), and the MeetingBar hook hides them when
+  the page learns it first (`nativeCallOwnsMedia`).
   """
 
   use PlatformWeb, :live_component
+
+  alias PlatformWeb.Components.Meetings.DevicePanel
+
+  # The panel root's DOM id; the bar names it in `data-bar-devices`.
+  @devices_id "meeting-bar-devices"
 
   @impl true
   def mount(socket) do
@@ -120,6 +150,8 @@ defmodule PlatformWeb.MeetingBarLive do
         :return_path,
         return_to_call_path(assigns[:meeting_slug], assigns[:space_slug], assigns[:space_id])
       )
+      |> assign(:devices_id, @devices_id)
+      |> assign(:devices?, is_nil(assigns[:native]))
 
     ~H"""
     <div id="meeting-bar-mount" class="contents">
@@ -130,6 +162,7 @@ defmodule PlatformWeb.MeetingBarLive do
         phx-mounted={JS.ignore_attributes(["data-state", "data-lost"])}
         data-state="connected"
         data-started-at={@started_at && DateTime.to_iso8601(@started_at)}
+        data-bar-devices={@devices? && @devices_id}
         aria-label="In call"
         class={[
           "group relative flex shrink-0 items-center gap-2.5 px-3.5 py-2 text-sm",
@@ -206,30 +239,59 @@ defmodule PlatformWeb.MeetingBarLive do
              call CONFIRMED (task 01a13c62 stage 3): pending is disabled with
              a warning ring, and a build whose page cannot drive the mic hides
              it. Off is the inverted chip. --%>
-        <button
+        <span
           :if={is_nil(@native) or @native.mic}
-          type="button"
-          data-bar-mic
-          disabled={@mic_pending}
-          aria-busy={if @mic_pending, do: "true"}
-          aria-pressed={if @mic_on, do: "false", else: "true"}
-          class={[control_class(), toggle_class(@mic_on), @mic_pending && "ring-2 ring-warning"]}
-          title={if @mic_on, do: "Mute mic", else: "Unmute mic"}
+          class="hidden shrink-0 items-stretch sm:inline-flex"
         >
-          <span><b>Mic</b> {if @mic_on, do: "on", else: "off"}</span>
-        </button>
+          <button
+            type="button"
+            data-bar-mic
+            disabled={@mic_pending}
+            aria-busy={if @mic_pending, do: "true"}
+            aria-pressed={if @mic_on, do: "false", else: "true"}
+            class={[
+              control_class(),
+              toggle_class(@mic_on),
+              @mic_pending && "ring-2 ring-warning",
+              @devices? && "rounded-r-none"
+            ]}
+            title={if @mic_on, do: "Mute mic", else: "Unmute mic"}
+          >
+            <span><b>Mic</b> {if @mic_on, do: "on", else: "off"}</span>
+          </button>
+          <.caret
+            :if={@devices?}
+            data-bar-mic-devices
+            devices_id={@devices_id}
+            kind="audioinput"
+            label="Choose microphone"
+            on={@mic_on}
+          />
+        </span>
 
         <%!-- Camera. Same hook pathway as the mic. --%>
-        <button
+        <span
           :if={is_nil(@native) or @native.camera}
-          type="button"
-          data-bar-camera
-          aria-pressed={if @camera_on, do: "true", else: "false"}
-          class={[control_class(), toggle_class(@camera_on)]}
-          title={if @camera_on, do: "Turn off camera", else: "Turn on camera"}
+          class="hidden shrink-0 items-stretch sm:inline-flex"
         >
-          <span>{if @camera_on, do: "Cam on", else: "Cam off"}</span>
-        </button>
+          <button
+            type="button"
+            data-bar-camera
+            aria-pressed={if @camera_on, do: "true", else: "false"}
+            class={[control_class(), toggle_class(@camera_on), @devices? && "rounded-r-none"]}
+            title={if @camera_on, do: "Turn off camera", else: "Turn on camera"}
+          >
+            <span>{if @camera_on, do: "Cam on", else: "Cam off"}</span>
+          </button>
+          <.caret
+            :if={@devices?}
+            data-bar-camera-devices
+            devices_id={@devices_id}
+            kind="videoinput"
+            label="Choose camera"
+            on={@camera_on}
+          />
+        </span>
 
         <.link
           navigate={@return_path}
@@ -326,7 +388,80 @@ defmodule PlatformWeb.MeetingBarLive do
           </span>
         </span>
       </div>
+      <.devices :if={@meeting_active && !@in_call_room && @devices?} id={@devices_id} />
     </div>
+    """
+  end
+
+  attr(:id, :string, required: true)
+
+  # The panel root: a function component, NOT a LiveComponent, with no
+  # `phx-target` (see the moduledoc). A SIBLING of the bar, in the mount's
+  # `contents`, so the notice slot is the next item of the shell's column,
+  # directly under the bar, and the fixed popover is not inside the bar's
+  # `relative` band. `phx-update="ignore"`: the hook owns everything in it.
+  defp devices(assigns) do
+    ~H"""
+    <div
+      id={@id}
+      phx-hook="MeetingDevicePanel"
+      phx-update="ignore"
+      phx-mounted={JS.ignore_attributes(["hidden"])}
+      data-role="meeting-devices"
+      data-devices-surface="meeting"
+      data-devices-notice="when-alone"
+      class="contents"
+    >
+      <div
+        id={"#{@id}-notice"}
+        data-role="meeting-bar-device-notice"
+        role="status"
+        aria-live="polite"
+        class="w-full shrink-0 empty:sr-only"
+      >
+      </div>
+      <DevicePanel.device_panel id={"#{@id}-popover"} container={:popover} />
+      <DevicePanel.device_panel id={"#{@id}-sheet"} container={:sheet} />
+    </div>
+    """
+  end
+
+  attr(:devices_id, :string, required: true)
+  attr(:kind, :string, required: true)
+  attr(:label, :string, required: true)
+  attr(:on, :boolean, required: true)
+  attr(:rest, :global, include: ~w(data-bar-mic-devices data-bar-camera-devices))
+
+  # The caret half of a split Mic / Cam chip: the chip's own ground (so the
+  # pair reads as one control, in success or, reconnecting, warning tokens)
+  # and a hairline in the band's content colour between them. Compact on
+  # the 44px band, with a full-height hit area from an `after:` box, so the
+  # touch target is 44px without growing the chip. `aria-expanded` and
+  # `hidden` belong to the hooks, so a LiveView patch (every mute) keeps them.
+  defp caret(assigns) do
+    ~H"""
+    <button
+      type="button"
+      data-devices-for={@devices_id}
+      data-devices-container="popover"
+      data-devices-section={@kind}
+      data-devices-placement="below"
+      phx-mounted={JS.ignore_attributes(["aria-expanded", "hidden"])}
+      aria-haspopup="dialog"
+      aria-expanded="false"
+      aria-controls={"#{@devices_id}-popover"}
+      aria-label={@label}
+      title={@label}
+      class={[
+        control_class(),
+        toggle_class(@on),
+        "relative rounded-l-none border-l border-current/30 px-1.5",
+        "after:absolute after:inset-x-0 after:-inset-y-2 after:content-['']"
+      ]}
+      {@rest}
+    >
+      <span class="hero-chevron-down size-3.5" aria-hidden="true"></span>
+    </button>
     """
   end
 

@@ -239,6 +239,12 @@ export function activeRoom(surface) {
   return null
 }
 
+// The surface a room was registered for, or null.
+export function surfaceOf(room) {
+  const entry = registry.find((e) => e.room === room)
+  return entry ? entry.surface : null
+}
+
 export function registeredRooms() {
   return registry.map((entry) => ({ ...entry }))
 }
@@ -311,7 +317,15 @@ export async function handleDevicesChanged(room, { kinds = KINDS } = {}) {
       continue
     }
     announceActiveDevice(kind, target.deviceId)
-    emit(DEVICE_FALLBACK_EVENT, { kind, fromLabel, toLabel: target.label })
+    // `surface` lets a panel ignore a fallback in a room it does not drive
+    // (the Voice tab's room is not the meeting's; task 01a1f4c5 stage 4).
+    const surface = surfaceOf(room)
+    emit(DEVICE_FALLBACK_EVENT, {
+      kind,
+      fromLabel,
+      toLabel: target.label,
+      ...(surface ? { surface } : {}),
+    })
     moved.push({ kind, from: active, to: target.deviceId })
   }
   return moved

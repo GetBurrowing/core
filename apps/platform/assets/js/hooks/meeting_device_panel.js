@@ -38,6 +38,15 @@
 //     overlay), and Esc collapses it. `meeting:device-panel-open` {id,
 //     container, section} opens a panel without a click: the lobby's mic
 //     check uses it to expand MICROPHONE when it warns.
+//   * The compact surfaces (stage 4): the in-call top bar and the Voice tab.
+//     `data-devices-surface` on the root names the registered room this
+//     panel drives ("meeting", the default, or "voice"), and ONLY that one:
+//     the Voice tab's panel never touches the meeting's room, and a fallback
+//     in another surface's room shows no strap here. A trigger with
+//     `data-devices-placement="below"` (the top bar) opens the popover under
+//     itself. `data-devices-notice="when-alone"` (the top bar) shows the
+//     strap only when no other panel on the page has a notice slot, so the
+//     quickmeet and the bar never announce the same fallback twice.
 
 import * as MD from "../lib/media_devices.js"
 import { openLayer } from "../lib/dismissable_overlay.js"
@@ -225,7 +234,12 @@ const MeetingDevicePanel = {
       }
       if (this._open && d.kind) this._renderSection(d.kind)
     }
-    this._onFallback = (e) => this.showNotice((e && e.detail) || {})
+    this._onFallback = (e) => {
+      const d = (e && e.detail) || {}
+      if (d.surface && d.surface !== this._surface()) return
+      if (this._noticeDeferred()) return
+      this.showNotice(d)
+    }
     this._onOpenRequest = (e) => {
       const d = (e && e.detail) || {}
       if (d.id !== this.el.id) return
@@ -395,7 +409,14 @@ const MeetingDevicePanel = {
     const vh = w.innerHeight || 0
     const left = Math.max(8, Math.min(rect.left - 8, vw - width - 8))
     panel.style.left = `${Math.round(left)}px`
-    panel.style.bottom = `${Math.round(vh - rect.top + 8)}px`
+    // The top bar sits at the top of the page: its popover opens below.
+    if (opener.getAttribute && opener.getAttribute("data-devices-placement") === "below") {
+      panel.style.bottom = ""
+      panel.style.top = `${Math.round(rect.bottom + 8)}px`
+    } else {
+      panel.style.top = ""
+      panel.style.bottom = `${Math.round(vh - rect.top + 8)}px`
+    }
   },
 
   _focusTarget(panel, kind) {
@@ -425,8 +446,27 @@ const MeetingDevicePanel = {
     await Promise.all(this._sections().map((kind) => this._renderSection(kind)))
   },
 
+  // The surface whose registered room this panel drives.
+  _surface() {
+    return this.el.getAttribute("data-devices-surface") || "meeting"
+  },
+
+  // Only this surface's room. Before the Voice tab's first press there is
+  // none, so a pick there only persists (and the first getUserMedia uses
+  // it); it never falls through to the meeting's room.
   _room() {
-    return MD.activeRoom("meeting") || MD.activeRoom()
+    return MD.activeRoom(this._surface())
+  },
+
+  // The top bar's strap gives way to a panel that has its own slot (the
+  // quickmeet beside it on /chat), so one fallback is announced once.
+  _noticeDeferred() {
+    if (this.el.getAttribute("data-devices-notice") !== "when-alone") return false
+    const doc = this._doc()
+    if (!doc || typeof doc.querySelectorAll !== "function") return false
+    return Array.from(doc.querySelectorAll('[data-role="meeting-device-notice-slot"]')).some(
+      (slot) => !(this.el.contains && this.el.contains(slot)),
+    )
   },
 
   _activeId(kind, devices) {
@@ -957,7 +997,11 @@ const MeetingDevicePanel = {
   // ── the device-switched strap ─────────────────────────────────────
 
   _slot() {
-    return this.el.querySelector('[data-role="meeting-device-notice-slot"]')
+    // The call surfaces' slot sits above their controls row; the top bar's
+    // (`meeting-bar-device-notice`, stage 4) sits under the bar.
+    return this.el.querySelector(
+      '[data-role="meeting-device-notice-slot"], [data-role="meeting-bar-device-notice"]',
+    )
   },
 
   showNotice({ kind, fromLabel, toLabel } = {}) {
@@ -1009,10 +1053,17 @@ const MeetingDevicePanel = {
     strap.querySelector("[data-notice-dismiss]").addEventListener("click", () => this.clearNotice())
     strap.querySelector("[data-notice-change]").addEventListener("click", () => {
       const opener = this._openerFor(kind)
+      // No VISIBLE trigger (the top bar below `sm`, whose strip carries no
+      // control): open the sheet, with no opener to point a popover at.
+      const shown = opener && this._visible(opener)
       this.open({
-        container: opener ? opener.getAttribute("data-devices-container") : "sheet",
+        container: shown
+          ? opener.getAttribute("data-devices-container")
+          : this._panel("sheet")
+            ? "sheet"
+            : "popover",
         section: kind || "audioinput",
-        opener,
+        opener: shown ? opener : null,
       })
     })
     slot.replaceChildren(strap)

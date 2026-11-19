@@ -1,4 +1,5 @@
 import { RoomEvent } from "livekit-client"
+import { activeRoom, announceActiveDevice, handleDevicesChanged } from "../lib/media_devices"
 
 /**
  * MeetingBar hook — bridges the in-call top bar controls to the LiveKit Room instance.
@@ -109,6 +110,90 @@ export function nativeCallOwnsMedia(win) {
   }
 }
 
+// The bar's "Sound and video" controls (task 01a1f4c5 stage 4): the mic
+// and camera carets, and the panel root `MeetingBarLive` renders beside the
+// bar (`#<bar id>-devices`, found through `data-bar-devices`).
+export const DEVICE_CARETS = "[data-bar-mic-devices], [data-bar-camera-devices]"
+
+// Inside the iOS app the native call owns the microphone, camera and route
+// (CallKit), and WKWebView cannot choose an output: the carets and the panel
+// are hidden. The server already leaves them out when it knows the call is
+// native (`@native`); this covers the page that learns it first.
+export function hideDeviceControls(root, doc, win) {
+  const hide = nativeCallOwnsMedia(win)
+  const nodes = root && typeof root.querySelectorAll === "function" ? [...root.querySelectorAll(DEVICE_CARETS)] : []
+  const panelId = root && root.getAttribute ? root.getAttribute("data-bar-devices") : null
+  const panel = panelId && doc && typeof doc.getElementById === "function" ? doc.getElementById(panelId) : null
+  if (panel) nodes.push(panel)
+  for (const node of nodes) {
+    if (hide) node.setAttribute("hidden", "")
+    else node.removeAttribute("hidden")
+  }
+  return hide
+}
+
+// A device unplugged while the person is on a page with no call client
+// (/calendar, /inbox): MeetingClient's own MediaDevicesChanged listener went
+// with its element, so the bar moves the room to a working device and the
+// panel's strap says so under the bar. Where a call client IS mounted
+// (`#meeting-client`, the chat) it does this itself, so the bar stands back,
+// checked at event time because the chat can mount after the bar.
+export function watchRoomDevices(win, doc) {
+  let bound = null
+  let handlers = []
+  const currentRoom = () => activeRoom("meeting") || win.__livekit_room || win.__livekitRoom || null
+  const clientMounted = () =>
+    !!(doc && typeof doc.getElementById === "function" && doc.getElementById("meeting-client"))
+
+  const release = () => {
+    if (bound && typeof bound.off === "function") {
+      for (const [event, fn] of handlers) {
+        try {
+          bound.off(event, fn)
+        } catch (_) {
+          /* already gone */
+        }
+      }
+    }
+    bound = null
+    handlers = []
+  }
+
+  const bind = (room) => {
+    if (!room || bound === room || typeof room.on !== "function") return
+    release()
+    bound = room
+    const onDevices = () => {
+      if (clientMounted() || nativeCallOwnsMedia(win)) return
+      handleDevicesChanged(room).catch((err) =>
+        console.warn("[MeetingBar] device fallback failed", err && err.message),
+      )
+    }
+    const onActive = (kind, deviceId) => {
+      if (clientMounted()) return
+      announceActiveDevice(kind, deviceId)
+    }
+    room.on(RoomEvent.MediaDevicesChanged, onDevices)
+    room.on(RoomEvent.ActiveDeviceChanged, onActive)
+    handlers = [
+      [RoomEvent.MediaDevicesChanged, onDevices],
+      [RoomEvent.ActiveDeviceChanged, onActive],
+    ]
+  }
+
+  const onConnected = (e) => bind((e && e.detail && e.detail.room) || currentRoom())
+  const onDisconnected = () => release()
+  win.addEventListener("livekit:room-connected", onConnected)
+  win.addEventListener("livekit:room-disconnected", onDisconnected)
+  bind(currentRoom())
+
+  return () => {
+    release()
+    win.removeEventListener("livekit:room-connected", onConnected)
+    win.removeEventListener("livekit:room-disconnected", onDisconnected)
+  }
+}
+
 /**
  * Toggle the local mic or camera from the top bar (or the lock screen) on
  * whatever page the person is on (task 01a1e82a remediation round 2).
@@ -165,6 +250,8 @@ const MeetingBar = {
     // Re-read mic / camera on every local publish and mute change, not only
     // at mount and room-connected (task 01a1e82a remediation, finding 1).
     this._stopWatch = watchLocalMedia(window, () => this._syncState())
+    this._stopDevices = watchRoomDevices(window, typeof document === "undefined" ? null : document)
+    hideDeviceControls(this.el, typeof document === "undefined" ? null : document, window)
 
     this._onDisconnected = () => {
       // Route to the MeetingBarLive LiveComponent (this.el lives inside it),
@@ -183,6 +270,7 @@ const MeetingBar = {
     this._stopTimer()
     this._startTimer()
     this._bindControls()
+    hideDeviceControls(this.el, typeof document === "undefined" ? null : document, window)
   },
 
   destroyed() {
@@ -192,6 +280,8 @@ const MeetingBar = {
     window.removeEventListener("livekit:room-connected", this._onConnected)
     if (this._stopWatch) this._stopWatch()
     this._stopWatch = null
+    if (this._stopDevices) this._stopDevices()
+    this._stopDevices = null
   },
 
   _syncState() {

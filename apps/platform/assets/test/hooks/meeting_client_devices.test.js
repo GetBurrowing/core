@@ -305,6 +305,7 @@ describe("MediaDevicesChanged: the active microphone disappears", () => {
       kind: "audioinput",
       fromLabel: "AirPods Pro",
       toLabel: "Default - MacBook Pro Microphone",
+      surface: "meeting",
     })
   })
 
@@ -323,6 +324,7 @@ describe("MediaDevicesChanged: the active microphone disappears", () => {
       kind: "audioinput",
       fromLabel: "AirPods Pro",
       toLabel: "Default - MacBook Pro Microphone",
+      surface: "meeting",
     })
   })
 
