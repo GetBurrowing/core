@@ -1224,10 +1224,62 @@ defmodule Platform.Orchestration.PromptTemplatesTest do
     # AC15, verbatim. The trailing newline is part of the match: in the
     # template body the second line is followed by a blank line, so the
     # heredoc's own "\n" is present in the content too.
+    #
+    # Task 01a1f53c-1825 stage 2 deliberately rewrote the second line: it
+    # used to say "Empty or missing subagent_id will fail validation"
+    # unconditionally, which stopped being true when `rejected` became
+    # acceptable without an id. The requirement now names the three
+    # statuses that still carry it.
     @intent_ack_preamble """
     **Your first tool call after spawning the subagent must be `intent_ack(intent_id="<...>", subagent_id="<the id returned when you spawned the subagent>", status: :working)`.**
-    Spawn the subagent FIRST, then include its returned agent id in the ack. Empty or missing subagent_id will fail validation.
+    Spawn the subagent FIRST, then include its returned agent id in the ack. For `working`, `completed` and `cancel_honored`, an empty or missing subagent_id will fail validation.
     """
+
+    test "says rejected takes no subagent_id and the other three statuses still require it" do
+      # Task 01a1f53c-1825. The tool accepts `rejected` with no subagent_id
+      # and records null. A prompt that still said every ack needs one
+      # would keep recipients spawning a subagent just to decline, or
+      # inventing an id to get past a requirement that no longer exists.
+      content = PromptTemplates.default_content_for_slug("dispatch.intent_attention")
+      ack = intent_attention_section(content, "## Ack contract", "## Deliverable steps")
+
+      assert ack =~ "**`rejected` takes no subagent_id.**",
+             "the ack contract must say rejected takes no subagent_id"
+
+      assert ack =~
+               ~s|intent_ack(intent_id="{{intent_id}}", status: "rejected", note: "<one line why>")|,
+             "the ack contract must give the literal no-id rejected call"
+
+      assert ack =~
+               "For `working`, `completed` and `cancel_honored`, an empty or missing subagent_id will fail validation.",
+             "the ack contract must still require subagent_id for working/completed/cancel_honored"
+
+      assert ack =~
+               "A `working`, `completed` or `cancel_honored` ack whose `subagent_id` is missing",
+             "the schema paragraph must scope the missing-id refusal to the three statuses"
+
+      refute ack =~ "Empty or missing subagent_id will fail validation.",
+             "the unconditional requirement must be gone from the ack contract"
+
+      steps = intent_attention_section(content, "## Deliverable steps", "## Cancellation")
+
+      assert steps =~
+               ~s|intent_ack(intent_id="{{intent_id}}", status: "rejected", note: "<one line why>")|,
+             "deliverable step 2 must carry the literal no-id rejected call"
+
+      assert steps =~ "Do not spawn or resume a subagent just to reject.",
+             "deliverable step 2 must say not to spawn or resume a subagent to reject"
+
+      # The anti-fabrication rule is untouched.
+      assert content =~ "do NOT invent a `subagent_id`",
+             "the failure-surfacing anti-fabrication line must survive"
+
+      descriptor =
+        Enum.find(PromptTemplates.default_templates(), &(&1.slug == "dispatch.intent_attention"))
+
+      assert descriptor.description =~ "Declining with `rejected` needs no subagent",
+             "the template description must no longer say every ack carries a subagent id"
+    end
 
     test "exists as a registered default template slug" do
       content = PromptTemplates.default_content_for_slug("dispatch.intent_attention")
@@ -1708,6 +1760,19 @@ defmodule Platform.Orchestration.PromptTemplatesTest do
                                       "priv/repo/migrations/20260728050000_force_update_architect_audit_diff_audit_tool.exs"
                                     ])
 
+    # Task 01a1f53c-1825 stage 2. Insert-when-absent plus force-update, the
+    # same shape as 20260731210000: the slug is claimed on every migrated
+    # environment, so the runtime only sees the "rejected takes no
+    # subagent_id" body through this migration.
+    @intent_attention_rejected_migration_path Path.join([
+                                                __ENV__.file
+                                                |> Path.dirname()
+                                                |> Path.dirname()
+                                                |> Path.dirname()
+                                                |> Path.dirname(),
+                                                "priv/repo/migrations/20261119200000_force_update_intent_attention_rejected_no_subagent.exs"
+                                              ])
+
     Code.compile_file(@alarm_silence_migration_path)
     Code.compile_file(@subagent_id_ack_migration_path)
     Code.compile_file(@federation_preamble_migration_path)
@@ -1717,6 +1782,76 @@ defmodule Platform.Orchestration.PromptTemplatesTest do
     Code.compile_file(@design_decline_migration_path)
     Code.compile_file(@deploy_repos_migration_path)
     Code.compile_file(@audit_diff_tool_migration_path)
+    Code.compile_file(@intent_attention_rejected_migration_path)
+
+    test "20261119200000 intent_attention migration INSERTS when the slug is absent" do
+      migration = Platform.Repo.Migrations.ForceUpdateIntentAttentionRejectedNoSubagent
+
+      :ok = drop_intent_attention_row()
+
+      refute PromptTemplates.get_template_by_slug("dispatch.intent_attention"),
+             "precondition: no dispatch.intent_attention row before the migration runs"
+
+      :ok = migration.up()
+
+      template = PromptTemplates.get_template_by_slug("dispatch.intent_attention")
+      assert template, "the migration must INSERT dispatch.intent_attention when absent"
+
+      assert template.content ==
+               PromptTemplates.default_content_for_slug("dispatch.intent_attention")
+
+      assert template.content =~ "**`rejected` takes no subagent_id.**"
+    end
+
+    test "20261119200000 intent_attention migration FORCE-UPDATES the previous body" do
+      # The upgrade case. Both live installs held the 20260731210000 body,
+      # whose ack contract said every ack fails validation without a
+      # subagent_id. Restore that sentence on the row and show the
+      # migration replaces it with the current body.
+      migration = Platform.Repo.Migrations.ForceUpdateIntentAttentionRejectedNoSubagent
+
+      :ok = PromptTemplates.seed_defaults()
+      seeded = PromptTemplates.get_template_by_slug("dispatch.intent_attention")
+      assert seeded
+
+      old_body =
+        String.replace(
+          seeded.content,
+          "For `working`, `completed` and `cancel_honored`, an empty or missing subagent_id will fail validation.",
+          "Empty or missing subagent_id will fail validation."
+        )
+
+      refute old_body == seeded.content, "precondition: the stale body differs from the current one"
+
+      {:ok, _} =
+        PromptTemplates.update_template(seeded, %{
+          content: old_body,
+          description: "stale description"
+        })
+
+      :ok = migration.up()
+
+      refreshed = PromptTemplates.get_template_by_slug("dispatch.intent_attention")
+
+      assert refreshed.content ==
+               PromptTemplates.default_content_for_slug("dispatch.intent_attention")
+
+      refute refreshed.content =~ "Empty or missing subagent_id will fail validation."
+
+      descriptor =
+        Enum.find(PromptTemplates.default_templates(), &(&1.slug == "dispatch.intent_attention"))
+
+      assert refreshed.description == descriptor.description
+
+      :ok = migration.up()
+
+      assert Platform.Repo.aggregate(
+               Ecto.Query.from(t in Platform.Orchestration.PromptTemplate,
+                 where: t.slug == "dispatch.intent_attention"
+               ),
+               :count
+             ) == 1
+    end
 
     test "seed_defaults seeds dispatch.planning with current default content" do
       :ok = PromptTemplates.seed_defaults()

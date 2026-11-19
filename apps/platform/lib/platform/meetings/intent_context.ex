@@ -225,7 +225,7 @@ defmodule Platform.Meetings.IntentContext do
 
         - Starting work? `intent_ack(intent_id: "#{intent_id}", status: "working")`. Send it before you begin, not after.
         - Finished? `intent_ack(intent_id: "#{intent_id}", status: "completed")`.
-        - Not yours, or not actionable? `intent_ack(intent_id: "#{intent_id}", status: "rejected")` with a one-line `note` saying why.
+        - Not yours, or not actionable? `intent_ack(intent_id: "#{intent_id}", status: "rejected")` with a one-line `note` saying why. No subagent and no `subagent_id` are needed to reject: do not spawn one just to decline.
 
         **An honest `rejected` is a good outcome.** It unblocks the meeting immediately and it teaches the classifier — rejections are recorded as corrections and become examples that sharpen future routing. Guessing at work that is not yours is the bad outcome, and silence is the worst one: it costs the meeting the full ninety seconds and tells nobody anything.
 
