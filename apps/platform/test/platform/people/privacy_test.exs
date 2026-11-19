@@ -38,6 +38,26 @@ defmodule Platform.People.PrivacyTest do
     assert {"the licence costs $12 a seat", []} = Privacy.scrub("the licence costs $12 a seat")
   end
 
+  test "money cue window cut inside a multibyte character does not raise" do
+    # The cue window is +/-40 bytes around the amount. Pad so the leading edge
+    # lands on the last byte of a curly apostrophe (226, 128, 153); the old
+    # byte window was invalid UTF-8 and the unicode cue regex raised.
+    lead = "\u2019" <> String.duplicate("a", 31) <> " salary $20"
+    assert binary_part(lead, 2, 1) == <<153>>
+
+    assert {scrubbed, [%{kind: :financial, count: 1}]} = Privacy.scrub(lead)
+    assert scrubbed == "\u2019" <> String.duplicate("a", 31) <> " salary [REDACTED: financial]"
+
+    # Same at the trailing edge: the window ends two bytes into an emoji.
+    trail = "salary $20 " <> String.duplicate("b", 37) <> "\u{1F600} done"
+    assert binary_part(trail, 48, 2) == <<240, 159>>
+
+    assert {scrubbed, [%{kind: :financial, count: 1}]} = Privacy.scrub(trail)
+
+    assert scrubbed ==
+             "salary [REDACTED: financial] " <> String.duplicate("b", 37) <> "\u{1F600} done"
+  end
+
   test "benign text is byte-identical" do
     text =
       "shipped 4a3900748f2a9c1e0b7d6e5f4a3b2c1d0e9f8a7b for 01a1aa47-837b-7000-ba1b-83ab03ec3265 " <>
