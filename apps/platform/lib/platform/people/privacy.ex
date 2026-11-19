@@ -191,7 +191,9 @@ defmodule Platform.People.Privacy do
   defp money_context?(text, start, len) do
     from = max(start - @money_window, 0)
     to = min(start + len + @money_window, byte_size(text))
-    window = binary_part(text, from, to - from)
+    # A byte window can cut a multibyte character at either edge; the unicode
+    # cue regex raises on invalid UTF-8, so drop the partial bytes first.
+    window = text |> binary_part(from, to - from) |> String.replace_invalid("")
     Regex.match?(@money_context, window)
   end
 end
