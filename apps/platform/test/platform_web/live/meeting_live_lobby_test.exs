@@ -524,7 +524,7 @@ defmodule PlatformWeb.MeetingLiveLobbyTest do
                ~s([data-role="meeting-lobby"] [data-role="meeting-lobby-devices"])
              )
 
-      assert html =~ "You'll join with"
+      assert html =~ "You&#39;ll join with"
 
       {preview, _} = :binary.match(html, ~s(data-role="meeting-lobby-preview"))
       {devices, _} = :binary.match(html, ~s(data-role="meeting-lobby-devices"))
