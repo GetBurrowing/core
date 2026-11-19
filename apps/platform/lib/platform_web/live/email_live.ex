@@ -790,7 +790,7 @@ defmodule PlatformWeb.EmailLive do
     %{user: user, selected_message: message} = socket.assigns
 
     with %{id: _} <- message,
-         true <- Triage.eligible?(user, message, Triage.triage_agent()),
+         true <- Triage.eligible?(user, message),
          {:ok, _feedback} <- Triage.record_feedback(user, message.id, verdict) do
       {:noreply, assign(socket, :triage_feedback, {:recorded, verdict})}
     else
@@ -2222,8 +2222,8 @@ defmodule PlatformWeb.EmailLive do
 
   # The triage feedback control (task 01a1f426 stage 2) shows only on a
   # message whose mailbox the triage covers for this reader: readable AND
-  # granted to the triage agent. `:available` or nil.
+  # with an active flag-important agent. `:available` or nil.
   defp triage_feedback_state(user, message) do
-    if Triage.eligible?(user, message, Triage.triage_agent()), do: :available
+    if Triage.eligible?(user, message), do: :available
   end
 end

@@ -30,7 +30,7 @@ defmodule Platform.Mail.DraftsTest do
 
     a = user!("a") |> member!(org_id, "admin")
     r = user!("r") |> member!(org_id)
-    agent = triage_agent!()
+    agent = agent!("triage")
 
     p = account!(a, org_id, %{"name" => "Pbox #{n}"}) |> then(&personal!(a, &1, r))
 

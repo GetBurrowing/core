@@ -34,13 +34,13 @@ defmodule Platform.Mail.Triage.MetricsTest do
 
     admin = user!("admin") |> member!(org_id, "admin")
     r = user!("r") |> member!(org_id)
-    agent = triage_agent!()
+    agent = agent!("triage")
 
     box =
       account!(admin, org_id, %{"name" => "Rbox #{n}", "internal_only" => false})
       |> then(&personal!(admin, &1, r))
 
-    grant_agent!(r, box, agent)
+    flag_agent!(r, box, agent)
 
     {:ok, _} =
       Mail.put_sender(admin, box, %{"key" => "me", "address" => "r-#{n}@example.test"})

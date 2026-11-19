@@ -6,16 +6,21 @@ defmodule Platform.Mail.TriageTest do
 
   ## Permission
 
-  The world: org admin A, member B. B owns personal mailbox B-box (granted
-  to the triage agent by B). Shared mailbox S is read by A and granted to
-  the agent. A owns personal mailbox A2, NOT granted to the agent. Only S
-  may produce an item for A:
+  The world: org admin A, member B. B owns personal mailbox B-box (its
+  flag-important agent set by B). Shared mailbox S is read by A and has the
+  same flag agent. A owns personal mailbox A2, with NO flag agent (Off).
+  Only S may produce an item for A:
 
     * B-box is the "admin confers nothing" case — removing the
-      `readable_account_ids` term from `Triage.eligible_accounts_query/3`
+      `readable_account_ids` term from `Triage.eligible_accounts_query/2`
       turns the B-box tests red;
-    * A2 is the "an agent uses only mail it has been granted" case —
-      removing the `agent_granted` term turns the A2 tests red.
+    * A2 is the "Off triages nothing" case — removing the flag_important
+      term turns the A2 tests red.
+
+  ## Per-mailbox agent (task 01a1f5cc stage 2)
+
+  Each mailbox is classified by its own flag agent; an access grant alone,
+  an inactive agent, or a `mail.triage` Roles assignee triages nothing.
 
   ## Sentinel
 
@@ -37,9 +42,9 @@ defmodule Platform.Mail.TriageTest do
   import Platform.Test.MailPrivacyFixtures
   import Platform.Test.MailTriageFixtures
 
-  alias Platform.Mail.Inbound
+  alias Platform.Mail.{Inbound, Ownership}
   alias Platform.Mail.Triage
-  alias Platform.Mail.Triage.{Feedback, Item}
+  alias Platform.Mail.Triage.{Classifier, Feedback, Item}
   alias Platform.Test.MailTriageStub, as: Stub
 
   setup do
@@ -49,13 +54,13 @@ defmodule Platform.Mail.TriageTest do
 
     a = user!("a") |> member!(org_id, "admin")
     b = user!("b") |> member!(org_id)
-    agent = triage_agent!()
+    agent = agent!("triage")
 
     b_box = account!(a, org_id, %{"name" => "B box #{n}"}) |> then(&personal!(a, &1, b))
-    grant_agent!(b, b_box, agent)
+    flag_agent!(b, b_box, agent)
 
     shared = account!(a, org_id, %{"name" => "Shared #{n}"}) |> then(&shared!(a, &1, [a]))
-    grant_agent!(a, shared, agent)
+    flag_agent!(a, shared, agent)
 
     a2 = account!(a, org_id, %{"name" => "A2 #{n}"}) |> then(&personal!(a, &1, a))
 
@@ -100,11 +105,13 @@ defmodule Platform.Mail.TriageTest do
       }
     end
 
-    test "eligible_account_ids is exactly the readable AND granted mailboxes", ctx do
-      assert Triage.eligible_account_ids(ctx.a, ctx.org_id, ctx.agent) == [ctx.shared.id]
-      # B reads B-box (owner) and it is granted; S and A2 are not B's.
-      assert Triage.eligible_account_ids(ctx.b, ctx.org_id, ctx.agent) == [ctx.b_box.id]
-      assert Triage.eligible_account_ids(ctx.a, ctx.org_id, nil) == []
+    test "eligible_account_ids is exactly the readable AND flagged mailboxes", ctx do
+      assert Triage.eligible_account_ids(ctx.a, ctx.org_id) == [ctx.shared.id]
+      # B reads B-box (owner) and it is flagged; S and A2 are not B's.
+      assert Triage.eligible_account_ids(ctx.b, ctx.org_id) == [ctx.b_box.id]
+
+      {:ok, _} = Ownership.set_flag_important_agent(ctx.a, ctx.shared, nil)
+      assert Triage.eligible_account_ids(ctx.a, ctx.org_id) == []
     end
 
     test "run_for_reader triages only mailboxes the reader reads AND the agent is granted", ctx do
@@ -120,9 +127,8 @@ defmodule Platform.Mail.TriageTest do
       refute calls =~ "A2-#{ctx.n}"
     end
 
-    test "a mailbox the reader reads but the agent is NOT granted: no item, no provider call",
-         ctx do
-      assert {:error, :not_eligible} = Triage.classify_for_reader(ctx.a, ctx.in_a2)
+    test "a mailbox the reader reads with no flag agent: no item, no provider call", ctx do
+      assert {:error, :no_triage_agent} = Triage.classify_for_reader(ctx.a, ctx.in_a2)
       assert stub_calls() == []
       assert items_for(ctx.a) == []
     end
@@ -137,19 +143,120 @@ defmodule Platform.Mail.TriageTest do
       assert account_id == ctx.b_box.id
     end
 
-    test "called_out hides an item at once when the agent's grant is revoked", ctx do
+    test "called_out hides an item at once when the mailbox is set to Off", ctx do
       assert {:ok, %Item{tier: "action"}} = Triage.classify_for_reader(ctx.a, ctx.in_s)
       assert [%Item{}] = Triage.called_out(ctx.a, Triage.briefing_today())
 
-      {:ok, _} = Platform.Mail.Ownership.revoke(ctx.a, ctx.shared, {:agent, ctx.agent.id})
+      {:ok, _} = Ownership.set_flag_important_agent(ctx.a, ctx.shared, nil)
       assert Triage.called_out(ctx.a, Triage.briefing_today()) == []
     end
 
-    test "no triage agent: nothing is classified and the run says so", ctx do
-      Platform.Roles.clear_override("mail.triage")
+    test "no flag agent on any readable mailbox: nothing is classified and the run says so",
+         ctx do
+      {:ok, _} = Ownership.set_flag_important_agent(ctx.a, ctx.shared, nil)
       assert {:ok, %{status: :no_triage_agent, classified: 0}} = run(ctx.a)
       assert stub_calls() == []
       assert {:error, :no_triage_agent} = Triage.classify_for_reader(ctx.a, ctx.in_s)
+    end
+  end
+
+  # ── per-mailbox agent (task 01a1f5cc stage 2) ──────────────────────────
+
+  describe "per-mailbox flag agent" do
+    test "a mailbox set to Off gets no item, even when an agent holds an access grant on it",
+         ctx do
+      # A2 was flagged by the agent and produced an item; the owner then
+      # turns it Off. The agent ALSO holds an ordinary access grant on A2.
+      grant_agent!(ctx.a, ctx.a2, ctx.agent)
+      flag_agent!(ctx.a, ctx.a2, ctx.agent)
+      earlier = inbound!(ctx.a2)
+      assert {:ok, %Item{id: earlier_id}} = Triage.classify_for_reader(ctx.a, earlier)
+      _ = stub_calls()
+
+      {:ok, _} = Ownership.set_flag_important_agent(ctx.a, ctx.a2, nil)
+      # The access grant survives Off, so the agent may still READ A2.
+      assert ctx.a2.id in Ownership.agent_granted_account_ids(ctx.agent.id, ctx.org_id)
+
+      refute ctx.a2.id in Triage.eligible_account_ids(ctx.a, ctx.org_id)
+      refute Enum.any?(Triage.called_out(ctx.a, Triage.briefing_today()), &(&1.id == earlier_id))
+      refute Triage.eligible?(ctx.a, earlier)
+
+      later = inbound!(ctx.a2)
+      assert {:error, :no_triage_agent} = Triage.classify_for_reader(ctx.a, later)
+      :ok = Triage.on_inbound(later.id)
+      assert {:ok, %{status: :ok, classified: 0, failed: 0}} = run(ctx.a)
+
+      assert stub_calls() == []
+      refute Enum.any?(items_for(ctx.a), &(&1.inbound_message_id == later.id))
+
+      view = Triage.section_view(ctx.a, Triage.briefing_today())
+      refute Map.has_key?(view.agents_by_account, ctx.a2.id)
+      assert ctx.a2.id in Enum.map(view.ungranted, & &1.id)
+    end
+
+    test "after switching X to Y the next inbound is classified by Y", ctx do
+      y = agent!("y")
+
+      first = inbound!(ctx.shared)
+      :ok = Triage.on_inbound(first.id)
+      x_label = Classifier.classifier_label(ctx.agent)
+      assert %Item{classifier: ^x_label} = Repo.get_by!(Item, inbound_message_id: first.id)
+
+      flag_agent!(ctx.a, ctx.shared, y)
+      assert %{id: y_id} = Triage.agent_for_account(ctx.shared.id)
+      assert y_id == y.id
+
+      second = inbound!(ctx.shared)
+      :ok = Triage.on_inbound(second.id)
+      y_label = Classifier.classifier_label(y)
+      assert y_label != x_label
+      assert %Item{classifier: ^y_label} = Repo.get_by!(Item, inbound_message_id: second.id)
+
+      view = Triage.section_view(ctx.a, Triage.briefing_today())
+      assert view.agents_by_account[ctx.shared.id] == %{id: y.id, name: y.name}
+    end
+
+    test "an inactive flag agent triages nothing", ctx do
+      in_s = inbound!(ctx.shared)
+
+      {1, _} =
+        from(ag in Platform.Agents.Agent, where: ag.id == ^ctx.agent.id)
+        |> Repo.update_all(set: [status: "paused"])
+
+      assert Triage.agent_for_account(ctx.shared.id) == nil
+      assert Triage.eligible_account_ids(ctx.a, ctx.org_id) == []
+      assert {:error, :no_triage_agent} = Triage.classify_for_reader(ctx.a, in_s)
+      :ok = Triage.on_inbound(in_s.id)
+      assert Triage.reconcile() == 0
+      assert {:ok, %{status: :no_triage_agent, classified: 0}} = run(ctx.a)
+      assert stub_calls() == []
+      assert items_for(ctx.a) == []
+
+      view = Triage.section_view(ctx.a, Triage.briefing_today())
+      assert view.agent == nil
+      assert view.agents_by_account == %{}
+      assert ctx.shared.id in Enum.map(view.ungranted, & &1.id)
+    end
+
+    test "the mail.triage role assignee is ignored", ctx do
+      # The role's agent holds an ordinary access grant on A2, and S is Off:
+      # the only way anything could be triaged for A is the Roles fallback.
+      z = agent!("role")
+      {:ok, _} = Platform.Roles.set_override("mail.triage", z.id)
+      grant_agent!(ctx.a, ctx.a2, z)
+      {:ok, _} = Ownership.set_flag_important_agent(ctx.a, ctx.shared, nil)
+
+      in_a2 = inbound!(ctx.a2)
+      in_s = inbound!(ctx.shared)
+
+      assert Triage.agent_for_account(ctx.a2.id) == nil
+      assert {:error, :no_triage_agent} = Triage.classify_for_reader(ctx.a, in_a2)
+      assert {:error, :no_triage_agent} = Triage.classify_for_reader(ctx.a, in_s)
+      :ok = Triage.on_inbound(in_a2.id)
+      assert {:ok, %{status: :no_triage_agent, classified: 0}} = run(ctx.a)
+      assert stub_calls() == []
+      assert items_for(ctx.a) == []
+      assert Triage.section_view(ctx.a, Triage.briefing_today()).agent == nil
     end
   end
 
@@ -380,7 +487,7 @@ defmodule Platform.Mail.TriageTest do
 
     test "one reader's not_important leaves another reader of the same mailbox unaffected", ctx do
       {:ok, _} = Platform.Mail.Ownership.grant(ctx.a, ctx.shared, {:user, ctx.b.id})
-      assert ctx.shared.id in Triage.eligible_account_ids(ctx.b, ctx.org_id, ctx.agent)
+      assert ctx.shared.id in Triage.eligible_account_ids(ctx.b, ctx.org_id)
 
       Stub.reply!(Stub.json(verdict(%{"tier" => "action"})))
       first = inbound!(ctx.shared, %{from_address: "billing@vendor.test"})
@@ -481,6 +588,18 @@ defmodule Platform.Mail.TriageTest do
           raw: raw([], "Please confirm #{sentinel} by Friday.")
         })
 
+      # A second email in A2 (Off for now): the per-account path below
+      # turns A2 on for agent Y and triages it through `on_inbound/2`.
+      y = agent!("y")
+
+      a2_inbound =
+        inbound!(ctx.a2, %{
+          from_address: "other-#{ctx.n}@elsewhere.test",
+          subject: "Fwd: #{sentinel}",
+          text_body: "Also #{sentinel} again.",
+          raw: raw([], "Also #{sentinel} again.")
+        })
+
       # The fixture's own INSERT is the test writing mail into the mailbox,
       # not the triage leaking it: drop what it emitted before measuring.
       _ = collect_telemetry()
@@ -496,6 +615,9 @@ defmodule Platform.Mail.TriageTest do
             assert {:ok, %{classified: 1}} = run(ctx.a)
             assert [%Item{} = item] = Triage.called_out(ctx.a, Triage.briefing_today())
             assert {:ok, _} = Triage.record_feedback(ctx.a, item, "not_important")
+            # The set_flag_important_agent write and the per-account path.
+            assert {:ok, _} = Ownership.set_flag_important_agent(ctx.a, ctx.a2, y.id)
+            assert :ok = Triage.on_inbound(a2_inbound.id)
           end)
         after
           Logger.configure(level: previous)
@@ -505,6 +627,10 @@ defmodule Platform.Mail.TriageTest do
       # and into the stored item, and the debug query log was really on.
       assert seen(stub_calls()) =~ sentinel
       assert Repo.get_by!(Item, inbound_message_id: inbound.id).why =~ sentinel
+      y_label = Classifier.classifier_label(y)
+      a2_item = Repo.get_by!(Item, inbound_message_id: a2_inbound.id)
+      assert a2_item.why =~ sentinel
+      assert a2_item.classifier == y_label
       # Every triage read of an item or an inbound row is quiet (stage 5),
       # so the proof that the debug query log was on is any query line.
       assert log =~ "QUERY OK"

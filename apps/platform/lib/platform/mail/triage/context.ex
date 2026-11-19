@@ -5,7 +5,7 @@ defmodule Platform.Mail.Triage.Context do
   subject, body, task title or meeting name leaves this module.
 
   Built for one (reader, inbound) pair whose mailbox the caller has already
-  established is eligible (`Platform.Mail.Triage.eligible_account_ids/3`):
+  established is eligible (`Platform.Mail.Triage.eligible_account_ids/2`):
 
     * `waiting_on` — the latest accepted `mail_deliveries` row FROM this
       mailbox TO the sender's address (else to anyone at the sender's

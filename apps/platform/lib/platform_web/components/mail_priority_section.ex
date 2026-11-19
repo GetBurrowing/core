@@ -31,8 +31,8 @@ defmodule PlatformWeb.Components.MailPrioritySection do
   only, and sending happens in Email's confirm pane, by a person.
 
   Every event handler resolves the item as the reader's OWN item
-  (`Triage.reader_item/2`) and then re-checks `Triage.eligible?/3` (the
-  item's account in `Triage.eligible_account_ids/3`) BEFORE it writes, then
+  (`Triage.reader_item/2`) and then re-checks `Triage.eligible?/2` (the
+  item's account in `Triage.eligible_account_ids/2`) BEFORE it writes, then
   calls `BriefingSections.changed/2`. A forged id (another reader's item,
   or an item of a mailbox no longer readable or granted) writes nothing.
 
@@ -62,19 +62,17 @@ defmodule PlatformWeb.Components.MailPrioritySection do
 
   defp reload(socket) do
     user = fetch_user(socket.assigns.user_id)
-    agent = Triage.triage_agent()
 
-    assign(socket, :view, Triage.section_view(user, socket.assigns.date, agent: agent))
+    assign(socket, :view, Triage.section_view(user, socket.assigns.date))
   end
 
   @impl true
   def handle_event(event, %{"item_id" => item_id}, socket) when event in @verbs do
     user = fetch_user(socket.assigns.user_id)
-    agent = Triage.triage_agent()
 
     with %{id: user_id} <- user,
          %Triage.Item{} = item <- Triage.reader_item(user, item_id),
-         true <- Triage.eligible?(user, item, agent),
+         true <- Triage.eligible?(user, item),
          {:ok, _} <- write(event, user, item) do
       BriefingSections.changed(user_id, socket.assigns.date)
     end

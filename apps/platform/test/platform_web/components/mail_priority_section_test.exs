@@ -40,13 +40,13 @@ defmodule PlatformWeb.Components.MailPrioritySectionTest do
     a = user!("a") |> member!(org_id, "admin")
     b = user!("b") |> member!(org_id)
     c = user!("c") |> member!(org_id)
-    agent = triage_agent!()
+    agent = agent!("triage")
 
     shared = account!(a, org_id, %{"name" => "Shared #{n}"}) |> then(&shared!(a, &1, [a, c]))
-    grant_agent!(a, shared, agent)
+    flag_agent!(a, shared, agent)
 
     b_box = account!(a, org_id, %{"name" => "B box #{n}"}) |> then(&personal!(a, &1, b))
-    grant_agent!(b, b_box, agent)
+    flag_agent!(b, b_box, agent)
 
     a2 = account!(a, org_id, %{"name" => "A2 box #{n}"}) |> then(&personal!(a, &1, a))
 
@@ -281,7 +281,7 @@ defmodule PlatformWeb.Components.MailPrioritySectionTest do
     {lv, _} = open_briefing(ctx.conn, ctx.a, Date.add(ctx.date, -3))
     assert has_element?(lv, "[data-role=mail-priority-empty]", "Nothing needs you today")
 
-    Platform.Roles.clear_override("mail.triage")
+    {:ok, _} = Platform.Mail.Ownership.set_flag_important_agent(ctx.a, ctx.shared, nil)
     {lv, html} = open_briefing(Phoenix.ConnTest.build_conn(), ctx.a, ctx.date)
     assert has_element?(lv, "[data-role=mail-priority-no-agent]")
     refute html =~ "A-WHY-#{ctx.n}"
@@ -357,7 +357,6 @@ defmodule PlatformWeb.Components.MailPrioritySectionTest do
 
       assert {:ok, _} =
                Platform.Mail.Triage.notify_top(ctx.evening_item,
-                 agent: ctx.agent,
                  now: DateTime.add(@evening, 5, :second)
                )
 

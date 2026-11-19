@@ -5,9 +5,12 @@ defmodule Platform.Responsibilities.Handlers.MailTriage do
   whose work runs outside the Router (`ExperimentsLabelSignal`,
   `FeedbackIntake`).
 
-  The row exists so `Platform.Roles.assignee_for("mail.triage")` resolves
-  (the triage agent comes from it, through a responsibility override or a
-  role bundle) and so Control Center shows the key. The Router never fires
+  The row exists so Control Center shows the key and the prompt templates
+  stay registered. Its assignee is NO LONGER READ (task 01a1f5cc): the agent
+  that flags important email is chosen per mailbox, in Email > Accounts,
+  and resolved by `Platform.Mail.Triage.agent_for_account/1` from the
+  mailbox's flag-important grant. A Roles override or role bundle on
+  `mail.triage` therefore triages nothing. The Router never fires
   it: triage runs through `Platform.Mail.Triage`, a tool-less classifier
   call per (reader, email) that must not go through the Router's
   tool-bearing dispatch.
