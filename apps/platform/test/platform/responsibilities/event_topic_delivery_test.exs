@@ -240,6 +240,12 @@ defmodule Platform.Responsibilities.EventTopicDeliveryTest do
       mode: :sweeper_only,
       owner: Platform.Feedback.Intake
     },
+    # Task 01a1f426 stage 1. Nothing broadcasts on it; Platform.Mail.Triage
+    # runs the tool-less classifier per (reader, email), never a Router fire.
+    "platform.mail.triage_only" => %{
+      mode: :sweeper_only,
+      owner: Platform.Mail.Triage
+    },
     # Completion calls the native handler directly after triage commits.
     # No Router dispatch: its provider only sees pre-filtered context.
     "platform.meetings.synthesis_only" => %{
@@ -510,6 +516,18 @@ defmodule Platform.Responsibilities.EventTopicDeliveryTest do
         |> Enum.map(& &1.key)
 
       assert keys == [Platform.Feedback.Classifier.responsibility_key()]
+    end
+
+    test ":sweeper_only mail triage key is the one Mail.Triage resolves" do
+      owner = @topic_delivery["platform.mail.triage_only"].owner
+      assert Code.ensure_loaded?(owner) and function_exported?(owner, :run_for_reader, 2)
+
+      keys =
+        event_topic_specs()
+        |> Enum.filter(&(&1.topic == "platform.mail.triage_only"))
+        |> Enum.map(& &1.key)
+
+      assert keys == [Platform.Mail.Triage.responsibility_key()]
     end
 
     test "direct delivery topics name an exported lifecycle entry point" do

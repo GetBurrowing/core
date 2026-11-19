@@ -140,6 +140,7 @@ defmodule PlatformWeb.EmailLive do
   alias Platform.Mail.Inbound
   alias Platform.Mail.Mailbox
   alias Platform.Mail.Ownership
+  alias Platform.Mail.Triage
   alias Platform.Tenancy
 
   defmodule NotFoundError do
@@ -174,6 +175,7 @@ defmodule PlatformWeb.EmailLive do
      |> assign(:pane, nil)
      |> assign(:selected_message, nil)
      |> assign(:selected_file, nil)
+     |> assign(:triage_feedback, nil)
      |> assign(:add_error, nil)
      |> assign(:form_error, nil)
      |> assign(:replacing, MapSet.new())
@@ -367,6 +369,7 @@ defmodule PlatformWeb.EmailLive do
         |> assign(:tab, "inbox")
         |> assign(:selected_message, message)
         |> assign(:selected_file, Mailbox.inbound_file(message))
+        |> assign(:triage_feedback, triage_feedback_state(socket.assigns.user, message))
         |> assign(:projects, Mailbox.org_projects(message.org_id))
         |> assign(:form, nil)
     end
@@ -775,6 +778,27 @@ defmodule PlatformWeb.EmailLive do
          )}
     end
   end
+
+  # ── Events: triage feedback (task 01a1f426 stage 2) ─────────────────────
+
+  # "This needed me" / "Not important" on the open message. The message is
+  # the server-side selection, never a client id, and eligibility is
+  # re-checked before `Triage.record_feedback/3` writes. Nothing about the
+  # message is logged or broadcast.
+  def handle_event("triage_feedback", %{"verdict" => verdict}, socket)
+      when verdict in ["missed", "not_important"] do
+    %{user: user, selected_message: message} = socket.assigns
+
+    with %{id: _} <- message,
+         true <- Triage.eligible?(user, message, Triage.triage_agent()),
+         {:ok, _feedback} <- Triage.record_feedback(user, message.id, verdict) do
+      {:noreply, assign(socket, :triage_feedback, {:recorded, verdict})}
+    else
+      _ -> {:noreply, assign(socket, :triage_feedback, nil)}
+    end
+  end
+
+  def handle_event("triage_feedback", _params, socket), do: {:noreply, socket}
 
   # ── Events: Add to files ────────────────────────────────────────────────
 
@@ -1681,9 +1705,19 @@ defmodule PlatformWeb.EmailLive do
 
   defp drafted_by_text(nil), do: nil
 
+  defp drafted_by_text(%{drafted_by: by, briefing: %{}}),
+    do: "Prepared by #{by} from the morning briefing"
+
   defp drafted_by_text(%{drafted_by: by, task_title: title}) do
     "Drafted by #{by}" <> if(title, do: " · task #{title}", else: "")
   end
+
+  # The link back to the called-out item (task 01a1f426 stage 5): only for
+  # the reader the item belongs to, whose briefing it is.
+  defp briefing_link(%{provenance: %{briefing: %{user_id: user_id} = b}}, %{id: user_id}),
+    do: Platform.Inbox.briefing_url(b.date) <> "#mail-priority-item-" <> b.item_id
+
+  defp briefing_link(_editor, _user), do: nil
 
   defp editor_drafted_by(%{provenance: %{} = provenance}), do: drafted_by_text(provenance)
   defp editor_drafted_by(_editor), do: "Drafted by you"
@@ -1698,6 +1732,7 @@ defmodule PlatformWeb.EmailLive do
 
     [
       "drafted by #{drafter}",
+      provenance && provenance[:briefing] && "from the morning briefing",
       provenance && provenance.task_title && "task #{provenance.task_title}",
       if(edited?, do: "edited and sent by you", else: "sent by you")
     ]
@@ -2184,4 +2219,11 @@ defmodule PlatformWeb.EmailLive do
   defp tls_label(other), do: other
 
   defp tls_modes, do: Account.tls_modes()
+
+  # The triage feedback control (task 01a1f426 stage 2) shows only on a
+  # message whose mailbox the triage covers for this reader: readable AND
+  # granted to the triage agent. `:available` or nil.
+  defp triage_feedback_state(user, message) do
+    if Triage.eligible?(user, message, Triage.triage_agent()), do: :available
+  end
 end

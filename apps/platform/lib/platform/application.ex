@@ -340,6 +340,7 @@ defmodule Platform.Application do
     |> maybe_add_security_sweeper(flag)
     |> maybe_add_space_purger(flag)
     |> maybe_add_experiments_mail_subscriber(flag)
+    |> maybe_add_mail_triage_subscriber(flag)
     |> maybe_add_usage_batcher(flag)
     |> maybe_add_instruction_pack_poller(flag)
     |> maybe_add_container_purger(flag)
@@ -642,6 +643,21 @@ defmodule Platform.Application do
     if flag.(:platform, :start_experiments_mail_subscriber, true) do
       idx = Enum.find_index(children, &(&1 == PlatformWeb.Endpoint)) || length(children)
       List.insert_at(children, idx, Platform.Experiments.Signals.MailSubscriber)
+    else
+      children
+    end
+  end
+
+  # Mail triage Subscriber (task 01a1f426 stage 3): triages each newly
+  # ingested email and tells its reader at once about a top-tier one,
+  # reconciling the last 24h on start. Needs Repo, PubSub and
+  # Platform.TaskSupervisor, so it goes ahead of the Endpoint. Only while
+  # the Email module is on. Disabled in config/test.exs; its tests
+  # start_supervised/1 it.
+  defp maybe_add_mail_triage_subscriber(children, flag) do
+    if flag.(:platform, :start_mail_triage_subscriber, true) and Platform.Mail.Config.enabled?() do
+      idx = Enum.find_index(children, &(&1 == PlatformWeb.Endpoint)) || length(children)
+      List.insert_at(children, idx, Platform.Mail.Triage.Subscriber)
     else
       children
     end

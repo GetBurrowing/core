@@ -78,11 +78,15 @@ defmodule Platform.SuperAgentsTest do
   end
 
   describe "the roster" do
-    test "both roles are closed-roster keys with one-key bundles, seeded unassigned" do
+    test "both roles are closed-roster keys led by their own key, seeded unassigned" do
       for {role, handler, key, _feature, _cron} <- @roles do
         assert role in Role.valid_keys()
         seed = Enum.find(Seeds.default_roles(), &(&1.key == role))
-        assert seed.bundle == [key]
+        # The steward's bundle also carries `mail.triage` (task 01a1f426
+        # stage 1): it is the role that reads granted mail bodies.
+        assert seed.bundle ==
+                 if(role == "relationship_steward", do: [key, "mail.triage"], else: [key])
+
         assert handler.key() == key
 
         # The migration seeded the role, the bundle row and the template.

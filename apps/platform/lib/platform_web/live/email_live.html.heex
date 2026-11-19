@@ -220,6 +220,15 @@
           >
             {editor_drafted_by(@editor)}
           </span>
+          <.link
+            :if={briefing_link(@editor, @user)}
+            navigate={briefing_link(@editor, @user)}
+            class="inline-flex min-h-11 items-center gap-1 text-xs text-info hover:underline sm:min-h-0"
+            data-role="mail-draft-briefing-link"
+          >
+            <span class="hero-arrow-uturn-left size-3.5" aria-hidden="true"></span>
+            Back to the briefing
+          </.link>
         </div>
 
         <label class="flex flex-col gap-1 text-xs font-medium text-base-content">
@@ -756,6 +765,41 @@
         >
           Open the channel post
         </.link>
+
+        <%!-- Triage feedback (task 01a1f426 stage 2): only for a mailbox
+             the triage covers for this reader. --%>
+        <div
+          :if={@triage_feedback == :available}
+          class="flex flex-wrap items-center gap-2 rounded-box border border-edge px-3 py-2"
+          data-role="mail-triage-feedback"
+        >
+          <span class="text-xs text-subtle">Morning briefing:</span>
+          <button
+            type="button"
+            phx-click="triage_feedback"
+            phx-value-verdict="missed"
+            class="btn btn-ghost btn-sm min-h-11 lg:min-h-8"
+            data-role="mail-triage-missed"
+          >
+            This needed me
+          </button>
+          <button
+            type="button"
+            phx-click="triage_feedback"
+            phx-value-verdict="not_important"
+            class="btn btn-ghost btn-sm min-h-11 lg:min-h-8"
+            data-role="mail-triage-not-important"
+          >
+            Not important
+          </button>
+        </div>
+        <p
+          :if={match?({:recorded, _}, @triage_feedback)}
+          class="text-xs text-subtle"
+          data-role="mail-triage-recorded"
+        >
+          Thanks. The next briefing will use this.
+        </p>
 
         <%!-- Escaped plain text only: HEEx escapes the value, nothing
              parses markdown, HTML or mentions here. --%>

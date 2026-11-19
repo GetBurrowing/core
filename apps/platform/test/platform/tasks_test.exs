@@ -994,4 +994,93 @@ defmodule Platform.TasksTest do
       refute_receive {:inbox_changed, _}, 200
     end
   end
+
+  # Task 01a1f426 stage 1: the reader-scoped task search the mail triage
+  # context calls, so the task-visibility rule stays in Tasks.
+  describe "list_open_tasks_matching_for_user/4" do
+    setup do
+      org_a = Platform.TenancyFixtures.tenant_org_id("initech")
+      org_b = Platform.TenancyFixtures.tenant_org_id("globex")
+      n = System.unique_integer([:positive])
+
+      user =
+        Repo.insert!(%Platform.Accounts.User{
+          email: "match-#{n}@example.com",
+          name: "Match #{n}",
+          oidc_sub: "match-#{n}"
+        })
+
+      %Platform.Tenancy.OrgMembership{}
+      |> Platform.Tenancy.OrgMembership.changeset(%{
+        user_id: user.id,
+        org_id: org_a,
+        role: "member"
+      })
+      |> Repo.insert!()
+
+      project = fn org_id ->
+        %Platform.Tasks.Project{}
+        |> Platform.Tasks.Project.changeset(%{
+          name: "Match #{org_id} #{n}",
+          slug: "match-#{System.unique_integer([:positive])}",
+          org_id: org_id
+        })
+        |> Repo.insert!()
+      end
+
+      %{user: user, org_a: org_a, own: project.(org_a), foreign: project.(org_b), n: n}
+    end
+
+    test "matches title or description, open only, visible only", ctx do
+      refute Platform.Tenancy.root_member?(ctx.user)
+      term = "otherco-#{ctx.n}.test"
+
+      {:ok, by_title} = Tasks.create_task(%{project_id: ctx.own.id, title: "Contract #{term}"})
+
+      {:ok, by_desc} =
+        Tasks.create_task(%{
+          project_id: ctx.own.id,
+          title: "Renewal",
+          description: "for #{String.upcase(term)}"
+        })
+
+      {:ok, closed} = Tasks.create_task(%{project_id: ctx.own.id, title: "Old #{term}"})
+
+      Repo.update_all(from(t in Platform.Tasks.Task, where: t.id == ^closed.id),
+        set: [status: "done"]
+      )
+
+      {:ok, unrelated} = Tasks.create_task(%{project_id: ctx.own.id, title: "Something else"})
+
+      # A task the reader cannot see: another org's project.
+      {:ok, hidden} = Tasks.create_task(%{project_id: ctx.foreign.id, title: "Secret #{term}"})
+
+      ids = ctx.user |> Tasks.list_open_tasks_matching_for_user([term], 10) |> Enum.map(& &1.id)
+
+      assert by_title.id in ids
+      assert by_desc.id in ids
+      refute closed.id in ids
+      refute unrelated.id in ids
+      refute hidden.id in ids
+      assert length(ids) == 2
+    end
+
+    test "terms match literally, limit and org narrowing apply, bad input answers []", ctx do
+      {:ok, _} = Tasks.create_task(%{project_id: ctx.own.id, title: "Rate 100% for a_b #{ctx.n}"})
+      {:ok, _} = Tasks.create_task(%{project_id: ctx.own.id, title: "Rate 100 for axb #{ctx.n}"})
+
+      assert [%{title: "Rate 100% for a_b" <> _}] =
+               Tasks.list_open_tasks_matching_for_user(ctx.user, ["100% for a_b #{ctx.n}"], 10)
+
+      assert [_] = Tasks.list_open_tasks_matching_for_user(ctx.user, ["Rate 100"], 1)
+
+      assert Tasks.list_open_tasks_matching_for_user(ctx.user, ["Rate 100"], 10,
+               org_id: Platform.TenancyFixtures.tenant_org_id("globex")
+             ) == []
+
+      assert Tasks.list_open_tasks_matching_for_user(ctx.user, ["  ", nil], 10) == []
+      assert Tasks.list_open_tasks_matching_for_user(nil, ["Rate"], 10) == []
+      assert Tasks.list_open_tasks_matching_for_user(%{id: "nope"}, ["Rate"], 10) == []
+    end
+  end
 end
