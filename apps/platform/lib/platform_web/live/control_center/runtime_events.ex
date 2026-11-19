@@ -1,14 +1,20 @@
 defmodule PlatformWeb.ControlCenter.RuntimeEvents do
   @moduledoc """
   Handle_event clauses for federated runtime management: suspend, unsuspend, revoke,
-  regenerate token, and dismiss regenerated token.
+  regenerate token, and dismiss regenerated token; and, for an install-managed
+  agent, the Owner control (review, confirm, cancel), which goes through
+  `Platform.Agents.NativeAgents.transfer_owner/4`.
   """
   import Phoenix.Component, only: [assign: 3]
   import Phoenix.LiveView, only: [put_flash: 3]
 
-  alias Platform.Agents.Agent
+  alias Platform.Accounts
+  alias Platform.Agents.{Agent, NativeAgents}
   alias Platform.Access.RuntimeProfiles
   alias Platform.Federation
+  alias PlatformWeb.ControlCenter.{NativeAgentEvents, RuntimePanel}
+
+  @invalid_owner "That person can't own this agent. Pick someone who belongs to this install and hasn't been archived."
 
   def handle(
         "suspend_federated_runtime",
@@ -178,6 +184,91 @@ defmodule PlatformWeb.ControlCenter.RuntimeEvents do
   end
 
   def handle("save_agent_restrictions", _params, socket), do: {:noreply, socket}
+
+  # ── Owner control (task 01a1f42d stage 4) ─────────────────────────
+  #
+  # Two steps: review (pick a person, see a confirm) and confirm (the
+  # transfer). The ONE authority is `NativeAgents.transfer_owner/4`: confirm
+  # calls it with the signed-in user as actor, and whatever it refuses is
+  # turned into a sentence here. Review checks `can_transfer_owner?/2` (the
+  # same rule) only so that a forged review never opens a confirm.
+
+  def handle(
+        "owner_transfer_review",
+        %{"new_owner_id" => new_owner_id},
+        %{assigns: %{selected_agent: %Agent{} = agent}} = socket
+      )
+      when is_binary(new_owner_id) do
+    user_id = socket.assigns.current_user_id
+
+    cond do
+      not NativeAgents.can_transfer_owner?(user_id, agent) ->
+        {:noreply, put_flash(socket, :error, NativeAgentEvents.refused_message())}
+
+      match?(%{owner_user_id: ^new_owner_id}, NativeAgents.get_managed_runtime(agent)) ->
+        {:noreply, put_flash(socket, :error, same_owner_message(new_owner_id, agent))}
+
+      user = Accounts.get_user(new_owner_id) ->
+        pending = %{agent_id: agent.id, id: user.id, name: RuntimePanel.user_label(user)}
+        {:noreply, assign(socket, :owner_transfer, pending)}
+
+      true ->
+        {:noreply, put_flash(socket, :error, @invalid_owner)}
+    end
+  end
+
+  def handle("owner_transfer_review", _params, socket),
+    do: {:noreply, put_flash(socket, :error, @invalid_owner)}
+
+  def handle(
+        "owner_transfer_confirm",
+        %{"new_owner_id" => new_owner_id},
+        %{assigns: %{selected_agent: %Agent{} = agent}} = socket
+      )
+      when is_binary(new_owner_id) do
+    actor = %{id: socket.assigns.current_user_id}
+    socket = assign(socket, :owner_transfer, nil)
+
+    case NativeAgents.transfer_owner(actor, agent, new_owner_id) do
+      {:ok, _runtime} ->
+        {:noreply,
+         socket
+         |> put_flash(:info, "#{user_name(new_owner_id)} now owns #{agent.name}.")
+         |> reload(socket)}
+
+      {:error, :forbidden} ->
+        {:noreply, put_flash(socket, :error, NativeAgentEvents.refused_message())}
+
+      {:error, :invalid_owner} ->
+        {:noreply, put_flash(socket, :error, @invalid_owner)}
+
+      {:error, :same_owner} ->
+        {:noreply, put_flash(socket, :error, same_owner_message(new_owner_id, agent))}
+
+      {:error, :not_managed} ->
+        {:noreply,
+         put_flash(socket, :error, "Only agents that run on this server have an owner to change.")}
+
+      {:error, _changeset} ->
+        {:noreply, put_flash(socket, :error, "Could not change the owner. Nothing was changed.")}
+    end
+  end
+
+  def handle("owner_transfer_confirm", _params, socket),
+    do: {:noreply, socket |> assign(:owner_transfer, nil) |> put_flash(:error, @invalid_owner)}
+
+  def handle("owner_transfer_cancel", _params, socket),
+    do: {:noreply, assign(socket, :owner_transfer, nil)}
+
+  defp same_owner_message(user_id, agent),
+    do: "#{user_name(user_id)} already owns #{agent.name}."
+
+  defp user_name(user_id) do
+    case Accounts.get_user(user_id) do
+      nil -> "That person"
+      user -> RuntimePanel.user_label(user)
+    end
+  end
 
   # Delegate reload back to the main LiveView module
   defp reload(socket, _original_socket) do

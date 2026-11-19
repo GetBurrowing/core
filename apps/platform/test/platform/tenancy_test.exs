@@ -471,6 +471,43 @@ defmodule Platform.TenancyTest do
     end
   end
 
+  # ── root_member_ids_query/0 (task 01a1f42d stage 4) ─────────────────
+
+  describe "root_member_ids_query/0" do
+    test "selects root-org members at every role, and nobody else" do
+      root = Tenancy.get_org_by_slug!("acme")
+      tenant = Tenancy.get_org!(Platform.TenancyFixtures.tenant_org_id("initech"))
+
+      admin = create_user!()
+      create_membership!(admin, root, "admin")
+      member = create_user!()
+      create_membership!(member, root, "member")
+      tenant_admin = create_user!()
+      create_membership!(tenant_admin, tenant, "admin")
+      nobody = create_user!()
+
+      ids = MapSet.new(Repo.all(Tenancy.root_member_ids_query()))
+
+      assert admin.id in ids
+      assert member.id in ids
+      refute tenant_admin.id in ids
+      refute nobody.id in ids
+    end
+
+    test "agrees with root_member?/1 for every user it could name" do
+      tenant = Tenancy.get_org!(Platform.TenancyFixtures.tenant_org_id("initech"))
+      tenant_member = create_user!()
+      create_membership!(tenant_member, tenant, "member")
+
+      ids = MapSet.new(Repo.all(Tenancy.root_member_ids_query()))
+
+      for user <- Repo.all(User) do
+        assert Tenancy.root_member?(user) == user.id in ids,
+               "root_member?/1 and root_member_ids_query/0 disagree on #{user.id}"
+      end
+    end
+  end
+
   # ── root_admin_preloaded?/1 (pure variant — no DB call) ─────────────
 
   describe "root_admin_preloaded?/1" do

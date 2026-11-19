@@ -318,11 +318,31 @@ defmodule Platform.Agents.NativeAgents do
   @spec eligible_owners() :: [Platform.Accounts.User.t()]
   def eligible_owners do
     from(u in Platform.Accounts.User,
-      where: u.id in subquery(root_member_ids_query()) and is_nil(u.archived_at),
+      where: u.id in subquery(Tenancy.root_member_ids_query()) and is_nil(u.archived_at),
       order_by: [asc: u.name, asc: u.id]
     )
     |> Repo.all()
   end
+
+  @doc """
+  May `user` transfer the ownership of `agent`? The same decision
+  `transfer_owner/4` makes first (the runtime's owner, or an install admin),
+  for a surface that only shows the control to people the call would let
+  through. `false` for an agent that is not install-managed, and for a `nil`
+  or malformed user.
+
+  This is an affordance check only: `transfer_owner/4` re-makes the decision
+  against the locked runtime row, so a caller that skips this learns nothing.
+  """
+  @spec can_transfer_owner?(map() | binary() | nil, Agent.t() | nil) :: boolean()
+  def can_transfer_owner?(user, %Agent{} = agent) do
+    case get_managed_runtime(agent) do
+      %AgentRuntime{} = runtime -> authorize_transfer(actor_id(user), runtime) == :ok
+      nil -> false
+    end
+  end
+
+  def can_transfer_owner?(_user, _agent), do: false
 
   @doc """
   Make `new_owner_user_id` the owner of `agent`'s install-managed runtime.
@@ -433,32 +453,20 @@ defmodule Platform.Agents.NativeAgents do
   defp check_managed(_), do: {:error, :not_managed}
 
   defp check_new_owner(user_id) when is_binary(user_id) do
-    eligible? =
-      Platform.UUID.valid?(user_id) and
-        Repo.exists?(
-          from(u in Platform.Accounts.User,
-            where:
-              u.id == ^user_id and is_nil(u.archived_at) and
-                u.id in subquery(root_member_ids_query())
-          )
-        )
-
-    if eligible?, do: :ok, else: {:error, :invalid_owner}
+    with true <- Platform.UUID.valid?(user_id),
+         %Platform.Accounts.User{archived_at: nil} = user <-
+           Repo.get(Platform.Accounts.User, user_id),
+         true <- Tenancy.root_member?(user) do
+      :ok
+    else
+      _ -> {:error, :invalid_owner}
+    end
   end
 
   defp check_new_owner(_), do: {:error, :invalid_owner}
 
   defp check_not_same(%AgentRuntime{owner_user_id: owner}, owner), do: {:error, :same_owner}
   defp check_not_same(_runtime, _new_owner), do: :ok
-
-  defp root_member_ids_query do
-    from(m in Platform.Tenancy.OrgMembership,
-      join: o in Platform.Tenancy.Org,
-      on: o.id == m.org_id,
-      where: is_nil(o.parent_org_id),
-      select: m.user_id
-    )
-  end
 
   defp record_owner_changed(actor_id, agent, previous, updated) do
     Platform.Audit.record(%{
