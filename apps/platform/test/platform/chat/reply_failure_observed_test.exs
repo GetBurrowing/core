@@ -125,7 +125,8 @@ defmodule Platform.Chat.ReplyFailureObservedTest do
       ReplyFailure.remember_delivery(%{
         agent: agent,
         message: message,
-        agent_participant: agent_p
+        agent_participant: agent_p,
+        reason: :mention
       })
 
     message

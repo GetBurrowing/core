@@ -92,6 +92,10 @@ defmodule PlatformWeb.ChatLive.PresenceHooks do
     |> assign(:has_agent_participant, false)
     |> assign(:agent_status, :offline)
     |> assign(:agent_typing_pids, MapSet.new())
+    # Agents a message in the active space is waiting on, by participant id:
+    # `%{state: "busy" | "queued", activity, since, agent_name}` (see
+    # `Platform.Chat.PubSub.broadcast_agent_busy/3`).
+    |> assign(:agent_busy, %{})
     # M10 (presence/typing scope, rbac-external-users): the allowlisted set of
     # space_ids an EXTERNAL user may receive presence/typing for. `nil` means
     # internal / no-restriction (the common case) — the consumer guards below
@@ -233,6 +237,7 @@ defmodule PlatformWeb.ChatLive.PresenceHooks do
     |> assign(:agent_presence, agent_presence)
     |> assign(:agent_status, PlatformWeb.ShellLive.default_agent_status())
     |> assign(:agent_typing_pids, MapSet.new())
+    |> assign(:agent_busy, if(connected?(socket), do: waiting_agents(space.id), else: %{}))
     |> reinsert_rendered_messages(space.id)
     |> schedule_refresh()
   end
@@ -355,7 +360,43 @@ defmodule PlatformWeb.ChatLive.PresenceHooks do
     end
   end
 
+  defp handle_info({:agent_busy, %{participant_id: participant_id, busy: busy} = payload}, socket) do
+    if space_scoped_to_active?(payload, socket) and typing_in_external_scope?(payload, socket) do
+      apply_agent_busy(socket, participant_id, busy)
+    else
+      {:cont, socket}
+    end
+  end
+
+  # An agent that posts is no longer busy or waited for in that space. Not
+  # halted: MessagesHooks renders the message.
+  defp handle_info({:new_message, %{participant_id: participant_id, space_id: space_id}}, socket)
+       when is_binary(participant_id) do
+    busy = socket.assigns[:agent_busy] || %{}
+
+    socket =
+      if Map.has_key?(busy, participant_id) and
+           match?(%{id: ^space_id}, socket.assigns[:active_space]),
+         do: assign(socket, :agent_busy, Map.delete(busy, participant_id)),
+         else: socket
+
+    {:cont, socket}
+  end
+
   defp handle_info(_msg, socket), do: {:cont, socket}
+
+  # The busy and queued states for a space being entered: the watchdog's
+  # busy watches and the delivery queue's held messages (this node's).
+  defp waiting_agents(space_id) do
+    Map.merge(
+      Platform.Federation.DeliveryQueue.held_in_space(space_id),
+      Platform.Chat.ReplyFailure.Watchdog.busy_in_space(space_id)
+    )
+  rescue
+    _ -> %{}
+  catch
+    :exit, _ -> %{}
+  end
 
   # Re-render every currently-rendered chat-message row so they pick up
   # the new participants_map / agent_slots_map / agent_participant_ids.
@@ -459,7 +500,32 @@ defmodule PlatformWeb.ChatLive.PresenceHooks do
   # Public for unit-test access. Not part of the public API; called only from
   # the `{:agent_typing, …}` `handle_info` clause above.
   @doc false
+  def apply_agent_busy(socket, participant_id, busy) do
+    socket =
+      assign(
+        socket,
+        :agent_busy,
+        if(is_map(busy),
+          do: Map.put(socket.assigns[:agent_busy] || %{}, participant_id, busy),
+          else: Map.delete(socket.assigns[:agent_busy] || %{}, participant_id)
+        )
+      )
+
+    {:halt, socket}
+  end
+
+  @doc false
   def apply_agent_typing(socket, typing, participant_id) do
+    # An agent that starts typing has turned to this space: busy is over.
+    socket =
+      case socket.assigns[:agent_busy] do
+        %{} = busy when typing and is_map_key(busy, participant_id) ->
+          assign(socket, :agent_busy, Map.delete(busy, participant_id))
+
+        _ ->
+          socket
+      end
+
     socket =
       socket
       |> update(:agent_typing_pids, fn pids ->

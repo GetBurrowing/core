@@ -84,6 +84,7 @@ defmodule Platform.Chat.ReplyFailure do
   alias Platform.Chat.ReplyFailure.{Dedupe, Watchdog}
   alias Platform.Chat.PubSub, as: ChatPubSub
   alias Platform.Federation
+  alias Platform.Federation.RuntimePresence
   alias Platform.Orchestration.ExecutionSpace
   alias Platform.Repo
 
@@ -91,6 +92,15 @@ defmodule Platform.Chat.ReplyFailure do
 
   @kind "reply_failure"
   @chat_declined_cause "chat_declined"
+
+  # Routing reasons that mean a person addressed this agent (an @mention, a
+  # DM, a reply to its message). Only these are watched for a missing reply:
+  # an ambient delivery (`:active_agent`, `:watch`) reaches the agent because
+  # it holds the channel, and saying nothing to "Bingo" or a pasted link is
+  # the right answer, not a failure (legacy-pie, 2026-11-16..18: every
+  # "Something went wrong before Butter could reply" sat under a message
+  # nobody had addressed to Butter).
+  @addressed_reasons [:mention, :directed, :multi_mention, :reply]
   @causes ~w(needs_login stopped crashed unknown)a
   @default_dedupe_s 300
 
@@ -210,11 +220,23 @@ defmodule Platform.Chat.ReplyFailure do
     })
   end
 
+  @doc "The routing reasons that mean a person addressed the agent."
+  @spec addressed_reasons() :: [atom()]
+  def addressed_reasons, do: @addressed_reasons
+
+  @doc "Whether `reason` means a person addressed the agent (`addressed_reasons/0`)."
+  @spec addressed_reason?(term()) :: boolean()
+  def addressed_reason?(reason), do: reason in @addressed_reasons
+
   @doc """
   Remember that `context`'s message was delivered to the agent's runtime, so
   a failure the agent host observes afterwards can still be reported for it
   (`notify_pending/1`). Only the last delivery per agent is kept, for
   `Dedupe.pending_ttl_ms/0`.
+
+  The no-reply watchdog is armed only when `context.reason` says a person
+  addressed the agent (`addressed_reason?/1`); an ambient delivery is
+  remembered for the host-observed path but never watched.
   """
   @spec remember_delivery(map()) :: :ok
   def remember_delivery(%{agent: %Agent{id: agent_id}, message: %Message{} = message} = context) do
@@ -277,30 +299,52 @@ defmodule Platform.Chat.ReplyFailure do
   Exactly one notice per message and per agent window, through `notify/2`,
   which also clears "<Name> is thinking…".
 
-  Returns what `notify/2` returns, or `:none` when the message was answered
-  (or is gone).
+  BUSY IS NOT A FAILURE: when the key is not rejected and the agent's
+  runtime still has a heartbeat (`runtime_alive?/1`), no notice is posted.
+  The agent is in the middle of something else and Claude Code delivers the
+  message when that turn ends, so the space is told "<Agent> is busy"
+  (`{:busy, busy}`, see `busy_info/2`) and the watchdog keeps watching. A
+  watch with `final: true` (the busy cap) posts the notice regardless.
+
+  Returns what `notify/2` returns, `{:busy, busy}`, or `:none` when the
+  message was answered (or is gone).
   """
   @spec no_response(map()) ::
-          {:ok, Message.t()} | :deduped | :skipped | :none | {:error, term()}
+          {:ok, Message.t()}
+          | {:busy, map()}
+          | :deduped
+          | :skipped
+          | :none
+          | {:error, term()}
   def no_response(%{agent_id: agent_id, message_id: message_id} = watch) do
     case unanswered(agent_id, message_id) do
       {:ok, agent, message} ->
         reason =
-          case AgentHost.check_auth(agent) do
-            {:ok, :rejected} -> :auth_rejected
-            _ -> :no_response
+          cond do
+            # Asked once, at the first verdict; a busy re-check does not
+            # make the host test the key every window.
+            match?(%{}, watch[:busy]) -> :no_response
+            match?({:ok, :rejected}, AgentHost.check_auth(agent)) -> :auth_rejected
+            true -> :no_response
           end
 
-        Logger.warning(
-          "[ReplyFailure] no reply from native agent=#{agent_id} to message=#{message_id}: #{reason}"
-        )
+        if reason == :no_response and watch[:final] != true and runtime_alive?(agent) do
+          busy(agent, message, watch)
+        else
+          Logger.warning(
+            "[ReplyFailure] no reply from native agent=#{agent_id} to message=#{message_id}: #{reason}"
+          )
 
-        notify(
-          %{agent: agent, message: message, agent_participant_id: watch[:agent_participant_id]},
-          reason
-        )
+          notify(
+            %{agent: agent, message: message, agent_participant_id: watch[:agent_participant_id]},
+            reason
+          )
+        end
 
       _ ->
+        if match?(%{}, watch[:busy]),
+          do: clear_busy(watch[:agent_participant_id], watch[:space_id])
+
         :none
     end
   rescue
@@ -313,6 +357,137 @@ defmodule Platform.Chat.ReplyFailure do
   end
 
   def no_response(_watch), do: :none
+
+  @doc """
+  True when `agent`'s runtime is connected and has a heartbeat
+  (`Platform.Federation.RuntimePresence.heartbeat?/1`). False for an agent
+  with no runtime.
+  """
+  @spec runtime_alive?(Agent.t() | nil) :: boolean()
+  def runtime_alive?(%Agent{} = agent) do
+    case Federation.get_runtime_for_agent(agent) do
+      %AgentRuntime{runtime_id: runtime_id} when is_binary(runtime_id) ->
+        RuntimePresence.heartbeat?(runtime_id)
+
+      _ ->
+        false
+    end
+  rescue
+    _ -> false
+  catch
+    :exit, _ -> false
+  end
+
+  def runtime_alive?(_agent), do: false
+
+  @doc """
+  The busy state for `agent`, which has had `message` (delivered at
+  `delivered_at`) waiting on it: `%{state: "busy", activity, since,
+  agent_name}`. `activity` is what the agent was last seen doing
+  (`Watchdog.current_activity/1`) as a phrase, or nil; `since` is when that
+  run of work started, else when the message was delivered.
+  """
+  @spec busy_info(Agent.t(), DateTime.t() | nil) :: map()
+  def busy_info(%Agent{} = agent, delivered_at \\ nil) do
+    activity = Watchdog.current_activity(agent.id)
+
+    since =
+      case activity do
+        %{since: %DateTime{} = since} -> since
+        _ -> delivered_at || DateTime.utc_now()
+      end
+
+    %{state: "busy", activity: activity_phrase(activity), since: since, agent_name: agent.name}
+  end
+
+  @doc "The phrase for an activity record, or nil. See `busy_info/2`."
+  @spec activity_phrase(map() | nil) :: String.t() | nil
+  def activity_phrase(%{task_id: task_id} = activity) when is_binary(task_id) do
+    case task_title(task_id) do
+      title when is_binary(title) -> "working on “#{title}”"
+      _ -> activity_phrase(%{activity | task_id: nil})
+    end
+  end
+
+  def activity_phrase(%{tool: tool}) when is_binary(tool), do: "using #{tool}"
+
+  def activity_phrase(%{space_id: space_id}) when is_binary(space_id) do
+    case Chat.get_space(space_id) do
+      # A channel's name is not private to its members' agents the way a DM's
+      # participants are; a DM is named generically.
+      %Space{kind: "channel", name: name} when is_binary(name) -> "replying in ##{name}"
+      %Space{} -> "replying in another conversation"
+      _ -> nil
+    end
+  end
+
+  def activity_phrase(_activity), do: nil
+
+  defp task_title(task_id) do
+    if Platform.UUID.valid?(task_id) do
+      case Repo.get(Platform.Tasks.Task, task_id) do
+        %{title: title} when is_binary(title) and title != "" -> title
+        _ -> nil
+      end
+    end
+  rescue
+    _ -> nil
+  end
+
+  defp busy(%Agent{} = agent, %Message{} = message, watch) do
+    busy = busy_info(agent, watch[:delivered_at])
+    participant_id = watch[:agent_participant_id]
+
+    if is_binary(participant_id) do
+      # Busy replaces "thinking": the agent is not working on THIS message yet.
+      _ = ChatPubSub.broadcast_agent_typing(message.space_id, participant_id, false)
+      _ = ChatPubSub.broadcast_agent_busy(message.space_id, participant_id, busy)
+    end
+
+    Logger.info(
+      "[ReplyFailure] native agent=#{agent.id} is busy (runtime connected); message=#{message.id} waits"
+    )
+
+    {:busy, busy}
+  end
+
+  defp clear_busy(participant_id, space_id)
+       when is_binary(participant_id) and is_binary(space_id) do
+    _ = ChatPubSub.broadcast_agent_busy(space_id, participant_id, nil)
+    :ok
+  end
+
+  defp clear_busy(_participant_id, _space_id), do: :ok
+
+  @doc """
+  True when `agent_id` has not answered `message_id` (and both exist). For
+  the delivery queue, which skips a redelivery the agent no longer needs.
+  """
+  @spec unanswered?(binary(), binary()) :: boolean()
+  def unanswered?(agent_id, message_id), do: match?({:ok, _, _}, unanswered(agent_id, message_id))
+
+  @doc """
+  A message held for an offline runtime (`Platform.Federation.DeliveryQueue`)
+  that the runtime did not come back for inside the queue's TTL: the notice
+  it would have got at dispatch, cause `runtime_offline`. Nothing is posted
+  when the agent answered after all, or when its runtime is up again (the
+  watchdog owns a delivered message).
+  """
+  @spec undelivered(map()) ::
+          {:ok, Message.t()} | :deduped | :skipped | :none | {:error, term()}
+  def undelivered(%{agent_id: agent_id, message_id: message_id} = entry) do
+    with {:ok, agent, message} <- unanswered(agent_id, message_id),
+         false <- runtime_alive?(agent) do
+      notify(
+        %{agent: agent, message: message, agent_participant_id: entry[:agent_participant_id]},
+        :runtime_offline
+      )
+    else
+      _ -> :none
+    end
+  end
+
+  def undelivered(_entry), do: :none
 
   @doc """
   For a native agent the agent host observes as `needs_login`, the cause to
@@ -365,6 +540,8 @@ defmodule Platform.Chat.ReplyFailure do
 
   defp stop_typing(participant_id, %Message{space_id: space_id}) do
     _ = ChatPubSub.broadcast_agent_typing(space_id, participant_id, false)
+    # Nor busy, nor queued: the notice is the last word on this message.
+    _ = ChatPubSub.broadcast_agent_busy(space_id, participant_id, nil)
     :ok
   end
 

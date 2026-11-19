@@ -28,7 +28,7 @@ defmodule PlatformWeb.RuntimeChannel do
   # clause matched is malformed, not unowned, so it is dropped silently rather
   # than logged as an event no extension serves. Guarded against the
   # `handle_in/3` clauses by `test/platform/extensions_test.exs`.
-  @core_events ~w(pong meeting_join_ack meeting_say_ack meeting_transcript_ack intent_delivered reply reply_chunk typing tool_call reply_with_media execution_event meeting_leave usage_event)
+  @core_events ~w(pong attention_ack meeting_join_ack meeting_say_ack meeting_transcript_ack intent_delivered reply reply_chunk typing tool_call reply_with_media execution_event meeting_leave usage_event)
 
   @doc false
   # Read by `Platform.Extensions.validate/0` (an extension may not claim one).
@@ -143,6 +143,11 @@ defmodule PlatformWeb.RuntimeChannel do
       # re-drain every connected runtime twice a minute, forever.
       Platform.Federation.DeadLetterReplay.schedule(runtime_id)
 
+      # Redeliver chat messages held while this runtime was away, and any
+      # it never acked (Platform.Federation.DeliveryQueue). Delayed inside
+      # the queue: a broadcast during join/3 would precede the subscription.
+      Platform.Federation.DeliveryQueue.runtime_joined(runtime_id)
+
       # Push capabilities after join completes (push/3 not allowed during join/3)
       send(self(), :send_capabilities)
 
@@ -253,6 +258,19 @@ defmodule PlatformWeb.RuntimeChannel do
   def handle_in("pong", _payload, socket) do
     RuntimePresence.touch(socket.assigns.runtime_id)
     {:noreply, socket}
+  end
+
+  # The runtime got a chat attention (`Platform.Federation.DeliveryQueue`):
+  # the inbound receipt a broadcast never was. Sent by plugins that declare
+  # the `attention_ack` feature; for any other plugin core never waits on
+  # one. Proven only from this inbound frame, like every capability.
+  @impl true
+  def handle_in("attention_ack", %{"message_id" => message_id}, socket)
+      when is_binary(message_id) do
+    runtime_id = socket.assigns.runtime_id
+    RuntimePresence.prove(runtime_id, "attention_ack")
+    known? = Platform.Federation.DeliveryQueue.ack(runtime_id, message_id) == :ok
+    {:reply, {:ok, %{message_id: message_id, pending: known?}}, socket}
   end
 
   @impl true
@@ -479,7 +497,7 @@ defmodule PlatformWeb.RuntimeChannel do
       ) do
     RuntimePresence.touch(socket.assigns.runtime_id)
     # Turn activity for the no-reply watchdog (task 01a10322 stage 7).
-    ReplyFailure.Watchdog.activity(socket.assigns[:agent_id])
+    ReplyFailure.Watchdog.activity(socket.assigns[:agent_id], {:space, space_id})
 
     case authorize_space_write(socket, space_id) do
       {:error, error_map} ->
@@ -509,7 +527,7 @@ defmodule PlatformWeb.RuntimeChannel do
   def handle_in("typing", %{"space_id" => space_id, "typing" => typing}, socket) do
     RuntimePresence.touch(socket.assigns.runtime_id)
     # Turn activity for the no-reply watchdog (task 01a10322 stage 7).
-    ReplyFailure.Watchdog.activity(socket.assigns[:agent_id])
+    ReplyFailure.Watchdog.activity(socket.assigns[:agent_id], {:space, space_id})
 
     case authorize_space_write(socket, space_id) do
       {:error, error_map} ->
@@ -546,7 +564,7 @@ defmodule PlatformWeb.RuntimeChannel do
 
     RuntimePresence.touch(runtime_id)
     # Turn activity for the no-reply watchdog (task 01a10322 stage 7).
-    ReplyFailure.Watchdog.activity(socket.assigns[:agent_id])
+    ReplyFailure.Watchdog.activity(socket.assigns[:agent_id], {:tool, tool, args})
 
     case Federation.get_runtime(socket.assigns.runtime_pk) do
       # A vanished row denies. Fail closed, never fall through to execution.

@@ -159,6 +159,11 @@ defmodule Platform.Application do
          # AFTER RuntimePresence and for a structural reason: every delivery
          # re-checks presence, so this must not outlive the process it reads.
          Platform.Federation.DeadLetterReplay,
+         # Chat messages held for an offline runtime, and sent ones awaiting
+         # an `attention_ack`. Timers and an in-memory map; redeliveries run
+         # under Platform.TaskSupervisor. Off in the test env
+         # (`:delivery_queue_enabled` false) unless a test turns it on.
+         Platform.Federation.DeliveryQueue,
          # Peer-envelope replay cache (task 01a0d90f stage 3, ADR 0054) —
          # owns the :federation_peer_nonces table. Pure ETS lifecycle
          # owner (PressWindow shape), no DB and no PubSub; it must exist

@@ -51,8 +51,8 @@ NODE_VERSION=22.23.3
 BUN_VERSION=1.4.2
 CLAUDE_CODE_VERSION=2.1.295
 CODEX_VERSION=0.162.0
-# burrow-cli v0.17.1 (GetBurrowing/burrow-cli 9a8ef75, PR #57): the plugin bun install is bounded (90 s per attempt, tree kill, two retries); 0.15.0 added --remote-terminal.
-BURROW_CLI_REF=9a8ef75be6961d4aa61c09ab35bec3d3accf922f
+# burrow-cli v0.18.2 (GetBurrowing/burrow-cli 6ddbe44, PR #60): pins the Claude Code channel plugin at 0.4.3 (acks every inbound message, dedupes redeliveries, lost-reply fix); 0.15.0 added --remote-terminal.
+BURROW_CLI_REF=6ddbe44f6a3b11a740d8ea859601be0f4c87be60
 """
 
 # services/agent-host/packaging/sudoers-burrow-agents, verbatim.
