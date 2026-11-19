@@ -95,6 +95,7 @@ defmodule PlatformWeb.Components.Meetings.CallShell do
   use Phoenix.Component
 
   alias Phoenix.LiveView.JS
+  alias PlatformWeb.Components.Meetings.DevicePanel
 
   import PlatformWeb.Components.Meetings.CandidateRail
   import PlatformWeb.Components.Meetings.ParticipantRail
@@ -1292,6 +1293,27 @@ defmodule PlatformWeb.Components.Meetings.CallShell do
     """
   )
 
+  attr(:devices_id, :string,
+    default: nil,
+    doc: """
+    DOM id of this bar's "Sound and video" panel (task 01a1f4c5 stage 2),
+    or nil for no panel. One per bar: the quickmeet's two panes pass
+    different ids, like `speaker_id`. With an id, and only in a browser
+    (`native` nil):
+
+      * desktop (`sm` and up with a fine pointer): mic and camera become
+        split buttons. The toggle keeps its `phx-click`, `data-role` and
+        labels; a sibling caret (`call-control-mic-devices` /
+        `call-control-camera-devices`) opens the popover on that section.
+      * phone: one 44px `call-control-devices` button opens the sheet.
+      * a notice slot renders directly ABOVE this row (never over the
+        grid) for the untimed device-switched strap.
+
+    Never in native mode: the iOS app's native call owns audio, and the
+    `MeetingSpeakerButton` stays the output control there.
+    """
+  )
+
   attr(:show_leave, :boolean,
     default: true,
     doc: "hide Leave on a surface where the viewer has not joined the call yet"
@@ -1314,7 +1336,35 @@ defmodule PlatformWeb.Components.Meetings.CallShell do
   )
 
   def call_controls(assigns) do
+    assigns = assign(assigns, :devices?, is_binary(assigns.devices_id) and is_nil(assigns.native))
+
     ~H"""
+    <%!-- The device panel's hook root (task 01a1f4c5 stage 2). A SIBLING of
+         the row, not a child: the row is `container-type: inline-size`, and
+         that containment makes it the containing block of every fixed
+         descendant, which would pin the bottom sheet inside a 46px bar.
+         `contents`, so the notice slot is a flex item of the CALLER's column,
+         directly above the row. `phx-update="ignore"`: the hook owns every
+         attribute and child in here. --%>
+    <div
+      :if={@devices?}
+      id={@devices_id}
+      phx-hook="MeetingDevicePanel"
+      phx-update="ignore"
+      data-role="meeting-devices"
+      class="contents"
+    >
+      <div
+        id={"#{@devices_id}-notice"}
+        data-role="meeting-device-notice-slot"
+        role="status"
+        aria-live="polite"
+        class="w-full shrink-0 empty:sr-only"
+      >
+      </div>
+      <DevicePanel.device_panel id={"#{@devices_id}-popover"} container={:popover} />
+      <DevicePanel.device_panel id={"#{@devices_id}-sheet"} container={:sheet} />
+    </div>
     <div
       class={[
         "flex items-center justify-center gap-2",
@@ -1324,55 +1374,87 @@ defmodule PlatformWeb.Components.Meetings.CallShell do
       data-component="call-controls"
       {@rest}
     >
-      <button
+      <div
         :if={is_nil(@native) or @native.mic}
-        type="button"
-        phx-click={@mic_event}
-        data-role={@mic_role}
-        data-active={to_string(@mic_on)}
-        data-on={to_string(@mic_on)}
-        data-pending={@native && to_string(@mic_pending)}
-        disabled={@native && @mic_pending}
-        aria-busy={if @native && @mic_pending, do: "true"}
-        aria-pressed={to_string(!@mic_on)}
-        aria-label={if @mic_on, do: "Mute microphone", else: "Unmute microphone"}
-        class={mic_class(@native, @mic_on, @mic_pending)}
+        class={["contents", @devices? && "sm:pointer-fine:inline-flex sm:pointer-fine:items-stretch"]}
+        data-role={@devices? && "call-control-mic-split"}
       >
-        <span
+        <button
+          type="button"
+          phx-click={@mic_event}
+          phx-mounted={@devices? && JS.ignore_attributes(["title"])}
+          data-devices-toggle={@devices? && @devices_id}
+          data-role={@mic_role}
+          data-active={to_string(@mic_on)}
+          data-on={to_string(@mic_on)}
+          data-pending={@native && to_string(@mic_pending)}
+          disabled={@native && @mic_pending}
+          aria-busy={if @native && @mic_pending, do: "true"}
+          aria-pressed={to_string(!@mic_on)}
+          aria-label={if @mic_on, do: "Mute microphone", else: "Unmute microphone"}
           class={[
-            "size-4",
-            if(@mic_on, do: "hero-microphone", else: "hero-microphone-slash text-error")
+            mic_class(@native, @mic_on, @mic_pending),
+            @devices? && "sm:pointer-fine:rounded-r-none"
           ]}
-          aria-hidden="true"
         >
-        </span>
-        <.toggling_label on={@mic_on} when_on="Mute" when_off="Unmute" />
-      </button>
+          <span
+            class={[
+              "size-4",
+              if(@mic_on, do: "hero-microphone", else: "hero-microphone-slash text-error")
+            ]}
+            aria-hidden="true"
+          >
+          </span>
+          <.toggling_label on={@mic_on} when_on="Mute" when_off="Unmute" />
+        </button>
+        <.devices_caret
+          :if={@devices?}
+          devices_id={@devices_id}
+          kind="audioinput"
+          role="call-control-mic-devices"
+          label="Choose microphone"
+        />
+      </div>
 
-      <button
+      <div
         :if={is_nil(@native) or @native.camera}
-        type="button"
-        phx-click={@camera_event}
-        data-role={@camera_role}
-        data-active={to_string(@camera_on)}
-        data-on={to_string(@camera_on)}
-        data-pending={@native && to_string(@camera_pending)}
-        disabled={@native && @camera_pending}
-        aria-busy={if @native && @camera_pending, do: "true"}
-        aria-pressed={to_string(!@camera_on)}
-        aria-label={if @camera_on, do: "Turn camera off", else: "Turn camera on"}
-        class={camera_class(@native, @camera_on, @camera_pending)}
+        class={["contents", @devices? && "sm:pointer-fine:inline-flex sm:pointer-fine:items-stretch"]}
+        data-role={@devices? && "call-control-camera-split"}
       >
-        <span
+        <button
+          type="button"
+          phx-click={@camera_event}
+          data-role={@camera_role}
+          data-active={to_string(@camera_on)}
+          data-on={to_string(@camera_on)}
+          data-pending={@native && to_string(@camera_pending)}
+          disabled={@native && @camera_pending}
+          aria-busy={if @native && @camera_pending, do: "true"}
+          aria-pressed={to_string(!@camera_on)}
+          aria-label={if @camera_on, do: "Turn camera off", else: "Turn camera on"}
           class={[
-            "size-4",
-            if(@camera_on, do: "hero-video-camera", else: "hero-video-camera-slash text-error")
+            camera_class(@native, @camera_on, @camera_pending),
+            @devices? && "sm:pointer-fine:rounded-r-none"
           ]}
-          aria-hidden="true"
         >
-        </span>
-        <span class="call-control-label">Camera</span>
-      </button>
+          <span
+            class={[
+              "size-4",
+              if(@camera_on, do: "hero-video-camera", else: "hero-video-camera-slash text-error")
+            ]}
+            aria-hidden="true"
+          >
+          </span>
+          <span class="call-control-label">Camera</span>
+        </button>
+        <.devices_caret
+          :if={@devices?}
+          devices_id={@devices_id}
+          kind="videoinput"
+          role="call-control-camera-devices"
+          label="Choose camera"
+        />
+      </div>
 
       <button
         :if={is_nil(@native)}
@@ -1412,6 +1494,27 @@ defmodule PlatformWeb.Components.Meetings.CallShell do
       </button>
 
       {render_slot(@before_leave)}
+
+      <%!-- Phone (below `sm`, or any coarse pointer): ONE 44px button opens
+           the bottom sheet. The canvas puts it in a control-bar overflow
+           menu; no overflow menu exists on this bar, so it is a button in
+           the row rather than a menu built for one item. --%>
+      <button
+        :if={@devices?}
+        type="button"
+        data-role="call-control-devices"
+        data-devices-for={@devices_id}
+        data-devices-container="sheet"
+        data-devices-section="audioinput"
+        phx-mounted={JS.ignore_attributes(["aria-expanded"])}
+        aria-haspopup="dialog"
+        aria-expanded="false"
+        aria-controls={"#{@devices_id}-sheet"}
+        aria-label="Sound and video"
+        class="btn btn-sm btn-square min-h-11 min-w-11 rounded-field border-edge bg-base-200 font-normal text-base-content sm:pointer-fine:hidden"
+      >
+        <span class="hero-adjustments-horizontal size-5" aria-hidden="true"></span>
+      </button>
 
       <button
         :if={@show_leave}
@@ -1492,6 +1595,36 @@ defmodule PlatformWeb.Components.Meetings.CallShell do
 
   # The Speaker button: the camera's ground; on adds the primary ring.
   defp speaker_class, do: [@camera_class, "aria-pressed:ring-2 aria-pressed:ring-primary"]
+
+  attr(:devices_id, :string, required: true)
+  attr(:kind, :string, required: true)
+  attr(:role, :string, required: true)
+  attr(:label, :string, required: true)
+
+  # The caret half of a split mic / camera button (task 01a1f4c5 stage 2).
+  # Desktop only (`sm` with a fine pointer); `aria-expanded` belongs to the
+  # MeetingDevicePanel hook, so a LiveView patch of this row (every mute)
+  # does not reset it. No `.call-control-label`: the quickmeet bar pins
+  # exactly four of those, and the narrow-bar container query keys on them.
+  defp devices_caret(assigns) do
+    ~H"""
+    <button
+      type="button"
+      data-role={@role}
+      data-devices-for={@devices_id}
+      data-devices-container="popover"
+      data-devices-section={@kind}
+      phx-mounted={JS.ignore_attributes(["aria-expanded"])}
+      aria-haspopup="dialog"
+      aria-expanded="false"
+      aria-controls={"#{@devices_id}-popover"}
+      aria-label={@label}
+      class="btn btn-sm hidden rounded-field rounded-l-none border-edge border-l-0 bg-base-200 px-1.5 font-normal text-base-content sm:pointer-fine:inline-flex"
+    >
+      <span class="hero-chevron-up size-3.5" aria-hidden="true"></span>
+    </button>
+    """
+  end
 
   attr(:on, :boolean, required: true)
   attr(:when_on, :string, required: true)

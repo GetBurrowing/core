@@ -60,6 +60,9 @@ defmodule Platform.Design.MeetingPaletteGuardTest do
     "lib/platform_web/components/meeting/voice_waveform.ex",
     "lib/platform_web/components/meetings/participant_rail.ex",
     "lib/platform_web/components/meetings/call_shell.ex",
+    # Task 01a1f4c5 stage 2: the Sound and video panel and its hook.
+    "lib/platform_web/components/meetings/device_panel.ex",
+    "assets/js/hooks/meeting_device_panel.js",
     "lib/platform_web/components/meetings/call_rail_frame.ex",
     "lib/platform_web/components/meetings/transcript_pane.ex",
     "lib/platform_web/components/meetings/agent_activity_badge.ex",
@@ -104,6 +107,10 @@ defmodule Platform.Design.MeetingPaletteGuardTest do
   # Hue classes written outside a tag, each of which only ever reaches an
   # icon (an aria-hidden glyph). {file, line pattern}.
   @icon_tone_helpers [
+    # The device panel's blocked / switch-failed glyph (task 01a1f4c5 stage
+    # 2): a hero-* icon rendered aria-hidden beside base-content text.
+    {"assets/js/hooks/meeting_device_panel.js",
+     ~r/^const ERROR_ICON_CLASS = "hero-exclamation-circle [^"]* text-error"$/},
     # (VideoTile's mic/camera-off glyph left this list in stage 3: it is
     # `text-error-content` on a solid error well, not a hue on text.)
     # The People tab's mic/camera glyph (hero-* span).
@@ -388,7 +395,7 @@ defmodule Platform.Design.MeetingPaletteGuardTest do
   # ── tests ─────────────────────────────────────────────────────────────
 
   test "the named file list is non-empty and every path exists" do
-    assert length(@files) == 24
+    assert length(@files) == 26
 
     for rel <- @files do
       assert File.regular?(Path.join(@root, rel)), "missing scope file: #{rel}"

@@ -1,6 +1,7 @@
 import { describe, it, expect, beforeEach, afterEach, vi } from "vitest"
 import { ClientState, __resetForTests as resetClientState } from "../../js/client_state.js"
 import {
+  truncateMiddle,
   NAMESPACE,
   DEVICE_FALLBACK_EVENT,
   ACTIVE_DEVICE_EVENT,
@@ -288,5 +289,33 @@ describe("handleDevicesChanged", () => {
     await handleDevicesChanged(room, { kinds: ["audioinput"] })
     expect(room.switched).toEqual([])
     expect(events.some(([n]) => n === DEVICE_FALLBACK_EVENT)).toBe(false)
+  })
+})
+
+describe("truncateMiddle (stage 2)", () => {
+  it("keeps short names whole", () => {
+    expect(truncateMiddle("AirPods Pro", 26)).toBe("AirPods Pro")
+    expect(truncateMiddle("AirPods Pro", 11)).toBe("AirPods Pro")
+  })
+
+  it("cuts the middle, keeps the distinguishing tail, and fits maxChars", () => {
+    const out = truncateMiddle("Logitech BRIO 2 Ultra HD Pro Webcam", 22)
+    expect(out.length).toBeLessThanOrEqual(22)
+    expect(out.startsWith("Logitech")).toBe(true)
+    expect(out.endsWith("Pro Webcam")).toBe(true)
+    expect(out).toContain("\u2026")
+    expect(truncateMiddle("Microphone Array (Realtek USB)", 20).endsWith("USB)")).toBe(true)
+  })
+
+  it("two names that differ only at the end stay distinguishable", () => {
+    const a = truncateMiddle("Logitech BRIO Webcam Unit 2", 16)
+    const b = truncateMiddle("Logitech BRIO Webcam Unit 4", 16)
+    expect(a).not.toBe(b)
+  })
+
+  it("tolerates nil and nonsense limits", () => {
+    expect(truncateMiddle(null, 10)).toBe("")
+    expect(truncateMiddle("abc", 0)).toBe("abc")
+    expect(truncateMiddle("abcdef", 1)).toBe("\u2026")
   })
 })

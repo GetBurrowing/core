@@ -59,6 +59,7 @@ import MeetingScreenShare from "./meeting_screen_share"
 import MeetingShareButton from "./meeting_share_button"
 import MeetingSoundboard from "./meeting_soundboard"
 import MeetingSpeakerButton from "./meeting_speaker_button"
+import MeetingDevicePanel from "./meeting_device_panel"
 import MeetingTimer from "./meeting_timer"
 import MeetingTranscript from "./meeting_transcript"
 import MeetingVideoTile from "./meeting_video_tile"
@@ -157,6 +158,7 @@ export default {
   MeetingShareButton,
   MeetingSoundboard,
   MeetingSpeakerButton,
+  MeetingDevicePanel,
   MeetingTimer,
   MeetingTranscript,
   MeetingVideoTile,

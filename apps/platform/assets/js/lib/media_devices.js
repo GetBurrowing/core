@@ -115,6 +115,21 @@ export function labelFor(deviceId) {
   return labels.get(deviceId) || ""
 }
 
+// Middle truncation (stage 2): device names differ at the END ("Logitech
+// BRIO 2" vs "Logitech BRIO 4K", "Microphone Array (Realtek USB)"), so the
+// tail survives and the cut goes in the middle. `maxChars` counts the
+// ellipsis. The tail gets the larger half.
+export function truncateMiddle(label, maxChars) {
+  const text = String(label == null ? "" : label)
+  const max = Math.floor(Number(maxChars))
+  if (!Number.isFinite(max) || max <= 0 || text.length <= max) return text
+  if (max === 1) return "\u2026"
+  const keep = max - 1
+  const head = Math.floor(keep / 2)
+  const tail = keep - head
+  return text.slice(0, head).trimEnd() + "\u2026" + text.slice(text.length - tail).trimStart()
+}
+
 // ── preference store ───────────────────────────────────────────────────
 
 export function getPreference(kind) {
