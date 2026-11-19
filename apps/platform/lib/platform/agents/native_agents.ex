@@ -96,15 +96,16 @@ defmodule Platform.Agents.NativeAgents do
     * `:actor` - the user id of the person who asked for the agent, or
       `:system` when no person did. Defaults to `:system`: the owner is
       never assumed to be the actor, because the owner is who the agent
-      belongs to, not who made it (Kobo's Burrow was created by a boot
-      task and attributed to whichever admin a random id sorted first).
+      belongs to, not who made it (one production install's Burrow was
+      created by a boot task and attributed to whichever admin a random id
+      sorted first).
     * `:path` - the caller, recorded as `metadata["path"]`: `"connect_ai"`,
       `"starter"`, `"control_center"`, or any other name. Defaults to
       `"unspecified"`.
 
   The event name lives in the `platform.agents` namespace on purpose; the
   owner-transfer event (`platform.federation.runtime_owner_changed`) keeps
-  the name a hand-written Kobo row already uses. Do not "fix" either one.
+  the name a hand-written production row already uses. Do not "fix" either one.
   """
   @spec create(binary(), map(), keyword()) ::
           {:ok, Agent.t(), AgentRuntime.t()} | {:error, Ecto.Changeset.t() | atom()}
@@ -382,7 +383,7 @@ defmodule Platform.Agents.NativeAgents do
   `Platform.Notifications.fan_out_to_user/2` (tests).
 
   The event name is in the `platform.federation` namespace because a
-  hand-written row on Kobo already uses it; see `create/3`.
+  hand-written production row already uses it; see `create/3`.
   """
   @spec transfer_owner(map() | binary() | nil, Agent.t(), binary(), keyword()) ::
           {:ok, AgentRuntime.t()}
