@@ -18,7 +18,7 @@ defmodule Platform.Agents.NativeAgents do
 
   ## Tokens
 
-  `create/2` provisions through `Platform.Federation.provision_agent_runtime/3`
+  `create/3` provisions through `Platform.Federation.provision_agent_runtime/3`
   and DISCARDS the raw runtime token it returns. Core stores only the token's
   hash; the supervisor mints a fresh token with
   `Platform.Federation.generate_runtime_token/1` on every start, so no
@@ -54,6 +54,7 @@ defmodule Platform.Agents.NativeAgents do
   alias Platform.Tenancy
 
   @managed_by "install"
+  @created_event "platform.agents.native_runtime_created"
 
   # Observed states in which the agent's process is up, so a file saved now
   # is not what it is running.
@@ -82,12 +83,34 @@ defmodule Platform.Agents.NativeAgents do
 
   Returns `{:ok, agent, runtime}`. The raw runtime token is discarded, never
   returned or logged.
+
+  ## Who created it (task 01a1f42d)
+
+  Every create writes one `"#{@created_event}"` audit event in the SAME
+  transaction as the runtime and agent rows, so a failed audit insert rolls
+  the whole create back and no runtime exists without its record. Options:
+
+    * `:actor` - the user id of the person who asked for the agent, or
+      `:system` when no person did. Defaults to `:system`: the owner is
+      never assumed to be the actor, because the owner is who the agent
+      belongs to, not who made it (Kobo's Burrow was created by a boot
+      task and attributed to whichever admin a random id sorted first).
+    * `:path` - the caller, recorded as `metadata["path"]`: `"connect_ai"`,
+      `"starter"`, `"control_center"`, or any other name. Defaults to
+      `"unspecified"`.
+
+  The event name lives in the `platform.agents` namespace on purpose; the
+  owner-transfer event (`platform.federation.runtime_owner_changed`) keeps
+  the name a hand-written Kobo row already uses. Do not "fix" either one.
   """
-  @spec create(binary(), map()) ::
+  @spec create(binary(), map(), keyword()) ::
           {:ok, Agent.t(), AgentRuntime.t()} | {:error, Ecto.Changeset.t() | atom()}
-  def create(owner_user_id, attrs) when is_binary(owner_user_id) and is_map(attrs) do
+  def create(owner_user_id, attrs, opts \\ [])
+      when is_binary(owner_user_id) and is_map(attrs) and is_list(opts) do
     name = attrs |> fetch(:name) |> to_string() |> String.trim()
     harness = fetch(attrs, :harness)
+    actor = Keyword.get(opts, :actor, :system)
+    path = opts |> Keyword.get(:path, "unspecified") |> to_string()
 
     if name == "" do
       {:error, :name_required}
@@ -112,7 +135,8 @@ defmodule Platform.Agents.NativeAgents do
                  agent_attrs,
                  runtime_attrs
                ),
-             :ok <- seed_files(agent, harness) do
+             :ok <- seed_files(agent, harness),
+             {:ok, _event} <- record_created(agent, runtime, actor, path) do
           {agent, runtime}
         else
           {:error, reason} -> Repo.rollback(reason)
@@ -124,6 +148,34 @@ defmodule Platform.Agents.NativeAgents do
       end
     end
   end
+
+  @doc "The audit event type every `create/3` writes."
+  @spec created_event() :: String.t()
+  def created_event, do: @created_event
+
+  defp record_created(agent, runtime, actor, path) do
+    {actor_type, actor_id} = created_actor(actor)
+
+    Platform.Audit.record(%{
+      event_type: @created_event,
+      action: "native_runtime_created",
+      actor_type: actor_type,
+      actor_id: actor_id,
+      resource_type: "agent_runtime",
+      resource_id: runtime.id,
+      metadata: %{
+        "runtime_id" => runtime.id,
+        "runtime_slug" => runtime.runtime_id,
+        "agent_id" => agent.id,
+        "owner_user_id" => runtime.owner_user_id,
+        "harness" => runtime.harness,
+        "path" => path
+      }
+    })
+  end
+
+  defp created_actor(:system), do: {"system", nil}
+  defp created_actor(user_id) when is_binary(user_id), do: {"user", user_id}
 
   @doc "Every native agent with its runtime, ordered by agent name."
   @spec list() :: [entry()]

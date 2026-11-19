@@ -24,7 +24,7 @@ defmodule Platform.Agents.Burrow do
   Whatever the harness, its instructions file carries the role and the setup
   guide (`identity_template/2`).
 
-  Creation goes through `Platform.Agents.NativeAgents.create/2` and so through
+  Creation goes through `Platform.Agents.NativeAgents.create/3` and so through
   `Platform.Federation.provision_agent_runtime/3`: on an empty install Burrow
   is the first external agent and takes `metadata.first_agent_grant`. There is
   no second grant path.
@@ -108,6 +108,10 @@ defmodule Platform.Agents.Burrow do
   first, then stopped, moved to `harness` (a running one too) and started, so
   its next `agent.start` carries no starter key. That is why a running starter
   Burrow, unlike any other running Burrow, is restarted here.
+
+  `owner_id` is the root admin acting right now (ConnectAiLive's signed-in
+  user, task 01a19505), so a create here is audited with them as its actor
+  (`NativeAgents.create/3`, path `"connect_ai"`).
   """
   @spec ensure(binary(), String.t()) :: {:ok, Agent.t()} | {:error, term()}
   def ensure(owner_id, harness) when is_binary(owner_id) and harness in ~w(claude_code codex) do
@@ -126,6 +130,9 @@ defmodule Platform.Agents.Burrow do
   Create Burrow on the starter key for `owner_id`, mark it, and start it.
   `{:ok, agent}` for the one that exists when any Burrow already does (nothing
   is changed), `{:error, :no_starter_key}` without a configured key.
+
+  `owner_id` is the admin signing in (`Starter.provision/1`), and the create
+  is audited with them as its actor (path `"starter"`).
   """
   @spec ensure_starter(binary()) :: {:ok, Agent.t()} | {:error, term()}
   def ensure_starter(owner_id) when is_binary(owner_id) do
@@ -133,7 +140,10 @@ defmodule Platform.Agents.Burrow do
          nil <- get() do
       # The mark goes on before the first start, so that start carries the key.
       with {:ok, agent, _runtime} <-
-             NativeAgents.create(owner_id, %{name: @name, harness: harness_for(:api_key)}),
+             NativeAgents.create(owner_id, %{name: @name, harness: harness_for(:api_key)},
+               actor: owner_id,
+               path: "starter"
+             ),
            {:ok, agent} <- Starter.activate(agent),
            {:ok, agent} <- start(agent) do
         assign_default_roles({:ok, agent})
@@ -184,7 +194,10 @@ defmodule Platform.Agents.Burrow do
   end
 
   defp create(owner_id, harness) do
-    case NativeAgents.create(owner_id, %{name: @name, harness: harness}) do
+    case NativeAgents.create(owner_id, %{name: @name, harness: harness},
+           actor: owner_id,
+           path: "connect_ai"
+         ) do
       {:ok, agent, _runtime} ->
         start(agent)
 

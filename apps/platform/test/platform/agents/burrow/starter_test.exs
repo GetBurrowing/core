@@ -52,6 +52,16 @@ defmodule Platform.Agents.Burrow.StarterTest do
     Enum.count(NativeAgents.list(), fn %{agent: a} -> a.slug == "burrow" end)
   end
 
+  defp created_events(runtime_pk) do
+    Platform.Repo.all(
+      from(e in Platform.Audit.Event,
+        where:
+          e.event_type == ^Platform.Agents.NativeAgents.created_event() and
+            e.resource_id == ^runtime_pk
+      )
+    )
+  end
+
   defp space_count(agent) do
     Repo.aggregate(from(s in Space, where: s.slug == ^GettingStarted.space_slug(agent)), :count)
   end
@@ -99,6 +109,19 @@ defmodule Platform.Agents.Burrow.StarterTest do
       Application.put_env(:platform, :native_agent_login, "operator")
       assert NativeLogin.start_env(agent) == %{"ANTHROPIC_API_KEY" => @starter}
       refute NativeLogin.api_key_set?(agent)
+    end
+
+    test "audits the create once, with the signing-in admin as actor (01a1f42d)", %{
+      admin: admin
+    } do
+      assert {:ok, _space} = Starter.provision(admin)
+      assert {:ok, _space} = Starter.provision(admin)
+
+      agent = Burrow.get()
+      assert [event] = created_events(agent.runtime_id)
+      assert event.actor_type == "user"
+      assert event.actor_id == admin.id
+      assert event.metadata["path"] == "starter"
     end
 
     test "an existing Burrow is left alone and never marked", %{admin: admin} do

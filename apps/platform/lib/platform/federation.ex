@@ -473,7 +473,7 @@ defmodule Platform.Federation do
   This is the single core composition of those three steps (task 01a10322
   stage 1, shared with task 01a0d6b9's desktop pairing follow-up). Federated
   onboarding (`PlatformWeb.ControlCenter.OnboardingEvents` "submit_federate")
-  and native agents (`Platform.Agents.NativeAgents.create/2`) both call it;
+  and native agents (`Platform.Agents.NativeAgents.create/3`) both call it;
   a second composition of the same steps elsewhere is ruled out.
 
     * `owner_user_id` owns the runtime row.

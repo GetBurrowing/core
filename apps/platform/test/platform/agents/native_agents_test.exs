@@ -85,6 +85,14 @@ defmodule Platform.Agents.NativeAgentsTest do
     |> Enum.filter(&(AgentRuntime.hash_token(&1) == hash))
   end
 
+  defp created_events(runtime_pk) do
+    Repo.all(
+      from(e in Platform.Audit.Event,
+        where: e.event_type == ^NativeAgents.created_event() and e.resource_id == ^runtime_pk
+      )
+    )
+  end
+
   describe "create/2" do
     test "creates an external agent on an activated, install-managed runtime" do
       owner = create_user()
@@ -160,6 +168,92 @@ defmodule Platform.Agents.NativeAgentsTest do
       # captured and found.
       {_, planted} = with_log([level: :debug], fn -> Logger.info("planted #{raw}") end)
       assert token_hits(planted, rt_hash) == [raw]
+    end
+  end
+
+  describe "create/3 audit (task 01a1f42d)" do
+    # Mutant: delete the `record_created/4` step in `create/3` -> every test
+    # here goes red; "an audit failure leaves no runtime and no agent" fails
+    # on its `{:error, _}` match because the create then succeeds.
+
+    test "records the acting user, the owner and the path in one row" do
+      owner = create_user()
+      actor = create_admin()
+
+      assert {:ok, agent, runtime} =
+               NativeAgents.create(owner.id, %{name: "Audited", harness: "claude_code"},
+                 actor: actor.id,
+                 path: "control_center"
+               )
+
+      assert [event] = created_events(runtime.id)
+      assert event.event_type == "platform.agents.native_runtime_created"
+      assert event.actor_type == "user"
+      assert event.actor_id == actor.id
+      assert event.resource_type == "agent_runtime"
+      assert event.resource_id == runtime.id
+      assert event.metadata["runtime_id"] == runtime.id
+      assert event.metadata["agent_id"] == agent.id
+      assert event.metadata["owner_user_id"] == owner.id
+      assert event.metadata["harness"] == "claude_code"
+      assert event.metadata["path"] == "control_center"
+    end
+
+    test "with no actor the create is attributed to the system, never to the owner" do
+      owner = create_user()
+
+      assert {:ok, _agent, runtime} =
+               NativeAgents.create(owner.id, %{name: "Unattributed", harness: "codex"})
+
+      assert [event] = created_events(runtime.id)
+      assert event.actor_type == "system"
+      assert event.actor_id == nil
+      assert event.metadata["owner_user_id"] == owner.id
+      assert event.metadata["path"] == "unspecified"
+    end
+
+    test "an explicit :system actor is the system" do
+      owner = create_user()
+
+      assert {:ok, _agent, runtime} =
+               NativeAgents.create(owner.id, %{name: "Sys", harness: "claude_code"},
+                 actor: :system,
+                 path: "iex"
+               )
+
+      assert [%{actor_type: "system", actor_id: nil, metadata: %{"path" => "iex"}}] =
+               created_events(runtime.id)
+    end
+
+    test "an audit failure leaves no runtime and no agent" do
+      owner = create_user()
+      runtimes = Repo.aggregate(AgentRuntime, :count)
+      agents = Repo.aggregate(Agent, :count)
+      events = Repo.aggregate(Platform.Audit.Event, :count)
+
+      # An actor id that is not a UUID fails the audit changeset, after the
+      # runtime, agent and files rows are already written in the transaction.
+      assert {:error, %Ecto.Changeset{data: %Platform.Audit.Event{}} = changeset} =
+               NativeAgents.create(owner.id, %{name: "Rolled Back", harness: "claude_code"},
+                 actor: "not-a-uuid"
+               )
+
+      assert changeset.errors[:actor_id]
+      assert Repo.aggregate(AgentRuntime, :count) == runtimes
+      assert Repo.aggregate(Agent, :count) == agents
+      assert Repo.aggregate(Platform.Audit.Event, :count) == events
+      refute Repo.get_by(Agent, name: "Rolled Back")
+    end
+
+    test "a refused create writes no audit row" do
+      owner = create_user()
+      events = Repo.aggregate(Platform.Audit.Event, :count)
+
+      assert {:error, %Ecto.Changeset{}} =
+               NativeAgents.create(owner.id, %{name: "Bad", harness: "vim"}, actor: owner.id)
+
+      assert {:error, :name_required} = NativeAgents.create(owner.id, %{name: " "})
+      assert Repo.aggregate(Platform.Audit.Event, :count) == events
     end
   end
 
@@ -314,6 +408,16 @@ defmodule Platform.Agents.NativeAgentsTest do
       on_exit(fn ->
         unboxed(fn ->
           Repo.delete_all(from(a in Agent, where: like(a.slug, ^"race-#{stamp}-%")))
+
+          # Each committed create also committed its audit row (01a1f42d).
+          Repo.delete_all(
+            from(e in Platform.Audit.Event,
+              where:
+                e.event_type == ^NativeAgents.created_event() and
+                  fragment("?->>'owner_user_id'", e.metadata) == ^owner.id
+            )
+          )
+
           Repo.delete_all(from(u in User, where: u.id == ^owner.id))
         end)
       end)

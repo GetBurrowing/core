@@ -54,6 +54,16 @@ defmodule Platform.Agents.BurrowTest do
 
   defp native_entries, do: NativeAgents.list()
 
+  defp created_events(runtime_pk) do
+    Platform.Repo.all(
+      from(e in Platform.Audit.Event,
+        where:
+          e.event_type == ^Platform.Agents.NativeAgents.created_event() and
+            e.resource_id == ^runtime_pk
+      )
+    )
+  end
+
   defp file_content(agent, key) do
     NativeAgents.start_files(agent)
     |> Enum.find(&(&1["key"] == key))
@@ -70,6 +80,20 @@ defmodule Platform.Agents.BurrowTest do
       assert a.name == "Burrow"
       assert a.slug == "burrow"
       assert rt.harness == "codex"
+    end
+
+    test "ensure/2 audits its create once, with the signed-in admin as actor (01a1f42d)" do
+      # Mutant: drop `actor: owner_id` in `Burrow.create/2` -> actor_type is
+      # "system" and this goes red.
+      owner = admin!()
+      assert {:ok, agent} = Burrow.ensure(owner.id, "claude_code")
+      assert {:ok, ^agent} = Burrow.ensure(owner.id, "claude_code")
+
+      assert [event] = created_events(agent.runtime_id)
+      assert event.actor_type == "user"
+      assert event.actor_id == owner.id
+      assert event.metadata["owner_user_id"] == owner.id
+      assert event.metadata["path"] == "connect_ai"
     end
 
     test "ensure/2 with claude_code creates one agent named Burrow running claude_code" do
