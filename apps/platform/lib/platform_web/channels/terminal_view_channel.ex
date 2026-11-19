@@ -11,8 +11,14 @@ defmodule PlatformWeb.TerminalViewChannel do
        `Platform.Federation.RemoteAccess`: the relationship kind must be an
        allowed kind, and today that means the runtime's owner. Otherwise
        `forbidden`;
-    3. the runtime is online but no terminal CLI is joined (the opt-in is off):
-       `flag_off`; the runtime is not online: `offline`.
+    3. the terminal is reachable: a terminal host (the CLI side that serves
+       `terminal:<runtime_id>`) is joined, or the runtime is online. Neither:
+       `offline`. A joined terminal host is enough on its own (task 01a1f4c6):
+       a hosted Codex agent waiting on its device login has its terminal host
+       up but no runtime presence yet, and that terminal is how its owner
+       finishes the login;
+    4. the runtime is online but no terminal CLI is joined (the opt-in is off):
+       `flag_off`.
 
   After a join the session starts read-only. While read-only, `in` frames are
   dropped by event name alone; a frame is never examined. A `mode` request is
@@ -41,8 +47,8 @@ defmodule PlatformWeb.TerminalViewChannel do
          runtime = Federation.get_runtime_by_runtime_id(runtime_id),
          kind = RemoteAccess.kind_for(runtime, user_id),
          {:allowed, true} <- {:allowed, RemoteAccess.allowed_kind?(kind)},
-         {:online, true} <- {:online, RuntimePresence.online?(runtime_id)},
          cli_pid = Terminal.cli_pid(runtime_id),
+         {:online, true} <- {:online, cli_pid != nil or RuntimePresence.online?(runtime_id)},
          {:opt_in, true} <- {:opt_in, RemoteAccess.permitted?(kind, cli_pid != nil)},
          {:audit, :ok} <- {:audit, Audit.record("opened", user_id, runtime_id, %{mode: "ro"})} do
       socket = start_session(socket, runtime_id, cli_pid)
@@ -72,6 +78,16 @@ defmodule PlatformWeb.TerminalViewChannel do
   defp start_session(socket, runtime_id, cli_pid) do
     sid = Terminal.new_session_id()
     :ok = Terminal.subscribe(sid)
+
+    # The terminal is the runtime owner's alone (RemoteAccess.kind_for/2), and
+    # that was decided at join. An owner transfer closes this session if the
+    # viewer is no longer the owner.
+    :ok =
+      Phoenix.PubSub.subscribe(
+        Platform.PubSub,
+        Platform.Agents.NativeAgents.owner_topic(runtime_id)
+      )
+
     send(cli_pid, {:terminal_open, sid})
 
     socket
@@ -144,6 +160,16 @@ defmodule PlatformWeb.TerminalViewChannel do
     socket = close(socket)
     push(socket, "closed", %{"reason" => "cli_gone"})
     {:stop, :normal, socket}
+  end
+
+  def handle_info({:runtime_owner_changed, %{new_owner_user_id: new_owner}}, socket) do
+    if new_owner == socket.assigns.user_id do
+      {:noreply, socket}
+    else
+      socket = close(socket)
+      push(socket, "closed", %{"reason" => "owner_changed"})
+      {:stop, :normal, socket}
+    end
   end
 
   def handle_info(_message, socket), do: {:noreply, socket}

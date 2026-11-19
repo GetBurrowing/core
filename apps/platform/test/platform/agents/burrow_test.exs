@@ -30,6 +30,20 @@ defmodule Platform.Agents.BurrowTest do
     })
   end
 
+  defp member! do
+    user = user!("member")
+
+    %OrgMembership{}
+    |> OrgMembership.changeset(%{
+      user_id: user.id,
+      org_id: Platform.TenancyFixtures.acme_org_id(),
+      role: "member"
+    })
+    |> Repo.insert!()
+
+    user
+  end
+
   defp admin! do
     user = user!("admin")
 
@@ -54,6 +68,16 @@ defmodule Platform.Agents.BurrowTest do
 
   defp native_entries, do: NativeAgents.list()
 
+  defp created_events(runtime_pk) do
+    Platform.Repo.all(
+      from(e in Platform.Audit.Event,
+        where:
+          e.event_type == ^Platform.Agents.NativeAgents.created_event() and
+            e.resource_id == ^runtime_pk
+      )
+    )
+  end
+
   defp file_content(agent, key) do
     NativeAgents.start_files(agent)
     |> Enum.find(&(&1["key"] == key))
@@ -70,6 +94,20 @@ defmodule Platform.Agents.BurrowTest do
       assert a.name == "Burrow"
       assert a.slug == "burrow"
       assert rt.harness == "codex"
+    end
+
+    test "ensure/2 audits its create once, with the signed-in admin as actor (01a1f42d)" do
+      # Mutant: drop `actor: owner_id` in `Burrow.create/2` -> actor_type is
+      # "system" and this goes red.
+      owner = admin!()
+      assert {:ok, agent} = Burrow.ensure(owner.id, "claude_code")
+      assert {:ok, ^agent} = Burrow.ensure(owner.id, "claude_code")
+
+      assert [event] = created_events(agent.runtime_id)
+      assert event.actor_type == "user"
+      assert event.actor_id == owner.id
+      assert event.metadata["owner_user_id"] == owner.id
+      assert event.metadata["path"] == "connect_ai"
     end
 
     test "ensure/2 with claude_code creates one agent named Burrow running claude_code" do
@@ -416,6 +454,52 @@ defmodule Platform.Agents.BurrowTest do
     end
   end
 
+  describe "who calls Burrow.ensure (01a19505 creation rule)" do
+    # Burrow is created only by an explicit act of the root admin who will own
+    # it: the Connect AI page (`ensure/2`) and the starter hand-over
+    # (`ensure_starter/1` via `Starter.provision/1`). No supervisor child, boot
+    # task or login hook may call either (the 2026-10-27 boot seed that did so
+    # gave Burrow to whichever admin a random membership id sorted first).
+    @allowed %{
+      "lib/platform_web/live/connect_ai_live.ex" => ["Burrow.ensure("],
+      "lib/platform/agents/burrow/starter.ex" => ["Burrow.ensure_starter("]
+    }
+
+    test "only the Connect AI page and the starter provisioner call it" do
+      calls =
+        for path <- Path.wildcard("lib/**/*.ex"),
+            path != "lib/platform/agents/burrow.ex",
+            src = File.read!(path),
+            call <- Regex.scan(~r/Burrow\.ensure(?:_starter)?\(/, src) |> List.flatten(),
+            reduce: %{} do
+          acc -> Map.update(acc, path, [call], &Enum.uniq(&1 ++ [call]))
+        end
+
+      assert calls == @allowed
+    end
+
+    test "no supervisor child and no login path reaches Burrow.ensure" do
+      # Positive control for the scan below: the pattern does match a caller.
+      assert File.read!("lib/platform_web/live/connect_ai_live.ex") =~ ~r/Burrow\.ensure\(/
+
+      for path <-
+            ["lib/platform/application.ex", "lib/platform/accounts.ex"] ++
+              Path.wildcard("lib/platform_web/controllers/auth*.ex") ++
+              Path.wildcard("lib/platform_web/plugs/*.ex") ++
+              ["lib/platform_web/live_auth.ex"] do
+        refute File.read!(path) =~ ~r/Burrow\.ensure|Agents\.Burrow\.run_at|burrow_seed/,
+               "#{path} must not create Burrow"
+      end
+
+      children = Supervisor.which_children(Platform.Supervisor)
+
+      for {id, _pid, _type, mods} <- children do
+        refute inspect(id) =~ "Burrow"
+        refute is_list(mods) and Enum.any?(mods, &(inspect(&1) =~ "Agents.Burrow"))
+      end
+    end
+  end
+
   describe "install_owner/0" do
     test "is the earliest non-archived root admin" do
       first = admin!()
@@ -449,12 +533,56 @@ defmodule Platform.Agents.BurrowTest do
       assert content.() =~ a1.id
     end
 
+    test "the Owner line names the runtime owner, not the install owner" do
+      install_owner = admin!()
+      creator = admin!()
+      assert Platform.Accounts.install_owner().id == install_owner.id
+
+      {:ok, agent} = Burrow.ensure(creator.id, "claude_code")
+
+      line = owner_line(agent)
+      assert line == "- Owner: #{creator.name} (principal #{creator.id})"
+      refute line =~ install_owner.id
+    end
+
+    test "after transfer_owner the Owner line names the new owner, marked when not an admin" do
+      creator = admin!()
+      new_owner = member!()
+      {:ok, agent} = Burrow.ensure(creator.id, "claude_code")
+      assert owner_line(agent) =~ creator.id
+
+      assert {:ok, %AgentRuntime{}} =
+               NativeAgents.transfer_owner(creator, agent, new_owner.id,
+                 notify: fn _, _ -> :ok end
+               )
+
+      assert owner_line(agent) ==
+               "- Owner: #{new_owner.name} (principal #{new_owner.id}). " <>
+                 "This user is not an admin of this install."
+
+      # The previous owner is still listed as an admin, just not as owner.
+      assert content_of(agent) =~ "- #{creator.name} (principal #{creator.id})"
+    end
+
     test "other native agents get no admins section" do
       owner = admin!()
       {:ok, agent, _} = NativeAgents.create(owner.id, %{name: "Other", harness: "claude_code"})
       files = NativeAgents.start_files(agent)
       refute Enum.any?(files, &(&1["content"] =~ "Owner and admins"))
     end
+  end
+
+  defp content_of(agent) do
+    NativeAgents.start_files(agent)
+    |> Enum.find(&(&1["key"] == "CLAUDE.md"))
+    |> Map.fetch!("content")
+  end
+
+  defp owner_line(agent) do
+    content_of(agent)
+    |> String.split("\n")
+    |> Enum.filter(&String.starts_with?(&1, "- Owner:"))
+    |> then(fn [line] -> line end)
   end
 
   defp from_membership(user_id) do

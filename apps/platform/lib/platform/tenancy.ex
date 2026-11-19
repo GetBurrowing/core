@@ -1152,9 +1152,27 @@ defmodule Platform.Tenancy do
 
   def root_member?(_), do: false
 
-  # The ONE "which org is the root org" predicate, in query form. Both
-  # `root_admin?/1` and `root_member?/1` compose it so the definition of
-  # root is written exactly once.
+  @doc """
+  A query selecting the `user_id` of every root-org membership, at any role.
+
+  The query form of `root_member?/1`, for callers that need the whole set
+  (for example a picker of users eligible to own an install-managed agent)
+  rather than a yes/no for one user. Built on the same root-org predicate as
+  `root_admin?/1` and `root_member?/1`, so the definition of the root org is
+  still written once, here. It does not filter archived users; callers that
+  need only live users add that themselves.
+  """
+  @spec root_member_ids_query() :: Ecto.Query.t()
+  def root_member_ids_query do
+    from(m in OrgMembership,
+      where: m.org_id in subquery(root_org_ids_query()),
+      select: m.user_id
+    )
+  end
+
+  # The ONE "which org is the root org" predicate, in query form.
+  # `root_admin?/1`, `root_member?/1` and `root_member_ids_query/0` all
+  # compose it so the definition of root is written exactly once.
   defp root_org_ids_query do
     from(o in Org, where: is_nil(o.parent_org_id), select: o.id)
   end

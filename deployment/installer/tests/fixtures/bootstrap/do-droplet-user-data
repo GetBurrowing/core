@@ -48,8 +48,8 @@ write_files:
       BUN_VERSION=1.4.2
       CLAUDE_CODE_VERSION=2.1.295
       CODEX_VERSION=0.162.0
-      # burrow-cli v0.18.2 (GetBurrowing/burrow-cli 6ddbe44, PR #60): pins the Claude Code channel plugin at 0.4.3 (acks every inbound message, dedupes redeliveries, lost-reply fix); 0.15.0 added --remote-terminal.
-      BURROW_CLI_REF=6ddbe44f6a3b11a740d8ea859601be0f4c87be60
+      # burrow-cli v0.19.0 (GetBurrowing/burrow-cli 9314fc3, PR #61): adds `watch --host-only` (host connections only, never types), which the agent host runs to serve the remote terminal; 0.18.2 pinned the Claude Code channel plugin at 0.4.3; 0.15.0 added --remote-terminal.
+      BURROW_CLI_REF=9314fc38a9f6025db98340486b5fadf18e892513
   - path: "/etc/sudoers.d/burrow-agents"
     owner: "root:root"
     permissions: "0440"

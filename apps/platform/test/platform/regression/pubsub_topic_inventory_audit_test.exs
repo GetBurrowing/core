@@ -199,6 +199,14 @@ defmodule Platform.Regression.PubSubTopicInventoryAuditTest do
 
     # ── runtime ──
     {"runtime:<id>", :runtime},
+    # Task 01a1f42d stage 2. `NativeAgents.owner_topic/1`, keyed by one
+    # runtime's runtime_id slug. Payload is `{:runtime_owner_changed,
+    # %{runtime_id, previous_owner_user_id, new_owner_user_id}}`, IDs only.
+    # Subscribers are RuntimeChannel (the runtime itself; it re-reads its row
+    # and re-pushes capabilities) and TerminalViewChannel (a viewer already
+    # authorized for that runtime's terminal; it closes unless it is the new
+    # owner). A receiver learns only that this runtime's owner changed.
+    {"runtime_owner:<id>", :runtime},
 
     # ── resource ──
     {"audit:<id>:<id>", :resource},

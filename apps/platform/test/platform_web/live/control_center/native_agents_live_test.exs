@@ -21,6 +21,7 @@ defmodule PlatformWeb.ControlCenter.NativeAgentsLiveTest do
   """
   use PlatformWeb.ConnCase, async: false
 
+  import Ecto.Query, only: [from: 2]
   import Phoenix.LiveViewTest
 
   alias Platform.Accounts.User
@@ -54,6 +55,16 @@ defmodule PlatformWeb.ControlCenter.NativeAgentsLiveTest do
     |> Repo.insert!()
 
     user
+  end
+
+  defp created_events(runtime_pk) do
+    Repo.all(
+      from(e in Platform.Audit.Event,
+        where:
+          e.event_type == ^Platform.Agents.NativeAgents.created_event() and
+            e.resource_id == ^runtime_pk
+      )
+    )
   end
 
   defp as(conn, user), do: init_test_session(conn, current_user_id: user.id)
@@ -506,6 +517,25 @@ defmodule PlatformWeb.ControlCenter.NativeAgentsLiveTest do
 
       assert_receive {:agent_host_push, "agent.start", %{"agent_id" => id}}
       assert id == agent.id
+    end
+
+    test "audits the create once, with the signed-in user as actor (01a1f42d)", %{
+      conn: conn,
+      owner: owner
+    } do
+      join_host!()
+      {:ok, view, _html} = live(as(conn, owner), ~p"/control")
+
+      render_hook(view, "submit_native", %{
+        "native" => %{"name" => "Audit Native", "harness" => "claude_code"}
+      })
+
+      agent = Repo.get_by!(Agent, name: "Audit Native")
+      assert [event] = created_events(agent.runtime_id)
+      assert event.actor_type == "user"
+      assert event.actor_id == owner.id
+      assert event.metadata["owner_user_id"] == owner.id
+      assert event.metadata["path"] == "control_center"
     end
 
     test "a codex harness is refused server-side", %{conn: conn, owner: owner} do

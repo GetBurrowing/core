@@ -135,6 +135,36 @@ defmodule Platform.Security.RuntimeChannelCapabilityTest do
     end
   end
 
+  # ── Owner change re-pushes capabilities (task 01a1f42d stage 2) ──────────
+
+  describe "an owner change on a connected runtime" do
+    # Mutant: drop the `{:runtime_owner_changed, _}` clause (or the subscribe
+    # in join/3) -> no second `capabilities` push arrives and this goes red.
+    test "re-reads the runtime and pushes the surface the NEW owner caps", ctx do
+      {socket, before} = join_runtime(ctx, ctx.int.id, @broad_bundles)
+      assert "task_create" in tool_names(before)
+
+      runtime = Platform.Federation.get_runtime(socket.assigns.runtime_pk)
+
+      {:ok, _} =
+        runtime |> AgentRuntime.changeset(%{owner_user_id: ctx.ext.id}) |> Repo.update()
+
+      Phoenix.PubSub.broadcast(
+        Platform.PubSub,
+        Platform.Agents.NativeAgents.owner_topic(runtime.runtime_id),
+        {:runtime_owner_changed,
+         %{
+           runtime_id: runtime.runtime_id,
+           previous_owner_user_id: ctx.int.id,
+           new_owner_user_id: ctx.ext.id
+         }}
+      )
+
+      assert_push("capabilities", after_change)
+      assert tool_names(after_change) == Enum.sort(@chat_names)
+    end
+  end
+
   # ── EXTERNAL owner, fail-closed intersection ───────────────────────────
 
   describe "external-owned runtime with only [task] (fail-closed)" do

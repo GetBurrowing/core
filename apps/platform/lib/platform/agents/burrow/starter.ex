@@ -28,7 +28,7 @@ defmodule Platform.Agents.Burrow.Starter do
 
   ## Why creation happens at the first hand-over sign-in, not at boot
 
-  `Burrow.ensure_starter/1` needs the owner: `NativeAgents.create/2` provisions
+  `Burrow.ensure_starter/1` needs the owner: `NativeAgents.create/3` provisions
   the runtime through `Federation.provision_agent_runtime/3` under the owner's
   scope, and the Getting started space needs the owner as a participant. At
   boot on a fresh install no user exists yet (the owner row is created by the

@@ -5,7 +5,7 @@ defmodule PlatformWeb.ControlCenter.RuntimePanel do
   """
   use Phoenix.Component
 
-  alias Platform.Agents.Agent
+  alias Platform.Agents.{Agent, NativeAgents}
   alias Platform.Access.{Caps, Registry, RuntimeProfiles, Scope}
   alias Platform.Federation.ToolSurface
   alias Platform.Federation
@@ -70,6 +70,10 @@ defmodule PlatformWeb.ControlCenter.RuntimePanel do
   # Not rendered here (the panel lives at the LiveView root, see
   # `grant_panel/1`); passed so the rows re-render when a grant closes it.
   attr(:grant_panel, :map, default: nil)
+  # Owner control (task 01a1f42d stage 4): the viewer, and the pending
+  # confirm (`%{agent_id, id, name}` or nil) the LiveView holds.
+  attr(:current_user_id, :string, default: nil)
+  attr(:owner_transfer, :map, default: nil)
 
   def federation_connection_panel(assigns) do
     runtime = assigns.federation_runtime || Federation.get_runtime(assigns.agent.runtime_id)
@@ -103,6 +107,7 @@ defmodule PlatformWeb.ControlCenter.RuntimePanel do
       |> assign(:owner_permissions, owner_permissions)
       |> assign(:caps, caps)
       |> assign(:owner_name, owner_name(owner))
+      |> assign_owner_control()
 
     ~H"""
     <div :if={@fed_runtime} class="mt-4 space-y-3">
@@ -151,6 +156,16 @@ defmodule PlatformWeb.ControlCenter.RuntimePanel do
           <span class="text-xs">{format_datetime(@fed_runtime.last_connected_at)}</span>
         </div>
       </div>
+
+      <.owner_card
+        :if={@managed?}
+        agent={@agent}
+        owner_name={@owner_name}
+        current_owner_id={@fed_runtime.owner_user_id}
+        can_transfer?={@can_transfer_owner?}
+        eligible_owners={@eligible_owners}
+        pending={@owner_transfer_pending}
+      />
 
       <%!-- First-run note (task 01a10322 stage 4): the Pending slot, info fill
            with info-content, above the bundles it explains. Copy verbatim
@@ -573,6 +588,121 @@ defmodule PlatformWeb.ControlCenter.RuntimePanel do
     </div>
     """
   end
+
+  # ── Owner (task 01a1f42d stage 4) ─────────────────────────────────
+
+  # Who owns an install-managed agent, and, for the owner or an install admin
+  # only, the control that hands it to someone else. The control is two steps:
+  # pick a person, then confirm. Both events re-check through
+  # `NativeAgents.transfer_owner/4` (see `RuntimeEvents`), so hiding the
+  # control is an affordance, not the guard.
+  attr(:agent, Agent, required: true)
+  attr(:owner_name, :string, default: nil)
+  attr(:current_owner_id, :string, default: nil)
+  attr(:can_transfer?, :boolean, default: false)
+  attr(:eligible_owners, :list, default: [])
+  attr(:pending, :map, default: nil)
+
+  defp owner_card(assigns) do
+    ~H"""
+    <div
+      id="agent-owner"
+      class="rounded-2xl border border-edge bg-base-200/40 p-4 text-sm"
+      data-role="agent-owner"
+    >
+      <div class="flex items-center justify-between gap-3">
+        <span>Owner</span>
+        <span data-role="agent-owner-name" class="min-w-0 truncate font-semibold">
+          {@owner_name || "Nobody"}
+        </span>
+      </div>
+      <p :if={@can_transfer?} class="mt-1 text-xs text-subtle">
+        The owner and admins can manage this agent. Its access is capped at the owner's.
+      </p>
+
+      <form
+        :if={@can_transfer? and is_nil(@pending)}
+        id="owner-transfer-form"
+        phx-submit="owner_transfer_review"
+        class="mt-3 flex flex-col gap-2 sm:flex-row sm:items-center"
+      >
+        <label for="owner-transfer-select" class="sr-only">New owner</label>
+        <select
+          id="owner-transfer-select"
+          name="new_owner_id"
+          class="select select-sm select-bordered w-full min-w-0 sm:flex-1"
+        >
+          <option
+            :for={user <- @eligible_owners}
+            value={user.id}
+            selected={user.id == @current_owner_id}
+          >
+            {user_label(user)}
+          </option>
+        </select>
+        <button type="submit" class="btn btn-sm" data-role="owner-transfer-review">
+          Change owner
+        </button>
+      </form>
+
+      <div
+        :if={@can_transfer? and @pending}
+        id="owner-transfer-confirm"
+        class="mt-3 rounded-box border border-warning/40 bg-warning/10 p-3"
+      >
+        <p>
+          Make <span class="font-semibold">{@pending.name}</span> the owner of {@agent.name}?
+        </p>
+        <div class="mt-3 flex flex-wrap gap-2">
+          <button
+            type="button"
+            class="btn btn-sm btn-primary"
+            phx-click="owner_transfer_confirm"
+            phx-value-new_owner_id={@pending.id}
+            data-role="owner-transfer-confirm"
+          >
+            Make owner
+          </button>
+          <button
+            type="button"
+            class="btn btn-sm btn-ghost"
+            phx-click="owner_transfer_cancel"
+            data-role="owner-transfer-cancel"
+          >
+            Cancel
+          </button>
+        </div>
+      </div>
+    </div>
+    """
+  end
+
+  defp assign_owner_control(%{managed?: true} = assigns) do
+    can_transfer? = NativeAgents.can_transfer_owner?(assigns.current_user_id, assigns.agent)
+
+    pending =
+      case assigns.owner_transfer do
+        %{agent_id: agent_id} = pending when agent_id == assigns.agent.id -> pending
+        _ -> nil
+      end
+
+    assigns
+    |> assign(:can_transfer_owner?, can_transfer?)
+    |> assign(:eligible_owners, if(can_transfer?, do: NativeAgents.eligible_owners(), else: []))
+    |> assign(:owner_transfer_pending, pending)
+  end
+
+  defp assign_owner_control(assigns) do
+    assigns
+    |> assign(:can_transfer_owner?, false)
+    |> assign(:eligible_owners, [])
+    |> assign(:owner_transfer_pending, nil)
+  end
+
+  @doc "How a user is named in the owner control: name, or email when unnamed."
+  def user_label(%{name: name}) when is_binary(name) and name != "", do: name
+  def user_label(%{email: email}) when is_binary(email), do: email
+  def user_label(_user), do: "Unnamed user"
 
   defp owner_name(%{user: %{name: name}}) when is_binary(name) and name != "", do: name
   defp owner_name(%{user: %{email: email}}) when is_binary(email), do: email
