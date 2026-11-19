@@ -114,6 +114,38 @@ defmodule Platform.Mail.Triage do
     |> Map.new()
   end
 
+  @doc """
+  `%{account_id => %{last_at: DateTime.t(), count: n}}`: for each of
+  `account_ids` with any, the latest `inserted_at` and the number of
+  `user`'s OWN items on that account during today's briefing day. Ids and
+  timestamps only; reads no mail text.
+  """
+  @spec reader_activity(any(), [binary()], keyword()) :: %{binary() => map()}
+  def reader_activity(user, account_ids, opts \\ [])
+
+  def reader_activity(%{id: user_id}, account_ids, opts)
+      when is_binary(user_id) and is_list(account_ids) do
+    ids = Enum.filter(account_ids, &Platform.UUID.valid?/1)
+
+    if ids == [] do
+      %{}
+    else
+      date = Keyword.get_lazy(opts, :date, &briefing_today/0)
+      {start, finish} = day_bounds(date)
+
+      from(i in Item,
+        where: i.user_id == ^user_id and i.account_id in ^ids,
+        where: i.inserted_at >= ^start and i.inserted_at < ^finish,
+        group_by: i.account_id,
+        select: {i.account_id, %{last_at: max(i.inserted_at), count: count(i.id)}}
+      )
+      |> Repo.all()
+      |> Map.new()
+    end
+  end
+
+  def reader_activity(_user, _account_ids, _opts), do: %{}
+
   # ── Permission ──────────────────────────────────────────────────────────
 
   @doc """

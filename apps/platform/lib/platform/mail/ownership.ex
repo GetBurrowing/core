@@ -771,6 +771,30 @@ defmodule Platform.Mail.Ownership do
   def flag_important_agent_ids(_account_ids), do: %{}
 
   @doc """
+  `%{account_id => %Agent{}}` (any status) for each of `account_ids` with a
+  flag-important grant: `flag_important_agent_ids/1` plus one agent read.
+  The CALLER decides which accounts it may name an agent for; pass only
+  those. Reads grants, never mail.
+  """
+  @spec flag_important_agents([binary()]) :: %{binary() => Agent.t()}
+  def flag_important_agents(account_ids) do
+    ids = flag_important_agent_ids(account_ids)
+
+    case ids |> Map.values() |> Enum.uniq() do
+      [] ->
+        %{}
+
+      agent_ids ->
+        agents =
+          from(ag in Agent, where: ag.id in ^agent_ids) |> Repo.all() |> Map.new(&{&1.id, &1})
+
+        for {account_id, agent_id} <- ids, %Agent{} = agent <- [agents[agent_id]], into: %{} do
+          {account_id, agent}
+        end
+    end
+  end
+
+  @doc """
   THE definition of "a mailbox's active flag agent": a query over
   `{account_id, %Agent{}}` for each account that is neither unassigned nor
   archived and has a flag-important grant held by an ACTIVE agent.

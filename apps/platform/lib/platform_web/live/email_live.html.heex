@@ -865,12 +865,21 @@
           data-role="mail-account-card"
           data-account-id={account.id}
         >
-          <p class="break-all font-mono text-sm font-semibold text-base-content">
-            {dispatch_address(account)}
-          </p>
+          <% {address_head, address_tail} = address_parts(dispatch_address(account)) %>
+          <div class="flex min-w-0 items-center gap-2">
+            <p
+              class="flex min-w-0 flex-1 font-mono text-sm font-semibold text-base-content"
+              title={dispatch_address(account)}
+            >
+              <span class="min-w-0 truncate">{address_head}</span><span class="shrink-0">{address_tail}</span>
+            </p>
+            <span class="badge badge-sm shrink-0 border-0 bg-base-300 text-base-content">
+              {kind_badge(account)}
+            </span>
+          </div>
           <p class="flex flex-wrap items-center gap-2 text-xs" data-role="mail-account-owner">
-            <span class="badge badge-outline badge-info badge-sm">
-              {kind_text(account, @owner_names)}
+            <span :if={owner_line(account, @owner_names)} class="text-subtle">
+              {owner_line(account, @owner_names)}
             </span>
             <span
               :if={@is_admin and not MapSet.member?(@readable_ids, account.id)}
@@ -919,6 +928,16 @@
               </span>
             </li>
           </ul>
+
+          <.flag_important
+            account={account}
+            manage?={MapSet.member?(@flag_manage_ids, account.id)}
+            readable?={MapSet.member?(@readable_ids, account.id)}
+            agent={@flag_agents[account.id]}
+            activity={@flag_activity[account.id]}
+            choices={@flag_choices}
+            pending={@flag_pending}
+          />
 
           <p class="text-xs text-subtle" data-role="mail-account-read-scope">
             <%= if account.read_enabled do %>
