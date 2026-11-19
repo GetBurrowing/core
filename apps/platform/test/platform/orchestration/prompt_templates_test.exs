@@ -1821,7 +1821,8 @@ defmodule Platform.Orchestration.PromptTemplatesTest do
           "Empty or missing subagent_id will fail validation."
         )
 
-      refute old_body == seeded.content, "precondition: the stale body differs from the current one"
+      refute old_body == seeded.content,
+             "precondition: the stale body differs from the current one"
 
       {:ok, _} =
         PromptTemplates.update_template(seeded, %{
