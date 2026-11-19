@@ -771,26 +771,73 @@ defmodule Platform.Mail.Ownership do
   def flag_important_agent_ids(_account_ids), do: %{}
 
   @doc """
+  THE definition of "a mailbox's active flag agent": a query over
+  `{account_id, %Agent{}}` for each account that is neither unassigned nor
+  archived and has a flag-important grant held by an ACTIVE agent.
+  `account_ids` is a list (malformed ids are dropped; an empty list matches
+  nothing) or `:all` (every org, for the start-up reconcile). The bindings
+  are named `:account`, `:grant` and `:agent`, so a caller narrows or
+  re-selects (`exclude(:select)` first) without restating the predicate. Reads grants, never mail.
+  """
+  @spec flag_important_agents_query([binary()] | :all) :: Ecto.Query.t()
+  def flag_important_agents_query(:all) do
+    from(a in Account,
+      as: :account,
+      join: g in AccountGrant,
+      as: :grant,
+      on: g.account_id == a.id and g.purpose == "flag_important",
+      join: ag in Agent,
+      as: :agent,
+      on: ag.id == g.principal_id and g.principal_type == "agent",
+      where: a.owner_kind != "unassigned" and is_nil(a.archived_at),
+      where: ag.status == "active",
+      select: {a.id, ag}
+    )
+  end
+
+  def flag_important_agents_query(account_ids) when is_list(account_ids) do
+    ids = Enum.filter(account_ids, &uuid?/1)
+    where(flag_important_agents_query(:all), [account: a], a.id in ^ids)
+  end
+
+  def flag_important_agents_query(_account_ids), do: flag_important_agents_query([])
+
+  @doc """
   A query selecting the ids of the accounts of `org_id` that are neither
   unassigned nor archived and have a flag-important grant held by an ACTIVE
-  agent, for a read to constrain in its query. Matches nothing for a
-  malformed id.
+  agent, for a read to constrain in its query. Built on
+  `flag_important_agents_query/1`. Matches nothing for a malformed id.
   """
   @spec flag_important_account_ids_query(any()) :: Ecto.Query.t()
   def flag_important_account_ids_query(org_id) do
     if uuid?(org_id) do
-      from(a in Account,
-        join: g in AccountGrant,
-        on: g.account_id == a.id and g.purpose == "flag_important",
-        join: ag in Agent,
-        on: ag.id == g.principal_id and g.principal_type == "agent",
-        where: a.org_id == ^org_id,
-        where: a.owner_kind != "unassigned" and is_nil(a.archived_at),
-        where: ag.status == "active",
-        select: a.id
-      )
+      flag_important_agents_query(:all)
+      |> where([account: a], a.org_id == ^org_id)
+      |> exclude(:select)
+      |> select([account: a], a.id)
     else
       none_query()
+    end
+  end
+
+  @doc """
+  The user ids holding a member grant on `account_id` when it is a SHARED
+  mailbox, else `[]`. A candidate list for callers that fan out per
+  reader; it is not the read permission (`readable_account_ids_query/2`).
+  """
+  @spec shared_member_ids(any()) :: [binary()]
+  def shared_member_ids(account_id) do
+    if uuid?(account_id) do
+      from(g in AccountGrant,
+        join: a in Account,
+        on: a.id == g.account_id and a.owner_kind == "shared",
+        where: g.account_id == ^account_id and g.principal_type == "user",
+        distinct: true,
+        select: g.principal_id
+      )
+      |> Repo.all()
+    else
+      []
     end
   end
 

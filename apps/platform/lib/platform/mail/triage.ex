@@ -23,7 +23,7 @@ defmodule Platform.Mail.Triage do
   ## Which agent
 
   The agent is chosen PER MAILBOX (task 01a1f5cc): the active agent holding
-  the account's `flag_important` grant (`agent_for_account/1`), set by the
+  the account's flag-important grant (`agent_for_account/1`), set by the
   mailbox's owner (or a shared mailbox's org admins) through
   `Ownership.set_flag_important_agent/3`. One reader's two mailboxes may
   name different agents; each email is classified, notified and drafted by
@@ -94,7 +94,12 @@ defmodule Platform.Mail.Triage do
   @spec agent_for_account(any()) :: Agent.t() | nil
   def agent_for_account(account_id) do
     if Platform.UUID.valid?(account_id) do
-      account_id |> List.wrap() |> agents_query() |> Repo.one()
+      account_id
+      |> List.wrap()
+      |> Ownership.flag_important_agents_query()
+      |> exclude(:select)
+      |> select([agent: ag], ag)
+      |> Repo.one()
     end
   end
 
@@ -104,22 +109,9 @@ defmodule Platform.Mail.Triage do
 
   defp agents_for_accounts(account_ids) do
     account_ids
-    |> agents_query()
-    |> select([ag, g], {g.account_id, ag})
+    |> Ownership.flag_important_agents_query()
     |> Repo.all()
     |> Map.new()
-  end
-
-  defp agents_query(account_ids) do
-    from(ag in Agent,
-      join: g in Platform.Mail.AccountGrant,
-      on: g.principal_type == "agent" and g.principal_id == ag.id,
-      join: a in Account,
-      on: a.id == g.account_id,
-      where: g.account_id in ^account_ids and g.purpose == "flag_important",
-      where: ag.status == "active",
-      where: a.owner_kind != "unassigned" and is_nil(a.archived_at)
-    )
   end
 
   # ── Permission ──────────────────────────────────────────────────────────
@@ -813,15 +805,9 @@ defmodule Platform.Mail.Triage do
     since = DateTime.add(now, -86_400, :second)
 
     flagged =
-      from(a in Account,
-        join: g in Platform.Mail.AccountGrant,
-        on: g.account_id == a.id and g.purpose == "flag_important",
-        join: ag in Agent,
-        on: ag.id == g.principal_id and g.principal_type == "agent",
-        where: a.owner_kind != "unassigned" and is_nil(a.archived_at),
-        where: ag.status == "active",
-        select: a.id
-      )
+      Ownership.flag_important_agents_query(:all)
+      |> exclude(:select)
+      |> select([account: a], a.id)
 
     ids =
       from(m in InboundMessage,
@@ -850,15 +836,7 @@ defmodule Platform.Mail.Triage do
         select: a.owner_user_id
       )
 
-    members =
-      from(g in Platform.Mail.AccountGrant,
-        join: a in Account,
-        on: a.id == g.account_id and a.owner_kind == "shared",
-        where: g.account_id == ^account_id and g.principal_type == "user",
-        select: g.principal_id
-      )
-
-    ids = Repo.all(owner) ++ Repo.all(members)
+    ids = Repo.all(owner) ++ Ownership.shared_member_ids(account_id)
 
     if ids == [] do
       []
