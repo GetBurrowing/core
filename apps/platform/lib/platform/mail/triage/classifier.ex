@@ -29,13 +29,17 @@ defmodule Platform.Mail.Triage.Classifier do
     * `List-Unsubscribe` present → `promo`, `rule:list_unsubscribe`;
     * `Precedence: bulk | list | junk` → `promo`, `rule:precedence_bulk`;
     * a noreply / notifications local part → `routine`, `rule:noreply_sender`;
-    * two or more `not_important` verdicts from this reader for the sender's
-      domain, the latest verdict among them → `routine`,
-      `rule:feedback_not_important`.
+    * this reader's latest verdict on the sender's domain is
+      `not_important` (one tap is enough) → `routine`,
+      `rule:feedback_not_important`. This is the deterministic ceiling on a
+      sender the reader demoted: it caps the tier at `routine` without a
+      model call, so it holds even when the provider is down.
 
   None of them applies when the reader is waiting on this sender's reply
-  (`waiting_on`), and the header rules do not apply when the reader's latest
-  verdict on the sender is `missed`: both go to the model.
+  (`waiting_on`): a reply we are waiting on still goes to the model and
+  keeps its `action` floor, so a demoted sender's awaited reply still
+  surfaces. The header rules do not apply when the reader's latest verdict
+  on the sender is `missed`: it goes to the model.
 
   ## The closed output shape
 

@@ -26,7 +26,7 @@ defmodule Platform.Mail.Triage.DrafterTest do
   import Platform.Test.MailTriageFixtures
 
   alias Platform.Mail
-  alias Platform.Mail.{Delivery, Draft, Drafts, Inbound}
+  alias Platform.Mail.{Delivery, Draft, Drafts, Inbound, Triage}
   alias Platform.Mail.Triage.{BriefingSection, Drafter, Item}
   alias Platform.Test.MailTriageStub, as: Stub
 
@@ -114,7 +114,7 @@ defmodule Platform.Mail.Triage.DrafterTest do
 
   defp seen(term), do: inspect(term, limit: :infinity, printable_limit: :infinity)
   defp drafts, do: Repo.all(Draft)
-  defp run(user), do: Drafter.run_for_reader(user, Date.utc_today())
+  defp run(user), do: Drafter.run_for_reader(user, Triage.briefing_today())
 
   # ── drafts only ──────────────────────────────────────────────────────────
 
@@ -449,7 +449,7 @@ defmodule Platform.Mail.Triage.DrafterTest do
   describe "runs from the briefing and from the subscriber" do
     test "the briefing's prepare/2 drafts what it called out", ctx do
       _inbound = inbound!(ctx.p, %{text_body: "Can you confirm?"})
-      assert BriefingSection.prepare(ctx.r.id, Date.utc_today()) >= 1
+      assert BriefingSection.prepare(ctx.r.id, Triage.briefing_today()) >= 1
       assert [%Draft{status: "draft", on_behalf_of_user_id: r_id}] = drafts()
       assert r_id == ctx.r.id
     end
@@ -551,7 +551,7 @@ defmodule Platform.Mail.Triage.DrafterTest do
       log =
         try do
           capture_log([level: :debug], fn ->
-            assert BriefingSection.prepare(ctx.r.id, Date.utc_today()) >= 1
+            assert BriefingSection.prepare(ctx.r.id, Triage.briefing_today()) >= 1
           end)
         after
           Logger.configure(level: previous)

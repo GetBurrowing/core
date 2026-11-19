@@ -31,6 +31,7 @@ defmodule Platform.Mail.Triage.SubscriberTest do
   alias Platform.Inbox
   alias Platform.Mail.{Delivery, Inbound, Ownership, Triage}
   alias Platform.Mail.Triage.{Item, Subscriber}
+  alias Platform.Memory.Insights.Disseminator
   alias Platform.Test.MailTriageStub, as: Stub
 
   defmodule Recorder do
@@ -133,7 +134,7 @@ defmodule Platform.Mail.Triage.SubscriberTest do
       assert user_id == ctx.r.id
       assert payload.title == "An email needs you"
       assert payload.body == "In #{ctx.p.name}. Open the briefing to see why."
-      assert payload.url == Inbox.briefing_url(Date.utc_today())
+      assert payload.url == Inbox.briefing_url(Triage.briefing_today())
 
       assert_eventually(fn -> length(rows_for(ctx.r)) == 1 end)
       [row] = rows_for(ctx.r)
@@ -249,6 +250,47 @@ defmodule Platform.Mail.Triage.SubscriberTest do
   end
 
   # ── sentinel ────────────────────────────────────────────────────────────
+
+  describe "the next briefing after an item classified on arrival" do
+    test "a reader whose only new item was classified on arrival still gets it in the briefing",
+         ctx do
+      inbound = waiting_reply!(ctx.p)
+      assert :ok = Triage.on_inbound(inbound.id)
+      [item] = items_for(ctx.r)
+      assert item.tier == "top"
+      assert %DateTime{} = item.notified_at
+      assert [{_, _}] = notifs()
+
+      now = DateTime.utc_now()
+      date = Triage.briefing_date(now)
+      assert Triage.briefing_date(item.inserted_at) == date
+      refute Triage.briefing_delivered?(ctx.r.id, date)
+
+      # The next briefing run finds nothing NEW to classify for this reader
+      # (the item already exists), and must still deliver it.
+      {:ok, _} = Disseminator.run(now: now, notifications_module: Recorder)
+
+      assert Triage.briefing_delivered?(ctx.r.id, date)
+      briefing = Platform.Memory.Insights.Briefings.for_user_on(ctx.r.id, date)
+      assert %Platform.Memory.Briefing{} = briefing
+
+      assert [_] =
+               Repo.all(
+                 from(i in Inbox.Item,
+                   where:
+                     i.user_id == ^ctx.r.id and i.kind == "briefing" and
+                       i.source_id == ^briefing.id
+                 )
+               )
+
+      assert Enum.map(Triage.section_view(ctx.r, date).called_out, & &1.id) == [item.id]
+      assert Enum.any?(notifs(), fn {user_id, _} -> user_id == ctx.r.id end)
+
+      # Delivered once: a second run pushes this reader nothing.
+      {:ok, _} = Disseminator.run(now: now, notifications_module: Recorder)
+      refute Enum.any?(notifs(), fn {user_id, _} -> user_id == ctx.r.id end)
+    end
+  end
 
   describe "the notification carries no mail content" do
     setup do

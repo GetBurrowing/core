@@ -56,7 +56,7 @@ defmodule PlatformWeb.Components.MailPrioritySection do
      socket
      |> assign(:id, assigns.id)
      |> assign(:user_id, assigns[:user_id])
-     |> assign(:date, assigns[:date] || Date.utc_today())
+     |> assign(:date, assigns[:date] || Triage.briefing_today())
      |> reload()}
   end
 

@@ -69,7 +69,7 @@ defmodule Platform.Mail.TriageTest do
 
     Triage.run_for_reader(
       user,
-      Date.utc_today(),
+      Triage.briefing_today(),
       Keyword.merge(
         [since: DateTime.add(now, -3600, :second), until: DateTime.add(now, 3600, :second)],
         opts
@@ -139,10 +139,10 @@ defmodule Platform.Mail.TriageTest do
 
     test "called_out hides an item at once when the agent's grant is revoked", ctx do
       assert {:ok, %Item{tier: "action"}} = Triage.classify_for_reader(ctx.a, ctx.in_s)
-      assert [%Item{}] = Triage.called_out(ctx.a, Date.utc_today())
+      assert [%Item{}] = Triage.called_out(ctx.a, Triage.briefing_today())
 
       {:ok, _} = Platform.Mail.Ownership.revoke(ctx.a, ctx.shared, {:agent, ctx.agent.id})
-      assert Triage.called_out(ctx.a, Date.utc_today()) == []
+      assert Triage.called_out(ctx.a, Triage.briefing_today()) == []
     end
 
     test "no triage agent: nothing is classified and the run says so", ctx do
@@ -270,6 +270,107 @@ defmodule Platform.Mail.TriageTest do
       assert stub_calls() == []
     end
 
+    test "ONE not_important tap makes the next email from that domain routine, not called out",
+         ctx do
+      Stub.reply!(Stub.json(verdict(%{"tier" => "action"})))
+      first = inbound!(ctx.shared, %{from_address: "billing@vendor.test"})
+      assert {:ok, %Item{tier: "action"} = item} = Triage.classify_for_reader(ctx.a, first)
+      _ = stub_calls()
+
+      assert {:ok, %Feedback{verdict: "not_important"}} =
+               Triage.record_feedback(ctx.a, item, "not_important")
+
+      # The model would call it action again; the ceiling never asks it.
+      Stub.reply!(Stub.json(verdict(%{"tier" => "action"})))
+      next = inbound!(ctx.shared, %{from_address: "accounts@vendor.test"})
+
+      assert {:ok, %Item{tier: "routine", classifier: "rule:feedback_not_important"} = demoted} =
+               Triage.classify_for_reader(ctx.a, next)
+
+      assert Enum.any?(demoted.signals, &(&1["kind"] == "feedback_not_important"))
+      assert stub_calls() == []
+      refute Enum.any?(Triage.called_out(ctx.a, Triage.briefing_today()), &(&1.id == demoted.id))
+    end
+
+    test "after one not_important tap, a reply we are waiting on from that domain is still called out",
+         ctx do
+      first = inbound!(ctx.shared, %{from_address: "billing@vendor.test"})
+      {:ok, item} = Triage.classify_for_reader(ctx.a, first)
+      _ = stub_calls()
+      assert {:ok, _} = Triage.record_feedback(ctx.a, item, "not_important")
+
+      # We wrote to counsel@ and have heard nothing from that address since.
+      delivery!(ctx.shared, "counsel@vendor.test")
+      Stub.reply!(Stub.json(verdict(%{"tier" => "routine", "needs" => "none"})))
+      reply = inbound!(ctx.shared, %{from_address: "counsel@vendor.test"})
+
+      assert {:ok, %Item{tier: "action"} = surfaced} = Triage.classify_for_reader(ctx.a, reply)
+      assert Enum.any?(surfaced.signals, &(&1["kind"] == "waiting_on"))
+      assert Enum.any?(surfaced.signals, &(&1["kind"] == "feedback_not_important"))
+      assert Enum.any?(Triage.called_out(ctx.a, Triage.briefing_today()), &(&1.id == surfaced.id))
+
+      [[_system, user]] = stub_calls()
+      assert user.content =~ ~s("reader_said_sender_not_important":true)
+      assert user.content =~ ~s("waiting_on_their_reply":true)
+    end
+
+    test "not_important followed by missed calls the next email out", ctx do
+      Stub.reply!(Stub.json(verdict(%{"tier" => "routine", "needs" => "none"})))
+      first = inbound!(ctx.shared, %{from_address: "billing@vendor.test"})
+      {:ok, item} = Triage.classify_for_reader(ctx.a, first)
+      _ = stub_calls()
+
+      assert {:ok, _} = Triage.record_feedback(ctx.a, item, "not_important")
+      second = inbound!(ctx.shared, %{from_address: "billing@vendor.test"})
+
+      assert {:ok, %Item{tier: "routine"} = second_item} =
+               Triage.classify_for_reader(ctx.a, second)
+
+      assert {:ok, %Feedback{verdict: "missed"}} =
+               Triage.record_feedback(ctx.a, second_item, "missed")
+
+      Stub.reply!(Stub.json(verdict(%{"tier" => "routine", "needs" => "none"})))
+      third = inbound!(ctx.shared, %{from_address: "billing@vendor.test"})
+
+      assert {:ok, %Item{tier: "action", classifier: "agent:" <> _} = third_item} =
+               Triage.classify_for_reader(ctx.a, third)
+
+      assert Enum.any?(
+               Triage.called_out(ctx.a, Triage.briefing_today()),
+               &(&1.id == third_item.id)
+             )
+
+      [[_system, user]] = stub_calls()
+      assert user.content =~ ~s("reader_said_sender_not_important":false)
+      assert user.content =~ ~s("reader_said_earlier_email_needed_them":true)
+    end
+
+    test "one reader's not_important leaves another reader of the same mailbox unaffected", ctx do
+      {:ok, _} = Platform.Mail.Ownership.grant(ctx.a, ctx.shared, {:user, ctx.b.id})
+      assert ctx.shared.id in Triage.eligible_account_ids(ctx.b, ctx.org_id, ctx.agent)
+
+      Stub.reply!(Stub.json(verdict(%{"tier" => "action"})))
+      first = inbound!(ctx.shared, %{from_address: "billing@vendor.test"})
+      {:ok, a_item} = Triage.classify_for_reader(ctx.a, first)
+      _ = stub_calls()
+      assert {:ok, _} = Triage.record_feedback(ctx.a, a_item, "not_important")
+
+      Stub.reply!(Stub.json(verdict(%{"tier" => "action"})))
+      next = inbound!(ctx.shared, %{from_address: "accounts@vendor.test"})
+
+      assert {:ok, %Item{tier: "action", classifier: "agent:" <> _} = b_item} =
+               Triage.classify_for_reader(ctx.b, next)
+
+      refute Enum.any?(b_item.signals, &(&1["kind"] == "feedback_not_important"))
+      assert Enum.any?(Triage.called_out(ctx.b, Triage.briefing_today()), &(&1.id == b_item.id))
+      [[_system, user]] = stub_calls()
+      assert user.content =~ ~s("reader_said_sender_not_important":false)
+
+      # Positive control: the same email IS demoted for the reader who tapped.
+      assert {:ok, %Item{tier: "routine", classifier: "rule:feedback_not_important"}} =
+               Triage.classify_for_reader(ctx.a, next)
+    end
+
     test "a missed verdict promotes the sender to at least action and reaches the model", ctx do
       Stub.reply!(Stub.json(verdict(%{"tier" => "routine", "needs" => "none"})))
       first = inbound!(ctx.shared, %{from_address: "ops@client.test"})
@@ -360,7 +461,7 @@ defmodule Platform.Mail.TriageTest do
         try do
           capture_log([level: :debug], fn ->
             assert {:ok, %{classified: 1}} = run(ctx.a)
-            assert [%Item{} = item] = Triage.called_out(ctx.a, Date.utc_today())
+            assert [%Item{} = item] = Triage.called_out(ctx.a, Triage.briefing_today())
             assert {:ok, _} = Triage.record_feedback(ctx.a, item, "not_important")
           end)
         after

@@ -46,16 +46,23 @@ defmodule Platform.Mail.Triage.BriefingSection do
   most #{@max_model_calls} model calls per run (the rest wait for the next
   run), then hands the called-out items to `Platform.Mail.Triage.Drafter`
   (a draft reply or a plan each, at most its daily cap; nothing is sent).
-  Returns the number of NEW called-out (`top` / `action`) items, so a
-  briefing is created when one lands. Idempotent per reader and date: a
-  second run classifies nothing and returns 0. 0 with no triage agent.
+  Returns the number of called-out (`top` / `action`) items the reader has
+  not had a briefing for: before this date's briefing is delivered
+  (`Triage.briefing_delivered?/2`), every called-out item of the date,
+  including those classified on arrival between briefings; after it, only
+  the NEW ones. So a briefing is created when one lands. Idempotent per
+  reader and date once delivered: a second run classifies nothing and
+  returns 0. 0 with no triage agent.
+
+  `date` is a briefing date (`Triage.briefing_date/1`): the window is that
+  local day (`Triage.day_bounds/1`), not the UTC one.
   """
   @spec prepare(binary(), Date.t()) :: non_neg_integer()
   def prepare(user_id, %Date{} = date) do
     with %{id: _} = user <- fetch_user(user_id),
          %Agent{} = agent <- Triage.triage_agent() do
       before = length(Triage.called_out(user, date, agent: agent))
-      {:ok, start} = DateTime.new(date, ~T[00:00:00], "Etc/UTC")
+      {start, _finish} = Triage.day_bounds(date)
 
       {:ok, _summary} =
         Triage.run_for_reader(user, date,
@@ -72,7 +79,14 @@ defmodule Platform.Mail.Triage.BriefingSection do
           since: DateTime.add(start, -86_400, :second)
         )
 
-      max(length(Triage.called_out(user, date, agent: agent)) - before, 0)
+      after_run = length(Triage.called_out(user, date, agent: agent))
+
+      # An item classified on arrival (the Subscriber, between briefings)
+      # was already counted in `before`; until this date's briefing is
+      # delivered it is still news for the reader, so it counts.
+      if Triage.briefing_delivered?(user.id, date),
+        do: max(after_run - before, 0),
+        else: after_run
     else
       _ -> 0
     end

@@ -64,7 +64,7 @@ defmodule PlatformWeb.Components.MailPriorityDraftsTest do
       agent: agent,
       shared: shared,
       a2: a2,
-      date: Date.utc_today()
+      date: Platform.Mail.Triage.briefing_today()
     }
   end
 

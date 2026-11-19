@@ -129,9 +129,9 @@ defmodule Platform.Mail.Triage.Drafter do
 
     case Keyword.get_lazy(opts, :agent, &Triage.triage_agent/0) do
       %Agent{} = agent ->
-        {:ok, start} = DateTime.new(date, ~T[00:00:00], "Etc/UTC")
+        {start, finish} = Platform.Mail.Triage.day_bounds(date)
         from = Keyword.get(opts, :since, start)
-        to = Keyword.get(opts, :until, DateTime.add(start, 86_400, :second))
+        to = Keyword.get(opts, :until, finish)
         opts = Keyword.put(opts, :agent, agent)
 
         summary =

@@ -277,8 +277,9 @@ defmodule Platform.Mail.Triage do
   # ── Run ─────────────────────────────────────────────────────────────────
 
   @doc """
-  Triage every eligible email received on `date` (UTC) that has no item
-  for `user` yet, across every org the reader is an internal member of.
+  Triage every eligible email received on briefing date `date`
+  (`day_bounds/1`) that has no item for `user` yet, across every org the
+  reader is an internal member of.
   Backfilled imports (`ingest_source == "backfill"`) are skipped. At most
   `:max_model_calls` (default #{@default_max_model_calls}) provider calls
   per run; the rest wait for the next run.
@@ -353,9 +354,72 @@ defmodule Platform.Mail.Triage do
   end
 
   defp window(date, opts) do
-    {:ok, start} = DateTime.new(date, ~T[00:00:00], "Etc/UTC")
-    finish = DateTime.add(start, 86_400, :second)
+    {start, finish} = day_bounds(date)
     {Keyword.get(opts, :since, start), Keyword.get(opts, :until, finish)}
+  end
+
+  # ── The briefing day ────────────────────────────────────────────────────
+
+  @doc """
+  The briefing date an instant belongs to: the calendar date, in the zone
+  the daily briefing's `digest_date` is written in
+  (`Platform.Memory.Insights.Disseminator.local_date/1`). Items are
+  bucketed by THIS date, never the UTC one: an email at 20:00 local is in
+  that evening's briefing, not in the next UTC day's (which has no
+  briefing row yet, so its link would render nothing).
+  """
+  @spec briefing_date(DateTime.t() | NaiveDateTime.t()) :: Date.t()
+  def briefing_date(%DateTime{} = at), do: Platform.Memory.Insights.Disseminator.local_date(at)
+
+  def briefing_date(%NaiveDateTime{} = at),
+    do: briefing_date(DateTime.from_naive!(at, "Etc/UTC"))
+
+  @doc "Today's briefing date (`briefing_date/1` of now)."
+  @spec briefing_today() :: Date.t()
+  def briefing_today, do: briefing_date(DateTime.utc_now())
+
+  @doc """
+  `{start, finish}` (UTC DateTimes, finish exclusive) of briefing date
+  `date`: local midnight to the next local midnight in the briefing zone,
+  so a DST day is 23 or 25 hours long.
+  """
+  @spec day_bounds(Date.t()) :: {DateTime.t(), DateTime.t()}
+  def day_bounds(%Date{} = date) do
+    zone = Platform.Memory.Insights.Disseminator.timezone()
+    {local_midnight(date, zone), local_midnight(Date.add(date, 1), zone)}
+  end
+
+  defp local_midnight(date, zone) do
+    local =
+      case DateTime.new(date, ~T[00:00:00], zone) do
+        {:ok, at} -> at
+        {:ambiguous, first, _second} -> first
+        {:gap, _before, just_after} -> just_after
+        {:error, _} -> DateTime.new!(date, ~T[00:00:00], "Etc/UTC")
+      end
+
+    DateTime.shift_zone!(local, "Etc/UTC")
+  end
+
+  @doc """
+  Has `user_id`'s briefing for `date` been delivered: a `memory_briefings`
+  row for the date AND its Inbox `briefing` row? A row created only so a
+  between-briefings link renders (`notify_top/2`) is not a delivery.
+  """
+  @spec briefing_delivered?(binary(), Date.t()) :: boolean()
+  def briefing_delivered?(user_id, %Date{} = date) when is_binary(user_id) do
+    case Platform.Memory.Insights.Briefings.for_user_on(user_id, date) do
+      %Platform.Memory.Briefing{id: briefing_id} ->
+        from(i in Platform.Inbox.Item,
+          where:
+            i.user_id == ^user_id and i.source_type == "briefing" and
+              i.source_id == ^briefing_id
+        )
+        |> Repo.exists?()
+
+      _ ->
+        false
+    end
   end
 
   defp candidates(%{id: user_id} = user, org_id, agent, from, to) do
@@ -387,9 +451,10 @@ defmodule Platform.Mail.Triage do
 
   @doc """
   The called-out items (`top` and `action`) created for `user` on `date`
-  (UTC), most important first, then newest. Only items whose mailbox is
-  STILL eligible now (readable by the reader and granted to the triage
-  agent): a revoked grant hides its items at once. `[]` with no triage
+  (the briefing day, `day_bounds/1`), most important first, then newest.
+  Only items whose mailbox is STILL eligible now (readable by the reader
+  and granted to the triage agent): a revoked grant hides its items at
+  once. `[]` with no triage
   agent. Preloads `:inbound_message` and `:account`.
 
   Options: `:agent`, `:tiers` (default `["top", "action"]`).
@@ -848,7 +913,11 @@ defmodule Platform.Mail.Triage do
       Repo.one(from(a in Account, where: a.id == ^item.account_id, select: a.name)) ||
         "your mailbox"
 
-    url = Platform.Inbox.briefing_url(DateTime.to_date(item.inserted_at || now))
+    # The item's own briefing date, and a briefing row for it, so the link
+    # renders the item even when no briefing was delivered that day yet.
+    date = briefing_date(item.inserted_at || now)
+    ensure_briefing_row(user.id, date)
+    url = Platform.Inbox.briefing_url(date)
     title = "An email needs you"
     body = "In #{mailbox}. Open the briefing to see why."
 
@@ -875,6 +944,14 @@ defmodule Platform.Mail.Triage do
     )
 
     {:ok, if(pushed?, do: :notified, else: :row_only)}
+  end
+
+  defp ensure_briefing_row(user_id, date) do
+    %Platform.Memory.Briefing{}
+    |> Platform.Memory.Briefing.changeset(%{user_id: user_id, digest_date: date, items: %{}})
+    |> Repo.insert(on_conflict: :nothing)
+
+    :ok
   end
 
   defp push(user_id, payload) do

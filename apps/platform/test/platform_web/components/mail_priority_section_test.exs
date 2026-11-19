@@ -85,7 +85,7 @@ defmodule PlatformWeb.Components.MailPrioritySectionTest do
       c_promo: c_promo,
       b_item: b_item,
       a2_item: a2_item,
-      date: Date.utc_today()
+      date: Platform.Mail.Triage.briefing_today()
     }
   end
 
@@ -292,11 +292,91 @@ defmodule PlatformWeb.Components.MailPrioritySectionTest do
     :ok = Platform.Test.MailTriageStub.install!(Platform.Test.MailTriageStub.json(verdict()))
     fresh = inbound!(ctx.shared, %{subject: "Fresh #{ctx.n}"})
 
-    assert BriefingSection.prepare(ctx.a.id, ctx.date) == 1
+    # Before the date's briefing is delivered, every called-out item of the
+    # date counts: the fresh one AND the setup's item, which was classified
+    # before this run (as on arrival).
+    assert BriefingSection.prepare(ctx.a.id, ctx.date) == 2
     assert Repo.get_by(Item, user_id: ctx.a.id, inbound_message_id: fresh.id)
-    # Idempotent per reader and date.
+
+    briefing =
+      Repo.insert!(%Briefing{user_id: ctx.a.id, digest_date: ctx.date, items: %{}})
+
+    {:ok, _, :created} = Platform.Inbox.upsert_briefing_item(briefing, %{total: 2})
+
+    # Once delivered, only NEW called-out items count.
+    later = inbound!(ctx.shared, %{subject: "Later #{ctx.n}"})
+    assert BriefingSection.prepare(ctx.a.id, ctx.date) == 1
+    assert Repo.get_by(Item, user_id: ctx.a.id, inbound_message_id: later.id)
+    # Idempotent per reader and date once delivered.
     assert BriefingSection.prepare(ctx.a.id, ctx.date) == 0
     assert BriefingSection.prepare("not-a-uuid", ctx.date) == 0
+  end
+
+  # ── the briefing day (an evening email across the UTC midnight) ───────
+
+  defmodule NoPush do
+    @moduledoc "A `:notifications_module` that sends nothing."
+    def fan_out_to_user(_user_id, _payload, _opts \\ []), do: :ok
+  end
+
+  describe "the briefing day" do
+    # 02:00Z on 19 November is 20:00 CST on the 18th in the briefing zone.
+    @evening ~U[2026-11-19 02:00:00.000000Z]
+    @evening_date ~D[2026-11-18]
+
+    setup ctx do
+      inbound =
+        inbound!(ctx.shared, %{
+          from_address: "late-#{ctx.n}@otherco.test",
+          subject: "Evening #{ctx.n}"
+        })
+
+      item =
+        item!(ctx.a, inbound, %{tier: "top", why: "EVENING-WHY-#{ctx.n}", inserted_at: @evening})
+
+      %{evening_item: item}
+    end
+
+    test "an item classified at 02:00Z is in the briefing of the local evening it arrived in",
+         ctx do
+      assert Platform.Mail.Triage.briefing_date(@evening) == @evening_date
+
+      ids = fn date -> Enum.map(Platform.Mail.Triage.called_out(ctx.a, date), & &1.id) end
+      assert ctx.evening_item.id in ids.(@evening_date)
+      refute ctx.evening_item.id in ids.(Date.add(@evening_date, 1))
+
+      {_lv, html} = open_briefing(ctx.conn, ctx.a, @evening_date)
+      assert html =~ "EVENING-WHY-#{ctx.n}"
+      {_lv, next_html} = open_briefing(ctx.conn, ctx.a, Date.add(@evening_date, 1))
+      refute next_html =~ "EVENING-WHY-#{ctx.n}"
+    end
+
+    test "its Inbox link opens a briefing date that renders the item", ctx do
+      Application.put_env(:platform, :notifications_module, NoPush)
+      on_exit(fn -> Application.delete_env(:platform, :notifications_module) end)
+
+      assert {:ok, _} =
+               Platform.Mail.Triage.notify_top(ctx.evening_item,
+                 agent: ctx.agent,
+                 now: DateTime.add(@evening, 5, :second)
+               )
+
+      row =
+        Repo.one!(
+          from(i in Platform.Inbox.Item,
+            where: i.user_id == ^ctx.a.id and i.source_id == ^ctx.evening_item.id
+          )
+        )
+
+      assert row.url == "/inbox/briefing/#{@evening_date}"
+
+      # No briefing was delivered that evening: the link alone must render.
+      conn = init_test_session(ctx.conn, current_user_id: ctx.a.id)
+      {:ok, _lv, html} = live(conn, row.url)
+      refute html =~ "There&#39;s no briefing for this day"
+      refute html =~ "no briefing for this day"
+      assert html =~ "EVENING-WHY-#{ctx.n}"
+    end
   end
 
   describe "Email message pane" do

@@ -160,7 +160,8 @@ defmodule Platform.Mail.Triage.Context do
       "reader_open_tasks_naming_them" => length(ctx.open_task_ids),
       "reader_meetings_with_them_last_14_days" => length(ctx.meeting_ids),
       "relation" => ctx.person && ctx.person.relation,
-      "reader_said_earlier_email_needed_them" => missed?(ctx)
+      "reader_said_earlier_email_needed_them" => missed?(ctx),
+      "reader_said_sender_not_important" => demoted?(ctx)
     }
   end
 
@@ -170,11 +171,14 @@ defmodule Platform.Mail.Triage.Context do
   def missed?(_ctx), do: false
 
   @doc """
-  Has this reader said the sender's mail is not important at least twice,
-  with nothing more recent saying otherwise?
+  Is this reader's most recent verdict on the sender's domain
+  `not_important`? One tap is enough: a reader who said "not important"
+  once expects the next email from that sender to stay out of the call-out
+  list. A later `missed` verdict makes `latest` "missed" and lifts it.
+  Per reader: the counts come from this reader's feedback rows only.
   """
   @spec demoted?(t()) :: boolean()
-  def demoted?(%{feedback: %{not_important: n, latest: "not_important"}}) when n >= 2, do: true
+  def demoted?(%{feedback: %{not_important: n, latest: "not_important"}}) when n >= 1, do: true
   def demoted?(_ctx), do: false
 
   @doc """

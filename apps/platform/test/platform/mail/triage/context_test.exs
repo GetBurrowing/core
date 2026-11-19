@@ -166,14 +166,16 @@ defmodule Platform.Mail.Triage.ContextTest do
       inbound = inbound!(ctx.box, %{from_address: "news@vendor.test"})
       {:ok, _} = Triage.record_feedback(ctx.reader, inbound, "not_important")
 
-      assert Context.build(ctx.reader, inbound, roster: []).feedback ==
-               %{not_important: 1, missed: 0, latest: "not_important"}
+      built = Context.build(ctx.reader, inbound, roster: [])
+      assert built.feedback == %{not_important: 1, missed: 0, latest: "not_important"}
+      assert Context.model_facts(built)["reader_said_sender_not_important"] == true
 
       other_box = account!(ctx.reader, ctx.org_id) |> then(&personal!(ctx.reader, &1, ctx.other))
       other_in = inbound!(other_box, %{from_address: "news@vendor.test"})
 
-      assert Context.build(ctx.other, other_in, roster: []).feedback ==
-               %{not_important: 0, missed: 0, latest: nil}
+      other_built = Context.build(ctx.other, other_in, roster: [])
+      assert other_built.feedback == %{not_important: 0, missed: 0, latest: nil}
+      assert Context.model_facts(other_built)["reader_said_sender_not_important"] == false
     end
 
     test "signals and model facts carry no text", ctx do

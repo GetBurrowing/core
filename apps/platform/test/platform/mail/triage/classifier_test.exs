@@ -135,14 +135,20 @@ defmodule Platform.Mail.Triage.ClassifierTest do
       assert :model = Classifier.prefilter(bulk, demoted)
     end
 
-    test "feedback: two not_important demote; a later missed wins" do
+    test "feedback: one not_important demotes; a later missed wins" do
       demoted = ctx(%{feedback: %{not_important: 2, missed: 0, latest: "not_important"}})
 
       assert {:rule, "routine", "feedback_not_important"} =
                Classifier.prefilter(inbound(), demoted)
 
       once = ctx(%{feedback: %{not_important: 1, missed: 0, latest: "not_important"}})
-      assert :model = Classifier.prefilter(inbound(), once)
+
+      assert {:rule, "routine", "feedback_not_important"} =
+               Classifier.prefilter(inbound(), once)
+
+      # A not_important that a later missed overrode demotes nothing.
+      overridden = ctx(%{feedback: %{not_important: 1, missed: 1, latest: "missed"}})
+      assert :model = Classifier.prefilter(inbound(), overridden)
 
       missed = ctx(%{feedback: %{not_important: 2, missed: 1, latest: "missed"}})
       bulk = inbound(%{raw: raw(["List-Unsubscribe: <mailto:x@y>"])})
