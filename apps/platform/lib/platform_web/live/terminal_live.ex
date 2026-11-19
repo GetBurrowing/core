@@ -22,6 +22,17 @@ defmodule PlatformWeb.TerminalLive do
     * `terminal_mode` `%{mode}`: the mode core confirmed. The page never
       shows "Can type" on a click alone.
 
+  ## Hosted agents
+
+  An install-managed (hosted) agent's terminal is always on: the agent host
+  starts it with the agent (task 01a1f4c6). Its owner has no shell to run
+  `burrow claude --remote-terminal` in, so for a hosted runtime the flag-off and
+  offline panels say what to do in the app instead, with a link to the agent's
+  page, and name the agent host's observed state when there is one. `hosted?`
+  is assigned only when `offer?` is true, so a non-owner learns nothing from it.
+  This is copy only: who may open the terminal is still the channel's owner
+  check, with no hosted exception.
+
   ## Entry gate
 
   The mode switch and the key row are drawn only when
@@ -31,6 +42,8 @@ defmodule PlatformWeb.TerminalLive do
   use PlatformWeb, :live_view
 
   alias Platform.Agents.Agent
+  alias Platform.Agents.NativeAgents
+  alias Platform.AgentHost.State, as: HostState
   alias Platform.Audit.Event
   alias Platform.Federation
   alias Platform.Repo
@@ -48,6 +61,7 @@ defmodule PlatformWeb.TerminalLive do
     runtime = Federation.get_runtime_by_runtime_id(runtime_id)
     offer? = user != nil and TerminalPanel.offer?(runtime, user.id)
     agent = offer? && Repo.get_by(Agent, runtime_id: runtime.id)
+    hosted? = offer? and NativeAgents.managed_runtime?(runtime)
 
     {:ok,
      socket
@@ -57,6 +71,9 @@ defmodule PlatformWeb.TerminalLive do
      |> assign(:offer?, offer?)
      |> assign(:agent_name, (agent && agent.name) || "Agent")
      |> assign(:agent_slug, agent && agent.slug)
+     |> assign(:agent_id, agent && agent.id)
+     |> assign(:hosted?, hosted?)
+     |> assign(:observed, hosted? && observed_state(agent))
      |> assign(:state, :connecting)
      |> assign(:ever_connected?, false)
      |> assign(:reason, nil)
@@ -64,6 +81,17 @@ defmodule PlatformWeb.TerminalLive do
      |> assign(:folder, nil)
      |> assign(:first_use?, offer? and first_use?(user))}
   end
+
+  # The agent host's last report for this agent, or nil. Only ever read for a
+  # hosted agent's owner.
+  defp observed_state(%Agent{id: id}) when is_binary(id) do
+    case HostState.get(id) do
+      %{state: state} -> state
+      _ -> nil
+    end
+  end
+
+  defp observed_state(_), do: nil
 
   defp first_use?(user) do
     not Repo.exists?(
@@ -90,7 +118,8 @@ defmodule PlatformWeb.TerminalLive do
      socket
      |> assign(:state, new_state)
      |> assign(:reason, reason)
-     |> assign(:ever_connected?, socket.assigns.ever_connected? or new_state == :connected)}
+     |> assign(:ever_connected?, socket.assigns.ever_connected? or new_state == :connected)
+     |> refresh_observed()}
   end
 
   def handle_event("terminal_cwd", %{"cwd" => cwd}, socket)
@@ -117,6 +146,12 @@ defmodule PlatformWeb.TerminalLive do
   end
 
   def handle_event(_event, _params, socket), do: {:noreply, socket}
+
+  defp refresh_observed(%{assigns: %{hosted?: true, agent_id: id}} = socket)
+       when is_binary(id),
+       do: assign(socket, :observed, observed_state(%Agent{id: id}))
+
+  defp refresh_observed(socket), do: socket
 
   # A session that was live and then lost its machine keeps its output on screen,
   # dimmed under the "Reconnecting" banner. The "isn't connected" panel is only
@@ -211,15 +246,37 @@ defmodule PlatformWeb.TerminalLive do
           </div>
 
           <div
-            :if={@shown == :offline}
+            :if={@shown == :offline and not @hosted?}
             id="terminal-offline"
             class="flex-1 p-6 text-sm text-base-content"
           >
             Your machine isn't connected right now. It will reconnect when burrow-cli is back.
           </div>
 
+          <%!-- A hosted agent's terminal is either not reachable at all (offline:
+               no terminal host and no presence) or reachable but not yet served
+               (flag_off). Both get this one panel, naming the observed state. --%>
           <div
-            :if={@shown == :refused and @reason == "flag_off"}
+            :if={@hosted? and hosted_unavailable?(@shown, @reason)}
+            id="terminal-hosted-unavailable"
+            data-reason={to_string(@shown)}
+            data-observed-state={@observed && to_string(@observed)}
+            class="flex-1 p-6 text-sm text-base-content"
+          >
+            <p :if={observed_line(@observed)} id="terminal-hosted-state" class="font-semibold">
+              {observed_line(@observed)}
+            </p>
+            <p :if={@shown == :offline} class="mt-1">
+              This agent isn't running right now. Start it from its page.
+            </p>
+            <p :if={@shown != :offline} class="mt-1">
+              The terminal starts with this agent and isn't up yet. If the agent is stopped or waiting for its account to be connected, start it or finish connecting it on its page, then open the terminal again.
+            </p>
+            <.agent_page_link slug={@agent_slug} name={@agent_name} />
+          </div>
+
+          <div
+            :if={@shown == :refused and @reason == "flag_off" and not @hosted?}
             id="terminal-flag-off"
             class="flex-1 p-6 text-sm text-base-content"
           >
@@ -274,6 +331,33 @@ defmodule PlatformWeb.TerminalLive do
     </Layouts.app>
     """
   end
+
+  attr(:slug, :string, default: nil)
+  attr(:name, :string, required: true)
+
+  defp agent_page_link(assigns) do
+    ~H"""
+    <.link
+      id="terminal-agent-page"
+      navigate={if @slug, do: "/control/" <> @slug, else: "/control"}
+      class="mt-3 inline-block rounded-md border border-edge px-3 py-1.5 text-sm text-base-content lg:hover:bg-base-200"
+    >
+      Go to {@name}
+    </.link>
+    """
+  end
+
+  defp hosted_unavailable?(:offline, _reason), do: true
+  defp hosted_unavailable?(:refused, "flag_off"), do: true
+  defp hosted_unavailable?(_shown, _reason), do: false
+
+  # The agent host's observed state, in plain words. `running` and no report
+  # say nothing: the general line below already covers them.
+  defp observed_line(:stopped), do: "This agent is stopped."
+  defp observed_line(:needs_login), do: "This agent is waiting for its account to be connected."
+  defp observed_line(:crashed), do: "This agent stopped unexpectedly."
+  defp observed_line(:starting), do: "This agent is starting."
+  defp observed_line(_), do: nil
 
   attr(:mode, :string, required: true)
 

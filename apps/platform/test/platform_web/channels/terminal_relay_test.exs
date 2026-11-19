@@ -161,6 +161,89 @@ defmodule PlatformWeb.TerminalRelayTest do
     assert rows(ctx.owner, "terminal.session.opened") == []
   end
 
+  # Task 01a1f4c6 stage 3. A hosted (install-managed) agent's terminal is always
+  # on, but who may open it is the same owner rule: no hosted exception.
+  # Mutant: make `RemoteAccess.allowed_kind?/1` in TerminalViewChannel.join
+  # always pass -> the non-owner and post-transfer tests below go red.
+  describe "a hosted agent's terminal" do
+    setup ctx do
+      runtime = Federation.get_runtime_by_runtime_id(ctx.runtime_id)
+
+      {:ok, runtime} =
+        runtime
+        |> Platform.Agents.AgentRuntime.changeset(%{
+          managed_by: "install",
+          harness: "claude_code"
+        })
+        |> Repo.update()
+
+      assert Platform.Agents.NativeAgents.managed_runtime?(runtime)
+      %{agent: Repo.get_by!(Agent, runtime_id: runtime.id)}
+    end
+
+    test "the owner joins ok", ctx do
+      online!(ctx)
+      join_cli(ctx)
+
+      assert {:ok, %{mode: "ro"}, _view} = join_view(ctx, ctx.owner)
+      assert types(ctx.owner) == ["terminal.session.opened"]
+    end
+
+    test "a non-owner is forbidden: one refused row, zero opened rows", ctx do
+      online!(ctx)
+      join_cli(ctx)
+
+      assert {:error, %{reason: "forbidden"}} = join_view(ctx, ctx.other)
+      assert types(ctx.other) == ["terminal.session.refused"]
+      assert [%{metadata: %{"reason" => "forbidden"}}] = rows(ctx.other)
+      assert rows(ctx.other, "terminal.session.opened") == []
+    end
+
+    # A hosted Codex agent waiting on its device login: the terminal host is
+    # joined, the runtime has no presence. The owner gets in; nobody else does.
+    test "offline with its terminal host joined: owner ok, non-owner forbidden with one refused row",
+         ctx do
+      join_cli(ctx)
+      refute RuntimePresence.online?(ctx.runtime_id)
+
+      assert {:ok, %{mode: "ro"}, _view} = join_view(ctx, ctx.owner)
+      assert types(ctx.owner) == ["terminal.session.opened"]
+
+      assert {:error, %{reason: "forbidden"}} = join_view(ctx, ctx.other)
+      assert types(ctx.other) == ["terminal.session.refused"]
+      assert [%{metadata: %{"reason" => "forbidden"}}] = rows(ctx.other)
+      assert rows(ctx.other, "terminal.session.opened") == []
+    end
+
+    test "after transfer_owner the previous owner is forbidden and the new owner is ok", ctx do
+      online!(ctx)
+      cli = join_cli(ctx)
+      {:ok, _, view} = join_view(ctx, ctx.owner)
+      _ = handshake(cli, view)
+      ref = Process.monitor(view.channel_pid)
+
+      assert {:ok, _} =
+               Platform.Agents.NativeAgents.transfer_owner(ctx.owner, ctx.agent, ctx.other.id,
+                 notify: fn _, _ -> :ok end
+               )
+
+      # The open session closes on the real transfer's broadcast.
+      assert %{"reason" => "owner_changed"} = assert_view_push("closed")
+      assert_receive {:DOWN, ^ref, :process, _, _}, 1_000
+
+      assert {:error, %{reason: "forbidden"}} = join_view(ctx, ctx.owner)
+
+      assert types(ctx.owner) == [
+               "terminal.session.opened",
+               "terminal.session.closed",
+               "terminal.session.refused"
+             ]
+
+      assert {:ok, %{mode: "ro"}, _} = join_view(ctx, ctx.other)
+      assert types(ctx.other) == ["terminal.session.opened"]
+    end
+  end
+
   test "an unknown runtime is forbidden too", ctx do
     {:error, %{reason: "forbidden"}} =
       subscribe_and_join(view_socket(ctx.owner), "terminal_view:no-such-runtime", %{})
@@ -175,15 +258,23 @@ defmodule PlatformWeb.TerminalRelayTest do
     assert [%{metadata: %{"reason" => "flag_off"}}] = rows(ctx.owner)
   end
 
-  test "offline: runtime not online -> offline, even with a terminal CLI joined", ctx do
+  test "offline: runtime not online and no terminal host -> offline", ctx do
+    refute RuntimePresence.online?(ctx.runtime_id)
+    assert {:error, %{reason: "offline"}} = join_view(ctx, ctx.owner)
+    assert types(ctx.owner) == ["terminal.session.refused"]
+    assert [%{metadata: %{"reason" => "offline"}}] = rows(ctx.owner)
+  end
+
+  # Task 01a1f4c6 stage 3: a joined terminal host is enough on its own.
+  # Mutant: put the presence check back alone -> this refuses `offline`.
+  test "a joined terminal host makes the terminal reachable without runtime presence", ctx do
     join_cli(ctx)
 
     refute RuntimePresence.online?(ctx.runtime_id),
            "joining the terminal topic must not mark presence"
 
-    assert {:error, %{reason: "offline"}} = join_view(ctx, ctx.owner)
-    assert types(ctx.owner) == ["terminal.session.refused"]
-    assert [%{metadata: %{"reason" => "offline"}}] = rows(ctx.owner)
+    assert {:ok, %{mode: "ro"}, _view} = join_view(ctx, ctx.owner)
+    assert types(ctx.owner) == ["terminal.session.opened"]
   end
 
   describe "refusal audit window" do
@@ -219,10 +310,11 @@ defmodule PlatformWeb.TerminalRelayTest do
       for _ <- 1..10, do: assert({:error, %{reason: "flag_off"}} = join_view(ctx, ctx.owner))
       assert [%{metadata: %{"reason" => "flag_off"}}] = rows(ctx.owner)
 
-      join_cli(ctx)
       RuntimePresence.untrack(ctx.runtime_id)
       for _ <- 1..10, do: assert({:error, %{reason: "offline"}} = join_view(ctx, ctx.owner))
       assert rows(ctx.owner) |> Enum.map(& &1.metadata["reason"]) == ["flag_off", "offline"]
+
+      join_cli(ctx)
 
       for _ <- 1..3, do: assert({:error, %{reason: "forbidden"}} = join_view(ctx, ctx.other))
       assert types(ctx.other) == ["terminal.session.refused"]
