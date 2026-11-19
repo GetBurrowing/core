@@ -205,10 +205,14 @@ defmodule PlatformWeb.MeetingLiveCaptionsStripTest do
     view |> element(@toggle) |> render_click()
 
     # `+` is the adjacent-sibling combinator: the controls immediately
-    # follow the strip.
+    # follow the strip. The one element allowed between them is the device
+    # panel's hook root (task 01a1f4c5): a `display: contents` wrapper whose
+    # only in-flow child is the device-switched notice slot, empty (and
+    # sr-only) unless a device was just lost, so the strip still sits
+    # directly on the controls.
     assert has_element?(
              view,
-             ~s([data-role="call-stage"] > [data-role="meeting-captions-shell"] + [data-role="meeting-stage-controls"])
+             ~s([data-role="call-stage"] > [data-role="meeting-captions-shell"] + [data-role="meeting-devices"].contents + [data-role="meeting-stage-controls"])
            )
   end
 
