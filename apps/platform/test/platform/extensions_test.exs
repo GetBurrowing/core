@@ -1034,7 +1034,13 @@ defmodule Platform.ExtensionsTest do
     # returns and limitations now describe the native Designer's dispatched
     # (`pending`) critique, so both tool-definition digests move. Names,
     # bundles, kinds and parameter schemas are unchanged. Measured locally.
-    @main_tool_digest_off "70e449d97bce3ab16ee230aaa8cbdcc2271b0740e28b4999ac00849d254a7bee"
+    #
+    # Re-pinned by task 01a1f53c-1825: `intent_ack`'s `subagent_id` is no
+    # longer `required` (optional for `rejected` only) and its description,
+    # parameter text and limitations say so, so both tool-definition digests
+    # move. Names, bundles and the kind digests are unchanged.
+    # Measured by CI 44620991816 on the PR #235 merge ref.
+    @main_tool_digest_off "1efb7cef9b0cccc1c6c57b8b13d698317116fd638ff0287563728ed0915708ed"
     @main_kinds_summaries_digest_off "cdfa332e00934d0fc7ab3288d73b2506f57abde6d47848626dd090f7c948a66f"
     @main_kinds_tool_schemas_digest_off "7200834a166530d83aecfb8c4b5c0a37d23035b91da696f78dc4c4a04e092797"
     # main's lists minus exactly `play`.
@@ -1270,7 +1276,7 @@ defmodule Platform.ExtensionsTest do
                digest(without_instruction_updates(legacy_kind_props(legacy)))
              ] == [
                @main_tool_digest_off,
-               "a18d1c3b55db53c96f0824a374607ec1ee6d54e2faa8457bb852ecb0475875b6"
+               "1e235cb9b9224447f501333515a63618c460886add9140a0c96fafc5cf6053ae"
              ]
     end
 

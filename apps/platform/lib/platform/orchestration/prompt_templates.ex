@@ -2363,9 +2363,11 @@ defmodule Platform.Orchestration.PromptTemplates do
         description:
           "Sent to a classified target's runtime when a per-meeting intent queue " <>
             "dispatches one live transcript intent (task 019f70b8). Makes the " <>
-            "spawn-before-ack ordering non-optional: the runtime spawns a subagent, " <>
-            "acks with its id via `intent_ack`, and honours an `intent_cancelled` " <>
-            "event addressed to that same subagent.",
+            "spawn-before-ack ordering non-optional for work it takes on: the " <>
+            "runtime spawns a subagent, acks working/completed with its id via " <>
+            "`intent_ack`, and honours an `intent_cancelled` event addressed to " <>
+            "that same subagent. Declining with `rejected` needs no subagent and " <>
+            "no subagent_id (task 01a1f53c).",
         variables: [
           "federation_preamble",
           "intent_id",
@@ -2399,7 +2401,9 @@ defmodule Platform.Orchestration.PromptTemplates do
         ## Ack contract
 
         **Your first tool call after spawning the subagent must be `intent_ack(intent_id="<...>", subagent_id="<the id returned when you spawned the subagent>", status: :working)`.**
-        Spawn the subagent FIRST, then include its returned agent id in the ack. Empty or missing subagent_id will fail validation.
+        Spawn the subagent FIRST, then include its returned agent id in the ack. For `working`, `completed` and `cancel_honored`, an empty or missing subagent_id will fail validation.
+
+        **`rejected` takes no subagent_id.** Declining needs no subagent, so do not spawn or resume one just to reject. The literal call is `intent_ack(intent_id="{{intent_id}}", status: "rejected", note: "<one line why>")`, and the omitted id is recorded as null.
 
         For this dispatch `intent_id` is `{{intent_id}}`.
 
@@ -2414,7 +2418,7 @@ defmodule Platform.Orchestration.PromptTemplates do
         - `rejected` — this intent is not yours, or is not actionable. Advances, and records a `wrong_target` correction that tunes future classification. An honest early `rejected` is a GOOD outcome: it unblocks the meeting and improves targeting. Guessing at work that is not yours is the bad outcome.
         - `cancel_honored` — you received an `intent_cancelled` event and stopped the subagent. Advances.
 
-        An `intent_ack` whose `subagent_id` is missing, empty, or over 128 bytes is rejected by the schema and leaves the queue row COMPLETELY untouched — a schema-rejected ack is never a partial ack. Those rejected attempts ARE counted: if the intent then times out it is reported as `no_ack_spawn_failed` (you tried and could not spawn) rather than `timed_out` (nothing came back at all). Do not paper over a failed spawn with a fabricated id — `no_ack_spawn_failed` is precisely the signal that tells the producer your runtime's spawn path is broken.
+        A `working`, `completed` or `cancel_honored` ack whose `subagent_id` is missing, and any ack whose `subagent_id` is supplied but empty or over 128 bytes, is rejected by the schema and leaves the queue row COMPLETELY untouched — a schema-rejected ack is never a partial ack. Those rejected attempts ARE counted: if the intent then times out it is reported as `no_ack_spawn_failed` (you tried and could not spawn) rather than `timed_out` (nothing came back at all). Do not paper over a failed spawn with a fabricated id — `no_ack_spawn_failed` is precisely the signal that tells the producer your runtime's spawn path is broken.
 
         If no ack of any kind arrives inside the meeting's ack window (default 90s) the intent is timed out and the queue moves on without you. The window is short because a live meeting is short.
 
@@ -2422,7 +2426,7 @@ defmodule Platform.Orchestration.PromptTemplates do
 
         1. **Read the excerpt before the label.** `{{transcript_chunk_excerpt}}` is what was said; `{{classified_intent}}` is a guess about it. Where the two disagree, the excerpt wins — and the right answer is usually `rejected`.
 
-        2. **Decide whether this is yours BEFORE spawning.** If it is not, ack `rejected` with a one-line `note` saying why, and stop. You do not need a subagent to decline.
+        2. **Decide whether this is yours BEFORE spawning.** If it is not, ack `rejected` with a one-line `note` saying why, and stop: `intent_ack(intent_id="{{intent_id}}", status: "rejected", note: "<one line why>")`. You do not need a subagent to decline, and `rejected` takes no subagent_id. Do not spawn or resume a subagent just to reject.
 
         3. **Spawn the subagent.** Fresh context, briefed with the excerpt, the classified intent, `{{target_rationale}}`, and `{{meeting_id}}`. Capture the id the spawn call returns.
 

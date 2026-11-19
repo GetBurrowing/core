@@ -42,6 +42,7 @@ defmodule Platform.Federation.ToolSurfaceIntentAckTest do
 
   alias Platform.Federation.ToolArguments
   alias Platform.Federation.ToolSurface
+  alias Platform.Meetings.IntentCorrections
   alias Platform.Meetings.IntentQueue
   alias Platform.Meetings.PubSub, as: MeetingsPubSub
 
@@ -92,6 +93,12 @@ defmodule Platform.Federation.ToolSurfaceIntentAckTest do
 
   defp ack(intent_id, args) do
     ToolSurface.execute("intent_ack", Map.put(args, "intent_id", intent_id), %{})
+  end
+
+  # The WIRE path both federation transports take: the argument gate, then
+  # execute/3.
+  defp wire_ack(intent_id, args) do
+    ToolArguments.dispatch("intent_ack", Map.put(args, "intent_id", intent_id), %{})
   end
 
   # ── Happy paths ────────────────────────────────────────────────────────────
@@ -270,30 +277,30 @@ defmodule Platform.Federation.ToolSurfaceIntentAckTest do
       assert IntentQueue.rejected_ack_count(meeting_id, row.id) == 2
     end
 
-    # FINDING (019fa609 stage 4), pinned rather than fixed.
+    # FINDING (019fa609 stage 4), FIXED by task 01a1f53c-1825.
     #
-    # `subagent_id` is declared `required: true` on intent_ack, so the generic
-    # argument gate added in stage 3 now answers an absent or blank one BEFORE
-    # execute/3 runs — and the gate has no way to record the attempt. The
-    # counter above therefore only advances for a subagent_id the gate lets
-    # through (whitespace-only is also treated as absent by the gate, so in
-    # practice only the >128-byte case still reaches the handler over the wire).
+    # `subagent_id` used to be declared `required: true` on intent_ack, so the
+    # generic argument gate answered an absent or blank one BEFORE execute/3
+    # ran — and the gate has no way to record the attempt, so over the wire
+    # the AC6 counter only advanced for an oversized id.
     #
-    # That is why ToolSurface.validate_subagent_id/1 was NOT deleted with the
-    # other presence checks in this stage: the gate does not reproduce its side
-    # effect, and the plan's instruction is to record a behaviour change of this
-    # kind rather than quietly absorb it. This test asserts the seam in both
-    # directions so a later fix has to update it deliberately.
-    test "the gate answers an absent subagent_id before the counter can see it",
+    # The requirement is now conditional on status (optional for `rejected`),
+    # which the per-parameter gate cannot express, so the descriptor says
+    # `required: false` and the handler enforces it. The handler's refusal
+    # keeps the gate's `:missing_subagent_id` code and DOES count the attempt.
+    # This test was updated deliberately to pin the new behaviour: the wire
+    # path and the handler path now agree.
+    test "an absent subagent_id on the wire is refused with :missing_subagent_id and counted",
          %{meeting_id: meeting_id} do
       row = dispatch!(meeting_id)
 
       # Handler path (execute/3): the attempt IS evidence.
       {:error, handler_err} = ack(row.id, %{"status" => "working"})
       assert handler_err.error =~ "subagent_id is required"
+      assert handler_err.code == :missing_subagent_id
       assert IntentQueue.rejected_ack_count(meeting_id, row.id) == 1
 
-      # Wire path (dispatch/3): refused earlier, and NOT counted.
+      # Wire path (dispatch/3): same refusal, now ALSO counted.
       {:error, gate_err} =
         ToolArguments.dispatch(
           "intent_ack",
@@ -302,10 +309,21 @@ defmodule Platform.Federation.ToolSurfaceIntentAckTest do
         )
 
       assert gate_err.code == :missing_subagent_id
-      assert IntentQueue.rejected_ack_count(meeting_id, row.id) == 1
+      assert gate_err.recoverable == true
+      assert gate_err.error == "intent_ack: subagent_id is required for status working"
+      assert gate_err.suggestion =~ "rejected"
+      assert IntentQueue.rejected_ack_count(meeting_id, row.id) == 2
 
-      # The oversized id is the one rejection shape the gate still passes
-      # through, so the counter keeps working for it.
+      # A blank id is no longer swallowed by the gate either.
+      {:error, _} =
+        ToolArguments.dispatch(
+          "intent_ack",
+          %{"intent_id" => row.id, "status" => "working", "subagent_id" => "  "},
+          %{}
+        )
+
+      assert IntentQueue.rejected_ack_count(meeting_id, row.id) == 3
+
       {:error, _} =
         ToolArguments.dispatch(
           "intent_ack",
@@ -317,7 +335,8 @@ defmodule Platform.Federation.ToolSurfaceIntentAckTest do
           %{}
         )
 
-      assert IntentQueue.rejected_ack_count(meeting_id, row.id) == 2
+      assert IntentQueue.rejected_ack_count(meeting_id, row.id) == 4
+      assert row!(meeting_id, row.id).status == :dispatched
     end
 
     # Both of these used to `Process.sleep(ack_timeout_ms + 300)`. Task
@@ -361,6 +380,133 @@ defmodule Platform.Federation.ToolSurfaceIntentAckTest do
       assert_receive {:intent_timed_out, %{id: ^intent_id}}, 3_000
 
       assert row!(meeting_id, row.id).status == :timed_out
+    end
+  end
+
+  # ── subagent_id is conditional on status (task 01a1f53c-1825) ─────────────
+
+  describe "subagent_id is optional for rejected only (wire path)" do
+    # NAMED TEST A. Through `ToolArguments.dispatch/3`, because the wire gate
+    # is where the reported refusal lived — `execute/3` alone never showed it.
+    test "rejected with no subagent_id advances the queue and records the correction",
+         %{meeting_id: meeting_id} do
+      handler_id = "intent-ack-rejected-no-id-#{System.unique_integer([:positive])}"
+      parent = self()
+
+      :telemetry.attach(
+        handler_id,
+        [:platform, :meetings, :intent_rejected],
+        fn _e, _m, meta, _ -> send(parent, {:rejected_hook, meta}) end,
+        nil
+      )
+
+      on_exit(fn -> :telemetry.detach(handler_id) end)
+
+      row =
+        dispatch!(meeting_id, %{
+          classified_intent: "not-mine-no-subagent",
+          chunk_excerpt: "someone should redo the onboarding illustrations"
+        })
+
+      behind = enqueue!(meeting_id)
+
+      assert {:ok, %{status: :completed, subagent_id: nil} = result} =
+               wire_ack(row.id, %{
+                 "status" => "rejected",
+                 "note" => "a designer thing, not mine"
+               })
+
+      assert result.intent_id == row.id
+      assert IntentQueue.cursor(meeting_id) == nil
+      assert row!(meeting_id, row.id).subagent_id == nil
+
+      # Declining is not a failed ack attempt.
+      assert IntentQueue.rejected_ack_count(meeting_id, row.id) == 0
+
+      assert_receive {:rejected_hook, meta}, 1_000
+      assert meta.intent_id == row.id
+      assert meta.subagent_id == nil
+      assert meta.note == "a designer thing, not mine"
+
+      # The durable tuning signal, written by the boot-attached
+      # IntentCorrections.TelemetryHandler from that hook.
+      assert [correction] = IntentCorrections.list_for_meeting(meeting_id)
+      assert correction.meeting_id == meeting_id
+      assert correction.reason == :wrong_target
+      assert correction.correction == :removed_no_action
+      assert correction.classified_intent == "not-mine-no-subagent"
+      assert correction.transcript_chunk_excerpt =~ "onboarding illustrations"
+
+      # The queue moved on: the next intent can be claimed.
+      assert {:ok, %{id: behind_id}} = IntentQueue.claim_next(meeting_id)
+      assert behind_id == behind.id
+    end
+
+    # NAMED TEST B, plus its working / cancel_honored siblings. A mutation
+    # that made subagent_id optional for every status turns all three red.
+    for status <- ~w(completed working cancel_honored) do
+      test "#{status} with no subagent_id is still refused", %{meeting_id: meeting_id} do
+        row = dispatch!(meeting_id)
+        before = row!(meeting_id, row.id)
+
+        :ok = MeetingsPubSub.subscribe_intents(meeting_id)
+
+        assert {:error, %{code: :missing_subagent_id} = err} =
+                 wire_ack(row.id, %{"status" => unquote(status)})
+
+        assert err.recoverable == true
+        assert err.error =~ unquote(status)
+
+        after_row = row!(meeting_id, row.id)
+        assert after_row == before
+        assert after_row.status == :dispatched
+        assert after_row.subagent_id == nil
+        assert after_row.acked_at == nil
+        assert IntentQueue.cursor(meeting_id) == row.id
+        assert IntentQueue.rejected_ack_count(meeting_id, row.id) == 1
+
+        refute_receive {:intent_acked, _}, 100
+        MeetingsPubSub.unsubscribe_intents(meeting_id)
+      end
+    end
+
+    test "working with a real id, then rejected with no id, keeps the real id",
+         %{meeting_id: meeting_id} do
+      row = dispatch!(meeting_id)
+
+      assert {:ok, %{status: :acked, subagent_id: "real-spawn.4f2a"}} =
+               wire_ack(row.id, %{"status" => "working", "subagent_id" => "real-spawn.4f2a"})
+
+      assert {:ok, %{status: :completed, subagent_id: "real-spawn.4f2a"}} =
+               wire_ack(row.id, %{"status" => "rejected"})
+
+      assert row!(meeting_id, row.id).subagent_id == "real-spawn.4f2a"
+      assert IntentQueue.cursor(meeting_id) == nil
+    end
+
+    test "a supplied subagent_id is still validated for rejected", %{meeting_id: meeting_id} do
+      row = dispatch!(meeting_id)
+
+      for bad <- ["", "   ", String.duplicate("x", 129)] do
+        assert {:error, _} = wire_ack(row.id, %{"status" => "rejected", "subagent_id" => bad})
+      end
+
+      assert row!(meeting_id, row.id).status == :dispatched
+      assert IntentQueue.rejected_ack_count(meeting_id, row.id) == 3
+    end
+
+    test "the queue itself refuses a nil subagent_id for any status but rejected",
+         %{meeting_id: meeting_id} do
+      row = dispatch!(meeting_id)
+
+      for status <- [:working, :completed, :cancel_honored] do
+        assert_raise FunctionClauseError, fn ->
+          IntentQueue.ack(meeting_id, row.id, nil, status)
+        end
+      end
+
+      assert row!(meeting_id, row.id).status == :dispatched
+      assert {:ok, %{status: :completed}} = IntentQueue.ack(meeting_id, row.id, nil, :rejected)
     end
   end
 
@@ -461,9 +607,10 @@ defmodule Platform.Federation.ToolSurfaceIntentAckTest do
     # pairing with it is a NAMING symmetry and not a capability one. The two
     # serve different queues with different lifetimes — `task_ack` writes
     # `execution_leases`, `intent_ack` writes meeting-lifetime ETS — which is
-    # why the descriptor's "same contract and the same validation as `task_ack`"
-    # line survives the move untouched, and why the move must not drag its
-    # sibling along.
+    # why the move must not drag its sibling along. (The descriptor's "same
+    # contract and the same validation as `task_ack`" line was dropped by task
+    # 01a1f53c-1825, when intent_ack's subagent_id became optional for
+    # `rejected`.)
     #
     # Nobody loses reach: migration 20260908150000 appended `meetings` to EVERY
     # `agent_runtimes` row unconditionally, so every runtime holding `task`
@@ -479,13 +626,28 @@ defmodule Platform.Federation.ToolSurfaceIntentAckTest do
       refute "task_ack" in meetings
     end
 
-    test "the descriptor declares the four ack statuses and requires subagent_id" do
+    # Task 01a1f53c-1825: subagent_id is conditional (optional for
+    # `rejected` only), which the per-parameter gate cannot express, so it is
+    # declared `required: false` and the handler enforces the rule.
+    test "the descriptor declares the four ack statuses and a conditional subagent_id" do
       descriptor =
         ToolSurface.list_tools(["meetings"])
         |> Enum.find(&(&1.name == "intent_ack"))
 
       assert descriptor.parameters.intent_id.required
-      assert descriptor.parameters.subagent_id.required
+      refute descriptor.parameters.subagent_id.required
+
+      for text <- [
+            descriptor.description,
+            descriptor.parameters.subagent_id.description,
+            descriptor.limitations
+          ] do
+        assert text =~ "`rejected`"
+        assert text =~ "`working`, `completed` and `cancel_honored`"
+      end
+
+      assert descriptor.description =~ "declining an intent needs no subagent"
+      refute descriptor.description =~ "Same contract and the same validation as `task_ack`"
       assert descriptor.parameters.status.required
       refute descriptor.parameters.note.required
 
