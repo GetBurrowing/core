@@ -11,9 +11,11 @@ import { ScreenShareFullscreenController } from "./lib/screen_share_viewer"
 import {
   announceActiveDevice,
   handleDevicesChanged,
+  kindOfPublication,
   refreshDevices,
   registerRoom,
   roomDefaults,
+  seedInUse,
   unregisterRoom,
 } from "../lib/media_devices"
 
@@ -342,6 +344,7 @@ const MeetingClient = {
     else registerRoom(room, "meeting")
 
     this._bindRoomEvents(room)
+    if (!isCompanionRoom(room)) seedInUse(room).catch(() => {})
     this._emitState("connected", room)
 
     this._ensureTile(room.localParticipant)
@@ -862,6 +865,13 @@ const MeetingClient = {
     bind(RoomEvent.ActiveDeviceChanged, (kind, deviceId) =>
       announceActiveDevice(kind, deviceId),
     )
+    // livekit publishes the join's mic and camera WITHOUT an
+    // ActiveDeviceChanged: record what each is really on, so a later unplug
+    // knows which device was lost (stage 5 round 2).
+    bind(RoomEvent.LocalTrackPublished, (pub) => {
+      const kind = kindOfPublication(pub)
+      if (kind) seedInUse(room, { kinds: [kind] }).catch(() => {})
+    })
 
     bind(RoomEvent.Disconnected, (reason) => this._handleDisconnected(room, reason))
   },
@@ -1729,7 +1739,10 @@ const MeetingClient = {
     this._room = room
     window.__livekit_room = room
     window.__livekitRoom = room
-    if (!isCompanionRoom(room)) registerRoom(room, "meeting")
+    if (!isCompanionRoom(room)) {
+      registerRoom(room, "meeting")
+      seedInUse(room).catch(() => {})
+    }
     window.dispatchEvent(new CustomEvent("livekit:room-connected", { detail: { room } }))
     document.dispatchEvent(new CustomEvent("livekit:room-connected", { detail: { room } }))
     this._emitState("connected", room)

@@ -68,6 +68,7 @@ import {
   preferredDeviceId,
   registerRoom,
   roomDefaults,
+  seedInUse,
   unregisterRoom,
 } from "../lib/media_devices"
 
@@ -445,6 +446,9 @@ const VoiceTab = {
       this._room = room
       this._pub = pub
       registerRoom(room, "voice")
+      // The mic published with no ActiveDeviceChanged: record the device it
+      // is on, so an unplug can say which one went (stage 5 round 2).
+      await seedInUse(room, { kinds: ["audioinput", "audiooutput"] }).catch(() => {})
       await this._mute()
       return true
     } catch (_err) {

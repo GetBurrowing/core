@@ -13,7 +13,7 @@ import { describe, it, expect, beforeEach, afterEach, vi } from "vitest"
  * mic publication the test controls. Time is a stubbed `performance.now`.
  */
 
-const lk = vi.hoisted(() => ({ trackState: "live", rooms: [] }))
+const lk = vi.hoisted(() => ({ trackState: "live", rooms: [], capturedId: null }))
 
 vi.mock("livekit-client", async (importOriginal) => {
   const actual = await importOriginal()
@@ -23,7 +23,13 @@ vi.mock("livekit-client", async (importOriginal) => {
       this.handlers = {}
       const pub = {
         isMuted: false,
-        track: { mediaStreamTrack: { readyState: lk.trackState, enabled: true } },
+        track: {
+          mediaStreamTrack: {
+            readyState: lk.trackState,
+            enabled: true,
+            getSettings: () => (lk.capturedId ? { deviceId: lk.capturedId } : {}),
+          },
+        },
         mute() {
           this.isMuted = true
           return Promise.resolve()
@@ -63,9 +69,12 @@ vi.mock("livekit-client", async (importOriginal) => {
   return { ...actual, Room }
 })
 
+import { RoomEvent } from "livekit-client"
+import { asDeviceInfos } from "../lib/fake_media_devices.js"
 import VoiceTab, { HOLD_MS, CAPTION_EVENT, MIC_TIMEOUT_MS } from "../../js/hooks/voice_tab.js"
 import { ClientState, __resetForTests as resetClientState } from "../../js/client_state.js"
 import {
+  DEVICE_FALLBACK_EVENT,
   activeRoom,
   getPreference,
   registerRoom,
@@ -182,6 +191,7 @@ beforeEach(() => {
   clock = 0
   lk.trackState = "live"
   lk.rooms = []
+  lk.capturedId = null
   vi.stubGlobal("performance", { now: () => clock })
   vi.stubGlobal("document", Object.assign(new EventTarget(), { getElementById: () => null }))
 })
@@ -479,6 +489,52 @@ describe("the remembered microphone", () => {
     expect(activeRoom("voice")).toBe(lk.rooms[0])
     t.handlers.voice_disconnect()
     expect(activeRoom("voice")).toBeNull()
+  })
+})
+
+// Stage 5 round 2: the Voice tab's mic publishes with no
+// ActiveDeviceChanged too, so its room seeds the device it is on and an
+// unplug that livekit recovers first still says which mic went.
+describe("the Voice tab's strap with no pick (stage 5 round 2)", () => {
+  beforeEach(() => {
+    resetClientState()
+    resetMediaDevices()
+  })
+
+  it("livekit moves the mic before MediaDevicesChanged: the strap names the lost mic", async () => {
+    let devices = [
+      { kind: "audioinput", deviceId: "default", label: "Default - MacBook Pro Microphone", groupId: "gM" },
+      { kind: "audioinput", deviceId: "air-1", label: "AirPods Pro", groupId: "gA" },
+      { kind: "audioinput", deviceId: "mbp-1", label: "MacBook Pro Microphone", groupId: "gM" },
+    ]
+    const straps = []
+    const win = new EventTarget()
+    win.addEventListener(DEVICE_FALLBACK_EVENT, (e) => straps.push(e.detail))
+    vi.stubGlobal("window", win)
+    lk.capturedId = "air-1"
+    const t = mount({
+      mediaDevices: {
+        getUserMedia: () => Promise.resolve({ getTracks: () => [{ stop() {} }] }),
+        enumerateDevices: () => Promise.resolve(asDeviceInfos(devices)),
+        addEventListener() {},
+        removeEventListener() {},
+      },
+    })
+    t.down(0)
+    await settle()
+    await settle()
+    const room = lk.rooms[0]
+    expect(activeRoom("voice")).toBe(room)
+
+    devices = [devices[0], devices[2]]
+    room.active = { audioinput: "mbp-1" }
+    room.handlers[RoomEvent.ActiveDeviceChanged]("audioinput", "mbp-1")
+    room.handlers[RoomEvent.MediaDevicesChanged]()
+    await settle()
+
+    expect(straps).toEqual([
+      { kind: "audioinput", fromLabel: "AirPods Pro", toLabel: "MacBook Pro Microphone", surface: "voice" },
+    ])
   })
 })
 

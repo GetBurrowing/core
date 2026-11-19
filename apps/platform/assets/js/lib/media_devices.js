@@ -61,6 +61,9 @@ const displaced = new Map()
 // kind -> Set of deviceIds whose loss was already announced, so one unplug
 // is announced once however many handlers see the devicechange.
 const announcedLoss = new Map()
+// kind -> count of real moves recorded in `inUse` (announcements, picks,
+// fallbacks), so an async seed can tell whether one landed while it waited.
+const inUseVersion = new Map()
 
 function isKind(kind) {
   return KINDS.includes(kind)
@@ -300,7 +303,82 @@ function noteInUse(kind, deviceId, { picked = false } = {}) {
   if (!picked && was && was.deviceId !== now.deviceId && !displaced.has(kind)) {
     displaced.set(kind, was)
   }
-  inUse.set(kind, now)
+  setInUse(kind, now)
+}
+
+function setInUse(kind, device) {
+  inUse.set(kind, device)
+  inUseVersion.set(kind, (inUseVersion.get(kind) || 0) + 1)
+}
+
+const KIND_SOURCE = { audioinput: "microphone", videoinput: "camera" }
+
+// The deviceId the local track of `kind` was really captured from, from the
+// MediaStreamTrack itself, or null with no such track.
+function trackDeviceId(room, kind) {
+  const source = KIND_SOURCE[kind]
+  const lp = room && room.localParticipant
+  if (!source || !lp) return null
+  let pub = null
+  if (typeof lp.getTrackPublication === "function") pub = lp.getTrackPublication(source)
+  if (!pub && lp.trackPublications && typeof lp.trackPublications.values === "function") {
+    for (const p of lp.trackPublications.values()) {
+      if (p && (p.source === source || (p.track && p.track.source === source))) {
+        pub = p
+        break
+      }
+    }
+  }
+  const mst = pub && pub.track && pub.track.mediaStreamTrack
+  if (!mst || typeof mst.getSettings !== "function") return null
+  try {
+    const settings = mst.getSettings()
+    return (settings && settings.deviceId) || null
+  } catch (_err) {
+    return null
+  }
+}
+
+// Record the device each kind is on the moment a room has it, before any
+// ActiveDeviceChanged. livekit publishes the join's mic on the capture
+// default WITHOUT emitting ActiveDeviceChanged, and its own recovery after an
+// unplug (handleTrackEnded unmuted, selectDefaultDevices muted) emits one for
+// the NEW device only, so without a seed nothing knows the old one was lost
+// and the strap never shows (task 01a1f4c5 stage 5 round 2). Call on connect
+// and on every LocalTrackPublished. The published track's own settings win
+// over `room.getActiveDevice`, which is only what the room was asked for.
+export async function seedInUse(room, { kinds = KINDS } = {}) {
+  if (!room) return
+  for (const kind of kinds) {
+    if (!isKind(kind)) continue
+    if (kind === "audiooutput" && !supportsOutputSelection()) continue
+    const active = typeof room.getActiveDevice === "function" ? room.getActiveDevice(kind) : undefined
+    const raw = trackDeviceId(room, kind) || active
+    if (!raw) continue
+    const version = inUseVersion.get(kind) || 0
+    let list = cachedDevices(kind)
+    if (!list.some((d) => d.deviceId === raw)) list = await listDevices(kind)
+    const now = resolveConcrete(raw, list)
+    if (!now) continue
+    if ((inUseVersion.get(kind) || 0) !== version) {
+      // A real move landed while the list was read: the seed is the device
+      // it moved off, unless it already knows that one.
+      const current = inUse.get(kind)
+      if (current && current.deviceId !== now.deviceId && !displaced.has(kind)) {
+        displaced.set(kind, now)
+      }
+      continue
+    }
+    inUse.set(kind, now)
+  }
+}
+
+// The kind a local publication captures, or null (screen share, data).
+export function kindOfPublication(pub) {
+  const source = pub && (pub.source || (pub.track && pub.track.source))
+  if (source === "microphone") return "audioinput"
+  if (source === "camera") return "videoinput"
+  return null
 }
 
 export function deviceInUse(kind) {
@@ -417,7 +495,7 @@ export async function handleDevicesChanged(room, { kinds = KINDS } = {}) {
     announcedLoss.set(kind, marks)
 
     announceActiveDevice(kind, active)
-    inUse.set(kind, now)
+    setInUse(kind, now)
     displaced.delete(kind)
     // `surface` lets a panel ignore a fallback in a room it does not drive
     // (the Voice tab's room is not the meeting's; task 01a1f4c5 stage 4).
@@ -465,6 +543,7 @@ export function __resetForTests() {
   labels.clear()
   lastActive.clear()
   inUse.clear()
+  inUseVersion.clear()
   displaced.clear()
   announcedLoss.clear()
   registry.length = 0

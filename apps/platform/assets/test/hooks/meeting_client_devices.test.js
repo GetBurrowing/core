@@ -508,3 +508,117 @@ describe("selectDevice through the registered meeting room", () => {
     })
   })
 })
+
+// Stage 5 round 2, on a real LiveKit room: a /meetings or quickmeet join
+// publishes the mic on the capture default and livekit emits NO
+// ActiveDeviceChanged for it, so nothing had recorded the device the person
+// was on. livekit then recovers first and announces only the NEW device.
+// The room's connect and LocalTrackPublished must seed it.
+describe("the strap when nobody picked a device and the join announced nothing (round 2)", () => {
+  const PLUGGED = [
+    { kind: "audioinput", deviceId: "default", label: "Default - MacBook Pro Microphone", groupId: "gM" },
+    { kind: "audioinput", deviceId: "air-1", label: "AirPods Pro", groupId: "gA" },
+    { kind: "audioinput", deviceId: "mbp-1", label: "MacBook Pro Microphone", groupId: "gM" },
+  ]
+  const UNPLUGGED = [PLUGGED[0], PLUGGED[2]]
+  const STRAP = {
+    kind: "audioinput",
+    fromLabel: "AirPods Pro",
+    toLabel: "MacBook Pro Microphone",
+    surface: "meeting",
+  }
+  const straps = () => events.filter(([n]) => n === DEVICE_FALLBACK_EVENT).map(([, d]) => d)
+
+  // Joined on air-1 (livekit's activeDeviceMap holds the capture default),
+  // the mic published, and NO ActiveDeviceChanged.
+  async function joinedSilently({ micEnabled, asked = "air-1", captured = null }) {
+    devices = [...PLUGGED, ...CAMS, ...OUTS]
+    const hook = buildHook()
+    await hook._join({ ...PAYLOAD, mic_enabled: micEnabled, camera_enabled: false })
+    const room = livekitFake.created[0]
+    room.active.set("audioinput", asked)
+    if (captured) room.micPub.track.mediaStreamTrack = { getSettings: () => ({ deviceId: captured }) }
+    room.emit(RoomEvent.LocalTrackPublished, room.micPub, room.localParticipant)
+    await settle()
+    events.length = 0
+    room.switched.length = 0
+    return room
+  }
+
+  function unplugAirPods() {
+    devices = [...UNPLUGGED, ...CAMS, ...OUTS]
+  }
+
+  it("unmuted: handleTrackEnded restarts the track BEFORE MediaDevicesChanged: one strap", async () => {
+    const room = await joinedSilently({ micEnabled: true })
+    unplugAirPods()
+    room.active.set("audioinput", "mbp-1")
+    room.emit(RoomEvent.ActiveDeviceChanged, "audioinput", "mbp-1")
+    room.emit(RoomEvent.MediaDevicesChanged)
+    await settle()
+    room.emit(RoomEvent.MediaDevicesChanged)
+    await settle()
+
+    expect(straps()).toEqual([STRAP])
+    expect(room.switched).toEqual([])
+  })
+
+  it("muted: selectDefaultDevices moves it BEFORE MediaDevicesChanged: one strap", async () => {
+    const room = await joinedSilently({ micEnabled: false })
+    unplugAirPods()
+    await room.switchActiveDevice("audioinput", "default")
+    room.emit(RoomEvent.ActiveDeviceChanged, "audioinput", "default")
+    room.switched.length = 0
+    room.emit(RoomEvent.MediaDevicesChanged)
+    await settle()
+
+    expect(straps()).toEqual([STRAP])
+    expect(room.switched).toEqual([])
+  })
+
+  for (const micEnabled of [true, false]) {
+    it(`devicechange first (${micEnabled ? "unmuted" : "muted"}): one strap, then livekit's late move adds none`, async () => {
+      const room = await joinedSilently({ micEnabled })
+      unplugAirPods()
+      room.emit(RoomEvent.MediaDevicesChanged)
+      await settle()
+      room.active.set("audioinput", "mbp-1")
+      room.emit(RoomEvent.ActiveDeviceChanged, "audioinput", "mbp-1")
+      room.emit(RoomEvent.MediaDevicesChanged)
+      await settle()
+
+      expect(straps()).toEqual([STRAP])
+      expect(room.switched).toEqual([["audioinput", "default", undefined]])
+    })
+  }
+
+  it("the published track's own deviceId wins over what the room was asked for", async () => {
+    // Asked for the MacBook mic (non-exact), the browser opened the AirPods.
+    const room = await joinedSilently({ micEnabled: true, asked: "mbp-1", captured: "air-1" })
+    unplugAirPods()
+    room.emit(RoomEvent.ActiveDeviceChanged, "audioinput", "mbp-1")
+    room.emit(RoomEvent.MediaDevicesChanged)
+    await settle()
+
+    expect(straps()).toEqual([STRAP])
+  })
+
+  it("a track captured on 'default' is seeded as the device behind it, by groupId", async () => {
+    devices = [...PLUGGED, ...CAMS, ...OUTS]
+    devices[0] = { ...PLUGGED[0], label: "Default - AirPods Pro", groupId: "gA" }
+    const hook = buildHook()
+    await hook._join({ ...PAYLOAD, mic_enabled: true, camera_enabled: false })
+    const room = livekitFake.created[0]
+    room.active.set("audioinput", "default")
+    room.micPub.track.mediaStreamTrack = { getSettings: () => ({ deviceId: "default" }) }
+    room.emit(RoomEvent.LocalTrackPublished, room.micPub, room.localParticipant)
+    await settle()
+    events.length = 0
+    unplugAirPods()
+    room.emit(RoomEvent.ActiveDeviceChanged, "audioinput", "mbp-1")
+    room.emit(RoomEvent.MediaDevicesChanged)
+    await settle()
+
+    expect(straps()).toEqual([STRAP])
+  })
+})

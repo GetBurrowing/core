@@ -1,5 +1,11 @@
 import { RoomEvent } from "livekit-client"
-import { activeRoom, announceActiveDevice, handleDevicesChanged } from "../lib/media_devices"
+import {
+  activeRoom,
+  announceActiveDevice,
+  handleDevicesChanged,
+  kindOfPublication,
+  seedInUse,
+} from "../lib/media_devices"
 
 /**
  * MeetingBar hook — bridges the in-call top bar controls to the LiveKit Room instance.
@@ -173,12 +179,21 @@ export function watchRoomDevices(win, doc) {
       if (clientMounted()) return
       announceActiveDevice(kind, deviceId)
     }
+    // What each kind is on before any ActiveDeviceChanged, so a later
+    // unplug knows the device it lost (stage 5 round 2).
+    const onPublished = (pub) => {
+      const kind = kindOfPublication(pub)
+      if (kind) seedInUse(room, { kinds: [kind] }).catch(() => {})
+    }
     room.on(RoomEvent.MediaDevicesChanged, onDevices)
     room.on(RoomEvent.ActiveDeviceChanged, onActive)
+    room.on(RoomEvent.LocalTrackPublished, onPublished)
     handlers = [
       [RoomEvent.MediaDevicesChanged, onDevices],
       [RoomEvent.ActiveDeviceChanged, onActive],
+      [RoomEvent.LocalTrackPublished, onPublished],
     ]
+    if (!nativeCallOwnsMedia(win)) seedInUse(room).catch(() => {})
   }
 
   const onConnected = (e) => bind((e && e.detail && e.detail.room) || currentRoom())
