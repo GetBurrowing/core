@@ -1,3 +1,5 @@
+import { ACTIVE_DEVICE_EVENT, preferredDeviceId } from "../lib/media_devices"
+
 /**
  * MeetingLobbyPreview — the self-preview tile on the pre-join lobby
  * (task 01a07410 / FE-17 stage 4).
@@ -31,10 +33,27 @@
  * is not an error the user can act on from here: the tile stamps
  * `data-preview="unavailable"` so the CSS can show the placeholder, and
  * the Join action stays enabled — the room may still grant media later.
+ *
+ * ## Which camera (task 01a1f4c5 stage 1)
+ *
+ * The preview opens the person's remembered camera
+ * (`media_devices.preferredDeviceId("videoinput")`, NON-exact so a missing
+ * camera falls back instead of failing), and re-acquires when
+ * `meeting:active-device` reports a new `videoinput` — a pick in the lobby's
+ * device panel persists the choice and the preview follows it. The Room built
+ * at Join reads the same preference, so what the lobby shows is what joins.
  */
 const MeetingLobbyPreview = {
   mounted() {
     this._stream = null
+    this._onActiveDevice = (event) => {
+      const detail = (event && event.detail) || {}
+      if (detail.kind !== "videoinput") return
+      this._restart()
+    }
+    if (typeof window !== "undefined" && typeof window.addEventListener === "function") {
+      window.addEventListener(ACTIVE_DEVICE_EVENT, this._onActiveDevice)
+    }
     this._sync()
   },
 
@@ -43,7 +62,23 @@ const MeetingLobbyPreview = {
   },
 
   destroyed() {
+    if (typeof window !== "undefined" && typeof window.removeEventListener === "function") {
+      window.removeEventListener(ACTIVE_DEVICE_EVENT, this._onActiveDevice)
+    }
     this._stop()
+  },
+
+  // The camera changed: drop the current stream and open the new one. A
+  // capture still pending is superseded: `_start` stops any stream that
+  // resolves for an older generation.
+  _restart() {
+    if (!this._wantCamera()) return
+    if (this._stream) {
+      this._stream.getTracks().forEach((t) => t.stop())
+      this._stream = null
+    }
+    this._pending = false
+    this._start()
   },
 
   _wantCamera() {
@@ -73,10 +108,18 @@ const MeetingLobbyPreview = {
 
     this._pending = true
     this.el.dataset.preview = "starting"
+    const gen = (this._gen = (this._gen || 0) + 1)
+    const deviceId = preferredDeviceId("videoinput")
+    const constraint = deviceId ? { deviceId } : true
 
     Promise.resolve()
-      .then(() => media.getUserMedia({ video: true, audio: false }))
+      .then(() => media.getUserMedia({ video: constraint, audio: false }))
       .then((stream) => {
+        // A newer `_start` (a camera switch) superseded this one.
+        if (gen !== this._gen) {
+          stream.getTracks().forEach((t) => t.stop())
+          return
+        }
         this._pending = false
         // The toggle flipped back to off while the prompt was up.
         if (!this._wantCamera()) {
@@ -95,6 +138,7 @@ const MeetingLobbyPreview = {
         this.el.dataset.preview = "live"
       })
       .catch((err) => {
+        if (gen !== this._gen) return
         this._pending = false
         this.el.dataset.preview = "unavailable"
         console.warn("[MeetingLobbyPreview] camera preview unavailable:", err)
@@ -102,6 +146,8 @@ const MeetingLobbyPreview = {
   },
 
   _stop() {
+    // Any capture still in flight is now stale.
+    this._gen = (this._gen || 0) + 1
     if (this._stream) {
       this._stream.getTracks().forEach((t) => t.stop())
       this._stream = null

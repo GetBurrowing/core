@@ -62,6 +62,14 @@
 
 import { Room, RoomEvent, Track } from "livekit-client"
 import { paintBars } from "./lib/ptt_waveform"
+import {
+  announceActiveDevice,
+  handleDevicesChanged,
+  preferredDeviceId,
+  registerRoom,
+  roomDefaults,
+  unregisterRoom,
+} from "../lib/media_devices"
 
 export const HOLD_MS = 280
 export const CAPTION_EVENT = "voice:caption"
@@ -358,7 +366,11 @@ const VoiceTab = {
 
     let request
     try {
-      request = Promise.resolve(md.getUserMedia({ audio: true }))
+      // The remembered microphone (task 01a1f4c5 stage 1), NON-exact: a
+      // device that is gone falls back to the browser's choice instead of
+      // failing the press.
+      const deviceId = preferredDeviceId("audioinput")
+      request = Promise.resolve(md.getUserMedia({ audio: deviceId ? { deviceId } : true }))
     } catch (_err) {
       this._permission = "denied"
       return "denied"
@@ -400,12 +412,24 @@ const VoiceTab = {
     if (reply === TIMED_OUT) return "reply_timeout"
     if (!reply || reply.ok !== true || !reply.token || !reply.url) return false
 
-    const room = new Room({ adaptiveStream: true, dynacast: true })
+    // No camera here: the Voice tab never publishes video.
+    const room = new Room({
+      adaptiveStream: true,
+      dynacast: true,
+      ...roomDefaults({ video: false }),
+    })
     room.on(RoomEvent.TranscriptionReceived, (segments, participant) =>
       this._transcription(segments, participant),
     )
     room.on(RoomEvent.TrackSubscribed, (track) => this._attachAudio(track))
+    room.on(RoomEvent.MediaDevicesChanged, () => {
+      handleDevicesChanged(room, { kinds: ["audioinput", "audiooutput"] }).catch(() => {})
+    })
+    room.on(RoomEvent.ActiveDeviceChanged, (kind, deviceId) =>
+      announceActiveDevice(kind, deviceId),
+    )
     room.on(RoomEvent.Disconnected, () => {
+      unregisterRoom(room)
       if (this._room === room) {
         this._room = null
         this._pub = null
@@ -420,6 +444,7 @@ const VoiceTab = {
       if (!pub) throw new Error("no microphone publication")
       this._room = room
       this._pub = pub
+      registerRoom(room, "voice")
       await this._mute()
       return true
     } catch (_err) {
@@ -461,6 +486,7 @@ const VoiceTab = {
     this._room = null
     this._pub = null
     if (room) {
+      unregisterRoom(room)
       try {
         room.disconnect()
       } catch (_e) {

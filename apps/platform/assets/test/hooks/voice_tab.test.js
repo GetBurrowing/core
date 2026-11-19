@@ -18,7 +18,8 @@ const lk = vi.hoisted(() => ({ trackState: "live", rooms: [] }))
 vi.mock("livekit-client", async (importOriginal) => {
   const actual = await importOriginal()
   class Room {
-    constructor() {
+    constructor(opts) {
+      this.opts = opts
       this.handlers = {}
       const pub = {
         isMuted: false,
@@ -55,6 +56,8 @@ vi.mock("livekit-client", async (importOriginal) => {
 })
 
 import VoiceTab, { HOLD_MS, CAPTION_EVENT, MIC_TIMEOUT_MS } from "../../js/hooks/voice_tab.js"
+import { ClientState, __resetForTests as resetClientState } from "../../js/client_state.js"
+import { activeRoom, __resetForTests as resetMediaDevices } from "../../js/lib/media_devices.js"
 import Sheet from "../../js/hooks/sheet.js"
 
 // ── fakes ────────────────────────────────────────────────────────────────
@@ -414,6 +417,53 @@ describe("the microphone", () => {
     expect(lk.rooms[0].disconnected).toBe(true)
     expect(turnEvents(t.pushed)).toEqual(["voice_press"])
     expect(t.hook.inTurn()).toBe(false)
+  })
+})
+
+// ── the remembered microphone (task 01a1f4c5 stage 1) ────────────────────
+
+describe("the remembered microphone", () => {
+  beforeEach(() => {
+    resetClientState()
+    resetMediaDevices()
+    const store = new Map()
+    vi.stubGlobal("localStorage", {
+      get length() {
+        return store.size
+      },
+      key: (i) => Array.from(store.keys())[i] ?? null,
+      getItem: (k) => (store.has(k) ? store.get(k) : null),
+      setItem: (k, v) => store.set(k, String(v)),
+      removeItem: (k) => store.delete(k),
+    })
+  })
+
+  it("the first press asks for the preferred deviceId, NON-exact", async () => {
+    ClientState.set("meeting_devices", "audioinput", { deviceId: "air-1", label: "AirPods Pro" })
+    const t = mount()
+    t.down(0)
+    await settle()
+    expect(t.gum).toHaveBeenCalledWith({ audio: { deviceId: "air-1" } })
+    expect(lk.rooms[0].opts.audioCaptureDefaults).toEqual({ deviceId: "air-1" })
+    // The Voice tab never publishes video.
+    expect(lk.rooms[0].opts.videoCaptureDefaults).toBeUndefined()
+  })
+
+  it("with nothing remembered the first press asks for any microphone, as before", async () => {
+    const t = mount()
+    t.down(0)
+    await settle()
+    expect(t.gum).toHaveBeenCalledWith({ audio: true })
+  })
+
+  it("registers its room as the voice surface once connected, and unregisters on disconnect", async () => {
+    const t = mount()
+    expect(activeRoom("voice")).toBeNull()
+    t.down(0)
+    await settle()
+    expect(activeRoom("voice")).toBe(lk.rooms[0])
+    t.handlers.voice_disconnect()
+    expect(activeRoom("voice")).toBeNull()
   })
 })
 

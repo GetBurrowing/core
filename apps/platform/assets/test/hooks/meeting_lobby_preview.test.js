@@ -1,5 +1,7 @@
-import { describe, it, expect, beforeEach, afterEach } from "vitest"
+import { describe, it, expect, beforeEach, afterEach, vi } from "vitest"
 import MeetingLobbyPreview from "../../js/hooks/meeting_lobby_preview.js"
+import { ClientState, __resetForTests as resetClientState } from "../../js/client_state.js"
+import { ACTIVE_DEVICE_EVENT, selectDevice, __resetForTests } from "../../js/lib/media_devices.js"
 
 /**
  * `MeetingLobbyPreview` (task 01a07410 / FE-17 stage 4) mirrors the
@@ -155,5 +157,67 @@ describe("MeetingLobbyPreview", () => {
 
     expect(el.dataset.preview).toBe("unavailable")
     expect(el._video.srcObject).toBeUndefined()
+  })
+
+  // ── the chosen camera (task 01a1f4c5 stage 1) ────────────────────────
+  describe("the chosen camera", () => {
+    beforeEach(() => {
+      resetClientState()
+      __resetForTests()
+      const store = new Map()
+      vi.stubGlobal("localStorage", {
+        get length() {
+          return store.size
+        },
+        key: (i) => Array.from(store.keys())[i] ?? null,
+        getItem: (k) => (store.has(k) ? store.get(k) : null),
+        setItem: (k, v) => store.set(k, String(v)),
+        removeItem: (k) => store.delete(k),
+      })
+      vi.stubGlobal("window", new EventTarget())
+    })
+
+    afterEach(() => {
+      vi.unstubAllGlobals()
+    })
+
+    it("opens the remembered camera, NON-exact", async () => {
+      ClientState.set("meeting_devices", "videoinput", { deviceId: "brio-1", label: "Logitech BRIO 2" })
+      const el = buildEl(true)
+      buildHook(el).mounted()
+      await settle()
+      expect(requests).toEqual([{ video: { deviceId: "brio-1" }, audio: false }])
+    })
+
+    it("re-acquires on meeting:active-device for videoinput, and stops the old stream", async () => {
+      const el = buildEl(true)
+      const hook = buildHook(el)
+      hook.mounted()
+      await settle()
+
+      await selectDevice("videoinput", "brio-1", { room: null })
+      await settle()
+
+      expect(streams[0].tracks[0].stopped).toBe(true)
+      expect(requests.at(-1)).toEqual({ video: { deviceId: "brio-1" }, audio: false })
+      expect(el._video.srcObject).toBe(streams.at(-1))
+      expect(el.dataset.preview).toBe("live")
+    })
+
+    it("ignores a microphone change, and stops listening once destroyed", async () => {
+      const el = buildEl(true)
+      const hook = buildHook(el)
+      hook.mounted()
+      await settle()
+
+      window.dispatchEvent(new CustomEvent(ACTIVE_DEVICE_EVENT, { detail: { kind: "audioinput" } }))
+      await settle()
+      expect(requests).toHaveLength(1)
+
+      hook.destroyed()
+      window.dispatchEvent(new CustomEvent(ACTIVE_DEVICE_EVENT, { detail: { kind: "videoinput" } }))
+      await settle()
+      expect(requests).toHaveLength(1)
+    })
   })
 })
