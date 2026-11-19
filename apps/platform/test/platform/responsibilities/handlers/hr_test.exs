@@ -316,9 +316,12 @@ defmodule Platform.Responsibilities.Handlers.HrTest do
         user_id: marisol.id
       })
 
+    # Pin the clock: without fired_at the handler reads DateTime.utc_now(),
+    # and the 30-day staleness window drops these @now-dated appearances.
     ctx_in = %{
       kind: :event_topic,
       topic: "meeting:finished",
+      fired_at: @now,
       payload: %{
         transcript_id: transcript.id,
         room_id: room.livekit_room_name,
