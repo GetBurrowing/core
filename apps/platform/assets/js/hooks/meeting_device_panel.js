@@ -31,19 +31,29 @@
 //   * Keyboard: each section is a radiogroup with roving tabindex. Arrows
 //     move, Enter / Space select, Esc closes (dismissable_overlay) and focus
 //     returns to the trigger that opened the panel.
+//   * The lobby (stage 3): a trigger with `data-devices-container="auto"`
+//     opens the INLINE accordion at `sm` and up and the sheet below it. The
+//     inline container shows only the section its trigger names, takes no
+//     history layer and no outside-click close (an accordion, not an
+//     overlay), and Esc collapses it. `meeting:device-panel-open` {id,
+//     container, section} opens a panel without a click: the lobby's mic
+//     check uses it to expand MICROPHONE when it warns.
 
 import * as MD from "../lib/media_devices.js"
 import { openLayer } from "../lib/dismissable_overlay.js"
 import { paintBars } from "./lib/ptt_waveform.js"
 
 export const NOTICE_ROLE = "meeting-device-notice"
+export const OPEN_PANEL_EVENT = "meeting:device-panel-open"
+// The `sm` breakpoint: an `auto` trigger opens inline at and above it.
+export const INLINE_QUERY = "(min-width: 640px)"
 export const METER_MS = 90
 export const MOVE_MS = 160
 export const TEST_TONE_MS = 600
 const SILENCE = 128
 const METER_BARS = 5
 
-const COPY = {
+export const COPY = {
   audioinput: { empty: "No microphone found", blocked: "Microphone blocked by browser" },
   videoinput: { empty: "No camera found", blocked: "Camera blocked by browser" },
   audiooutput: { empty: "No speaker found", blocked: "No speaker found" },
@@ -58,6 +68,8 @@ const PERMISSION = { audioinput: "microphone", videoinput: "camera" }
 // Characters per label before the middle is cut, per kind (the meter and
 // the thumbnail take different widths of the 320px popover).
 export const TRUNCATE_AT = { audioinput: 26, videoinput: 22, audiooutput: 30 }
+
+export const INLINE_EXTRA_CHARS = 12
 
 const PUBLISHED_SOURCE = { audioinput: "microphone", videoinput: "camera" }
 
@@ -108,6 +120,59 @@ function stopStream(stream) {
   }
 }
 
+// A short tone through the chosen output: OscillatorNode -> gain ->
+// MediaStreamDestination -> an `<audio>` given `setSinkId(sink)`. Returns a
+// handle whose `stop()` is idempotent, or null where there is no
+// AudioContext. `onEnd` runs once, however the tone stops.
+export async function playTestTone({ win, doc, sink = null, ms = TEST_TONE_MS, onEnd } = {}) {
+  const Ctx = win && (win.AudioContext || win.webkitAudioContext)
+  if (!Ctx || !doc) return null
+  let ctx = null
+  let osc = null
+  let audio = null
+  let timer = null
+  let done = false
+  const stop = () => {
+    if (done) return
+    done = true
+    if (timer) clearTimeout(timer)
+    try {
+      if (osc) osc.stop()
+    } catch (_e) {}
+    try {
+      if (audio) {
+        audio.pause()
+        audio.srcObject = null
+      }
+    } catch (_e) {}
+    try {
+      if (ctx) ctx.close()
+    } catch (_e) {}
+    if (typeof onEnd === "function") onEnd()
+  }
+  try {
+    ctx = new Ctx()
+    osc = ctx.createOscillator()
+    const gain = ctx.createGain()
+    gain.gain.value = 0.2
+    const dest = ctx.createMediaStreamDestination()
+    osc.frequency.value = 660
+    osc.connect(gain)
+    gain.connect(dest)
+    audio = doc.createElement("audio")
+    audio.srcObject = dest.stream
+    if (sink && typeof audio.setSinkId === "function") await audio.setSinkId(sink)
+    osc.start()
+    const p = audio.play()
+    if (p && typeof p.catch === "function") p.catch(() => {})
+    timer = setTimeout(stop, ms)
+  } catch (_e) {
+    stop()
+    return null
+  }
+  return { stop }
+}
+
 const MeetingDevicePanel = {
   mounted() {
     this._win = typeof window !== "undefined" ? window : null
@@ -145,6 +210,7 @@ const MeetingDevicePanel = {
 
     this._bindPanel(this._panel("popover"))
     this._bindPanel(this._panel("sheet"))
+    this._bindPanel(this._panel("inline"))
 
     this._onDevicesChanged = (e) => {
       const kind = e && e.detail && e.detail.kind
@@ -160,12 +226,23 @@ const MeetingDevicePanel = {
       if (this._open && d.kind) this._renderSection(d.kind)
     }
     this._onFallback = (e) => this.showNotice((e && e.detail) || {})
+    this._onOpenRequest = (e) => {
+      const d = (e && e.detail) || {}
+      if (d.id !== this.el.id) return
+      const section = d.section || "audioinput"
+      const container = d.container || "inline"
+      if (this._open && this._open.container === container && this._open.section === section) return
+      const opener =
+        this._triggerList().find((t) => t.getAttribute("data-devices-section") === section) || null
+      this.open({ container, section, opener, focus: false })
+    }
 
     const w = this._win
     if (w && typeof w.addEventListener === "function") {
       w.addEventListener(MD.DEVICES_CHANGED_EVENT, this._onDevicesChanged)
       w.addEventListener(MD.ACTIVE_DEVICE_EVENT, this._onActiveDevice)
       w.addEventListener(MD.DEVICE_FALLBACK_EVENT, this._onFallback)
+      w.addEventListener(OPEN_PANEL_EVENT, this._onOpenRequest)
     }
     this._observeMicToggle()
   },
@@ -181,6 +258,7 @@ const MeetingDevicePanel = {
       w.removeEventListener(MD.DEVICES_CHANGED_EVENT, this._onDevicesChanged)
       w.removeEventListener(MD.ACTIVE_DEVICE_EVENT, this._onActiveDevice)
       w.removeEventListener(MD.DEVICE_FALLBACK_EVENT, this._onFallback)
+      w.removeEventListener(OPEN_PANEL_EVENT, this._onOpenRequest)
     }
     if (this._micObserver) this._micObserver.disconnect()
     if (this._open && this._open.layer) this._open.layer.release()
@@ -219,23 +297,47 @@ const MeetingDevicePanel = {
       this.close()
       return Promise.resolve()
     }
-    const container = trigger.getAttribute("data-devices-container") || "popover"
+    let container = trigger.getAttribute("data-devices-container") || "popover"
+    if (container === "auto") container = this._autoContainer()
     const section = trigger.getAttribute("data-devices-section") || "audioinput"
     return this.open({ container, section, opener: trigger })
   },
 
-  async open({ container = "popover", section = "audioinput", opener = null } = {}) {
+  // `auto` (the lobby's Change): inline at `sm` and up, the sheet below.
+  _autoContainer() {
+    const w = this._win
+    try {
+      if (w && typeof w.matchMedia === "function" && w.matchMedia(INLINE_QUERY).matches) return "inline"
+    } catch (_e) {}
+    return this._panel("inline") && !this._panel("sheet") ? "inline" : "sheet"
+  },
+
+  async open({ container = "popover", section = "audioinput", opener = null, focus = true } = {}) {
     if (this._open) this.close()
     const panel = this._panel(container)
     if (!panel) return
     this.clearNotice()
-    this._open = { container, panel, opener, layer: null }
+    this._open = { container, section, panel, opener, layer: null }
     if (opener) opener.setAttribute("aria-expanded", "true")
+    if (container === "inline") {
+      // An accordion of ONE section: the one the Change link names.
+      for (const s of panel.querySelectorAll("[data-device-section]")) {
+        if (s.getAttribute("data-device-section") === section) s.removeAttribute("hidden")
+        else s.setAttribute("hidden", "")
+      }
+    }
     panel.removeAttribute("hidden")
     if (container === "popover") this._place(panel, opener)
 
     await this._renderAll()
     if (!this._open || this._open.panel !== panel) return
+
+    // Inline: no history layer, no outside-click close, focus stays where
+    // the person is unless they opened it from the keyboard or a click.
+    if (container === "inline") {
+      if (focus && opener && typeof opener.focus === "function") opener.focus()
+      return
+    }
 
     const focusTo = this._focusTarget(panel, section)
     const card = container === "sheet" ? panel.querySelector("[data-device-card]") : panel
@@ -311,9 +413,12 @@ const MeetingDevicePanel = {
 
   _sections() {
     if (!this._open) return []
-    return Array.from(this._open.panel.querySelectorAll("[data-device-list]")).map((l) =>
-      l.getAttribute("data-device-list"),
-    )
+    return Array.from(this._open.panel.querySelectorAll("[data-device-list]"))
+      .filter((l) => {
+        const s = typeof l.closest === "function" ? l.closest("[data-device-section]") : null
+        return !(s && s.hasAttribute("hidden"))
+      })
+      .map((l) => l.getAttribute("data-device-list"))
   },
 
   async _renderAll() {
@@ -424,7 +529,10 @@ const MeetingDevicePanel = {
     const doc = this._doc()
     const sheet = container === "sheet"
     const full = device.label
-    const shown = sheet ? full : MD.truncateMiddle(full, TRUNCATE_AT[kind] || 26)
+    // The lobby's inline accordion is the column's full width (~26rem),
+    // wider than the 20rem popover the TRUNCATE_AT budget is sized for.
+    const budget = (TRUNCATE_AT[kind] || 26) + (container === "inline" ? INLINE_EXTRA_CHARS : 0)
+    const shown = sheet ? full : MD.truncateMiddle(full, budget)
     const tags = []
     if (device.virtual) tags.push("virtual")
     if (device.default) tags.push("default")
@@ -531,6 +639,13 @@ const MeetingDevicePanel = {
 
   _onPanelKey(event) {
     const t = event.target
+    if (event.key === "Escape" && this._open && this._open.container === "inline") {
+      if (event.preventDefault) event.preventDefault()
+      const opener = this._open.opener
+      this.close()
+      if (opener && typeof opener.focus === "function") opener.focus()
+      return
+    }
     const row = t && typeof t.closest === "function" ? t.closest('[role="radio"]') : null
     if (!row) return
     const list = row.parentNode
@@ -805,62 +920,38 @@ const MeetingDevicePanel = {
 
   async testSound() {
     if (this._tone) return
-    const w = this._win
-    const Ctx = w && (w.AudioContext || w.webkitAudioContext)
-    const doc = this._doc()
-    if (!Ctx || !doc) return
     const button = this._open && this._open.panel.querySelector("[data-device-test-sound]")
     const room = this._room()
     const sink =
       (room && typeof room.getActiveDevice === "function" && room.getActiveDevice("audiooutput")) ||
       (MD.resolvePreferred("audiooutput").device || {}).deviceId ||
       null
-    let ctx
-    try {
-      ctx = new Ctx()
-      const osc = ctx.createOscillator()
-      const gain = ctx.createGain()
-      gain.gain.value = 0.2
-      const dest = ctx.createMediaStreamDestination()
-      osc.frequency.value = 660
-      osc.connect(gain)
-      gain.connect(dest)
-      const audio = doc.createElement("audio")
-      audio.srcObject = dest.stream
-      if (sink && typeof audio.setSinkId === "function") await audio.setSinkId(sink)
-      this._tone = { ctx, osc, audio, button }
-      if (button) button.setAttribute("data-playing", "true")
-      osc.start()
-      const p = audio.play()
-      if (p && typeof p.catch === "function") p.catch(() => {})
-      this._toneTimer = setTimeout(() => this._stopTone(), TEST_TONE_MS)
-    } catch (_e) {
-      this._stopTone()
-      if (ctx && !this._tone) {
-        try {
-          ctx.close()
-        } catch (_e2) {}
-      }
+    const pending = { stop() {} }
+    this._tone = pending
+    if (button) button.setAttribute("data-playing", "true")
+    const handle = await playTestTone({
+      win: this._win,
+      doc: this._doc(),
+      sink,
+      onEnd: () => {
+        if (button) button.removeAttribute("data-playing")
+        if (this._tone === pending || this._tone === handle) this._tone = null
+      },
+    })
+    if (!handle) {
+      if (button) button.removeAttribute("data-playing")
+      if (this._tone === pending) this._tone = null
+      return
     }
+    // Closed (or destroyed) while setSinkId was pending: do not play on.
+    if (this._tone === pending) this._tone = handle
+    else handle.stop()
   },
 
   _stopTone() {
-    if (this._toneTimer) clearTimeout(this._toneTimer)
-    this._toneTimer = null
     const t = this._tone
     this._tone = null
-    if (!t) return
-    try {
-      t.osc.stop()
-    } catch (_e) {}
-    try {
-      t.audio.pause()
-      t.audio.srcObject = null
-    } catch (_e) {}
-    try {
-      t.ctx.close()
-    } catch (_e) {}
-    if (t.button) t.button.removeAttribute("data-playing")
+    if (t) t.stop()
   },
 
   // ── the device-switched strap ─────────────────────────────────────

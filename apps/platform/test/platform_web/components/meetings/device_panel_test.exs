@@ -134,6 +134,147 @@ defmodule PlatformWeb.Components.Meetings.DevicePanelTest do
     end
   end
 
+  describe "lobby_devices/1 (task 01a1f4c5 stage 3)" do
+    defp lobby, do: render_component(&DevicePanel.lobby_devices/1, %{})
+    defp text(html, selector), do: html |> q(selector) |> LazyHTML.text() |> squish()
+    defp squish(s), do: s |> String.split() |> Enum.join(" ")
+
+    test "the heading, one row per kind in order, each with a Change link aimed at the lobby panel" do
+      html = lobby()
+
+      assert text(html, "#meeting-lobby-devices-title") == "You'll join with"
+
+      assert attr(html, ~s([data-role="meeting-lobby-device-row"]), "data-kind") ==
+               ~w(audioinput videoinput audiooutput)
+
+      change = ~s([data-role="meeting-lobby-device-change"])
+      assert count(html, change) == 3
+
+      assert attr(html, change, "data-devices-for") ==
+               List.duplicate("meeting-lobby-devices-panel", 3)
+
+      assert attr(html, change, "data-devices-container") == ~w(auto auto auto)
+      assert attr(html, change, "data-devices-section") == ~w(audioinput videoinput audiooutput)
+      assert attr(html, change, "aria-expanded") == ~w(false false false)
+
+      assert attr(html, change, "aria-label") ==
+               ["Change microphone", "Change camera", "Change speaker"]
+
+      for t <- html |> q(change) |> Enum.map(&(&1 |> LazyHTML.text() |> String.trim())) do
+        assert t == "Change"
+      end
+
+      for class <- attr(html, change, "class") do
+        assert class =~ "link"
+        assert class =~ "text-base-content"
+        assert class =~ "pointer-coarse:min-h-11"
+      end
+
+      # The icons the canvas names, one per row.
+      for icon <- ~w(hero-microphone hero-video-camera hero-speaker-wave) do
+        assert count(html, ~s([data-role="meeting-lobby-device-row"] .#{icon})) == 1
+      end
+    end
+
+    test "only the microphone row has a meter, only the speaker row has Test sound" do
+      html = lobby()
+
+      assert count(html, ~s([data-lobby-device="audioinput"] [data-lobby-meter])) == 1
+      assert count(html, "[data-lobby-meter]") == 1
+      assert count(html, "[data-lobby-meter] [data-meter-bar].bg-info") == 5
+      assert attr(html, "[data-lobby-meter]", "class") |> hd() =~ "bg-base-200"
+
+      assert count(html, ~s([data-lobby-device="audiooutput"] [data-lobby-test-sound])) == 1
+      assert count(html, "[data-lobby-test-sound]") == 1
+      assert text(html, "[data-lobby-test-sound]") == "Test sound"
+    end
+
+    test "the mic check carries the canvas's three lines verbatim, hidden until the hook runs" do
+      html = lobby()
+      line = ~s([data-role="meeting-lobby-mic-check"])
+
+      assert attr(html, line, "hidden") == [""]
+      assert attr(html, line, "aria-live") == ["polite"]
+
+      assert text(html, ~s(#{line} [data-mic-check-copy="invitation"])) ==
+               "Say something to check your microphone."
+
+      assert text(html, ~s(#{line} [data-mic-check-copy="heard"])) == "We can hear you"
+
+      assert text(html, ~s(#{line} [data-mic-check-copy="warning"])) ==
+               "No sound from this microphone. Try another?"
+
+      # Heard: a check. Warning: a warning-coloured ICON, base-content text.
+      assert attr(html, ~s([data-mic-check-icon="heard"]), "class") |> hd() =~ "hero-check"
+
+      warning_icon = attr(html, ~s([data-mic-check-icon="warning"]), "class") |> hd()
+      assert warning_icon =~ "hero-exclamation-triangle"
+      assert warning_icon =~ "text-warning"
+      assert attr(html, ~s([data-mic-check-icon="warning"]), "aria-hidden") == ["true"]
+      assert attr(html, line, "class") |> hd() =~ "text-base-content"
+      refute attr(html, line, "class") |> hd() =~ "text-warning"
+    end
+
+    test "the remembered-device lines, one per kind, hidden, in text-subtle" do
+      html = lobby()
+      sel = ~s([data-role="meeting-lobby-device-substituted"])
+
+      assert attr(html, sel, "data-kind") == ~w(audioinput videoinput audiooutput)
+      assert attr(html, sel, "hidden") == ["", "", ""]
+
+      assert html |> q(sel) |> Enum.map(&(&1 |> LazyHTML.text() |> squish())) == [
+               "Your usual microphone isn't connected.",
+               "Your usual camera isn't connected.",
+               "Your usual speaker isn't connected."
+             ]
+
+      for class <- attr(html, sel, "class"), do: assert(class =~ "text-subtle")
+    end
+
+    test "the rows sit in ONE ignored container; the panel hook holds an inline and a sheet panel" do
+      html = lobby()
+
+      assert attr(html, "#meeting-lobby-devices-rows", "phx-update") == ["ignore"]
+
+      assert count(html, ~s(#meeting-lobby-devices-rows [data-role="meeting-lobby-device-row"])) ==
+               3
+
+      assert count(html, ~s(#meeting-lobby-devices-rows [data-role="meeting-lobby-mic-check"])) ==
+               1
+
+      assert attr(html, "#meeting-lobby-devices-panel", "phx-hook") == ["MeetingDevicePanel"]
+      assert attr(html, "#meeting-lobby-devices-panel", "phx-update") == ["ignore"]
+
+      assert attr(
+               html,
+               ~s(#meeting-lobby-devices-panel [data-role="meeting-device-panel"]),
+               "data-container"
+             ) ==
+               ~w(inline sheet)
+
+      # The inline accordion starts collapsed, with every section for the
+      # hook to narrow to one.
+      assert attr(html, "#meeting-lobby-devices-panel-inline", "hidden") == [""]
+
+      assert attr(
+               html,
+               "#meeting-lobby-devices-panel-inline [data-device-section]",
+               "data-device-section"
+             ) ==
+               ~w(audioinput videoinput audiooutput)
+
+      assert count(html, "#meeting-lobby-devices-panel-sheet.fixed") == 1
+    end
+
+    test "no colour literal, no orange, no dimmed base-content in the block" do
+      html = lobby()
+      refute html =~ ~r/#[0-9a-fA-F]{3,8}\b/
+      refute html =~ ~r/(?<![-\w])(text|bg|border|ring)-primary(?![-\w])/
+      refute html =~ "btn-primary"
+      refute html =~ ~r/text-base-content\/\d+/
+    end
+  end
+
   describe "call_controls/1 with devices_id" do
     test "desktop carets and the 44px phone trigger render, aimed at this bar's panel" do
       html = controls(devices_id: "devs")

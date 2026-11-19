@@ -10,7 +10,12 @@ import {
   truncateMiddle,
   __resetForTests as resetDevices,
 } from "../../js/lib/media_devices.js"
-import MeetingDevicePanel, { MOVE_MS, noticeText } from "../../js/hooks/meeting_device_panel.js"
+import MeetingDevicePanel, {
+  MOVE_MS,
+  OPEN_PANEL_EVENT,
+  noticeText,
+} from "../../js/hooks/meeting_device_panel.js"
+import { getPreference } from "../../js/lib/media_devices.js"
 
 /**
  * The "Sound and video" panel hook (task 01a1f4c5 stage 2).
@@ -526,5 +531,146 @@ describe("pick by proof", () => {
     expect(rows("videoinput")[0].querySelector("[data-device-thumb]")).not.toBeNull()
     hook.close()
     expect(published.stop).not.toHaveBeenCalled()
+  })
+})
+
+// ── the lobby's Change links (task 01a1f4c5 stage 3) ──────────────────
+describe("the lobby: an auto trigger, the inline accordion and the sheet", () => {
+  function inlinePanel(id) {
+    const kinds = ["audioinput", "videoinput", "audiooutput"]
+    return h(
+      "div",
+      { id, "data-role": "meeting-device-panel", "data-container": "inline", hidden: "" },
+      kinds.map((k) => section(id, k, "inline")),
+    )
+  }
+
+  // The markup `DevicePanel.lobby_devices/1` renders.
+  function mountLobby() {
+    body = h("body")
+    const root = h("div", { id: "lp", "data-role": "meeting-devices" }, [
+      inlinePanel("lp-inline"),
+      panel("lp-sheet", "sheet"),
+    ])
+    const change = {}
+    const rowsEl = h(
+      "div",
+      {},
+      ["audioinput", "videoinput", "audiooutput"].map((kind) => {
+        change[kind] = h("button", {
+          "data-role": "meeting-lobby-device-change",
+          "data-devices-for": "lp",
+          "data-devices-container": "auto",
+          "data-devices-section": kind,
+          "aria-expanded": "false",
+        })
+        return change[kind]
+      }),
+    )
+    body.appendChild(rowsEl)
+    body.appendChild(root)
+    const hook = Object.create(MeetingDevicePanel)
+    hook.el = root
+    hook.mounted()
+    return { hook, root, change }
+  }
+
+  const inline = () => body.querySelector("#lp-inline")
+  const sheet = () => body.querySelector("#lp-sheet")
+  const visibleSections = () =>
+    inline()
+      .querySelectorAll("[data-device-section]")
+      .filter((s) => !s.hasAttribute("hidden"))
+      .map((s) => s.getAttribute("data-device-section"))
+
+  it("at sm and up, Change expands ONE section inline, with no history layer", async () => {
+    win.matchMedia = (q) => ({ matches: q === "(min-width: 640px)" })
+    const { change } = mountLobby()
+    click(change.videoinput)
+    await settle()
+
+    expect(inline().hasAttribute("hidden")).toBe(false)
+    expect(sheet().hasAttribute("hidden")).toBe(true)
+    expect(visibleSections()).toEqual(["videoinput"])
+    expect(liveRows("videoinput", "inline").map((r) => r.getAttribute("data-device-id"))).toEqual([
+      "cam-1",
+      "cam-2",
+    ])
+    // The hidden sections were not rendered (no capture for a hidden mic).
+    expect(rows("audioinput", "inline")).toEqual([])
+    expect(change.videoinput.getAttribute("aria-expanded")).toBe("true")
+    expect(win.history.pushState).not.toHaveBeenCalled()
+
+    // An outside pointerdown does not collapse an accordion.
+    doc.fire("pointerdown", { target: body })
+    expect(inline().hasAttribute("hidden")).toBe(false)
+
+    // The other Change switches the section; the same one collapses.
+    click(change.audioinput)
+    await settle()
+    expect(visibleSections()).toEqual(["audioinput"])
+    expect(change.videoinput.getAttribute("aria-expanded")).toBe("false")
+    click(change.audioinput)
+    expect(inline().hasAttribute("hidden")).toBe(true)
+    expect(change.audioinput.getAttribute("aria-expanded")).toBe("false")
+  })
+
+  it("below sm, the same Change opens the bottom sheet", async () => {
+    win.matchMedia = () => ({ matches: false })
+    const { change } = mountLobby()
+    click(change.audioinput)
+    await settle()
+    expect(sheet().hasAttribute("hidden")).toBe(false)
+    expect(inline().hasAttribute("hidden")).toBe(true)
+    expect(liveRows("audioinput", "sheet")).toHaveLength(4)
+  })
+
+  it("Esc inside the inline section collapses it and returns focus to Change", async () => {
+    win.matchMedia = (q) => ({ matches: q === "(min-width: 640px)" })
+    const { change } = mountLobby()
+    click(change.audioinput)
+    await settle()
+    const first = liveRows("audioinput", "inline")[0]
+    first.focus()
+    inline().fire("keydown", { key: "Escape", target: first, preventDefault() {} })
+    expect(inline().hasAttribute("hidden")).toBe(true)
+    expect(doc.activeElement).toBe(change.audioinput)
+  })
+
+  it("meeting:device-panel-open expands MICROPHONE inline without moving focus", async () => {
+    const { change } = mountLobby()
+    const elsewhere = h("input")
+    elsewhere.focus()
+    win.dispatchEvent(
+      new CustomEvent(OPEN_PANEL_EVENT, {
+        detail: { id: "lp", container: "inline", section: "audioinput" },
+      }),
+    )
+    await settle()
+    expect(visibleSections()).toEqual(["audioinput"])
+    expect(change.audioinput.getAttribute("aria-expanded")).toBe("true")
+    expect(doc.activeElement).toBe(elsewhere)
+
+    // Another panel's id is not ours.
+    win.dispatchEvent(
+      new CustomEvent(OPEN_PANEL_EVENT, { detail: { id: "other", container: "inline", section: "videoinput" } }),
+    )
+    await settle()
+    expect(visibleSections()).toEqual(["audioinput"])
+  })
+
+  it("a pick in the lobby only persists (no room) and announces the device", async () => {
+    win.matchMedia = (q) => ({ matches: q === "(min-width: 640px)" })
+    const seen = []
+    win.addEventListener(ACTIVE_DEVICE_EVENT, (e) => seen.push(e.detail))
+    const { change } = mountLobby()
+    click(change.audioinput)
+    await settle()
+    const bh = liveRows("audioinput", "inline").find((r) => r.getAttribute("data-device-id") === "bh-1")
+    click(bh)
+    await settle()
+    expect(seen.at(-1)).toMatchObject({ kind: "audioinput", deviceId: "bh-1" })
+    expect(getPreference("audioinput")).toEqual({ deviceId: "bh-1", label: "BlackHole 2ch" })
+    expect(bh.getAttribute("aria-checked")).toBe("true")
   })
 })

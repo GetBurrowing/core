@@ -242,6 +242,7 @@ defmodule PlatformWeb.MeetingLive do
   alias PlatformWeb.Components.Meetings.CallShell
   alias PlatformWeb.Components.Meetings.CallRailFrame
   alias PlatformWeb.Components.Meetings.CandidateRail
+  alias PlatformWeb.Components.Meetings.DevicePanel
   alias PlatformWeb.Components.Meetings.ParticipantRail
 
   import PlatformWeb.Components.Meetings.CallRailFrame, only: [rail_frame: 1]

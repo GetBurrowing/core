@@ -500,4 +500,105 @@ defmodule PlatformWeb.MeetingLiveLobbyTest do
       assert html =~ "Mic off"
     end
   end
+
+  # ── "You'll join with" (task 01a1f4c5 stage 3) ──────────────────────────
+
+  describe "the lobby's You'll join with block" do
+    defp lobby_html(view), do: view |> element(~s([data-role="meeting-lobby"])) |> render()
+
+    # `btn-primary` as a class token (not `btn-primary-content` or similar).
+    defp primary_count(html) do
+      ~r/class="([^"]*)"/
+      |> Regex.scan(html, capture: :all_but_first)
+      |> Enum.count(fn [class] -> "btn-primary" in String.split(class) end)
+    end
+
+    test "renders between the preview and the join form, with three rows and their Change links",
+         %{conn: conn} do
+      {view, html, _meeting} = open_lobby(conn)
+
+      assert assigns(view).state == :name_entry
+
+      assert has_element?(
+               view,
+               ~s([data-role="meeting-lobby"] [data-role="meeting-lobby-devices"])
+             )
+
+      assert html =~ "You'll join with"
+
+      {preview, _} = :binary.match(html, ~s(data-role="meeting-lobby-preview"))
+      {devices, _} = :binary.match(html, ~s(data-role="meeting-lobby-devices"))
+      {join_form, _} = :binary.match(html, ~s(data-role="meeting-lobby-join-form"))
+      assert preview < devices and devices < join_form
+
+      for kind <- ~w(audioinput videoinput audiooutput) do
+        assert has_element?(
+                 view,
+                 ~s([data-role="meeting-lobby-device-row"][data-kind="#{kind}"] [data-role="meeting-lobby-device-change"][data-devices-section="#{kind}"])
+               )
+      end
+
+      assert has_element?(view, ~s(#meeting-lobby-devices-panel[phx-hook="MeetingDevicePanel"]))
+      assert has_element?(view, ~s([data-role="meeting-lobby-mic-check"]))
+    end
+
+    test "the existing Mic and Camera toggles are unchanged", %{conn: conn} do
+      {view, _html, _meeting} = open_lobby(conn)
+
+      assert has_element?(
+               view,
+               ~s([data-role="meeting-lobby-mic"][phx-click="meeting_toggle_mic"][aria-label="Join with microphone off"][data-on="true"].min-h-11)
+             )
+
+      assert has_element?(
+               view,
+               ~s([data-role="meeting-lobby-camera"][phx-click="meeting_toggle_camera"][aria-label="Join with camera off"][data-on="true"].min-h-11)
+             )
+
+      # Still inside the preview tile, not moved into the new block.
+      assert has_element?(
+               view,
+               ~s([data-role="meeting-lobby-preview"] [data-role="meeting-lobby-mic"])
+             )
+
+      refute has_element?(
+               view,
+               ~s([data-role="meeting-lobby-devices"] [data-role="meeting-lobby-mic"])
+             )
+    end
+
+    test "the preview carries data-mic-enabled, and it follows the mic toggle", %{conn: conn} do
+      {view, _html, _meeting} = open_lobby(conn)
+
+      assert has_element?(view, ~s([data-role="meeting-lobby-preview"][data-mic-enabled="true"]))
+      toggle(view, "meeting-lobby-mic")
+      assert has_element?(view, ~s([data-role="meeting-lobby-preview"][data-mic-enabled="false"]))
+      # The camera attribute is independent of it.
+      assert has_element?(
+               view,
+               ~s([data-role="meeting-lobby-preview"][data-camera-enabled="true"])
+             )
+
+      # The block survives the re-render (its rows are client-owned).
+      assert has_element?(view, ~s(#meeting-lobby-devices-rows[phx-update="ignore"]))
+    end
+
+    test "Join is the ONLY btn-primary in the lobby", %{conn: conn} do
+      {view, _html, _meeting} = open_lobby(conn)
+      html = lobby_html(view)
+
+      assert primary_count(html) == 1
+      assert has_element?(view, ~s([data-role="meeting-lobby-join"].btn-primary))
+    end
+
+    test "Join leaves the lobby: the block (and the preview hook's element) is gone", %{
+      conn: conn
+    } do
+      {view, _html, _meeting} = open_lobby(conn)
+      join(view)
+
+      refute has_element?(view, ~s([data-role="meeting-lobby-devices"]))
+      refute has_element?(view, ~s([data-role="meeting-lobby-preview"]))
+    end
+  end
 end

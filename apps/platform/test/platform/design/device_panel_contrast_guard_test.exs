@@ -16,6 +16,7 @@ defmodule Platform.Design.DevicePanelContrastGuardTest do
   | selected check: base-content / base-100                    | 3     |
   | blocked / failed icon: error / base-100                    | 3     |
   | caret and phone trigger glyph: base-content / base-200     | 3     |
+  | lobby mic-check warning icon: warning / base-100 (stage 3) | 3     |
 
   `--subtle` is `color-mix(in oklab, base-content N%, transparent)`, so its
   pairs are PAINTED: the worst pixel `Platform.Design.PaintedComposite`
@@ -99,7 +100,8 @@ defmodule Platform.Design.DevicePanelContrastGuardTest do
       {"meter info / base-200", ratio(b, "--color-info", "--color-base-200"), @non_text},
       {"check / base-100", ratio(b, "--color-base-content", "--color-base-100"), @non_text},
       {"error icon / base-100", ratio(b, "--color-error", "--color-base-100"), @non_text},
-      {"caret glyph / base-200", ratio(b, "--color-base-content", "--color-base-200"), @non_text}
+      {"caret glyph / base-200", ratio(b, "--color-base-content", "--color-base-200"), @non_text},
+      {"warning icon / base-100", ratio(b, "--color-warning", "--color-base-100"), @non_text}
     ]
   end
 

@@ -226,6 +226,7 @@
         phx-hook="MeetingLobbyPreview"
         data-role="meeting-lobby-preview"
         data-camera-enabled={to_string(@camera_enabled)}
+        data-mic-enabled={to_string(@mic_enabled)}
         data-preview="off"
         class="group relative mt-4 aspect-[3/4] w-full overflow-hidden rounded-box border border-edge bg-base-300 sm:aspect-video"
       >
@@ -303,6 +304,12 @@
           </button>
         </div>
       </div>
+
+      <%!-- "You'll join with" (task 01a1f4c5 stage 3): WHICH microphone,
+         camera and speaker, the mic check, and the remembered-device lines.
+         Shared by both branches below, so the guest and the member see the
+         same block. The toggles above still own on / off. --%>
+      <DevicePanel.lobby_devices />
 
       <%!-- GUEST (`:name_entry`) collects a name; the signed-in MEMBER
          (`:lobby`) does not — the account already names them, so the member

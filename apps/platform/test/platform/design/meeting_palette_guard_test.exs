@@ -63,6 +63,8 @@ defmodule Platform.Design.MeetingPaletteGuardTest do
     # Task 01a1f4c5 stage 2: the Sound and video panel and its hook.
     "lib/platform_web/components/meetings/device_panel.ex",
     "assets/js/hooks/meeting_device_panel.js",
+    # Stage 3: the lobby's "You'll join with" rows, mic check and meter.
+    "assets/js/hooks/meeting_lobby_preview.js",
     "lib/platform_web/components/meetings/call_rail_frame.ex",
     "lib/platform_web/components/meetings/transcript_pane.ex",
     "lib/platform_web/components/meetings/agent_activity_badge.ex",
@@ -395,7 +397,7 @@ defmodule Platform.Design.MeetingPaletteGuardTest do
   # ── tests ─────────────────────────────────────────────────────────────
 
   test "the named file list is non-empty and every path exists" do
-    assert length(@files) == 26
+    assert length(@files) == 27
 
     for rel <- @files do
       assert File.regular?(Path.join(@root, rel)), "missing scope file: #{rel}"
