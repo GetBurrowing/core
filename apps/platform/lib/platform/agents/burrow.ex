@@ -24,7 +24,7 @@ defmodule Platform.Agents.Burrow do
   Whatever the harness, its instructions file carries the role and the setup
   guide (`identity_template/2`).
 
-  Creation goes through `Platform.Agents.NativeAgents.create/2` and so through
+  Creation goes through `Platform.Agents.NativeAgents.create/3` and so through
   `Platform.Federation.provision_agent_runtime/3`: on an empty install Burrow
   is the first external agent and takes `metadata.first_agent_grant`. There is
   no second grant path.
@@ -45,12 +45,16 @@ defmodule Platform.Agents.Burrow do
 
   ## Owner and admins
 
-  The owner is `Platform.Accounts.install_owner/0` (the earliest non-archived
-  root-org admin); admins are `Platform.Accounts.install_admins/0`. `admins_section/0` reads them from the database
-  each time and renders name and principal id (the user id). `start_files/1`
-  in `NativeAgents` appends that section to Burrow's instructions file, so
-  every `agent.start` carries the current list and a removed admin is gone at
-  the next start. The section is generated, never stored.
+  The owner is the user in Burrow's runtime `owner_user_id`: the root admin
+  who created it (task 01a19505), or whoever it was transferred to
+  (`NativeAgents.transfer_owner/4`). It is NOT `Platform.Accounts.install_owner/0`
+  (task 01a1f42d). Admins are `Platform.Accounts.install_admins/0`.
+  `admins_section/1` reads both from the database each time and renders name
+  and principal id (the user id); an owner who is not an admin is named and
+  marked as such, never dropped. `start_files/1` in `NativeAgents` appends that
+  section to Burrow's instructions file, so every `agent.start` carries the
+  current owner and list, and a removed admin is gone at the next start. The
+  section is generated, never stored.
   """
 
   require Logger
@@ -108,6 +112,10 @@ defmodule Platform.Agents.Burrow do
   first, then stopped, moved to `harness` (a running one too) and started, so
   its next `agent.start` carries no starter key. That is why a running starter
   Burrow, unlike any other running Burrow, is restarted here.
+
+  `owner_id` is the root admin acting right now (ConnectAiLive's signed-in
+  user, task 01a19505), so a create here is audited with them as its actor
+  (`NativeAgents.create/3`, path `"connect_ai"`).
   """
   @spec ensure(binary(), String.t()) :: {:ok, Agent.t()} | {:error, term()}
   def ensure(owner_id, harness) when is_binary(owner_id) and harness in ~w(claude_code codex) do
@@ -126,6 +134,9 @@ defmodule Platform.Agents.Burrow do
   Create Burrow on the starter key for `owner_id`, mark it, and start it.
   `{:ok, agent}` for the one that exists when any Burrow already does (nothing
   is changed), `{:error, :no_starter_key}` without a configured key.
+
+  `owner_id` is the admin signing in (`Starter.provision/1`), and the create
+  is audited with them as its actor (path `"starter"`).
   """
   @spec ensure_starter(binary()) :: {:ok, Agent.t()} | {:error, term()}
   def ensure_starter(owner_id) when is_binary(owner_id) do
@@ -133,7 +144,10 @@ defmodule Platform.Agents.Burrow do
          nil <- get() do
       # The mark goes on before the first start, so that start carries the key.
       with {:ok, agent, _runtime} <-
-             NativeAgents.create(owner_id, %{name: @name, harness: harness_for(:api_key)}),
+             NativeAgents.create(owner_id, %{name: @name, harness: harness_for(:api_key)},
+               actor: owner_id,
+               path: "starter"
+             ),
            {:ok, agent} <- Starter.activate(agent),
            {:ok, agent} <- start(agent) do
         assign_default_roles({:ok, agent})
@@ -184,7 +198,10 @@ defmodule Platform.Agents.Burrow do
   end
 
   defp create(owner_id, harness) do
-    case NativeAgents.create(owner_id, %{name: @name, harness: harness}) do
+    case NativeAgents.create(owner_id, %{name: @name, harness: harness},
+           actor: owner_id,
+           path: "connect_ai"
+         ) do
       {:ok, agent, _runtime} ->
         start(agent)
 
@@ -254,19 +271,14 @@ defmodule Platform.Agents.Burrow do
   @doc "Root-org admins as `%{id, name}`; see `Platform.Accounts.install_admins/0`."
   defdelegate admins, to: Platform.Accounts, as: :install_admins
 
-  @doc "The install owner; see `Platform.Accounts.install_owner/0`."
-  defdelegate owner, to: Platform.Accounts, as: :install_owner
-
-  @doc "The generated owner / admins section appended to Burrow's instructions file."
-  @spec admins_section() :: String.t()
-  def admins_section do
+  @doc """
+  The generated owner / admins section appended to `agent`'s (Burrow's)
+  instructions file. The Owner line names the runtime's `owner_user_id`.
+  """
+  @spec admins_section(Agent.t() | nil) :: String.t()
+  def admins_section(agent) do
     admins = admins()
-
-    owner_line =
-      case admins do
-        [o | _] -> "- Owner: #{o.name} (principal #{o.id})"
-        [] -> "- Owner: none"
-      end
+    owner_line = owner_line(runtime_owner(agent), admins)
 
     admin_lines =
       case admins do
@@ -284,6 +296,28 @@ defmodule Platform.Agents.Burrow do
 
     #{Enum.join(admin_lines, "\n")}
     """
+  end
+
+  defp runtime_owner(agent) do
+    case NativeAgents.get_managed_runtime(agent) do
+      %AgentRuntime{owner_user_id: id} when is_binary(id) -> {id, Platform.Accounts.get_user(id)}
+      _ -> nil
+    end
+  end
+
+  defp owner_line(nil, _admins), do: "- Owner: none recorded on this agent's runtime"
+
+  defp owner_line({id, nil}, _admins),
+    do: "- Owner: principal #{id}, which is no longer a user of this install"
+
+  defp owner_line({id, user}, admins) do
+    base = "- Owner: #{user.name} (principal #{id})"
+
+    cond do
+      user.archived_at -> base <> ". This user is archived and is not an admin of this install."
+      Enum.any?(admins, &(&1.id == id)) -> base
+      true -> base <> ". This user is not an admin of this install."
+    end
   end
 
   @doc """

@@ -661,4 +661,116 @@ defmodule Platform.AccountsTest do
       assert {:error, :not_found} = Accounts.note_sign_in_link_expiry(user, @later)
     end
   end
+
+  # Task 01a1f42d stage 3. The production shape that broke the old order:
+  # every root-org membership backfilled in one statement, so all share an
+  # `inserted_at`, with random v4 membership ids. Ordering by membership id
+  # then picked whichever admin's random id sorted first.
+  describe "install_admins/0 and install_owner/0 — backfilled memberships" do
+    defp backfilled_user!(label, inserted_at, archived? \\ false) do
+      n = System.unique_integer([:positive])
+
+      Repo.insert!(%Accounts.User{
+        email: "backfill-#{label}-#{n}@example.com",
+        name: "Backfill #{label} #{n}",
+        oidc_sub: "oidc-backfill-#{label}-#{n}",
+        inserted_at: inserted_at,
+        updated_at: inserted_at,
+        archived_at: if(archived?, do: DateTime.utc_now())
+      })
+    end
+
+    defp backfilled_membership!(user, role, id_suffix) do
+      id = "00000000-0000-4000-8000-" <> String.pad_leading("#{id_suffix}", 12, "0")
+
+      Repo.insert!(%OrgMembership{
+        id: id,
+        user_id: user.id,
+        org_id: Tenancy.get_org_by_slug!("acme").id,
+        role: role
+      })
+
+      id
+    end
+
+    setup do
+      # User insert times: the oldest admin is created first; the demoted
+      # member and the archived former admin are older still, so only the
+      # role and archive filters keep them out.
+      demoted = backfilled_user!("demoted", ~N[2019-01-01 00:00:00])
+      archived = backfilled_user!("archived-admin", ~N[2019-02-01 00:00:00], true)
+      oldest_admin = backfilled_user!("oldest-admin", ~N[2020-01-01 00:00:00])
+      middle_admin = backfilled_user!("middle-admin", ~N[2021-01-01 00:00:00])
+      newest_admin = backfilled_user!("newest-admin", ~N[2022-01-01 00:00:00])
+      member_a = backfilled_user!("member-a", ~N[2023-01-01 00:00:00])
+      member_b = backfilled_user!("member-b", ~N[2023-02-01 00:00:00])
+
+      # Membership ids: the archived former admin's sorts lowest overall, and
+      # among the live admins the NEWEST admin's sorts lowest and the oldest
+      # admin's highest — the reverse of the intended order.
+      ids = [
+        backfilled_membership!(archived, "admin", 1),
+        backfilled_membership!(newest_admin, "admin", 2),
+        # Demoted from admin: the row is a member row now.
+        backfilled_membership!(demoted, "member", 3),
+        backfilled_membership!(member_a, "member", 4),
+        backfilled_membership!(middle_admin, "admin", 5),
+        backfilled_membership!(member_b, "member", 6),
+        backfilled_membership!(oldest_admin, "admin", 7)
+      ]
+
+      # One instant for all seven memberships, earlier than any other row in
+      # the sandbox, so these memberships are the earliest in the root org.
+      {7, _} =
+        Repo.update_all(
+          from(m in OrgMembership,
+            where: m.id in type(^ids, {:array, Platform.Types.UUIDv7}),
+            update: [
+              set: [
+                inserted_at: fragment("'2000-01-01 00:00:00'::timestamp"),
+                updated_at: fragment("'2000-01-01 00:00:00'::timestamp")
+              ]
+            ]
+          ),
+          []
+        )
+
+      %{
+        ids: ids,
+        oldest_admin: oldest_admin,
+        middle_admin: middle_admin,
+        newest_admin: newest_admin,
+        archived: archived,
+        demoted: demoted
+      }
+    end
+
+    test "the shape holds: seven memberships share one inserted_at", %{ids: ids} do
+      stamps =
+        Repo.all(
+          from(m in OrgMembership,
+            where: m.id in type(^ids, {:array, Platform.Types.UUIDv7}),
+            select: m.inserted_at
+          )
+        )
+
+      assert length(stamps) == 7
+      assert stamps |> Enum.uniq() |> length() == 1
+    end
+
+    test "install_owner/0 is the oldest non-archived admin by user inserted_at", ctx do
+      assert Accounts.install_owner().id == ctx.oldest_admin.id
+
+      ordered = Accounts.install_admins() |> Enum.map(& &1.id) |> Enum.take(3)
+      assert ordered == [ctx.oldest_admin.id, ctx.middle_admin.id, ctx.newest_admin.id]
+
+      admin_ids = Enum.map(Accounts.install_admins(), & &1.id)
+      refute ctx.archived.id in admin_ids
+      refute ctx.demoted.id in admin_ids
+    end
+
+    test "the result is the same on every call", ctx do
+      for _ <- 1..5, do: assert(Accounts.install_owner().id == ctx.oldest_admin.id)
+    end
+  end
 end

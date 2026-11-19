@@ -185,7 +185,11 @@ defmodule PlatformWeb.ControlCenter.NativeAgentEvents do
   end
 
   defp create(owner_id, name, harness, socket) do
-    case NativeAgents.create(owner_id, %{name: name, harness: harness}) do
+    # The signed-in user both owns and creates it.
+    case NativeAgents.create(owner_id, %{name: name, harness: harness},
+           actor: owner_id,
+           path: "control_center"
+         ) do
       {:ok, agent, _runtime} ->
         _ = AgentHost.start_agent(agent)
 

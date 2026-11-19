@@ -113,6 +113,7 @@ defmodule PlatformWeb.ControlCenterLive do
      |> assign(:external_agent_form, AgentData.build_external_agent_form())
      |> assign(:probe_result, nil)
      |> assign(:regenerated_token, nil)
+     |> assign(:owner_transfer, nil)
      |> assign(:show_add_space_modal, false)
      |> assign(:available_spaces, [])
      |> assign(:available_meeting_spaces, [])
@@ -355,6 +356,13 @@ defmodule PlatformWeb.ControlCenterLive do
     "dismiss_regenerated_token" => :ui,
     "save_tool_profile" => :manage_selected,
     "save_agent_restrictions" => :manage_selected,
+    # Owner control (task 01a1f42d stage 4). :ui because the authority is
+    # `NativeAgents.transfer_owner/4` itself (owner or install admin), which
+    # `RuntimeEvents` calls; :manage_selected would add a second, different
+    # rule in front of it.
+    "owner_transfer_review" => :ui,
+    "owner_transfer_confirm" => :ui,
+    "owner_transfer_cancel" => :ui,
     "set_accepts_chat" => :manage_selected,
     # Grant panel (task 01a1a2e4-9265 stage 3): org admin of the selected
     # agent's owner org, never :manage_selected (a member owner manages
@@ -898,6 +906,15 @@ defmodule PlatformWeb.ControlCenterLive do
   defp handle_control_event("save_agent_restrictions", params, socket),
     do: RuntimeEvents.handle("save_agent_restrictions", params, socket)
 
+  defp handle_control_event("owner_transfer_review", params, socket),
+    do: RuntimeEvents.handle("owner_transfer_review", params, socket)
+
+  defp handle_control_event("owner_transfer_confirm", params, socket),
+    do: RuntimeEvents.handle("owner_transfer_confirm", params, socket)
+
+  defp handle_control_event("owner_transfer_cancel", params, socket),
+    do: RuntimeEvents.handle("owner_transfer_cancel", params, socket)
+
   defp handle_control_event(
          "set_accepts_chat",
          %{"agent_chat" => %{"accepts_chat" => value}},
@@ -1253,6 +1270,7 @@ defmodule PlatformWeb.ControlCenterLive do
                 can_grant?={@can_grant?}
                 grant_panel={@grant_panel}
                 sheet_refusal={@sheet_refusal}
+                owner_transfer={@owner_transfer}
                 can_manage?={
                   Platform.Access.Agents.manage?(@access_scope, @selected_agent) and
                     (is_nil(@native_header) or @native_header.can_manage?)
