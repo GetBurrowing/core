@@ -45,12 +45,16 @@ defmodule Platform.Agents.Burrow do
 
   ## Owner and admins
 
-  The owner is `Platform.Accounts.install_owner/0` (the earliest non-archived
-  root-org admin); admins are `Platform.Accounts.install_admins/0`. `admins_section/0` reads them from the database
-  each time and renders name and principal id (the user id). `start_files/1`
-  in `NativeAgents` appends that section to Burrow's instructions file, so
-  every `agent.start` carries the current list and a removed admin is gone at
-  the next start. The section is generated, never stored.
+  The owner is the user in Burrow's runtime `owner_user_id`: the root admin
+  who created it (task 01a19505), or whoever it was transferred to
+  (`NativeAgents.transfer_owner/4`). It is NOT `Platform.Accounts.install_owner/0`
+  (task 01a1f42d). Admins are `Platform.Accounts.install_admins/0`.
+  `admins_section/1` reads both from the database each time and renders name
+  and principal id (the user id); an owner who is not an admin is named and
+  marked as such, never dropped. `start_files/1` in `NativeAgents` appends that
+  section to Burrow's instructions file, so every `agent.start` carries the
+  current owner and list, and a removed admin is gone at the next start. The
+  section is generated, never stored.
   """
 
   require Logger
@@ -267,19 +271,14 @@ defmodule Platform.Agents.Burrow do
   @doc "Root-org admins as `%{id, name}`; see `Platform.Accounts.install_admins/0`."
   defdelegate admins, to: Platform.Accounts, as: :install_admins
 
-  @doc "The install owner; see `Platform.Accounts.install_owner/0`."
-  defdelegate owner, to: Platform.Accounts, as: :install_owner
-
-  @doc "The generated owner / admins section appended to Burrow's instructions file."
-  @spec admins_section() :: String.t()
-  def admins_section do
+  @doc """
+  The generated owner / admins section appended to `agent`'s (Burrow's)
+  instructions file. The Owner line names the runtime's `owner_user_id`.
+  """
+  @spec admins_section(Agent.t() | nil) :: String.t()
+  def admins_section(agent) do
     admins = admins()
-
-    owner_line =
-      case admins do
-        [o | _] -> "- Owner: #{o.name} (principal #{o.id})"
-        [] -> "- Owner: none"
-      end
+    owner_line = owner_line(runtime_owner(agent), admins)
 
     admin_lines =
       case admins do
@@ -297,6 +296,28 @@ defmodule Platform.Agents.Burrow do
 
     #{Enum.join(admin_lines, "\n")}
     """
+  end
+
+  defp runtime_owner(agent) do
+    case NativeAgents.get_managed_runtime(agent) do
+      %AgentRuntime{owner_user_id: id} when is_binary(id) -> {id, Platform.Accounts.get_user(id)}
+      _ -> nil
+    end
+  end
+
+  defp owner_line(nil, _admins), do: "- Owner: none recorded on this agent's runtime"
+
+  defp owner_line({id, nil}, _admins),
+    do: "- Owner: principal #{id}, which is no longer a user of this install"
+
+  defp owner_line({id, user}, admins) do
+    base = "- Owner: #{user.name} (principal #{id})"
+
+    cond do
+      user.archived_at -> base <> ". This user is archived and is not an admin of this install."
+      Enum.any?(admins, &(&1.id == id)) -> base
+      true -> base <> ". This user is not an admin of this install."
+    end
   end
 
   @doc """

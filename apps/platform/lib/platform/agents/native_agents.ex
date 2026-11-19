@@ -721,7 +721,7 @@ defmodule Platform.Agents.NativeAgents do
     section =
       if burrow?,
         do:
-          Platform.Agents.Burrow.admins_section() <>
+          Platform.Agents.Burrow.admins_section(agent) <>
             Platform.Agents.Burrow.Starter.instructions_section(agent),
         else: ""
 
