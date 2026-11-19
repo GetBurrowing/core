@@ -50,6 +50,17 @@ const cache = new Map()
 // that just disappeared is, by definition, no longer in the current list.
 const labels = new Map()
 const lastActive = new Map()
+// The device each kind is ACTUALLY on, resolved to a concrete device
+// ("default" -> the device it maps to, by groupId): `{deviceId, label}`.
+// Fed by every `meeting:active-device` this module announces.
+const inUse = new Map()
+// The device a kind was on before something OTHER than a person's pick
+// moved it (livekit's own recovery), kept until the next devicechange is
+// handled: that is the device that may just have been unplugged.
+const displaced = new Map()
+// kind -> Set of deviceIds whose loss was already announced, so one unplug
+// is announced once however many handlers see the devicechange.
+const announcedLoss = new Map()
 
 function isKind(kind) {
   return KINDS.includes(kind)
@@ -62,6 +73,19 @@ function emit(name, detail) {
     w.dispatchEvent(new CustomEvent(name, { detail }))
   } catch (_err) {
     // A page without CustomEvent has no listener to tell.
+  }
+}
+
+// A real MediaDeviceInfo keeps deviceId, kind, label and groupId as getters on
+// its PROTOTYPE: `{ ...info }` and `Object.assign({}, info)` copy nothing, and
+// every row came out with no deviceId and an empty label (task 01a1f4c5 stage
+// 5). Read each field by name.
+export function copyDeviceInfo(info, kind) {
+  return {
+    deviceId: info.deviceId,
+    kind: info.kind || kind,
+    label: info.label,
+    groupId: info.groupId,
   }
 }
 
@@ -101,7 +125,7 @@ export async function listDevices(kind) {
   }
   const devices = raw
     .filter((d) => d && d.label && (!d.kind || d.kind === kind))
-    .map((d) => decorate({ ...d, kind: d.kind || kind }))
+    .map((d) => decorate(copyDeviceInfo(d, kind)))
   for (const d of devices) labels.set(d.deviceId, d.label)
   cache.set(kind, devices)
   return devices
@@ -249,6 +273,41 @@ export function registeredRooms() {
   return registry.map((entry) => ({ ...entry }))
 }
 
+// ── what each kind is really on ────────────────────────────────────────
+
+// `deviceId` as the concrete device it means in `list`. "default" is an alias
+// whose LABEL changes when the device behind it goes away ("Default - AirPods"
+// becomes "Default - MacBook Pro Microphone") while its deviceId stays
+// listed, so presence of "default" says nothing: resolve it by groupId.
+export function resolveConcrete(deviceId, list = []) {
+  if (!deviceId) return null
+  const entry = (list || []).find((d) => d && d.deviceId === deviceId)
+  if (deviceId === "default") {
+    const groupId = entry && entry.groupId
+    const real =
+      groupId && (list || []).find((d) => d && d.deviceId !== "default" && d.groupId === groupId)
+    if (real) return { deviceId: real.deviceId, label: real.label }
+    return entry ? { deviceId: "default", label: entry.label } : null
+  }
+  return { deviceId, label: (entry && entry.label) || labelFor(deviceId) }
+}
+
+function noteInUse(kind, deviceId, { picked = false } = {}) {
+  const now = resolveConcrete(deviceId, cachedDevices(kind))
+  if (picked) displaced.delete(kind)
+  if (!now) return
+  const was = inUse.get(kind)
+  if (!picked && was && was.deviceId !== now.deviceId && !displaced.has(kind)) {
+    displaced.set(kind, was)
+  }
+  inUse.set(kind, now)
+}
+
+export function deviceInUse(kind) {
+  const d = inUse.get(kind)
+  return d ? { ...d } : null
+}
+
 // ── switching ──────────────────────────────────────────────────────────
 
 // Announce the device a kind is on. Consecutive duplicates are dropped (the
@@ -258,6 +317,7 @@ export function announceActiveDevice(kind, deviceId, { force = false } = {}) {
   if (!isKind(kind)) return
   if (!force && lastActive.get(kind) === deviceId) return
   lastActive.set(kind, deviceId)
+  noteInUse(kind, deviceId)
   emit(ACTIVE_DEVICE_EVENT, { kind, deviceId: deviceId || null, label: labelFor(deviceId) })
 }
 
@@ -284,49 +344,91 @@ export async function selectDevice(kind, deviceId, { room = activeRoom() } = {})
       const current =
         typeof room.getActiveDevice === "function" ? room.getActiveDevice(kind) : undefined
       announceActiveDevice(kind, current, { force: true })
+      noteInUse(kind, current, { picked: true })
       return { ok: false, error, deviceId: current }
     }
   }
 
   setPreference(kind, { deviceId, label })
   announceActiveDevice(kind, deviceId)
+  // A person's pick is never a "disconnected" device.
+  noteInUse(kind, deviceId, { picked: true })
   return { ok: true }
 }
 
-// RoomEvent.MediaDevicesChanged: re-list every kind, and move any kind whose
-// active device is gone onto `fallbackFor`. Deliberately blind to mute: the
-// muted-at-unplug person is the case livekit leaves on a dead device.
+// RoomEvent.MediaDevicesChanged: re-list every kind and, for any kind whose
+// device went away, make sure it is on a working one and SAY so. Deliberately
+// blind to mute: the muted-at-unplug person is the case livekit leaves on a
+// dead device.
+//
+// The lost device is the one the kind was ACTUALLY on (`inUse`, or the one
+// livekit's own recovery just moved it off, `displaced`), never a fresh read
+// of `room.getActiveDevice`: livekit usually recovers FIRST (handleTrackEnded
+// when unmuted, selectDefaultDevices when muted), so by the time this runs
+// the room already reports a present device, or "default" which never
+// disappears (task 01a1f4c5 stage 5). Whoever moved it, the strap names the
+// lost device and the one now in use.
 export async function handleDevicesChanged(room, { kinds = KINDS } = {}) {
   const moved = []
   for (const kind of kinds) {
     if (kind === "audiooutput" && !supportsOutputSelection()) continue
+    const before = cachedDevices(kind)
     const devices = await listDevices(kind)
     emit(DEVICES_CHANGED_EVENT, { kind })
     if (!room || typeof room.getActiveDevice !== "function") continue
-    if (devices.length === 0) continue
-    const active = room.getActiveDevice(kind)
-    if (!active || devices.some((d) => d.deviceId === active)) continue
 
-    const target = fallbackFor(kind, active, devices)
-    if (!target) continue
-    const fromLabel = labelFor(active)
-    try {
-      await room.switchActiveDevice(kind, target.deviceId)
-    } catch (err) {
-      console.warn(`[media_devices] fallback for ${kind} failed`, err && err.message)
-      continue
+    const seen = announcedLoss.get(kind)
+    if (seen) for (const d of devices) seen.delete(d.deviceId)
+    if (devices.length === 0) continue
+
+    const present = (d) => !!d && devices.some((x) => x.deviceId === d.deviceId && x.deviceId !== "default")
+    const current = inUse.get(kind) || resolveConcrete(room.getActiveDevice(kind), before)
+    const earlier = displaced.get(kind)
+    displaced.delete(kind)
+
+    let lost = null
+    if (current && current.deviceId !== "default" && !present(current)) lost = current
+    else if (earlier && earlier.deviceId !== "default" && !present(earlier)) lost = earlier
+    if (!lost) continue
+    if (seen && seen.has(lost.deviceId)) continue
+
+    // Where the room is now; move it only if that is gone too.
+    let active = room.getActiveDevice(kind)
+    let now = resolveConcrete(active, devices)
+    const usable = active && devices.some((d) => d.deviceId === active) && now && now.deviceId !== lost.deviceId
+    if (!usable) {
+      const target = fallbackFor(kind, lost.deviceId, devices)
+      if (!target) continue
+      try {
+        await room.switchActiveDevice(kind, target.deviceId)
+      } catch (err) {
+        console.warn(`[media_devices] fallback for ${kind} failed`, err && err.message)
+        continue
+      }
+      active = target.deviceId
+      now = resolveConcrete(active, devices) || { deviceId: target.deviceId, label: target.label }
     }
-    announceActiveDevice(kind, target.deviceId)
+
+    // Another handler (the bar and the client both listen) may have got here
+    // during the awaits.
+    const marks = announcedLoss.get(kind) || new Set()
+    if (marks.has(lost.deviceId)) continue
+    marks.add(lost.deviceId)
+    announcedLoss.set(kind, marks)
+
+    announceActiveDevice(kind, active)
+    inUse.set(kind, now)
+    displaced.delete(kind)
     // `surface` lets a panel ignore a fallback in a room it does not drive
     // (the Voice tab's room is not the meeting's; task 01a1f4c5 stage 4).
     const surface = surfaceOf(room)
     emit(DEVICE_FALLBACK_EVENT, {
       kind,
-      fromLabel,
-      toLabel: target.label,
+      fromLabel: lost.label || labelFor(lost.deviceId),
+      toLabel: now.label,
       ...(surface ? { surface } : {}),
     })
-    moved.push({ kind, from: active, to: target.deviceId })
+    moved.push({ kind, from: lost.deviceId, to: active })
   }
   return moved
 }
@@ -362,6 +464,9 @@ export function __resetForTests() {
   cache.clear()
   labels.clear()
   lastActive.clear()
+  inUse.clear()
+  displaced.clear()
+  announcedLoss.clear()
   registry.length = 0
   if (watching) watching.stop()
 }

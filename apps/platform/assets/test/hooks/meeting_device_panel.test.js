@@ -16,6 +16,7 @@ import MeetingDevicePanel, {
   noticeText,
 } from "../../js/hooks/meeting_device_panel.js"
 import { getPreference } from "../../js/lib/media_devices.js"
+import { asDeviceInfos } from "../lib/fake_media_devices.js"
 
 /**
  * The "Sound and video" panel hook (task 01a1f4c5 stage 2).
@@ -232,7 +233,7 @@ beforeEach(() => {
     userAgent:
       "Mozilla/5.0 (Macintosh) AppleWebKit/537.36 (KHTML, like Gecko) Chrome/131.0.0.0 Safari/537.36",
     mediaDevices: {
-      enumerateDevices: () => Promise.resolve(devices.map((d) => ({ ...d }))),
+      enumerateDevices: () => Promise.resolve(asDeviceInfos(devices)),
       getUserMedia: (c) => {
         const s = fakeStream(JSON.stringify(c))
         gum.push(s)
@@ -462,6 +463,116 @@ describe("keyboard", () => {
     expect(pop.hasAttribute("hidden")).toBe(true)
     expect(micCaret.getAttribute("aria-expanded")).toBe("false")
     expect(doc.activeElement).toBe(micCaret)
+  })
+})
+
+// A history that behaves like Chrome's: pushState is synchronous and drops
+// forward entries; back() is ASYNCHRONOUS and resolves against the entry
+// current when it was CALLED, then fires popstate. The vi.fn history above
+// cannot show the stage 5 bug, where a close-then-reopen left the next Esc
+// going back off the meeting page.
+function chromeHistory(w, urls) {
+  const entries = urls.map((url) => ({ url, state: null }))
+  let index = entries.length - 1
+  const history = {
+    calls: { push: 0, back: 0 },
+    get length() {
+      return entries.length
+    },
+    get state() {
+      return entries[index].state
+    },
+    get index() {
+      return index
+    },
+    pushState(state, _title, url) {
+      history.calls.push += 1
+      entries.splice(index + 1)
+      entries.push({ url: url || entries[index].url, state })
+      index = entries.length - 1
+    },
+    back() {
+      history.calls.back += 1
+      const target = Math.max(0, index - 1)
+      setTimeout(() => {
+        if (target === index) return
+        index = target
+        w.dispatchEvent(new Event("popstate"))
+      }, 0)
+    },
+  }
+  w.history = history
+  w.location = {
+    get href() {
+      return entries[index].url
+    },
+  }
+  return history
+}
+
+describe("switching carets with the popover open (stage 5 review)", () => {
+  async function openMicThenCamera() {
+    const history = chromeHistory(win, ["http://x/previous", "http://x/meetings/m"])
+    const room = fakeRoom({ audioinput: "air-1", videoinput: "cam-1" })
+    registerRoom(room, "meeting")
+    const dom = mount()
+    click(dom.micCaret)
+    await settle()
+    const lengthAfterOpen = history.length
+    history.calls.push = 0
+    history.calls.back = 0
+    click(dom.camCaret)
+    await settle()
+    return { history, room, lengthAfterOpen, ...dom }
+  }
+
+  it("reuses the open layer: the popover is on CAMERA, focused there, and no history moved", async () => {
+    const { hook, history, lengthAfterOpen, micCaret, camCaret } = await openMicThenCamera()
+    expect(hook.isOpen()).toBe(true)
+    expect(history.length).toBe(lengthAfterOpen)
+    // Not a close and a reopen: no back(), no second entry.
+    expect(history.calls).toEqual({ push: 0, back: 0 })
+    expect(micCaret.getAttribute("aria-expanded")).toBe("false")
+    expect(camCaret.getAttribute("aria-expanded")).toBe("true")
+    expect(doc.activeElement).toBe(rows("videoinput")[0])
+  })
+
+  it("then Esc closes the popover and stays on the meeting page", async () => {
+    const { hook, history, room, lengthAfterOpen, camCaret } = await openMicThenCamera()
+
+    win.dispatchEvent(Object.assign(new Event("keydown"), { key: "Escape" }))
+    await settle()
+    await settle()
+
+    expect(hook.isOpen()).toBe(false)
+    expect(win.location.href).toBe("http://x/meetings/m")
+    expect(history.index).toBe(1)
+    expect(history.length).toBe(lengthAfterOpen)
+    expect(doc.activeElement).toBe(camCaret)
+    // The call is still up: the room the panel drives is still registered.
+    expect(hook._room()).toBe(room)
+
+    // And the NEXT open and Esc still stay put.
+    click(camCaret)
+    await settle()
+    win.dispatchEvent(Object.assign(new Event("keydown"), { key: "Escape" }))
+    await settle()
+    await settle()
+    expect(win.location.href).toBe("http://x/meetings/m")
+  })
+
+  it("then an outside click closes the popover and stays on the meeting page", async () => {
+    const { hook, history, room, lengthAfterOpen } = await openMicThenCamera()
+
+    doc.fire("pointerdown", { target: body })
+    await settle()
+    await settle()
+
+    expect(hook.isOpen()).toBe(false)
+    expect(win.location.href).toBe("http://x/meetings/m")
+    expect(history.index).toBe(1)
+    expect(history.length).toBe(lengthAfterOpen)
+    expect(hook._room()).toBe(room)
   })
 })
 

@@ -11,6 +11,7 @@ import {
   selectDevice,
   __resetForTests,
 } from "../../js/lib/media_devices.js"
+import { asDeviceInfos } from "../lib/fake_media_devices.js"
 
 /**
  * MeetingClient on the shared media-device layer (task 01a1f4c5 stage 1).
@@ -192,7 +193,7 @@ beforeEach(() => {
   vi.stubGlobal("navigator", {
     userAgent: "Mozilla/5.0 (Macintosh) AppleWebKit/537.36 (KHTML, like Gecko) Chrome/131.0.0.0 Safari/537.36",
     mediaDevices: {
-      enumerateDevices: () => Promise.resolve(devices.map((d) => ({ ...d }))),
+      enumerateDevices: () => Promise.resolve(asDeviceInfos(devices)),
       addEventListener() {},
       removeEventListener() {},
     },
@@ -335,6 +336,142 @@ describe("MediaDevicesChanged: the active microphone disappears", () => {
     await settle()
     expect(room.switched).toEqual([])
     expect(events.some(([n]) => n === DEVICE_FALLBACK_EVENT)).toBe(false)
+  })
+})
+
+// Stage 5 review, on a real LiveKit room: livekit usually recovers FIRST.
+// Unmuted, `handleTrackEnded` restarts the track (ActiveDeviceChanged) before
+// MediaDevicesChanged; muted, `selectDefaultDevices` runs inside livekit's
+// own devicechange handler before it emits MediaDevicesChanged. Either way
+// `getActiveDevice` already names a present device (or "default", which
+// never disappears) when our handler runs, so reading it after recovery
+// announced nothing. The strap must name the device the person was ACTUALLY
+// on. Real groupIds: Chrome's "default" entry shares its device's groupId.
+describe("the strap when livekit recovers first (stage 5)", () => {
+  const PLUGGED = [
+    { kind: "audioinput", deviceId: "default", label: "Default - AirPods Pro", groupId: "gA" },
+    { kind: "audioinput", deviceId: "air-1", label: "AirPods Pro", groupId: "gA" },
+    { kind: "audioinput", deviceId: "mbp-1", label: "MacBook Pro Microphone", groupId: "gM" },
+  ]
+  const UNPLUGGED = [
+    { kind: "audioinput", deviceId: "default", label: "Default - MacBook Pro Microphone", groupId: "gM" },
+    { kind: "audioinput", deviceId: "mbp-1", label: "MacBook Pro Microphone", groupId: "gM" },
+  ]
+  const STRAP = {
+    kind: "audioinput",
+    fromLabel: "AirPods Pro",
+    toLabel: "MacBook Pro Microphone",
+    surface: "meeting",
+  }
+  const straps = () => events.filter(([n]) => n === DEVICE_FALLBACK_EVENT).map(([, d]) => d)
+
+  async function joinedOn(deviceId, { micEnabled }) {
+    devices = [...PLUGGED, ...CAMS, ...OUTS]
+    const hook = buildHook()
+    await hook._join({ ...PAYLOAD, mic_enabled: micEnabled, camera_enabled: false })
+    const room = livekitFake.created[0]
+    room.active.set("audioinput", deviceId)
+    // What livekit emits when the mic track publishes.
+    room.emit(RoomEvent.ActiveDeviceChanged, "audioinput", deviceId)
+    await settle()
+    events.length = 0
+    room.switched.length = 0
+    return room
+  }
+
+  function unplugAirPods() {
+    devices = [...UNPLUGGED, ...CAMS, ...OUTS]
+  }
+
+  it("unmuted: handleTrackEnded restarted the track on 'default' BEFORE MediaDevicesChanged", async () => {
+    const room = await joinedOn("air-1", { micEnabled: true })
+    unplugAirPods()
+    room.active.set("audioinput", "default")
+    room.emit(RoomEvent.ActiveDeviceChanged, "audioinput", "default")
+    room.emit(RoomEvent.MediaDevicesChanged)
+    await settle()
+
+    expect(straps()).toEqual([STRAP])
+    // livekit already moved it: nothing for us to switch.
+    expect(room.switched).toEqual([])
+  })
+
+  it("muted: selectDefaultDevices moved it to the first mic BEFORE MediaDevicesChanged", async () => {
+    const room = await joinedOn("air-1", { micEnabled: false })
+    unplugAirPods()
+    await room.switchActiveDevice("audioinput", "default")
+    room.emit(RoomEvent.ActiveDeviceChanged, "audioinput", "default")
+    room.switched.length = 0
+    room.emit(RoomEvent.MediaDevicesChanged)
+    await settle()
+
+    expect(straps()).toEqual([STRAP])
+    expect(room.switched).toEqual([])
+  })
+
+  it("on 'default' (Chrome): the entry stays listed but now means another mic", async () => {
+    const room = await joinedOn("default", { micEnabled: false })
+    unplugAirPods()
+    // livekit's Chrome branch: same deviceId, new label, active is default.
+    room.emit(RoomEvent.ActiveDeviceChanged, "audioinput", "default")
+    room.emit(RoomEvent.MediaDevicesChanged)
+    await settle()
+
+    expect(straps()).toEqual([STRAP])
+    expect(room.switched).toEqual([])
+  })
+
+  it("devicechange first: the strap appears exactly once, however many handlers and echoes follow", async () => {
+    const room = await joinedOn("air-1", { micEnabled: false })
+    unplugAirPods()
+    // The bar and the client both listen: two runs of the handler.
+    room.emit(RoomEvent.MediaDevicesChanged)
+    room.emit(RoomEvent.MediaDevicesChanged)
+    await settle()
+    // livekit's late echo of the move, and another devicechange.
+    room.emit(RoomEvent.ActiveDeviceChanged, "audioinput", "default")
+    room.emit(RoomEvent.MediaDevicesChanged)
+    await settle()
+
+    expect(straps()).toEqual([STRAP])
+    expect(room.switched).toEqual([["audioinput", "default", undefined]])
+  })
+
+  it("a device that was NOT in use going away: no strap", async () => {
+    const room = await joinedOn("air-1", { micEnabled: true })
+    devices = [PLUGGED[0], PLUGGED[1], ...CAMS, ...OUTS]
+    room.emit(RoomEvent.MediaDevicesChanged)
+    await settle()
+
+    expect(straps()).toEqual([])
+    expect(room.switched).toEqual([])
+  })
+
+  it("a person's own pick is never announced as a disconnect", async () => {
+    const room = await joinedOn("air-1", { micEnabled: true })
+    expect((await selectDevice("audioinput", "mbp-1")).ok).toBe(true)
+    room.emit(RoomEvent.ActiveDeviceChanged, "audioinput", "mbp-1")
+    unplugAirPods()
+    room.emit(RoomEvent.MediaDevicesChanged)
+    await settle()
+
+    expect(straps()).toEqual([])
+  })
+
+  it("unplugged again after a re-plug: announced again", async () => {
+    const room = await joinedOn("air-1", { micEnabled: true })
+    unplugAirPods()
+    room.emit(RoomEvent.MediaDevicesChanged)
+    await settle()
+    devices = [...PLUGGED, ...CAMS, ...OUTS]
+    room.emit(RoomEvent.MediaDevicesChanged)
+    await settle()
+    expect((await selectDevice("audioinput", "air-1")).ok).toBe(true)
+    unplugAirPods()
+    room.emit(RoomEvent.MediaDevicesChanged)
+    await settle()
+
+    expect(straps()).toEqual([STRAP, STRAP])
   })
 })
 

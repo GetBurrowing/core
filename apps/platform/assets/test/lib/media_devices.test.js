@@ -19,6 +19,7 @@ import {
   unregisterRoom,
   __resetForTests,
 } from "../../js/lib/media_devices.js"
+import { asDeviceInfos } from "./fake_media_devices.js"
 
 /**
  * The shared media-device layer (task 01a1f4c5 stage 1).
@@ -64,7 +65,7 @@ function stubBrowser() {
     userAgent:
       "Mozilla/5.0 (Macintosh; Intel Mac OS X 10_15_7) AppleWebKit/537.36 (KHTML, like Gecko) Chrome/131.0.0.0 Safari/537.36",
     mediaDevices: {
-      enumerateDevices: () => Promise.resolve(devices.map((d) => ({ ...d }))),
+      enumerateDevices: () => Promise.resolve(asDeviceInfos(devices)),
       addEventListener() {},
       removeEventListener() {},
     },
@@ -97,6 +98,26 @@ describe("listDevices", () => {
     expect(list.find((d) => d.deviceId === "air-1").virtual).toBe(false)
     expect(list.find((d) => d.deviceId === "default").default).toBe(true)
     expect(list.find((d) => d.deviceId === "mbp-1").default).toBe(false)
+  })
+
+  // A browser's MediaDeviceInfo has no own properties: its fields are getters
+  // on the prototype. A spread of one is `{}` (stage 5 review: every row in
+  // real Chrome was blank, with no data-device-id).
+  it("reads every field of a getter-only MediaDeviceInfo (a spread copies none)", async () => {
+    const info = asDeviceInfos([AIRPODS])[0]
+    expect(Object.keys(info)).toEqual([])
+    expect({ ...info }).toEqual({})
+
+    devices = [AIRPODS]
+    const [row] = await listDevices("audioinput")
+    expect(row).toEqual({
+      deviceId: "air-1",
+      kind: "audioinput",
+      label: "AirPods Pro",
+      groupId: "g1",
+      virtual: false,
+      default: false,
+    })
   })
 })
 
@@ -273,7 +294,8 @@ describe("handleDevicesChanged", () => {
     expect(events.find(([n]) => n === DEVICE_FALLBACK_EVENT)[1]).toEqual({
       kind: "audioinput",
       fromLabel: "AirPods Pro",
-      toLabel: "Default - MacBook Pro Microphone",
+      // "default" is named as the device it maps to (same groupId), stage 5.
+      toLabel: "MacBook Pro Microphone",
     })
   })
 

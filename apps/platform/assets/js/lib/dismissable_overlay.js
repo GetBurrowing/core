@@ -17,6 +17,12 @@
 //     that echoes back is marked consumed so it cannot close the next layer.
 //   - Focus moves to the layer's close control on open and returns to
 //     returnFocusTo on close.
+//   - A layer opened while a close's history.back() is still in flight
+//     (back() is asynchronous; one overlay closing as another opens) waits
+//     for that echo before pushing its own entry. Chrome resolves back()
+//     against the entry current when it was CALLED, so a push in between is
+//     left forward of the traversal, and the next close's back() leaves the
+//     page (task 01a1f4c5 stage 5: a meeting dropped the person on Esc).
 //
 // The close-bar contract both overlay callers use is exported below as class
 // names; the rules live in app.css under `.overlay-close-bar` /
@@ -33,6 +39,9 @@ let installedOn = null
 let onPopState = null
 let onKeyDown = null
 let consumedPops = 0
+// Layers opened while a consumed back() was in flight: their entry is
+// pushed once the last echo lands.
+const pendingPush = []
 let nextId = 1
 
 function win() {
@@ -45,6 +54,7 @@ function install(w) {
   onPopState = () => {
     if (consumedPops > 0) {
       consumedPops -= 1
+      if (consumedPops === 0) flushPendingPushes()
       return
     }
     const top = stack[stack.length - 1]
@@ -60,6 +70,27 @@ function install(w) {
   w.addEventListener("popstate", onPopState)
   w.addEventListener("keydown", onKeyDown, true)
   installedOn = w
+}
+
+function pushEntry(layer) {
+  const w = win()
+  layer.pending = false
+  if (w && w.history && typeof w.history.pushState === "function") {
+    w.history.pushState({ ...(w.history.state || {}), overlayDepth: stack.indexOf(layer) + 1 }, "", w.location.href)
+  }
+}
+
+function flushPendingPushes() {
+  while (pendingPush.length > 0) {
+    const layer = pendingPush.shift()
+    if (!layer.closed) pushEntry(layer)
+  }
+}
+
+function dropPending(layer) {
+  const i = pendingPush.indexOf(layer)
+  if (i !== -1) pendingPush.splice(i, 1)
+  layer.pending = false
 }
 
 function uninstall() {
@@ -84,7 +115,11 @@ function finish(layer, { popped, runOnClose = true }) {
   if (i !== -1) stack.splice(i, 1)
   layer.unbindSwipe()
   if (runOnClose && typeof layer.onClose === "function") layer.onClose()
-  if (!popped) {
+  // A layer whose entry was never pushed has nothing of its own to go back
+  // over: a back() here would pop the page.
+  const hadEntry = !layer.pending
+  dropPending(layer)
+  if (!popped && hadEntry) {
     const w = win()
     if (w && w.history && typeof w.history.back === "function") {
       consumedPops += 1
@@ -172,11 +207,15 @@ export function openLayer({ el, onClose, swipeTarget, canSwipe, returnFocusTo, c
     onClose,
     returnFocusTo,
     closed: false,
+    pending: false,
     unbindSwipe: () => {},
   }
   stack.push(layer)
-  if (w && w.history && typeof w.history.pushState === "function") {
-    w.history.pushState({ ...(w.history.state || {}), overlayDepth: stack.length }, "", w.location.href)
+  if (consumedPops > 0) {
+    layer.pending = true
+    pendingPush.push(layer)
+  } else {
+    pushEntry(layer)
   }
   layer.unbindSwipe = bindSwipe(layer, swipeTarget, canSwipe)
   const control =
@@ -195,7 +234,13 @@ export function openLayer({ el, onClose, swipeTarget, canSwipe, returnFocusTo, c
       layer.closed = true
       const i = stack.indexOf(layer)
       if (i !== -1) stack.splice(i, 1)
+      dropPending(layer)
       layer.unbindSwipe()
+    },
+    // Point focus-on-close somewhere else: a panel retargeted to another
+    // opener while it stays open (no close, so no history traffic).
+    setReturnFocusTo(el) {
+      layer.returnFocusTo = el
     },
     isOpen() {
       return !layer.closed
@@ -211,6 +256,7 @@ export function openLayerCount() {
 /** Tests only: drop every layer and listener. */
 export function __resetForTests() {
   stack.length = 0
+  pendingPush.length = 0
   consumedPops = 0
   uninstall()
 }

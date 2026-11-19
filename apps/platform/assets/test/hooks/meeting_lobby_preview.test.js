@@ -14,6 +14,7 @@ import {
   truncateMiddle,
   __resetForTests,
 } from "../../js/lib/media_devices.js"
+import { asDeviceInfos } from "../lib/fake_media_devices.js"
 
 /**
  * `MeetingLobbyPreview` (task 01a07410 / FE-17 stage 4) mirrors the
@@ -439,7 +440,7 @@ describe("the lobby's You'll join with block", () => {
       userAgent:
         "Mozilla/5.0 (Macintosh) AppleWebKit/537.36 (KHTML, like Gecko) Chrome/131.0.0.0 Safari/537.36",
       mediaDevices: {
-        enumerateDevices: () => Promise.resolve(devices.map((d) => ({ ...d }))),
+        enumerateDevices: () => Promise.resolve(asDeviceInfos(devices)),
         getUserMedia: (constraints) => {
           const track = { stopped: false, stop: vi.fn(function () { this.stopped = true }) }
           const s = { constraints, track, getTracks: () => [track] }

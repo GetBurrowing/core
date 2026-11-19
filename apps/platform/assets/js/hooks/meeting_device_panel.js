@@ -327,6 +327,15 @@ const MeetingDevicePanel = {
   },
 
   async open({ container = "popover", section = "audioinput", opener = null, focus = true } = {}) {
+    // Already open in this container (the mic caret, then the camera caret):
+    // keep the open layer and retarget it. Closing and reopening ran the
+    // layer's history.back() and then pushed a new entry before that
+    // asynchronous back() landed, so the next Esc or outside click went back
+    // OFF the meeting page and dropped the person from the call (task
+    // 01a1f4c5 stage 5).
+    if (this._open && this._open.container === container && this._open.layer) {
+      return this._retarget({ section, opener, focus })
+    }
     if (this._open) this.close()
     const panel = this._panel(container)
     if (!panel) return
@@ -375,6 +384,27 @@ const MeetingDevicePanel = {
     const doc = this._doc()
     if (doc && typeof doc.addEventListener === "function") {
       doc.addEventListener("pointerdown", this._onOutside, true)
+    }
+  },
+
+  // Point the open popover / sheet at another section and opener without
+  // closing it: no history traffic at all.
+  async _retarget({ section, opener }) {
+    const open = this._open
+    if (open.opener && open.opener !== opener) open.opener.setAttribute("aria-expanded", "false")
+    if (opener) opener.setAttribute("aria-expanded", "true")
+    open.opener = opener
+    open.section = section
+    if (typeof open.layer.setReturnFocusTo === "function") open.layer.setReturnFocusTo(opener)
+    this.clearNotice()
+    if (open.container === "popover") this._place(open.panel, opener)
+    await this._renderAll()
+    if (this._open !== open) return
+    const target = this._focusTarget(open.panel, section)
+    if (target && typeof target.focus === "function") {
+      try {
+        target.focus({ preventScroll: true })
+      } catch (_e) {}
     }
   },
 

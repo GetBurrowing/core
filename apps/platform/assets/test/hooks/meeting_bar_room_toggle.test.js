@@ -2,6 +2,7 @@ import { describe, it, expect, beforeEach, afterEach, vi } from "vitest"
 import { RoomEvent } from "livekit-client"
 import MeetingBar from "../../js/hooks/meeting_bar.js"
 import { registerRoom, __resetForTests as resetDevices } from "../../js/lib/media_devices.js"
+import { asDeviceInfos } from "../lib/fake_media_devices.js"
 
 // Task 01a1e82a remediation round 2, finding 2. On a shell page (/calendar,
 // /inbox) the bar's Mic / Cam pushed `meeting_toggle_*` to the shell, which
@@ -287,7 +288,7 @@ describe("a device unplugged on a page with no call client", () => {
     vi.stubGlobal("navigator", {
       userAgent: "Mozilla/5.0 (Macintosh) AppleWebKit/537.36 (KHTML, like Gecko) Chrome/131.0.0.0 Safari/537.36",
       mediaDevices: {
-        enumerateDevices: () => Promise.resolve(MICS.map((d) => ({ ...d }))),
+        enumerateDevices: () => Promise.resolve(asDeviceInfos(MICS)),
         addEventListener() {},
         removeEventListener() {},
       },

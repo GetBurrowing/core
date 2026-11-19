@@ -3,6 +3,7 @@ import { Room, RemoteAudioTrack, RemoteParticipant } from "livekit-client"
 import MeetingClient from "../../js/hooks/meeting_client.js"
 import { __resetForTests as resetClientState } from "../../js/client_state.js"
 import { registerRoom, selectDevice, __resetForTests } from "../../js/lib/media_devices.js"
+import { asDeviceInfos } from "../lib/fake_media_devices.js"
 
 /**
  * Speaker selection reaches remote audio (task 01a1f4c5 stage 1).
@@ -87,10 +88,10 @@ beforeEach(() => {
       "Mozilla/5.0 (Macintosh; Intel Mac OS X 10_15_7) AppleWebKit/537.36 (KHTML, like Gecko) Chrome/131.0.0.0 Safari/537.36",
     mediaDevices: {
       enumerateDevices: () =>
-        Promise.resolve([
+        Promise.resolve(asDeviceInfos([
           { kind: "audiooutput", deviceId: "out-1", label: "MacBook Pro Speakers" },
           { kind: "audiooutput", deviceId: "out-2", label: "AirPods Pro" },
-        ]),
+        ])),
     },
   })
   vi.stubGlobal("document", {
