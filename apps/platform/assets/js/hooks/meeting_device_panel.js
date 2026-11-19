@@ -261,6 +261,13 @@ const MeetingDevicePanel = {
     this._observeMicToggle()
   },
 
+  // The hook root is not patched when the controls row is, so this is a
+  // backstop, not the main path (that is the structural watch).
+  updated() {
+    this._ensureMicObserved()
+    this._applyMicName()
+  },
+
   destroyed() {
     this._destroyed = true
     const doc0 = this._doc()
@@ -275,6 +282,10 @@ const MeetingDevicePanel = {
       w.removeEventListener(OPEN_PANEL_EVENT, this._onOpenRequest)
     }
     if (this._micObserver) this._micObserver.disconnect()
+    if (this._micTreeObserver) this._micTreeObserver.disconnect()
+    this._micObserver = null
+    this._micTreeObserver = null
+    this._observedToggle = null
     if (this._open && this._open.layer) this._open.layer.release()
     this._teardown()
     this._stopTone()
@@ -1035,6 +1046,7 @@ const MeetingDevicePanel = {
   },
 
   showNotice({ kind, fromLabel, toLabel } = {}) {
+    this._ensureMicObserved()
     const slot = this._slot()
     if (!slot || !toLabel) return
     const doc = this._doc()
@@ -1149,6 +1161,7 @@ const MeetingDevicePanel = {
   },
 
   _applyMicName() {
+    this._ensureMicObserved()
     const toggle = this._micToggle()
     if (!toggle || !this._micName) return
     const suffix = `, ${this._micName}`
@@ -1159,23 +1172,53 @@ const MeetingDevicePanel = {
     if (toggle.getAttribute("title") !== title) toggle.setAttribute("title", title)
   },
 
+  // LiveView REPLACES the mic toggle (joining swaps the lobby-era button
+  // ~100 ms after Join) without remounting this root, so the node found in
+  // mounted() can go stale. A structural watch notices the swap and moves
+  // the attribute observer to the CURRENT node, even when nothing else
+  // happens before the server's next aria-label rewrite on it.
   _observeMicToggle() {
-    const toggle = this._micToggle()
     const w = this._win
     const MO = w && w.MutationObserver
-    if (!toggle || !MO) return
-    let wasOn = toggle.getAttribute("data-on")
-    this._micObserver = new MO(() => {
-      const on = toggle.getAttribute("data-on")
-      // Unmuting clears a microphone strap.
-      if (wasOn === "false" && on === "true" && this._notice && this._notice.kind === "audioinput") {
-        this.clearNotice()
-      }
-      wasOn = on
-      // A LiveView patch rewrites aria-label on every mute; put the name back.
-      this._applyMicName()
-    })
+    if (!MO) return
+    this._micWasOn = null
+    this._micObserver = new MO(() => this._onMicToggleMutated())
+    const doc = this._doc()
+    const root = doc && (doc.body || doc.documentElement)
+    if (root) {
+      this._micTreeObserver = new MO(() => this._ensureMicObserved())
+      this._micTreeObserver.observe(root, { childList: true, subtree: true })
+    }
+    this._ensureMicObserved()
+  },
+
+  // Cheap when nothing moved: one querySelector and an identity check.
+  _ensureMicObserved() {
+    if (this._destroyed || !this._micObserver) return
+    const toggle = this._micToggle()
+    if (toggle === this._observedToggle) return
+    this._micObserver.disconnect()
+    this._observedToggle = toggle || null
+    if (!toggle) return
+    // wasOn carries across the swap: a new node that arrives muted and then
+    // flips to on is an unmute, whichever node saw the "false".
+    const on = toggle.getAttribute("data-on")
+    if (on !== null) this._micWasOn = on
     this._micObserver.observe(toggle, { attributes: true, attributeFilter: ["aria-label", "data-on"] })
+    this._applyMicName()
+  },
+
+  _onMicToggleMutated() {
+    const toggle = this._observedToggle
+    if (!toggle) return
+    const on = toggle.getAttribute("data-on")
+    // Unmuting clears a microphone strap.
+    if (this._micWasOn === "false" && on === "true" && this._notice && this._notice.kind === "audioinput") {
+      this.clearNotice()
+    }
+    if (on !== null) this._micWasOn = on
+    // A LiveView patch rewrites aria-label on every mute; put the name back.
+    this._applyMicName()
   },
 }
 

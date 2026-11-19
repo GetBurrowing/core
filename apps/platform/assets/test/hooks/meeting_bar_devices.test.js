@@ -4,6 +4,9 @@ import { watchRoomDevices } from "../../js/hooks/meeting_bar.js"
 import { __resetForTests as resetClientState } from "../../js/client_state.js"
 import { DEVICE_FALLBACK_EVENT, registerRoom, __resetForTests } from "../../js/lib/media_devices.js"
 import { asDeviceInfos } from "../lib/fake_media_devices.js"
+import MeetingDevicePanel from "../../js/hooks/meeting_device_panel.js"
+import { fakeDocument } from "../lib/fake_dom.js"
+import { installFakeMutationObservers } from "../lib/fake_mutation_observer.js"
 
 /**
  * The in-call top bar on a page with no call client (/calendar, /inbox) is
@@ -147,5 +150,92 @@ describe("the top bar's strap with no pick (stage 5 round 2)", () => {
     await settle()
 
     expect(events).toEqual([STRAP])
+  })
+})
+
+// v2 stage 1, review round 3 case 7006: on /tasks the bar's mic button never
+// named the fallback device, because it was not the panel's mic toggle.
+describe("the top-bar mic button after a fallback (v2 stage 1)", () => {
+  let fmo
+  let fdoc
+  let body
+
+  function h(tag, attrs = {}, children = []) {
+    const n = fdoc.createElement(tag)
+    for (const [k, v] of Object.entries(attrs)) n.setAttribute(k, v)
+    for (const c of children) n.appendChild(typeof c === "string" ? fdoc.createTextNode(c) : c)
+    return n
+  }
+
+  beforeEach(() => {
+    fmo = installFakeMutationObservers()
+    win.MutationObserver = fmo.MutationObserver
+    fdoc = fakeDocument()
+    body = h("body")
+    fdoc.querySelector = (sel) => body.querySelector(sel)
+    fdoc.querySelectorAll = (sel) => body.querySelectorAll(sel)
+    Object.defineProperty(fdoc, "body", { get: () => body, configurable: true })
+    vi.stubGlobal("document", fdoc)
+  })
+  afterEach(() => fmo.restore())
+
+  // The markup MeetingBarLive renders with devices: the bar's mic button is
+  // the panel's mic toggle, and the panel root is the bar's sibling.
+  function mountBar() {
+    const mic = h(
+      "button",
+      {
+        "data-bar-mic": "",
+        "data-devices-toggle": "meeting-bar-devices",
+        "data-on": "true",
+        "aria-label": "Mic on",
+        title: "Mute mic",
+      },
+      ["Mic on"],
+    )
+    const bar = h("div", { id: "meeting-top-bar" }, [mic])
+    const root = h(
+      "div",
+      { id: "meeting-bar-devices", "data-role": "meeting-devices", "data-devices-notice": "when-alone" },
+      [
+        h("div", {
+          id: "meeting-bar-devices-notice",
+          "data-role": "meeting-bar-device-notice",
+          role: "status",
+          "aria-live": "polite",
+        }),
+      ],
+    )
+    body.appendChild(bar)
+    body.appendChild(root)
+    const hook = Object.create(MeetingDevicePanel)
+    hook.el = root
+    hook.mounted()
+    return { hook, mic }
+  }
+
+  it("the top-bar mic button names the fallback device", async () => {
+    const { hook, mic } = mountBar()
+    win.dispatchEvent(
+      new CustomEvent(DEVICE_FALLBACK_EVENT, {
+        detail: { kind: "audioinput", fromLabel: "AirPods Pro", toLabel: "BlackHole 2ch", surface: "meeting" },
+      }),
+    )
+    const strap = body.querySelector('[data-role="meeting-device-notice"]')
+    expect(strap, "the bar shows the strap").not.toBeNull()
+    strap.querySelector("[data-notice-dismiss]").fire("click", {})
+    expect(body.querySelector('[data-role="meeting-device-notice"]')).toBeNull()
+    await settle()
+
+    expect(mic.getAttribute("aria-label"), "the bar mic's aria-label names mic 2").toBe(
+      "Mic on, BlackHole 2ch",
+    )
+    expect(mic.getAttribute("title"), "the bar mic's title names mic 2").toBe("Microphone: BlackHole 2ch")
+
+    // The server's next patch after a mute.
+    mic.setAttribute("aria-label", "Mic off")
+    await settle()
+    expect(mic.getAttribute("aria-label")).toBe("Mic off, BlackHole 2ch")
+    hook.destroyed()
   })
 })

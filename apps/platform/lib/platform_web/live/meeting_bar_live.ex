@@ -246,6 +246,10 @@ defmodule PlatformWeb.MeetingBarLive do
           <button
             type="button"
             data-bar-mic
+            phx-mounted={@devices? && JS.ignore_attributes(["title"])}
+            data-devices-toggle={@devices? && @devices_id}
+            data-on={@devices? && to_string(@mic_on)}
+            aria-label={@devices? && if(@mic_on, do: "Mic on", else: "Mic off")}
             disabled={@mic_pending}
             aria-busy={if @mic_pending, do: "true"}
             aria-pressed={if @mic_on, do: "false", else: "true"}

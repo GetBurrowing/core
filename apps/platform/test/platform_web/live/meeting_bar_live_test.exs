@@ -404,5 +404,36 @@ defmodule PlatformWeb.MeetingBarLiveTest do
       d = doc(Map.put(@meeting_assigns, :in_call_room, true))
       refute present?(d, "#meeting-bar-devices")
     end
+
+    # Task 01a1f4c5 v2 stage 1: the shared panel hook names the fallback
+    # device on the bar's mic button the way it does on the room's.
+    test "the mic button is the panel's mic toggle, with a server aria-label" do
+      d = doc(@meeting_assigns)
+
+      assert attr(d, "[data-bar-mic]", "data-devices-toggle") == "meeting-bar-devices"
+      assert attr(d, "[data-bar-mic]", "data-on") == "true"
+      assert attr(d, "[data-bar-mic]", "aria-label") == "Mic on"
+      mounted = attr(d, "[data-bar-mic]", "phx-mounted")
+      assert mounted =~ "ignore_attrs"
+      assert mounted =~ "title"
+
+      off = doc(Map.put(@meeting_assigns, :mic_on, false))
+      assert attr(off, "[data-bar-mic]", "data-on") == "false"
+      assert attr(off, "[data-bar-mic]", "aria-label") == "Mic off"
+    end
+
+    test "native mode leaves the mic button without the toggle wiring" do
+      d =
+        doc(
+          Map.merge(@meeting_assigns, %{
+            native: %{mic: true, camera: true, active_speakers: true}
+          })
+        )
+
+      assert attr(d, "[data-bar-mic]", "data-devices-toggle") == nil
+      assert attr(d, "[data-bar-mic]", "data-on") == nil
+      assert attr(d, "[data-bar-mic]", "aria-label") == nil
+      assert attr(d, "[data-bar-mic]", "phx-mounted") == nil
+    end
   end
 end

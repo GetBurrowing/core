@@ -17,6 +17,7 @@ import MeetingDevicePanel, {
 } from "../../js/hooks/meeting_device_panel.js"
 import { getPreference } from "../../js/lib/media_devices.js"
 import { asDeviceInfos } from "../lib/fake_media_devices.js"
+import { installFakeMutationObservers } from "../lib/fake_mutation_observer.js"
 
 /**
  * The "Sound and video" panel hook (task 01a1f4c5 stage 2).
@@ -433,6 +434,116 @@ describe("the device-switched strap", () => {
     click(body.querySelector("[data-notice-dismiss]"))
     expect(micToggle.getAttribute("aria-label")).toBe("Mute microphone, MacBook Pro Microphone")
     expect(micToggle.getAttribute("title")).toBe("Microphone: MacBook Pro Microphone")
+  })
+})
+
+// v2 stage 1, review round 3 case 7006: about 100 ms after Join LiveView
+// REPLACES the mic toggle while the panel root stays mounted, and the next
+// server patch rewrites aria-label on the NEW node. The name must survive.
+describe("the mic toggle is followed across a LiveView swap", () => {
+  let fmo
+  beforeEach(() => {
+    fmo = installFakeMutationObservers()
+    win.MutationObserver = fmo.MutationObserver
+    // The structural watch observes document.body; buildDom() makes it.
+    Object.defineProperty(doc, "body", { get: () => body, configurable: true })
+  })
+  afterEach(() => fmo.restore())
+
+  const fallback = () =>
+    win.dispatchEvent(
+      new CustomEvent(DEVICE_FALLBACK_EVENT, {
+        detail: { kind: "audioinput", fromLabel: "AirPods Pro", toLabel: "BlackHole 2ch" },
+      }),
+    )
+
+  // What LiveView's morph does to the controls row when it re-renders the
+  // button with a different identity: a NEW node in the old one's place.
+  const swap = (old, attrs = {}) => {
+    const fresh = h("button", {
+      "data-role": "meeting-mic",
+      "data-devices-toggle": "devs",
+      "data-on": "true",
+      "aria-label": "Mute microphone",
+      ...attrs,
+    })
+    const parent = old.parentNode
+    parent.insertBefore(fresh, old)
+    parent.removeChild(old)
+    return fresh
+  }
+
+  it("a mic toggle replaced after mount still gets the device name after a server aria-label rewrite", async () => {
+    const { micToggle } = mount()
+    const fresh = swap(micToggle)
+    await settle()
+    fallback()
+    click(body.querySelector("[data-notice-dismiss]"))
+    // The server's next patch, on the NEW node only, with nothing in between.
+    fresh.setAttribute("aria-label", "Mute microphone")
+    await settle()
+    expect(fresh.getAttribute("aria-label"), "the new node's aria-label names mic 2").toBe(
+      "Mute microphone, BlackHole 2ch",
+    )
+    expect(fresh.getAttribute("title"), "the new node's title names mic 2").toBe(
+      "Microphone: BlackHole 2ch",
+    )
+  })
+
+  it("a toggle replaced BEFORE the fallback is named", async () => {
+    const { micToggle } = mount()
+    const fresh = swap(micToggle)
+    await settle()
+    fallback()
+    await settle()
+    expect(fresh.getAttribute("aria-label")).toBe("Mute microphone, BlackHole 2ch")
+    expect(fresh.getAttribute("title")).toBe("Microphone: BlackHole 2ch")
+    fresh.setAttribute("aria-label", "Unmute microphone")
+    await settle()
+    expect(fresh.getAttribute("aria-label")).toBe("Unmute microphone, BlackHole 2ch")
+  })
+
+  it("unmute on a replaced toggle clears the mic strap", async () => {
+    const { micToggle } = mount()
+    const fresh = swap(micToggle, { "data-on": "false", "aria-label": "Unmute microphone" })
+    await settle()
+    fallback()
+    await settle()
+    expect(body.querySelector('[data-role="meeting-device-notice"]')).not.toBeNull()
+
+    // A rewrite on the DETACHED old node does nothing.
+    micToggle.setAttribute("data-on", "false")
+    micToggle.setAttribute("data-on", "true")
+    micToggle.setAttribute("aria-label", "Mute microphone")
+    await settle()
+    expect(
+      body.querySelector('[data-role="meeting-device-notice"]'),
+      "a flip on the detached node must not clear the strap",
+    ).not.toBeNull()
+    expect(micToggle.getAttribute("aria-label")).toBe("Mute microphone")
+
+    fresh.setAttribute("data-on", "true")
+    fresh.setAttribute("aria-label", "Mute microphone")
+    await settle()
+    expect(
+      body.querySelector('[data-role="meeting-device-notice"]'),
+      "unmuting the CURRENT toggle clears the mic strap",
+    ).toBeNull()
+    expect(fresh.getAttribute("aria-label")).toBe("Mute microphone, BlackHole 2ch")
+  })
+
+  it("destroyed disconnects every observer", async () => {
+    const { hook, micToggle } = mount()
+    expect(fmo.live()).toBe(2)
+    const fresh = swap(micToggle)
+    await settle()
+    expect(fmo.live()).toBe(2)
+    hook.destroyed()
+    expect(fmo.live(), "no observer survives destroyed()").toBe(0)
+    fallback()
+    swap(fresh)
+    await settle()
+    expect(hook._observedToggle).toBeNull()
   })
 })
 
