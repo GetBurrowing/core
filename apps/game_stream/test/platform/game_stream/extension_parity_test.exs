@@ -448,10 +448,15 @@ defmodule Platform.GameStream.ExtensionParityTest do
     # (`pending`) critique, so all six tool-definition digests move (flag
     # off and on). Names, bundles, kinds and metrics are unchanged; the new
     # `design_critique_complete` is set aside as additive. Measured locally.
-    @previous_tool_digest_off "1ca472098cf7b3a25e9229e0b8f29eb0d492606eaec95ba9fec8c3cc73dcd58c"
-    @previous_tool_digest_on "d8459be664a46689367f43ef681cc35d37323b5adaa74a5ffd217c8f21ebdabc"
-    @main_tool_digest_off "ef9635eb32aece1110bf3805def2b2e3ce7bab10767a9fd20e57726963a4f926"
-    @main_tool_digest_on "26f8399443085f47697180ebdb0d7063bd245bff882b1021e13fa96522c9df77"
+    # Re-pinned by task 01a1f53c-1825: `intent_ack`'s `subagent_id` is no
+    # longer `required` (optional for `rejected` only) and its description,
+    # parameter text and limitations say so, so all six tool-definition
+    # digests move (flag off and on). Names, bundles, kinds and metrics are
+    # unchanged. Measured by CI 44620991816 on the PR #235 merge ref.
+    @previous_tool_digest_off "0cc6743983c9420dae79338ac2377d5d984bdc819ac327d9aff090a0c2bd8910"
+    @previous_tool_digest_on "3bdd97fab88b65bbfd8bfa0bd6170b4e22644d2e3f8dfdb61e1312681e18f7f8"
+    @main_tool_digest_off "fab064177c00d3bb9bd4cb1ee66eaa3d625a1fd2709d4856dd9445cc70075792"
+    @main_tool_digest_on "7e35bb390c6dcb59a9ca7bfdce86efa626c01ba7a7e48fba623f8a761f0c4fec"
     @main_kinds_summaries_digest_off "5c9857dfe4ee0ea14d427072988cb574b74aba8bf8fe458030961cd96fd85564"
     @main_kinds_summaries_digest_on "2fc4005890d690f0d25da590378066518bf925ce91a7b865065d02fc8ab2163f"
     @main_kinds_tool_schemas_digest_off "cebd9c6810c617499002b615a3e0bdf9e058cd1ca9d5b2bcaa471b2b04e20b82"
@@ -677,7 +682,7 @@ defmodule Platform.GameStream.ExtensionParityTest do
              ] == [
                @previous_tool_digest_off,
                @main_tool_digest_off,
-               "275c9aff02eec08d527833efe18ae0d4a6b6218b6748653c205ff91a4284392a"
+               "1543cb5e56e24a41332fefc1db3683939ff65378c7ea405ac5068ad4d99574eb"
              ]
     end
 
@@ -700,7 +705,7 @@ defmodule Platform.GameStream.ExtensionParityTest do
              ] == [
                @previous_tool_digest_on,
                @main_tool_digest_on,
-               "58a01fe5dc6351cd4ae45bafc0100ad89d69aa8d478e35c4a56929e892ea052b"
+               "3cc3d6f0694f10ec11beb212e35dce502b53813915b3b102681460c78c279e08"
              ]
     end
 
