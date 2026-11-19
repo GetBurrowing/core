@@ -21,6 +21,7 @@ defmodule Platform.Repo.Migrations.BackfillStaleAgentParticipantDisplayNames do
   `IS DISTINCT FROM`, not `<>`, so a NULL `display_name` is repaired too.
   Plain SQL, no schema modules. IDEMPOTENT: a second run matches zero rows.
   """
+  # old-code-compatible: data-only UPDATE of chat_participants.display_name to the agent's current name; no schema change, and the previous release reads the column the same way.
   use Ecto.Migration
 
   def up do
