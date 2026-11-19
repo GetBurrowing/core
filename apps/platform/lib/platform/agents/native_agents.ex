@@ -48,6 +48,8 @@ defmodule Platform.Agents.NativeAgents do
 
   import Ecto.Query
 
+  require Logger
+
   alias Platform.Agents.{Agent, AgentRuntime, Manners, MemoryContext, WorkspaceFile}
   alias Platform.Federation
   alias Platform.Repo
@@ -55,6 +57,7 @@ defmodule Platform.Agents.NativeAgents do
 
   @managed_by "install"
   @created_event "platform.agents.native_runtime_created"
+  @owner_changed_event "platform.federation.runtime_owner_changed"
 
   # Observed states in which the agent's process is up, so a file saved now
   # is not what it is running.
@@ -285,6 +288,257 @@ defmodule Platform.Agents.NativeAgents do
   end
 
   def can_manage?(_user, _agent), do: false
+
+  # ── Owner transfer (task 01a1f42d stage 2) ────────────────────────
+
+  @doc "The audit event type every successful `transfer_owner/4` writes."
+  @spec owner_changed_event() :: String.t()
+  def owner_changed_event, do: @owner_changed_event
+
+  @doc """
+  The PubSub topic `transfer_owner/4` broadcasts `{:runtime_owner_changed,
+  %{runtime_id, previous_owner_user_id, new_owner_user_id}}` on, keyed by the
+  runtime's `runtime_id` slug.
+
+  Processes that took an authorization decision from the owner when they
+  started and then keep running subscribe to it: `PlatformWeb.RuntimeChannel`
+  (its pushed `capabilities` were computed from a Scope capped by the old
+  owner) and `PlatformWeb.TerminalViewChannel` (an open terminal is the
+  owner's alone, so the previous owner's session is closed).
+  """
+  @spec owner_topic(String.t()) :: String.t()
+  def owner_topic(runtime_id) when is_binary(runtime_id), do: "runtime_owner:" <> runtime_id
+
+  @doc """
+  The users a native agent can be transferred to: every non-archived member of
+  the root org, at any role, ordered by name. The same rule
+  `transfer_owner/4` enforces, so a picker built from this list offers nobody
+  the call refuses.
+  """
+  @spec eligible_owners() :: [Platform.Accounts.User.t()]
+  def eligible_owners do
+    from(u in Platform.Accounts.User,
+      where: u.id in subquery(root_member_ids_query()) and is_nil(u.archived_at),
+      order_by: [asc: u.name, asc: u.id]
+    )
+    |> Repo.all()
+  end
+
+  @doc """
+  Make `new_owner_user_id` the owner of `agent`'s install-managed runtime.
+
+  `actor` is the person asking (a user struct or map with an `:id`, or a user
+  id). Authorization is checked FIRST, before any other property of the
+  request: the actor must be the runtime's current owner or an install admin
+  (`Tenancy.root_admin?/1`). Anyone else, and a `nil` actor, gets
+  `{:error, :forbidden}`, so a refused caller learns nothing about the agent
+  or the proposed owner.
+
+  Then, writing nothing on any of them:
+
+    * `{:error, :not_managed}` - `agent` is not an install-managed agent;
+    * `{:error, :invalid_owner}` - the new owner is not an existing,
+      non-archived member of the root org (`eligible_owners/0`);
+    * `{:error, :same_owner}` - the new owner already owns it.
+
+  On success, ONE transaction updates `owner_user_id` through
+  `AgentRuntime.changeset/2` and records a `"#{@owner_changed_event}"` audit
+  event (actor, previous and new owner, runtime and agent ids). The runtime
+  row is locked `FOR UPDATE` and every check above is made against the locked
+  row, so two concurrent transfers cannot both pass the owner check.
+
+  After commit:
+
+    * the previous owner is notified (`Platform.Notifications.fan_out_to_user/2`,
+      linking `/control/<agent slug>`), unless the actor IS the previous owner.
+      A notification failure is logged and never undoes the transfer;
+    * `{:runtime_owner_changed, ...}` is broadcast on `owner_topic/1`.
+
+  Nothing else caches the owner: `can_manage?/2`, `Platform.Access.Agents.manage?/2`
+  and `Platform.Access.Scope.for_runtime/1` (the owner cap) all read the
+  runtime row on every call.
+
+  Options: `:notify` - a 2-arity function replacing
+  `Platform.Notifications.fan_out_to_user/2` (tests).
+
+  The event name is in the `platform.federation` namespace because a
+  hand-written row on Kobo already uses it; see `create/3`.
+  """
+  @spec transfer_owner(map() | binary() | nil, Agent.t(), binary(), keyword()) ::
+          {:ok, AgentRuntime.t()}
+          | {:error, :forbidden | :not_managed | :invalid_owner | :same_owner}
+          | {:error, Ecto.Changeset.t()}
+  def transfer_owner(actor, agent, new_owner_user_id, opts \\ [])
+
+  def transfer_owner(actor, %Agent{} = agent, new_owner_user_id, opts) when is_list(opts) do
+    actor_id = actor_id(actor)
+
+    Repo.transaction(fn ->
+      runtime = lock_runtime(agent)
+
+      with :ok <- authorize_transfer(actor_id, runtime),
+           :ok <- check_managed(runtime),
+           :ok <- check_new_owner(new_owner_user_id),
+           :ok <- check_not_same(runtime, new_owner_user_id),
+           {:ok, updated} <-
+             runtime
+             |> AgentRuntime.changeset(%{owner_user_id: new_owner_user_id})
+             |> Repo.update(),
+           {:ok, _event} <- record_owner_changed(actor_id, agent, runtime, updated) do
+        {runtime.owner_user_id, updated}
+      else
+        {:error, reason} -> Repo.rollback(reason)
+      end
+    end)
+    |> case do
+      {:ok, {previous_owner_id, updated}} ->
+        after_transfer(actor_id, agent, previous_owner_id, updated, opts)
+        {:ok, updated}
+
+      {:error, reason} ->
+        {:error, reason}
+    end
+  end
+
+  def transfer_owner(_actor, _agent, _new_owner_user_id, _opts), do: {:error, :forbidden}
+
+  defp actor_id(%{id: id}) when is_binary(id), do: actor_id(id)
+
+  defp actor_id(id) when is_binary(id) do
+    if Platform.UUID.valid?(id), do: id, else: nil
+  end
+
+  defp actor_id(_), do: nil
+
+  defp lock_runtime(%Agent{runtime_id: nil}), do: nil
+
+  defp lock_runtime(%Agent{runtime_id: runtime_pk}) do
+    from(r in AgentRuntime, where: r.id == ^runtime_pk, lock: "FOR UPDATE")
+    |> Repo.one()
+  end
+
+  # The one authorization decision. Owner of the runtime, or an install admin;
+  # a nil actor, and anyone else, is refused before anything else is looked at.
+  defp authorize_transfer(nil, _runtime), do: {:error, :forbidden}
+
+  defp authorize_transfer(actor_id, runtime) do
+    owner? = match?(%AgentRuntime{owner_user_id: ^actor_id}, runtime)
+
+    if owner? or Tenancy.root_admin?(%{id: actor_id}),
+      do: :ok,
+      else: {:error, :forbidden}
+  end
+
+  defp check_managed(%AgentRuntime{managed_by: @managed_by}), do: :ok
+  defp check_managed(_), do: {:error, :not_managed}
+
+  defp check_new_owner(user_id) when is_binary(user_id) do
+    eligible? =
+      Platform.UUID.valid?(user_id) and
+        Repo.exists?(
+          from(u in Platform.Accounts.User,
+            where:
+              u.id == ^user_id and is_nil(u.archived_at) and
+                u.id in subquery(root_member_ids_query())
+          )
+        )
+
+    if eligible?, do: :ok, else: {:error, :invalid_owner}
+  end
+
+  defp check_new_owner(_), do: {:error, :invalid_owner}
+
+  defp check_not_same(%AgentRuntime{owner_user_id: owner}, owner), do: {:error, :same_owner}
+  defp check_not_same(_runtime, _new_owner), do: :ok
+
+  defp root_member_ids_query do
+    from(m in Platform.Tenancy.OrgMembership,
+      join: o in Platform.Tenancy.Org,
+      on: o.id == m.org_id,
+      where: is_nil(o.parent_org_id),
+      select: m.user_id
+    )
+  end
+
+  defp record_owner_changed(actor_id, agent, previous, updated) do
+    Platform.Audit.record(%{
+      event_type: @owner_changed_event,
+      action: "runtime_owner_changed",
+      actor_type: "user",
+      actor_id: actor_id,
+      resource_type: "agent_runtime",
+      resource_id: updated.id,
+      metadata: %{
+        "previous_owner_user_id" => previous.owner_user_id,
+        "new_owner_user_id" => updated.owner_user_id,
+        "runtime_id" => updated.id,
+        "runtime_slug" => updated.runtime_id,
+        "agent_id" => agent.id
+      }
+    })
+  end
+
+  defp after_transfer(actor_id, agent, previous_owner_id, updated, opts) do
+    Phoenix.PubSub.broadcast(
+      Platform.PubSub,
+      owner_topic(updated.runtime_id),
+      {:runtime_owner_changed,
+       %{
+         runtime_id: updated.runtime_id,
+         previous_owner_user_id: previous_owner_id,
+         new_owner_user_id: updated.owner_user_id
+       }}
+    )
+
+    if is_binary(previous_owner_id) and previous_owner_id != actor_id do
+      notify = Keyword.get(opts, :notify, &Platform.Notifications.fan_out_to_user/2)
+      notify_previous_owner(notify, actor_id, agent, previous_owner_id, updated.owner_user_id)
+    end
+
+    :ok
+  end
+
+  defp notify_previous_owner(notify, actor_id, agent, previous_owner_id, new_owner_id) do
+    new_owner = display_name(new_owner_id)
+    by = display_name(actor_id)
+
+    payload = %{
+      title: "#{agent.name} has a new owner",
+      body: "#{by} made #{new_owner} the owner of #{agent.name}. You no longer own it.",
+      url: "/control/#{agent.slug}"
+    }
+
+    case notify.(previous_owner_id, payload) do
+      :ok ->
+        :ok
+
+      other ->
+        Logger.warning(
+          "[NativeAgents] owner-change notification for runtime of agent #{agent.id} " <>
+            "returned #{inspect(other)}; the transfer stands"
+        )
+    end
+  rescue
+    e ->
+      Logger.warning(
+        "[NativeAgents] owner-change notification for agent #{agent.id} failed: " <>
+          "#{Exception.message(e)}; the transfer stands"
+      )
+  catch
+    kind, reason ->
+      Logger.warning(
+        "[NativeAgents] owner-change notification for agent #{agent.id} failed: " <>
+          "#{inspect({kind, reason})}; the transfer stands"
+      )
+  end
+
+  defp display_name(user_id) do
+    case Platform.Accounts.get_user(user_id) do
+      %{name: name} when is_binary(name) and name != "" -> name
+      %{email: email} when is_binary(email) -> email
+      _ -> "Someone"
+    end
+  end
 
   # ── Agent files (stage 5) ─────────────────────────────────────────
 

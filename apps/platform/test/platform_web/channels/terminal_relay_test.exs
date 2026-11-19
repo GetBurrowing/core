@@ -362,6 +362,38 @@ defmodule PlatformWeb.TerminalRelayTest do
     if String.starts_with?(query, "INSERT"), do: send(pid, {:insert, query})
   end
 
+  # Task 01a1f42d stage 2. Mutant: drop the `{:runtime_owner_changed, _}`
+  # clause (or the subscribe in start_session/3) -> no "closed" push and the
+  # previous owner's session stays open.
+  test "an owner change closes the previous owner's open session once", ctx do
+    online!(ctx)
+    cli = join_cli(ctx)
+    {:ok, _, view} = join_view(ctx, ctx.owner)
+    _ = handshake(cli, view)
+    ref = Process.monitor(view.channel_pid)
+
+    broadcast_owner_change(ctx, ctx.owner.id)
+    refute_receive %Message{topic: "terminal_view:" <> _, event: "closed"}, 150
+
+    broadcast_owner_change(ctx, ctx.other.id)
+    assert %{"reason" => "owner_changed"} = assert_view_push("closed")
+    assert_receive {:DOWN, ^ref, :process, _, _}, 1_000
+    assert types(ctx.owner) == ["terminal.session.opened", "terminal.session.closed"]
+  end
+
+  defp broadcast_owner_change(ctx, new_owner_id) do
+    Phoenix.PubSub.broadcast(
+      Platform.PubSub,
+      Platform.Agents.NativeAgents.owner_topic(ctx.runtime_id),
+      {:runtime_owner_changed,
+       %{
+         runtime_id: ctx.runtime_id,
+         previous_owner_user_id: ctx.owner.id,
+         new_owner_user_id: new_owner_id
+       }}
+    )
+  end
+
   test "a 100-frame session inserts nothing but audit events", ctx do
     online!(ctx)
     cli = join_cli(ctx)

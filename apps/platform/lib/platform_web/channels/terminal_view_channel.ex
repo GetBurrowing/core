@@ -72,6 +72,16 @@ defmodule PlatformWeb.TerminalViewChannel do
   defp start_session(socket, runtime_id, cli_pid) do
     sid = Terminal.new_session_id()
     :ok = Terminal.subscribe(sid)
+
+    # The terminal is the runtime owner's alone (RemoteAccess.kind_for/2), and
+    # that was decided at join. An owner transfer closes this session if the
+    # viewer is no longer the owner.
+    :ok =
+      Phoenix.PubSub.subscribe(
+        Platform.PubSub,
+        Platform.Agents.NativeAgents.owner_topic(runtime_id)
+      )
+
     send(cli_pid, {:terminal_open, sid})
 
     socket
@@ -144,6 +154,16 @@ defmodule PlatformWeb.TerminalViewChannel do
     socket = close(socket)
     push(socket, "closed", %{"reason" => "cli_gone"})
     {:stop, :normal, socket}
+  end
+
+  def handle_info({:runtime_owner_changed, %{new_owner_user_id: new_owner}}, socket) do
+    if new_owner == socket.assigns.user_id do
+      {:noreply, socket}
+    else
+      socket = close(socket)
+      push(socket, "closed", %{"reason" => "owner_changed"})
+      {:stop, :normal, socket}
+    end
   end
 
   def handle_info(_message, socket), do: {:noreply, socket}

@@ -151,6 +151,16 @@ defmodule PlatformWeb.RuntimeChannel do
       # Push capabilities after join completes (push/3 not allowed during join/3)
       send(self(), :send_capabilities)
 
+      # The capabilities above are computed from a Scope capped by the
+      # runtime's OWNER. An owner transfer (NativeAgents.transfer_owner/4)
+      # broadcasts here so the stashed row is re-read and the advertised
+      # surface recomputed against the new owner, without a reconnect.
+      :ok =
+        Phoenix.PubSub.subscribe(
+          Platform.PubSub,
+          Platform.Agents.NativeAgents.owner_topic(runtime_id)
+        )
+
       # Periodically re-affirm presence from this live channel process.
       # `track/1` only runs at join time; if the RuntimePresence Agent crashes
       # or is hot-reloaded, the map resets to %{} but every live channel process
@@ -218,6 +228,12 @@ defmodule PlatformWeb.RuntimeChannel do
 
     send(self(), :send_spaces_manifest)
     {:noreply, socket}
+  end
+
+  def handle_info({:runtime_owner_changed, _change}, socket) do
+    runtime = Federation.get_runtime(socket.assigns.runtime_pk)
+    send(self(), :send_capabilities)
+    {:noreply, assign(socket, :runtime, runtime)}
   end
 
   def handle_info(:send_spaces_manifest, socket) do
