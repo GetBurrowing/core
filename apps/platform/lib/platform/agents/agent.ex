@@ -57,6 +57,12 @@ defmodule Platform.Agents.Agent do
   rather than a migration here. See that module for why the personality
   markdown is a workspace file rather than a column alongside this one.
 
+  ## Rename sync
+
+  Renaming an agent (a `:name` change on a loaded row) also rewrites its chat
+  participant rows that still carry the old name or none, through
+  `Platform.Chat.rename_agent_participants/4`, in the same transaction.
+
   ## Chat opt-out
 
   `accepts_chat` (NOT NULL, default `true`) lets a single-purpose agent of
@@ -152,6 +158,24 @@ defmodule Platform.Agents.Agent do
       name: :agents_unique_slug,
       message: "slug already taken in this workspace"
     )
+    |> prepare_changes(&sync_participant_display_names/1)
+  end
+
+  # A rename must reach the agent's chat participant rows, whose
+  # `display_name` is the copy every mention and members-sheet reader keys on
+  # (task 01a1f0d1). Every rename writer goes through this changeset, and
+  # `prepare_changes/2` runs inside the update's transaction and only for a
+  # valid changeset, so one hook here covers them all. The query itself lives
+  # in `Platform.Chat`, which owns that table.
+  defp sync_participant_display_names(%Ecto.Changeset{} = changeset) do
+    with %__MODULE__{__meta__: %{state: :loaded}, id: id, name: old_name}
+         when is_binary(id) <- changeset.data,
+         {:ok, new_name} when is_binary(new_name) and new_name != "" <-
+           fetch_change(changeset, :name) do
+      Platform.Chat.rename_agent_participants(changeset.repo, id, old_name, new_name)
+    end
+
+    changeset
   end
 
   defp validate_external_fields(changeset) do
