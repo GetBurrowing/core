@@ -161,6 +161,73 @@ defmodule PlatformWeb.TerminalRelayTest do
     assert rows(ctx.owner, "terminal.session.opened") == []
   end
 
+  # Task 01a1f4c6 stage 3. A hosted (install-managed) agent's terminal is always
+  # on, but who may open it is the same owner rule: no hosted exception.
+  # Mutant: make `RemoteAccess.allowed_kind?/1` in TerminalViewChannel.join
+  # always pass -> the non-owner and post-transfer tests below go red.
+  describe "a hosted agent's terminal" do
+    setup ctx do
+      runtime = Federation.get_runtime_by_runtime_id(ctx.runtime_id)
+
+      {:ok, runtime} =
+        runtime
+        |> Platform.Agents.AgentRuntime.changeset(%{
+          managed_by: "install",
+          harness: "claude_code"
+        })
+        |> Repo.update()
+
+      assert Platform.Agents.NativeAgents.managed_runtime?(runtime)
+      %{agent: Repo.get_by!(Agent, runtime_id: runtime.id)}
+    end
+
+    test "the owner joins ok", ctx do
+      online!(ctx)
+      join_cli(ctx)
+
+      assert {:ok, %{mode: "ro"}, _view} = join_view(ctx, ctx.owner)
+      assert types(ctx.owner) == ["terminal.session.opened"]
+    end
+
+    test "a non-owner is forbidden: one refused row, zero opened rows", ctx do
+      online!(ctx)
+      join_cli(ctx)
+
+      assert {:error, %{reason: "forbidden"}} = join_view(ctx, ctx.other)
+      assert types(ctx.other) == ["terminal.session.refused"]
+      assert [%{metadata: %{"reason" => "forbidden"}}] = rows(ctx.other)
+      assert rows(ctx.other, "terminal.session.opened") == []
+    end
+
+    test "after transfer_owner the previous owner is forbidden and the new owner is ok", ctx do
+      online!(ctx)
+      cli = join_cli(ctx)
+      {:ok, _, view} = join_view(ctx, ctx.owner)
+      _ = handshake(cli, view)
+      ref = Process.monitor(view.channel_pid)
+
+      assert {:ok, _} =
+               Platform.Agents.NativeAgents.transfer_owner(ctx.owner, ctx.agent, ctx.other.id,
+                 notify: fn _, _ -> :ok end
+               )
+
+      # The open session closes on the real transfer's broadcast.
+      assert %{"reason" => "owner_changed"} = assert_view_push("closed")
+      assert_receive {:DOWN, ^ref, :process, _, _}, 1_000
+
+      assert {:error, %{reason: "forbidden"}} = join_view(ctx, ctx.owner)
+
+      assert types(ctx.owner) == [
+               "terminal.session.opened",
+               "terminal.session.closed",
+               "terminal.session.refused"
+             ]
+
+      assert {:ok, %{mode: "ro"}, _} = join_view(ctx, ctx.other)
+      assert types(ctx.other) == ["terminal.session.opened"]
+    end
+  end
+
   test "an unknown runtime is forbidden too", ctx do
     {:error, %{reason: "forbidden"}} =
       subscribe_and_join(view_socket(ctx.owner), "terminal_view:no-such-runtime", %{})
