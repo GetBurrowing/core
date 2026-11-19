@@ -570,8 +570,8 @@ defmodule Platform.RepoLookupBoundaryTest do
      "task 01a1f426 stage 3: `on_inbound/2` reads the id off the ids-only `mail:inbound` PubSub payload or a `Repo.all` of `mail_inbound_messages` PKs (`reconcile/1`), and the same `with` guards it with `Platform.UUID.valid?/1` first; a malformed id does nothing and answers `:ok`"},
     {"platform/mail/triage.ex", :get, "Platform.Accounts.User", 1, :safe_internal,
      "task 01a1f426 stage 3: `notify_top/2` loads `item.user_id`, the `user_id` FK column of a `%Item{}` read from `mail_triage_items` (a `binary_id` the database already holds)"},
-    {"platform/mail/triage.ex", :platform_uuid_guard, "-", 9, :safe_internal,
-     "task 01a1f426 stage 1's mail triage. `eligible_accounts_query/3` guards the org id and the agent id (two calls) before either reaches `where:` or the Ownership subqueries, matching nothing for a malformed one; `record_feedback/3` guards the item id and user id (item clause, two calls) and the inbound id and user id (id clause, two calls) before the `Repo.one`s, answering `{:error, :not_found}`. The briefing section and Email event handlers of later stages pass LiveView event params here, so each guard is used as a BOOLEAN and the original string is never passed on. Pinned by triage_test.exs \"feedback on an email the reader cannot read is refused and writes nothing\" (`not-a-uuid`) and \"eligible_account_ids is exactly the readable AND granted mailboxes\" (nil agent) Count 6 -> 8 at task 01a1f426 stage 2: `reader_item/2` guards the LiveView event's item id and the user id (two calls) before its `Repo.one` (the fifth counted `Repo.one` in this file), which also pins `i.user_id` so another reader's item answers nil; a malformed id answers nil and the briefing section writes nothing. Pinned by mail_priority_section_test.exs \"a forged item id from another reader or a non-granted mailbox is refused and writes nothing\" (`not-a-uuid`). Count 8 -> 9 at task 01a1f426 stage 3: `on_inbound/2` guards the inbound id off the `mail:inbound` PubSub payload before `Repo.get`"},
+    {"platform/mail/triage.ex", :platform_uuid_guard, "-", 10, :safe_internal,
+     "task 01a1f426 stage 1's mail triage. `eligible_accounts_query/3` guards the org id and the agent id (two calls) before either reaches `where:` or the Ownership subqueries, matching nothing for a malformed one; `record_feedback/3` guards the item id and user id (item clause, two calls) and the inbound id and user id (id clause, two calls) before the `Repo.one`s, answering `{:error, :not_found}`. The briefing section and Email event handlers of later stages pass LiveView event params here, so each guard is used as a BOOLEAN and the original string is never passed on. Pinned by triage_test.exs \"feedback on an email the reader cannot read is refused and writes nothing\" (`not-a-uuid`) and \"eligible_account_ids is exactly the readable AND granted mailboxes\" (nil agent) Count 6 -> 8 at task 01a1f426 stage 2: `reader_item/2` guards the LiveView event's item id and the user id (two calls) before its `Repo.one` (the fifth counted `Repo.one` in this file), which also pins `i.user_id` so another reader's item answers nil; a malformed id answers nil and the briefing section writes nothing. Pinned by mail_priority_section_test.exs \"a forged item id from another reader or a non-granted mailbox is refused and writes nothing\" (`not-a-uuid`). Count 8 -> 9 at task 01a1f426 stage 3: `on_inbound/2` guards the inbound id off the `mail:inbound` PubSub payload before `Repo.get`. Count 9 -> 10 at task 01a1f5cc stage 2 (the per-mailbox flag agent): `eligible_accounts_query/2` takes no agent any more, so it guards the org id only (-1); `agent_for_account/1` guards the account id before its `Repo.one` (+1, answering nil for a malformed id) and `agents_for_accounts/1` filters the account ids through the guard before `where: ... in ^ids` (+1)"},
     {"platform/mail/triage/drafter.ex", :get, "InboundMessage", 1, :safe_internal,
      "task 01a1f426 stage 4: `draft/3` loads `item.inbound_message_id`, the `inbound_message_id` FK column of a `%Item{}` read from `mail_triage_items` (a `binary_id` the database already holds), after the item's `user_id` was matched against the reader"},
     {"platform/mail/triage/drafter.ex", :get!, "Item", 1, :safe_internal,
@@ -1375,7 +1375,11 @@ defmodule Platform.RepoLookupBoundaryTest do
     # hand: `fresh/1` pins `a.id == ^id` only after `uuid?/1`, and `revoke/3`
     # pins `account_id` off that fresh row and a principal id already passed
     # through `normalize_principal/1`'s `uuid?/1` (recorded in @inventory).
-    "platform/mail/ownership.ex" => 2,
+    # Task 01a1f5cc stage 1: 2 -> 4. Triaged by hand:
+    # `set_flag_important_agent/3`'s `Repo.one(flag_grant_query(current.id))`
+    # pins the account id of the `fresh/1` row it has just locked, and
+    # `flag_important_agent/1` pins `a.account_id == ^id` only after `uuid?/1`.
+    "platform/mail/ownership.ex" => 4,
     # Task 01a1ea5b stage 5: 0 -> 1, `Release.apply_mail_owner_mapping/2`'s
     # `mapping_user/1`. Triaged by hand: the `where:` pins `lower(u.email)`,
     # a `:string` column, against an address read from the mapping file; no
@@ -1422,7 +1426,9 @@ defmodule Platform.RepoLookupBoundaryTest do
     # `deliver_notification/4`'s mailbox name (the item's `account_id` FK).
     # triage/metrics.ex: 0 → 2 — `counts/3`'s two reads, whose org or user
     # id `summary/2` / `for_user/2` guarded with Platform.UUID.valid?/1.
-    "platform/mail/triage.ex" => 7,
+    # Task 01a1f5cc stage 2: triage.ex 7 -> 8, `agent_for_account/1`, whose
+    # account id is behind Platform.UUID.valid?/1 (recorded in @inventory).
+    "platform/mail/triage.ex" => 8,
     "platform/mail/triage/metrics.ex" => 2,
     # Task 01a1f426 stage 4. triage/drafter.ex: 0 → 1 — `claim/2`'s count,
     # whose `user_id` is off a loaded `%Item{}`. deliverer.ex: 0 → 1 —

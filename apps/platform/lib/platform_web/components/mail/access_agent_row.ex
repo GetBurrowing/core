@@ -31,19 +31,19 @@ defmodule PlatformWeb.Components.Mail.AccessAgentRow do
         <span class="truncate text-sm text-base-content">{@agent.name}</span>
         <span
           :if={@agent.flag?}
-          class="truncate text-xs text-subtle"
+          class="text-xs text-subtle"
           data-role="access-agent-flag"
         >
           Flags important email
         </span>
+        <span
+          :if={granted_text(@agent.granted_at)}
+          class="font-mono text-xs text-subtle"
+          data-role="access-agent-granted"
+        >
+          {granted_text(@agent.granted_at)}
+        </span>
       </div>
-      <span
-        :if={granted_text(@agent.granted_at)}
-        class="shrink-0 font-mono text-xs text-subtle"
-        data-role="access-agent-granted"
-      >
-        {granted_text(@agent.granted_at)}
-      </span>
       <button
         :if={@manage? and @agent.access?}
         type="button"
@@ -57,7 +57,7 @@ defmodule PlatformWeb.Components.Mail.AccessAgentRow do
       <.link
         :if={@manage? and not @agent.access?}
         patch={@accounts_path}
-        class="link min-h-11 shrink-0 content-center text-xs text-base-content lg:min-h-6"
+        class="link min-h-11 max-w-36 shrink-0 content-center text-right text-xs text-base-content sm:max-w-none lg:min-h-6"
         data-role="access-agent-turn-off"
       >
         Turn off in Email &gt; Accounts
