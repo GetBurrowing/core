@@ -445,14 +445,39 @@ defmodule PlatformWeb.TerminalLiveTest do
 
       assert has_element?(
                view,
-               "#terminal-offline",
+               ~s(#terminal-hosted-unavailable[data-reason="offline"]),
                "This agent isn't running right now. Start it from its page."
              )
 
-      assert has_element?(view, ~s(#terminal-offline a[href="/control/#{agent.slug}"]))
+      assert has_element?(
+               view,
+               ~s(#terminal-hosted-unavailable a[href="/control/#{agent.slug}"])
+             )
+
+      refute has_element?(view, "#terminal-offline")
+      refute html =~ "isn't up yet"
       refute html =~ "burrow-cli"
       refute html =~ "--remote-terminal"
       refute has_element?(view, "#terminal-copy-command")
+    end
+
+    test "a stopped agent that is offline names the state in the hosted panel", %{
+      conn: conn,
+      owner: owner,
+      hosted: agent,
+      hosted_runtime: runtime
+    } do
+      HostState.put(agent.id, :stopped)
+      {:ok, view, _} = live(as_user(conn, owner), ~p"/terminal/#{runtime.runtime_id}")
+      render_hook(view, "terminal_state", %{"state" => "offline", "reason" => "offline"})
+
+      assert has_element?(
+               view,
+               ~s(#terminal-hosted-unavailable[data-observed-state="stopped"]),
+               "This agent isn't running right now."
+             )
+
+      assert has_element?(view, "#terminal-hosted-state", "This agent is stopped.")
     end
 
     test "a workstation runtime still gets the original copy", %{
@@ -468,6 +493,7 @@ defmodule PlatformWeb.TerminalLiveTest do
 
       render_hook(view, "terminal_state", %{"state" => "offline", "reason" => "offline"})
       assert has_element?(view, "#terminal-offline", "when burrow-cli is back")
+      refute has_element?(view, "#terminal-hosted-unavailable")
     end
 
     test "a non-owner gets the refusal, no hosted copy and no agent name; a forged set_mode does nothing",

@@ -246,29 +246,30 @@ defmodule PlatformWeb.TerminalLive do
           </div>
 
           <div
-            :if={@shown == :offline}
+            :if={@shown == :offline and not @hosted?}
             id="terminal-offline"
-            data-hosted={to_string(@hosted?)}
             class="flex-1 p-6 text-sm text-base-content"
           >
-            <%= if @hosted? do %>
-              <p>This agent isn't running right now. Start it from its page.</p>
-              <.agent_page_link slug={@agent_slug} name={@agent_name} />
-            <% else %>
-              Your machine isn't connected right now. It will reconnect when burrow-cli is back.
-            <% end %>
+            Your machine isn't connected right now. It will reconnect when burrow-cli is back.
           </div>
 
+          <%!-- A hosted agent's terminal is either not reachable at all (offline:
+               no terminal host and no presence) or reachable but not yet served
+               (flag_off). Both get this one panel, naming the observed state. --%>
           <div
-            :if={@shown == :refused and @reason == "flag_off" and @hosted?}
+            :if={@hosted? and hosted_unavailable?(@shown, @reason)}
             id="terminal-hosted-unavailable"
+            data-reason={to_string(@shown)}
             data-observed-state={@observed && to_string(@observed)}
             class="flex-1 p-6 text-sm text-base-content"
           >
             <p :if={observed_line(@observed)} id="terminal-hosted-state" class="font-semibold">
               {observed_line(@observed)}
             </p>
-            <p class="mt-1">
+            <p :if={@shown == :offline} class="mt-1">
+              This agent isn't running right now. Start it from its page.
+            </p>
+            <p :if={@shown != :offline} class="mt-1">
               The terminal starts with this agent and isn't up yet. If the agent is stopped or waiting for its account to be connected, start it or finish connecting it on its page, then open the terminal again.
             </p>
             <.agent_page_link slug={@agent_slug} name={@agent_name} />
@@ -345,6 +346,10 @@ defmodule PlatformWeb.TerminalLive do
     </.link>
     """
   end
+
+  defp hosted_unavailable?(:offline, _reason), do: true
+  defp hosted_unavailable?(:refused, "flag_off"), do: true
+  defp hosted_unavailable?(_shown, _reason), do: false
 
   # The agent host's observed state, in plain words. `running` and no report
   # say nothing: the general line below already covers them.
