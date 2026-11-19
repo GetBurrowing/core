@@ -430,6 +430,158 @@ defmodule Platform.Mail.Triage do
 
   defp tier_rank(tier), do: Enum.find_index(Item.tiers(), &(&1 == tier)) || 99
 
+  # ── Briefing surface (task 01a1f426 stage 2) ────────────────────────────
+
+  @doc """
+  What the briefing's `mail_priority` section shows `user` for `date`: a
+  pure read. Returns
+
+    * `:agent` — the triage agent, or nil (the section says no agent is
+      assigned);
+    * `:readable?` — whether the reader may read any non-archived mailbox
+      (no mailbox at all means the section is absent);
+    * `:called_out` — the reader's `top` / `action` items of `date` whose
+      mailbox is still eligible: open ones first, then by tier, then newest
+      received;
+    * `:others` — the reader's `routine` / `promo` items of `date`, same rule;
+    * `:ungranted` — `%{id, name}` of the mailboxes the reader may read that
+      are NOT granted to the triage agent (metadata only: the name).
+
+  Each row is a plain map of display fields only (`id`, `inbound_id`,
+  `account_id`, `tier`, `status`, `why`, `from`, `subject`, `mailbox`,
+  `received_at`). The body is never selected.
+
+  Options: `:agent` (default `triage_agent/0`).
+  """
+  @spec section_view(map(), Date.t(), keyword()) :: map()
+  def section_view(user, date, opts \\ [])
+
+  def section_view(%{id: user_id} = user, %Date{} = date, opts) when is_binary(user_id) do
+    agent = Keyword.get_lazy(opts, :agent, &triage_agent/0)
+    orgs = org_ids(user)
+
+    readable =
+      Enum.flat_map(orgs, fn org_id ->
+        readable = Ownership.readable_account_ids_query(user, org_id)
+
+        from(a in Account,
+          where: a.org_id == ^org_id and is_nil(a.archived_at) and a.id in subquery(readable),
+          order_by: [asc: a.name],
+          select: %{id: a.id, org_id: a.org_id, name: a.name}
+        )
+        |> Repo.all()
+      end)
+
+    eligible =
+      case agent do
+        %Agent{} ->
+          orgs |> Enum.flat_map(&eligible_account_ids(user, &1, agent)) |> MapSet.new()
+
+        _ ->
+          MapSet.new()
+      end
+
+    rows = if MapSet.size(eligible) > 0, do: section_rows(user_id, date, eligible), else: []
+    {called_out, others} = Enum.split_with(rows, &(&1.tier in @called_out_tiers))
+
+    %{
+      agent: if(match?(%Agent{}, agent), do: agent),
+      readable?: readable != [],
+      called_out: called_out,
+      others: others,
+      ungranted:
+        readable
+        |> Enum.reject(&MapSet.member?(eligible, &1.id))
+        |> Enum.map(&Map.take(&1, [:id, :name]))
+    }
+  end
+
+  def section_view(_user, _date, _opts),
+    do: %{agent: nil, readable?: false, called_out: [], others: [], ungranted: []}
+
+  defp section_rows(user_id, date, eligible) do
+    {from, to} = window(date, [])
+    eligible = MapSet.to_list(eligible)
+
+    from(i in Item,
+      join: m in InboundMessage,
+      on: m.id == i.inbound_message_id,
+      join: a in Account,
+      on: a.id == i.account_id,
+      where: i.user_id == ^user_id and i.account_id in ^eligible,
+      where: i.inserted_at >= ^from and i.inserted_at < ^to,
+      select: %{
+        id: i.id,
+        inbound_id: i.inbound_message_id,
+        account_id: i.account_id,
+        tier: i.tier,
+        status: i.status,
+        why: i.why,
+        inserted_at: i.inserted_at,
+        from: m.from_address,
+        subject: m.subject,
+        received_at: coalesce(m.received_at, m.inserted_at),
+        mailbox: a.name
+      }
+    )
+    |> Repo.all(quiet_opts())
+    |> Enum.sort_by(fn row ->
+      {row.status != "open", tier_rank(row.tier),
+       -DateTime.to_unix(row.received_at, :microsecond)}
+    end)
+  end
+
+  @doc """
+  The reader's OWN item `item_id`, whatever its mailbox's eligibility now
+  (the caller decides that with `eligible?/3`). nil for a malformed id, an
+  unknown one, or another reader's item.
+  """
+  @spec reader_item(map(), any()) :: Item.t() | nil
+  def reader_item(%{id: user_id}, item_id) when is_binary(user_id) and is_binary(item_id) do
+    if Platform.UUID.valid?(item_id) and Platform.UUID.valid?(user_id) do
+      Repo.one(from(i in Item, where: i.id == ^item_id and i.user_id == ^user_id))
+    end
+  end
+
+  def reader_item(_user, _item_id), do: nil
+
+  @doc """
+  Is the mailbox of `target` (an item or an inbound message: anything with
+  `org_id` and `account_id`) eligible for `user` NOW, with `agent` as the
+  triage agent: readable by the reader AND granted to the agent
+  (`eligible_account_ids/3`). False with no agent.
+  """
+  @spec eligible?(map(), map(), Agent.t() | nil) :: boolean()
+  def eligible?(user, %{org_id: org_id, account_id: account_id}, agent)
+      when is_binary(account_id) do
+    account_id in eligible_account_ids(user, org_id, agent)
+  end
+
+  def eligible?(_user, _target, _agent), do: false
+
+  @doc """
+  The reader marks their called-out item done: status `acted`, `acted_how`
+  `"manual"`. Only the reader's own open item; `{:error, :not_found}`
+  otherwise. Writes ids and a status only; logs ids only.
+  """
+  @spec mark_done(map(), Item.t()) :: {:ok, Item.t()} | {:error, :not_found}
+  def mark_done(%{id: user_id}, %Item{user_id: user_id, status: "open"} = item)
+      when is_binary(user_id) do
+    {:ok, updated} =
+      item
+      |> Item.update_changeset(%{
+        status: "acted",
+        acted_at: DateTime.utc_now(),
+        acted_how: "manual"
+      })
+      |> Repo.update(quiet_opts())
+
+    Logger.info("[Mail.Triage] done item=#{item.id} user=#{user_id}")
+    {:ok, updated}
+  end
+
+  def mark_done(_user, _item), do: {:error, :not_found}
+
   # ── Feedback ────────────────────────────────────────────────────────────
 
   @doc """
