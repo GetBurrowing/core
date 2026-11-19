@@ -6833,7 +6833,8 @@ defmodule Platform.Tasks do
   `%`/`_` escaped so a term matches literally. No usable term, a nil or
   id-less user, or a malformed id answers `[]`.
 
-  Options: `:org_id` narrows (never widens) to one org's projects.
+  Options: `:org_id` narrows (never widens) to one org's projects;
+  `:repo_opts` may carry `log: false` / `telemetry_event: nil` for the read.
   """
   @spec list_open_tasks_matching_for_user(map() | nil, [String.t()], pos_integer(), keyword()) ::
           [Task.t()]
@@ -6874,13 +6875,22 @@ defmodule Platform.Tasks do
       |> scope_by(Platform.Access.Scope.for_user(user), :task)
       |> order_by([t], desc: t.inserted_at, desc: t.id)
       |> limit(^min(limit, 50))
-      |> Repo.all()
+      |> Repo.all(repo_read_opts(opts))
     else
       []
     end
   end
 
   def list_open_tasks_matching_for_user(_user, _terms, _limit, _opts), do: []
+
+  # `:repo_opts` (task 01a1f426 stage 4): only the two options that keep a
+  # read's params out of the query log and the repo query telemetry, so a
+  # caller whose search terms come from private mail can quiet the read.
+  defp repo_read_opts(opts) do
+    opts
+    |> Keyword.get(:repo_opts, [])
+    |> Keyword.take([:log, :telemetry_event])
+  end
 
   defp escape_like(term) do
     term

@@ -25,7 +25,18 @@ defmodule Platform.Mail.Deliverer do
 
   The word is `accepted`: SMTP acceptance is the only acknowledgment there
   is, and it is not delivery.
+
+  ## Threading (task 01a1f426 stage 4)
+
+  A delivery of a draft that answers an inbound email
+  (`mail_drafts.in_reply_to_inbound_id`) carries `In-Reply-To: <that
+  email's Message-ID>` and `References: <its References> <its
+  Message-ID>`, so the reply threads in the recipient's client. Only an
+  inbound of the delivery's OWN account counts; one that is gone (FK ON
+  DELETE SET NULL) or has no Message-ID adds no header.
   """
+
+  import Ecto.Query, only: [from: 2]
 
   alias Platform.Mail
   alias Platform.Mail.Account
@@ -99,10 +110,58 @@ defmodule Platform.Mail.Deliverer do
     |> Swoosh.Email.subject(delivery.subject || "")
     |> Swoosh.Email.text_body(delivery.body || "")
     |> Swoosh.Email.header("Message-ID", delivery.message_id_header)
+    |> put_threading(delivery)
     |> put_html(delivery.html_body)
     |> put_reply_to(delivery.reply_to)
     |> put_calendar(delivery.calendar_method, delivery.calendar_ics)
   end
+
+  defp put_threading(email, %Delivery{draft_id: draft_id, account_id: account_id})
+       when is_binary(draft_id) and is_binary(account_id) do
+    parent =
+      from(d in Platform.Mail.Draft,
+        join: m in Platform.Mail.InboundMessage,
+        on: m.id == d.in_reply_to_inbound_id and m.account_id == ^account_id,
+        where: d.id == ^draft_id,
+        select: %{message_id: m.message_id_header, raw: m.raw}
+      )
+      |> Repo.one()
+
+    case parent && message_id(parent.message_id) do
+      nil ->
+        email
+
+      message_id ->
+        references =
+          parent.raw
+          |> Platform.Mail.Triage.Classifier.headers()
+          |> Map.get("references", "")
+          |> String.split(~r/\s+/, trim: true)
+          |> Enum.filter(&String.match?(&1, ~r/\A<[^<>\s]+>\z/))
+          |> Enum.take(-20)
+
+        email
+        |> Swoosh.Email.header("In-Reply-To", message_id)
+        |> Swoosh.Email.header(
+          "References",
+          Enum.join(Enum.uniq(references ++ [message_id]), " ")
+        )
+    end
+  end
+
+  defp put_threading(email, _delivery), do: email
+
+  # A Message-ID as one `<id@host>` token: angle brackets added when the
+  # stored header lacks them, anything with whitespace or a CR/LF refused.
+  defp message_id(value) when is_binary(value) do
+    bare = value |> String.trim() |> String.trim_leading("<") |> String.trim_trailing(">")
+
+    if bare != "" and not String.match?(bare, ~r/[\s<>]/),
+      do: "<" <> bare <> ">",
+      else: nil
+  end
+
+  defp message_id(_), do: nil
 
   defp put_html(email, html) when is_binary(html) and html != "",
     do: Swoosh.Email.html_body(email, html)

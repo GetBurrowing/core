@@ -193,6 +193,88 @@ defmodule Platform.Mail.Triage.ContextTest do
     end
   end
 
+  # Task 01a1f426 stage 4 (auditor's must): the waiting-on, thread, task
+  # search and feedback reads take the sender's address or domain as a
+  # query PARAMETER, and Ecto's `:debug` line and the repo query telemetry
+  # both carry params (the telemetry even with `log: false`).
+  describe "the sender's address stays out of the query log and telemetry" do
+    setup do
+      previous = Logger.level()
+      on_exit(fn -> Logger.configure(level: previous) end)
+
+      test_pid = self()
+      handler = "mail-triage-context-sentinel-#{System.unique_integer([:positive])}"
+
+      :ok =
+        :telemetry.attach(
+          handler,
+          [:platform, :repo, :query],
+          fn _event, _m, metadata, _ ->
+            # `:result` is the rows a read hands its own caller; the query,
+            # its params and the rest of the metadata are what a handler ships.
+            send(test_pid, {:repo_query_seen, Map.delete(metadata, :result)})
+          end,
+          nil
+        )
+
+      on_exit(fn -> :telemetry.detach(handler) end)
+      :ok
+    end
+
+    test "no read of Context.build/3 puts the address or domain in either", ctx do
+      n = String.downcase(Ecto.UUID.generate())
+      domain = "sentinel-#{n}.test"
+      address = "who-#{n}@#{domain}"
+      control = "CONTROL-#{n}"
+
+      delivery = delivery!(ctx.box, address, at(3))
+      project = project!(ctx.org_id)
+      {:ok, task} = Platform.Tasks.create_task(%{project_id: project.id, title: "Deal #{domain}"})
+      inbound = inbound!(ctx.box, %{from_address: "Who <#{address}>"})
+      {:ok, _} = Triage.record_feedback(ctx.reader, inbound, "missed")
+      _ = drain_repo_queries()
+
+      Logger.configure(level: :debug)
+
+      {built, log} =
+        ExUnit.CaptureLog.with_log([level: :debug], fn ->
+          built = Context.build(ctx.reader, inbound, roster: [])
+          # Positive control: an ordinary read with a parameter in the same
+          # window shows up in both the debug log and the telemetry.
+          Repo.query!("SELECT $1::text", [control])
+          built
+        end)
+
+      queries = drain_repo_queries()
+
+      # The reads that take the address really ran and found their rows.
+      assert built.waiting_on == delivery.id
+      assert built.thread.outbound == 1
+      assert task.id in built.open_task_ids
+      assert built.feedback.missed == 1
+
+      assert log =~ control
+      assert Enum.any?(queries, &(inspect(&1, limit: :infinity) =~ control))
+
+      for leak <- [address, domain] do
+        refute log =~ leak
+
+        for metadata <- queries do
+          refute inspect(metadata, limit: :infinity, printable_limit: :infinity) =~ leak,
+                 "#{leak} in [:platform, :repo, :query] metadata"
+        end
+      end
+    end
+  end
+
+  defp drain_repo_queries do
+    receive do
+      {:repo_query_seen, metadata} -> [metadata | drain_repo_queries()]
+    after
+      0 -> []
+    end
+  end
+
   describe "address helpers" do
     test "address/domain/local_part" do
       assert Context.address("Name <A@B.test>") == "a@b.test"

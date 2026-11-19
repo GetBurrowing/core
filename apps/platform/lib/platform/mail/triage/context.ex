@@ -32,6 +32,22 @@ defmodule Platform.Mail.Triage.Context do
 
   A freemail domain (gmail.com and friends) is never used as an
   organisation term: it names a provider, not a counterparty.
+
+  ## Titles, for the drafter only (stage 4)
+
+  `task_titles` and `meeting_titles` hold the titles / names of the SAME
+  reader-visible tasks and meetings as `open_task_ids` / `meeting_ids`
+  (`%{id, title}`), read through the same public Tasks and Meetings
+  functions. They never reach `signals/1` or `model_facts/1`: only
+  `Platform.Mail.Triage.Drafter` renders them, into a prompt for this
+  reader's own draft, so reader B's draft never cites reader A's tasks.
+
+  ## The sender's address stays out of the query log
+
+  Every read that takes the sender's address or domain as a query
+  parameter (waiting_on, thread, feedback priors, the task search) passes
+  `Platform.Mail.Triage.quiet_opts/0`: no Ecto `:debug` line and no
+  `[:platform, :repo, :query]` event, whose metadata carries the params.
   """
 
   import Ecto.Query
@@ -54,6 +70,8 @@ defmodule Platform.Mail.Triage.Context do
           thread: %{inbound: non_neg_integer(), outbound: non_neg_integer()},
           open_task_ids: [binary()],
           meeting_ids: [binary()],
+          task_titles: [%{id: binary(), title: String.t()}],
+          meeting_titles: [%{id: binary(), title: String.t()}],
           person: %{slug: String.t(), relation: String.t()} | nil,
           feedback: %{
             not_important: non_neg_integer(),
@@ -74,14 +92,18 @@ defmodule Platform.Mail.Triage.Context do
     at = inbound.received_at || inbound.inserted_at || now
 
     person = person(address, domain, Keyword.get_lazy(opts, :roster, &roster/0))
+    tasks = open_tasks(user, inbound.org_id, domain, person)
+    meetings = meetings(user, address, domain, now)
 
     %{
       address: address,
       domain: domain,
       waiting_on: waiting_on(inbound, address, domain, at),
       thread: thread(inbound, address, at),
-      open_task_ids: open_task_ids(user, inbound.org_id, domain, person),
-      meeting_ids: meeting_ids(user, address, domain, now),
+      open_task_ids: Enum.map(tasks, & &1.id),
+      meeting_ids: Enum.map(meetings, & &1.id),
+      task_titles: Enum.map(tasks, &%{id: &1.id, title: &1.title}),
+      meeting_titles: Enum.map(meetings, &%{id: &1.id, title: &1.name}),
       person: person && Map.take(person, [:slug, :relation]),
       feedback: feedback(user, domain)
     }
@@ -250,9 +272,9 @@ defmodule Platform.Mail.Triage.Context do
   defp waiting_on(inbound, address, domain, at) do
     params = fn key -> [dump(inbound.account_id), key, naive(at), dump(inbound.id)] end
 
-    first_id(Repo.query!(@waiting_address_sql, params.(address))) ||
+    first_id(Repo.query!(@waiting_address_sql, params.(address), quiet())) ||
       if(is_binary(domain) and not freemail?(domain),
-        do: first_id(Repo.query!(@waiting_domain_sql, params.(domain))),
+        do: first_id(Repo.query!(@waiting_domain_sql, params.(domain), quiet())),
         else: nil
       )
   end
@@ -270,7 +292,11 @@ defmodule Platform.Mail.Triage.Context do
 
   defp thread(inbound, address, at) do
     %{rows: [[inbound_count, outbound_count]]} =
-      Repo.query!(@thread_sql, [dump(inbound.account_id), address, dump(inbound.id), naive(at)])
+      Repo.query!(
+        @thread_sql,
+        [dump(inbound.account_id), address, dump(inbound.id), naive(at)],
+        quiet()
+      )
 
     %{inbound: inbound_count, outbound: outbound_count}
   end
@@ -280,7 +306,7 @@ defmodule Platform.Mail.Triage.Context do
 
   # ── tasks / meetings / people ────────────────────────────────────────────
 
-  defp open_task_ids(user, org_id, domain, person) do
+  defp open_tasks(user, org_id, domain, person) do
     terms =
       [
         if(is_binary(domain) and not freemail?(domain), do: domain),
@@ -293,15 +319,16 @@ defmodule Platform.Mail.Triage.Context do
         []
 
       terms ->
-        user
-        |> Platform.Tasks.list_open_tasks_matching_for_user(terms, @task_limit, org_id: org_id)
-        |> Enum.map(& &1.id)
+        Platform.Tasks.list_open_tasks_matching_for_user(user, terms, @task_limit,
+          org_id: org_id,
+          repo_opts: quiet()
+        )
     end
   end
 
-  defp meeting_ids(_user, nil, _domain, _now), do: []
+  defp meetings(_user, nil, _domain, _now), do: []
 
-  defp meeting_ids(user, address, domain, now) do
+  defp meetings(user, address, domain, now) do
     from = DateTime.add(now, -@meeting_window_days * 86_400, :second)
 
     user
@@ -312,7 +339,6 @@ defmodule Platform.Mail.Triage.Context do
       |> Platform.Meetings.list_invites()
       |> Enum.any?(&invite_matches?(&1, address, domain))
     end)
-    |> Enum.map(& &1.id)
   end
 
   defp took_part?(meeting, %{id: user_id} = user) do
@@ -363,7 +389,7 @@ defmodule Platform.Mail.Triage.Context do
         order_by: [desc: f.inserted_at, desc: f.id],
         select: f.verdict
       )
-      |> Repo.all()
+      |> Repo.all(quiet())
 
     %{
       not_important: Enum.count(rows, &(&1 == "not_important")),
@@ -371,6 +397,8 @@ defmodule Platform.Mail.Triage.Context do
       latest: List.first(rows)
     }
   end
+
+  defp quiet, do: Platform.Mail.Triage.quiet_opts()
 
   defp dump(id), do: Ecto.UUID.dump!(id)
 

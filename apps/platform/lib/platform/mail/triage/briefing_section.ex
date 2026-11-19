@@ -44,7 +44,9 @@ defmodule Platform.Mail.Triage.BriefingSection do
   before `date` that has no item for them yet (so overnight mail is
   covered; already-triaged mail is skipped by the unique index), with at
   most #{@max_model_calls} model calls per run (the rest wait for the next
-  run). Returns the number of NEW called-out (`top` / `action`) items, so a
+  run), then hands the called-out items to `Platform.Mail.Triage.Drafter`
+  (a draft reply or a plan each, at most its daily cap; nothing is sent).
+  Returns the number of NEW called-out (`top` / `action`) items, so a
   briefing is created when one lands. Idempotent per reader and date: a
   second run classifies nothing and returns 0. 0 with no triage agent.
   """
@@ -60,6 +62,14 @@ defmodule Platform.Mail.Triage.BriefingSection do
           agent: agent,
           since: DateTime.add(start, -86_400, :second),
           max_model_calls: @max_model_calls
+        )
+
+      # Task 01a1f426 stage 4: start the work on what was called out (a
+      # draft reply or a plan; drafts only, capped per reader per day).
+      {:ok, _drafted} =
+        Platform.Mail.Triage.Drafter.run_for_reader(user, date,
+          agent: agent,
+          since: DateTime.add(start, -86_400, :second)
         )
 
       max(length(Triage.called_out(user, date, agent: agent)) - before, 0)

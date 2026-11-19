@@ -10,8 +10,14 @@ defmodule Platform.Mail.Triage.Item do
   telemetry (`Platform.Mail.Triage.quiet_opts/0`). `signals` is a list of
   `%{"kind" => ..., <id or count keys>}` maps and never holds text.
 
-  The draft columns (`draft_id`, `draft_original_body`, `plan_steps`,
-  `edit_ratio`) are written by later stages of the same task.
+  The draft columns are written by `Platform.Mail.Triage.Drafter` (stage
+  4): `drafted_at` (when the drafter took the item), and either `draft_id`
+  + `draft_original_body` (the model's reply as first written, inside the
+  mailbox boundary like the draft itself) or `plan_summary` +
+  `plan_steps`. All of them carry model text and are written with
+  `Platform.Mail.Triage.quiet_opts/0`. `draft_original_body` is cleared by
+  a database trigger when the draft is discarded or deleted. `edit_ratio`
+  is stage 5's.
   """
   use Ecto.Schema
 
@@ -45,6 +51,8 @@ defmodule Platform.Mail.Triage.Item do
     field(:draft_id, :binary_id)
     field(:draft_original_body, :string)
     field(:plan_steps, {:array, :string})
+    field(:plan_summary, :string)
+    field(:drafted_at, :utc_datetime_usec)
     field(:edit_ratio, :float)
 
     timestamps()
@@ -95,6 +103,20 @@ defmodule Platform.Mail.Triage.Item do
   def update_changeset(%__MODULE__{} = item, attrs) do
     item
     |> cast(attrs, [:status, :acted_at, :acted_how, :tier])
+    |> common_validations()
+  end
+
+  @max_plan_steps 8
+
+  @doc "At most this many plan steps."
+  @spec max_plan_steps() :: pos_integer()
+  def max_plan_steps, do: @max_plan_steps
+
+  @doc "Changeset for the drafter's columns (task 01a1f426 stage 4)."
+  def drafter_changeset(%__MODULE__{} = item, attrs) do
+    item
+    |> cast(attrs, [:draft_id, :draft_original_body, :plan_summary, :plan_steps, :drafted_at])
+    |> validate_length(:plan_steps, max: @max_plan_steps)
     |> common_validations()
   end
 

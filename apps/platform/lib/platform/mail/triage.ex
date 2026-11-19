@@ -47,7 +47,7 @@ defmodule Platform.Mail.Triage do
 
   alias Platform.Agents.Agent
   alias Platform.Mail.{Account, InboundMessage, Ownership}
-  alias Platform.Mail.Triage.{Classifier, Context, Feedback, Item}
+  alias Platform.Mail.Triage.{Classifier, Context, Drafter, Feedback, Item}
   alias Platform.Repo
 
   @responsibility_key "mail.triage"
@@ -589,7 +589,9 @@ defmodule Platform.Mail.Triage do
   A newly ingested email `inbound_id`, triaged for every reader of its
   mailbox for whom the mailbox is eligible (`eligible?/3`: readable by them
   AND granted to the triage agent), and a `top` result notified at once
-  (`notify_top/2`). Driven by `Platform.Mail.Triage.Subscriber`.
+  (`notify_top/2`), and a called-out one handed to
+  `Platform.Mail.Triage.Drafter` (a draft reply or a plan, never a send).
+  Driven by `Platform.Mail.Triage.Subscriber`.
 
   A backfilled import (`ingest_source == "backfill"`) is skipped: a quiet
   import must not page anyone. Calls no send path. Returns `:ok`.
@@ -675,10 +677,20 @@ defmodule Platform.Mail.Triage do
     end
   end
 
+  # Classify, notify a `top` item, then start the work on a called-out one
+  # (`Platform.Mail.Triage.Drafter`, task 01a1f426 stage 4: drafts only,
+  # capped per reader per day).
   defp triage_and_notify(user, inbound, agent, opts) do
-    case classify_for_reader(user, inbound, agent: agent, now: opts[:now] || DateTime.utc_now()) do
-      {:ok, %Item{tier: "top"} = item} -> notify_top(item, Keyword.put(opts, :agent, agent))
-      _ -> :ok
+    now = opts[:now] || DateTime.utc_now()
+
+    case classify_for_reader(user, inbound, agent: agent, now: now) do
+      {:ok, %Item{} = item} ->
+        if item.tier == "top", do: notify_top(item, Keyword.put(opts, :agent, agent))
+        if Drafter.draftable?(item), do: Drafter.draft(user, item, agent: agent, now: now)
+        :ok
+
+      _ ->
+        :ok
     end
   end
 
@@ -882,7 +894,7 @@ defmodule Platform.Mail.Triage do
             verdict: verdict
           }
           |> Feedback.changeset()
-          |> Repo.insert!()
+          |> Repo.insert!(quiet_opts())
 
         if item, do: apply_verdict(item, verdict)
 
