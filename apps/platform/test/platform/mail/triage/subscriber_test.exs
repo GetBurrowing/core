@@ -65,15 +65,15 @@ defmodule Platform.Mail.Triage.SubscriberTest do
     a = user!("a") |> member!(org_id, "admin")
     r = user!("r") |> member!(org_id)
     m = user!("m") |> member!(org_id)
-    agent = triage_agent!()
+    agent = agent!("triage")
 
     p = account!(a, org_id, %{"name" => "Pbox #{n}"}) |> then(&personal!(a, &1, r))
-    grant_agent!(r, p, agent)
+    flag_agent!(r, p, agent)
 
     p2 = account!(a, org_id, %{"name" => "P2box #{n}"}) |> then(&personal!(a, &1, r))
 
     s = account!(a, org_id, %{"name" => "Sbox #{n}"}) |> then(&shared!(a, &1, [r, m]))
-    grant_agent!(a, s, agent)
+    flag_agent!(a, s, agent)
 
     :ok = Stub.install!(Stub.json(verdict(%{"tier" => "top"})))
 

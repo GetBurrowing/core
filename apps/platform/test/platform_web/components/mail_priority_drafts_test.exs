@@ -49,10 +49,10 @@ defmodule PlatformWeb.Components.MailPriorityDraftsTest do
 
     a = user!("a") |> member!(org_id, "admin")
     c = user!("c") |> member!(org_id)
-    agent = triage_agent!()
+    agent = agent!("triage")
 
     shared = account!(a, org_id, %{"name" => "Shared #{n}"}) |> then(&shared!(a, &1, [a, c]))
-    grant_agent!(a, shared, agent)
+    flag_agent!(a, shared, agent)
     a2 = account!(a, org_id, %{"name" => "A2 box #{n}"}) |> then(&personal!(a, &1, a))
 
     %{

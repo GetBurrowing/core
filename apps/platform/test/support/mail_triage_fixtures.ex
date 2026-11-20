@@ -1,15 +1,14 @@
 defmodule Platform.Test.MailTriageFixtures do
   @moduledoc """
-  Fixtures for `Platform.Mail.Triage` (task 01a1f426 stage 1): the triage
-  agent (pinned to `mail.triage` by a responsibility override), agent
-  grants, accepted deliveries and closed-shape replies. Mailboxes, users
+  Fixtures for `Platform.Mail.Triage` (task 01a1f426 stage 1): the flag
+  agent of a mailbox (task 01a1f5cc, set through the real
+  `Ownership.set_flag_important_agent/3` write), agent access grants, accepted deliveries and closed-shape replies. Mailboxes, users
   and inbound rows come from `Platform.Test.MailPrivacyFixtures`, through
   the real ownership write paths. Bodies carry marker tokens only.
   """
 
   alias Platform.Mail.{Delivery, Ownership}
   alias Platform.Repo
-  alias Platform.Roles
 
   @doc "Turn the Email module on for the test, restoring the env on exit."
   def enable_mail! do
@@ -26,11 +25,23 @@ defmodule Platform.Test.MailTriageFixtures do
     :ok
   end
 
-  @doc "An agent pinned to `mail.triage`."
-  def triage_agent! do
-    agent = Platform.Test.MailPrivacyFixtures.agent!("triage")
-    {:ok, _} = Roles.set_override("mail.triage", agent.id)
-    agent
+  @doc """
+  Make an agent `account`'s flag-important agent, as `owner` (who must
+  manage the mailbox: its owner, or an org admin of a shared one), through
+  `Ownership.set_flag_important_agent/3`. `name` is a tag for a NEW active
+  agent, or an existing `%Agent{}` to reuse across mailboxes. Returns the
+  agent.
+  """
+  def flag_agent!(owner, account, name \\ "triage")
+
+  def flag_agent!(owner, account, %Platform.Agents.Agent{} = agent) do
+    case Ownership.set_flag_important_agent(owner, account, agent.id) do
+      {:ok, _} -> agent
+    end
+  end
+
+  def flag_agent!(owner, account, name) when is_binary(name) do
+    flag_agent!(owner, account, Platform.Test.MailPrivacyFixtures.agent!(name))
   end
 
   @doc "Grant `agent` the mailbox; `actor` must manage it (owner or admin)."

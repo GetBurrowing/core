@@ -40,13 +40,13 @@ defmodule PlatformWeb.Components.MailPrioritySectionTest do
     a = user!("a") |> member!(org_id, "admin")
     b = user!("b") |> member!(org_id)
     c = user!("c") |> member!(org_id)
-    agent = triage_agent!()
+    agent = agent!("triage")
 
     shared = account!(a, org_id, %{"name" => "Shared #{n}"}) |> then(&shared!(a, &1, [a, c]))
-    grant_agent!(a, shared, agent)
+    flag_agent!(a, shared, agent)
 
     b_box = account!(a, org_id, %{"name" => "B box #{n}"}) |> then(&personal!(a, &1, b))
-    grant_agent!(b, b_box, agent)
+    flag_agent!(b, b_box, agent)
 
     a2 = account!(a, org_id, %{"name" => "A2 box #{n}"}) |> then(&personal!(a, &1, a))
 
@@ -162,7 +162,7 @@ defmodule PlatformWeb.Components.MailPrioritySectionTest do
            )
 
     assert section_html =~ "A2 box #{ctx.n}"
-    assert section_html =~ "grant #{ctx.agent.name} access in"
+    assert section_html =~ "has no agent flagging important email"
 
     # Routine and promo mail sits under the collapsed disclosure.
     assert has_element?(lv, "details[data-role=mail-priority-others]:not([open])")
@@ -281,11 +281,75 @@ defmodule PlatformWeb.Components.MailPrioritySectionTest do
     {lv, _} = open_briefing(ctx.conn, ctx.a, Date.add(ctx.date, -3))
     assert has_element?(lv, "[data-role=mail-priority-empty]", "Nothing needs you today")
 
-    Platform.Roles.clear_override("mail.triage")
+    {:ok, _} = Platform.Mail.Ownership.set_flag_important_agent(ctx.a, ctx.shared, nil)
     {lv, html} = open_briefing(Phoenix.ConnTest.build_conn(), ctx.a, ctx.date)
     assert has_element?(lv, "[data-role=mail-priority-no-agent]")
     refute html =~ "A-WHY-#{ctx.n}"
     refute has_element?(lv, "[data-role=mail-priority-item]")
+  end
+
+  # Task 01a1f5cc stage 4: each mailbox has its own flag agent, so the
+  # section names none, and no visible string says sort or triage.
+  defp visible_text(lv) do
+    lv
+    |> section()
+    |> render()
+    |> Floki.parse_fragment!()
+    |> Floki.text(sep: " ")
+    |> String.split()
+    |> Enum.join(" ")
+  end
+
+  test "the briefing names no single agent and contains neither sort nor triage", ctx do
+    # Flagged: S (the agent). Off: A2. Then the no-agent state.
+    {lv, _} = open_briefing(ctx.conn, ctx.a, ctx.date)
+    flagged = visible_text(lv)
+    assert flagged =~ "A-WHY-#{ctx.n}"
+    refute flagged =~ ctx.agent.name
+    refute flagged =~ ~r/sort|triage/i
+
+    {:ok, _} = Platform.Mail.Ownership.set_flag_important_agent(ctx.a, ctx.shared, nil)
+    {lv, _} = open_briefing(Phoenix.ConnTest.build_conn(), ctx.a, ctx.date)
+    none = visible_text(lv)
+
+    assert lv
+           |> element("[data-role=mail-priority-no-agent]")
+           |> render()
+           |> Floki.parse_fragment!()
+           |> Floki.text()
+           |> String.split()
+           |> Enum.join(" ") ==
+             "No agent flags important email for you yet. Choose one for each mailbox in Email > Accounts."
+
+    assert has_element?(lv, ~s([data-role=mail-priority-no-agent] a[href="/email/accounts"]))
+    refute none =~ ctx.agent.name
+    refute none =~ ~r/sort|triage/i
+  end
+
+  test "a mailbox set to Off is listed as having no agent flagging important email", ctx do
+    {lv, _} = open_briefing(ctx.conn, ctx.a, ctx.date)
+    row = "[data-role=mail-priority-ungranted-mailbox][data-account-id='#{ctx.a2.id}']"
+
+    text =
+      lv
+      |> element(row)
+      |> render()
+      |> Floki.parse_fragment!()
+      |> Floki.text()
+      |> String.split()
+      |> Enum.join(" ")
+
+    assert text ==
+             "A2 box #{ctx.n} has no agent flagging important email. Choose one in Email > Accounts."
+
+    assert has_element?(lv, row <> ~s( a[href="/email/accounts"]))
+
+    # The flagged mailbox is not listed; turning it Off lists nothing new
+    # here (no mailbox has an agent, so the no-agent line replaces the list).
+    refute has_element?(
+             lv,
+             "[data-role=mail-priority-ungranted-mailbox][data-account-id='#{ctx.shared.id}']"
+           )
   end
 
   test "prepare triages the reader's new mail once and counts new called-out items", ctx do
@@ -357,7 +421,6 @@ defmodule PlatformWeb.Components.MailPrioritySectionTest do
 
       assert {:ok, _} =
                Platform.Mail.Triage.notify_top(ctx.evening_item,
-                 agent: ctx.agent,
                  now: DateTime.add(@evening, 5, :second)
                )
 

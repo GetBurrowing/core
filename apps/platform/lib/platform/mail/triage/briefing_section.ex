@@ -12,7 +12,6 @@ defmodule Platform.Mail.Triage.BriefingSection do
   is off (`Platform.Mail.Config.enabled?/0`, no query).
   """
 
-  alias Platform.Agents.Agent
   alias Platform.Mail.Triage
 
   @key "mail_priority"
@@ -52,21 +51,21 @@ defmodule Platform.Mail.Triage.BriefingSection do
   including those classified on arrival between briefings; after it, only
   the NEW ones. So a briefing is created when one lands. Idempotent per
   reader and date once delivered: a second run classifies nothing and
-  returns 0. 0 with no triage agent.
+  returns 0. 0 when no mailbox the reader may read has an active flag
+  agent. There is no single agent: each mailbox is triaged and drafted by
+  its own flag-important agent (`Triage.agent_for_account/1`).
 
   `date` is a briefing date (`Triage.briefing_date/1`): the window is that
   local day (`Triage.day_bounds/1`), not the UTC one.
   """
   @spec prepare(binary(), Date.t()) :: non_neg_integer()
   def prepare(user_id, %Date{} = date) do
-    with %{id: _} = user <- fetch_user(user_id),
-         %Agent{} = agent <- Triage.triage_agent() do
-      before = length(Triage.called_out(user, date, agent: agent))
+    with %{id: _} = user <- fetch_user(user_id) do
+      before = length(Triage.called_out(user, date))
       {start, _finish} = Triage.day_bounds(date)
 
       {:ok, _summary} =
         Triage.run_for_reader(user, date,
-          agent: agent,
           since: DateTime.add(start, -86_400, :second),
           max_model_calls: @max_model_calls
         )
@@ -75,11 +74,10 @@ defmodule Platform.Mail.Triage.BriefingSection do
       # draft reply or a plan; drafts only, capped per reader per day).
       {:ok, _drafted} =
         Platform.Mail.Triage.Drafter.run_for_reader(user, date,
-          agent: agent,
           since: DateTime.add(start, -86_400, :second)
         )
 
-      after_run = length(Triage.called_out(user, date, agent: agent))
+      after_run = length(Triage.called_out(user, date))
 
       # An item classified on arrival (the Subscriber, between briefings)
       # was already counted in `before`; until this date's briefing is

@@ -10,8 +10,10 @@ defmodule Platform.Mail.Triage.Drafter do
   A reader's own `top` / `action` item whose `needs` is reply, decision or
   plan, that the drafter has not taken yet (`drafted_at`, `draft_id` and
   `plan_steps` all nil), whose mailbox is eligible for the reader NOW
-  (`Platform.Mail.Triage.eligible?/3`: readable by the reader AND granted
-  to the triage agent). An ineligible mailbox costs no provider call and
+  (`Platform.Mail.Triage.eligible?/2`: readable by the reader AND with an
+  active flag-important agent). The draft or plan is written by THAT
+  mailbox's agent (`Platform.Mail.Triage.agent_for_account/1`), so one
+  reader's two mailboxes may be worked by two agents. An ineligible mailbox costs no provider call and
   writes nothing. At most 15 items are taken per reader per UTC day
   (`daily_cap/0`); the claim and the count are one step under a per-reader
   advisory lock, so concurrent runs cannot overshoot.
@@ -37,7 +39,7 @@ defmodule Platform.Mail.Triage.Drafter do
   (`drafted_at`), so a rejected answer is not paid for again. A provider
   failure releases the claim and stores nothing, so the next run retries.
 
-    * reply — `Platform.Mail.Drafts.create({:agent, triage_agent_id}, ...)`,
+    * reply — `Platform.Mail.Drafts.create({:agent, flag_agent_id}, ...)`,
       the agent path whose own scope refuses an account not GRANTED to the
       agent or not readable by the on-behalf reader. Sender: a sender of
       that account from `Drafts.sendable_senders(reader, org_id)` (the one
@@ -118,53 +120,45 @@ defmodule Platform.Mail.Triage.Drafter do
   mailbox is eligible now, until the daily cap. Returns `{:ok, summary}`
   with `:replies`, `:plans`, `:skipped`, `:failed` and `:capped` counts.
 
-  Options: `:agent` (default `Triage.triage_agent/0`), `:since` / `:until`
-  (DateTimes replacing the date's bounds), `:now`.
+  Options: `:since` / `:until` (DateTimes replacing the date's bounds),
+  `:now`. Each item is drafted by its own mailbox's agent.
   """
   @spec run_for_reader(map(), Date.t(), keyword()) :: {:ok, map()}
   def run_for_reader(user, date, opts \\ [])
 
   def run_for_reader(%{id: user_id} = user, %Date{} = date, opts) when is_binary(user_id) do
     empty = %{replies: 0, plans: 0, skipped: 0, failed: 0, capped: 0}
+    {start, finish} = Platform.Mail.Triage.day_bounds(date)
+    from = Keyword.get(opts, :since, start)
+    to = Keyword.get(opts, :until, finish)
 
-    case Keyword.get_lazy(opts, :agent, &Triage.triage_agent/0) do
-      %Agent{} = agent ->
-        {start, finish} = Platform.Mail.Triage.day_bounds(date)
-        from = Keyword.get(opts, :since, start)
-        to = Keyword.get(opts, :until, finish)
-        opts = Keyword.put(opts, :agent, agent)
+    summary =
+      user
+      |> candidates(from, to)
+      |> Enum.reduce_while(empty, fn item, acc ->
+        case draft(user, item, opts) do
+          {:ok, :reply, _} -> {:cont, %{acc | replies: acc.replies + 1}}
+          {:ok, :plan, _} -> {:cont, %{acc | plans: acc.plans + 1}}
+          {:skipped, :daily_cap} -> {:halt, %{acc | capped: acc.capped + 1}}
+          {:skipped, _} -> {:cont, %{acc | skipped: acc.skipped + 1}}
+          {:error, _} -> {:cont, %{acc | failed: acc.failed + 1}}
+        end
+      end)
 
-        summary =
-          user
-          |> candidates(agent, from, to)
-          |> Enum.reduce_while(empty, fn item, acc ->
-            case draft(user, item, opts) do
-              {:ok, :reply, _} -> {:cont, %{acc | replies: acc.replies + 1}}
-              {:ok, :plan, _} -> {:cont, %{acc | plans: acc.plans + 1}}
-              {:skipped, :daily_cap} -> {:halt, %{acc | capped: acc.capped + 1}}
-              {:skipped, _} -> {:cont, %{acc | skipped: acc.skipped + 1}}
-              {:error, _} -> {:cont, %{acc | failed: acc.failed + 1}}
-            end
-          end)
-
-        {:ok, summary}
-
-      _ ->
-        {:ok, empty}
-    end
+    {:ok, summary}
   end
 
   def run_for_reader(_user, _date, _opts),
     do: {:ok, %{replies: 0, plans: 0, skipped: 0, failed: 0, capped: 0}}
 
-  defp candidates(%{id: user_id} = user, agent, from, to) do
+  defp candidates(%{id: user_id} = user, from, to) do
     user
     |> Platform.Tenancy.list_user_memberships()
     |> Enum.reject(&(&1.external or is_nil(&1.org) or Map.get(&1.org, :archived_at)))
     |> Enum.map(& &1.org_id)
     |> Enum.uniq()
     |> Enum.flat_map(fn org_id ->
-      eligible = Triage.eligible_accounts_query(user, org_id, agent)
+      eligible = Triage.eligible_accounts_query(user, org_id)
 
       from(i in Item,
         where: i.user_id == ^user_id and i.org_id == ^org_id,
@@ -189,22 +183,24 @@ defmodule Platform.Mail.Triage.Drafter do
   item}`, `{:ok, :plan, item}`, `{:skipped, reason}` (`:no_triage_agent`,
   `:not_draftable`, `:not_eligible`, `:no_sender`, `:daily_cap`,
   `:already_drafted`) or `{:error, reason}` (`:provider_failed`,
-  `:rejected_output`, `{:draft_refused, reason}`).
+  `:rejected_output`, `{:draft_refused, reason}`). The agent is the item's
+  own mailbox's (`Triage.agent_for_account/1`); none means
+  `:no_triage_agent`.
 
-  Options: `:agent`, `:now`.
+  Options: `:now`.
   """
   @spec draft(map(), Item.t(), keyword()) :: outcome()
   def draft(user, item, opts \\ [])
 
   def draft(%{id: user_id} = user, %Item{user_id: user_id} = item, opts)
       when is_binary(user_id) do
-    agent = Keyword.get_lazy(opts, :agent, &Triage.triage_agent/0)
+    agent = Triage.agent_for_account(item.account_id)
     now = Keyword.get(opts, :now, DateTime.utc_now())
 
     result =
       with {:agent, %Agent{}} <- {:agent, agent},
            {:draftable, true} <- {:draftable, draftable?(item)},
-           {:eligible, true} <- {:eligible, Triage.eligible?(user, item, agent)},
+           {:eligible, true} <- {:eligible, Triage.eligible?(user, item)},
            %InboundMessage{} = inbound <-
              Repo.get(InboundMessage, item.inbound_message_id, Triage.quiet_opts()),
            {:sender, sender} when sender != :none or item.needs != "reply" <-

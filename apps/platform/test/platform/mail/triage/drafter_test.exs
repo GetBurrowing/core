@@ -45,17 +45,17 @@ defmodule Platform.Mail.Triage.DrafterTest do
     a = user!("a") |> member!(org_id, "admin")
     b = user!("b") |> member!(org_id)
     r = user!("r") |> member!(org_id)
-    agent = triage_agent!()
+    agent = agent!("triage")
 
     p = account!(a, org_id, %{"name" => "Pbox #{n}"}) |> then(&personal!(a, &1, r))
 
     {:ok, _} =
       Mail.put_sender(a, p, %{key: "ops", address: "box@example.test", display_name: "R"})
 
-    grant_agent!(r, p, agent)
+    flag_agent!(r, p, agent)
 
     p3 = account!(a, org_id, %{"name" => "P3box #{n}"}) |> then(&personal!(a, &1, r))
-    grant_agent!(r, p3, agent)
+    flag_agent!(r, p3, agent)
 
     s2 = account!(a, org_id, %{"name" => "S2box #{n}"}) |> then(&shared!(a, &1, [r]))
 
@@ -67,7 +67,7 @@ defmodule Platform.Mail.Triage.DrafterTest do
     {:ok, _} =
       Mail.put_sender(a, b_box, %{key: "ops", address: "b@example.test", display_name: "B"})
 
-    grant_agent!(b, b_box, agent)
+    flag_agent!(b, b_box, agent)
 
     :ok = Stub.install!(by_prompt(@reply))
 
@@ -225,7 +225,7 @@ defmodule Platform.Mail.Triage.DrafterTest do
       tasks = Repo.aggregate(Platform.Tasks.Task, :count)
       item = item!(ctx.r, inbound!(ctx.p), %{needs: "plan"})
 
-      assert {:ok, :plan, stored} = Drafter.draft(ctx.r, item, agent: ctx.agent)
+      assert {:ok, :plan, stored} = Drafter.draft(ctx.r, item)
       assert stored.plan_summary == "Prepare the proposal they asked for."
       assert stored.plan_steps == ["Collect the scope", "Draft the timeline", "Review pricing"]
       assert stored.draft_id == nil
@@ -247,8 +247,8 @@ defmodule Platform.Mail.Triage.DrafterTest do
       routine = item!(ctx.r, inbound!(ctx.p), %{tier: "routine"})
       nothing = item!(ctx.r, inbound!(ctx.p), %{tier: "action", needs: "none"})
 
-      assert {:skipped, :not_draftable} = Drafter.draft(ctx.r, routine, agent: ctx.agent)
-      assert {:skipped, :not_draftable} = Drafter.draft(ctx.r, nothing, agent: ctx.agent)
+      assert {:skipped, :not_draftable} = Drafter.draft(ctx.r, routine)
+      assert {:skipped, :not_draftable} = Drafter.draft(ctx.r, nothing)
       assert stub_calls() == []
     end
 
@@ -303,7 +303,7 @@ defmodule Platform.Mail.Triage.DrafterTest do
 
       log =
         capture_log(fn ->
-          assert {:error, :rejected_output} = Drafter.draft(ctx.r, item, agent: ctx.agent)
+          assert {:error, :rejected_output} = Drafter.draft(ctx.r, item)
         end)
 
       refute log =~ "MODEL-TEXT-#{ctx.n}"
@@ -322,7 +322,7 @@ defmodule Platform.Mail.Triage.DrafterTest do
       item = item!(ctx.r, inbound!(ctx.p))
 
       capture_log(fn ->
-        assert {:error, :provider_failed} = Drafter.draft(ctx.r, item, agent: ctx.agent)
+        assert {:error, :provider_failed} = Drafter.draft(ctx.r, item)
       end)
 
       stored = Repo.get!(Item, item.id)
@@ -333,7 +333,7 @@ defmodule Platform.Mail.Triage.DrafterTest do
 
     test "no sender on the mailbox: no draft and no provider call", ctx do
       item = item!(ctx.r, inbound!(ctx.p3))
-      assert {:skipped, :no_sender} = Drafter.draft(ctx.r, item, agent: ctx.agent)
+      assert {:skipped, :no_sender} = Drafter.draft(ctx.r, item)
       assert stub_calls() == []
       assert drafts() == []
     end
@@ -342,13 +342,14 @@ defmodule Platform.Mail.Triage.DrafterTest do
   # ── mailbox permissions ──────────────────────────────────────────────────
 
   describe "mailbox permissions" do
-    test "a mailbox the reader reads but the agent is not granted: no draft and no provider call",
+    test "a mailbox the reader reads with no flag agent: no draft and no provider call",
          ctx do
       item = item!(ctx.r, inbound!(ctx.s2, %{text_body: "S2-#{ctx.n}"}))
 
-      result = Drafter.draft(ctx.r, item, agent: ctx.agent)
+      # S2 has no flag-important agent, so there is no agent to draft as.
+      result = Drafter.draft(ctx.r, item)
       assert drafts() == []
-      assert result == {:skipped, :not_eligible}
+      assert result == {:skipped, :no_triage_agent}
       assert stub_calls() == []
 
       assert {:ok, %{replies: 0, plans: 0}} = run(ctx.r)
@@ -362,7 +363,7 @@ defmodule Platform.Mail.Triage.DrafterTest do
       item =
         item!(ctx.a, inbound!(ctx.b_box, %{text_body: "BBOX-#{ctx.n}"}), %{needs: "decision"})
 
-      result = Drafter.draft(ctx.a, item, agent: ctx.agent)
+      result = Drafter.draft(ctx.a, item)
       assert drafts() == []
       assert result == {:skipped, :not_eligible}
       assert stub_calls() == []
@@ -391,7 +392,7 @@ defmodule Platform.Mail.Triage.DrafterTest do
 
     test "another reader's item is never drafted for this reader", ctx do
       item = item!(ctx.b, inbound!(ctx.b_box))
-      assert {:skipped, :not_eligible} = Drafter.draft(ctx.r, item, agent: ctx.agent)
+      assert {:skipped, :not_eligible} = Drafter.draft(ctx.r, item)
       assert stub_calls() == []
     end
   end
@@ -454,9 +455,41 @@ defmodule Platform.Mail.Triage.DrafterTest do
       assert r_id == ctx.r.id
     end
 
+    test "each mailbox is classified by its own flag agent", ctx do
+      # One reader, two mailboxes: P is flagged by X (the setup's agent),
+      # P3 by Y. Each email is classified AND drafted by its own agent.
+      y = flag_agent!(ctx.r, ctx.p3, "y")
+
+      {:ok, _} =
+        Mail.put_sender(ctx.a, ctx.p3, %{
+          key: "ops",
+          address: "p3@example.test",
+          display_name: "R3"
+        })
+
+      in_p = inbound!(ctx.p, %{text_body: "Can you confirm?"})
+      in_p3 = inbound!(ctx.p3, %{text_body: "Can you confirm too?"})
+      :ok = Triage.on_inbound(in_p.id)
+      :ok = Triage.on_inbound(in_p3.id)
+
+      x_label = Platform.Mail.Triage.Classifier.classifier_label(ctx.agent)
+      y_label = Platform.Mail.Triage.Classifier.classifier_label(y)
+      assert x_label != y_label
+      assert Repo.get_by!(Item, inbound_message_id: in_p.id).classifier == x_label
+      assert Repo.get_by!(Item, inbound_message_id: in_p3.id).classifier == y_label
+
+      by_inbound = Map.new(drafts(), &{&1.in_reply_to_inbound_id, &1})
+      assert %Draft{created_by_type: "agent", account_id: p_id} = by_inbound[in_p.id]
+      assert by_inbound[in_p.id].created_by_id == ctx.agent.id
+      assert p_id == ctx.p.id
+      assert %Draft{created_by_type: "agent", account_id: p3_id} = by_inbound[in_p3.id]
+      assert by_inbound[in_p3.id].created_by_id == y.id
+      assert p3_id == ctx.p3.id
+    end
+
     test "a newly ingested email is drafted after classification", ctx do
       inbound = inbound!(ctx.p, %{text_body: "Can you confirm?"})
-      :ok = Platform.Mail.Triage.on_inbound(inbound.id, agent: ctx.agent)
+      :ok = Platform.Mail.Triage.on_inbound(inbound.id)
       assert [%Draft{in_reply_to_inbound_id: id}] = drafts()
       assert id == inbound.id
     end
@@ -467,7 +500,7 @@ defmodule Platform.Mail.Triage.DrafterTest do
   describe "draft_original_body" do
     setup ctx do
       item = item!(ctx.r, inbound!(ctx.p))
-      {:ok, :reply, item} = Drafter.draft(ctx.r, item, agent: ctx.agent)
+      {:ok, :reply, item} = Drafter.draft(ctx.r, item)
       %{item: item}
     end
 

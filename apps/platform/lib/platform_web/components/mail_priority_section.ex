@@ -5,9 +5,9 @@ defmodule PlatformWeb.Components.MailPrioritySection do
   rendered for the reader. Mounted by the briefing through the section
   contract (`Platform.Memory.Insights.BriefingSections`, key
   `mail_priority`), it receives only a user id and a date and re-reads the
-  user, the triage agent and the items on every update and every event, so
-  which mailboxes are in view (readable by the reader AND granted to the
-  triage agent) is decided by `Platform.Mail.Triage`, never by what was
+  user, each mailbox's flag agent and the items on every update and every
+  event, so which mailboxes are in view (readable by the reader AND with an
+  active flag agent, chosen per mailbox in Email > Accounts) is decided by `Platform.Mail.Triage`, never by what was
   passed in or by a client-supplied id.
 
   Per called-out email: a tier chip (Needs you / Action), the sender's name
@@ -31,14 +31,17 @@ defmodule PlatformWeb.Components.MailPrioritySection do
   only, and sending happens in Email's confirm pane, by a person.
 
   Every event handler resolves the item as the reader's OWN item
-  (`Triage.reader_item/2`) and then re-checks `Triage.eligible?/3` (the
-  item's account in `Triage.eligible_account_ids/3`) BEFORE it writes, then
+  (`Triage.reader_item/2`) and then re-checks `Triage.eligible?/2` (the
+  item's account in `Triage.eligible_account_ids/2`) BEFORE it writes, then
   calls `BriefingSections.changed/2`. A forged id (another reader's item,
   or an item of a mailbox no longer readable or granted) writes nothing.
 
-  States: no triage agent assigned; mailboxes the reader may read that are
-  not granted to the agent (named, with where to grant access: metadata
-  only); nothing needs you today; items. Stacked cards at every width,
+  States: no mailbox of the reader has a flag agent ("No agent flags
+  important email for you yet."); mailboxes the reader may read with no
+  flag agent (each named, "has no agent flagging important email", with a
+  link to Email > Accounts: metadata only, and no agent name, since each
+  mailbox has its own agent); nothing needs you today; items. No visible
+  string says "sort" or "triage" (task 01a1f5cc stage 4). Stacked cards at every width,
   44px tap targets below `sm`; times and labels use `text-subtle`.
   """
 
@@ -62,19 +65,17 @@ defmodule PlatformWeb.Components.MailPrioritySection do
 
   defp reload(socket) do
     user = fetch_user(socket.assigns.user_id)
-    agent = Triage.triage_agent()
 
-    assign(socket, :view, Triage.section_view(user, socket.assigns.date, agent: agent))
+    assign(socket, :view, Triage.section_view(user, socket.assigns.date))
   end
 
   @impl true
   def handle_event(event, %{"item_id" => item_id}, socket) when event in @verbs do
     user = fetch_user(socket.assigns.user_id)
-    agent = Triage.triage_agent()
 
     with %{id: user_id} <- user,
          %Triage.Item{} = item <- Triage.reader_item(user, item_id),
-         true <- Triage.eligible?(user, item, agent),
+         true <- Triage.eligible?(user, item),
          {:ok, _} <- write(event, user, item) do
       BriefingSections.changed(user_id, socket.assigns.date)
     end
@@ -120,15 +121,18 @@ defmodule PlatformWeb.Components.MailPrioritySection do
         </h3>
 
         <p
-          :if={is_nil(@view.agent)}
+          :if={@view.agents_by_account == %{}}
           class="rounded-box border border-edge bg-base-100 px-4 py-3 text-sm text-base-content"
           data-role="mail-priority-no-agent"
         >
-          No agent is assigned to triage your email yet, so nothing is called out.
+          No agent flags important email for you yet. Choose one for each mailbox in <.link
+            navigate="/email/accounts"
+            class="text-info hover:underline"
+          >Email &gt; Accounts</.link>.
         </p>
 
         <ul
-          :if={@view.agent && @view.ungranted != []}
+          :if={@view.agents_by_account != %{} && @view.ungranted != []}
           role="list"
           class="mb-2 space-y-1"
           data-role="mail-priority-ungranted"
@@ -143,16 +147,16 @@ defmodule PlatformWeb.Components.MailPrioritySection do
             </span>
             <span class="min-w-0">
               <span class="font-medium">{box.name}</span>
-              is not triaged. To include it, grant {@view.agent.name} access in
-              <.link navigate="/email/accounts" class="text-info hover:underline">
-                Email &gt; Accounts &gt; Access
-              </.link>
+              has no agent flagging important email. Choose one in <.link
+                navigate="/email/accounts"
+                class="text-info hover:underline"
+              >Email &gt; Accounts</.link>.
             </span>
           </li>
         </ul>
 
         <p
-          :if={@view.agent && @view.called_out == []}
+          :if={@view.agents_by_account != %{} && @view.called_out == []}
           class="rounded-box border border-edge bg-base-100 px-4 py-6 text-center text-sm text-subtle"
           data-role="mail-priority-empty"
         >

@@ -83,7 +83,10 @@ defmodule PlatformWeb.EmailLive do
   it, read from `Platform.Mail.Ownership.audience/2`, which answers only a
   reader. Access opens the Access panel (`access-panel`): the right-hand
   pane at `lg`, a bottom sheet below it. A manager (`can_manage_access?/2`)
-  gets `Ownership.list_grants/2`'s rows with Revoke, the revoke confirm
+  gets `Ownership.list_grants/2`'s rows folded to one row per agent
+  (`access-agent-row`; the flag agent carries `access-agent-flag`), with
+  Revoke on an access grant (the flag grant stays; a flag-only agent gets
+  `access-agent-turn-off`, a link to Email > Accounts), the revoke confirm
   (`access-revoke-confirm`) and Grant; anyone else who reads it gets the
   same panel read-only. The account editor carries the admin-only owner
   form (`set_owner`) and, for an account the admin cannot read, the
@@ -132,6 +135,9 @@ defmodule PlatformWeb.EmailLive do
   """
 
   use PlatformWeb, :live_view
+
+  import PlatformWeb.Components.Mail.AccessAgentRow, only: [access_agent_row: 1]
+  import PlatformWeb.Components.Mail.FlagImportant, only: [flag_important: 1]
 
   alias Platform.Mail
   alias Platform.Mail.Account
@@ -197,6 +203,11 @@ defmodule PlatformWeb.EmailLive do
      |> assign(:access, nil)
      |> assign(:grant_picker, false)
      |> assign(:revoke_confirm, nil)
+     |> assign(:flag_pending, nil)
+     |> assign(:flag_manage_ids, MapSet.new())
+     |> assign(:flag_agents, %{})
+     |> assign(:flag_activity, %{})
+     |> assign(:flag_choices, [])
      |> assign(:org_people, [])
      |> assign(:people, [])
      |> assign(:provenance, %{})
@@ -214,6 +225,7 @@ defmodule PlatformWeb.EmailLive do
       |> assign(:account_filter, account_param(params["account"]))
       |> assign_mailbox()
       |> close_access()
+      |> assign(:flag_pending, nil)
       |> assign(:add_error, nil)
       |> assign(:form_error, nil)
       |> reset_compose(socket.assigns.live_action)
@@ -280,11 +292,45 @@ defmodule PlatformWeb.EmailLive do
       |> Platform.Accounts.get_users_map(include_archived: true)
       |> Map.new(fn {id, user} -> {id, user.name || user.email} end)
 
+    readable_ids = MapSet.new(readable, & &1.id)
+
     socket
     |> assign(:readable_accounts, readable)
-    |> assign(:readable_ids, MapSet.new(readable, & &1.id))
+    |> assign(:readable_ids, readable_ids)
     |> assign(:accounts, accounts)
     |> assign(:owner_names, owner_names)
+    |> assign_flag_important(accounts, readable_ids)
+  end
+
+  # Flag important email (task 01a1f5cc stage 3). `@flag_manage_ids` (the
+  # accounts whose card renders the control) is `Ownership.can_manage_access?/2`
+  # per account; it decides only what renders, and `flag_confirm` is re-checked
+  # by `Ownership.set_flag_important_agent/3`. Agent names are loaded ONLY for
+  # accounts the viewer manages or reads, so an admin's render of someone
+  # else's personal mailbox carries no agent name. Activity is the viewer's
+  # own items today.
+  defp assign_flag_important(socket, accounts, readable_ids) do
+    user = socket.assigns.user
+
+    manage_ids =
+      for %Account{} = account <- accounts,
+          Ownership.can_manage_access?(user, account),
+          into: MapSet.new(),
+          do: account.id
+
+    named_ids =
+      for %Account{id: id} <- accounts,
+          MapSet.member?(manage_ids, id) or MapSet.member?(readable_ids, id),
+          do: id
+
+    socket
+    |> assign(:flag_manage_ids, manage_ids)
+    |> assign(:flag_agents, Ownership.flag_important_agents(named_ids))
+    |> assign(:flag_activity, Triage.reader_activity(user, MapSet.to_list(readable_ids)))
+    |> assign(
+      :flag_choices,
+      if(MapSet.size(manage_ids) == 0, do: [], else: Platform.Chat.list_agents_for_picker())
+    )
   end
 
   # The mailbox the header and access line describe: the `?account=` filter
@@ -597,6 +643,65 @@ defmodule PlatformWeb.EmailLive do
     )
   end
 
+  # Flag important email (task 01a1f5cc stage 3). `flag_pick` only opens
+  # the ledger: nothing is written until `flag_confirm` (Give access / Turn
+  # off), which resolves the account from its own `account_id` and calls the
+  # owner-checked `Ownership.set_flag_important_agent/3`.
+  def handle_event("flag_pick", %{"account_id" => id, "agent_id" => pick}, socket) do
+    %{flag_manage_ids: manage_ids, flag_agents: agents} = socket.assigns
+
+    saved =
+      case agents[id] do
+        %{id: agent_id} -> agent_id
+        nil -> nil
+      end
+
+    choice = if(pick == "off", do: nil, else: pick)
+
+    pending =
+      cond do
+        not MapSet.member?(manage_ids, id) ->
+          nil
+
+        choice == saved ->
+          nil
+
+        is_nil(choice) ->
+          %{account_id: id, agent_id: nil}
+
+        Enum.any?(socket.assigns.flag_choices, &(&1.id == choice)) ->
+          %{account_id: id, agent_id: choice}
+
+        true ->
+          nil
+      end
+
+    {:noreply, assign(socket, :flag_pending, pending)}
+  end
+
+  def handle_event("flag_pick", _params, socket), do: {:noreply, socket}
+
+  def handle_event("flag_cancel", _params, socket),
+    do: {:noreply, assign(socket, :flag_pending, nil)}
+
+  def handle_event("flag_confirm", %{"account_id" => id} = params, socket) do
+    agent_id =
+      case params["agent_id"] do
+        value when value in [nil, "", "off"] -> nil
+        value -> value
+      end
+
+    {:noreply, socket} =
+      access_write(
+        socket,
+        id,
+        &Ownership.set_flag_important_agent(&1, &2, agent_id),
+        if(agent_id, do: "Saved. The agent starts with the next new email.", else: "Turned off.")
+      )
+
+    {:noreply, assign(socket, :flag_pending, nil)}
+  end
+
   def handle_event("set_owner", %{"owner" => %{"account_id" => id} = params}, socket) do
     attrs = %{kind: params["kind"], owner_user_id: blank_to_nil(params["owner_user_id"])}
 
@@ -790,7 +895,7 @@ defmodule PlatformWeb.EmailLive do
     %{user: user, selected_message: message} = socket.assigns
 
     with %{id: _} <- message,
-         true <- Triage.eligible?(user, message, Triage.triage_agent()),
+         true <- Triage.eligible?(user, message),
          {:ok, _feedback} <- Triage.record_feedback(user, message.id, verdict) do
       {:noreply, assign(socket, :triage_feedback, {:recorded, verdict})}
     else
@@ -1201,15 +1306,16 @@ defmodule PlatformWeb.EmailLive do
   # The Access panel's data. A manager reads `Ownership.list_grants/2` (the
   # grant rows, with when each agent was granted); anyone else who reads the
   # mailbox gets `Ownership.audience/2`, read-only. Neither: nil, no panel.
+  #
+  # ONE row per agent (task 01a1f5cc stage 4): `list_grants/2` returns rows of
+  # both purposes, so an agent holding an access AND a flag_important grant
+  # has two rows. `agent_rows/2` folds them here, at the panel's one reader,
+  # rather than in `list_grants/2`, which stays the raw grant list.
   defp load_access(user, %Account{} = account) do
     case Ownership.list_grants(user, account) do
       {:ok, grants} ->
         names = Ownership.principal_names(grants)
-
-        agents =
-          for %{principal_type: "agent", principal_id: id} = grant <- grants,
-              %{} = agent <- [names[{"agent", id}]],
-              do: Map.put(agent, :granted_at, grant.inserted_at)
+        agents = agent_rows(grants, names)
 
         people =
           case account.owner_kind do
@@ -1219,10 +1325,13 @@ defmodule PlatformWeb.EmailLive do
             _ ->
               for %{principal_type: "user", principal_id: id} <- grants,
                   %{} = p <- [names[{"user", id}]],
+                  uniq: true,
                   do: p
           end
 
-        granted = MapSet.new(agents, & &1.id)
+        # Only an ACCESS grant makes an agent a non-candidate: the flag agent
+        # can still be given an ordinary grant.
+        granted = for %{access?: true, id: id} <- agents, into: MapSet.new(), do: id
         member_ids = MapSet.new(people, & &1.id)
 
         %{
@@ -1243,10 +1352,16 @@ defmodule PlatformWeb.EmailLive do
       {:error, _} ->
         case Ownership.audience(user, account) do
           {:ok, %{agents: agents, people: people}} ->
+            flag_id = Ownership.flag_important_agent_ids([account.id])[account.id]
+
             %{
               account: account,
               manage?: false,
-              agents: Enum.map(agents, &Map.put(&1, :granted_at, nil)),
+              agents:
+                Enum.map(
+                  agents,
+                  &Map.merge(&1, %{granted_at: nil, access?: true, flag?: &1.id == flag_id})
+                ),
               people: people,
               candidates: [],
               member_candidates: []
@@ -1256,6 +1371,36 @@ defmodule PlatformWeb.EmailLive do
             nil
         end
     end
+  end
+
+  # The agent grant rows folded to one entry per agent, in first-granted
+  # order: `access?` / `flag?` say which purposes it holds, and `granted_at`
+  # is the access grant's time (the flag grant's when it holds only that).
+  defp agent_rows(grants, names) do
+    grants
+    |> Enum.filter(&(&1.principal_type == "agent"))
+    |> Enum.group_by(& &1.principal_id)
+    |> Enum.flat_map(fn {id, rows} ->
+      case names[{"agent", id}] do
+        %{} = agent ->
+          access = Enum.find(rows, &(&1.purpose == "access"))
+          first = Enum.min_by(rows, & &1.inserted_at, DateTime)
+
+          [
+            {first.inserted_at,
+             Map.merge(agent, %{
+               granted_at: (access || first).inserted_at,
+               access?: access != nil,
+               flag?: Enum.any?(rows, &(&1.purpose == "flag_important"))
+             })}
+          ]
+
+        _ ->
+          []
+      end
+    end)
+    |> Enum.sort_by(&elem(&1, 0), DateTime)
+    |> Enum.map(&elem(&1, 1))
   end
 
   defp owner_people(%Account{owner_user_id: id}) when is_binary(id) do
@@ -1276,6 +1421,7 @@ defmodule PlatformWeb.EmailLive do
   defp access_error_text(:not_shared), do: "Only a shared mailbox has members."
   defp access_error_text(:unknown_principal), do: "Pick an agent or a person of this org."
   defp access_error_text(:invalid_kind), do: "Pick Unassigned, Personal or Shared."
+  defp access_error_text(:unassigned), do: "Give this mailbox an owner first."
   defp access_error_text(_reason), do: "Could not save the change. Try again."
 
   @doc false
@@ -1325,10 +1471,6 @@ defmodule PlatformWeb.EmailLive do
   def people_text(%{people: people}, user),
     do: Enum.map_join(people, ", ", &if(&1.id == user.id, do: "you", else: &1.name))
 
-  defp granted_text(%DateTime{} = at), do: "granted " <> Calendar.strftime(at, "%m-%d %H:%M")
-  defp granted_text(%NaiveDateTime{} = at), do: "granted " <> Calendar.strftime(at, "%m-%d %H:%M")
-  defp granted_text(_), do: nil
-
   # The switcher's groups, each `{key, label, chip, accounts}`; an empty
   # group is dropped. Personal mailboxes the viewer owns, then shared ones.
   defp switcher_groups(readable, user) do
@@ -1339,11 +1481,14 @@ defmodule PlatformWeb.EmailLive do
     |> Enum.reject(fn {_, _, _, accounts} -> accounts == [] end)
   end
 
-  defp kind_text(%Account{owner_kind: "personal", owner_user_id: id}, names),
-    do: "Personal · " <> Map.get(names, id, "unknown owner")
+  defp owner_line(%Account{owner_kind: "personal", owner_user_id: id}, names),
+    do: Map.get(names, id, "unknown owner")
 
-  defp kind_text(%Account{owner_kind: "shared"}, _names), do: "Shared"
-  defp kind_text(%Account{}, _names), do: "Unassigned"
+  defp owner_line(%Account{}, _names), do: nil
+
+  defp kind_badge(%Account{owner_kind: "personal"}), do: "Personal"
+  defp kind_badge(%Account{owner_kind: "shared"}), do: "Shared"
+  defp kind_badge(%Account{}), do: "Unassigned"
 
   # ── Drafting helpers ────────────────────────────────────────────────────
 
@@ -2156,6 +2301,22 @@ defmodule PlatformWeb.EmailLive do
     end
   end
 
+  @doc false
+  # The address split for a middle truncation: everything before the last
+  # "@" truncates, "@domain" stays. No "@": all of it truncates.
+  def address_parts(address) when is_binary(address) do
+    case :binary.matches(address, "@") do
+      [] ->
+        {address, ""}
+
+      matches ->
+        {at, _} = List.last(matches)
+        {binary_part(address, 0, at), binary_part(address, at, byte_size(address) - at)}
+    end
+  end
+
+  def address_parts(_address), do: {"", ""}
+
   defp on_off(true), do: "On"
   defp on_off(_), do: "Off"
 
@@ -2222,8 +2383,8 @@ defmodule PlatformWeb.EmailLive do
 
   # The triage feedback control (task 01a1f426 stage 2) shows only on a
   # message whose mailbox the triage covers for this reader: readable AND
-  # granted to the triage agent. `:available` or nil.
+  # with an active flag-important agent. `:available` or nil.
   defp triage_feedback_state(user, message) do
-    if Triage.eligible?(user, message, Triage.triage_agent()), do: :available
+    if Triage.eligible?(user, message), do: :available
   end
 end

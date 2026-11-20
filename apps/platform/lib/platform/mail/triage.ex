@@ -10,18 +10,27 @@ defmodule Platform.Mail.Triage do
 
   ## Which mailboxes a reader's triage covers
 
-  `eligible_account_ids/3`: the non-archived accounts of the org that the
+  `eligible_account_ids/2`: the non-archived accounts of the org that the
   reader may read (`Ownership.readable_account_ids_query/2`: personal ones
   they own, shared ones they hold a grant on) INTERSECTED with the accounts
-  granted to the triage agent (`Ownership.agent_granted_account_ids_query/2`).
-  Both are subqueries of the one account query. An agent uses only mail it
-  has been granted, and a reader sees triage only of mail they may read.
-  Org admin status confers nothing here, and `digest_opt_in` (which governs
-  the cross-mailbox Digest only) is not consulted.
+  that have an ACTIVE flag-important agent
+  (`Ownership.flag_important_account_ids_query/1`). Both are subqueries of
+  the one account query. An ordinary access grant alone makes no mailbox
+  eligible, and a reader sees triage only of mail they may read. Org admin
+  status confers nothing here, and `digest_opt_in` (which governs the
+  cross-mailbox Digest only) is not consulted.
 
-  The triage agent is `Platform.Roles.assignee_for("mail.triage")`
-  (`Platform.Responsibilities.Handlers.MailTriage` registers the key). No
-  assignee means nothing is classified and `run_for_reader/2` says so.
+  ## Which agent
+
+  The agent is chosen PER MAILBOX (task 01a1f5cc): the active agent holding
+  the account's flag-important grant (`agent_for_account/1`), set by the
+  mailbox's owner (or a shared mailbox's org admins) through
+  `Ownership.set_flag_important_agent/3`. One reader's two mailboxes may
+  name different agents; each email is classified, notified and drafted by
+  its own mailbox's agent. A mailbox with no flag agent (Off) or whose flag
+  agent is not active triages nothing. The `mail.triage` responsibility's
+  assignee (`Platform.Roles`) is NOT read: there is no fallback, so Off is
+  true whatever other grants an agent holds.
 
   ## What leaves the mailbox
 
@@ -36,8 +45,8 @@ defmodule Platform.Mail.Triage do
   ## Idempotency
 
   One item per (inbound message, reader), enforced by the unique index:
-  `run_for_reader/2` only ever selects inbound with no item for that reader,
-  and `classify_for_reader/2` returns the existing item. A provider failure
+  `run_for_reader/3` only ever selects inbound with no item for that reader,
+  and `classify_for_reader/3` returns the existing item. A provider failure
   stores nothing, so the next run retries it.
   """
 
@@ -62,7 +71,11 @@ defmodule Platform.Mail.Triage do
     "feedback_not_important" => "You marked mail from this sender as not important."
   }
 
-  @doc "The responsibility key whose assignee does the triage."
+  @doc """
+  The responsibility key triage is registered and filed under (drafts carry
+  it). Its assignee is NOT read: the agent is chosen per mailbox
+  (`agent_for_account/1`).
+  """
   @spec responsibility_key() :: String.t()
   def responsibility_key, do: @responsibility_key
 
@@ -73,40 +86,89 @@ defmodule Platform.Mail.Triage do
   @spec quiet_opts() :: keyword()
   def quiet_opts, do: [log: false, telemetry_event: nil]
 
-  @doc "The agent assigned to `mail.triage`, or nil."
-  @spec triage_agent() :: Agent.t() | nil
-  def triage_agent do
-    Platform.Roles.assignee_for(@responsibility_key)
-  rescue
-    _ -> nil
+  @doc """
+  The ACTIVE agent holding `account_id`'s flag-important grant, or nil (no
+  grant, an inactive agent, an unassigned or archived account, or a
+  malformed id). Reads grants, never mail.
+  """
+  @spec agent_for_account(any()) :: Agent.t() | nil
+  def agent_for_account(account_id) do
+    if Platform.UUID.valid?(account_id) do
+      account_id
+      |> List.wrap()
+      |> Ownership.flag_important_agents_query()
+      |> exclude(:select)
+      |> select([agent: ag], ag)
+      |> Repo.one()
+    end
   end
+
+  # `%{account_id => %Agent{}}`: the active flag agent of each of
+  # `account_ids` that has one. One query.
+  defp agents_for_accounts([]), do: %{}
+
+  defp agents_for_accounts(account_ids) do
+    account_ids
+    |> Ownership.flag_important_agents_query()
+    |> Repo.all()
+    |> Map.new()
+  end
+
+  @doc """
+  `%{account_id => %{last_at: DateTime.t(), count: n}}`: for each of
+  `account_ids` with any, the latest `inserted_at` and the number of
+  `user`'s OWN items on that account during today's briefing day. Ids and
+  timestamps only; reads no mail text.
+  """
+  @spec reader_activity(any(), [binary()], keyword()) :: %{binary() => map()}
+  def reader_activity(user, account_ids, opts \\ [])
+
+  def reader_activity(%{id: user_id}, account_ids, opts)
+      when is_binary(user_id) and is_list(account_ids) do
+    ids = Enum.filter(account_ids, &Platform.UUID.valid?/1)
+
+    if ids == [] do
+      %{}
+    else
+      date = Keyword.get_lazy(opts, :date, &briefing_today/0)
+      {start, finish} = day_bounds(date)
+
+      from(i in Item,
+        where: i.user_id == ^user_id and i.account_id in ^ids,
+        where: i.inserted_at >= ^start and i.inserted_at < ^finish,
+        group_by: i.account_id,
+        select: {i.account_id, %{last_at: max(i.inserted_at), count: count(i.id)}}
+      )
+      |> Repo.all()
+      |> Map.new()
+    end
+  end
+
+  def reader_activity(_user, _account_ids, _opts), do: %{}
 
   # ── Permission ──────────────────────────────────────────────────────────
 
   @doc """
-  Ids of the accounts of `org_id` this reader's triage covers, with `agent`
-  (an `%Agent{}` or an agent id) as the triage agent. See the moduledoc.
-  `[]` for a nil agent or a malformed id.
+  Ids of the accounts of `org_id` this reader's triage covers: readable by
+  the reader AND with an active flag-important agent. See the moduledoc.
+  `[]` for a malformed id.
   """
-  @spec eligible_account_ids(any(), any(), Agent.t() | binary() | nil) :: [binary()]
-  def eligible_account_ids(user, org_id, agent) do
-    user |> eligible_accounts_query(org_id, agent) |> Repo.all()
+  @spec eligible_account_ids(any(), any()) :: [binary()]
+  def eligible_account_ids(user, org_id) do
+    user |> eligible_accounts_query(org_id) |> Repo.all()
   end
 
-  @doc "`eligible_account_ids/3` as a query selecting account ids."
-  @spec eligible_accounts_query(any(), any(), Agent.t() | binary() | nil) :: Ecto.Query.t()
-  def eligible_accounts_query(user, org_id, %Agent{id: agent_id}),
-    do: eligible_accounts_query(user, org_id, agent_id)
-
-  def eligible_accounts_query(user, org_id, agent_id) when is_binary(agent_id) do
-    if Platform.UUID.valid?(org_id) and Platform.UUID.valid?(agent_id) do
+  @doc "`eligible_account_ids/2` as a query selecting account ids."
+  @spec eligible_accounts_query(any(), any()) :: Ecto.Query.t()
+  def eligible_accounts_query(user, org_id) do
+    if Platform.UUID.valid?(org_id) do
       readable = Ownership.readable_account_ids_query(user, org_id)
-      granted = Ownership.agent_granted_account_ids_query(agent_id, org_id)
+      flagged = Ownership.flag_important_account_ids_query(org_id)
 
       from(a in Account,
         where: a.org_id == ^org_id and is_nil(a.archived_at),
         where: a.id in subquery(readable),
-        where: a.id in subquery(granted),
+        where: a.id in subquery(flagged),
         select: a.id
       )
     else
@@ -114,20 +176,19 @@ defmodule Platform.Mail.Triage do
     end
   end
 
-  def eligible_accounts_query(_user, _org_id, _agent), do: none_query()
-
   defp none_query, do: from(a in Account, where: false, select: a.id)
 
   # ── Classify ────────────────────────────────────────────────────────────
 
   @doc """
-  Triage `inbound` for `user`. Returns `{:ok, item}` (new or existing),
-  `{:error, :no_triage_agent}`, `{:error, :not_eligible}` (the mailbox is
-  not readable by the reader AND granted to the agent: no provider call, no
-  write) or `{:error, :provider_failed}` (nothing stored).
+  Triage `inbound` for `user`, with the agent of the inbound's own mailbox
+  (`agent_for_account/1`). Returns `{:ok, item}` (new or existing),
+  `{:error, :no_triage_agent}` (the mailbox has no active flag agent),
+  `{:error, :not_eligible}` (the mailbox is not readable by the reader AND
+  flagged: no provider call, no write) or `{:error, :provider_failed}`
+  (nothing stored).
 
-  Options: `:agent` (the triage agent, default `triage_agent/0`), `:roster`
-  (a pre-read People roster), `:now`.
+  Options: `:roster` (a pre-read People roster), `:now`.
   """
   @spec classify_for_reader(map(), InboundMessage.t(), keyword()) ::
           {:ok, Item.t()} | {:error, atom()}
@@ -135,28 +196,30 @@ defmodule Platform.Mail.Triage do
 
   def classify_for_reader(%{id: user_id} = user, %InboundMessage{} = inbound, opts)
       when is_binary(user_id) do
-    case Keyword.get_lazy(opts, :agent, &triage_agent/0) do
-      %Agent{} = agent ->
-        cond do
-          not eligible_inbound?(user, inbound, agent) ->
-            {:error, :not_eligible}
-
-          item = get_item(user_id, inbound.id) ->
-            {:ok, item}
-
-          true ->
-            do_classify(user, inbound, agent, opts)
-        end
-
-      _ ->
-        {:error, :no_triage_agent}
-    end
+    classify_with(user, inbound, agent_for_account(inbound.account_id), opts)
   end
 
   def classify_for_reader(_user, _inbound, _opts), do: {:error, :not_eligible}
 
-  defp eligible_inbound?(user, %InboundMessage{id: id, org_id: org_id}, agent) do
-    eligible = eligible_accounts_query(user, org_id, agent)
+  # `agent` is the inbound's own mailbox's agent, resolved by the caller
+  # from `inbound.account_id` (never chosen by a caller of the public API).
+  defp classify_with(user, inbound, %Agent{} = agent, opts) do
+    cond do
+      not eligible_inbound?(user, inbound) ->
+        {:error, :not_eligible}
+
+      item = get_item(user.id, inbound.id) ->
+        {:ok, item}
+
+      true ->
+        do_classify(user, inbound, agent, opts)
+    end
+  end
+
+  defp classify_with(_user, _inbound, _agent, _opts), do: {:error, :no_triage_agent}
+
+  defp eligible_inbound?(user, %InboundMessage{id: id, org_id: org_id}) do
+    eligible = eligible_accounts_query(user, org_id)
 
     from(m in InboundMessage,
       where: m.id == ^id and m.account_id in subquery(eligible)
@@ -284,40 +347,45 @@ defmodule Platform.Mail.Triage do
   `:max_model_calls` (default #{@default_max_model_calls}) provider calls
   per run; the rest wait for the next run.
 
-  Returns `{:ok, summary}` with `:status` (`:ok` or `:no_triage_agent`),
+  Each email is classified by its own mailbox's agent: the candidates are
+  grouped by account, and each account's agent is read once.
+
+  Returns `{:ok, summary}` with `:status` (`:ok`, or `:no_triage_agent`
+  when no mailbox the reader may read has an active flag agent),
   `:classified`, `:model_calls`, `:failed` and `:deferred` counts.
 
   Options: `:since` / `:until` (DateTimes replacing the date's bounds),
-  `:max_model_calls`, `:agent`, `:now`.
+  `:max_model_calls`, `:now`.
   """
   @spec run_for_reader(map(), Date.t(), keyword()) :: {:ok, map()}
   def run_for_reader(user, date, opts \\ [])
 
   def run_for_reader(%{id: user_id} = user, %Date{} = date, opts) when is_binary(user_id) do
     empty = %{status: :ok, classified: 0, model_calls: 0, failed: 0, deferred: 0}
+    orgs = org_ids(user)
 
-    case Keyword.get_lazy(opts, :agent, &triage_agent/0) do
-      %Agent{} = agent ->
-        {from, to} = window(date, opts)
-        max_calls = Keyword.get(opts, :max_model_calls, @default_max_model_calls)
-        roster = Context.roster()
+    if Enum.any?(orgs, &(eligible_account_ids(user, &1) != [])) do
+      {from, to} = window(date, opts)
+      max_calls = Keyword.get(opts, :max_model_calls, @default_max_model_calls)
+      roster = Context.roster()
+      candidates = Enum.flat_map(orgs, &candidates(user, &1, from, to))
 
-        summary =
-          user
-          |> org_ids()
-          |> Enum.flat_map(&candidates(user, &1, agent, from, to))
-          |> Enum.reduce(empty, fn inbound, acc ->
-            if acc.model_calls >= max_calls and needs_model?(user, inbound) do
-              %{acc | deferred: acc.deferred + 1}
-            else
-              run_one(user, inbound, agent, roster, opts, acc)
-            end
-          end)
+      agents =
+        candidates |> Enum.map(& &1.account_id) |> Enum.uniq() |> agents_for_accounts()
 
-        {:ok, summary}
+      summary =
+        candidates
+        |> Enum.reduce(empty, fn inbound, acc ->
+          if acc.model_calls >= max_calls and needs_model?(user, inbound) do
+            %{acc | deferred: acc.deferred + 1}
+          else
+            run_one(user, inbound, Map.get(agents, inbound.account_id), roster, opts, acc)
+          end
+        end)
 
-      _ ->
-        {:ok, %{empty | status: :no_triage_agent}}
+      {:ok, summary}
+    else
+      {:ok, %{empty | status: :no_triage_agent}}
     end
   end
 
@@ -326,8 +394,7 @@ defmodule Platform.Mail.Triage do
 
   defp run_one(user, inbound, agent, roster, opts, acc) do
     result =
-      classify_for_reader(user, inbound,
-        agent: agent,
+      classify_with(user, inbound, agent,
         roster: roster,
         now: Keyword.get(opts, :now, DateTime.utc_now())
       )
@@ -422,8 +489,8 @@ defmodule Platform.Mail.Triage do
     end
   end
 
-  defp candidates(%{id: user_id} = user, org_id, agent, from, to) do
-    eligible = eligible_accounts_query(user, org_id, agent)
+  defp candidates(%{id: user_id} = user, org_id, from, to) do
+    eligible = eligible_accounts_query(user, org_id)
 
     from(m in InboundMessage,
       left_join: i in Item,
@@ -453,42 +520,35 @@ defmodule Platform.Mail.Triage do
   The called-out items (`top` and `action`) created for `user` on `date`
   (the briefing day, `day_bounds/1`), most important first, then newest.
   Only items whose mailbox is STILL eligible now (readable by the reader
-  and granted to the triage agent): a revoked grant hides its items at
-  once. `[]` with no triage
-  agent. Preloads `:inbound_message` and `:account`.
+  and with an active flag agent): a revoked grant or a mailbox set to Off
+  hides its items at once. Preloads `:inbound_message` and `:account`.
 
-  Options: `:agent`, `:tiers` (default `["top", "action"]`).
+  Options: `:tiers` (default `["top", "action"]`).
   """
   @spec called_out(map(), Date.t(), keyword()) :: [Item.t()]
   def called_out(user, date, opts \\ [])
 
   def called_out(%{id: user_id} = user, %Date{} = date, opts) when is_binary(user_id) do
-    case Keyword.get_lazy(opts, :agent, &triage_agent/0) do
-      %Agent{} = agent ->
-        {from, to} = window(date, [])
-        tiers = Keyword.get(opts, :tiers, @called_out_tiers)
+    {from, to} = window(date, [])
+    tiers = Keyword.get(opts, :tiers, @called_out_tiers)
 
-        user
-        |> org_ids()
-        |> Enum.flat_map(fn org_id ->
-          eligible = eligible_accounts_query(user, org_id, agent)
+    user
+    |> org_ids()
+    |> Enum.flat_map(fn org_id ->
+      eligible = eligible_accounts_query(user, org_id)
 
-          from(i in Item,
-            where: i.user_id == ^user_id and i.org_id == ^org_id,
-            where: i.account_id in subquery(eligible),
-            where: i.tier in ^tiers,
-            where: i.inserted_at >= ^from and i.inserted_at < ^to
-          )
-          |> Repo.all(quiet_opts())
-        end)
-        |> Enum.sort_by(fn i ->
-          {tier_rank(i.tier), -DateTime.to_unix(i.inserted_at, :microsecond)}
-        end)
-        |> Repo.preload([:inbound_message, :account], quiet_opts())
-
-      _ ->
-        []
-    end
+      from(i in Item,
+        where: i.user_id == ^user_id and i.org_id == ^org_id,
+        where: i.account_id in subquery(eligible),
+        where: i.tier in ^tiers,
+        where: i.inserted_at >= ^from and i.inserted_at < ^to
+      )
+      |> Repo.all(quiet_opts())
+    end)
+    |> Enum.sort_by(fn i ->
+      {tier_rank(i.tier), -DateTime.to_unix(i.inserted_at, :microsecond)}
+    end)
+    |> Repo.preload([:inbound_message, :account], quiet_opts())
   end
 
   def called_out(_user, _date, _opts), do: []
@@ -501,8 +561,9 @@ defmodule Platform.Mail.Triage do
   What the briefing's `mail_priority` section shows `user` for `date`: a
   pure read. Returns
 
-    * `:agent` — the triage agent, or nil (the section says no agent is
-      assigned);
+    * `:agents_by_account` — `%{account_id => %{id, name}}`: the active flag
+      agent of each eligible mailbox (empty: no readable mailbox has one).
+      There is no single agent: each mailbox has its own;
     * `:readable?` — whether the reader may read any non-archived mailbox
       (no mailbox at all means the section is absent);
     * `:called_out` — the reader's `top` / `action` items of `date` whose
@@ -510,7 +571,7 @@ defmodule Platform.Mail.Triage do
       received;
     * `:others` — the reader's `routine` / `promo` items of `date`, same rule;
     * `:ungranted` — `%{id, name}` of the mailboxes the reader may read that
-      are NOT granted to the triage agent (metadata only: the name).
+      have NO active flag agent (metadata only: the name).
 
   Each row is a plain map of display fields only (`id`, `inbound_id`,
   `account_id`, `tier`, `status`, `acted_how`, `why`, `from`, `subject`,
@@ -527,17 +588,16 @@ defmodule Platform.Mail.Triage do
   `preview` is at most the first two non-blank lines of the draft's body,
   each capped at 160 characters, read with `quiet_opts/0`.
 
-  Options: `:agent` (default `triage_agent/0`).
+  Takes no options (the agent is never chosen by the caller).
   """
   @spec section_view(map(), Date.t(), keyword()) :: map()
   def section_view(user, date, opts \\ [])
 
-  def section_view(%{id: user_id} = user, %Date{} = date, opts) when is_binary(user_id) do
-    agent = Keyword.get_lazy(opts, :agent, &triage_agent/0)
-    orgs = org_ids(user)
-
+  def section_view(%{id: user_id} = user, %Date{} = date, _opts) when is_binary(user_id) do
     readable =
-      Enum.flat_map(orgs, fn org_id ->
+      user
+      |> org_ids()
+      |> Enum.flat_map(fn org_id ->
         readable = Ownership.readable_account_ids_query(user, org_id)
 
         from(a in Account,
@@ -548,20 +608,21 @@ defmodule Platform.Mail.Triage do
         |> Repo.all()
       end)
 
-    eligible =
-      case agent do
-        %Agent{} ->
-          orgs |> Enum.flat_map(&eligible_account_ids(user, &1, agent)) |> MapSet.new()
+    agents_by_account =
+      readable
+      |> Enum.map(& &1.id)
+      |> agents_for_accounts()
+      |> Map.new(fn {account_id, agent} -> {account_id, %{id: agent.id, name: agent.name}} end)
 
-        _ ->
-          MapSet.new()
-      end
+    # Eligible = readable AND an active flag agent, by the same rule as
+    # `eligible_accounts_query/2` (both terms were read just above).
+    eligible = agents_by_account |> Map.keys() |> MapSet.new()
 
     rows = if MapSet.size(eligible) > 0, do: section_rows(user_id, date, eligible), else: []
     {called_out, others} = Enum.split_with(rows, &(&1.tier in @called_out_tiers))
 
     %{
-      agent: if(match?(%Agent{}, agent), do: agent),
+      agents_by_account: agents_by_account,
       readable?: readable != [],
       called_out: called_out,
       others: others,
@@ -573,7 +634,13 @@ defmodule Platform.Mail.Triage do
   end
 
   def section_view(_user, _date, _opts),
-    do: %{agent: nil, readable?: false, called_out: [], others: [], ungranted: []}
+    do: %{
+      agents_by_account: %{},
+      readable?: false,
+      called_out: [],
+      others: [],
+      ungranted: []
+    }
 
   defp section_rows(user_id, date, eligible) do
     {from, to} = window(date, [])
@@ -673,7 +740,7 @@ defmodule Platform.Mail.Triage do
 
   @doc """
   The reader's OWN item `item_id`, whatever its mailbox's eligibility now
-  (the caller decides that with `eligible?/3`). nil for a malformed id, an
+  (the caller decides that with `eligible?/2`). nil for a malformed id, an
   unknown one, or another reader's item.
   """
   @spec reader_item(map(), any()) :: Item.t() | nil
@@ -687,17 +754,16 @@ defmodule Platform.Mail.Triage do
 
   @doc """
   Is the mailbox of `target` (an item or an inbound message: anything with
-  `org_id` and `account_id`) eligible for `user` NOW, with `agent` as the
-  triage agent: readable by the reader AND granted to the agent
-  (`eligible_account_ids/3`). False with no agent.
+  `org_id` and `account_id`) eligible for `user` NOW: readable by the
+  reader AND with an active flag agent (`eligible_account_ids/2`).
   """
-  @spec eligible?(map(), map(), Agent.t() | nil) :: boolean()
-  def eligible?(user, %{org_id: org_id, account_id: account_id}, agent)
+  @spec eligible?(map(), map()) :: boolean()
+  def eligible?(user, %{org_id: org_id, account_id: account_id})
       when is_binary(account_id) do
-    account_id in eligible_account_ids(user, org_id, agent)
+    account_id in eligible_account_ids(user, org_id)
   end
 
-  def eligible?(_user, _target, _agent), do: false
+  def eligible?(_user, _target), do: false
 
   @doc """
   The reader marks their called-out item done: status `acted`, `acted_how`
@@ -726,24 +792,24 @@ defmodule Platform.Mail.Triage do
   # ── Between briefings (task 01a1f426 stage 3) ───────────────────────────
 
   @doc """
-  A newly ingested email `inbound_id`, triaged for every reader of its
-  mailbox for whom the mailbox is eligible (`eligible?/3`: readable by them
-  AND granted to the triage agent), and a `top` result notified at once
-  (`notify_top/2`), and a called-out one handed to
+  A newly ingested email `inbound_id`, triaged by its own mailbox's agent
+  (`agent_for_account/1`; no agent means no work) for every reader of the
+  mailbox for whom it is eligible (`eligible?/2`), and a `top` result
+  notified at once (`notify_top/2`), and a called-out one handed to
   `Platform.Mail.Triage.Drafter` (a draft reply or a plan, never a send).
   Driven by `Platform.Mail.Triage.Subscriber`.
 
   A backfilled import (`ingest_source == "backfill"`) is skipped: a quiet
   import must not page anyone. Calls no send path. Returns `:ok`.
 
-  Options: `:agent` (default `triage_agent/0`), `:now`.
+  Options: `:now`.
   """
   @spec on_inbound(binary(), keyword()) :: :ok
   def on_inbound(inbound_id, opts \\ []) when is_binary(inbound_id) do
     with true <- Platform.UUID.valid?(inbound_id),
-         %Agent{} = agent <- Keyword.get_lazy(opts, :agent, &triage_agent/0),
          %InboundMessage{ingest_source: source} = inbound when source != "backfill" <-
-           Repo.get(InboundMessage, inbound_id, quiet_opts()) do
+           Repo.get(InboundMessage, inbound_id, quiet_opts()),
+         %Agent{} = agent <- agent_for_account(inbound.account_id) do
       for user <- reader_candidates(inbound.account_id) do
         triage_and_notify(user, inbound, agent, opts)
       end
@@ -754,41 +820,41 @@ defmodule Platform.Mail.Triage do
 
   @doc """
   The start-up pass of `Platform.Mail.Triage.Subscriber`: every live
-  (non-backfill) email of the last 24 hours that has no item yet for some
-  reader of its mailbox goes through `on_inbound/2`. At most
-  #{@candidate_cap} emails per pass. Returns the number of emails visited.
+  (non-backfill) email of the last 24 hours in a mailbox WITH an active
+  flag agent goes through `on_inbound/2`. At most #{@candidate_cap} emails
+  per pass. Returns the number of emails visited.
+
+  Options: `:now`.
   """
   @spec reconcile(keyword()) :: non_neg_integer()
   def reconcile(opts \\ []) do
-    case Keyword.get_lazy(opts, :agent, &triage_agent/0) do
-      %Agent{} = agent ->
-        now = Keyword.get(opts, :now, DateTime.utc_now())
-        since = DateTime.add(now, -86_400, :second)
+    now = Keyword.get(opts, :now, DateTime.utc_now())
+    since = DateTime.add(now, -86_400, :second)
 
-        ids =
-          from(m in InboundMessage,
-            join: a in Account,
-            on: a.id == m.account_id and is_nil(a.archived_at),
-            where: m.ingest_source != "backfill",
-            where: coalesce(m.received_at, m.inserted_at) >= ^since,
-            order_by: [asc: m.inserted_at, asc: m.id],
-            limit: @candidate_cap,
-            select: m.id
-          )
-          |> Repo.all()
+    flagged =
+      Ownership.flag_important_agents_query(:all)
+      |> exclude(:select)
+      |> select([account: a], a.id)
 
-        Enum.each(ids, &on_inbound(&1, Keyword.put(opts, :agent, agent)))
-        length(ids)
+    ids =
+      from(m in InboundMessage,
+        where: m.account_id in subquery(flagged),
+        where: m.ingest_source != "backfill",
+        where: coalesce(m.received_at, m.inserted_at) >= ^since,
+        order_by: [asc: m.inserted_at, asc: m.id],
+        limit: @candidate_cap,
+        select: m.id
+      )
+      |> Repo.all()
 
-      _ ->
-        0
-    end
+    Enum.each(ids, &on_inbound(&1, opts))
+    length(ids)
   end
 
   # The people who may read an account by its ownership: the owner of a
   # personal one, the user-grant holders of a shared one. A CANDIDATE list
   # only: `classify_for_reader/3` decides eligibility for each (readable
-  # AND granted to the agent), so this list is never the permission.
+  # AND flagged), so this list is never the permission.
   defp reader_candidates(account_id) do
     owner =
       from(a in Account,
@@ -797,15 +863,7 @@ defmodule Platform.Mail.Triage do
         select: a.owner_user_id
       )
 
-    members =
-      from(g in Platform.Mail.AccountGrant,
-        join: a in Account,
-        on: a.id == g.account_id and a.owner_kind == "shared",
-        where: g.account_id == ^account_id and g.principal_type == "user",
-        select: g.principal_id
-      )
-
-    ids = Repo.all(owner) ++ Repo.all(members)
+    ids = Repo.all(owner) ++ Ownership.shared_member_ids(account_id)
 
     if ids == [] do
       []
@@ -823,10 +881,10 @@ defmodule Platform.Mail.Triage do
   defp triage_and_notify(user, inbound, agent, opts) do
     now = opts[:now] || DateTime.utc_now()
 
-    case classify_for_reader(user, inbound, agent: agent, now: now) do
+    case classify_with(user, inbound, agent, now: now) do
       {:ok, %Item{} = item} ->
-        if item.tier == "top", do: notify_top(item, Keyword.put(opts, :agent, agent))
-        if Drafter.draftable?(item), do: Drafter.draft(user, item, agent: agent, now: now)
+        if item.tier == "top", do: notify_top(item, opts)
+        if Drafter.draftable?(item), do: Drafter.draft(user, item, now: now)
         :ok
 
       _ ->
@@ -844,7 +902,10 @@ defmodule Platform.Mail.Triage do
   Tell the reader a `top` item landed between briefings. Only an item whose
   `notified_at` is nil: the same `UPDATE` sets it, so a second event, a
   reconcile or a concurrent task notifies nothing (the dedupe). The
-  mailbox must still be eligible for the reader now.
+  mailbox must still be eligible for the reader now (`eligible?/2`: still
+  readable, and still with an active flag agent).
+
+  Options: `:now`.
 
     * an Inbox row of kind `mail_priority` (`source_type`
       `mail_triage_item`): title "An email needs you", body
@@ -865,12 +926,11 @@ defmodule Platform.Mail.Triage do
   def notify_top(item, opts \\ [])
 
   def notify_top(%Item{tier: "top", notified_at: nil} = item, opts) do
-    agent = Keyword.get_lazy(opts, :agent, &triage_agent/0)
     now = Keyword.get(opts, :now, DateTime.utc_now())
     user = Repo.get(Platform.Accounts.User, item.user_id)
 
     with %Platform.Accounts.User{} <- user,
-         true <- eligible?(user, item, agent),
+         true <- eligible?(user, item),
          {:ok, {:claimed, earlier}} <- claim_notification(item, now) do
       deliver_notification(user, item, earlier, now)
     else
