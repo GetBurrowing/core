@@ -129,7 +129,9 @@ defmodule Platform.Design.BottomNavGlassGuardTest do
     ~s{:root:has([phx-hook="ComposeInput"]:focus)},
     @hides_tab_bar,
     ":root:has([data-fullscreen-viewer])",
-    ":root:has([data-in-call])"
+    # Task 01a1fa7b stage 1: a minimized in-chat call overlay (`.hidden`)
+    # gives the bar back.
+    ":root:has([data-in-call]:not(.hidden))"
   ]
 
   @expected_rules [

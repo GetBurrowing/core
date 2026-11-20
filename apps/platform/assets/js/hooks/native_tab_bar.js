@@ -57,7 +57,7 @@ export const EVENT = "burrowNativeTab"
 export const ATTR = "data-native-tab-bar"
 export const DESKTOP_QUERY = "(min-width: 1024px)"
 export const HIDE_SELECTOR =
-  ':root:has([phx-hook="ComposeInput"]:focus), :root:has([data-fullscreen-viewer]), :root:has([data-in-call])'
+  ':root:has([phx-hook="ComposeInput"]:focus), :root:has([data-fullscreen-viewer]), :root:has([data-in-call]:not(.hidden))'
 // `.sheet-open` is the shared Sheet component. `[data-covers-tab-bar]` marks
 // hand-rolled bottom sheets that cover the web bar the same way (Calendar's
 // event details and its editor / feed / new-room modals). Without it the

@@ -1290,6 +1290,7 @@ defmodule PlatformWeb.ChatLive.Partials do
     <div
       :if={@in_meeting}
       data-role="quickmeet-mobile-overlay"
+      data-in-call="true"
       class="fixed inset-0 z-50 flex flex-col bg-base-100 lg:hidden safe-area-x"
     >
       <header class="flex h-12 flex-shrink-0 items-center justify-between border-b border-edge px-4 safe-area-top">
@@ -1418,9 +1419,11 @@ defmodule PlatformWeb.ChatLive.Partials do
 
       <%!-- Mobile controls, same component, same event vocabulary, its
            own `share_id` so the two panes never collide on a duplicate
-           id while both subtrees are in the document. `safe-area-bottom`
-           and the bottom-nav clearance stay on the control row: this is
-           the primary action row at 375px. --%>
+           id while both subtrees are in the document. The row pads only
+           for the safe area (`safe-area-bottom`): the overlay carries
+           `data-in-call`, so the tab bar is hidden while it shows and
+           there is no bar to clear. This is the primary action row at
+           375px. --%>
       <CallShell.call_controls
         class="min-h-[46px] shrink-0 justify-center gap-2 border-t border-edge px-3 py-2 safe-area-bottom"
         mic_event="meeting_toggle_mic"

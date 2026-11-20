@@ -1121,4 +1121,20 @@ defmodule PlatformWeb.Chat.PartialsMeetingPanelTest do
       end
     end
   end
+
+  describe "in-call tab bar signal (task 01a1fa7b stage 1)" do
+    # HIDE_SELECTOR (native_tab_bar.js) and app.css hide the tab bar under
+    # `:root:has([data-in-call]:not(.hidden))`. The in-chat call overlay is
+    # the quick meeting, so it must carry the attribute or the native
+    # UITabBar stays over its Leave / mic / camera row.
+    test "the in-chat call overlay carries data-in-call while in the meeting" do
+      doc = LazyHTML.from_fragment(render_panel(%{}))
+
+      assert doc
+             |> LazyHTML.query(~s([data-role="quickmeet-mobile-overlay"][data-in-call]))
+             |> Enum.count() == 1
+
+      refute render_panel(%{in_meeting: false}) =~ "data-in-call"
+    end
+  end
 end
