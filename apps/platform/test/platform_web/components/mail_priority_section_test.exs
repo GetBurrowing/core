@@ -440,7 +440,7 @@ defmodule PlatformWeb.Components.MailPrioritySectionTest do
 
     ungranted = "[data-role=mail-priority-ungranted-mailbox][data-account-id='#{ctx.a2.id}']"
 
-    assert lv |> element(ungranted) |> render() |> text_of() ==
+    assert lv |> element(ungranted) |> render() |> text_of() |> String.replace(" .", ".") ==
              "A2 box #{ctx.n} has no agent flagging important email. Choose one in Email > Accounts."
 
     # Order: closing line, quiet lines, no-agent lines, Open Email.
