@@ -97,7 +97,10 @@ defmodule Platform.Orchestration.HeartbeatSchedulerCodeModeTest do
     # Repinned by task 01a1b733 stage 1 (handoff rule appended to the
     # federation preamble): +671 bytes, exactly "\n\n" plus the 669-byte
     # trimmed `Manners.handoff_rule/0`, computed from the source before the run.
-    in_review: {"0c5abff32ed21018d40b1c26657a6441d9466bbd695c77c4e75a91daa5960fe9", 19_671}
+    #
+    # Repinned by the burrow_* channel-tool rename: +112 bytes, as for
+    # planning (predicted, then measured by CI on core PR #241).
+    in_review: {"a815249282ca142bb954aec42730cd72c86868976d7622cb0dcade3a7ef61484", 19_783}
   }
 
   @treatment_block "\n\n## Experiment directive (dispatch.code_mode)\n\n" <>
