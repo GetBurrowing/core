@@ -926,7 +926,8 @@ defmodule Platform.Mail.Ownership do
   end
 
   @doc """
-  Turn the morning-briefing digest on or off for a PERSONAL mailbox, as
+  Turn the mail digest (the `mail_digest` agent tool, no longer the morning
+  briefing since task 01a1f931) on or off for a PERSONAL mailbox, as
   `actor` (task 01a1ea5b stage 5). Only its owner may (`{:error,
   :unauthorized}` otherwise, admins included); a shared mailbox always feeds
   the digest and an unassigned one never does (`{:error, :not_personal}`).

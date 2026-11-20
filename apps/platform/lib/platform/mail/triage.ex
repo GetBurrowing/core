@@ -5,7 +5,8 @@ defmodule Platform.Mail.Triage do
   them, and one line on why.
 
   `Platform.Mail.Digest` stays what it is (metadata only, the admin
-  cross-mailbox view). This module reads bodies, so its permission rule is
+  cross-mailbox view behind the `mail_digest` agent tool; it is not in the
+  briefing since task 01a1f931). This module reads bodies, so its permission rule is
   narrower and is applied in every query it makes.
 
   ## Which mailboxes a reader's triage covers

@@ -35,13 +35,14 @@ config :platform, Platform.Access, restriction_providers: [Platform.Mail.Ownersh
 
 # Core daily-briefing section providers (task 01a1ea5b stage 5): modules whose
 # `briefing_sections/0` joins the extensions' sections, so the briefing never
-# names them. `Platform.Mail.Digest` is Email's metadata-only mail section; it
-# contributes nothing while the Email module is off. The called-out email
-# section (`Platform.Mail.Triage.BriefingSection`, task 01a1f426 stage 2) is
-# listed FIRST: sections mount in provider order, above Needs your call, so
-# the briefing opens with the emails that need the reader.
+# names them. The called-out email section
+# (`Platform.Mail.Triage.BriefingSection`, task 01a1f426 stage 2) is the only
+# core provider; it mounts above Needs your call, so the briefing opens with
+# the emails that need the reader. `Platform.Mail.Digest` is no longer a
+# briefing section (removed by task 01a1f931 at the owner's request): it is
+# only the `mail_digest` agent tool's metadata query.
 config :platform, Platform.Memory.Insights.BriefingSections,
-  providers: [Platform.Mail.Triage.BriefingSection, Platform.Mail.Digest]
+  providers: [Platform.Mail.Triage.BriefingSection]
 
 # Responsibilities Registry boot flag (ADR-0041 M1 stage 4) — default
 # on. Disabled in config/test.exs so DataCase-sandboxed tests own their

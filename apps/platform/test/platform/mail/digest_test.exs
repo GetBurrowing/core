@@ -1,11 +1,12 @@
 defmodule Platform.Mail.DigestTest do
   @moduledoc """
   `Platform.Mail.Digest` (task 01a1ea5b stage 5, Email privacy): the
-  metadata-only mail section of the daily briefing and the `mail_digest`
-  agent tool.
+  metadata-only query behind the `mail_digest` agent tool. It is no longer
+  a briefing section (task 01a1f931); the briefing's absence of it is pinned
+  in `PlatformWeb.Components.MailPrioritySectionTest`.
 
     * NOTHING from a subject, a body or a sender's local part reaches the
-      digest, the rendered briefing section or the tool, for a viewer who
+      digest or the tool, for a viewer who
       cannot read the mailbox ("no subject, body or local part ...");
     * a personal mailbox whose owner has not opted in contributes nothing,
       and opting in makes it appear ("an opted-out personal mailbox ...");
@@ -22,22 +23,11 @@ defmodule Platform.Mail.DigestTest do
   """
   use Platform.DataCase, async: false
 
-  import Phoenix.LiveViewTest
   import Platform.TenancyFixtures
   import Platform.Test.MailPrivacyFixtures
 
   alias Platform.Federation.ToolSurface
   alias Platform.Mail.{Delivery, Digest, Ownership}
-  alias Platform.Memory.Briefing
-  alias Platform.Memory.Insights.{Briefings, BriefingSections, Disseminator}
-  alias PlatformWeb.Components.MailDigestSection
-
-  @now ~U[2026-11-15 13:00:00Z]
-  @date ~D[2026-11-15]
-
-  defmodule PushRecorder do
-    def fan_out_to_user(id, payload), do: send(self(), {:push, id, payload})
-  end
 
   setup do
     previous = Application.fetch_env(:platform, :mail_enabled)
@@ -156,9 +146,6 @@ defmodule Platform.Mail.DigestTest do
     result
   end
 
-  defp render_section(user),
-    do: render_component(MailDigestSection, id: "mail-digest-test", user_id: user.id)
-
   # ── The token guard ─────────────────────────────────────────────────────
 
   describe "no subject, body or local part" do
@@ -170,7 +157,7 @@ defmodule Platform.Mail.DigestTest do
       assert inspect(rows) =~ "alicelocal"
     end
 
-    test "no subject, body or local part reaches for_org/2, the briefing section or mail_digest for a viewer who cannot read the mailbox",
+    test "no subject, body or local part reaches for_org/2 or mail_digest for a viewer who cannot read the mailbox",
          ctx do
       ctx = ctx |> seed() |> opt_in!()
       agent = agent!()
@@ -183,7 +170,6 @@ defmodule Platform.Mail.DigestTest do
 
       for viewer <- [ctx.admin, ctx.member] do
         viewer |> then(&Digest.for_org(&1, ctx.org_id)) |> inspect() |> refute_tokens(ctx)
-        viewer |> render_section() |> refute_tokens(ctx)
 
         ctx
         |> space_with!([viewer], agent)
@@ -191,11 +177,6 @@ defmodule Platform.Mail.DigestTest do
         |> inspect()
         |> refute_tokens(ctx)
       end
-
-      # And the admin's section did render the rows it carries.
-      html = render_section(ctx.admin)
-      assert html =~ "acme.test"
-      assert html =~ "Support #{ctx.n} (private)"
     end
   end
 
@@ -398,71 +379,6 @@ defmodule Platform.Mail.DigestTest do
       assert Platform.Access.ToolPermissions.for_tool("mail_digest") == "mail.use"
       names = ToolSurface.list_tools(["mail"]) |> Enum.map(& &1.name)
       assert "mail_digest" in names
-    end
-  end
-
-  # ── The briefing section ────────────────────────────────────────────────
-
-  describe "the briefing section" do
-    test "a core provider contributes the mail section only while Email is on", ctx do
-      # Task 01a1f426 stage 2 lists the called-out email section first.
-      assert ["mail_priority", "mail"] = Enum.map(BriefingSections.all(), & &1.key)
-      assert BriefingSections.providers() == [Platform.Mail.Triage.BriefingSection, Digest]
-      Application.put_env(:platform, :mail_enabled, false)
-      assert BriefingSections.all() == []
-      _ = ctx
-    end
-
-    test "the admin's briefing renders the cross-mailbox rows; the non-admin's has no section",
-         ctx do
-      ctx = seed(ctx)
-
-      admin_briefing =
-        Repo.insert!(%Briefing{user_id: ctx.admin.id, digest_date: @date, items: %{}})
-
-      member_briefing =
-        Repo.insert!(%Briefing{user_id: ctx.member.id, digest_date: @date, items: %{}})
-
-      admin_view = Briefings.view(admin_briefing, Platform.Access.Scope.for_user(ctx.admin))
-      assert [%{key: "mail", total: 1, open: 0, calls: 0}] = admin_view.sections
-
-      member_view = Briefings.view(member_briefing, Platform.Access.Scope.for_user(ctx.member))
-      assert member_view.sections == []
-
-      html = render_section(ctx.admin)
-      assert html =~ "data-role=\"mail-digest\""
-
-      for heading <- ["Customer", "Open threads", "Last activity"], do: assert(html =~ heading)
-      assert html =~ "Who's on it" or html =~ "Who&#39;s on it"
-
-      assert html =~ "data-role=\"mail-digest-private\""
-      refute html =~ "data-role=\"mail-digest-mailbox-link\""
-      assert html =~ "data-role=\"mail-digest-cards\""
-
-      teammate_html = render_section(ctx.teammate)
-      assert teammate_html =~ "/email?account=#{ctx.shared.id}"
-      refute render_section(ctx.member) =~ "mail-digest-row"
-    end
-
-    test "a mailbox in view with no traffic reads Nothing to show yet", ctx do
-      account!(ctx.admin, ctx.org_id) |> then(&shared!(ctx.admin, &1, []))
-      html = render_section(ctx.admin)
-      assert html =~ "Nothing to show yet"
-      assert Digest.briefing_summary(ctx.admin.id, @date) == %{total: 1, open: 0, calls: 0}
-      assert Digest.briefing_prepare(ctx.admin.id, @date) == 0
-      assert Digest.briefing_summary(ctx.member.id, @date) == nil
-    end
-
-    test "delivery creates a briefing for a reader with mail rows, and none for a reader without",
-         ctx do
-      ctx = seed(ctx)
-
-      assert {:ok, %{sections: _}} =
-               Disseminator.run(now: @now, notifications_module: PushRecorder)
-
-      assert Briefings.for_user_on(ctx.admin.id, @date)
-      assert Briefings.for_user_on(ctx.teammate.id, @date)
-      assert Briefings.for_user_on(ctx.member.id, @date) == nil
     end
   end
 end

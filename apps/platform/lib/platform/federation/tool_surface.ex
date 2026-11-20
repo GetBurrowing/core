@@ -8662,7 +8662,7 @@ defmodule Platform.Federation.ToolSurface do
   end
 
   # The metadata-only mail digest (task 01a1ea5b stage 5): no grant needed,
-  # the briefing's audience rule applied to the humans of the named space
+  # the digest's audience rule applied to the humans of the named space
   # (`Platform.Mail.Digest.for_audience/2`), org-pinned like mail_inbound_list.
   def execute("mail_digest", args, context) do
     with :ok <- mail_enabled("mail_digest"),
