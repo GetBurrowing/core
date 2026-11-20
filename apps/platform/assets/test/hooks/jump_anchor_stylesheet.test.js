@@ -285,7 +285,7 @@ describe("app.css — the jump-to-latest control is unconditional", () => {
       ":root[data-native-tab-bar]:has([data-bottom-rail]:not([data-web-tabs]))",
       // Task 01a1ecb3 stage 1: a focused Goals field ([data-hides-tab-bar])
       // hides the native tab bar as a focused composer does.
-      ':root[data-native-tab-bar]:has([data-bottom-rail]):has([phx-hook="ComposeInput"]:focus),\n  :root[data-native-tab-bar]:has([data-bottom-rail]):has([data-hides-tab-bar]:focus),\n  :root[data-native-tab-bar]:has([data-bottom-rail]):has([data-fullscreen-viewer]),\n  :root[data-native-tab-bar]:has([data-bottom-rail]):has([data-in-call])',
+      ':root[data-native-tab-bar]:has([data-bottom-rail]):has([phx-hook="ComposeInput"]:focus),\n  :root[data-native-tab-bar]:has([data-bottom-rail]):has([data-hides-tab-bar]:focus),\n  :root[data-native-tab-bar]:has([data-bottom-rail]):has([data-fullscreen-viewer]),\n  :root[data-native-tab-bar]:has([data-bottom-rail]):has([data-in-call]:not(.hidden))',
       ".compose-input-area",
       ".sheet-panel .compose-input-area",
       ".clears-tab-bar",

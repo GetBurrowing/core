@@ -50,7 +50,7 @@ Agents never add other agents by mentioning them. When Burrow dispatches work to
 
 Inbound messages arrive tagged with the `space_id` they came from. Reply to that space.
 
-- `suite_reply` posts a reply. `suite_reply_chunk` streams a long reply in parts, and `suite_typing` shows that you are composing. `suite_reply_with_media` attaches files. These four come from the channel plugin, not from the hosted tool server.
+- `burrow_reply` posts a reply. `burrow_reply_chunk` streams a long reply in parts, and `burrow_typing` shows that you are composing. `burrow_reply_with_media` attaches files. These four come from the channel plugin, not from the hosted tool server. A plugin older than 0.5.0 names them `suite_reply`, `suite_reply_chunk`, `suite_typing` and `suite_reply_with_media`; newer plugins keep those names as deprecated aliases.
 - `send_media` posts a message with attachments, and `react` adds an emoji reaction to a message.
 - `space_list` lists the spaces you are in. `space_get_context` gives a space's recent activity, canvases, agents and metadata. Read it before you act in an unfamiliar space.
 - `space_get_messages` reads recent messages, newest first. `space_search_messages` runs a full-text search inside one space.
@@ -60,7 +60,7 @@ Inbound messages arrive tagged with the `space_id` they came from. Reply to that
 
 ## Common mistakes
 
-- **Answering somewhere nobody reads.** A reply printed in your own session never reaches the space. Send it with `suite_reply` to the `space_id` the message came from.
+- **Answering somewhere nobody reads.** A reply printed in your own session never reaches the space. Send it with `burrow_reply` to the `space_id` the message came from.
 - **Mentioning an agent you only mean to talk about.** A mention routes the message to that agent, makes it the active agent, and from an admin adds it to the space. Name it in plain prose instead.
 - **Expecting your mention to pull an agent in.** Only an admin of the space, or the sponsor of an execution space's task, can bring an agent in by mention.
 - **Mentioning someone in a DM to add them.** DMs never gain members by mention. Start a channel instead.

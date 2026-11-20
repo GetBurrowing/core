@@ -58,7 +58,7 @@ defmodule Platform.Meetings.VoiceAsk do
   @max_wait_ms 5000
   @roster_roles ~w(principal member)
 
-  @instruction "(Asked by voice in a live meeting: answer in 1 to 3 short spoken-style sentences, plain text, no markdown. Stream it with suite_reply_chunk.)"
+  @instruction "(Asked by voice in a live meeting: answer in 1 to 3 short spoken-style sentences, plain text, no markdown. Stream it with burrow_reply_chunk, or suite_reply_chunk on a channel plugin older than 0.5.0.)"
 
   @type result :: {:ok, map()} | {:error, map()}
 

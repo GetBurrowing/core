@@ -59,7 +59,14 @@ defmodule Platform.Orchestration.HeartbeatSchedulerCodeModeTest do
     # Repinned by task 01a1b733 stage 1 (handoff rule appended to the
     # federation preamble): +671 bytes, exactly "\n\n" plus the 669-byte
     # trimmed `Manners.handoff_rule/0`, computed from the source before the run.
-    planning: {"a9358b84e7ea11da6787859b4a191478f988f3559223e1f5c8095485aa110103", 30_366},
+    #
+    # Repinned by the burrow_* channel-tool rename (federation preamble's
+    # infra line and evidence line name `burrow_reply` /
+    # `burrow_reply_with_media` with the `suite_*` spelling for old plugins):
+    # +112 bytes, exactly 60 + 52, computed from the source before the run;
+    # measured by CI (core PR #241). Every phase renders the preamble once,
+    # so in_progress and in_review move by the same +112.
+    planning: {"f1d404a469b8c42fd54a971a65898cdcaaf9d5f45babbbeaa90072c39bc57062", 30_478},
     # Repinned by task 01a13ae7 stage 3 (design fidelity section in
     # dispatch.in_progress): +1_031 bytes, exactly the 1_030-byte section plus
     # one blank line before it, predicted before the run; in_review unchanged.
@@ -77,7 +84,10 @@ defmodule Platform.Orchestration.HeartbeatSchedulerCodeModeTest do
     # Repinned by task 01a1b733 stage 1 (handoff rule appended to the
     # federation preamble): +671 bytes, exactly "\n\n" plus the 669-byte
     # trimmed `Manners.handoff_rule/0`, computed from the source before the run.
-    in_progress: {"ab33e60e843b63594a111a123f493d6c887ad65467b6df76d4a6583a040fb0a9", 17_793},
+    #
+    # Repinned by the burrow_* channel-tool rename: +112 bytes, as for
+    # planning (predicted, then measured by CI on core PR #241).
+    in_progress: {"9b1de460819988f594b5e29d1328f6fca7b90728c8fd14c1b815d7f55eedf99f", 17_905},
     # Repinned by task 01a14b9e-50a4-7000-996c-429bca872907 stage 3 (Burrow
     # preamble): +2 bytes, as for planning.
     #
@@ -87,7 +97,10 @@ defmodule Platform.Orchestration.HeartbeatSchedulerCodeModeTest do
     # Repinned by task 01a1b733 stage 1 (handoff rule appended to the
     # federation preamble): +671 bytes, exactly "\n\n" plus the 669-byte
     # trimmed `Manners.handoff_rule/0`, computed from the source before the run.
-    in_review: {"0c5abff32ed21018d40b1c26657a6441d9466bbd695c77c4e75a91daa5960fe9", 19_671}
+    #
+    # Repinned by the burrow_* channel-tool rename: +112 bytes, as for
+    # planning (predicted, then measured by CI on core PR #241).
+    in_review: {"a815249282ca142bb954aec42730cd72c86868976d7622cb0dcade3a7ef61484", 19_783}
   }
 
   @treatment_block "\n\n## Experiment directive (dispatch.code_mode)\n\n" <>

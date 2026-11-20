@@ -586,7 +586,17 @@ describe("hide predicate", () => {
   it("mirrors app.css's three hide rules", () => {
     expect(HIDE_SELECTOR).toContain(':has([phx-hook="ComposeInput"]:focus)')
     expect(HIDE_SELECTOR).toContain(":has([data-fullscreen-viewer])")
-    expect(HIDE_SELECTOR).toContain(":has([data-in-call])")
+    expect(HIDE_SELECTOR).toContain(":has([data-in-call]:not(.hidden))")
+  })
+
+  it("HIDE_SELECTOR hides for a visible in-call element and not for a minimized one", () => {
+    // Task 01a1fa7b stage 1: the in-chat call overlay carries data-in-call,
+    // and minimize only adds `.hidden` to it, so the bar must come back
+    // then. The test env has no DOM (no `document`), so this pins the
+    // clause's exact text rather than matching against a real document.
+    const clauses = HIDE_SELECTOR.split(",").map((s) => s.trim())
+    expect(clauses).toContain(":root:has([data-in-call]:not(.hidden))")
+    expect(clauses).not.toContain(":root:has([data-in-call])")
   })
 })
 
