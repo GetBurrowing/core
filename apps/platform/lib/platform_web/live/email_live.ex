@@ -93,8 +93,8 @@ defmodule PlatformWeb.EmailLive do
   `settings-only-note`.
 
   `grant_agent`, `revoke_agent`, `grant_member`, `revoke_member`,
-  `set_digest_opt_in` (stage 5: the owner's morning-briefing opt-in,
-  `access-digest-opt-in`) and
+  `set_digest_opt_in` (stage 5: the owner's opt-in to the `mail_digest`
+  agent tool, `access-digest-opt-in`) and
   `set_owner` resolve the account from the event's own `account_id` and
   call the actor-checked `Platform.Mail.Ownership` writes; nothing here
   decides who may write, so a crafted event writes nothing.
@@ -637,8 +637,8 @@ defmodule PlatformWeb.EmailLive do
       id,
       &Ownership.set_digest_opt_in(&1, &2, opt_in),
       if(opt_in,
-        do: "This mailbox now feeds the morning briefing.",
-        else: "This mailbox no longer feeds the morning briefing."
+        do: "This mailbox now feeds the mail digest.",
+        else: "This mailbox no longer feeds the mail digest."
       )
     )
   end
