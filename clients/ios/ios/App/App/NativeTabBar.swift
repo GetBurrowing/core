@@ -301,10 +301,16 @@ enum NativeTabBarMaterial {
 /// a UITabBar pinned to the bottom of the web view. A UITabBarController
 /// child drew the same glass on an iPhone but needs five empty pages and a
 /// touch-passthrough container, always keeps a selection, and turns into a
-/// sidebar at regular width.
+/// sidebar at regular width. The iPhone Duo is the exception (task 01a1fa7c):
+/// the system puts only a UITabBarController's tabs in its side strip, so
+/// there `ControllerTabBarHost` drives `DuoShellController`.
 @MainActor
 protocol NativeTabBarHosting: AnyObject {
     var bar: UITabBar { get }
+    /// "standalone" or "controller", for the DEBUG probe.
+    var hosting: String { get }
+    /// The style of the content behind the bar, once sampled.
+    var backdropStyle: UIUserInterfaceStyle? { get }
     /// The keys the bar is drawing, in order.
     var renderedKeys: [String] { get }
     /// The tab key tapped. Selection does NOT change on a tap; it follows the
@@ -319,8 +325,22 @@ protocol NativeTabBarHosting: AnyObject {
 
 @MainActor
 enum NativeTabBarFactory {
-    static func make() -> NativeTabBarHosting {
-        StandaloneTabBarHost()
+    /// The host for the bar of `parent` (the bridge). On the Duo (`isDuo`,
+    /// injected so tests can take either branch) with the bridge inside a
+    /// `DuoShellController`, the controller host; everywhere else, and on a
+    /// Duo whose bridge is not in a shell, the standalone bar.
+    static func make(for parent: UIViewController? = nil, isDuo: Bool = DuoDevice.current) -> NativeTabBarHosting {
+        if isDuo, #available(iOS 18, *), let shell = parent?.duoShell as? DuoShellController {
+            return ControllerTabBarHost(shell: shell)
+        }
+        return StandaloneTabBarHost()
+    }
+
+    /// What the web pads the bottom with (`--native-tab-bar-height`): nothing
+    /// while the bar is in the vertical side strip, else the bar's height
+    /// above the bottom safe area.
+    static func bottomReservation(barHeight: CGFloat, safeAreaBottom: CGFloat, verticalBar: Bool) -> CGFloat {
+        verticalBar ? 0 : heightAboveSafeArea(barHeight: barHeight, safeAreaBottom: safeAreaBottom)
     }
 
     static func item(_ tab: NativeTab, index: Int, compatibleWith traits: UITraitCollection? = nil) -> UITabBarItem {
@@ -380,6 +400,7 @@ enum NativeTabBarFactory {
 
 @MainActor
 final class StandaloneTabBarHost: NSObject, NativeTabBarHosting, UITabBarDelegate {
+    let hosting = "standalone"
     typealias Animator = (TimeInterval, UIView.AnimationOptions, @escaping () -> Void, @escaping (Bool) -> Void) -> Void
     private let animate: Animator
 
@@ -524,6 +545,98 @@ final class StandaloneTabBarHost: NSObject, NativeTabBarHosting, UITabBarDelegat
         render(state)
         guard renderedKeys.indices.contains(item.tag) else { return }
         onTap?(renderedKeys[item.tag])
+    }
+}
+
+/// The iPhone Duo's host (task 01a1fa7c stage 1): the web's state drives a
+/// `DuoShellController`, whose tabs the system places in the closed Duo's
+/// side strip. The same contract as the standalone bar: a tap forwards its
+/// key and selection follows the web's next state. One difference: a
+/// UITabBarController always has a selected tab, so `selected: null` keeps
+/// the previous selection instead of showing none.
+@available(iOS 18, *)
+@MainActor
+final class ControllerTabBarHost: NSObject, NativeTabBarHosting, UITabBarControllerDelegate {
+    let hosting = "controller"
+    let shell: DuoShellController
+    var onTap: ((String) -> Void)?
+    private var state = NativeTabBarState()
+    private(set) var ink = NativeTabInkColors.fallback
+    private(set) var backdropStyle: UIUserInterfaceStyle?
+    /// Reduce Motion: the strip shows and hides with no animation.
+    private let reduceMotion: () -> Bool
+
+    init(shell: DuoShellController, reduceMotion: @escaping () -> Bool = { UIAccessibility.isReduceMotionEnabled }) {
+        self.shell = shell
+        self.reduceMotion = reduceMotion
+        super.init()
+    }
+
+    var bar: UITabBar { shell.tabBar }
+    var renderedKeys: [String] { shell.keys }
+
+    func install(in parent: UIViewController) {
+        shell.delegate = self
+        NativeTabBarFactory.configure(shell.tabBar)
+        // The bar's accessibility identifier, plus one per tab item.
+        applyItemAttributes()
+        shell.tabBar.registerForTraitChanges([UITraitPreferredContentSizeCategory.self]) { [weak self] (_: UITabBar, _: UITraitCollection) in
+            self?.applyItemAttributes()
+        }
+    }
+
+    func render(_ state: NativeTabBarState) {
+        self.state = state
+        if !state.items.isEmpty, state.items != shell.keys {
+            let previous = shell.selectedTab?.identifier
+            shell.setTabs(shell.makeTabs(for: state.items), animated: false)
+            if let previous, let kept = shell.tabs.first(where: { $0.identifier == previous }) {
+                shell.selectedTab = kept
+            }
+            applyItemAttributes()
+        }
+        // `selected: null` (or a key not drawn) keeps the previous selection.
+        if let key = state.selected, let tab = shell.tabs.first(where: { $0.identifier == key }), shell.selectedTab !== tab {
+            shell.selectedTab = tab
+        }
+        shell.placeContent()
+        for tab in shell.tabs {
+            tab.badgeValue = NativeTabBarFactory.badge(for: tab.identifier, state)
+        }
+        ink = ink.applying(state.ink)
+        repaint()
+        let hidden = !state.shown
+        if shell.isTabBarHidden != hidden {
+            shell.setTabBarHidden(hidden, animated: !reduceMotion())
+        }
+    }
+
+    func applyBackdrop(_ style: UIUserInterfaceStyle?) {
+        guard style != backdropStyle else { return }
+        backdropStyle = style
+        repaint()
+    }
+
+    private func repaint() {
+        let adapted = NativeTabBarBackdrop.adapted(ink, webStyle: state.interfaceStyle, backdrop: backdropStyle)
+        NativeTabBarFactory.paint(shell.tabBar, ink: adapted.ink, style: adapted.style)
+    }
+
+    /// The label font and the `native-tab-<key>` identifiers on the items
+    /// the controller built from its tabs.
+    private func applyItemAttributes() {
+        let traits = shell.tabBar.traitCollection
+        for (key, item) in zip(shell.keys, shell.tabBar.items ?? []) {
+            NativeTabLabel.apply(to: item, compatibleWith: traits)
+            item.accessibilityIdentifier = "native-tab-\(key)"
+        }
+    }
+
+    /// A tap never moves the selection: the key goes to the web, and the
+    /// web's next state selects (canvas rule 3, selection follows the route).
+    func tabBarController(_ tabBarController: UITabBarController, shouldSelectTab tab: UITab) -> Bool {
+        onTap?(tab.identifier)
+        return false
     }
 }
 

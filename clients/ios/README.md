@@ -148,7 +148,29 @@ container). Both drew the same floating glass platter with nothing set:
 because:
 
 - it stays a bottom bar at every width. On the image's iOS 27.1 foldable
-  (iPhone Duo, regular width) the controller became a trailing sidebar;
+  (iPhone Duo, regular width) the controller became a trailing sidebar.
+  **Superseded on the Duo by task 01a1fa7c (2026-11-20).** The system puts
+  only a `UITabBarController`'s tabs in the closed Duo's vertical side strip
+  (Tech Talk 111462: a custom `UITabBar` "won't be considered"). So on the
+  Duo only, the window root is `DuoShellController` (`mode = .tabBar`, never
+  the sidebar), with one `UITab` per web key. Each tab's
+  `UINavigationController` root is a `TabSlotViewController`, and the one
+  live `BurrowBridgeViewController` is re-parented into the selected slot.
+  `ControllerTabBarHost` drives it from the same `tabBarState`:
+  - a tap forwards its key and never selects;
+  - `visible:false` calls `setTabBarHidden`;
+  - badges go through `UITab.badgeValue`.
+  Two Duo-only differences: `selected: null` keeps the previous selection
+  (a tab bar controller always has one), and `--native-tab-bar-height` is 0
+  while `verticalBarEdge` is set. The content's sides stop at the slot's
+  safe area, so nothing web-drawn sits under the strip. Web-load recovery
+  swaps only the shell's content. The Duo test is `DuoDevice`: model
+  identifier `iPhone19,4` (`SIMULATOR_MODEL_IDENTIFIER` on the simulator)
+  on iOS 27.1+, decided once per launch. `verticalBarEdge` cannot decide it
+  (it is unspecified on the open inner display in portrait), and the
+  public `UIHingeInteraction` reports the hinge only asynchronously, after a
+  view is on screen, which is too late to pick the window root. Every other
+  iPhone and iPad keeps the standalone bar below;
 - it can show no selection (`selected: null`), while the controller always
   holds one;
 - it needs no child view controller, dummy pages or hit-test passthrough
