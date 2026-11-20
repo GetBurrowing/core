@@ -593,18 +593,27 @@ final class BurrowBridgeViewController: CAPBridgeViewController {
         }
     }
 
+    /// Whether the bar is somewhere other than the bottom: the closed Duo's
+    /// side strip, or the top of the open Duo at regular width.
+    private var tabBarOffBottom: Bool {
+        guard let bar = tabBarHost?.bar else { return false }
+        if DuoLayout.verticalBarActive(for: self) { return true }
+        guard duoShell != nil else { return false }
+        return !DuoLayout.barAtBottom(barFrameInWindow: bar.convert(bar.bounds, to: nil), windowHeight: view.window?.bounds.height)
+    }
+
     private func currentTabBarHeight() -> CGFloat {
         guard let bar = tabBarHost?.bar else { return 0 }
         return NativeTabBarFactory.bottomReservation(
-            barHeight: bar.frame.height, safeAreaBottom: view.safeAreaInsets.bottom, verticalBar: DuoLayout.verticalBarActive(for: self))
+            barHeight: bar.frame.height, safeAreaBottom: view.safeAreaInsets.bottom, verticalBar: tabBarOffBottom)
     }
 
     /// Keeps `--native-tab-bar-height` current on layout and rotation. A 0 is
-    /// pushed only for the vertical side strip; otherwise 0 means the bar has
-    /// not been laid out yet.
+    /// pushed only while the bar is off the bottom (the Duo's side strip or
+    /// top bar); otherwise 0 means the bar has not been laid out yet.
     private func pushTabBarHeight() {
         let height = currentTabBarHeight()
-        guard height > 0 || DuoLayout.verticalBarActive(for: self), height != pushedTabBarHeight else { return }
+        guard height > 0 || tabBarOffBottom, height != pushedTabBarHeight else { return }
         pushedTabBarHeight = height
         webView?.evaluateJavaScript(NativeTabBarDocument.heightUpdate(height))
     }
@@ -877,6 +886,13 @@ final class BurrowBridgeViewController: CAPBridgeViewController {
             // Capacitor owns preferredStatusBarStyle; this is its setter.
             self.setStatusBarStyle(style)
         }
+    }
+
+    /// Capacitor reads the plist, whose iPhone list now carries landscape for
+    /// the open Duo only (task 01a1fa7c stage 2): narrowed back here, as the
+    /// app delegate does for the whole app.
+    override var supportedInterfaceOrientations: UIInterfaceOrientationMask {
+        OrientationPolicy.mask(for: viewIfLoaded?.window)
     }
 
     override func traitCollectionDidChange(_ previousTraitCollection: UITraitCollection?) {

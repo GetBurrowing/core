@@ -337,10 +337,11 @@ enum NativeTabBarFactory {
     }
 
     /// What the web pads the bottom with (`--native-tab-bar-height`): nothing
-    /// while the bar is in the vertical side strip, else the bar's height
-    /// above the bottom safe area.
-    static func bottomReservation(barHeight: CGFloat, safeAreaBottom: CGFloat, verticalBar: Bool) -> CGFloat {
-        verticalBar ? 0 : heightAboveSafeArea(barHeight: barHeight, safeAreaBottom: safeAreaBottom)
+    /// while the bar is in the vertical side strip or at the top (the open
+    /// Duo at regular width), else the bar's height above the bottom safe
+    /// area.
+    static func bottomReservation(barHeight: CGFloat, safeAreaBottom: CGFloat, verticalBar: Bool, barAtBottom: Bool = true) -> CGFloat {
+        verticalBar || !barAtBottom ? 0 : heightAboveSafeArea(barHeight: barHeight, safeAreaBottom: safeAreaBottom)
     }
 
     static func item(_ tab: NativeTab, index: Int, compatibleWith traits: UITraitCollection? = nil) -> UITabBarItem {

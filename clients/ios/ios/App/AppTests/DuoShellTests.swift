@@ -209,6 +209,77 @@ final class DuoShellTests: XCTestCase {
         XCTAssertFalse(DuoLayout.verticalBarActive(UITraitCollection()), "unspecified edge: no vertical bar")
     }
 
+    func testTheBottomReservationIsZeroWhenTheBarIsAtTheTop() {
+        XCTAssertEqual(NativeTabBarFactory.bottomReservation(barHeight: 96, safeAreaBottom: 34, verticalBar: false, barAtBottom: false), 0)
+        XCTAssertEqual(NativeTabBarFactory.bottomReservation(barHeight: 96, safeAreaBottom: 34, verticalBar: false, barAtBottom: true), 62)
+        // Open at regular width the system draws the tabs at the top (B').
+        XCTAssertFalse(DuoLayout.barAtBottom(barFrameInWindow: CGRect(x: 0, y: 24, width: 669, height: 50), windowHeight: 951))
+        XCTAssertTrue(DuoLayout.barAtBottom(barFrameInWindow: CGRect(x: 0, y: 855, width: 669, height: 96), windowHeight: 951))
+        // Slid off the bottom by setTabBarHidden: still the bottom bar.
+        XCTAssertTrue(DuoLayout.barAtBottom(barFrameInWindow: CGRect(x: 0, y: 960, width: 669, height: 96), windowHeight: 951))
+        XCTAssertTrue(DuoLayout.barAtBottom(barFrameInWindow: .zero, windowHeight: nil), "no window yet: as today")
+    }
+
+    // MARK: Orientation (task 01a1fa7c stage 2)
+
+    private let outerPortrait = CGSize(width: 466, height: 678)
+    private let innerPortrait = CGSize(width: 669, height: 951)
+    private let innerLandscape = CGSize(width: 951, height: 669)
+    private let iPhone18Pro = CGSize(width: 402, height: 874)
+
+    func testTheOpenDuoRotatesAndTheClosedDuoStaysPortrait() {
+        let both: UIInterfaceOrientationMask = [.portrait, .landscapeLeft, .landscapeRight]
+        XCTAssertEqual(OrientationPolicy.mask(idiom: .phone, isDuo: true, windowSize: innerPortrait), both)
+        XCTAssertEqual(OrientationPolicy.mask(idiom: .phone, isDuo: true, windowSize: innerLandscape), both, "landscape stays allowed once there")
+        XCTAssertEqual(OrientationPolicy.mask(idiom: .phone, isDuo: true, windowSize: outerPortrait), .portrait)
+        XCTAssertEqual(OrientationPolicy.mask(idiom: .phone, isDuo: true, windowSize: .zero), .portrait, "no window yet")
+        XCTAssertFalse(OrientationPolicy.mask(idiom: .phone, isDuo: true, windowSize: innerPortrait).contains(.portraitUpsideDown))
+    }
+
+    func testEveryOtherIPhoneIsPortraitOnlyAtAnySize() {
+        for size in [iPhone18Pro, outerPortrait, innerPortrait, innerLandscape, CGSize(width: 440, height: 956)] {
+            XCTAssertEqual(OrientationPolicy.mask(idiom: .phone, isDuo: false, windowSize: size), .portrait, "\(size)")
+        }
+    }
+
+    func testIPadKeepsAllFourOrientations() {
+        for isDuo in [true, false] {
+            XCTAssertEqual(OrientationPolicy.mask(idiom: .pad, isDuo: isDuo, windowSize: CGSize(width: 1032, height: 1376)), .all)
+        }
+    }
+
+    func testTheOpenTestIsTheWindowsShorterSide() {
+        XCTAssertFalse(OrientationPolicy.isOpen(windowSize: outerPortrait))
+        XCTAssertFalse(OrientationPolicy.isOpen(windowSize: CGSize(width: 678, height: 466)), "closed, turned")
+        XCTAssertTrue(OrientationPolicy.isOpen(windowSize: innerPortrait))
+        XCTAssertTrue(OrientationPolicy.isOpen(windowSize: innerLandscape))
+    }
+
+    func testTheWindowMaskFollowsTheInjectedPredicate() {
+        let window = UIWindow(frame: CGRect(origin: .zero, size: innerPortrait))
+        XCTAssertEqual(OrientationPolicy.mask(for: window, isDuo: false), .portrait)
+        if UIDevice.current.userInterfaceIdiom == .phone {
+            XCTAssertEqual(OrientationPolicy.mask(for: window, isDuo: true), [.portrait, .landscapeLeft, .landscapeRight])
+            XCTAssertEqual(OrientationPolicy.mask(for: UIWindow(frame: CGRect(origin: .zero, size: outerPortrait)), isDuo: true), .portrait)
+        }
+        XCTAssertEqual(OrientationPolicy.mask(for: nil, isDuo: true), UIDevice.current.userInterfaceIdiom == .pad ? .all : .portrait)
+    }
+
+    func testThePlistGrantsLandscapeOnlyForTheMaskToNarrow() throws {
+        // The raw file: the bundle's lookup folds the `~ipad` key in on iPad.
+        let url = try XCTUnwrap(Bundle.main.url(forResource: "Info", withExtension: "plist"))
+        let plist = try XCTUnwrap(PropertyListSerialization.propertyList(from: Data(contentsOf: url), format: nil) as? [String: Any])
+        let iphone = try XCTUnwrap(plist["UISupportedInterfaceOrientations"] as? [String])
+        XCTAssertEqual(
+            Set(iphone), ["UIInterfaceOrientationPortrait", "UIInterfaceOrientationLandscapeLeft", "UIInterfaceOrientationLandscapeRight"])
+        let ipad = try XCTUnwrap(plist["UISupportedInterfaceOrientations~ipad"] as? [String])
+        XCTAssertEqual(ipad.count, 4, "the ~ipad key is untouched")
+        // The app delegate narrows a closed-size window back to portrait.
+        let closed = UIWindow(frame: CGRect(origin: .zero, size: iPhone18Pro))
+        let expected: UIInterfaceOrientationMask = UIDevice.current.userInterfaceIdiom == .pad ? .all : .portrait
+        XCTAssertEqual(AppDelegate().application(UIApplication.shared, supportedInterfaceOrientationsFor: closed), expected)
+    }
+
     // MARK: Web-load recovery
 
     func testDuoRecoverySwapsOnlyTheContent() throws {

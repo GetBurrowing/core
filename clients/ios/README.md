@@ -176,6 +176,64 @@ because:
 - it needs no child view controller, dummy pages or hit-test passthrough
   over the web view.
 
+**iPhone Duo postures: task 01a1fa7c stage 2, 2026-11-20.**
+
+Measured widths. These come from the iOS 27.2 Duo simulator profile
+(`capabilities.plist`, displays `primary` and `primary-1`, both @3x):
+
+| Display | Pixels | Points |
+| --- | --- | --- |
+| outer | 1398 px wide | 466x678 pt |
+| inner, portrait | 2007x2853 px | 669x951 pt |
+| inner, landscape | 2853x2007 px | 951x669 pt |
+
+Both inner widths are under 1024. That is the `DESKTOP_QUERY` in
+`native_tab_bar.js`, and the web's own desktop nav breakpoint
+(`.bottom-nav lg:hidden`) is also 1024. So the web desktop rail and sidebar
+never show beside the native tabs, and there is no `data-native-duo` rule.
+
+Inner landscape (951) is above 768. There the shared bottom sheet already
+floats as a centred card, a dialog rather than a bottom sheet. Inner
+portrait (669) keeps the bottom sheet.
+
+Layout per posture:
+
+| Posture | Layout |
+| --- | --- |
+| closed | the system's side strip (stage 1) |
+| open, portrait | B': iPad-style regular width |
+| open, landscape | B': iPad-style regular width |
+
+The open layout comes from photos of a real Duo on the stage-1 reference
+board. Apple's apps show a split view or a full-width view with a sidebar
+toggle, and no phone-style bottom bar. `DuoShellController` keeps
+`mode = .tabBar` and does not override the bar placement.
+
+At regular width the system draws the tabs at the top. While the bar is
+not along the bottom (`DuoLayout.barAtBottom`, decided from the bar's frame
+in the window), the bridge pushes `--native-tab-bar-height` 0.
+
+The open posture could not be produced on rock. Xcode 27.2 has no
+Simulator.app, DeviceHub has no fold control reachable from `simctl`,
+`devicectl` or AppleScript (assistive access refused), and toggling display
+power crashes SpringBoard. So the open B' rendering is inferred from the
+board, not screenshotted from Burrow.
+
+Orientation. The plist's iPhone list now carries Portrait, LandscapeLeft and
+LandscapeRight; there is no per-model key, and `~ipad` is unchanged.
+`AppDelegate.application(_:supportedInterfaceOrientationsFor:)` and
+`BurrowBridgeViewController.supportedInterfaceOrientations` narrow that
+list through `OrientationPolicy.mask`:
+
+- iPad: all four orientations.
+- The Duo, open (the window's shorter side is at least 600 pt): portrait
+  and both landscapes.
+- Every other iPhone, and the closed Duo: portrait only.
+
+The app-level mask also caps any controller presented full screen.
+`DuoShellController` re-reads the mask after every size transition and
+size-class change.
+
 Neither hosting minimised on scroll. iOS can only minimise a bar that
 tracks a scroll view, and neither tracks the web view's. The behaviour is
 left at the system default and not asserted. On iOS 17 to 25,

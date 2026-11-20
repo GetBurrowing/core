@@ -58,6 +58,45 @@ enum DuoLayout {
         let candidates = [controller.duoShell?.traitCollection, controller.view.window?.traitCollection, controller.traitCollection]
         return candidates.contains { $0.map(verticalBarActive) ?? false }
     }
+
+    /// Whether the bar sits along the bottom. Open at regular width the
+    /// system puts a tab bar controller's tabs at the top, iPad-style (canvas
+    /// layout B'), and the web then reserves nothing at the bottom. Decided
+    /// from where the bar is, not from a size class: a bar slid off the
+    /// bottom by `setTabBarHidden` still counts as bottom.
+    static func barAtBottom(barFrameInWindow frame: CGRect, windowHeight: CGFloat?) -> Bool {
+        guard let windowHeight, windowHeight > 0 else { return true }
+        return frame.midY >= windowHeight / 2
+    }
+}
+
+/// The app's orientations (task 01a1fa7c stage 2). Every iPhone is
+/// portrait-only, as before, except the Duo while it is open: on the inner
+/// display Apple's own apps rotate, so the Duo adds landscape there. The
+/// plist's iPhone list carries landscape only so this mask can grant it; the
+/// app delegate returns this mask for every window, which also caps any
+/// controller presented full screen. iPad keeps all four (`~ipad` key).
+enum OrientationPolicy {
+    /// Open or closed, from the window's shorter side. The iOS 27.2 Duo
+    /// profile (both displays @3x): the outer display is 1398 px = 466 pt
+    /// wide, the inner one 2007x2853 px = 669x951 pt.
+    static let innerDisplayShortSide: CGFloat = 600
+
+    static func isOpen(windowSize: CGSize) -> Bool {
+        min(windowSize.width, windowSize.height) >= innerDisplayShortSide
+    }
+
+    static func mask(idiom: UIUserInterfaceIdiom, isDuo: Bool, windowSize: CGSize) -> UIInterfaceOrientationMask {
+        if idiom == .pad { return .all }
+        if isDuo, isOpen(windowSize: windowSize) { return [.portrait, .landscapeLeft, .landscapeRight] }
+        return .portrait
+    }
+
+    /// The mask for `window` (closed, so portrait, before there is one).
+    @MainActor
+    static func mask(for window: UIWindow?, isDuo: Bool = DuoDevice.current) -> UIInterfaceOrientationMask {
+        mask(idiom: UIDevice.current.userInterfaceIdiom, isDuo: isDuo, windowSize: window?.bounds.size ?? .zero)
+    }
 }
 
 /// One tab's page: the root of that tab's UINavigationController (stage 4
@@ -148,10 +187,23 @@ final class DuoShellController: UITabBarController {
         // UIKit may already have loaded this controller's view above, so the
         // content is placed here rather than in viewDidLoad.
         placeContent()
+        // Folding or unfolding changes the window's size (and with it the
+        // orientation mask): ask the system to re-read the mask.
+        registerForTraitChanges([UITraitHorizontalSizeClass.self, UITraitVerticalSizeClass.self]) {
+            (shell: DuoShellController, _: UITraitCollection) in
+            shell.setNeedsUpdateOfSupportedInterfaceOrientations()
+        }
     }
 
     @available(*, unavailable)
     required init?(coder: NSCoder) { fatalError("init(coder:) is not supported") }
+
+    override func viewWillTransition(to size: CGSize, with coordinator: any UIViewControllerTransitionCoordinator) {
+        super.viewWillTransition(to: size, with: coordinator)
+        coordinator.animate(alongsideTransition: nil) { [weak self] _ in
+            self?.setNeedsUpdateOfSupportedInterfaceOrientations()
+        }
+    }
 
     /// A tab per known key: the glyph and title of `NativeTabBarFactory.item`,
     /// and a navigation controller whose root is that key's slot.
