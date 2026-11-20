@@ -467,6 +467,43 @@ defmodule Platform.Meetings.VoiceSessionTest do
     end
   end
 
+  describe "show cohost dispatch" do
+    test "sends a profile only for an explicitly selected show session" do
+      user = user!()
+      agent = voice_agent!()
+      space = channel!([user])
+      {:ok, room} = Meetings.ensure_room(space.id)
+      profile = %{"persona" => "Economist", "episode_brief" => "Wages and demand"}
+
+      assert {:ok, _} =
+               Meetings.invite_agent(room, agent, user,
+                 mode: "show_cohost",
+                 cohost_profile: profile
+               )
+
+      assert [dispatch] = drain_dispatches()
+      metadata = Jason.decode!(dispatch["metadata"])
+      assert metadata["mode"] == "show_cohost"
+      assert metadata["cohost_profile"] == profile
+    end
+
+    test "does not dispatch a show profile for a user outside the room" do
+      user = user!()
+      agent = voice_agent!()
+      space = channel!([user])
+      {:ok, room} = Meetings.ensure_room(space.id)
+      profile = %{"persona" => "Economist", "episode_brief" => "Wages"}
+
+      assert {:error, _} =
+               Meetings.invite_agent(room, agent, user!(),
+                 mode: "show_cohost",
+                 cohost_profile: profile
+               )
+
+      assert [] = drain_dispatches()
+    end
+  end
+
   # ── Voice DM records (task 01a1b6c3 stage 2) ─────────────────────────
 
   defp dm_messages(session) do

@@ -250,6 +250,7 @@ async def entrypoint(ctx: JobContext) -> None:
         space_id=space_id,
         agent_roster=agent_roster,
         voice_context=voice_context,
+        cohost_profile=job_metadata.get("cohost_profile") if mode == "show_cohost" else None,
         drop_empty_turns=mode == VOICE_1TO1_MODE,
         router=router,
     )

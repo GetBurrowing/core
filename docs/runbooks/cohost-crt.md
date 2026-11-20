@@ -17,7 +17,7 @@ audio-driven. "Ready" means the voice participant exists, not proof that STT or
 the model is listening. This increment does not claim a thinking-state signal.
 
 The editable example profile is
-`services/meeting-voice-agent/show_profiles/how-to-computer.json`. The meeting
+`services/meeting-voice-agent/show_profiles/how_to_computer.json`. The meeting
 invitation plumbing carries `mode: "show_cohost"` and `cohost_profile` to the
 existing voice worker, whose instruction builder keeps the profile through
 context updates. Operator selection/invitation for this show profile still
