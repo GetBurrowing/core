@@ -260,6 +260,63 @@ defmodule Platform.Mail.TriageTest do
     end
   end
 
+  # ── briefing read (task 01a1f66a stage 1) ──────────────────────────────
+
+  describe "section_view" do
+    defp stored_item!(user, inbound, tier) do
+      Repo.insert!(%Item{
+        org_id: inbound.org_id,
+        account_id: inbound.account_id,
+        inbound_message_id: inbound.id,
+        user_id: user.id,
+        tier: tier,
+        needs: "reply",
+        classifier: "rule:test",
+        status: "open",
+        signals: []
+      })
+    end
+
+    test "has no :others key, called_out holds only top/action, and :quiet lists the eligible mailboxes with nothing called out",
+         ctx do
+      # Q1 holds only low-tier items, Q2 holds nothing; both are eligible.
+      # A2 is readable with no flag agent: ungranted, never quiet.
+      q1 =
+        account!(ctx.a, ctx.org_id, %{"name" => "Q1 #{ctx.n}"})
+        |> then(&personal!(ctx.a, &1, ctx.a))
+
+      flag_agent!(ctx.a, q1, ctx.agent)
+
+      q2 =
+        account!(ctx.a, ctx.org_id, %{"name" => "Q2 #{ctx.n}"})
+        |> then(&personal!(ctx.a, &1, ctx.a))
+
+      flag_agent!(ctx.a, q2, ctx.agent)
+
+      top = stored_item!(ctx.a, inbound!(ctx.shared), "top")
+      action = stored_item!(ctx.a, inbound!(ctx.shared), "action")
+      low = for tier <- ~w(promo routine), do: stored_item!(ctx.a, inbound!(ctx.shared), tier)
+      low_q1 = for tier <- ~w(promo routine), do: stored_item!(ctx.a, inbound!(q1), tier)
+
+      view = Triage.section_view(ctx.a, Triage.briefing_today())
+
+      refute Map.has_key?(view, :others)
+      assert Enum.sort(Enum.map(view.called_out, & &1.id)) == Enum.sort([top.id, action.id])
+      assert Enum.all?(view.called_out, &(&1.tier in ~w(top action)))
+      assert view.quiet == [%{id: q1.id, name: q1.name}, %{id: q2.id, name: q2.name}]
+      assert ctx.a2.id in Enum.map(view.ungranted, & &1.id)
+
+      # Classification is unchanged: the low-tier rows are still stored.
+      stored = MapSet.new(items_for(ctx.a), & &1.id)
+      assert Enum.all?(low ++ low_q1, &MapSet.member?(stored, &1.id))
+
+      # Nothing eligible: no quiet line at all.
+      d = user!("d") |> member!(ctx.org_id)
+      assert Triage.section_view(d, Triage.briefing_today()).quiet == []
+      assert Triage.section_view(nil, Triage.briefing_today()).quiet == []
+    end
+  end
+
   # ── storage outcomes ────────────────────────────────────────────────────
 
   describe "outcomes" do

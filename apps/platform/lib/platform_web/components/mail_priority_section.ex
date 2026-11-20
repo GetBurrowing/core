@@ -10,13 +10,19 @@ defmodule PlatformWeb.Components.MailPrioritySection do
   active flag agent, chosen per mailbox in Email > Accounts) is decided by `Platform.Mail.Triage`, never by what was
   passed in or by a client-supplied id.
 
-  Per called-out email: a tier chip (Needs you / Action), the sender's name
-  and address, the subject (a link to the message in Email), the mailbox,
-  ONE line of why, the received time, and two actions: "Done" (status
-  acted) and "Not important" (feedback `not_important`, item dismissed).
-  Below, a collapsed "N other emails" disclosure lists the routine and promo
-  items (sender and subject only), each with "This needed me" (feedback
-  `missed`). The inbound body is never rendered.
+  Per called-out email: a tier chip (Needs you now / To do, not urgent),
+  the sender's name and address, the subject (a link to the message in
+  Email), the mailbox, ONE line of why, the received time, and two
+  actions: "Done" (status acted) and "Not important" (feedback
+  `not_important`, item dismissed). The inbound body is never rendered.
+
+  Routine and promo mail appears here in no form: no line, no count, no
+  subject, no sender (task 01a1f66a; `Triage.section_view/3` never selects
+  it). The list ends with "That's everything your agents flagged.", then a
+  "Nothing in <mailbox> needs you." line per eligible mailbox with nothing
+  flagged, then the no-agent lines, then a plain "Open Email" link. A
+  reader who finds an unflagged email needed them says so in Email's
+  message pane, not here.
 
   Level 2 (task 01a1f426 stage 5): an item whose drafter reply is ready
   shows "Draft ready", a two-line preview of the draft and a link that
@@ -40,7 +46,7 @@ defmodule PlatformWeb.Components.MailPrioritySection do
   important email for you yet."); mailboxes the reader may read with no
   flag agent (each named, "has no agent flagging important email", with a
   link to Email > Accounts: metadata only, and no agent name, since each
-  mailbox has its own agent); nothing needs you today; items. No visible
+  mailbox has its own agent); nothing in your email needs you; items. No visible
   string says "sort" or "triage" (task 01a1f5cc stage 4). Stacked cards at every width,
   44px tap targets below `sm`; times and labels use `text-subtle`.
   """
@@ -51,7 +57,7 @@ defmodule PlatformWeb.Components.MailPrioritySection do
   alias Platform.Mail.Triage.Context
   alias Platform.Memory.Insights.BriefingSections
 
-  @verbs ~w(triage_done triage_not_important triage_missed)
+  @verbs ~w(triage_done triage_not_important)
 
   @impl true
   def update(assigns, socket) do
@@ -92,9 +98,6 @@ defmodule PlatformWeb.Components.MailPrioritySection do
        when tier in ~w(top action),
        do: Triage.record_feedback(user, item, "not_important")
 
-  defp write("triage_missed", user, %{tier: tier} = item) when tier in ~w(routine promo),
-    do: Triage.record_feedback(user, item, "missed")
-
   defp write(_event, _user, _item), do: {:error, :not_allowed}
 
   defp fetch_user(id) when is_binary(id), do: Platform.Accounts.get_user(id)
@@ -131,36 +134,13 @@ defmodule PlatformWeb.Components.MailPrioritySection do
           >Email &gt; Accounts</.link>.
         </p>
 
-        <ul
-          :if={@view.agents_by_account != %{} && @view.ungranted != []}
-          role="list"
-          class="mb-2 space-y-1"
-          data-role="mail-priority-ungranted"
-        >
-          <li
-            :for={box <- @view.ungranted}
-            class="flex items-start gap-2 rounded-box border border-edge bg-base-100 px-4 py-2 text-sm text-base-content"
-            data-role="mail-priority-ungranted-mailbox"
-            data-account-id={box.id}
-          >
-            <span class="hero-lock-closed mt-0.5 size-4 shrink-0 text-subtle" aria-hidden="true">
-            </span>
-            <span class="min-w-0">
-              <span class="font-medium">{box.name}</span>
-              has no agent flagging important email. Choose one in <.link
-                navigate="/email/accounts"
-                class="text-info hover:underline"
-              >Email &gt; Accounts</.link>.
-            </span>
-          </li>
-        </ul>
-
         <p
           :if={@view.agents_by_account != %{} && @view.called_out == []}
-          class="rounded-box border border-edge bg-base-100 px-4 py-6 text-center text-sm text-subtle"
+          class="mb-2 flex items-start gap-2 px-1 py-2 text-sm text-subtle"
           data-role="mail-priority-empty"
         >
-          Nothing needs you today
+          <span class="hero-check mt-0.5 size-4 shrink-0 text-info" aria-hidden="true"></span>
+          <span class="min-w-0">Nothing in your email needs you.</span>
         </p>
 
         <ul :if={@view.called_out != []} role="list" class="space-y-2" data-role="mail-priority-list">
@@ -248,43 +228,62 @@ defmodule PlatformWeb.Components.MailPrioritySection do
           </li>
         </ul>
 
-        <details
-          :if={@view.others != []}
-          class="mt-2 rounded-box border border-edge bg-base-100"
-          data-role="mail-priority-others"
+        <p
+          :if={@view.called_out != []}
+          class="mb-2 mt-3 text-sm text-subtle"
+          data-role="mail-priority-closing"
         >
-          <summary class="flex min-h-11 cursor-pointer items-center px-4 text-sm text-base-content">
-            {others_label(length(@view.others))}
-          </summary>
-          <ul role="list" class="divide-y divide-edge border-t border-edge">
-            <li
-              :for={item <- @view.others}
-              class="flex flex-col gap-2 px-4 py-2 sm:flex-row sm:items-center sm:justify-between"
-              data-role="mail-priority-other"
-              data-item-id={item.id}
-            >
-              <div class="min-w-0">
-                <p class="truncate text-xs text-subtle">{sender_label(item.from)}</p>
-                <.link
-                  navigate={"/email/messages/" <> item.inbound_id}
-                  class="block truncate text-sm text-base-content hover:underline"
-                >
-                  {item.subject || "(no subject)"}
-                </.link>
-              </div>
-              <button
-                type="button"
-                phx-click="triage_missed"
-                phx-value-item_id={item.id}
-                phx-target={@myself}
-                class="btn btn-ghost btn-sm min-h-11 shrink-0 self-start sm:min-h-8 sm:self-auto"
-                data-role="mail-priority-missed"
-              >
-                This needed me
-              </button>
-            </li>
-          </ul>
-        </details>
+          That's everything your agents flagged.
+        </p>
+
+        <ul
+          :if={@view.called_out != [] && @view.quiet != []}
+          role="list"
+          class="mb-2 space-y-1"
+          data-role="mail-priority-quiet"
+        >
+          <li
+            :for={box <- @view.quiet}
+            class="flex items-start gap-2 px-1 text-sm text-subtle"
+            data-role="mail-priority-quiet-mailbox"
+            data-account-id={box.id}
+          >
+            <span class="hero-check mt-0.5 size-4 shrink-0 text-info" aria-hidden="true"></span>
+            <span class="min-w-0 break-words">Nothing in {box.name} needs you.</span>
+          </li>
+        </ul>
+
+        <ul
+          :if={@view.agents_by_account != %{} && @view.ungranted != []}
+          role="list"
+          class="mb-2 space-y-1"
+          data-role="mail-priority-ungranted"
+        >
+          <li
+            :for={box <- @view.ungranted}
+            class="flex items-start gap-2 rounded-box border border-edge bg-base-100 px-4 py-2 text-sm text-base-content"
+            data-role="mail-priority-ungranted-mailbox"
+            data-account-id={box.id}
+          >
+            <span class="hero-lock-closed mt-0.5 size-4 shrink-0 text-subtle" aria-hidden="true">
+            </span>
+            <span class="min-w-0">
+              <span class="font-medium">{box.name}</span>
+              has no agent flagging important email. Choose one in <.link
+                navigate="/email/accounts"
+                class="text-info hover:underline"
+              >Email &gt; Accounts</.link>.
+            </span>
+          </li>
+        </ul>
+
+        <.link
+          navigate="/email"
+          class="mt-1 inline-flex min-h-11 items-center gap-1 text-sm text-base-content hover:underline sm:min-h-0"
+          data-role="mail-priority-open-email"
+        >
+          Open Email <span aria-hidden="true">&rarr;</span>
+        </.link>
       </div>
     </section>
     """
@@ -372,7 +371,7 @@ defmodule PlatformWeb.Components.MailPrioritySection do
       class="inline-flex shrink-0 items-center rounded-full border border-warning px-2 py-0.5 text-xs font-semibold text-warning"
       data-role="mail-priority-tier"
     >
-      Needs you
+      Needs you now
     </span>
     """
   end
@@ -383,7 +382,7 @@ defmodule PlatformWeb.Components.MailPrioritySection do
       class="inline-flex shrink-0 items-center rounded-full border border-info px-2 py-0.5 text-xs font-semibold text-info"
       data-role="mail-priority-tier"
     >
-      Action
+      To do, not urgent
     </span>
     """
   end
@@ -431,9 +430,4 @@ defmodule PlatformWeb.Components.MailPrioritySection do
   end
 
   def display_name(_), do: nil
-
-  defp sender_label(from), do: display_name(from) || Context.address(from) || "(unknown sender)"
-
-  defp others_label(1), do: "1 other email"
-  defp others_label(n), do: "#{n} other emails"
 end
