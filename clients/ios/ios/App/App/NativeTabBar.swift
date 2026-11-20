@@ -382,6 +382,8 @@ enum NativeTabBarFactory {
 final class StandaloneTabBarHost: NSObject, NativeTabBarHosting, UITabBarDelegate {
     typealias Animator = (TimeInterval, UIView.AnimationOptions, @escaping () -> Void, @escaping (Bool) -> Void) -> Void
     private let animate: Animator
+    /// Whether Reduce Motion is on; read at each show or hide.
+    private let reduceMotion: () -> Bool
 
     override convenience init() {
         self.init { duration, options, changes, completion in
@@ -389,8 +391,13 @@ final class StandaloneTabBarHost: NSObject, NativeTabBarHosting, UITabBarDelegat
         }
     }
 
-    init(animate: @escaping Animator) {
+    convenience init(animate: @escaping Animator) {
+        self.init(animate: animate, reduceMotion: { UIAccessibility.isReduceMotionEnabled })
+    }
+
+    init(animate: @escaping Animator, reduceMotion: @escaping () -> Bool) {
         self.animate = animate
+        self.reduceMotion = reduceMotion
         super.init()
     }
 
@@ -464,7 +471,8 @@ final class StandaloneTabBarHost: NSObject, NativeTabBarHosting, UITabBarDelegat
     }
 
     /// The bar slides down out of view and back with a standard UIKit
-    /// animation; hidden (so not hittable) once it is out.
+    /// animation; hidden (so not hittable) once it is out. With Reduce
+    /// Motion on it appears and disappears at once, with no slide.
     private func setShown(_ shown: Bool) {
         guard shown != shownTarget else { return }
         shownTarget = shown
@@ -478,6 +486,12 @@ final class StandaloneTabBarHost: NSObject, NativeTabBarHosting, UITabBarDelegat
                 WebLoadLog.event("tabbar-transition animation-start shown=\(shown) hidden=\(bar.isHidden)")
             }
         #endif
+        if reduceMotion() {
+            bar.transform = .identity
+            bar.isHidden = !shown
+            bar.accessibilityElementsHidden = !shown
+            return
+        }
         let offset = CGAffineTransform(translationX: 0, y: max(bar.bounds.height, 100))
         if shown {
             if bar.isHidden {
