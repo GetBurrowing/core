@@ -105,7 +105,16 @@ const ASSETS = resolve(HERE, "..");
 // in-call tab title) joined the bundle. First-party code with no new
 // dependency; the overage is past one 16 KB step, so two. 1088 KB still
 // catches the ~8.2 MB leak.
-const MAX_BYTES = 1088 * 1024;
+//
+// Raised from 1088 KB to 1120 KB by task 01a1f4c5 (Meetings: pick camera,
+// microphone and speaker; PR #237): the WITH-Play app.js measured 1,145,065
+// bytes in CI run 44652569036, 30,953 over 1088 KB, after lib/media_devices.js
+// (the shared device layer) and hooks/meeting_device_panel.js (the Sound and
+// video panel, unplug strap) joined the bundle, with the lobby preview, top
+// bar and Voice tab hooks growing to use them. First-party code with no new
+// dependency (livekit-client was already bundled); the overage is past one
+// 16 KB step, so two. 1120 KB still catches the ~8.2 MB leak.
+const MAX_BYTES = 1120 * 1024;
 
 // The profile also sets `env: %{"NODE_PATH" => [.../deps, build_path]}`, and
 // that half was missing here until this commit. js/app.js has exactly three

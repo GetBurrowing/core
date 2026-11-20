@@ -138,6 +138,77 @@ defmodule PlatformWeb.VoiceLiveTest do
     end
   end
 
+  # ── Sound and video beside #mic (task 01a1f4c5 stage 4) ───────────────
+
+  describe "the mic's Sound and video control" do
+    setup do
+      %{burrow: burrow!()}
+    end
+
+    test "a desktop caret and a 44px phone trigger, both OUTSIDE #mic", %{conn: conn} do
+      {:ok, view, _html} = live(conn, ~p"/voice")
+      d = doc(view)
+
+      caret = "#voice-area [data-role=voice-devices-caret]"
+      assert attr(d, caret, "aria-label") == ["Choose microphone"]
+      assert attr(d, caret, "data-devices-for") == ["voice-devices"]
+      assert attr(d, caret, "data-devices-container") == ["popover"]
+      assert attr(d, caret, "data-devices-section") == ["audioinput"]
+      assert attr(d, caret, "aria-haspopup") == ["dialog"]
+      [caret_class] = attr(d, caret, "class")
+      assert "sm:pointer-fine:inline-flex" in String.split(caret_class)
+      assert "hidden" in String.split(caret_class)
+
+      phone = "#voice-area [data-role=voice-devices]"
+      assert attr(d, phone, "aria-label") == ["Sound and video"]
+      assert attr(d, phone, "data-devices-container") == ["sheet"]
+      [phone_class] = attr(d, phone, "class")
+      assert "min-h-11" in String.split(phone_class)
+      assert "min-w-11" in String.split(phone_class)
+      assert "sm:pointer-fine:hidden" in String.split(phone_class)
+
+      for cls <- [caret_class, phone_class] do
+        assert "bg-base-100" in String.split(cls)
+        assert "border-edge" in String.split(cls)
+        assert "text-base-content" in String.split(cls)
+      end
+
+      # VoiceTab starts a turn only for a pointerdown on or inside #mic: the
+      # control must never be inside it.
+      assert q(d, "#mic [data-devices-for]") |> Enum.count() == 0
+      assert q(d, "#mic") |> Enum.count() == 1
+      # #mic keeps its own attributes.
+      assert attr(d, "#mic", "aria-pressed") == ["false"]
+    end
+
+    test "the panel has MICROPHONE and SPEAKER, no CAMERA, and drives the voice room", %{
+      conn: conn
+    } do
+      {:ok, view, _html} = live(conn, ~p"/voice")
+      d = doc(view)
+
+      root = "#voice-area #voice-devices"
+      assert attr(d, root, "phx-hook") == ["MeetingDevicePanel"]
+      assert attr(d, root, "phx-update") == ["ignore"]
+      assert attr(d, root, "data-devices-surface") == ["voice"]
+
+      for panel <- ~w(voice-devices-popover voice-devices-sheet) do
+        kinds =
+          d |> q("##{panel} [data-device-section]") |> LazyHTML.attribute("data-device-section")
+
+        assert kinds == ["audioinput", "audiooutput"]
+        refute text(d, "##{panel}") =~ "Camera"
+        assert text(d, "##{panel} h2") == "Sound and video"
+      end
+
+      assert attr(d, "#voice-devices-sheet [data-device-card]", "class") |> hd() =~
+               "clears-tab-bar"
+
+      # The strap belongs to the meeting surfaces: no notice slot here.
+      assert q(d, "#voice-devices [data-role=meeting-device-notice-slot]") |> Enum.count() == 0
+    end
+  end
+
   # ── idle screen ───────────────────────────────────────────────────────
 
   describe "idle, no context" do

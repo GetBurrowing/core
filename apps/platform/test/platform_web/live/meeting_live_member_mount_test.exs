@@ -220,6 +220,24 @@ defmodule PlatformWeb.MeetingLiveMemberMountTest do
       assert has_element?(view, ~s([data-role="meeting-lobby-camera"]))
       assert has_element?(view, ~s([data-role="meeting-lobby-join"]))
 
+      # Task 01a1f4c5 stage 3: the member gets the same "You'll join with"
+      # block, and Join stays the only btn-primary.
+      assert has_element?(
+               view,
+               ~s([data-role="meeting-lobby"] [data-role="meeting-lobby-devices"])
+             )
+
+      assert has_element?(view, ~s([data-role="meeting-lobby-preview"][data-mic-enabled="true"]))
+
+      lobby = view |> element(~s([data-role="meeting-lobby"])) |> render()
+
+      primaries =
+        ~r/class="([^"]*)"/
+        |> Regex.scan(lobby, capture: :all_but_first)
+        |> Enum.count(fn [class] -> "btn-primary" in String.split(class) end)
+
+      assert primaries == 1
+
       # A member has no name to enter — the guest's name field is absent.
       refute has_element?(view, ~s(input[name="guest[name]"]))
 

@@ -215,3 +215,93 @@ describe("dismissable_overlay", () => {
     expect(closed).not.toHaveBeenCalled()
   })
 })
+
+// Chrome's back() is asynchronous and resolves against the entry current when
+// it was CALLED. A layer that pushes its entry while that back() is in flight
+// leaves the entry forward of the traversal, and its own close then goes back
+// off the page (task 01a1f4c5 stage 5: two device panels, one closing as the
+// other opens, dropped a person from the meeting).
+describe("dismissable_overlay: a layer opened while a back() is in flight", () => {
+  let win, doc, prevWindow, entries, index
+
+  function chromeWindow() {
+    const w = new EventTarget()
+    entries = [
+      { url: "https://app.test/previous", state: null },
+      { url: "https://app.test/meetings/m", state: null },
+    ]
+    index = 1
+    w.location = {
+      get href() {
+        return entries[index].url
+      },
+    }
+    w.history = {
+      get state() {
+        return entries[index].state
+      },
+      get length() {
+        return entries.length
+      },
+      pushState(state, _t, url) {
+        entries.splice(index + 1)
+        entries.push({ url, state })
+        index = entries.length - 1
+      },
+      back() {
+        const target = Math.max(0, index - 1)
+        setTimeout(() => {
+          if (target === index) return
+          index = target
+          w.dispatchEvent(new Event("popstate"))
+        }, 0)
+      },
+    }
+    return w
+  }
+
+  const tick = () => new Promise((r) => setTimeout(r, 5))
+
+  beforeEach(() => {
+    __resetForTests()
+    prevWindow = globalThis.window
+    win = chromeWindow()
+    globalThis.window = win
+    doc = fakeDocument()
+  })
+
+  afterEach(() => {
+    __resetForTests()
+    if (prevWindow === undefined) delete globalThis.window
+    else globalThis.window = prevWindow
+  })
+
+  it("waits for the echo before pushing, so its own close stays on the page", async () => {
+    const a = openLayer({ el: layerEl(doc, "a").el, onClose: () => {} })
+    a.close()
+    const closedB = vi.fn()
+    const b = openLayer({ el: layerEl(doc, "b").el, onClose: closedB })
+    await tick()
+    expect(win.location.href).toBe("https://app.test/meetings/m")
+    expect(entries.length).toBe(3)
+    expect(index).toBe(2)
+
+    b.close()
+    await tick()
+    expect(closedB).toHaveBeenCalledTimes(1)
+    expect(win.location.href).toBe("https://app.test/meetings/m")
+    expect(index).toBe(1)
+  })
+
+  it("a layer closed before its entry was pushed never goes back", async () => {
+    const a = openLayer({ el: layerEl(doc, "a").el, onClose: () => {} })
+    a.close()
+    const b = openLayer({ el: layerEl(doc, "b").el, onClose: () => {} })
+    b.close()
+    await tick()
+    expect(win.location.href).toBe("https://app.test/meetings/m")
+    // Only A's back(): B never pushed and never went back.
+    expect(index).toBe(1)
+    expect(openLayerCount()).toBe(0)
+  })
+})

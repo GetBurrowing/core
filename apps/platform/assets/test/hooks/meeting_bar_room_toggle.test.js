@@ -1,6 +1,8 @@
 import { describe, it, expect, beforeEach, afterEach, vi } from "vitest"
 import { RoomEvent } from "livekit-client"
 import MeetingBar from "../../js/hooks/meeting_bar.js"
+import { registerRoom, __resetForTests as resetDevices } from "../../js/lib/media_devices.js"
+import { asDeviceInfos } from "../lib/fake_media_devices.js"
 
 // Task 01a1e82a remediation round 2, finding 2. On a shell page (/calendar,
 // /inbox) the bar's Mic / Cam pushed `meeting_toggle_*` to the shell, which
@@ -201,5 +203,120 @@ describe("the bar's Mic / Cam on a shell page act on the real room", () => {
 
     expect(room.localParticipant.setMicrophoneEnabled).not.toHaveBeenCalled()
     expect(serverPushes).toContainEqual(["meeting_toggle_mic", {}])
+  })
+})
+
+// ── the bar's Sound and video carets (task 01a1f4c5 stage 4) ─────────────
+
+function fakeNode(attrs = {}) {
+  const a = new Map(Object.entries(attrs))
+  return {
+    getAttribute: (k) => (a.has(k) ? a.get(k) : null),
+    setAttribute: (k, v) => a.set(k, String(v)),
+    removeAttribute: (k) => a.delete(k),
+    hasAttribute: (k) => a.has(k),
+  }
+}
+
+function mountBarWithCarets() {
+  const micCaret = fakeNode({ "data-bar-mic-devices": "" })
+  const camCaret = fakeNode({ "data-bar-camera-devices": "" })
+  const panelRoot = fakeNode({ id: "meeting-bar-devices" })
+  const root = fakeNode({ "data-bar-devices": "meeting-bar-devices" })
+  const caretClicks = []
+  const hook = Object.create(MeetingBar)
+  hook.el = Object.assign(root, {
+    dataset: {},
+    querySelector: () => null,
+    querySelectorAll: (sel) =>
+      sel === "[data-bar-mic-devices], [data-bar-camera-devices]" ? [micCaret, camCaret] : [],
+  })
+  const prevGet = doc.getElementById
+  doc.getElementById = (id) => (id === "meeting-bar-devices" ? panelRoot : prevGet(id))
+  hook.pushEventTo = () => {}
+  hook.pushEvent = (event, payload) => caretClicks.push([event, payload])
+  hook.handleEvent = () => {}
+  hook.mounted()
+  return { hook, micCaret, camCaret, panelRoot, serverPushes: caretClicks }
+}
+
+describe("the bar's device carets", () => {
+  it("in a browser the carets and the panel stay visible", () => {
+    win.__livekit_room = fakeRoom()
+    const { micCaret, camCaret, panelRoot } = mountBarWithCarets()
+    expect(micCaret.hasAttribute("hidden")).toBe(false)
+    expect(camCaret.hasAttribute("hidden")).toBe(false)
+    expect(panelRoot.hasAttribute("hidden")).toBe(false)
+  })
+
+  it("no caret behaviour when the native call owns media: carets and panel are hidden", () => {
+    win.__livekit_room = fakeRoom()
+    win.Capacitor = { isNativePlatform: () => true, Plugins: { BurrowMeetings: {} } }
+    const { hook, micCaret, camCaret, panelRoot, serverPushes } = mountBarWithCarets()
+    expect(micCaret.hasAttribute("hidden")).toBe(true)
+    expect(camCaret.hasAttribute("hidden")).toBe(true)
+    expect(panelRoot.hasAttribute("hidden")).toBe(true)
+    // And a LiveView patch of the bar does not bring them back.
+    micCaret.removeAttribute("hidden")
+    hook.updated()
+    expect(micCaret.hasAttribute("hidden")).toBe(true)
+    expect(serverPushes).toEqual([])
+  })
+})
+
+describe("a device unplugged on a page with no call client", () => {
+  const MICS = [
+    { kind: "audioinput", deviceId: "default", label: "Default - MacBook Pro Microphone" },
+    { kind: "audioinput", deviceId: "mbp-1", label: "MacBook Pro Microphone" },
+  ]
+
+  function deviceRoom(active) {
+    const room = fakeRoom()
+    const map = new Map(Object.entries(active))
+    room.switched = []
+    room.getActiveDevice = (kind) => map.get(kind)
+    room.switchActiveDevice = (kind, id) => {
+      room.switched.push([kind, id])
+      map.set(kind, id)
+      return Promise.resolve(true)
+    }
+    return room
+  }
+
+  beforeEach(() => {
+    resetDevices()
+    vi.stubGlobal("navigator", {
+      userAgent: "Mozilla/5.0 (Macintosh) AppleWebKit/537.36 (KHTML, like Gecko) Chrome/131.0.0.0 Safari/537.36",
+      mediaDevices: {
+        enumerateDevices: () => Promise.resolve(asDeviceInfos(MICS)),
+        addEventListener() {},
+        removeEventListener() {},
+      },
+    })
+  })
+  afterEach(() => {
+    vi.unstubAllGlobals()
+    resetDevices()
+  })
+
+  it("the bar moves the room off the lost mic (MeetingClient's listener left with its page)", async () => {
+    const room = deviceRoom({ audioinput: "air-1" })
+    win.__livekit_room = room
+    registerRoom(room, "meeting")
+    mountBar()
+    room.emit(RoomEvent.MediaDevicesChanged)
+    for (let i = 0; i < 5; i++) await flush()
+    expect(room.switched).toContainEqual(["audioinput", "default"])
+  })
+
+  it("stands back where a call client is mounted (it handles the fallback itself)", async () => {
+    const room = deviceRoom({ audioinput: "air-1" })
+    win.__livekit_room = room
+    registerRoom(room, "meeting")
+    doc.getElementById = (id) => (id === "meeting-client" ? {} : null)
+    mountBar()
+    room.emit(RoomEvent.MediaDevicesChanged)
+    for (let i = 0; i < 5; i++) await flush()
+    expect(room.switched).toEqual([])
   })
 })

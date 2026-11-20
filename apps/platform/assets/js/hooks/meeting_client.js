@@ -8,6 +8,16 @@ import {
 import { cancelActiveSpeakers, offerActiveSpeakers } from "./lib/active_speakers_debounce"
 import { toggleScreenShare } from "./lib/screen_share_policy"
 import { ScreenShareFullscreenController } from "./lib/screen_share_viewer"
+import {
+  announceActiveDevice,
+  handleDevicesChanged,
+  kindOfPublication,
+  refreshDevices,
+  registerRoom,
+  roomDefaults,
+  seedInUse,
+  unregisterRoom,
+} from "../lib/media_devices"
 
 /**
  * True when the LiveKit track / publication is a screen-share video
@@ -320,6 +330,7 @@ const MeetingClient = {
     // reviewer asserts (`#meeting-client.dataset.roomState === 'connected'`)
     // was absent after the reconnect settled.
     if (this._room === room) {
+      if (!isCompanionRoom(room)) registerRoom(room, "meeting")
       this._emitState("connected", room)
       return
     }
@@ -327,8 +338,13 @@ const MeetingClient = {
     window.__livekit_room = room
     window.__livekitRoom = room
     if (isCompanionRoom(room)) this._companionRoom = room
+    // A LiveView remount must keep the device panel driving this room
+    // (task 01a1f4c5 stage 1). A companion is camera-only and keeps the
+    // system camera, so it is never the room a panel switches.
+    else registerRoom(room, "meeting")
 
     this._bindRoomEvents(room)
+    if (!isCompanionRoom(room)) seedInUse(room).catch(() => {})
     this._emitState("connected", room)
 
     this._ensureTile(room.localParticipant)
@@ -837,6 +853,26 @@ const MeetingClient = {
       return
     }
 
+    // ── Devices (task 01a1f4c5 stage 1) ──────────────────────────────────
+    // A device that disappears moves to a working one and says so, muted or
+    // not: livekit's own `handleTrackEnded` restarts only an UNMUTED track,
+    // so a person muted at unplug would stay bound to a dead microphone.
+    bind(RoomEvent.MediaDevicesChanged, () => {
+      handleDevicesChanged(room).catch((err) =>
+        console.warn("[MeetingClient] device fallback failed", err && err.message),
+      )
+    })
+    bind(RoomEvent.ActiveDeviceChanged, (kind, deviceId) =>
+      announceActiveDevice(kind, deviceId),
+    )
+    // livekit publishes the join's mic and camera WITHOUT an
+    // ActiveDeviceChanged: record what each is really on, so a later unplug
+    // knows which device was lost (stage 5 round 2).
+    bind(RoomEvent.LocalTrackPublished, (pub) => {
+      const kind = kindOfPublication(pub)
+      if (kind) seedInUse(room, { kinds: [kind] }).catch(() => {})
+    })
+
     bind(RoomEvent.Disconnected, (reason) => this._handleDisconnected(room, reason))
   },
 
@@ -1242,7 +1278,9 @@ const MeetingClient = {
     }
     if (existing) await this._leaveCompanion()
 
-    const room = this._newRoom()
+    // The companion keeps the system camera (out of scope for the device
+    // picker), so it is built without the stored device preferences.
+    const room = this._newRoom({ devices: false })
     companionRooms.add(room)
     this._companionRoom = room
     if (!(await this._connectRoom(room, url, token, { autoSubscribe: false }))) {
@@ -1544,6 +1582,7 @@ const MeetingClient = {
       // self-view so the fresh connect below starts from a clean slate.
       this._releaseRoomListeners()
       await existing.disconnect().catch(() => {})
+      unregisterRoom(existing)
       this._room = null
       window.__livekit_room = null
       window.__livekitRoom = null
@@ -1553,6 +1592,7 @@ const MeetingClient = {
     if (this._room) {
       console.warn("[MeetingClient] join-meeting while already connected; disconnecting first")
       await this._room.disconnect().catch(() => {})
+      unregisterRoom(this._room)
       this._room = null
     }
 
@@ -1568,6 +1608,9 @@ const MeetingClient = {
     this._connLost = false
     this._joinCreds = { url, token, desired, roomName: room_name }
 
+    // List devices first (never prompts) so a remembered device whose id
+    // rotated is still matched by label in `_newRoom`.
+    await refreshDevices().catch(() => {})
     const room = this._newRoom()
     if (!(await this._connectRoom(room, url, token))) return
 
@@ -1656,12 +1699,19 @@ const MeetingClient = {
   // "Stay" on the browser's leave-page prompt. A real exit still leaves:
   // pagehide (and an uncancelled beforeunload) run `_onPageHide` -> `_leave`
   // here and the watchdog's disconnect on every other shell page.
-  _newRoom() {
+  //
+  // Device preferences (task 01a1f4c5 stage 1): `audioCaptureDefaults`,
+  // `videoCaptureDefaults` and, where the browser can choose an output,
+  // `audioOutput` start on the person's remembered (or lobby-picked) devices.
+  // NON-exact, so a missing device never fails the join. The server never
+  // sees a deviceId.
+  _newRoom({ devices = true } = {}) {
     return new Room({
       adaptiveStream: true,
       dynacast: true,
       publishDefaults: { simulcast: true },
       disconnectOnPageLeave: false,
+      ...(devices ? roomDefaults() : {}),
     })
   },
 
@@ -1684,9 +1734,15 @@ const MeetingClient = {
     }
 
     if (stillWanted && !stillWanted()) return true
+    // A rejoin replaces a lost Room: the panel must stop pointing at it.
+    if (this._room && this._room !== room) unregisterRoom(this._room)
     this._room = room
     window.__livekit_room = room
     window.__livekitRoom = room
+    if (!isCompanionRoom(room)) {
+      registerRoom(room, "meeting")
+      seedInUse(room).catch(() => {})
+    }
     window.dispatchEvent(new CustomEvent("livekit:room-connected", { detail: { room } }))
     document.dispatchEvent(new CustomEvent("livekit:room-connected", { detail: { room } }))
     this._emitState("connected", room)
@@ -1700,9 +1756,11 @@ const MeetingClient = {
     this._leaving = true
     this._rejoinGen += 1
     this._clearRejoinTimers()
+    const leaving = this._room
     try {
-      await this._room.disconnect()
+      await leaving.disconnect()
     } catch (_) { /* already gone */ }
+    unregisterRoom(leaving)
     this._cleanupRoom()
     // The room was already dead (reconnecting / lost), so disconnect() emitted
     // no Disconnected for the handler to turn into `meeting_left`.
@@ -1717,6 +1775,7 @@ const MeetingClient = {
     // Detach any listeners we installed before nulling our ref so a
     // future _join against a fresh Room starts from a clean slate.
     this._releaseRoomListeners()
+    if (this._room) unregisterRoom(this._room)
     this._room = null
     window.__livekit_room = null
     window.__livekitRoom = null

@@ -13,16 +13,23 @@ import { describe, it, expect, beforeEach, afterEach, vi } from "vitest"
  * mic publication the test controls. Time is a stubbed `performance.now`.
  */
 
-const lk = vi.hoisted(() => ({ trackState: "live", rooms: [] }))
+const lk = vi.hoisted(() => ({ trackState: "live", rooms: [], capturedId: null }))
 
 vi.mock("livekit-client", async (importOriginal) => {
   const actual = await importOriginal()
   class Room {
-    constructor() {
+    constructor(opts) {
+      this.opts = opts
       this.handlers = {}
       const pub = {
         isMuted: false,
-        track: { mediaStreamTrack: { readyState: lk.trackState, enabled: true } },
+        track: {
+          mediaStreamTrack: {
+            readyState: lk.trackState,
+            enabled: true,
+            getSettings: () => (lk.capturedId ? { deviceId: lk.capturedId } : {}),
+          },
+        },
         mute() {
           this.isMuted = true
           return Promise.resolve()
@@ -50,11 +57,31 @@ vi.mock("livekit-client", async (importOriginal) => {
       this.disconnected = true
       return Promise.resolve()
     }
+    getActiveDevice(kind) {
+      return (this.active || {})[kind]
+    }
+    switchActiveDevice(kind, deviceId, exact) {
+      ;(this.switched ||= []).push([kind, deviceId, exact])
+      this.active = { ...(this.active || {}), [kind]: deviceId }
+      return Promise.resolve(true)
+    }
   }
   return { ...actual, Room }
 })
 
+import { RoomEvent } from "livekit-client"
+import { asDeviceInfos } from "../lib/fake_media_devices.js"
 import VoiceTab, { HOLD_MS, CAPTION_EVENT, MIC_TIMEOUT_MS } from "../../js/hooks/voice_tab.js"
+import { ClientState, __resetForTests as resetClientState } from "../../js/client_state.js"
+import {
+  DEVICE_FALLBACK_EVENT,
+  activeRoom,
+  getPreference,
+  registerRoom,
+  __resetForTests as resetMediaDevices,
+} from "../../js/lib/media_devices.js"
+import MeetingDevicePanel from "../../js/hooks/meeting_device_panel.js"
+import { fakeDocument } from "../lib/fake_dom.js"
 import Sheet from "../../js/hooks/sheet.js"
 
 // ── fakes ────────────────────────────────────────────────────────────────
@@ -164,6 +191,7 @@ beforeEach(() => {
   clock = 0
   lk.trackState = "live"
   lk.rooms = []
+  lk.capturedId = null
   vi.stubGlobal("performance", { now: () => clock })
   vi.stubGlobal("document", Object.assign(new EventTarget(), { getElementById: () => null }))
 })
@@ -414,6 +442,243 @@ describe("the microphone", () => {
     expect(lk.rooms[0].disconnected).toBe(true)
     expect(turnEvents(t.pushed)).toEqual(["voice_press"])
     expect(t.hook.inTurn()).toBe(false)
+  })
+})
+
+// ── the remembered microphone (task 01a1f4c5 stage 1) ────────────────────
+
+describe("the remembered microphone", () => {
+  beforeEach(() => {
+    resetClientState()
+    resetMediaDevices()
+    const store = new Map()
+    vi.stubGlobal("localStorage", {
+      get length() {
+        return store.size
+      },
+      key: (i) => Array.from(store.keys())[i] ?? null,
+      getItem: (k) => (store.has(k) ? store.get(k) : null),
+      setItem: (k, v) => store.set(k, String(v)),
+      removeItem: (k) => store.delete(k),
+    })
+  })
+
+  it("the first press asks for the preferred deviceId, NON-exact", async () => {
+    ClientState.set("meeting_devices", "audioinput", { deviceId: "air-1", label: "AirPods Pro" })
+    const t = mount()
+    t.down(0)
+    await settle()
+    expect(t.gum).toHaveBeenCalledWith({ audio: { deviceId: "air-1" } })
+    expect(lk.rooms[0].opts.audioCaptureDefaults).toEqual({ deviceId: "air-1" })
+    // The Voice tab never publishes video.
+    expect(lk.rooms[0].opts.videoCaptureDefaults).toBeUndefined()
+  })
+
+  it("with nothing remembered the first press asks for any microphone, as before", async () => {
+    const t = mount()
+    t.down(0)
+    await settle()
+    expect(t.gum).toHaveBeenCalledWith({ audio: true })
+  })
+
+  it("registers its room as the voice surface once connected, and unregisters on disconnect", async () => {
+    const t = mount()
+    expect(activeRoom("voice")).toBeNull()
+    t.down(0)
+    await settle()
+    expect(activeRoom("voice")).toBe(lk.rooms[0])
+    t.handlers.voice_disconnect()
+    expect(activeRoom("voice")).toBeNull()
+  })
+})
+
+// Stage 5 round 2: the Voice tab's mic publishes with no
+// ActiveDeviceChanged too, so its room seeds the device it is on and an
+// unplug that livekit recovers first still says which mic went.
+describe("the Voice tab's strap with no pick (stage 5 round 2)", () => {
+  beforeEach(() => {
+    resetClientState()
+    resetMediaDevices()
+  })
+
+  it("livekit moves the mic before MediaDevicesChanged: the strap names the lost mic", async () => {
+    let devices = [
+      { kind: "audioinput", deviceId: "default", label: "Default - MacBook Pro Microphone", groupId: "gM" },
+      { kind: "audioinput", deviceId: "air-1", label: "AirPods Pro", groupId: "gA" },
+      { kind: "audioinput", deviceId: "mbp-1", label: "MacBook Pro Microphone", groupId: "gM" },
+    ]
+    const straps = []
+    const win = new EventTarget()
+    win.addEventListener(DEVICE_FALLBACK_EVENT, (e) => straps.push(e.detail))
+    vi.stubGlobal("window", win)
+    lk.capturedId = "air-1"
+    const t = mount({
+      mediaDevices: {
+        getUserMedia: () => Promise.resolve({ getTracks: () => [{ stop() {} }] }),
+        enumerateDevices: () => Promise.resolve(asDeviceInfos(devices)),
+        addEventListener() {},
+        removeEventListener() {},
+      },
+    })
+    t.down(0)
+    await settle()
+    await settle()
+    const room = lk.rooms[0]
+    expect(activeRoom("voice")).toBe(room)
+
+    devices = [devices[0], devices[2]]
+    room.active = { audioinput: "mbp-1" }
+    room.handlers[RoomEvent.ActiveDeviceChanged]("audioinput", "mbp-1")
+    room.handlers[RoomEvent.MediaDevicesChanged]()
+    await settle()
+
+    expect(straps).toEqual([
+      { kind: "audioinput", fromLabel: "AirPods Pro", toLabel: "MacBook Pro Microphone", surface: "voice" },
+    ])
+  })
+})
+
+// ── the Sound and video control beside #mic (task 01a1f4c5 stage 4) ─────
+//
+// The voice area as voice_area/1 renders it, in fake_dom FakeElements whose
+// dispatchEvent BUBBLES: #voice-area > row > [#mic, caret > icon]. VoiceTab's
+// pointerdown listener is on #voice-area, so the caret's pointerdown does
+// reach it; what must hold is that it never starts a turn.
+
+describe("the device caret beside #mic", () => {
+  function mountArea() {
+    const d = fakeDocument()
+    const h = (tag, attrs = {}, children = []) => {
+      const n = d.createElement(tag)
+      for (const [k, v] of Object.entries(attrs)) n.setAttribute(k, v)
+      for (const c of children) n.appendChild(c)
+      return n
+    }
+    const mic = h("button", { id: "mic" })
+    const icon = h("span", { class: "hero-chevron-up" })
+    const caret = h(
+      "button",
+      { "data-role": "voice-devices-caret", "data-devices-for": "voice-devices" },
+      [icon],
+    )
+    const phone = h("button", { "data-role": "voice-devices", "data-devices-for": "voice-devices" })
+    const area = h("div", { id: "voice-area", "data-user-id": "u1", "data-partner-id": "a1" }, [
+      h("div", {}, [mic, caret, phone]),
+    ])
+    const gum = vi.fn(() => Promise.resolve({ getTracks: () => [{ stop() {} }] }))
+    vi.stubGlobal("navigator", { mediaDevices: { getUserMedia: gum } })
+    const pushed = []
+    const hook = Object.create(VoiceTab)
+    hook.el = area
+    hook.pushEvent = (event, _payload, cb) => {
+      pushed.push(event)
+      if (event === "voice_start" && cb) cb({ ok: true, token: "tok", url: "ws://lk.test", room: "r" })
+    }
+    hook.handleEvent = () => {}
+    hook.mounted()
+    const pointer = (type, target) =>
+      target.dispatchEvent({ type, bubbles: true, target, button: 0, pointerId: 1, preventDefault() {} })
+    return { hook, mic, caret, icon, phone, gum, pushed, pointer }
+  }
+
+  it("a pointerdown on the caret does not start a turn", async () => {
+    const t = mountArea()
+    for (const target of [t.caret, t.icon, t.phone]) {
+      t.pointer("pointerdown", target)
+      await settle()
+      clock = 1_000
+      t.pointer("pointerup", target)
+    }
+    expect(t.gum).not.toHaveBeenCalled()
+    expect(t.pushed).toEqual([])
+    expect(t.hook.inTurn()).toBe(false)
+    expect(lk.rooms).toHaveLength(0)
+
+    // Positive control: the same dispatch on #mic, through the same bubbling
+    // path, does start one.
+    clock = 2_000
+    t.pointer("pointerdown", t.mic)
+    await settle()
+    expect(t.gum).toHaveBeenCalledTimes(1)
+    expect(t.pushed).toEqual(["voice_start", "voice_press"])
+  })
+})
+
+describe("a pick in the Voice tab's panel", () => {
+  beforeEach(() => {
+    resetClientState()
+    resetMediaDevices()
+    const store = new Map()
+    vi.stubGlobal("localStorage", {
+      get length() {
+        return store.size
+      },
+      key: (i) => Array.from(store.keys())[i] ?? null,
+      getItem: (k) => (store.has(k) ? store.get(k) : null),
+      setItem: (k, v) => store.set(k, String(v)),
+      removeItem: (k) => store.delete(k),
+    })
+  })
+
+  function voicePanel() {
+    const d = fakeDocument()
+    const root = d.createElement("div")
+    root.setAttribute("id", "voice-devices")
+    root.setAttribute("data-devices-surface", "voice")
+    const hook = Object.create(MeetingDevicePanel)
+    hook.el = root
+    const row = (kind, deviceId) => {
+      const r = d.createElement("div")
+      r.setAttribute("role", "radio")
+      r.setAttribute("data-device-kind", kind)
+      r.setAttribute("data-device-id", deviceId)
+      return r
+    }
+    return { hook, row }
+  }
+
+  // A meeting in progress elsewhere on the page: pinned on window AND
+  // registered LAST, so it is what an unscoped `activeRoom()` would return.
+  function meetingRoom() {
+    const meeting = {
+      switchActiveDevice: vi.fn(() => Promise.resolve(true)),
+      getActiveDevice: () => "mic-1",
+    }
+    vi.stubGlobal("window", Object.assign(new EventTarget(), { __livekit_room: meeting }))
+    registerRoom(meeting, "meeting")
+    return meeting
+  }
+
+  it("after connect calls switchActiveDevice on the voice room, not window.__livekit_room", async () => {
+    const t = mount()
+    t.down(0)
+    await settle()
+    const voiceRoom = lk.rooms[0]
+    expect(activeRoom("voice")).toBe(voiceRoom)
+    const meeting = meetingRoom()
+
+    const { hook, row } = voicePanel()
+    const result = await hook.select(row("audioinput", "mic-2"))
+
+    expect(result).toEqual({ ok: true })
+    expect(voiceRoom.switched).toEqual([["audioinput", "mic-2", true]])
+    expect(meeting.switchActiveDevice).not.toHaveBeenCalled()
+    expect(getPreference("audioinput").deviceId).toBe("mic-2")
+  })
+
+  it("before the first press only persists, and the first getUserMedia uses it", async () => {
+    const meeting = meetingRoom()
+    const { hook, row } = voicePanel()
+    const result = await hook.select(row("audioinput", "mic-2"))
+
+    expect(result).toEqual({ ok: true })
+    expect(meeting.switchActiveDevice).not.toHaveBeenCalled()
+    expect(getPreference("audioinput").deviceId).toBe("mic-2")
+
+    const t = mount()
+    t.down(0)
+    await settle()
+    expect(t.gum).toHaveBeenCalledWith({ audio: { deviceId: "mic-2" } })
   })
 })
 

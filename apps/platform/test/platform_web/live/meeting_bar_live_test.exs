@@ -280,4 +280,160 @@ defmodule PlatformWeb.MeetingBarLiveTest do
       assert present?(d, "[data-bar-leave]")
     end
   end
+
+  # Task 01a1f4c5 stage 4: the Sound and video carets on the bar's Mic and
+  # Cam chips, desktop only; the phone strip carries no device control.
+  describe "Sound and video" do
+    test "mic and camera carets render beside their chips, desktop only" do
+      d = doc(@meeting_assigns)
+
+      for {flag, kind, label} <- [
+            {"data-bar-mic-devices", "audioinput", "Choose microphone"},
+            {"data-bar-camera-devices", "videoinput", "Choose camera"}
+          ] do
+        sel = "#meeting-top-bar [#{flag}]"
+        assert present?(d, sel)
+        assert attr(d, sel, "data-devices-for") == "meeting-bar-devices"
+        assert attr(d, sel, "data-devices-container") == "popover"
+        assert attr(d, sel, "data-devices-section") == kind
+        assert attr(d, sel, "data-devices-placement") == "below"
+        assert attr(d, sel, "aria-label") == label
+        assert attr(d, sel, "aria-haspopup") == "dialog"
+        assert attr(d, sel, "aria-expanded") == "false"
+        assert attr(d, sel, "aria-controls") == "meeting-bar-devices-popover"
+        # The bar's own control classes: hidden below `sm`.
+        assert "hidden" in classes(d, sel)
+        assert "sm:inline-flex" in classes(d, sel)
+        # A 44px hit area on the compact band.
+        assert "after:-inset-y-2" in classes(d, sel)
+        # Never a server event: the panel hook owns the click.
+        assert attr(d, sel, "phx-click") == nil
+      end
+
+      # The chips keep their hook pathway and copy.
+      assert text(d, "[data-bar-mic]") == "Mic on"
+      assert attr(d, "[data-bar-mic]", "phx-click") == nil
+      assert "rounded-r-none" in classes(d, "[data-bar-mic]")
+      assert "rounded-r-none" in classes(d, "[data-bar-camera]")
+
+      # The caret sits in the same sm-only split as its chip.
+      assert present?(d, "span.sm\\:inline-flex > [data-bar-mic] + [data-bar-mic-devices]")
+      assert present?(d, "span.sm\\:inline-flex > [data-bar-camera] + [data-bar-camera-devices]")
+    end
+
+    test "the phone strip gets no new control" do
+      d = doc(@meeting_assigns)
+
+      # Every control a phone can see (anything without the sm-only
+      # `hidden`) is the strip's own: the full-bleed link and the lost-state
+      # buttons, exactly as before.
+      visible_on_phone =
+        d
+        |> q("#meeting-top-bar button, #meeting-top-bar a")
+        |> Enum.reject(fn node ->
+          cls = node |> LazyHTML.attribute("class") |> List.first("") |> String.split()
+          "hidden" in cls
+        end)
+        |> Enum.map(fn node ->
+          node
+          |> LazyHTML.attribute("data-role")
+          |> List.first() ||
+            Enum.find(~w(data-bar-rejoin data-meeting-leave-sheet), fn a ->
+              LazyHTML.attribute(node, a) != []
+            end)
+        end)
+
+      assert Enum.sort(visible_on_phone) ==
+               Enum.sort(["meeting-strip-link", "data-bar-rejoin", "data-meeting-leave-sheet"])
+
+      refute present?(d, "[data-role=meeting-strip-link] [data-devices-for]")
+    end
+
+    test "the panel is a function-component child: popover, sheet and notice under the bar" do
+      d = doc(@meeting_assigns)
+
+      root = "#meeting-bar-mount > #meeting-bar-devices"
+      assert present?(d, root)
+      assert attr(d, root, "phx-hook") == "MeetingDevicePanel"
+      assert attr(d, root, "phx-update") == "ignore"
+      assert attr(d, root, "data-devices-surface") == "meeting"
+      assert attr(d, root, "data-devices-notice") == "when-alone"
+      assert attr(d, "#meeting-top-bar", "data-bar-devices") == "meeting-bar-devices"
+
+      # Directly after the bar, so the strap sits under it.
+      assert present?(d, "#meeting-top-bar + #meeting-bar-devices")
+      notice = "#meeting-bar-devices > [data-role=meeting-bar-device-notice]"
+      assert attr(d, notice, "role") == "status"
+      assert attr(d, notice, "aria-live") == "polite"
+
+      assert text(d, "#meeting-bar-devices-popover h2") == "Sound and video"
+      assert present?(d, "#meeting-bar-devices-sheet[data-container=sheet]")
+
+      for kind <- ~w(audioinput videoinput audiooutput) do
+        assert present?(d, "#meeting-bar-devices-popover [data-device-section=#{kind}]")
+      end
+
+      # Never success-tinted: the popover keeps the base surface.
+      cls = classes(d, "#meeting-bar-devices-popover")
+      assert "bg-base-100" in cls
+      assert "text-base-content" in cls
+      refute Enum.any?(cls, &String.contains?(&1, "success"))
+
+      # No phx-target anywhere in the panel: it pushes no server events.
+      assert q(d, "#meeting-bar-devices [phx-target]") |> Enum.count() == 0
+      assert q(d, "#meeting-bar-devices [phx-click]") |> Enum.count() == 0
+    end
+
+    test "not rendered while the native call owns media" do
+      d =
+        doc(
+          Map.merge(@meeting_assigns, %{
+            native: %{mic: true, camera: true, active_speakers: true}
+          })
+        )
+
+      assert present?(d, "[data-bar-mic]")
+      assert present?(d, "[data-bar-camera]")
+      refute present?(d, "[data-bar-mic-devices]")
+      refute present?(d, "[data-bar-camera-devices]")
+      refute present?(d, "#meeting-bar-devices")
+      refute "rounded-r-none" in classes(d, "[data-bar-mic]")
+    end
+
+    test "not rendered in the call room" do
+      d = doc(Map.put(@meeting_assigns, :in_call_room, true))
+      refute present?(d, "#meeting-bar-devices")
+    end
+
+    # Task 01a1f4c5 v2 stage 1: the shared panel hook names the fallback
+    # device on the bar's mic button the way it does on the room's.
+    test "the mic button is the panel's mic toggle, with a server aria-label" do
+      d = doc(@meeting_assigns)
+
+      assert attr(d, "[data-bar-mic]", "data-devices-toggle") == "meeting-bar-devices"
+      assert attr(d, "[data-bar-mic]", "data-on") == "true"
+      assert attr(d, "[data-bar-mic]", "aria-label") == "Mic on"
+      mounted = attr(d, "[data-bar-mic]", "phx-mounted")
+      assert mounted =~ "ignore_attrs"
+      assert mounted =~ "title"
+
+      off = doc(Map.put(@meeting_assigns, :mic_on, false))
+      assert attr(off, "[data-bar-mic]", "data-on") == "false"
+      assert attr(off, "[data-bar-mic]", "aria-label") == "Mic off"
+    end
+
+    test "native mode leaves the mic button without the toggle wiring" do
+      d =
+        doc(
+          Map.merge(@meeting_assigns, %{
+            native: %{mic: true, camera: true, active_speakers: true}
+          })
+        )
+
+      assert attr(d, "[data-bar-mic]", "data-devices-toggle") == nil
+      assert attr(d, "[data-bar-mic]", "data-on") == nil
+      assert attr(d, "[data-bar-mic]", "aria-label") == nil
+      assert attr(d, "[data-bar-mic]", "phx-mounted") == nil
+    end
+  end
 end
