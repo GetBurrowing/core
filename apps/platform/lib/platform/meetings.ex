@@ -8628,6 +8628,11 @@ defmodule Platform.Meetings do
   # when the caller is `invite_agent/4` (its context map carries `:mode`);
   # every `/3` caller's context has no such key, so its metadata encodes to
   # exactly the bytes it did before.
+  defp voice_dispatch_metadata(%{mode: "show_cohost", cohost_profile: profile})
+       when is_map(profile) do
+    %{"mode" => "show_cohost", "cohost_profile" => profile}
+  end
+
   defp voice_dispatch_metadata(%{mode: mode} = context) do
     %{"mode" => mode, "voice_context" => Map.get(context, :voice_context)}
   end
@@ -9819,7 +9824,8 @@ defmodule Platform.Meetings do
   def invite_agent(%Room{} = room, %Agent{} = agent, inviting_user, opts) when is_list(opts) do
     extra = %{
       mode: Keyword.get(opts, :mode),
-      voice_context: Keyword.get(opts, :voice_context)
+      voice_context: Keyword.get(opts, :voice_context),
+      cohost_profile: Keyword.get(opts, :cohost_profile)
     }
 
     do_invite_agent(room, agent, inviting_user, extra)

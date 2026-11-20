@@ -313,6 +313,7 @@ defmodule Platform.MixProject do
         "esbuild excalidraw",
         "esbuild emoji",
         "esbuild terminal",
+        "esbuild cohost_face",
         "cmd --cd assets node scripts/copy_excalidraw_assets.mjs"
       ],
       # `compile` first: colocated hooks (`Phoenix.LiveView.ColocatedHook`) are
@@ -326,6 +327,7 @@ defmodule Platform.MixProject do
         "esbuild excalidraw --minify",
         "esbuild emoji --minify",
         "esbuild terminal --minify",
+        "esbuild cohost_face --minify",
         "cmd --cd assets node scripts/copy_excalidraw_assets.mjs",
         "phx.digest"
       ],
