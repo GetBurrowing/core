@@ -181,7 +181,7 @@ describe("the top-bar mic button after a fallback (v2 stage 1)", () => {
 
   // The markup MeetingBarLive renders with devices: the bar's mic button is
   // the panel's mic toggle, and the panel root is the bar's sibling.
-  function mountBar() {
+  function mountBar({ withCallSlot = false } = {}) {
     const mic = h(
       "button",
       {
@@ -207,6 +207,8 @@ describe("the top-bar mic button after a fallback (v2 stage 1)", () => {
       ],
     )
     body.appendChild(bar)
+    // An in-chat quickmeet on the same page has its own strap slot.
+    if (withCallSlot) body.appendChild(h("div", { "data-role": "meeting-device-notice-slot" }))
     body.appendChild(root)
     const hook = Object.create(MeetingDevicePanel)
     hook.el = root
@@ -236,6 +238,22 @@ describe("the top-bar mic button after a fallback (v2 stage 1)", () => {
     mic.setAttribute("aria-label", "Mic off")
     await settle()
     expect(mic.getAttribute("aria-label")).toBe("Mic off, BlackHole 2ch")
+    hook.destroyed()
+  })
+
+  it("the top-bar mic button is named when a call surface on the page shows the strap", async () => {
+    const { hook, mic } = mountBar({ withCallSlot: true })
+    win.dispatchEvent(
+      new CustomEvent(DEVICE_FALLBACK_EVENT, {
+        detail: { kind: "audioinput", fromLabel: "AirPods Pro", toLabel: "BlackHole 2ch", surface: "meeting" },
+      }),
+    )
+    expect(body.querySelector("#meeting-bar-devices [data-role=meeting-device-notice]"), "the bar gives way").toBeNull()
+    await settle()
+    expect(mic.getAttribute("aria-label"), "the bar mic's aria-label still names mic 2").toBe(
+      "Mic on, BlackHole 2ch",
+    )
+    expect(mic.getAttribute("title")).toBe("Microphone: BlackHole 2ch")
     hook.destroyed()
   })
 })

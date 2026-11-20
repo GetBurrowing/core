@@ -237,7 +237,15 @@ const MeetingDevicePanel = {
     this._onFallback = (e) => {
       const d = (e && e.detail) || {}
       if (d.surface && d.surface !== this._surface()) return
-      if (this._noticeDeferred()) return
+      if (this._noticeDeferred()) {
+        // The call surface on this page shows the strap; this panel's own
+        // mic toggle (the top bar's) still names the new device.
+        if (d.kind === "audioinput" && d.toLabel) {
+          this._micName = d.toLabel
+          this._applyMicName()
+        }
+        return
+      }
       this.showNotice(d)
     }
     this._onOpenRequest = (e) => {
