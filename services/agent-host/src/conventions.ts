@@ -3,7 +3,7 @@
  * writes in CLAUDE.md (task 01a10322 stage 7, round 2).
  *
  * THE DEFECT. The owner edits an agent's work-dir CLAUDE.md in Agent files,
- * and that file is the agent's own. suite-cli never overwrites an existing
+ * and that file is the agent's own. burrow-cli never overwrites an existing
  * CLAUDE.md: it writes its conventions to BURROW_CONVENTIONS.md instead, which
  * loads only if CLAUDE.md says `@BURROW_CONVENTIONS.md`. Core's seeded identity
  * file does not, and an owner who replaces it will not, so the agent never
@@ -44,15 +44,15 @@ export const HEADER = [
 ].join("\n");
 
 /**
- * Used only when suite-cli's text cannot be loaded. The one convention without
+ * Used only when burrow-cli's text cannot be loaded. The one convention without
  * which a native agent fails silently: an answer that never reaches Burrow.
  */
 export const FALLBACK = [
   "## Always respond in channel",
   "",
-  "Every reply to a Burrow message goes into the Burrow channel with the `suite_reply`",
-  "tool, using the `space_id` from the inbound `<channel>` tag. A terminal-only answer",
-  "is an answer nobody received.",
+  "Every reply to a Burrow message goes into the Burrow channel with the `burrow_reply`",
+  "tool (named `suite_reply` on a channel plugin older than 0.5.0), using the `space_id`",
+  "from the inbound `<channel>` tag. A terminal-only answer is an answer nobody received.",
   "",
 ].join("\n");
 
@@ -95,14 +95,26 @@ export async function writeUserMemory(runner: Runner, user: AgentUser, content: 
 }
 
 /**
- * `bun run src/conventions.ts --check`: exit 1 unless suite-cli's conventions
+ * The reply tool's names, either of which proves the conventions carry the
+ * reply rule: `burrow_reply` since burrow-cli 0.20.0 (channel plugin 0.5.0),
+ * and `suite_reply`, its deprecated alias, which every earlier pin names.
+ */
+export const REPLY_TOOL_NAMES = ["burrow_reply", "suite_reply"] as const;
+
+/** True when `text` names the reply tool under either name. Pure. */
+export function carriesReplyRule(text: string): boolean {
+  return REPLY_TOOL_NAMES.some((name) => text.includes(name));
+}
+
+/**
+ * `bun run src/conventions.ts --check`: exit 1 unless burrow-cli's conventions
  * load and carry the reply rule. The image build runs it (Dockerfile), so a
- * suite-cli re-pin that moves or renames the export fails the build instead
+ * burrow-cli re-pin that moves or renames the export fails the build instead
  * of shipping agents that fall back to {@link FALLBACK}.
  */
 if (import.meta.main && process.argv.includes("--check")) {
   const text = await loadBurrowConventions();
-  if (text === null || !text.includes("suite_reply")) {
+  if (text === null || !carriesReplyRule(text)) {
     console.error(`conventions: could not load BURROW_CONVENTIONS from ${BURROW_CLI_LIB}/src/claude_md.ts`);
     process.exit(1);
   }

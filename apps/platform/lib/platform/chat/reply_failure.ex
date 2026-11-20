@@ -31,7 +31,7 @@ defmodule Platform.Chat.ReplyFailure do
   notice for that message if the agent has not answered it (stage 7).
 
   A native agent can also fail with NOTHING observable: a turn that ends
-  without `suite_reply`, or a key that went bad after the agent worked, so
+  without `burrow_reply`, or a key that went bad after the agent worked, so
   the dev channel drops the message and no turn runs (stage 7 round 2, gate
   cases 7008 and 7009). `remember_delivery/1` therefore also arms
   `Platform.Chat.ReplyFailure.Watchdog`, which calls `no_response/1` when the
