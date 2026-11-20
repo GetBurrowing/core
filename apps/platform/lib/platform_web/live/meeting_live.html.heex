@@ -3026,6 +3026,23 @@
               </button>
             </div>
 
+            <div :if={is_binary(assigns[:user_id])} class="border-b border-base-300 p-3">
+              <button
+                type="button"
+                phx-click="meeting_toggle_show_cohost"
+                aria-pressed={to_string(!!assigns[:show_cohost?])}
+                class={[
+                  "btn btn-sm",
+                  if(assigns[:show_cohost?], do: "btn-primary", else: "btn-outline")
+                ]}
+                data-role="show-cohost-mode"
+              >
+                How To Computer cohost {if assigns[:show_cohost?], do: "on", else: "off"}
+              </button>
+              <p class="mt-1 text-xs text-subtle">
+                Applies the show personality and episode brief to the next agent you invite.
+              </p>
+            </div>
             <%!-- `captions_available` is mount-time, like the quickmeet
                (chat_live.html.heex): the LiveKit triple is deployment
                config, not join state. `@livekit_url` is only ever

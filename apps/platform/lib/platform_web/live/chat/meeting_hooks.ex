@@ -2085,7 +2085,10 @@ defmodule PlatformWeb.ChatLive.MeetingHooks do
 
     case ensure_agent_in_space(room, agent, actor) do
       {:ok, membership} ->
-        case Meetings.invite_agent(room, agent, actor) do
+        options =
+          Platform.Meetings.CohostProfile.invitation_options(socket.assigns[:show_cohost?])
+
+        case Meetings.invite_agent(room, agent, actor, options) do
           {:ok, _participant} ->
             put_flash(socket, :info, invite_flash(agent, room, socket.assigns[:user_id]))
 

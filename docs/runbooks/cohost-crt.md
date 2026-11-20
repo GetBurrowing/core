@@ -16,12 +16,15 @@ without stopping the shared remote track. Blink is decorative; mouth motion is
 audio-driven. "Ready" means the voice participant exists, not proof that STT or
 the model is listening. This increment does not claim a thinking-state signal.
 
-The editable example profile is
-`services/meeting-voice-agent/show_profiles/how_to_computer.json`. The meeting
+The editable profile is `apps/platform/priv/cohosts/how_to_computer.json`.
+In the meeting People rail, enable **How To Computer cohost**, then invite
+an existing voice-capable agent using the normal invitation control. The meeting
 invitation plumbing carries `mode: "show_cohost"` and `cohost_profile` to the
 existing voice worker, whose instruction builder keeps the profile through
-context updates. Operator selection/invitation for this show profile still
-requires completion; ordinary meetings keep their existing instructions.
+context updates. The toggle applies to subsequent invitations on that page;
+it does not restart an agent already in the room. Ordinary invitations keep
+their existing instructions. This uses the deployment's existing LiveKit voice
+dispatch target and speech/model configuration, not a separate local backend.
 
 ## Verification so far
 

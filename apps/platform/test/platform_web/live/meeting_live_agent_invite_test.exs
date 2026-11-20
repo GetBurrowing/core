@@ -303,6 +303,56 @@ defmodule PlatformWeb.MeetingLiveAgentInviteTest do
   end
 
   describe "the invite-an-agent control" do
+    test "show mode carries its brief through the existing LiveKit worker dispatch",
+         %{conn: conn, meeting: meeting, agent: agent, space: space} do
+      viewer = seat!(space, user!("show-operator"))
+
+      {:ok, _, _} =
+        Federation.register_voice_runtime(viewer.id, agent, %{
+          metadata: %{
+            "client_info" => %{
+              "features" => ["meeting_voice"],
+              "livekit_agent_name" => "meeting-voice-agent"
+            }
+          }
+        })
+
+      previous = Application.get_env(:platform, :livekit_req_client)
+      owner = self()
+
+      Req.Test.stub(:cohost_invite, fn conn ->
+        {:ok, body, conn} = Plug.Conn.read_body(conn)
+        data = Jason.decode!(body)
+
+        if String.ends_with?(conn.request_path, "/CreateDispatch") do
+          send(owner, {:cohost_dispatch, Jason.decode!(data["metadata"])})
+        end
+
+        Req.Test.json(conn, %{})
+      end)
+
+      Application.put_env(
+        :platform,
+        :livekit_req_client,
+        Req.new(plug: {Req.Test, :cohost_invite})
+      )
+
+      on_exit(fn -> Application.put_env(:platform, :livekit_req_client, previous) end)
+
+      {:ok, view, _} = conn |> login(viewer) |> live(~p"/meetings/#{meeting.slug}")
+      join_call!(view)
+      assert has_element?(view, ~s([data-role="show-cohost-mode"][aria-pressed="false"]))
+      view |> element(~s([data-role="show-cohost-mode"])) |> render_click()
+
+      view
+      |> element(~s([data-role="meeting-agent-invite-button"][data-agent-id="#{agent.id}"]))
+      |> render_click()
+
+      assert_receive {:cohost_dispatch, metadata}
+      assert metadata["mode"] == "show_cohost"
+      assert metadata["cohost_profile"]["episode_brief"] =~ "AI economy"
+    end
+
     test "offers each space agent and is wired to the invite event",
          %{conn: conn, meeting: meeting, agent: agent} do
       {:ok, _view, html} =

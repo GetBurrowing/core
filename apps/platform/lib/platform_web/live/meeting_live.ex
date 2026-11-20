@@ -2937,6 +2937,10 @@ defmodule PlatformWeb.MeetingLive do
     {:noreply, invite_agent_into_call(socket, agent_id)}
   end
 
+  def handle_event("meeting_toggle_show_cohost", _params, socket) do
+    {:noreply, assign(socket, :show_cohost?, !socket.assigns[:show_cohost?])}
+  end
+
   # "Show me the discussion" (task 01a084bf stage 3). This used to toggle
   # `:chat_panel_open` for `#meeting-chat-drawer`; that drawer is deleted
   # and chat is a PANE of the call rail, so the event was re-pointed rather
