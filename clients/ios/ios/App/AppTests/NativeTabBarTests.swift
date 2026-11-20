@@ -417,6 +417,50 @@ final class NativeTabBarTests: XCTestCase {
         XCTAssertTrue(host.bar.accessibilityElementsHidden)
     }
 
+    func testReduceMotionShowsAndHidesWithoutAnimating() {
+        let parent = UIViewController()
+        var animations = 0
+        let host = StandaloneTabBarHost(
+            animate: { _, _, changes, completion in
+                animations += 1
+                changes()
+                completion(true)
+            },
+            reduceMotion: { true })
+        host.install(in: parent)
+        var next = state(["items": four, "visible": true])
+        host.render(next)
+        XCTAssertFalse(host.bar.isHidden, "shown at once")
+        XCTAssertFalse(host.bar.accessibilityElementsHidden)
+        XCTAssertEqual(host.bar.transform, .identity)
+        next.visible = false
+        host.render(next)
+        XCTAssertTrue(host.bar.isHidden, "hidden at once")
+        XCTAssertTrue(host.bar.accessibilityElementsHidden)
+        XCTAssertEqual(host.bar.transform, .identity)
+        XCTAssertEqual(animations, 0, "Reduce Motion: no slide")
+    }
+
+    func testStandardMotionAnimatesShowAndHide() {
+        let parent = UIViewController()
+        var durations: [TimeInterval] = []
+        let host = StandaloneTabBarHost(
+            animate: { duration, _, changes, completion in
+                durations.append(duration)
+                changes()
+                completion(true)
+            },
+            reduceMotion: { false })
+        host.install(in: parent)
+        var next = state(["items": four, "visible": true])
+        host.render(next)
+        XCTAssertFalse(host.bar.isHidden)
+        next.visible = false
+        host.render(next)
+        XCTAssertTrue(host.bar.isHidden)
+        XCTAssertEqual(durations, [0.3, 0.25])
+    }
+
     #if DEBUG
         func testRenderedProbeReadsActualHiddenState() {
             let bar = UITabBar()

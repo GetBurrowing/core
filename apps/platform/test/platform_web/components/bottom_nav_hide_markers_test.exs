@@ -13,8 +13,13 @@ defmodule PlatformWeb.Components.BottomNavHideMarkersTest do
       textarea, pinned by apps/goals'
       test/platform_web/goals_tab_bar_marker_guard_test.exs);
     * `:root:has([data-fullscreen-viewer])`: a full-screen viewer;
-    * `:root:has([data-in-call])`: MeetingLive while in the call (pinned in
-      meeting_live_test.exs, where the join lifecycle lives).
+    * `:root:has([data-in-call]:not(.hidden))`: a visible call UI.
+      MeetingLive while in the call (pinned in meeting_live_test.exs, where
+      the join lifecycle lives) and the in-chat call overlay
+      (`quickmeet-mobile-overlay`, pinned in
+      test/platform_web/live/chat/partials_meeting_panel_test.exs, task
+      01a1fa7b stage 1). Minimizing the overlay adds `.hidden`, which gives
+      the bar back while the call continues.
 
   A selector is only as good as the attribute it keys on. These tests pin
   that each viewer renders `data-fullscreen-viewer` exactly while it covers

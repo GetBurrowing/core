@@ -5153,13 +5153,18 @@ body, .font-suite {
         the ComposeInput hook; task 01a1ecb3, the Goals fields);
      2. a full-screen viewer is open ([data-fullscreen-viewer]: the image
         in-app chat viewer, the file preview, the full-screen prototype);
-     3. the in-call room ([data-in-call], MeetingLive while in the call). The
-        mini bar on OTHER tabs during a call does not hide it.
+     3. a visible call UI ([data-in-call]:not(.hidden)): MeetingLive while
+        in the call, and the in-chat call overlay
+        (quickmeet-mobile-overlay) while it shows. Minimizing that overlay
+        only adds `.hidden` to it, so the bar comes back while the call
+        carries on behind the green strip; the element leaving the DOM on
+        Leave brings it back too. The mini bar on OTHER tabs during a call
+        does not hide it.
    Clearance drops to 0 with it, so FABs, toasts and composer padding follow. */
 :root:has([phx-hook="ComposeInput"]:focus),
 :root:has([data-hides-tab-bar]:focus),
 :root:has([data-fullscreen-viewer]),
-:root:has([data-in-call]) {
+:root:has([data-in-call]:not(.hidden)) {
   --bottom-nav-height: 0px;
   --bottom-nav-gap: 0px;
 }
@@ -5236,7 +5241,7 @@ body, .font-suite {
 :root:has([phx-hook="ComposeInput"]:focus) .bottom-nav,
 :root:has([data-hides-tab-bar]:focus) .bottom-nav,
 :root:has([data-fullscreen-viewer]) .bottom-nav,
-:root:has([data-in-call]) .bottom-nav {
+:root:has([data-in-call]:not(.hidden)) .bottom-nav {
   transform: translateY(calc(100% + var(--bottom-nav-offset)));
   opacity: 0;
   visibility: hidden;
@@ -5280,7 +5285,7 @@ body, .font-suite {
   :root[data-native-tab-bar]:has([data-bottom-rail]):has([phx-hook="ComposeInput"]:focus),
   :root[data-native-tab-bar]:has([data-bottom-rail]):has([data-hides-tab-bar]:focus),
   :root[data-native-tab-bar]:has([data-bottom-rail]):has([data-fullscreen-viewer]),
-  :root[data-native-tab-bar]:has([data-bottom-rail]):has([data-in-call]) {
+  :root[data-native-tab-bar]:has([data-bottom-rail]):has([data-in-call]:not(.hidden)) {
     --bottom-nav-height: 0px;
     --bottom-nav-gap: 0px;
   }
