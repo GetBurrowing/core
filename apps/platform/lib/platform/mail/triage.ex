@@ -569,7 +569,9 @@ defmodule Platform.Mail.Triage do
     * `:called_out` — the reader's `top` / `action` items of `date` whose
       mailbox is still eligible: open ones first, then by tier, then newest
       received;
-    * `:others` — the reader's `routine` / `promo` items of `date`, same rule;
+    * `:quiet` — `%{id, name}` of the eligible mailboxes (readable AND with
+      an active flag agent) with no called-out item for `date`, in name
+      order; empty when no mailbox is eligible;
     * `:ungranted` — `%{id, name}` of the mailboxes the reader may read that
       have NO active flag agent (metadata only: the name).
 
@@ -577,6 +579,12 @@ defmodule Platform.Mail.Triage do
   `account_id`, `tier`, `status`, `acted_how`, `why`, `from`, `subject`,
   `mailbox`, `received_at`, `plan` and `draft`). The inbound body is never
   selected.
+
+  Low-tier (`routine` / `promo`) items are never selected here: the query
+  filters on the called-out tiers, so no routine or promo email reaches the
+  briefing in any form (task 01a1f66a). They are still classified and
+  stored; Email's message pane is where a reader says one of them needed
+  them.
 
   `:plan` is `%{summary, steps}` when the drafter produced a fulfilment
   plan, else nil. `:draft` (task 01a1f426 stage 5) is `%{id, status,
@@ -618,14 +626,19 @@ defmodule Platform.Mail.Triage do
     # `eligible_accounts_query/2` (both terms were read just above).
     eligible = agents_by_account |> Map.keys() |> MapSet.new()
 
-    rows = if MapSet.size(eligible) > 0, do: section_rows(user_id, date, eligible), else: []
-    {called_out, others} = Enum.split_with(rows, &(&1.tier in @called_out_tiers))
+    called_out =
+      if MapSet.size(eligible) > 0, do: section_rows(user_id, date, eligible), else: []
+
+    flagged = MapSet.new(called_out, & &1.account_id)
 
     %{
       agents_by_account: agents_by_account,
       readable?: readable != [],
       called_out: called_out,
-      others: others,
+      quiet:
+        readable
+        |> Enum.filter(&(MapSet.member?(eligible, &1.id) and not MapSet.member?(flagged, &1.id)))
+        |> Enum.map(&Map.take(&1, [:id, :name])),
       ungranted:
         readable
         |> Enum.reject(&MapSet.member?(eligible, &1.id))
@@ -638,7 +651,7 @@ defmodule Platform.Mail.Triage do
       agents_by_account: %{},
       readable?: false,
       called_out: [],
-      others: [],
+      quiet: [],
       ungranted: []
     }
 
@@ -652,6 +665,7 @@ defmodule Platform.Mail.Triage do
       join: a in Account,
       on: a.id == i.account_id,
       where: i.user_id == ^user_id and i.account_id in ^eligible,
+      where: i.tier in ^@called_out_tiers,
       where: i.inserted_at >= ^from and i.inserted_at < ^to,
       select: %{
         id: i.id,
@@ -751,6 +765,28 @@ defmodule Platform.Mail.Triage do
   end
 
   def reader_item(_user, _item_id), do: nil
+
+  @doc """
+  Did the triage call out `inbound_message_id` for `user`: true when the
+  reader's OWN item for that message has a tier in `@called_out_tiers`
+  (top or action). A message with no item, or with a routine/promo item,
+  is unflagged. Another reader's item is never read. A pure read.
+  """
+  @spec flagged_for_reader?(map(), any()) :: boolean()
+  def flagged_for_reader?(%{id: user_id}, inbound_message_id)
+      when is_binary(user_id) and is_binary(inbound_message_id) do
+    Platform.UUID.valid?(user_id) and Platform.UUID.valid?(inbound_message_id) and
+      Repo.exists?(
+        from(i in Item,
+          where:
+            i.inbound_message_id == ^inbound_message_id and i.user_id == ^user_id and
+              i.tier in ^@called_out_tiers
+        ),
+        quiet_opts()
+      )
+  end
+
+  def flagged_for_reader?(_user, _inbound_message_id), do: false
 
   @doc """
   Is the mailbox of `target` (an item or an inbound message: anything with

@@ -78,6 +78,7 @@ defmodule PlatformWeb.Components.MailPrioritySectionTest do
       shared: shared,
       a2: a2,
       in_s: in_s,
+      in_promo: in_promo,
       in_a2: in_a2,
       a_item: a_item,
       c_item: c_item,
@@ -143,7 +144,7 @@ defmodule PlatformWeb.Components.MailPrioritySectionTest do
     assert section_html =~ "Contract clauses #{ctx.n}"
     assert section_html =~ "Counsel Person"
     assert section_html =~ "counsel-#{ctx.n}@otherco.test"
-    assert section_html =~ "Needs you"
+    assert section_html =~ "Needs you now"
     assert section_html =~ "Shared #{ctx.n}"
     assert section_html =~ ~s(href="/email/messages/#{ctx.in_s.id}")
 
@@ -164,9 +165,13 @@ defmodule PlatformWeb.Components.MailPrioritySectionTest do
     assert section_html =~ "A2 box #{ctx.n}"
     assert section_html =~ "has no agent flagging important email"
 
-    # Routine and promo mail sits under the collapsed disclosure.
-    assert has_element?(lv, "details[data-role=mail-priority-others]:not([open])")
-    assert section_html =~ "1 other email"
+    # Routine and promo mail appears in no form (task 01a1f66a); the list
+    # ends with the closing line, and Email is one plain link away.
+    refute section_html =~ "Promo #{ctx.n}"
+    refute has_element?(lv, "[data-role=mail-priority-others]")
+    refute section_html =~ ~r/other emails?/i
+    assert has_element?(lv, "[data-role=mail-priority-closing]")
+    assert has_element?(lv, ~s([data-role=mail-priority-open-email][href="/email"]))
 
     # Drafts only: no send control on this surface.
     refute section_html =~ ~s(phx-click="send")
@@ -203,12 +208,23 @@ defmodule PlatformWeb.Components.MailPrioritySectionTest do
     refute html_c =~ "A-WHY-#{ctx.n}"
     assert has_element?(lv_c, "[data-item-id='#{ctx.c_item.id}'][data-status=open]")
 
-    lv_c
-    |> element("[data-item-id='#{ctx.c_promo.id}'] [data-role=mail-priority-missed]")
-    |> render_click()
+    # The briefing lists no promo, so C reports the missed promo from
+    # Email's message pane (the only "This needed me" path, task 01a1f66a).
+    refute has_element?(lv_c, "[data-item-id='#{ctx.c_promo.id}']")
+    since = DateTime.add(DateTime.utc_now(), -3600, :second)
+    assert Platform.Mail.Triage.Metrics.for_user(ctx.c, since).missed_reports == 0
 
-    assert [%Feedback{verdict: "missed"}] = feedback_for(ctx.c)
+    {:ok, pane_c, _} =
+      Phoenix.ConnTest.build_conn()
+      |> init_test_session(current_user_id: ctx.c.id)
+      |> live("/email/messages/#{ctx.in_promo.id}")
+
+    pane_c |> element("[data-role=mail-triage-missed]") |> render_click()
+
+    assert [%Feedback{verdict: "missed"} = missed] = feedback_for(ctx.c)
+    assert missed.inbound_message_id == ctx.in_promo.id
     assert reload(ctx.c_promo).tier == "action"
+    assert Platform.Mail.Triage.Metrics.for_user(ctx.c, since).missed_reports == 1
     # A's feedback and A's promo item are unchanged by C's.
     assert [%Feedback{verdict: "not_important"}] = feedback_for(ctx.a)
     assert reload(ctx.a_promo).tier == "promo"
@@ -279,13 +295,180 @@ defmodule PlatformWeb.Components.MailPrioritySectionTest do
 
   test "states: no triage agent, nothing today", ctx do
     {lv, _} = open_briefing(ctx.conn, ctx.a, Date.add(ctx.date, -3))
-    assert has_element?(lv, "[data-role=mail-priority-empty]", "Nothing needs you today")
+    assert has_element?(lv, "[data-role=mail-priority-empty]", "Nothing in your email needs you.")
+    refute has_element?(lv, "[data-role=mail-priority-closing]")
+    assert has_element?(lv, ~s([data-role=mail-priority-open-email][href="/email"]))
 
     {:ok, _} = Platform.Mail.Ownership.set_flag_important_agent(ctx.a, ctx.shared, nil)
     {lv, html} = open_briefing(Phoenix.ConnTest.build_conn(), ctx.a, ctx.date)
     assert has_element?(lv, "[data-role=mail-priority-no-agent]")
     refute html =~ "A-WHY-#{ctx.n}"
     refute has_element?(lv, "[data-role=mail-priority-item]")
+    assert has_element?(lv, ~s([data-role=mail-priority-open-email][href="/email"]))
+  end
+
+  # ── low-tier mail is not in the briefing (task 01a1f66a stage 1) ──────
+
+  defp text_of(html) do
+    html |> Floki.parse_fragment!() |> Floki.text(sep: " ") |> String.split() |> Enum.join(" ")
+  end
+
+  # A mailbox A alone reads, with its own flag agent.
+  defp own_box!(ctx, name) do
+    box =
+      account!(ctx.a, ctx.org_id, %{"name" => "#{name} #{ctx.n}"})
+      |> then(&personal!(ctx.a, &1, ctx.a))
+
+    flag_agent!(ctx.a, box, ctx.agent)
+    box
+  end
+
+  defp low_items!(ctx, box, tag) do
+    for {tier, i} <- [{"promo", 1}, {"promo", 2}, {"routine", 3}] do
+      inbound =
+        inbound!(box, %{
+          from_address: "Low #{tag} #{i} <low-#{tag}-#{i}-#{ctx.n}@bulk.test>",
+          subject: "LOW-#{tag}-SUBJ-#{i}-#{ctx.n}"
+        })
+
+      %{
+        item: item!(ctx.a, inbound, %{tier: tier, why: "LOW-#{tag}-WHY-#{i}-#{ctx.n}"}),
+        subject: inbound.subject,
+        sender: "low-#{tag}-#{i}-#{ctx.n}@bulk.test",
+        why: "LOW-#{tag}-WHY-#{i}-#{ctx.n}"
+      }
+    end
+  end
+
+  test "low-tier mail appears in no form", ctx do
+    # Only M is flagged for A, so the setup's shared items are out of view.
+    {:ok, _} = Platform.Mail.Ownership.set_flag_important_agent(ctx.a, ctx.shared, nil)
+    m = own_box!(ctx, "M")
+
+    top = inbound!(m, %{subject: "TOP-SUBJ-#{ctx.n}"})
+    act = inbound!(m, %{subject: "ACT-SUBJ-#{ctx.n}"})
+    item!(ctx.a, top, %{tier: "top", why: "Top why."})
+    item!(ctx.a, act, %{tier: "action", why: "Action why."})
+    lows = low_items!(ctx, m, "m")
+
+    {lv, _} = open_briefing(ctx.conn, ctx.a, ctx.date)
+    section_html = lv |> section() |> render()
+
+    assert section_html =~ "TOP-SUBJ-#{ctx.n}"
+    assert section_html =~ "ACT-SUBJ-#{ctx.n}"
+
+    for low <- lows do
+      refute section_html =~ low.subject
+      refute section_html =~ low.sender
+      refute section_html =~ low.why
+    end
+
+    refute section_html =~ ~r/other emails?/i
+
+    for role <- ~w(mail-priority-others mail-priority-other mail-priority-missed) do
+      refute has_element?(lv, "[data-role=#{role}]")
+    end
+
+    # No count of the 3 low-tier emails anywhere outside the item cards.
+    outside_items =
+      section_html
+      |> Floki.parse_fragment!()
+      |> Floki.filter_out("[data-role=mail-priority-item]")
+      |> Floki.raw_html()
+      |> text_of()
+      # Mailbox names carry the run's unique number; it is not a count.
+      |> String.replace("#{ctx.n}", "")
+
+    refute outside_items =~ "3"
+
+    assert lv |> element("[data-role=mail-priority-closing]") |> render() |> text_of() ==
+             "That's everything your agents flagged."
+
+    # Classification is unchanged: the low-tier rows are still stored.
+    for low <- lows, do: assert(Repo.get(Item, low.item.id))
+  end
+
+  test "only low-tier mail: one empty line and nothing listed", ctx do
+    {:ok, _} = Platform.Mail.Ownership.set_flag_important_agent(ctx.a, ctx.shared, nil)
+    m = own_box!(ctx, "M")
+    lows = low_items!(ctx, m, "o")
+
+    {lv, _} = open_briefing(ctx.conn, ctx.a, ctx.date)
+    section_html = lv |> section() |> render()
+
+    assert lv |> element("[data-role=mail-priority-empty]") |> render() |> text_of() ==
+             "Nothing in your email needs you."
+
+    for low <- lows do
+      refute section_html =~ low.subject
+      refute section_html =~ low.sender
+    end
+
+    refute has_element?(lv, "[data-role=mail-priority-closing]")
+    refute has_element?(lv, "[data-role=mail-priority-quiet]")
+    refute has_element?(lv, "[data-role=mail-priority-item]")
+  end
+
+  test "mixed mailboxes: a quiet line for an eligible mailbox, the no-agent line for one without",
+       ctx do
+    # X: the shared mailbox with A's top item (setup). Y: eligible, promo
+    # only. Z: A2, readable with no flag agent (setup).
+    y = own_box!(ctx, "Y")
+    lows = low_items!(ctx, y, "y")
+
+    {lv, _} = open_briefing(ctx.conn, ctx.a, ctx.date)
+    section_html = lv |> section() |> render()
+
+    assert section_html =~ "Contract clauses #{ctx.n}"
+
+    quiet = "[data-role=mail-priority-quiet-mailbox][data-account-id='#{y.id}']"
+    assert lv |> element(quiet) |> render() |> text_of() == "Nothing in Y #{ctx.n} needs you."
+    for low <- lows, do: refute(section_html =~ low.subject)
+
+    # The flagged mailbox and the no-agent mailbox get no quiet line.
+    refute has_element?(
+             lv,
+             "[data-role=mail-priority-quiet-mailbox][data-account-id='#{ctx.shared.id}']"
+           )
+
+    refute has_element?(
+             lv,
+             "[data-role=mail-priority-quiet-mailbox][data-account-id='#{ctx.a2.id}']"
+           )
+
+    refute section_html =~ "Nothing in A2 box #{ctx.n} needs you."
+
+    ungranted = "[data-role=mail-priority-ungranted-mailbox][data-account-id='#{ctx.a2.id}']"
+
+    assert lv |> element(ungranted) |> render() |> text_of() |> String.replace(" .", ".") ==
+             "A2 box #{ctx.n} has no agent flagging important email. Choose one in Email > Accounts."
+
+    # Order: closing line, quiet lines, no-agent lines, Open Email.
+    positions =
+      for role <-
+            ~w(mail-priority-list mail-priority-closing mail-priority-quiet mail-priority-ungranted mail-priority-open-email) do
+        {pos, _} = :binary.match(section_html, ~s(data-role="#{role}"))
+        pos
+      end
+
+    assert positions == Enum.sort(positions)
+
+    assert lv |> element("[data-role=mail-priority-open-email]") |> render() |> text_of() ==
+             "Open Email →"
+  end
+
+  test "a triage_missed event sent to the briefing writes nothing", ctx do
+    {lv, _} = open_briefing(ctx.conn, ctx.a, ctx.date)
+
+    for id <- [ctx.a_promo.id, ctx.a_item.id] do
+      lv
+      |> with_target("[data-section=mail_priority]")
+      |> render_click("triage_missed", %{"item_id" => id})
+    end
+
+    assert feedback_for(ctx.a) == []
+    assert reload(ctx.a_promo).tier == "promo"
+    assert reload(ctx.a_item).status == "open"
   end
 
   # Task 01a1f5cc stage 4: each mailbox has its own flag agent, so the
@@ -442,18 +625,100 @@ defmodule PlatformWeb.Components.MailPrioritySectionTest do
     end
   end
 
-  describe "Email message pane" do
-    test "the triage feedback control writes the reader's feedback", ctx do
-      conn = init_test_session(ctx.conn, current_user_id: ctx.a.id)
-      {:ok, lv, _} = live(conn, "/email/messages/#{ctx.in_s.id}")
+  defp open_pane(user, inbound) do
+    {:ok, lv, _} =
+      Phoenix.ConnTest.build_conn()
+      |> init_test_session(current_user_id: user.id)
+      |> live("/email/messages/#{inbound.id}")
 
-      assert has_element?(lv, "[data-role=mail-triage-feedback]")
+    lv
+  end
+
+  defp pane_text(lv) do
+    lv
+    |> element("[data-role=mail-triage-feedback]")
+    |> render()
+    |> text_of()
+  end
+
+  describe "Email message pane" do
+    # Task 01a1f66a stage 2: the pane is the only "This needed me" path
+    # for mail the briefing did not call out.
+    test "an unflagged message offers only This needed me, and the loop closes into the briefing",
+         ctx do
+      lv = open_pane(ctx.a, ctx.in_promo)
+
+      assert has_element?(lv, "[data-role=mail-triage-feedback][data-flagged=false]")
+      assert pane_text(lv) =~ "Not in your briefing ·"
+      assert has_element?(lv, "[data-role=mail-triage-missed]")
+      refute has_element?(lv, "[data-role=mail-triage-not-important]")
+      refute pane_text(lv) =~ "Morning briefing"
+
+      {briefing, _} = open_briefing(Phoenix.ConnTest.build_conn(), ctx.a, ctx.date)
+      refute has_element?(briefing, "[data-item-id='#{ctx.a_promo.id}']")
+
+      since = DateTime.add(DateTime.utc_now(), -3600, :second)
       lv |> element("[data-role=mail-triage-missed]") |> render_click()
 
       assert [%Feedback{verdict: "missed"} = fb] = feedback_for(ctx.a)
+      assert fb.inbound_message_id == ctx.in_promo.id
+
+      assert lv |> element("[data-role=mail-triage-recorded]") |> render() |> text_of() ==
+               "Thanks. The next briefing will use this."
+
+      assert feedback_for(ctx.c) == []
+      assert reload(ctx.a_promo).tier == "action"
+      assert reload(ctx.c_promo).tier == "promo"
+      assert Platform.Mail.Triage.Metrics.for_user(ctx.a, since).missed_reports == 1
+
+      {briefing, _} = open_briefing(Phoenix.ConnTest.build_conn(), ctx.a, ctx.date)
+      assert has_element?(briefing, "[data-item-id='#{ctx.a_promo.id}']")
+      assert briefing |> section() |> render() =~ "Promo #{ctx.n}"
+
+      # Reopened, the message is now flagged for A.
+      reopened = open_pane(ctx.a, ctx.in_promo)
+      assert has_element?(reopened, "[data-role=mail-triage-feedback][data-flagged=true]")
+    end
+
+    test "a flagged message offers only Not important", ctx do
+      lv = open_pane(ctx.a, ctx.in_s)
+
+      assert has_element?(lv, "[data-role=mail-triage-feedback][data-flagged=true]")
+      assert pane_text(lv) =~ "Morning briefing:"
+      assert has_element?(lv, "[data-role=mail-triage-not-important]")
+      refute has_element?(lv, "[data-role=mail-triage-missed]")
+      refute pane_text(lv) =~ "Not in your briefing"
+
+      lv |> element("[data-role=mail-triage-not-important]") |> render_click()
+
+      assert [%Feedback{verdict: "not_important"} = fb] = feedback_for(ctx.a)
       assert fb.inbound_message_id == ctx.in_s.id
       assert has_element?(lv, "[data-role=mail-triage-recorded]")
       assert feedback_for(ctx.c) == []
+    end
+
+    test "Reader C's view uses C's own item, not A's", ctx do
+      split =
+        inbound!(ctx.shared, %{
+          from_address: "Split Sender <split-#{ctx.n}@otherco.test>",
+          subject: "Split #{ctx.n}"
+        })
+
+      item!(ctx.a, split, %{tier: "top", why: "A-SPLIT-#{ctx.n}"})
+      c_split = item!(ctx.c, split, %{tier: "promo", why: "Bulk mail."})
+
+      lv_a = open_pane(ctx.a, split)
+      assert has_element?(lv_a, "[data-role=mail-triage-feedback][data-flagged=true]")
+
+      lv_c = open_pane(ctx.c, split)
+      assert has_element?(lv_c, "[data-role=mail-triage-feedback][data-flagged=false]")
+      assert has_element?(lv_c, "[data-role=mail-triage-missed]")
+      refute has_element?(lv_c, "[data-role=mail-triage-not-important]")
+
+      lv_c |> element("[data-role=mail-triage-missed]") |> render_click()
+      assert [%Feedback{verdict: "missed"}] = feedback_for(ctx.c)
+      assert feedback_for(ctx.a) == []
+      assert reload(c_split).tier == "action"
     end
 
     test "a mailbox not granted to the triage agent has no control and refuses the event",

@@ -326,9 +326,11 @@ defmodule PlatformWeb.Components.MailPriorityDraftsTest do
     |> element("[data-item-id='#{dismiss.id}'] [data-role=mail-priority-not-important]")
     |> render_click()
 
+    # The briefing lists no promo any more (task 01a1f66a); a forged
+    # triage_missed on it is refused and still reaches no send path.
     lv
-    |> element("[data-role=mail-priority-other][data-item-id='#{promo.id}'] button")
-    |> render_click()
+    |> with_target("[data-section=mail_priority]")
+    |> render_click("triage_missed", %{"item_id" => promo.id})
 
     # The events took effect...
     assert Repo.get!(Item, done.id).status == "acted"

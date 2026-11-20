@@ -767,31 +767,38 @@
         </.link>
 
         <%!-- Triage feedback (task 01a1f426 stage 2): only for a mailbox
-             the triage covers for this reader. --%>
+             the triage covers for this reader. Task 01a1f66a stage 2: mail
+             the briefing did not call out offers only "This needed me";
+             mail it did call out offers only "Not important". --%>
         <div
-          :if={@triage_feedback == :available}
+          :if={match?({:available, _}, @triage_feedback)}
           class="flex flex-wrap items-center gap-2 rounded-box border border-edge px-3 py-2"
           data-role="mail-triage-feedback"
+          data-flagged={to_string(@triage_feedback == {:available, :flagged})}
         >
-          <span class="text-xs text-subtle">Morning briefing:</span>
-          <button
-            type="button"
-            phx-click="triage_feedback"
-            phx-value-verdict="missed"
-            class="btn btn-ghost btn-sm min-h-11 lg:min-h-8"
-            data-role="mail-triage-missed"
-          >
-            This needed me
-          </button>
-          <button
-            type="button"
-            phx-click="triage_feedback"
-            phx-value-verdict="not_important"
-            class="btn btn-ghost btn-sm min-h-11 lg:min-h-8"
-            data-role="mail-triage-not-important"
-          >
-            Not important
-          </button>
+          <%= if @triage_feedback == {:available, :flagged} do %>
+            <span class="text-xs text-subtle">Morning briefing:</span>
+            <button
+              type="button"
+              phx-click="triage_feedback"
+              phx-value-verdict="not_important"
+              class="btn btn-ghost btn-sm min-h-11 lg:min-h-8"
+              data-role="mail-triage-not-important"
+            >
+              Not important
+            </button>
+          <% else %>
+            <span class="text-xs text-subtle">Not in your briefing ·</span>
+            <button
+              type="button"
+              phx-click="triage_feedback"
+              phx-value-verdict="missed"
+              class="btn btn-ghost btn-sm min-h-11 lg:min-h-8"
+              data-role="mail-triage-missed"
+            >
+              This needed me
+            </button>
+          <% end %>
         </div>
         <p
           :if={match?({:recorded, _}, @triage_feedback)}
