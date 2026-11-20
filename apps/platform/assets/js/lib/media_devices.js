@@ -9,7 +9,7 @@
 //   * Listing: `listDevices(kind)` wraps livekit's `Room.getLocalDevices(kind,
 //     false)` (enumerateDevices, never prompts) and tags each row `virtual` /
 //     `default`.
-//   * Remembering: the choice is stored through `Suite.ClientState` under the
+//   * Remembering: the choice is stored through `ClientState` (js/client_state.js) under the
 //     `meeting_devices` namespace, one key per kind, value `{deviceId, label}`.
 //     It never reaches the server. Direct localStorage is lint-gated.
 //   * Resolving: `resolvePreferred` matches the stored choice by deviceId, then
