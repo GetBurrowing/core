@@ -662,6 +662,7 @@ defmodule PlatformWeb.Components.MailPrioritySectionTest do
 
       assert [%Feedback{verdict: "missed"} = fb] = feedback_for(ctx.a)
       assert fb.inbound_message_id == ctx.in_promo.id
+
       assert lv |> element("[data-role=mail-triage-recorded]") |> render() |> text_of() ==
                "Thanks. The next briefing will use this."
 
