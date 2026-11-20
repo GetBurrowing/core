@@ -59,7 +59,14 @@ defmodule Platform.Orchestration.HeartbeatSchedulerCodeModeTest do
     # Repinned by task 01a1b733 stage 1 (handoff rule appended to the
     # federation preamble): +671 bytes, exactly "\n\n" plus the 669-byte
     # trimmed `Manners.handoff_rule/0`, computed from the source before the run.
-    planning: {"a9358b84e7ea11da6787859b4a191478f988f3559223e1f5c8095485aa110103", 30_366},
+    #
+    # Repinned by the burrow_* channel-tool rename (federation preamble's
+    # infra line and evidence line name `burrow_reply` /
+    # `burrow_reply_with_media` with the `suite_*` spelling for old plugins):
+    # +112 bytes, exactly 60 + 52, computed from the source before the run;
+    # measured by CI (core PR #241). in_progress / in_review unchanged: their
+    # renders do not carry either line.
+    planning: {"f1d404a469b8c42fd54a971a65898cdcaaf9d5f45babbbeaa90072c39bc57062", 30_478},
     # Repinned by task 01a13ae7 stage 3 (design fidelity section in
     # dispatch.in_progress): +1_031 bytes, exactly the 1_030-byte section plus
     # one blank line before it, predicted before the run; in_review unchanged.

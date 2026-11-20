@@ -26,6 +26,6 @@ Burrow Docs explain how Burrow works and ship with the product; your organizatio
 
 To read a topic, call `memory_view` with its path, or find it with `memory_search`.
 
-Burrow was called Startup Suite. Old names still work: `suite_run` and `suite_run_describe` (now `burrow_run`, `burrow_run_describe`), the code-mode script global `suite` (now `burrow`) and `window.suite` (now `window.burrow`). The channel tools `suite_reply`, `suite_reply_chunk`, `suite_reply_with_media` and `suite_typing` are now `burrow_reply`, `burrow_reply_chunk`, `burrow_reply_with_media` and `burrow_typing` (channel plugin 0.5.0); the old names are deprecated aliases. The `suite` CLI is now `burrow`.
+Burrow was called Startup Suite. Old names still work: `suite_run` and `suite_run_describe` (now `burrow_run`, `burrow_run_describe`), the code-mode script global `suite` (now `burrow`) and `window.suite` (now `window.burrow`). `suite_reply` and the other channel tools are now `burrow_reply` and so on. The CLI is `burrow`.
 
 _Last verified at 837fba6e._
