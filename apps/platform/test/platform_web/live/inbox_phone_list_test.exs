@@ -377,6 +377,8 @@ defmodule PlatformWeb.InboxPhoneListTest do
 
       assert LazyHTML.attribute(back, "phx-click") == ["open_more_sheet"]
       assert LazyHTML.attribute(back, "aria-label") == ["Back to More"]
+      # Task 01a1fa7c stage 3: the iPhone Duo's native Back mirrors it.
+      assert LazyHTML.attribute(back, "data-native-back") == ["back"]
 
       lv |> element("#inbox-phone [data-role=inbox-back]") |> render_click()
       assert :sys.get_state(lv.pid).socket.assigns.more_sheet_open == true

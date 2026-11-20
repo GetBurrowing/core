@@ -502,6 +502,23 @@ defmodule PlatformWeb.ChatLiveChatListTest do
       assert has_element?(view, "#chat-list")
     end
 
+    # Task 01a1fa7c stage 3: the conversation's chevron is the control the
+    # iPhone Duo's native Back mirrors (js/hooks/native_back.js); the /chat
+    # root carries no marker, so native reports null there.
+    test "the back chevron carries data-native-back=back; the /chat root has none", %{conn: conn} do
+      w = world(conn)
+      {:ok, view, _} = live(w.conn, ~p"/chat/#{w.alpha.slug}")
+
+      assert has_element?(
+               view,
+               "a[data-role='chat-back'][data-native-back='back'][aria-label='Back to chat list']"
+             )
+
+      {:ok, root, _} = live(w.conn, ~p"/chat")
+      assert has_element?(root, "#chat-list")
+      refute has_element?(root, "[data-native-back]")
+    end
+
     # Task 01a1557a-8562 stage 5 deleted the phone drawer, the channel pills
     # and the pinned strip: the Chat list is the phone's only conversation
     # list. The drawer only rendered while open, so its OPENER is refuted

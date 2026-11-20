@@ -135,6 +135,10 @@ defmodule PlatformWeb.SettingsLiveTest do
       assert query(html, "[data-role=settings-back]") |> LazyHTML.attribute("phx-click") ==
                ["open_more_sheet"]
 
+      # Task 01a1fa7c stage 3: the iPhone Duo's native Back mirrors it.
+      assert query(html, "[data-role=settings-back]") |> LazyHTML.attribute("data-native-back") ==
+               ["back"]
+
       assert query(html, "[data-role=settings-profile] .size-\\[72px\\]") |> Enum.count() == 1
     end
 
