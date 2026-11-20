@@ -444,6 +444,13 @@ config :esbuild,
     env: %{"NODE_PATH" => [Path.expand("../deps", __DIR__), Mix.Project.build_path()]}
   ]
 
+# Built only as a separate entry; the meeting hook loads it when a voice tile mounts.
+config :esbuild,
+  cohost_face: [
+    args: ~w(js/cohost_face_island.js --bundle --target=es2022 --outdir=../priv/static/assets/js),
+    cd: Path.expand("../assets", __DIR__)
+  ]
+
 # Fourth entry point: the remote terminal (task 01a17b17 stage 3). xterm.js and
 # its fit addon, plus the WebCrypto session, built SEPARATELY from js/app.js and
 # fetched on demand by js/lib/load_terminal.js when the terminal page mounts.

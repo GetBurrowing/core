@@ -1,5 +1,5 @@
 import {describe, it, expect, beforeEach, afterEach, vi} from "vitest"
-import Face, {mouthHeight, audibleTrack} from "../../js/hooks/meeting_cohost_face"
+import Face, {mouthHeight, audibleTrack} from "../../js/hooks/meeting_cohost_face_runtime"
 
 describe("cohost performance audio", () => {
   beforeEach(() => {
