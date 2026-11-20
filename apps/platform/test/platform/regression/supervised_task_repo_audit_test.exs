@@ -244,6 +244,9 @@ defmodule Platform.Regression.SupervisedTaskRepoAuditTest do
     # which touch Repo from its own process and Task children. Tests
     # start_supervised/1 it inside their sandbox.
     :start_experiments_mail_subscriber,
+    # Task 01a1f426 stage 3 — the mail triage Subscriber. Same shape as the
+    # Experiments one: subscribes to "mail:inbound" and reconciles at start.
+    :start_mail_triage_subscriber,
     :start_usage_batcher,
     # Task 01a07402 stage 3 — the canvas body search backfill's boot-time
     # one-shot. A `Task`, not a ticker, but the same hazard: left on it would

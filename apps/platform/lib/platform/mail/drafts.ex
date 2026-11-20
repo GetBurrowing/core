@@ -79,10 +79,15 @@ defmodule Platform.Mail.Drafts do
   @editable ~w(account_id sender_key to_addresses to_user_ids subject body
                on_behalf_of_user_id responsibility task_id)a
 
+  # The email a draft answers (task 01a1f426 stage 4): set by the system or
+  # an agent only (the triage drafter, the agent draft tools). A person's
+  # draft never names one.
+  @agent_editable @editable ++ ~w(in_reply_to_inbound_id)a
+
   # The rich parts (task 01a1a933): an HTML alternative, Reply-To and a
   # calendar invite. System drafts only — the meeting invite mailer writes
   # them; a person's or an agent's draft stays plain text.
-  @system_editable @editable ++ ~w(html_body reply_to calendar_method calendar_ics)a
+  @system_editable @agent_editable ++ ~w(html_body reply_to calendar_method calendar_ics)a
 
   @type actor :: {:user, binary()} | {:agent, binary()} | User.t()
   @type error ::
@@ -97,6 +102,7 @@ defmodule Platform.Mail.Drafts do
           | :account_or_on_behalf_required
           | :on_behalf_cannot_read_account
           | :task_not_found
+          | :in_reply_to_not_found
           | {:invalid_addresses, [String.t()]}
           | {:unknown_recipient_user_ids, [String.t()]}
           | {:invalid, String.t()}
@@ -105,14 +111,24 @@ defmodule Platform.Mail.Drafts do
 
   @doc """
   Create a draft in `org_id` as `actor`. `attrs` may use atom or string
-  keys; see the moduledoc for what is validated.
+  keys; see the moduledoc for what is validated. An agent may also set
+  `in_reply_to_inbound_id` (an email of the draft's own account); a
+  person's attrs never carry it.
+
+  `opts` (task 01a1f426 stage 4): `log: false` keeps the insert out of
+  Ecto's query log, and `telemetry_event: nil` out of the
+  `[:platform, :repo, :query]` event, whose metadata carries the params
+  (the body) even when the log line is off. A caller writing model text
+  passes both. Default unchanged.
   """
-  @spec create(actor(), binary(), map()) :: {:ok, Draft.t()} | {:error, error()}
-  def create(actor, org_id, attrs) when is_map(attrs) do
+  @spec create(actor(), binary(), map(), keyword()) :: {:ok, Draft.t()} | {:error, error()}
+  def create(actor, org_id, attrs, opts \\ [])
+
+  def create(actor, org_id, attrs, opts) when is_map(attrs) do
     with {:ok, actor} <- normalize_actor(actor),
          {:ok, org_id} <- fetch_org(org_id),
          :ok <- authorize_create(actor, org_id),
-         {:ok, changes} <- validate(org_id, %{}, normalize(attrs)),
+         {:ok, changes} <- validate(org_id, %{}, normalize(attrs, editable_for(actor))),
          :ok <- user_account_readable(actor, org_id, changes),
          :ok <- agent_draft_scope(actor, org_id, %{}, changes) do
       {type, id} = actor
@@ -126,11 +142,11 @@ defmodule Platform.Mail.Drafts do
           status: "draft"
         })
       )
-      |> Repo.insert()
+      |> Repo.insert(repo_write_opts(opts))
     end
   end
 
-  def create(_actor, _org_id, _attrs), do: {:error, {:invalid, "attrs must be a map"}}
+  def create(_actor, _org_id, _attrs, _opts), do: {:error, {:invalid, "attrs must be a map"}}
 
   @doc """
   Create a draft written by the platform itself — the email deploy
@@ -142,7 +158,8 @@ defmodule Platform.Mail.Drafts do
   actors, which `create/3` handles.
 
   `opts`: `log: false` keeps the draft insert out of the query log (Ecto's
-  :debug line prints CAST params, i.e. the body). Default unchanged.
+  :debug line prints CAST params, i.e. the body), and `telemetry_event:
+  nil` out of the repo query telemetry. Default unchanged.
   """
   @spec create_system(binary(), map(), keyword()) :: {:ok, Draft.t()} | {:error, error()}
   def create_system(org_id, attrs, opts \\ []) when is_map(attrs) do
@@ -162,14 +179,25 @@ defmodule Platform.Mail.Drafts do
           status: "draft"
         })
       )
-      |> Repo.insert(query_log_opts(opts))
+      |> Repo.insert(repo_write_opts(opts))
     end
   end
 
-  # `log: false` only when asked: an explicit `log: true` is not a valid
-  # Ecto option value, so the default passes no option at all.
-  defp query_log_opts(opts),
-    do: if(Keyword.get(opts, :log, true) == false, do: [log: false], else: [])
+  # `log: false` and `telemetry_event: nil` only when asked: the default
+  # passes no option at all, exactly as before.
+  defp repo_write_opts(opts) do
+    log = if Keyword.get(opts, :log, true) == false, do: [log: false], else: []
+
+    telemetry =
+      if Keyword.has_key?(opts, :telemetry_event) and is_nil(opts[:telemetry_event]),
+        do: [telemetry_event: nil],
+        else: []
+
+    log ++ telemetry
+  end
+
+  defp editable_for({:user, _id}), do: @editable
+  defp editable_for(_agent), do: @agent_editable
 
   defp system_stage_id(:error), do: {:ok, nil}
   defp system_stage_id({:ok, nil}), do: {:ok, nil}
@@ -183,21 +211,25 @@ defmodule Platform.Mail.Drafts do
   @doc """
   Update the open draft `draft_id` as `actor`. Only the keys present in
   `attrs` change. A draft that is no longer `draft` is not editable.
+  `opts` as `create/4`.
   """
-  @spec update(actor(), binary(), map()) :: {:ok, Draft.t()} | {:error, error()}
-  def update(actor, draft_id, attrs) when is_map(attrs) do
+  @spec update(actor(), binary(), map(), keyword()) :: {:ok, Draft.t()} | {:error, error()}
+  def update(actor, draft_id, attrs, opts \\ [])
+
+  def update(actor, draft_id, attrs, opts) when is_map(attrs) do
     with {:ok, actor} <- normalize_actor(actor),
          {:ok, draft} <- fetch_draft(draft_id),
          :ok <- authorize_edit(actor, draft),
          :ok <- editable(draft),
-         {:ok, changes} <- validate(draft.org_id, draft, normalize(attrs)),
+         {:ok, changes} <- validate(draft.org_id, draft, normalize(attrs, editable_for(actor))),
          :ok <- user_account_readable(actor, draft.org_id, changes),
          :ok <- agent_draft_scope(actor, draft.org_id, draft, changes) do
-      draft |> Draft.changeset(changes) |> Repo.update()
+      draft |> Draft.changeset(changes) |> Repo.update(repo_write_opts(opts))
     end
   end
 
-  def update(_actor, _draft_id, _attrs), do: {:error, {:invalid, "attrs must be a map"}}
+  def update(_actor, _draft_id, _attrs, _opts),
+    do: {:error, {:invalid, "attrs must be a map"}}
 
   @doc "Discard the open draft `draft_id` as `actor`."
   @spec discard(actor(), binary()) :: {:ok, Draft.t()} | {:error, error()}
@@ -357,10 +389,19 @@ defmodule Platform.Mail.Drafts do
   end
 
   @doc """
-  `%{draft_id => %{drafted_by: name, task_title: title_or_nil}}` for a list
-  of drafts, in three queries whatever the list length.
+  `%{draft_id => %{drafted_by: name, task_title: title_or_nil, briefing:
+  briefing_or_nil}}` for a list of drafts, in four queries whatever the
+  list length.
+
+  `briefing` (task 01a1f426 stage 5) is `%{item_id, user_id, date}` for an
+  agent draft the mail triage drafter prepared from a called-out email
+  (`mail_triage_items.draft_id`, same mailbox), else nil: the editor then
+  reads "Prepared by <agent> from the morning briefing" and, for the
+  reader the item belongs to, links back to the item. Ids and a date only.
   """
-  @spec provenance([Draft.t()]) :: %{binary() => %{drafted_by: String.t(), task_title: any()}}
+  @spec provenance([Draft.t()]) :: %{
+          binary() => %{drafted_by: String.t(), task_title: any(), briefing: map() | nil}
+        }
   def provenance(drafts) when is_list(drafts) do
     agent_ids =
       for d <- drafts, d.created_by_type == "agent", d.created_by_id, do: d.created_by_id
@@ -371,6 +412,7 @@ defmodule Platform.Mail.Drafts do
     agents = names_by_id(Agent, agent_ids)
     users = names_by_id(User, user_ids)
     tasks = titles_by_id(task_ids)
+    briefings = briefing_items(for d <- drafts, d.created_by_type == "agent", do: d)
 
     Map.new(drafts, fn d ->
       drafted_by =
@@ -380,7 +422,32 @@ defmodule Platform.Mail.Drafts do
           _ -> "the system"
         end
 
-      {d.id, %{drafted_by: drafted_by, task_title: d.task_id && Map.get(tasks, d.task_id)}}
+      {d.id,
+       %{
+         drafted_by: drafted_by,
+         task_title: d.task_id && Map.get(tasks, d.task_id),
+         briefing: Map.get(briefings, d.id)
+       }}
+    end)
+  end
+
+  defp briefing_items([]), do: %{}
+
+  defp briefing_items(drafts) do
+    ids = drafts |> Enum.map(& &1.id) |> Enum.filter(&Platform.UUID.valid?/1)
+    account_of = Map.new(drafts, &{&1.id, &1.account_id})
+
+    from(i in Platform.Mail.Triage.Item,
+      where: i.draft_id in ^ids,
+      order_by: [asc: i.inserted_at],
+      select: {i.draft_id, i.account_id, i.id, i.user_id, i.inserted_at}
+    )
+    |> Repo.all()
+    |> Enum.filter(fn {draft_id, account_id, _, _, _} ->
+      account_id == Map.get(account_of, draft_id)
+    end)
+    |> Map.new(fn {draft_id, _account_id, item_id, user_id, at} ->
+      {draft_id, %{item_id: item_id, user_id: user_id, date: DateTime.to_date(at)}}
     end)
   end
 
@@ -501,7 +568,7 @@ defmodule Platform.Mail.Drafts do
 
   # ── Private: validation ─────────────────────────────────────────────────
 
-  defp normalize(attrs, keys \\ @editable) do
+  defp normalize(attrs, keys) do
     Enum.reduce(keys, %{}, fn key, acc ->
       case fetch_attr(attrs, key) do
         {:ok, value} -> Map.put(acc, key, value)
@@ -527,12 +594,14 @@ defmodule Platform.Mail.Drafts do
          :ok <- check_user_ids(changes),
          :ok <- check_account_and_sender(org_id, existing, changes),
          :ok <- check_on_behalf_of(org_id, changes),
-         :ok <- check_task(org_id, changes) do
+         :ok <- check_task(org_id, changes),
+         :ok <- check_in_reply_to(org_id, existing, changes) do
       {:ok, changes}
     end
   end
 
-  @id_keys ~w(account_id sender_key on_behalf_of_user_id task_id responsibility)a
+  @id_keys ~w(account_id sender_key on_behalf_of_user_id task_id responsibility
+              in_reply_to_inbound_id)a
 
   defp blank_ids_to_nil(changes) do
     {:ok,
@@ -677,6 +746,39 @@ defmodule Platform.Mail.Drafts do
   defp check_task(_org_id, %{task_id: nil}), do: :ok
   defp check_task(_org_id, %{task_id: _}), do: {:error, :task_not_found}
   defp check_task(_org_id, _changes), do: :ok
+
+  # The email a draft answers must be one of the draft's OWN account (as it
+  # will be after the write), in its org: a reply never threads under, or
+  # reveals the existence of, mail of another mailbox. Re-checked whenever
+  # the account or the link changes.
+  defp check_in_reply_to(org_id, existing, changes) do
+    touched? =
+      Map.has_key?(changes, :in_reply_to_inbound_id) or
+        (Map.has_key?(changes, :account_id) and
+           not is_nil(Map.get(existing, :in_reply_to_inbound_id)))
+
+    inbound_id = effective(changes, existing, :in_reply_to_inbound_id)
+    account_id = effective(changes, existing, :account_id)
+
+    cond do
+      not touched? or is_nil(inbound_id) ->
+        :ok
+
+      not is_binary(inbound_id) or not Platform.UUID.valid?(inbound_id) or
+          not is_binary(account_id) ->
+        {:error, :in_reply_to_not_found}
+
+      from(m in Platform.Mail.InboundMessage,
+        where: m.id == ^inbound_id and m.org_id == ^org_id and m.account_id == ^account_id,
+        select: 1
+      )
+      |> Repo.exists?() ->
+        :ok
+
+      true ->
+        {:error, :in_reply_to_not_found}
+    end
+  end
 
   # ── Private: lookups ────────────────────────────────────────────────────
 

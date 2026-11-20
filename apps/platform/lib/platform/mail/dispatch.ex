@@ -426,6 +426,9 @@ defmodule Platform.Mail.Dispatch do
     case Deliverer.deliver(id) do
       {:ok, %Delivery{status: "accepted"} = delivery} ->
         mark_dispatched(draft.id)
+        # Mail triage's acted-on metric (task 01a1f426 stage 3): a reply to
+        # a called-out email marks it acted. Ids only; never raises.
+        Platform.Mail.Triage.Metrics.on_delivery_accepted(delivery)
         {:ok, delivery}
 
       {:error, {:failed, _error, _delivery} = failed} ->

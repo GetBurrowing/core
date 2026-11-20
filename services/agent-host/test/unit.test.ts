@@ -322,7 +322,7 @@ describe("the runner", () => {
   test("launches burrow claude, then exits 1 when pane-status says the session is gone", async () => {
     const r = io({ "burrow pane-status": [0, 0, 1] });
     expect(await runAgent(r)).toBe(1);
-    expect(r.calls[0]).toEqual(["burrow", "claude", "--session", "suite-agent"]);
+    expect(r.calls[0]).toEqual(["burrow", "claude", "--session", "suite-agent", "--remote-terminal"]);
     expect(r.calls.filter((c) => c[1] === "pane-status")).toHaveLength(3);
     // Nothing the runner runs types into a pane.
     expect(r.calls.some((c) => c.includes("send-keys"))).toBe(false);

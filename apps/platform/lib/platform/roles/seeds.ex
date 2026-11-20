@@ -298,8 +298,14 @@ defmodule Platform.Roles.Seeds do
       # granted mail content, which no other role does (the Scientist's
       # labeller is deliberately blind). Same migration as `doctor`. NO
       # ASSIGNMENT IS SEEDED (`Handlers.RelationshipsFollowUpSweep.provision/1`).
+      #
+      # Task 01a1f426 stage 1 added `mail.triage` (the morning briefing's mail
+      # triage) for the same permission reason: it reads granted mail bodies.
+      # Existing DBs pick the bundle row up from
+      # `20261119150100_seed_mail_triage_classify_prompt.exs`.
       bundle: [
-        "relationships.follow_up_sweep"
+        "relationships.follow_up_sweep",
+        "mail.triage"
       ]
     }
   ]

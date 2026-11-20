@@ -226,6 +226,10 @@ config :platform, :start_space_purger, false
 # every mail test's inbound row from outside every sandbox.
 config :platform, :start_experiments_mail_subscriber, false
 
+# Mail triage Subscriber (task 01a1f426 stage 3): tests start it with
+# start_supervised/1 inside their own sandbox.
+config :platform, :start_mail_triage_subscriber, false
+
 # Usage counts batcher (task 01a1b678 stage 2): tests start it with
 # start_supervised/1 and drive `flush/2`. Left on it would POST to the broker
 # stub from outside every test.

@@ -36,8 +36,12 @@ config :platform, Platform.Access, restriction_providers: [Platform.Mail.Ownersh
 # Core daily-briefing section providers (task 01a1ea5b stage 5): modules whose
 # `briefing_sections/0` joins the extensions' sections, so the briefing never
 # names them. `Platform.Mail.Digest` is Email's metadata-only mail section; it
-# contributes nothing while the Email module is off.
-config :platform, Platform.Memory.Insights.BriefingSections, providers: [Platform.Mail.Digest]
+# contributes nothing while the Email module is off. The called-out email
+# section (`Platform.Mail.Triage.BriefingSection`, task 01a1f426 stage 2) is
+# listed FIRST: sections mount in provider order, above Needs your call, so
+# the briefing opens with the emails that need the reader.
+config :platform, Platform.Memory.Insights.BriefingSections,
+  providers: [Platform.Mail.Triage.BriefingSection, Platform.Mail.Digest]
 
 # Responsibilities Registry boot flag (ADR-0041 M1 stage 4) — default
 # on. Disabled in config/test.exs so DataCase-sandboxed tests own their
@@ -115,6 +119,8 @@ config :platform, Platform.Responsibilities,
     Platform.Responsibilities.Handlers.AgentsGoalHeartbeat,
     Platform.Responsibilities.Handlers.ExperimentsLabelSignal,
     Platform.Responsibilities.Handlers.ExperimentsScientist,
+    # Task 01a1f426 stage 1: mail triage for the morning briefing (null topic).
+    Platform.Responsibilities.Handlers.MailTriage,
     # Task 01a11ec3 stage 3: external-feedback intake (never the janitor).
     Platform.Responsibilities.Handlers.FeedbackIntake,
     # Task 019fa1ac-6685 stage 1: the janitor's weekly chore drain.

@@ -73,6 +73,7 @@ defmodule Platform.Responsibilities.Providers do
   alias Platform.Responsibilities.Providers.Feedback
   alias Platform.Responsibilities.Providers.Hr
   alias Platform.Responsibilities.Providers.Janitor
+  alias Platform.Responsibilities.Providers.Mail
   alias Platform.Responsibilities.Providers.Meetings
   alias Platform.Responsibilities.Providers.Memory
   alias Platform.Responsibilities.Providers.Relationships
@@ -93,6 +94,8 @@ defmodule Platform.Responsibilities.Providers do
     # Task 019fa1ac-6685 stage 1: `janitor.cron_drain`. Removing this entry
     # is the canonical detonation for janitor_registration_test.exs.
     "janitor" => Janitor,
+    # Task 01a1f426 stage 1: `mail.triage` (registration only; never fired).
+    "mail" => Mail,
     "meetings" => Meetings,
     "memory" => Memory,
     # Super agents: `relationships.follow_up_sweep` (relationship_steward role).

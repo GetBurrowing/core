@@ -723,7 +723,17 @@ defmodule Platform.CodeMode.ReturnContractTest do
       same_keys!([working, completed], "intent_ack")
     end
 
+    # Task 01a1f53c-1825: `rejected` may omit subagent_id, and the result
+    # then carries `subagent_id: null` — the schema must declare it nullable.
+    test "a rejected ack with no subagent_id conforms", %{intent_id: id} do
+      rejected = conform!("intent_ack", %{"intent_id" => id, "status" => "rejected"})
+      assert rejected["status"] == "completed"
+      assert rejected["subagent_id"] == nil
+    end
+
     test "refusals are the error envelope", %{intent_id: id} do
+      refuse!("intent_ack", %{"intent_id" => id, "status" => "completed"})
+
       refuse!("intent_ack", %{
         "intent_id" => Ecto.UUID.generate(),
         "subagent_id" => "s",

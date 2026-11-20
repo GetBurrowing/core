@@ -889,4 +889,264 @@ defmodule Platform.Mail.OwnershipTest do
       refute moved.digest_opt_in
     end
   end
+
+  describe "set_flag_important_agent" do
+    # Task 01a1f5cc stage 1: the per-mailbox flag-important grant.
+
+    defp flag_rows(account) do
+      Repo.all(
+        from(g in AccountGrant,
+          where: g.account_id == ^account.id and g.purpose == "flag_important"
+        )
+      )
+    end
+
+    defp access_row?(account, agent) do
+      Repo.exists?(
+        from(g in AccountGrant,
+          where:
+            g.account_id == ^account.id and g.principal_type == "agent" and
+              g.principal_id == ^agent.id and g.purpose == "access"
+        )
+      )
+    end
+
+    defp flag_events(account) do
+      Repo.all(
+        from(e in Event,
+          where:
+            e.event_type == "platform.mail.ownership" and e.resource_id == ^account.id and
+              e.action == "set_flag_important",
+          order_by: [asc: e.id]
+        )
+      )
+    end
+
+    test "the owner sets and clears the flag agent on a personal mailbox", ctx do
+      account = personal!(ctx, ctx.owner)
+      agent = agent!()
+
+      assert {:ok, %AccountGrant{purpose: "flag_important"} = grant} =
+               Ownership.set_flag_important_agent(ctx.owner, account, agent.id)
+
+      assert grant.principal_type == "agent" and grant.principal_id == agent.id
+      assert %Agent{id: id} = Ownership.flag_important_agent(account)
+      assert id == agent.id
+      assert Ownership.flag_important_agent_ids([account.id]) == %{account.id => agent.id}
+
+      assert account.id in Repo.all(Ownership.flag_important_account_ids_query(account.org_id))
+
+      # Choosing the agent already set is a no-op.
+      assert {:ok, :unchanged} = Ownership.set_flag_important_agent(ctx.owner, account, agent.id)
+
+      assert {:ok, nil} = Ownership.set_flag_important_agent(ctx.owner, account, nil)
+      assert flag_rows(account) == []
+      assert is_nil(Ownership.flag_important_agent(account))
+      assert Ownership.flag_important_agent_ids([account.id]) == %{}
+
+      refute account.id in Repo.all(Ownership.flag_important_account_ids_query(account.org_id))
+
+      assert {:ok, :unchanged} = Ownership.set_flag_important_agent(ctx.owner, account, nil)
+
+      # An inactive agent is refused, and nothing is written.
+      paused = agent!() |> Agent.changeset(%{status: "paused"}) |> Repo.update!()
+
+      assert {:error, :unknown_principal} =
+               Ownership.set_flag_important_agent(ctx.owner, account, paused.id)
+
+      assert flag_rows(account) == []
+
+      # An unassigned mailbox has no manager.
+      unassigned = account!(ctx.admin, ctx.org_id, "unassigned")
+
+      assert {:error, :unassigned} =
+               Ownership.set_flag_important_agent(ctx.admin, unassigned, agent.id)
+    end
+
+    test "an org admin cannot set the flag agent on someone else's personal mailbox", ctx do
+      account = personal!(ctx, ctx.owner)
+      agent = agent!()
+
+      # The org admin and the root (install) admin both manage the org, and
+      # neither is the owner.
+      for actor <- [ctx.admin, ctx.support] do
+        assert {:error, :unauthorized} =
+                 Ownership.set_flag_important_agent(actor, account, agent.id)
+
+        assert {:error, :unauthorized} = Ownership.set_flag_important_agent(actor, account, nil)
+      end
+
+      assert flag_rows(account) == []
+      assert flag_events(account) == []
+
+      # Nor can they turn off the owner's choice.
+      {:ok, _} = Ownership.set_flag_important_agent(ctx.owner, account, agent.id)
+
+      for actor <- [ctx.admin, ctx.support] do
+        assert {:error, :unauthorized} = Ownership.set_flag_important_agent(actor, account, nil)
+      end
+
+      assert [%{principal_id: id}] = flag_rows(account)
+      assert id == agent.id
+      assert length(flag_events(account)) == 1
+    end
+
+    test "a shared mailbox's org admin may set it, a member may not", ctx do
+      account = shared!(ctx)
+      {:ok, _} = Ownership.grant(ctx.admin, account, {:user, ctx.other.id})
+      agent = agent!()
+
+      assert {:error, :unauthorized} =
+               Ownership.set_flag_important_agent(ctx.other, account, agent.id)
+
+      assert flag_rows(account) == []
+
+      assert {:ok, %AccountGrant{}} =
+               Ownership.set_flag_important_agent(ctx.admin, account, agent.id)
+
+      assert [_] = flag_rows(account)
+    end
+
+    test "Off keeps the access grant the owner gave the same agent", ctx do
+      account = personal!(ctx, ctx.owner)
+      agent = agent!()
+      {:ok, _} = Ownership.grant(ctx.owner, account, {:agent, agent.id})
+      {:ok, _} = Ownership.set_flag_important_agent(ctx.owner, account, agent.id)
+
+      # Both rows coexist, and listing readers names the agent once.
+      assert access_row?(account, agent)
+      assert Ownership.granted_agent_names([account.id]) == %{account.id => [agent.name]}
+      assert {:ok, %{agents: [%{id: id}]}} = Ownership.audience(ctx.owner, account)
+      assert id == agent.id
+      {:ok, grants} = Ownership.list_grants(ctx.owner, account)
+      assert map_size(Ownership.principal_names(grants)) == 1
+
+      {:ok, nil} = Ownership.set_flag_important_agent(ctx.owner, account, nil)
+
+      assert flag_rows(account) == []
+      assert access_row?(account, agent)
+      assert account.id in Ownership.agent_granted_account_ids(agent.id, account.org_id)
+    end
+
+    test "switching X to Y removes X's flag grant and keeps X's access grant", ctx do
+      account = personal!(ctx, ctx.owner)
+      x = agent!()
+      y = agent!()
+      {:ok, _} = Ownership.grant(ctx.owner, account, {:agent, x.id})
+      {:ok, _} = Ownership.set_flag_important_agent(ctx.owner, account, x.id)
+
+      {:ok, %AccountGrant{principal_id: y_id}} =
+        Ownership.set_flag_important_agent(ctx.owner, account, y.id)
+
+      assert y_id == y.id
+      assert [%{principal_id: ^y_id}] = flag_rows(account)
+      assert access_row?(account, x)
+      refute access_row?(account, y)
+    end
+
+    test "a mailbox has at most one flag agent", ctx do
+      account = personal!(ctx, ctx.owner)
+      x = agent!()
+      y = agent!()
+      parent = self()
+
+      results =
+        [x, y]
+        |> Enum.map(fn agent ->
+          Task.async(fn ->
+            Ecto.Adapters.SQL.Sandbox.allow(Repo, parent, self())
+            Ownership.set_flag_important_agent(ctx.owner, account, agent.id)
+          end)
+        end)
+        |> Task.await_many(10_000)
+
+      assert Enum.all?(results, &match?({:ok, %AccountGrant{}}, &1))
+      assert [%{principal_id: id}] = flag_rows(account)
+      assert id in [x.id, y.id]
+
+      # The database holds the rule whatever the writer: a second
+      # flag_important row on the account is refused by the partial index.
+      assert_raise Ecto.ConstraintError, ~r/mail_account_grants_one_flag_agent_index/, fn ->
+        Repo.transaction(fn ->
+          Repo.insert!(%AccountGrant{
+            account_id: account.id,
+            principal_type: "agent",
+            principal_id: if(id == x.id, do: y.id, else: x.id),
+            purpose: "flag_important"
+          })
+        end)
+      end
+
+      # And a flag grant is always an agent's.
+      assert_raise Ecto.ConstraintError, ~r/mail_account_grants_purpose_check/, fn ->
+        Repo.transaction(fn ->
+          Repo.insert!(%AccountGrant{
+            account_id: account.id,
+            principal_type: "user",
+            principal_id: ctx.owner.id,
+            purpose: "flag_important"
+          })
+        end)
+      end
+    end
+
+    test "each change writes one audit row with ids only", ctx do
+      account = personal!(ctx, ctx.owner)
+      x = agent!()
+      y = agent!()
+
+      {:ok, _} = Ownership.set_flag_important_agent(ctx.owner, account, x.id)
+      {:ok, :unchanged} = Ownership.set_flag_important_agent(ctx.owner, account, x.id)
+      {:ok, _} = Ownership.set_flag_important_agent(ctx.owner, account, y.id)
+      {:ok, nil} = Ownership.set_flag_important_agent(ctx.owner, account, nil)
+      {:ok, :unchanged} = Ownership.set_flag_important_agent(ctx.owner, account, nil)
+
+      assert [a, b, c] = flag_events(account)
+
+      assert Enum.map([a, b, c], & &1.metadata) == [
+               %{"previous_agent_id" => nil, "agent_id" => x.id},
+               %{"previous_agent_id" => x.id, "agent_id" => y.id},
+               %{"previous_agent_id" => y.id, "agent_id" => nil}
+             ]
+
+      for e <- [a, b, c] do
+        assert e.actor_id == ctx.owner.id
+        assert e.resource_type == "mail_account"
+        text = inspect(e.metadata)
+        refute text =~ x.name
+        refute text =~ y.name
+        refute text =~ "@"
+      end
+    end
+
+    test "set_owner clears the flag agent", ctx do
+      account = personal!(ctx, ctx.owner)
+      agent = agent!()
+      {:ok, _} = Ownership.set_flag_important_agent(ctx.owner, account, agent.id)
+
+      {:ok, moved} =
+        Ownership.set_owner(ctx.admin, account, %{kind: "personal", owner_user_id: ctx.other.id})
+
+      assert flag_rows(moved) == []
+      assert is_nil(Ownership.flag_important_agent(moved))
+    end
+
+    test "revoke of the access grant leaves the flag grant", ctx do
+      account = personal!(ctx, ctx.owner)
+      agent = agent!()
+      {:ok, _} = Ownership.grant(ctx.owner, account, {:agent, agent.id})
+      {:ok, _} = Ownership.set_flag_important_agent(ctx.owner, account, agent.id)
+
+      assert {:ok, %AccountGrant{purpose: "access"}} =
+               Ownership.revoke(ctx.owner, account, {:agent, agent.id})
+
+      refute access_row?(account, agent)
+      assert [%{principal_id: id}] = flag_rows(account)
+      assert id == agent.id
+
+      # The flag grant is not an access grant: a second revoke finds none.
+      assert {:error, :not_found} = Ownership.revoke(ctx.owner, account, {:agent, agent.id})
+      assert [_] = flag_rows(account)
+    end
+  end
 end

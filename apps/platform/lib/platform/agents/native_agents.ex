@@ -207,6 +207,14 @@ defmodule Platform.Agents.NativeAgents do
 
   def get_managed_runtime(_), do: nil
 
+  @doc """
+  True when `runtime` is install-managed (a hosted agent the agent host runs),
+  false for a workstation runtime and for `nil`.
+  """
+  @spec managed_runtime?(AgentRuntime.t() | nil) :: boolean()
+  def managed_runtime?(%AgentRuntime{} = runtime), do: AgentRuntime.install_managed?(runtime)
+  def managed_runtime?(_), do: false
+
   @doc "True when `agent` is a native (install-managed) agent."
   @spec managed?(Agent.t() | nil) :: boolean()
   def managed?(agent), do: not is_nil(get_managed_runtime(agent))

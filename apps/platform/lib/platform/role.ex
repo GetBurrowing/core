@@ -381,6 +381,13 @@ defmodule Platform.Role do
     },
     %{
       kind: :push,
+      file: "lib/platform/mail/triage.ex",
+      class: :background,
+      note:
+        "notify_top/2 pushes a top-tier email (no subject, sender or body) from on_inbound/2, which only Mail.Triage.Subscriber calls; full only"
+    },
+    %{
+      kind: :push,
       file: "lib/platform/memory/insights/disseminator.ex",
       class: :both,
       note:

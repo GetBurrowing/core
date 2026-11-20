@@ -38,6 +38,17 @@ Runs a Burrow install's native agents (core task 01a10322). TypeScript on bun.
 - `agent.pane` returns the agent's recent pane text for Burrow's read-only
   "Recent output" (`src/pane.ts`): captured as the agent, withheld whole
   while a login screen is up, scrubbed of credential-shaped strings.
+- The owner's remote terminal is always on for a hosted Claude agent (core
+  task 01a1f4c6, `src/terminal_host.ts`). Every unit start runs `burrow claude
+  --session suite-agent --remote-terminal`, which records the opt-in on the
+  agent folder's record. The runner then keeps one child running beside the
+  session: `burrow watch --no-install --host-only --interval 10`. That child
+  serves `terminal:<runtime_id>` and nothing else: it never types into the
+  pane, and with config access off it never registers `runtime_host:`. It is
+  restarted 5 s after it exits, and it never stops the agent. A restart, an
+  image update or a container restart needs no owner action. Who may open the
+  terminal is core's decision alone (TerminalViewChannel, on the runtime's
+  current owner).
 
 Environment: `BURROW_CORE_URL`, `AGENT_HOST_TOKEN`, and `AGENT_HOST_PROFILE`
 (`full_machine` or `contained`). The profile is reported to core as is, and

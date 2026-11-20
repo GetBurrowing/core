@@ -1279,4 +1279,475 @@ defmodule PlatformWeb.EmailLiveTest do
       assert has_element?(view, ~s([data-role="settings-only-note"]))
     end
   end
+
+  # ── Flag important email (task 01a1f5cc stage 3) ───────────────────────
+
+  describe "Flag important email" do
+    alias Platform.Audit.Event
+    alias Platform.Mail.AccountGrant
+    alias Platform.Mail.Ownership
+
+    setup ctx do
+      owner = user!("owner") |> member!(ctx.org_id, "member")
+      personal = account!(ctx.admin, ctx.org_id, "f#{System.unique_integer([:positive])}")
+
+      {:ok, personal} =
+        Ownership.set_owner(ctx.admin, personal, %{kind: "personal", owner_user_id: owner.id})
+
+      n = System.unique_integer([:positive])
+      ivy = agent!("Ivy#{n}")
+      octo = agent!("Octo#{n}")
+
+      %{owner: owner, personal: personal, ivy: ivy, octo: octo}
+    end
+
+    defp flag_sel(account), do: ~s([data-role="flag-important"][data-account-id="#{account.id}"])
+
+    defp option_sel(account, id),
+      do: flag_sel(account) <> ~s( [data-role="flag-important-option"][data-agent-id="#{id}"])
+
+    defp flag_rows(account) do
+      Repo.all(
+        from(g in AccountGrant,
+          where: g.account_id == ^account.id and g.purpose == "flag_important",
+          select: g.principal_id
+        )
+      )
+    end
+
+    defp flag_audits(account) do
+      Repo.aggregate(
+        from(e in Event,
+          where:
+            e.event_type == "platform.mail.ownership" and e.resource_id == ^account.id and
+              e.action == "set_flag_important"
+        ),
+        :count
+      )
+    end
+
+    defp flag_html(view, account), do: view |> element(flag_sel(account)) |> render()
+
+    test "the owner chooses an agent through the ledger and nothing saves before Give access",
+         %{conn: conn} = ctx do
+      {:ok, view, _} = live(login(conn, ctx.owner), "/email/accounts")
+
+      assert has_element?(view, flag_sel(ctx.personal) <> ~s( [data-role="flag-important-off"]))
+      assert has_element?(view, flag_sel(ctx.personal) <> ~s( [data-role="flag-important-sheet"]))
+
+      view |> element(option_sel(ctx.personal, ctx.ivy.id)) |> render_click()
+
+      ledger = flag_sel(ctx.personal) <> ~s( [data-role="flag-important-ledger"])
+      assert has_element?(view, ledger, "Choose #{ctx.ivy.name}? (not saved yet)")
+
+      assert has_element?(
+               view,
+               ledger <> ~s([phx-window-keydown="flag_cancel"][phx-key="Escape"])
+             )
+
+      assert has_element?(
+               view,
+               ledger <> ~s( [data-role="flag-important-ledger-plus"]),
+               "#{ctx.ivy.name} can read new mail in this mailbox"
+             )
+
+      # Nothing is written by the pick; the picker still shows the saved Off.
+      assert flag_rows(ctx.personal) == []
+      assert flag_audits(ctx.personal) == 0
+
+      assert has_element?(
+               view,
+               flag_sel(ctx.personal) <> ~s( [data-role="flag-important-picker"]),
+               "Off"
+             )
+
+      view
+      |> element(flag_sel(ctx.personal) <> ~s( [data-role="flag-important-confirm"]))
+      |> render_click()
+
+      assert flag_rows(ctx.personal) == [ctx.ivy.id]
+      assert flag_audits(ctx.personal) == 1
+      refute has_element?(view, ledger)
+
+      assert has_element?(
+               view,
+               flag_sel(ctx.personal) <> ~s( [data-role="flag-important-status"]),
+               "On · #{ctx.ivy.name} reads new mail in this mailbox only and flags what's important in your briefing."
+             )
+
+      assert has_element?(
+               view,
+               flag_sel(ctx.personal) <> ~s( [data-role="flag-important-activity"]),
+               "Waiting for new email"
+             )
+
+      # Switching opens the ledger with both lines; Cancel (and Esc) save nothing.
+      view |> element(option_sel(ctx.personal, ctx.octo.id)) |> render_click()
+      assert has_element?(view, ledger, "Switch to #{ctx.octo.name}? (not saved yet)")
+
+      assert has_element?(
+               view,
+               ledger <> ~s( [data-role="flag-important-ledger-minus"]),
+               "#{ctx.ivy.name} stops reading it for you"
+             )
+
+      assert has_element?(view, ledger, "#{ctx.ivy.name} keeps any other access you gave it")
+
+      view
+      |> element(flag_sel(ctx.personal) <> ~s( [data-role="flag-important-cancel"]))
+      |> render_click()
+
+      refute has_element?(view, ledger)
+
+      view |> element(option_sel(ctx.personal, ctx.octo.id)) |> render_click()
+      assert has_element?(view, ledger)
+      render_hook(view, "flag_cancel", %{"key" => "Escape"})
+      refute has_element?(view, ledger)
+
+      assert flag_rows(ctx.personal) == [ctx.ivy.id]
+      assert flag_audits(ctx.personal) == 1
+    end
+
+    test "Off goes through Turn off and keeps the agent's access grant", %{conn: conn} = ctx do
+      {:ok, _} = Ownership.grant(ctx.owner, ctx.personal, {:agent, ctx.ivy.id})
+      {:ok, _} = Ownership.set_flag_important_agent(ctx.owner, ctx.personal, ctx.ivy.id)
+
+      {:ok, view, _} = live(login(conn, ctx.owner), "/email/accounts")
+      view |> element(option_sel(ctx.personal, "off")) |> render_click()
+
+      ledger = flag_sel(ctx.personal) <> ~s( [data-role="flag-important-ledger"])
+      assert has_element?(view, ledger <> ~s( [data-role="flag-important-ledger-minus"]))
+      refute has_element?(view, ledger <> ~s( [data-role="flag-important-ledger-plus"]))
+      assert has_element?(view, ledger <> ~s( [data-role="flag-important-confirm"]), "Turn off")
+      assert flag_rows(ctx.personal) == [ctx.ivy.id]
+
+      view |> element(ledger <> ~s( [data-role="flag-important-confirm"])) |> render_click()
+
+      assert flag_rows(ctx.personal) == []
+
+      assert has_element?(
+               view,
+               flag_sel(ctx.personal) <> ~s( [data-role="flag-important-off"]),
+               "Off: no agent flags important email here."
+             )
+
+      assert Repo.exists?(
+               from(g in AccountGrant,
+                 where:
+                   g.account_id == ^ctx.personal.id and g.principal_id == ^ctx.ivy.id and
+                     g.purpose == "access"
+               )
+             )
+    end
+
+    test "an org admin sees Only the mailbox owner can set this and no agent name on someone else's personal mailbox",
+         %{conn: conn} = ctx do
+      {:ok, _} = Ownership.set_flag_important_agent(ctx.owner, ctx.personal, ctx.ivy.id)
+
+      {:ok, view, _} = live(login(conn, ctx.admin), "/email/accounts")
+
+      assert has_element?(
+               view,
+               flag_sel(ctx.personal) <> ~s( [data-role="flag-important-owner-only"]),
+               "Only the mailbox owner can set this."
+             )
+
+      refute has_element?(
+               view,
+               flag_sel(ctx.personal) <> ~s( [data-role="flag-important-picker"])
+             )
+
+      refute has_element?(
+               view,
+               flag_sel(ctx.personal) <> ~s( [data-role="flag-important-activity"])
+             )
+
+      card =
+        view
+        |> element(~s([data-role="mail-account-card"][data-account-id="#{ctx.personal.id}"]))
+        |> render()
+
+      refute card =~ ctx.ivy.name
+      refute card =~ ctx.ivy.id
+
+      # Positive control: the owner's card names the agent.
+      {:ok, owner_view, _} = live(login(conn, ctx.owner), "/email/accounts")
+      assert flag_html(owner_view, ctx.personal) =~ ctx.ivy.name
+    end
+
+    test "a crafted flag_confirm from an org admin on someone else's personal mailbox writes nothing",
+         %{conn: conn} = ctx do
+      {:ok, view, _} = live(login(conn, ctx.admin), "/email/accounts")
+
+      render_hook(view, "flag_pick", %{
+        "account_id" => ctx.personal.id,
+        "agent_id" => ctx.octo.id
+      })
+
+      refute has_element?(view, ~s([data-role="flag-important-ledger"]))
+
+      render_hook(view, "flag_confirm", %{
+        "account_id" => ctx.personal.id,
+        "agent_id" => ctx.octo.id
+      })
+
+      assert render(view) =~ "You cannot change who reads this mailbox."
+      assert flag_rows(ctx.personal) == []
+      assert flag_audits(ctx.personal) == 0
+    end
+
+    test "a shared mailbox member sees a read-only line", %{conn: conn} = ctx do
+      {:ok, _} = Ownership.set_flag_important_agent(ctx.admin, ctx.account, ctx.ivy.id)
+
+      {:ok, view, _} = live(login(conn, ctx.member), "/email/accounts")
+
+      assert has_element?(
+               view,
+               flag_sel(ctx.account) <> ~s( [data-role="flag-important-readonly"]),
+               "#{ctx.ivy.name} reads this mailbox for you · set by this mailbox's admins"
+             )
+
+      refute has_element?(view, flag_sel(ctx.account) <> ~s( [data-role="flag-important-picker"]))
+      refute has_element?(view, flag_sel(ctx.account) <> ~s( [data-role="flag-important-option"]))
+
+      {:ok, _} = Ownership.set_flag_important_agent(ctx.admin, ctx.account, nil)
+      {:ok, view, _} = live(login(conn, ctx.member), "/email/accounts")
+
+      assert has_element?(
+               view,
+               flag_sel(ctx.account) <> ~s( [data-role="flag-important-readonly"]),
+               "Off: no agent flags important email here."
+             )
+
+      # The shared mailbox's admin gets the control.
+      {:ok, view, _} = live(login(conn, ctx.admin), "/email/accounts")
+      assert has_element?(view, flag_sel(ctx.account) <> ~s( [data-role="flag-important-picker"]))
+    end
+
+    test "the control copy contains neither sort nor triage", %{conn: conn} = ctx do
+      banned = ~r/sort|triage|steward|relationship/i
+      {:ok, view, _} = live(login(conn, ctx.owner), "/email/accounts")
+
+      texts = fn view ->
+        view
+        |> render()
+        |> Floki.parse_document!()
+        |> Floki.find(~s([data-role="flag-important"]))
+        |> Enum.map(&Floki.text/1)
+      end
+
+      off = texts.(view)
+      view |> element(option_sel(ctx.personal, ctx.ivy.id)) |> render_click()
+      choose = texts.(view)
+
+      view
+      |> element(flag_sel(ctx.personal) <> ~s( [data-role="flag-important-confirm"]))
+      |> render_click()
+
+      on = texts.(view)
+      view |> element(option_sel(ctx.personal, ctx.octo.id)) |> render_click()
+      switch = texts.(view)
+      view |> element(option_sel(ctx.personal, "off")) |> render_click()
+      turn_off = texts.(view)
+
+      Repo.update_all(from(a in Platform.Agents.Agent, where: a.id == ^ctx.ivy.id),
+        set: [status: "paused"]
+      )
+
+      {:ok, stopped_view, _} = live(login(conn, ctx.owner), "/email/accounts")
+      stopped = texts.(stopped_view)
+
+      assert Enum.any?(
+               stopped,
+               &(&1 =~ "Stopped: #{ctx.ivy.name} can no longer read this mailbox.")
+             )
+
+      assert Enum.any?(stopped, &(&1 =~ "Choose an agent"))
+
+      {:ok, admin_view, _} = live(login(conn, ctx.admin), "/email/accounts")
+      admin = texts.(admin_view)
+      {:ok, member_view, _} = live(login(conn, ctx.member), "/email/accounts")
+      member = texts.(member_view)
+
+      all = off ++ choose ++ on ++ switch ++ turn_off ++ stopped ++ admin ++ member
+      assert Enum.any?(all, &(&1 =~ "Flag important email"))
+      assert Enum.any?(all, &(&1 =~ "Only the mailbox owner can set this."))
+      assert Enum.any?(all, &(&1 =~ "This agent reads new email in this mailbox"))
+
+      for text <- all, do: refute(text =~ banned, "banned word in: " <> text)
+    end
+
+    test "Give access is the only primary button in the row", %{conn: conn} = ctx do
+      {:ok, _} = Ownership.set_flag_important_agent(ctx.owner, ctx.personal, ctx.ivy.id)
+      {:ok, view, _} = live(login(conn, ctx.owner), "/email/accounts")
+
+      assert occurrences(flag_html(view, ctx.personal), "btn-primary") == 0
+
+      view |> element(option_sel(ctx.personal, ctx.octo.id)) |> render_click()
+      html = flag_html(view, ctx.personal)
+      assert occurrences(html, "btn-primary") == 1
+
+      assert has_element?(
+               view,
+               flag_sel(ctx.personal) <> ~s( [data-role="flag-important-confirm"].btn-primary),
+               "Give access"
+             )
+
+      view |> element(option_sel(ctx.personal, "off")) |> render_click()
+      assert occurrences(flag_html(view, ctx.personal), "btn-primary") == 0
+
+      assert has_element?(
+               view,
+               flag_sel(ctx.personal) <> ~s( [data-role="flag-important-confirm"]),
+               "Turn off"
+             )
+    end
+
+    test "with no active agents the row says so instead of an empty picker",
+         %{conn: conn} = ctx do
+      Repo.update_all(from(a in Platform.Agents.Agent, where: a.status == "active"),
+        set: [status: "paused"]
+      )
+
+      {:ok, view, _} = live(login(conn, ctx.owner), "/email/accounts")
+
+      assert has_element?(
+               view,
+               flag_sel(ctx.personal) <> ~s( [data-role="flag-important-no-agents"]),
+               "No agents available to you yet"
+             )
+
+      refute has_element?(
+               view,
+               flag_sel(ctx.personal) <> ~s( [data-role="flag-important-picker"])
+             )
+    end
+
+    test "the activity line counts the viewer's own items today", %{conn: conn} = ctx do
+      {:ok, _} = Ownership.set_flag_important_agent(ctx.owner, ctx.personal, ctx.ivy.id)
+
+      for _ <- 1..2 do
+        row = inbound!(ctx.personal, %{})
+
+        Repo.insert!(%Platform.Mail.Triage.Item{
+          org_id: ctx.org_id,
+          account_id: ctx.personal.id,
+          inbound_message_id: row.id,
+          user_id: ctx.owner.id,
+          tier: "routine",
+          classifier: "test"
+        })
+      end
+
+      {:ok, view, _} = live(login(conn, ctx.owner), "/email/accounts")
+
+      assert has_element?(
+               view,
+               flag_sel(ctx.personal) <> ~s( [data-role="flag-important-activity"]),
+               ~r/Last read \d\d:\d\d · 2 new emails/
+             )
+    end
+  end
+
+  # Task 01a1f5cc stage 4: an agent can hold an access AND a flag_important
+  # grant on one mailbox; the Access panel shows it once.
+  describe "Access panel with a flag agent" do
+    alias Platform.Mail.AccountGrant
+    alias Platform.Mail.Ownership
+
+    setup ctx do
+      owner = user!("owner") |> member!(ctx.org_id, "member")
+      personal = account!(ctx.admin, ctx.org_id, "a#{System.unique_integer([:positive])}")
+
+      {:ok, personal} =
+        Ownership.set_owner(ctx.admin, personal, %{kind: "personal", owner_user_id: owner.id})
+
+      n = System.unique_integer([:positive])
+      %{owner: owner, personal: personal, ivy: agent!("Ivy#{n}"), octo: agent!("Octo#{n}")}
+    end
+
+    defp grant_purposes(account, agent) do
+      Repo.all(
+        from(g in AccountGrant,
+          where: g.account_id == ^account.id and g.principal_id == ^agent.id,
+          order_by: g.purpose,
+          select: g.purpose
+        )
+      )
+    end
+
+    defp open_access(conn, user, account) do
+      {:ok, view, _} = live(login(conn, user), "/email?account=#{account.id}")
+      view |> element(~s([data-role="access-line-open"])) |> render_click()
+      assert has_element?(view, ~s([data-role="access-panel"][data-mode="manage"]))
+      view
+    end
+
+    defp agent_row(agent), do: ~s([data-role="access-agent-row"][data-agent-id="#{agent.id}"])
+
+    test "the Access panel lists an agent holding both grants once", %{conn: conn} = ctx do
+      {:ok, _} = Ownership.grant(ctx.owner, ctx.personal, {:agent, ctx.ivy.id})
+      {:ok, _} = Ownership.set_flag_important_agent(ctx.owner, ctx.personal, ctx.ivy.id)
+      {:ok, _} = Ownership.set_flag_important_agent(ctx.owner, ctx.personal, ctx.ivy.id)
+      assert grant_purposes(ctx.personal, ctx.ivy) == ["access", "flag_important"]
+
+      view = open_access(conn, ctx.owner, ctx.personal)
+      html = render(view)
+
+      assert [_] = Regex.scan(~r/data-role="access-agent-row"/, html)
+
+      assert has_element?(
+               view,
+               agent_row(ctx.ivy) <> ~s( [data-role="access-agent-flag"]),
+               "Flags important email"
+             )
+
+      assert has_element?(view, agent_row(ctx.ivy) <> ~s( [data-role="access-revoke"]))
+      refute has_element?(view, ~s([data-role="access-agent-turn-off"]))
+
+      # The access line names Ivy once.
+      line = view |> element(~s([data-role="access-line-agents"])) |> render()
+      assert [_] = Regex.scan(~r/#{ctx.ivy.name}/, line)
+
+      # Ivy holds an access grant, so it is no grant candidate; Octo is.
+      view |> element(~s([data-role="access-grant-open"])) |> render_click()
+      picker = view |> element("#access-grant-form") |> render()
+      refute picker =~ ctx.ivy.name
+      assert picker =~ ctx.octo.name
+    end
+
+    test "Revoke on the Access panel keeps the flag grant", %{conn: conn} = ctx do
+      {:ok, _} = Ownership.grant(ctx.owner, ctx.personal, {:agent, ctx.ivy.id})
+      {:ok, _} = Ownership.set_flag_important_agent(ctx.owner, ctx.personal, ctx.ivy.id)
+
+      view = open_access(conn, ctx.owner, ctx.personal)
+      view |> element(agent_row(ctx.ivy) <> ~s( [data-role="access-revoke"])) |> render_click()
+      view |> element(~s([data-role="access-revoke-yes"])) |> render_click()
+
+      assert grant_purposes(ctx.personal, ctx.ivy) == ["flag_important"]
+
+      # Still one row, now flag-only: no Revoke, a link to Email > Accounts.
+      assert has_element?(view, agent_row(ctx.ivy) <> ~s( [data-role="access-agent-flag"]))
+      refute has_element?(view, agent_row(ctx.ivy) <> ~s( [data-role="access-revoke"]))
+
+      assert has_element?(
+               view,
+               agent_row(ctx.ivy) <>
+                 ~s( a[data-role="access-agent-turn-off"][href="/email/accounts"]),
+               "Turn off in Email > Accounts"
+             )
+
+      # A flag-only agent may still be given an ordinary grant.
+      view |> element(~s([data-role="access-grant-open"])) |> render_click()
+      assert view |> element("#access-grant-form") |> render() =~ ctx.ivy.name
+
+      # A crafted revoke of the flag-only agent removes nothing.
+      render_click(view, "revoke_agent", %{
+        "account_id" => ctx.personal.id,
+        "agent_id" => ctx.ivy.id
+      })
+
+      assert grant_purposes(ctx.personal, ctx.ivy) == ["flag_important"]
+    end
+  end
 end
