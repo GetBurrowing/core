@@ -12,8 +12,9 @@ defmodule Platform.Memory.Insights.BriefingSections do
       config :platform, Platform.Memory.Insights.BriefingSections, providers: [...]
 
   Each provider implements `briefing_sections/0`, read per call, exactly as an
-  extension's. The briefing never names a provider: Email's mail digest
-  (`Platform.Mail.Digest`) is the first, configured in `config/config.exs`.
+  extension's. The briefing never names a provider: Email's called-out email
+  section (`Platform.Mail.Triage.BriefingSection`) is the core provider,
+  configured in `config/config.exs`.
   Core providers run before extensions, and an extension section whose key a
   core provider already uses is dropped (logged), so keys stay unique.
   """

@@ -1,9 +1,10 @@
 defmodule Platform.Mail.Digest do
   @moduledoc """
   What is happening across an org's mailboxes, from METADATA ONLY (task
-  01a1ea5b stage 5, Email privacy). It is the mail section of the daily
-  briefing (the owner's decision: "the digest should just be your morning
-  briefing"), and the `mail_digest` agent tool. It is not a page in Email.
+  01a1ea5b stage 5, Email privacy): the query behind the `mail_digest` agent
+  tool. It is no longer a section of the daily briefing (removed by task
+  01a1f931 at the owner's request; the briefing's email section is
+  `Platform.Mail.Triage.BriefingSection`), and it is not a page in Email.
 
   ## Which mailboxes contribute
 
@@ -104,75 +105,6 @@ defmodule Platform.Mail.Digest do
   end
 
   def for_audience(_users, org_id), do: empty(org_id)
-
-  @doc """
-  The digest of every org `user` is an internal member of, for the briefing:
-  `[%{org_id, org_name, mailboxes, rows}]`, orgs with no mailbox in view
-  omitted.
-  """
-  @spec for_user(any()) :: [map()]
-  def for_user(%{id: user_id} = user) when is_binary(user_id) do
-    user
-    |> Tenancy.list_user_memberships()
-    |> Enum.reject(&(&1.external or is_nil(&1.org) or Map.get(&1.org, :archived_at)))
-    |> Enum.uniq_by(& &1.org_id)
-    |> Enum.sort_by(&String.downcase(&1.org.name || ""))
-    |> Enum.map(fn membership ->
-      membership.org_id |> then(&for_org(user, &1)) |> Map.put(:org_name, membership.org.name)
-    end)
-    |> Enum.filter(&(&1.mailboxes > 0))
-  end
-
-  def for_user(_user), do: []
-
-  # ── Briefing section (Platform.Memory.Insights.BriefingSections provider) ──
-
-  @doc """
-  The mail section of the daily briefing, as a core provider of
-  `Platform.Memory.Insights.BriefingSections`. None while the Email module is
-  off (`Platform.Mail.Config.enabled?/0`, no query).
-  """
-  @spec briefing_sections() :: [map()]
-  def briefing_sections do
-    if Platform.Mail.Config.enabled?() do
-      [
-        %{
-          key: "mail",
-          component: PlatformWeb.Components.MailDigestSection,
-          prepare: &briefing_prepare/2,
-          summary: &briefing_summary/2
-        }
-      ]
-    else
-      []
-    end
-  end
-
-  @doc """
-  Delivery: 1 when the reader's digest has at least one row today (so a
-  briefing is created for them even with no insight), else 0. Writes nothing,
-  so it is idempotent per reader and date.
-  """
-  @spec briefing_prepare(binary(), Date.t()) :: 0 | 1
-  def briefing_prepare(user_id, _date) do
-    if Enum.any?(for_user(fetch_user(user_id)), &(&1.rows != [])), do: 1, else: 0
-  end
-
-  @doc """
-  The section counts as ONE informational item (`open` 0, nothing to
-  decide) while the reader has a contributing mailbox in view, rows or not;
-  nil (section absent) when they have none.
-  """
-  @spec briefing_summary(binary(), Date.t()) :: map() | nil
-  def briefing_summary(user_id, _date) do
-    case for_user(fetch_user(user_id)) do
-      [] -> nil
-      _orgs -> %{total: 1, open: 0, calls: 0}
-    end
-  end
-
-  defp fetch_user(user_id) when is_binary(user_id), do: Platform.Accounts.get_user(user_id)
-  defp fetch_user(_), do: nil
 
   # ── Build ───────────────────────────────────────────────────────────────
 

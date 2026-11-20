@@ -27,6 +27,7 @@ defmodule PlatformWeb.Components.MailPrioritySectionTest do
   import Platform.Test.MailPrivacyFixtures
   import Platform.Test.MailTriageFixtures
 
+  alias Platform.Mail.{Digest, Ownership}
   alias Platform.Mail.Triage.{BriefingSection, Feedback, Item}
   alias Platform.Memory.Briefing
   alias Platform.Memory.Insights.BriefingSections
@@ -282,15 +283,46 @@ defmodule PlatformWeb.Components.MailPrioritySectionTest do
     assert BriefingSection.summary("not-a-uuid", ctx.date) == nil
   end
 
-  test "mail_priority comes before mail in the provider order", ctx do
-    assert BriefingSections.providers() == [
-             Platform.Mail.Triage.BriefingSection,
-             Platform.Mail.Digest
-           ]
-
-    assert ["mail_priority", "mail" | _] = Enum.map(BriefingSections.all(), & &1.key)
+  test "the triage section is the only core provider; the mail digest is not a briefing section",
+       ctx do
+    # Task 01a1f931: the per-customer mail digest section left the briefing.
+    assert BriefingSections.providers() == [Platform.Mail.Triage.BriefingSection]
+    keys = Enum.map(BriefingSections.all(), & &1.key)
+    assert "mail_priority" in keys
+    refute "mail" in keys
     keys = ctx.a.id |> BriefingSections.summaries(ctx.date) |> Enum.map(& &1.key)
     assert List.first(keys) == "mail_priority"
+  end
+
+  test "the rendered briefing carries no per-customer mail digest, though its data exists",
+       ctx do
+    n = ctx.n
+    customer = "customer-#{n}.test"
+
+    inbound!(ctx.shared, %{from_address: "Buyer Person <buyer-#{n}@#{customer}>"})
+
+    a_box =
+      account!(ctx.a, ctx.org_id, %{"name" => "A opted #{n}"})
+      |> then(&personal!(ctx.a, &1, ctx.a))
+
+    {:ok, a_box} = Ownership.set_digest_opt_in(ctx.a, a_box, true)
+    inbound!(a_box, %{from_address: "Other Buyer <other-#{n}@#{customer}>"})
+
+    # Positive control 1: the data the old section rendered is there.
+    digest = Digest.for_org(ctx.a, ctx.org_id)
+    assert digest.rows != []
+    assert Enum.any?(digest.rows, &(&1.customer == customer))
+
+    {lv, html} = open_briefing(ctx.conn, ctx.a, ctx.date)
+
+    # Positive control 2: the triage section renders for this reader.
+    assert has_element?(lv, "[data-role=mail-priority-open-email]")
+
+    refute has_element?(lv, "[data-role^=mail-digest]")
+    html = html <> render(lv)
+    refute html =~ "Who's on it"
+    refute html =~ "Who&#39;s on it"
+    refute html =~ customer
   end
 
   test "states: no triage agent, nothing today", ctx do

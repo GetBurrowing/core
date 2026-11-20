@@ -1159,18 +1159,27 @@ defmodule PlatformWeb.EmailLiveTest do
       assert render(view) =~ "You cannot change who reads this mailbox."
     end
 
-    test "the owner turns the briefing digest on and off; a crafted toggle by anyone else writes nothing (stage 5)",
+    test "the owner turns the mail digest opt-in on and off; a crafted toggle by anyone else writes nothing (stage 5)",
          %{conn: conn} = ctx do
       {:ok, view, _} = live(login(conn, ctx.owner), "/email?account=#{ctx.personal.id}")
       view |> element(~s([data-role="access-line-open"])) |> render_click()
       assert has_element?(view, ~s([data-role="access-digest-opt-in"]))
+
+      opt_in_html = view |> element(~s([data-role="access-digest-opt-in"])) |> render()
+      assert opt_in_html =~ "Let agents include this mailbox in the mail digest"
+
+      assert opt_in_html =~
+               "Customers, counts and times only, never subjects or bodies. Org admins see it as private."
+
+      refute opt_in_html =~ "morning briefing"
 
       view
       |> form("#access-digest-form", %{"digest_opt_in" => "true"})
       |> render_change()
 
       assert Repo.reload!(ctx.personal).digest_opt_in
-      assert render(view) =~ "This mailbox now feeds the morning briefing."
+      assert render(view) =~ "This mailbox now feeds the mail digest."
+      refute render(view) =~ "feeds the morning briefing"
 
       view
       |> form("#access-digest-form", %{"digest_opt_in" => "false"})

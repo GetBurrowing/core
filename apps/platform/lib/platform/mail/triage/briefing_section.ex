@@ -2,9 +2,9 @@ defmodule Platform.Mail.Triage.BriefingSection do
   @moduledoc """
   The called-out email section of the daily briefing (task 01a1f426 stage
   2, Level 1 surface), key `mail_priority`: a core provider of
-  `Platform.Memory.Insights.BriefingSections`, listed BEFORE
-  `Platform.Mail.Digest` in `config/config.exs` so it renders first, above
-  every other section and above Needs your call.
+  `Platform.Memory.Insights.BriefingSections` and the only one listed in
+  `config/config.exs`, so it renders first, above every other section and
+  above Needs your call.
 
   Thin over `Platform.Mail.Triage`: `prepare/2` runs the reader's triage,
   `summary/2` counts what `Triage.section_view/3` shows. Rendered by
