@@ -317,6 +317,37 @@ defmodule Platform.Mail.TriageTest do
     end
   end
 
+  # Task 01a1f66a stage 2: Email's message pane offers "This needed me"
+  # only on mail the briefing did not call out for THIS reader.
+  describe "flagged_for_reader?/2" do
+    test "true for the reader's own top/action item, false for promo, routine, no item and another reader's top",
+         ctx do
+      [top, action, promo, routine, none] = for _ <- 1..5, do: inbound!(ctx.shared)
+      stored_item!(ctx.a, top, "top")
+      stored_item!(ctx.a, action, "action")
+      stored_item!(ctx.a, promo, "promo")
+      stored_item!(ctx.a, routine, "routine")
+
+      assert Triage.flagged_for_reader?(ctx.a, top.id)
+      assert Triage.flagged_for_reader?(ctx.a, action.id)
+      refute Triage.flagged_for_reader?(ctx.a, promo.id)
+      refute Triage.flagged_for_reader?(ctx.a, routine.id)
+      refute Triage.flagged_for_reader?(ctx.a, none.id)
+
+      # B's top item on B's own mailbox is never A's; A's top is never B's.
+      b_top = inbound!(ctx.b_box)
+      stored_item!(ctx.b, b_top, "top")
+      assert Triage.flagged_for_reader?(ctx.b, b_top.id)
+      refute Triage.flagged_for_reader?(ctx.a, b_top.id)
+      refute Triage.flagged_for_reader?(ctx.b, top.id)
+
+      # Malformed input reads nothing.
+      refute Triage.flagged_for_reader?(ctx.a, "not-a-uuid")
+      refute Triage.flagged_for_reader?(nil, top.id)
+      refute Triage.flagged_for_reader?(ctx.a, nil)
+    end
+  end
+
   # ── storage outcomes ────────────────────────────────────────────────────
 
   describe "outcomes" do

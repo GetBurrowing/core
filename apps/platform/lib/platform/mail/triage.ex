@@ -767,6 +767,28 @@ defmodule Platform.Mail.Triage do
   def reader_item(_user, _item_id), do: nil
 
   @doc """
+  Did the triage call out `inbound_message_id` for `user`: true when the
+  reader's OWN item for that message has a tier in `@called_out_tiers`
+  (top or action). A message with no item, or with a routine/promo item,
+  is unflagged. Another reader's item is never read. A pure read.
+  """
+  @spec flagged_for_reader?(map(), any()) :: boolean()
+  def flagged_for_reader?(%{id: user_id}, inbound_message_id)
+      when is_binary(user_id) and is_binary(inbound_message_id) do
+    Platform.UUID.valid?(user_id) and Platform.UUID.valid?(inbound_message_id) and
+      Repo.exists?(
+        from(i in Item,
+          where:
+            i.inbound_message_id == ^inbound_message_id and i.user_id == ^user_id and
+              i.tier in ^@called_out_tiers
+        ),
+        quiet_opts()
+      )
+  end
+
+  def flagged_for_reader?(_user, _inbound_message_id), do: false
+
+  @doc """
   Is the mailbox of `target` (an item or an inbound message: anything with
   `org_id` and `account_id`) eligible for `user` NOW: readable by the
   reader AND with an active flag agent (`eligible_account_ids/2`).

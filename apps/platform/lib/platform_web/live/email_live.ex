@@ -2383,8 +2383,14 @@ defmodule PlatformWeb.EmailLive do
 
   # The triage feedback control (task 01a1f426 stage 2) shows only on a
   # message whose mailbox the triage covers for this reader: readable AND
-  # with an active flag-important agent. `:available` or nil.
+  # with an active flag-important agent. `{:available, :flagged}` when the
+  # briefing called the message out for this reader (task 01a1f66a stage 2),
+  # `{:available, :unflagged}` when it did not, nil when not eligible.
   defp triage_feedback_state(user, message) do
-    if Triage.eligible?(user, message), do: :available
+    if Triage.eligible?(user, message) do
+      if Triage.flagged_for_reader?(user, message.id),
+        do: {:available, :flagged},
+        else: {:available, :unflagged}
+    end
   end
 end

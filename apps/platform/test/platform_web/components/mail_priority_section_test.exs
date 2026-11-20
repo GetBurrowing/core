@@ -625,18 +625,99 @@ defmodule PlatformWeb.Components.MailPrioritySectionTest do
     end
   end
 
-  describe "Email message pane" do
-    test "the triage feedback control writes the reader's feedback", ctx do
-      conn = init_test_session(ctx.conn, current_user_id: ctx.a.id)
-      {:ok, lv, _} = live(conn, "/email/messages/#{ctx.in_s.id}")
+  defp open_pane(user, inbound) do
+    {:ok, lv, _} =
+      Phoenix.ConnTest.build_conn()
+      |> init_test_session(current_user_id: user.id)
+      |> live("/email/messages/#{inbound.id}")
 
-      assert has_element?(lv, "[data-role=mail-triage-feedback]")
+    lv
+  end
+
+  defp pane_text(lv) do
+    lv
+    |> element("[data-role=mail-triage-feedback]")
+    |> render()
+    |> text_of()
+  end
+
+  describe "Email message pane" do
+    # Task 01a1f66a stage 2: the pane is the only "This needed me" path
+    # for mail the briefing did not call out.
+    test "an unflagged message offers only This needed me, and the loop closes into the briefing",
+         ctx do
+      lv = open_pane(ctx.a, ctx.in_promo)
+
+      assert has_element?(lv, "[data-role=mail-triage-feedback][data-flagged=false]")
+      assert pane_text(lv) =~ "Not in your briefing ·"
+      assert has_element?(lv, "[data-role=mail-triage-missed]")
+      refute has_element?(lv, "[data-role=mail-triage-not-important]")
+      refute pane_text(lv) =~ "Morning briefing"
+
+      {briefing, _} = open_briefing(Phoenix.ConnTest.build_conn(), ctx.a, ctx.date)
+      refute has_element?(briefing, "[data-item-id='#{ctx.a_promo.id}']")
+
+      since = DateTime.add(DateTime.utc_now(), -3600, :second)
       lv |> element("[data-role=mail-triage-missed]") |> render_click()
 
       assert [%Feedback{verdict: "missed"} = fb] = feedback_for(ctx.a)
+      assert fb.inbound_message_id == ctx.in_promo.id
+      assert lv |> element("[data-role=mail-triage-recorded]") |> render() |> text_of() ==
+               "Thanks. The next briefing will use this."
+
+      assert feedback_for(ctx.c) == []
+      assert reload(ctx.a_promo).tier == "action"
+      assert reload(ctx.c_promo).tier == "promo"
+      assert Platform.Mail.Triage.Metrics.for_user(ctx.a, since).missed_reports == 1
+
+      {briefing, _} = open_briefing(Phoenix.ConnTest.build_conn(), ctx.a, ctx.date)
+      assert has_element?(briefing, "[data-item-id='#{ctx.a_promo.id}']")
+      assert briefing |> section() |> render() =~ "Promo #{ctx.n}"
+
+      # Reopened, the message is now flagged for A.
+      reopened = open_pane(ctx.a, ctx.in_promo)
+      assert has_element?(reopened, "[data-role=mail-triage-feedback][data-flagged=true]")
+    end
+
+    test "a flagged message offers only Not important", ctx do
+      lv = open_pane(ctx.a, ctx.in_s)
+
+      assert has_element?(lv, "[data-role=mail-triage-feedback][data-flagged=true]")
+      assert pane_text(lv) =~ "Morning briefing:"
+      assert has_element?(lv, "[data-role=mail-triage-not-important]")
+      refute has_element?(lv, "[data-role=mail-triage-missed]")
+      refute pane_text(lv) =~ "Not in your briefing"
+
+      lv |> element("[data-role=mail-triage-not-important]") |> render_click()
+
+      assert [%Feedback{verdict: "not_important"} = fb] = feedback_for(ctx.a)
       assert fb.inbound_message_id == ctx.in_s.id
       assert has_element?(lv, "[data-role=mail-triage-recorded]")
       assert feedback_for(ctx.c) == []
+    end
+
+    test "Reader C's view uses C's own item, not A's", ctx do
+      split =
+        inbound!(ctx.shared, %{
+          from_address: "Split Sender <split-#{ctx.n}@otherco.test>",
+          subject: "Split #{ctx.n}"
+        })
+
+      item!(ctx.a, split, %{tier: "top", why: "A-SPLIT-#{ctx.n}"})
+      c_split = item!(ctx.c, split, %{tier: "promo", why: "Bulk mail."})
+
+      lv_a = open_pane(ctx.a, split)
+      assert has_element?(lv_a, "[data-role=mail-triage-feedback][data-flagged=true]")
+
+      lv_c = open_pane(ctx.c, split)
+      assert has_element?(lv_c, "[data-role=mail-triage-feedback][data-flagged=false]")
+      assert has_element?(lv_c, "[data-role=mail-triage-missed]")
+      refute has_element?(lv_c, "[data-role=mail-triage-not-important]")
+
+      lv_c |> element("[data-role=mail-triage-missed]") |> render_click()
+      assert [%Feedback{verdict: "missed"}] = feedback_for(ctx.c)
+      assert feedback_for(ctx.a) == []
+      assert reload(c_split).tier == "action"
     end
 
     test "a mailbox not granted to the triage agent has no control and refuses the event",
