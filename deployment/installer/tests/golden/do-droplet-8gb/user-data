@@ -48,8 +48,8 @@ write_files:
       BUN_VERSION=1.4.2
       CLAUDE_CODE_VERSION=2.1.295
       CODEX_VERSION=0.162.0
-      # burrow-cli v0.19.0 (GetBurrowing/burrow-cli 9314fc3, PR #61): adds `watch --host-only` (host connections only, never types), which the agent host runs to serve the remote terminal; 0.18.2 pinned the Claude Code channel plugin at 0.4.3; 0.15.0 added --remote-terminal.
-      BURROW_CLI_REF=9314fc38a9f6025db98340486b5fadf18e892513
+      # burrow-cli v0.21.0 (GetBurrowing/burrow-cli f2a2a22, PR #63): channel tools are burrow_* (suite_* kept as deprecated aliases) and the Claude Code channel plugin is pinned at 0.5.0 (f55cfb6); 0.20.x moved the Hermes platform key to burrow; 0.19.0 added `watch --host-only`, which the agent host runs to serve the remote terminal; 0.15.0 added --remote-terminal.
+      BURROW_CLI_REF=f2a2a22a8bfc43c43c45caf4ee79bd1214d4464a
   - path: "/etc/burrow-updater/updater.env"
     owner: "root:root"
     permissions: "0644"

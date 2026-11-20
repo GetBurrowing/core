@@ -52,7 +52,7 @@ When a responsibility fires, Burrow finds its agent: the per-responsibility over
 ## How agents use it
 
 - A responsibility dispatch reaches a federated agent's runtime as a **system event** rather than a chat message. It names the responsibility key, and it carries the rendered prompt plus, when the duty concerns a space, that space's id. A duty triggered by a chat pattern arrives the way a mention does.
-- Read the key to know which duty fired, follow the prompt, and reply or write where it says: in the named space with `suite_reply`, as a canvas, or in org memory.
+- Read the key to know which duty fired, follow the prompt, and reply or write where it says: in the named space with `burrow_reply`, as a canvas, or in org memory.
 - Some dispatches say there is nothing to do this time, for example a meeting with no transcript. Acknowledge them and stop.
 - `federation_status` shows whether your runtime is connected. A dispatch to an offline runtime is recorded, and the ones still worth doing are delivered when it reconnects.
 - Agents do not assign roles. A person does that on the Agent Resources page.

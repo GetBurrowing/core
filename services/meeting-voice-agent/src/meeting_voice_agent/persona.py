@@ -148,10 +148,22 @@ def build_instructions(
     space_id: str | None = None,
     agent_roster: list[dict] | None = None,
     voice_context: dict | None = None,
+    cohost_profile: dict | None = None,
 ) -> str:
     """The ONE instruction builder: construction and every `mva.context`
     update call this, so a rebuilt prompt matches a fresh one exactly."""
-    instructions = _instructions_with_space_context(config.instructions, space_id)
+    # Only explicitly scoped sessions receive the editable show instructions.
+    # Invalid profiles fall back to the ordinary meeting persona.
+    instructions = config.instructions
+    if isinstance(cohost_profile, dict):
+        persona = cohost_profile.get("persona")
+        brief = cohost_profile.get("episode_brief")
+        if (
+            isinstance(persona, str) and persona.strip()
+            and isinstance(brief, str) and brief.strip()
+        ):
+            instructions = f"{instructions}\n\n{persona.strip()}\n\nEpisode brief:\n{brief.strip()}"
+    instructions = _instructions_with_space_context(instructions, space_id)
     instructions = _instructions_with_roster_context(instructions, agent_roster)
     return _instructions_with_voice_context(instructions, voice_context)
 
@@ -197,6 +209,7 @@ class MeetingVoiceAgent(Agent):
         space_id: str | None = None,
         agent_roster: list[dict] | None = None,
         voice_context: dict | None = None,
+        cohost_profile: dict | None = None,
         drop_empty_turns: bool = False,
         router: VoiceRouter | None = None,
     ) -> None:
@@ -207,8 +220,10 @@ class MeetingVoiceAgent(Agent):
         self._space_id = space_id
         self._agent_roster = agent_roster
         self.voice_context = voice_context
+        self._cohost_profile = cohost_profile
         instructions = build_instructions(
-            config, space_id=space_id, agent_roster=agent_roster, voice_context=voice_context
+            config, space_id=space_id, agent_roster=agent_roster, voice_context=voice_context,
+            cohost_profile=cohost_profile,
         )
         super().__init__(instructions=instructions, tools=tools or [])
 
@@ -279,6 +294,7 @@ class MeetingVoiceAgent(Agent):
             space_id=self._space_id,
             agent_roster=self._agent_roster,
             voice_context=voice_context,
+            cohost_profile=self._cohost_profile,
         )
 
     async def apply_voice_context(self, voice_context: dict | None) -> None:

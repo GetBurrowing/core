@@ -889,7 +889,7 @@ defmodule Platform.Orchestration.PromptTemplates do
   3. Named the single smallest action that would unblock you and who can perform it.
   A blocker missing any of the three is not a blocker. It is unfinished work.
 
-  Local infrastructure problems are NOT blockers. That covers the test rig, containers, ports, the dev server, the test or build hosts, docker or podman, credentials for local tooling, and missing tools. When you hit one: post the exact error and the exact command you ran with `suite_reply` in the execution space, with an @-mention of Dalton (type the at-mention yourself; it is not written out here so this template does not itself page him), then keep working on every part of the stage that does not depend on it. Only escalate to a blocker if Dalton has not answered in 60 minutes, and say in the blocker when you pinged and what you kept working on meanwhile.
+  Local infrastructure problems are NOT blockers. That covers the test rig, containers, ports, the dev server, the test or build hosts, docker or podman, credentials for local tooling, and missing tools. When you hit one: post the exact error and the exact command you ran with `burrow_reply` (named `suite_reply` on a channel plugin older than 0.5.0) in the execution space, with an @-mention of Dalton (type the at-mention yourself; it is not written out here so this template does not itself page him), then keep working on every part of the stage that does not depend on it. Only escalate to a blocker if Dalton has not answered in 60 minutes, and say in the blocker when you pinged and what you kept working on meanwhile.
 
   Never run the core test suite on a person's workstation; run it where your org's test-rig skill says (skill_list query: test rig). A broken or unreachable rig is an infra problem: route it to Dalton as above, do not run the suite on a workstation, and do not file a blocker for it.
 
@@ -954,7 +954,7 @@ defmodule Platform.Orchestration.PromptTemplates do
 
   4. **Submit** — call `review_request_create` with `validation_id` set to the `manual_approval` validation (NOT a `validation_evaluate` call — that's only for `test_pass` / `lint_pass`) and `items: [{label, canvas_id}]` pointing at the canvas from step 3. The review items appear inline on the task detail panel with approve/reject buttons. Items can mix `canvas_id` (visual) and `content` (text) — use `content` for tabular evidence, links, test summaries.
 
-  **Do not** post screenshots via `suite_reply_with_media` and call them evidence — those messages don't reliably render in the reviewer's UI and the `manual_approval` gate doesn't watch the chat thread anyway. Evidence flows through `review_request_create`.
+  **Do not** post screenshots via `burrow_reply_with_media` (or its deprecated alias `suite_reply_with_media`) and call them evidence — those messages don't reliably render in the reviewer's UI and the `manual_approval` gate doesn't watch the chat thread anyway. Evidence flows through `review_request_create`.
 
   ## Tool-name conventions (dot vs underscore)
 

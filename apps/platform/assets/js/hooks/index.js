@@ -64,6 +64,7 @@ import MeetingTimer from "./meeting_timer"
 import MeetingTranscript from "./meeting_transcript"
 import MeetingVideoTile from "./meeting_video_tile"
 import MeetingVoiceWaveform from "./meeting_voice_waveform"
+import MeetingCohostFace from "./meeting_cohost_face"
 import MeetingWatchdog from "./meeting_watchdog"
 import MeetingWhiteboard from "./meeting_whiteboard"
 import MermaidDiagram from "./mermaid_diagram"
@@ -163,6 +164,7 @@ export default {
   MeetingTranscript,
   MeetingVideoTile,
   MeetingVoiceWaveform,
+  MeetingCohostFace,
   MeetingWatchdog,
   MeetingWhiteboard,
   MermaidDiagram,

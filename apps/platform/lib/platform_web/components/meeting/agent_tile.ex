@@ -64,6 +64,7 @@ defmodule PlatformWeb.Components.Meeting.AgentTile do
   import PlatformWeb.AvatarComponents, only: [agent_avatar: 1]
   import PlatformWeb.Components.Meetings.AgentActivityBadge, only: [agent_activity_badge: 1]
   import PlatformWeb.Components.Meeting.VoiceWaveform, only: [voice_waveform: 1]
+  import PlatformWeb.Components.Meeting.CohostFace, only: [cohost_face: 1]
 
   # `:failed` belongs here because `MeetingLive.agent_activity_state/2`
   # can return it and the strip's call site passes that straight through;
@@ -158,6 +159,12 @@ defmodule PlatformWeb.Components.Meeting.AgentTile do
       }
       {@rest}
     >
+      <.cohost_face
+        :if={@voice?}
+        id={"#{@id_prefix}-face-#{@identity}"}
+        identity={@identity}
+        name={@name}
+      />
       <%!-- Avatar centred on the slot tint, or — for an agent in
            the call by voice — the voice waveform (task 01a1117f stage 4). A
            voice agent has no camera and is not a person, so a face does not

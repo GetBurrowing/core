@@ -211,3 +211,20 @@ def test_mva_context_none_restores_the_base_instructions():
     asyncio.run(run())
 
     agent.update_instructions.assert_awaited_once_with(config.instructions)
+
+
+def test_show_profile_is_explicit_and_survives_context_updates():
+    config = AgentConfig.from_env()
+    profile = {"persona": "Dry economist.", "episode_brief": "Wages fund demand."}
+    agent = MeetingVoiceAgent(config, cohost_profile=profile)
+
+    assert "Dry economist." in agent.instructions
+    assert "Wages fund demand." in agent.instructions
+    assert "Dry economist." in agent.instructions_for_context({"kind": "none"})
+    assert "Dry economist." not in MeetingVoiceAgent(config).instructions
+
+
+def test_incomplete_show_profile_falls_back_to_normal_persona():
+    config = AgentConfig.from_env()
+    agent = MeetingVoiceAgent(config, cohost_profile={"persona": "Incomplete"})
+    assert agent.instructions == config.instructions

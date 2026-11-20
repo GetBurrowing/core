@@ -11370,6 +11370,45 @@ textarea.cal-input {
 @media (prefers-reduced-motion: reduce){.ba-flow,.ba-modal,.ba-step,.ba-card.reveal,.ba-card.reveal::after,.ba-confetti i,.ba-dice.roll,.ba-typing i,.ba-vnow .ic,.ba-vb.swap{animation:none!important}.ba-confetti{display:none}}
 /* ── end character builder ── */
 
+.cohost-performance {
+  box-sizing: border-box;
+  position: fixed;
+  inset: 0;
+  width: 100vw;
+  height: 100dvh;
+  max-width: none;
+  max-height: none;
+  padding: 0;
+  border: 0;
+  background: var(--color-viewer);
+  color: var(--color-on-viewer);
+}
+.cohost-performance[open] { display: grid; place-items: center; }
+.cohost-performance::backdrop { background: var(--color-viewer); }
+.cohost-performance-controls {
+  position: absolute; top: 1rem; right: 1rem; z-index: 1;
+  display: flex; gap: 0.5rem;
+}
+.cohost-performance:fullscreen .cohost-performance-controls { display: none; }
+.cohost-face-stage {
+  box-sizing: border-box;
+  position: relative;
+  width: min(100vw, 100dvh);
+  aspect-ratio: 1;
+  padding: 6%;
+  color: var(--color-success);
+}
+.cohost-face-stage svg { width: 100%; height: 100%; }
+.cohost-face-status {
+  position: absolute; bottom: 9%; inset-inline: 0;
+  text-align: center; font-size: 0.875rem;
+  color: var(--color-on-viewer);
+}
+.cohost-face-eyes { transform-box: fill-box; transform-origin: center; animation: cohost-blink 6s infinite; }
+.cohost-face-stage[data-state="disconnected"] .cohost-face-ink { opacity: 0.35; }
+@keyframes cohost-blink { 0%, 44%, 48%, 100% { transform: scaleY(1); } 46% { transform: scaleY(0.1); } }
+@media (prefers-reduced-motion: reduce) { .cohost-face-eyes { animation: none; } }
+
 /* The public gaming catalog scrolls as a document, outside the workspace shell. */
 html.gaming-document,
 html.gaming-document body {

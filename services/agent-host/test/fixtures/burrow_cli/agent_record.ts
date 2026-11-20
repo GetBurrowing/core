@@ -1,6 +1,6 @@
 /**
  * VENDORED, VERBATIM: burrow-cli's own agent-record reader and writer at
- * BURROW_CLI_REF 9314fc38a9f6025db98340486b5fadf18e892513 (0.19.0), so
+ * BURROW_CLI_REF f2a2a22a8bfc43c43c45caf4ee79bd1214d4464a (0.21.0), so
  * test/runner_terminal.test.ts can read the record agent-host writes back the
  * way burrow-cli does. agent-host's tests run without a burrow-cli checkout
  * (CI's bun:1 container), so the reader cannot be imported; it is copied.
@@ -22,7 +22,7 @@ import { realpathSync } from "node:fs";
 import { createHash } from "node:crypto";
 import { basename, resolve } from "node:path";
 
-export const VENDORED_REF = "9314fc38a9f6025db98340486b5fadf18e892513";
+export const VENDORED_REF = "f2a2a22a8bfc43c43c45caf4ee79bd1214d4464a";
 
 // src/tmux.ts 47-52
 const SAFE_NAME = /[^A-Za-z0-9_-]+/g;

@@ -17024,7 +17024,7 @@ defmodule Platform.Federation.ToolSurface do
              "Post the exact error to @[Dalton] in the execution space and continue.",
          recoverable: true,
          suggestion:
-           "Post the exact command and error with suite_reply in the execution space mentioning @[Dalton], keep working on what does not depend on it, or refile with needs_human: false."
+           "Post the exact command and error with burrow_reply (suite_reply on a channel plugin older than 0.5.0) in the execution space mentioning @[Dalton], keep working on what does not depend on it, or refile with needs_human: false."
        }}
     else
       :ok
