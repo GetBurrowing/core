@@ -99,6 +99,50 @@ enum OrientationPolicy {
     }
 }
 
+/// The web's back target (task 01a1fa7c stage 4), from
+/// `navBarState({back: {kind: "back" | "close", label} | null})`, the
+/// contract of apps/platform/assets/js/hooks/native_back.js.
+struct NativeNavBack: Equatable {
+    enum Kind: String { case back, close }
+    let kind: Kind
+    /// The web control's aria-label, else "Back" / "Close". Back shows it as
+    /// its title; both read it to VoiceOver.
+    let label: String
+
+    /// The target in a `navBarState` payload. `back: null`, a missing key,
+    /// an unknown kind or a malformed value all mean no target (a tab root),
+    /// so a bad payload clears the item rather than leaving a stale one.
+    static func parse(_ payload: [String: Any]) -> NativeNavBack? {
+        guard let back = payload["back"] as? [String: Any], let raw = back["kind"] as? String, let kind = Kind(rawValue: raw) else {
+            return nil
+        }
+        let label = (back["label"] as? String)?.trimmingCharacters(in: .whitespacesAndNewlines) ?? ""
+        return NativeNavBack(kind: kind, label: label.isEmpty ? defaultLabel(kind) : label)
+    }
+
+    static func defaultLabel(_ kind: Kind) -> String { kind == .back ? "Back" : "Close" }
+}
+
+/// The strings native shares with native_back.js (pinned both ways by
+/// NativeTabBarContractTests and native_back_contract.test.js).
+enum NativeNavBarDocument {
+    static let method = "navBarState"
+    static let tapEvent = "burrowNativeBack"
+    /// Set on `<html>` while native draws the Back in the side strip;
+    /// app.css then hides every `[data-native-back]` control.
+    static let attribute = "data-native-vertical-bar"
+
+    /// The script that sets or clears the attribute, nil off the Duo (the
+    /// attribute is never touched there). It is SET only on a Duo whose side
+    /// strip is in use; the open Duo clears it, so the web's own control
+    /// comes back.
+    static func attributeScript(isDuo: Bool, verticalBar: Bool) -> String? {
+        guard isDuo else { return nil }
+        let call = verticalBar ? "setAttribute(\"\(attribute)\", \"\")" : "removeAttribute(\"\(attribute)\")"
+        return "(function (root) { if (root) root.\(call); })(document.documentElement);"
+    }
+}
+
 /// One tab's page: the root of that tab's UINavigationController (stage 4
 /// puts the native Back in its navigation item). It holds the shared web
 /// content only while its tab is selected.
@@ -148,6 +192,32 @@ final class TabSlotViewController: UIViewController {
         child.didMove(toParent: self)
         content = child
         setNeedsStatusBarAppearanceUpdate()
+    }
+
+    /// The native Back or Close at the top of the strip (stage 4): one
+    /// leading item, which UIKit draws in place of a system back button
+    /// (`leftItemsSupplementBackButton` stays false, Tech Talk 111462). A
+    /// leading item, not a pushed placeholder controller, so nothing has to
+    /// track the web's history. nil clears it.
+    func showNavBack(_ back: NativeNavBack?, action: @escaping () -> Void) {
+        guard let back else {
+            navigationItem.leadingItemGroups = []
+            return
+        }
+        let handler = UIAction { _ in action() }
+        let item: UIBarButtonItem
+        switch back.kind {
+        case .back:
+            // The HIG asks for a title and the symbol together.
+            item = UIBarButtonItem(title: back.label, image: UIImage(systemName: "chevron.backward"), primaryAction: handler)
+            item.accessibilityIdentifier = "native-nav-back"
+        case .close:
+            item = UIBarButtonItem(systemItem: .close, primaryAction: handler)
+            item.accessibilityIdentifier = "native-nav-close"
+        }
+        item.accessibilityLabel = back.label
+        navigationItem.leftItemsSupplementBackButton = false
+        navigationItem.leadingItemGroups = [UIBarButtonItemGroup(barButtonItems: [item], representativeItem: nil)]
     }
 
     /// Forgets the content once another slot has taken it.
@@ -223,10 +293,40 @@ final class DuoShellController: UITabBarController {
         let slot = TabSlotViewController(key: key)
         slot.shell = self
         let navigation = UINavigationController(rootViewController: slot)
-        // Stage 1 draws no navigation bar; stage 4 shows it in the strip.
-        navigation.setNavigationBarHidden(true, animated: false)
+        // Hidden until the side strip is in use (`renderNavBack`).
+        navigation.setNavigationBarHidden(!navBarShown, animated: false)
         navigations[key] = navigation
         return navigation
+    }
+
+    // MARK: Native Back (stage 4)
+
+    /// The web's back target, drawn in the selected slot only.
+    private(set) var navBack: NativeNavBack?
+    /// Whether the side strip is in use: the navigation bars show only then.
+    /// Everywhere else (the open Duo, inner portrait included) they stay
+    /// hidden and the web header keeps its own control.
+    private(set) var navBarShown = false
+    /// The item's tap: the bridge fires `burrowNativeBack`.
+    var onNavBack: (() -> Void)?
+
+    /// Draws `back` (nil: none) in the selected slot, clears every other
+    /// slot, and shows the navigation bars only while `verticalBar`.
+    func renderNavBack(_ back: NativeNavBack?, verticalBar: Bool) {
+        navBack = back
+        navBarShown = verticalBar
+        applyNavBack()
+    }
+
+    private func applyNavBack() {
+        let selected = selectedSlot
+        for (_, navigation) in navigations {
+            guard let slot = navigation.viewControllers.first as? TabSlotViewController else { continue }
+            slot.showNavBack(slot === selected ? navBack : nil) { [weak self] in self?.onNavBack?() }
+            if navigation.isNavigationBarHidden == navBarShown {
+                navigation.setNavigationBarHidden(!navBarShown, animated: false)
+            }
+        }
     }
 
     /// The keys of the tabs, in order.
@@ -246,6 +346,8 @@ final class DuoShellController: UITabBarController {
         guard let target = selectedSlot else { return }
         for tab in tabs where slot(of: tab) !== target { slot(of: tab)?.release(content) }
         target.host(content)
+        // The Back follows the content into the newly selected slot.
+        applyNavBack()
     }
 
     /// Web-load recovery on the Duo: a fresh bridge replaces ONLY the

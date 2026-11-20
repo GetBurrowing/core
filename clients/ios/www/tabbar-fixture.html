@@ -18,7 +18,12 @@
          to refract. ?backdrop=white|black (task 01a174e8 stage 3) fills the
          page with one flat colour instead of the rows and sends the
          Chat-selected, dot-on state with the page scheme's inks on load,
-         for the contrast measurement over the two extremes. -->
+         for the contrast measurement over the two extremes. The Nav
+         buttons (task 01a1fa7c stage 4) stand in for native_back.js: each
+         shows a web header control marked data-native-back and sends
+         SuiteNative.navBarState({back}); a burrowNativeBack event "clicks"
+         it, which returns to the root (back: null). The page hides marked
+         controls under <html data-native-vertical-bar> as app.css does. -->
     <style>
       :root { color-scheme: light dark; --ink: #221f1b; --ground: #fbfaf9; --edge: #d9d3c9; }
       @media (prefers-color-scheme: dark) { :root { --ink: #eeeff1; --ground: #191b20; --edge: #383b42; } }
@@ -40,11 +45,15 @@
       :root[data-backdrop] .controls { gap: 4px; margin-bottom: 4px; }
       :root[data-backdrop] button { font-size: 11px; padding: 3px 6px; border-radius: 6px; }
       :root[data-backdrop] p { margin: 2px 0; }
+      #webnav { display: flex; align-items: center; gap: 8px; min-height: 44px; font-weight: 600; }
+      #webnav button { padding: 4px 10px; }
+      :root[data-native-vertical-bar] [data-native-back] { display: none !important; }
       .row { height: 64px; margin: 8px 0; border-radius: 12px; display: flex; align-items: center; padding: 0 16px; color: #fff; font-weight: 600; }
     </style>
   </head>
   <body>
     <main>
+      <div id="webnav"><button id="webback" data-native-back="back" aria-label="Back" hidden>&#8249;</button><span id="navtitle">Chats</span></div>
       <h1>Tab bar fixture</h1>
       <div class="controls">
         <button data-ink="auto" data-state='{"items":["chat","calendar","meetings","inbox","more"],"selected":"chat","inbox_dot":true,"visible":true}'>Chat, dot on</button>
@@ -69,6 +78,10 @@
         <button data-state='{"items":["chat","games","calendar","meetings","inbox","more"]}'>Unknown key</button>
         <button data-state='{"items":[],"selected":"chat"}'>Empty items</button>
         <button data-state='{"selected":"calendar","inbox_dot":true}'>No items field</button>
+        <button data-nav='{"kind":"back","label":"Back"}' data-title="# general">Nav thread</button>
+        <button data-nav='{"kind":"back","label":"More"}' data-title="Settings">Nav settings</button>
+        <button data-nav='{"kind":"close","label":"Close"}' data-title="Task detail">Nav modal</button>
+        <button data-nav="null" data-title="Chats">Nav root</button>
         <a href="tabbar-fixture.html?mode=silent">Silent page</a>
         <a href="tabbar-fixture.html?mode=auto">Stateful page</a>
         <a href="tabbar-fixture.html?backdrop=white">Backdrop white</a>
@@ -77,6 +90,7 @@
       <p id="plugin">plugin: checking</p>
       <ol id="events"></ol>
       <p id="doc">doc: checking</p>
+      <p id="navdoc">nav: checking</p>
       <p id="viewport">viewport: checking</p>
       <p id="rendered">rendered: waiting for the first state</p>
       <p id="glass">glass: waiting for the first state</p>
@@ -179,6 +193,42 @@
             })
             .catch(function () {});
         });
+
+        // The Back bridge (stand-in for native_back.js).
+        var webBack = document.getElementById("webback");
+        function navLine() {
+          var root = document.documentElement;
+          document.getElementById("navdoc").textContent =
+            "nav: vertical-bar=" + root.hasAttribute("data-native-vertical-bar") + " web-back=" +
+            (webBack.hidden ? "none" : webBack.getAttribute("data-native-back")) + " web-back-shown=" +
+            (getComputedStyle(webBack).display !== "none");
+        }
+        function setNav(back, title) {
+          webBack.hidden = !back;
+          if (back) {
+            webBack.setAttribute("data-native-back", back.kind);
+            webBack.setAttribute("aria-label", back.label);
+            webBack.innerHTML = back.kind === "close" ? "&#215;" : "&#8249;";
+          }
+          document.getElementById("navtitle").textContent = title;
+          var target = plugin();
+          if (target && typeof target.navBarState === "function") target.navBarState({ back: back }).catch(function () {});
+          navLine();
+        }
+        document.querySelectorAll("button[data-nav]").forEach(function (button) {
+          button.addEventListener("click", function () {
+            setNav(JSON.parse(button.getAttribute("data-nav")), button.getAttribute("data-title"));
+          });
+        });
+        webBack.addEventListener("click", function () { setNav(null, "Chats"); });
+        window.addEventListener("burrowNativeBack", function () {
+          var item = document.createElement("li");
+          item.textContent = "nativeBack " + (webBack.hidden ? "none" : webBack.getAttribute("data-native-back"));
+          document.getElementById("events").appendChild(item);
+          if (!webBack.hidden) webBack.click();
+        });
+        new MutationObserver(navLine).observe(document.documentElement, { attributes: true, attributeFilter: ["data-native-vertical-bar"] });
+        navLine();
 
         window.addEventListener("burrowNativeTab", function (event) {
           var detail = event.detail || {};

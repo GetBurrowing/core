@@ -301,4 +301,99 @@ final class DuoShellTests: XCTestCase {
         XCTAssertTrue(ShellRoot.content(of: window.rootViewController) === replacement)
         window.isHidden = true
     }
+
+    // MARK: Native Back in the strip (stage 4)
+
+    private func leadingItems(_ slot: TabSlotViewController?) -> [UIBarButtonItem] {
+        (slot?.navigationItem.leadingItemGroups ?? []).flatMap(\.barButtonItems)
+    }
+
+    func testThePayloadParsesBackCloseAndEverythingElseAsNone() {
+        XCTAssertEqual(NativeNavBack.parse(["back": ["kind": "back", "label": "Back to channels"]]), NativeNavBack(kind: .back, label: "Back to channels"))
+        XCTAssertEqual(NativeNavBack.parse(["back": ["kind": "close", "label": "Close"]]), NativeNavBack(kind: .close, label: "Close"))
+        XCTAssertEqual(NativeNavBack.parse(["back": ["kind": "back", "label": "  "]])?.label, "Back", "a blank label falls back")
+        for payload: [String: Any] in [["back": NSNull()], [:], ["back": ["kind": "home"]], ["back": "back"], ["back": ["label": "Back"]]] {
+            XCTAssertNil(NativeNavBack.parse(payload), "\(payload)")
+        }
+    }
+
+    func testBackGivesOneLeadingGroupWithTheLabelAndTheChevron() throws {
+        let slot = TabSlotViewController(key: "chat")
+        slot.showNavBack(NativeNavBack(kind: .back, label: "General"), action: {})
+        XCTAssertEqual(slot.navigationItem.leadingItemGroups.count, 1)
+        let item = try XCTUnwrap(leadingItems(slot).first)
+        XCTAssertEqual(leadingItems(slot).count, 1)
+        XCTAssertEqual(item.title, "General")
+        XCTAssertEqual(item.image, UIImage(systemName: "chevron.backward"))
+        XCTAssertEqual(item.accessibilityLabel, "General")
+        XCTAssertFalse(slot.navigationItem.leftItemsSupplementBackButton)
+        XCTAssertNil(slot.navigationItem.title, "the strip never carries a title")
+    }
+
+    func testCloseGivesTheSystemCloseItem() throws {
+        let slot = TabSlotViewController(key: "chat")
+        slot.showNavBack(NativeNavBack(kind: .close, label: "Close"), action: {})
+        XCTAssertEqual(leadingItems(slot).count, 1)
+        let item = try XCTUnwrap(leadingItems(slot).first)
+        XCTAssertEqual(item.accessibilityIdentifier, "native-nav-close")
+        XCTAssertEqual(item.accessibilityLabel, "Close")
+        XCTAssertNil(item.title)
+    }
+
+    func testNoneClearsTheItem() {
+        let slot = TabSlotViewController(key: "chat")
+        slot.showNavBack(NativeNavBack(kind: .back, label: "Back"), action: {})
+        slot.showNavBack(nil, action: {})
+        XCTAssertTrue(slot.navigationItem.leadingItemGroups.isEmpty)
+    }
+
+    func testTheItemsActionFiresTheBackEvent() throws {
+        let (shell, _, _) = makeShell()
+        var fired = 0
+        shell.onNavBack = { fired += 1 }
+        shell.renderNavBack(NativeNavBack(kind: .back, label: "Back"), verticalBar: true)
+        let item = try XCTUnwrap(leadingItems(shell.selectedSlot).first)
+        let action = try XCTUnwrap(item.primaryAction)
+        action.performWithSender(nil, target: nil)
+        XCTAssertEqual(fired, 1)
+    }
+
+    func testOnlyTheSelectedSlotCarriesTheBackAndItFollowsTheContent() {
+        let (shell, host, _) = makeShell()
+        host.render(state(["items": four, "selected": "chat", "visible": true]))
+        shell.renderNavBack(NativeNavBack(kind: .back, label: "Back"), verticalBar: true)
+        XCTAssertEqual(leadingItems(shell.selectedSlot).count, 1)
+        let chat = shell.selectedSlot
+        host.render(state(["selected": "inbox"]))
+        XCTAssertEqual(shell.selectedTab?.identifier, "inbox")
+        XCTAssertTrue(leadingItems(chat).isEmpty, "exactly one Back")
+        XCTAssertEqual(leadingItems(shell.selectedSlot).count, 1)
+        let total = shell.tabs.map { leadingItems(shell.slot(of: $0)).count }.reduce(0, +)
+        XCTAssertEqual(total, 1)
+    }
+
+    func testTheNavigationBarShowsOnlyWhileTheStripIsInUse() {
+        let (shell, host, _) = makeShell()
+        host.render(state(["items": four, "selected": "chat", "visible": true]))
+        func hidden() -> [Bool] { shell.tabs.compactMap { shell.slot(of: $0)?.navigationController?.isNavigationBarHidden } }
+        XCTAssertEqual(hidden(), [true, true, true, true], "hidden before any state")
+        shell.renderNavBack(NativeNavBack(kind: .back, label: "Back"), verticalBar: true)
+        XCTAssertEqual(hidden(), [false, false, false, false], "closed: the strip")
+        // Open (inner display, portrait or landscape): no edge, no bar, and
+        // the web header keeps its own control.
+        shell.renderNavBack(NativeNavBack(kind: .back, label: "Back"), verticalBar: false)
+        XCTAssertEqual(hidden(), [true, true, true, true])
+        XCTAssertFalse(shell.navBarShown)
+    }
+
+    func testTheAttributeIsSetOnlyOnTheDuoWithAnEdge() throws {
+        XCTAssertNil(NativeNavBarDocument.attributeScript(isDuo: false, verticalBar: true), "never on another iPhone")
+        XCTAssertNil(NativeNavBarDocument.attributeScript(isDuo: false, verticalBar: false))
+        let set = try XCTUnwrap(NativeNavBarDocument.attributeScript(isDuo: true, verticalBar: true))
+        XCTAssertTrue(set.contains("setAttribute(\"data-native-vertical-bar\""))
+        XCTAssertFalse(set.contains("removeAttribute"))
+        let cleared = try XCTUnwrap(NativeNavBarDocument.attributeScript(isDuo: true, verticalBar: false))
+        XCTAssertTrue(cleared.contains("removeAttribute(\"data-native-vertical-bar\")"))
+        XCTAssertFalse(cleared.contains("setAttribute"))
+    }
 }

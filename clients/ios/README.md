@@ -88,6 +88,12 @@ window event `burrowNativeTab`.
 - Native to web: window event `burrowNativeTab`, `detail: {key, reselect}`.
   `reselect` is true when the tapped key is the selected one. A tap never
   moves the selection; the web's next state does.
+- Back and Close on the iPhone Duo (task 01a1fa7c stages 3 and 4): web to
+  native `SuiteNative.navBarState({back: {kind: "back" | "close", label} | null})`
+  (apps/platform/assets/js/hooks/native_back.js), native to web the window
+  event `burrowNativeBack`, on which the web clicks its own marked control.
+  Only the Duo draws it; every other device resolves the call and draws
+  nothing. See "iPhone Duo: Back and Close in the side strip" below.
 - Document start: a main-frame `WKUserScript` per install host sets
   `<html data-native-tab-bar>` and `--native-tab-bar-height` (the bar's
   height above the bottom safe area, 49px on an iPhone 18 Pro on iOS 27:
@@ -233,6 +239,33 @@ list through `OrientationPolicy.mask`:
 The app-level mask also caps any controller presented full screen.
 `DuoShellController` re-reads the mask after every size transition and
 size-class change.
+
+**iPhone Duo: Back and Close in the side strip (task 01a1fa7c stage 4, 2026-11-20).**
+`navBarState` puts one leading item in the selected tab's
+`TabSlotViewController.navigationItem.leadingItemGroups`: a
+`chevron.backward` item titled with the web label for `back`, the system
+`.close` item for `close`, nothing for `null`
+(`leftItemsSupplementBackButton` stays false, per Tech Talk 111462). Its
+tap fires `burrowNativeBack`. The tab navigation controllers show their
+(titleless) bar only while the side strip is in use, read from the shell
+and window as for the bottom reservation (the content reports no edge on
+iOS 27.2); open, they are hidden and the web header keeps its own control.
+On every edge change and every new document the shell sets or clears
+`<html data-native-vertical-bar>` in the same main-thread turn as the
+item, so app.css hides the web control exactly while the native one
+shows. Never set off the Duo.
+
+Measured on the iOS 27.2 Duo simulator, closed (466x678 pt), with the
+tab-bar fixture's Nav buttons: the titleless visible navigation bar takes
+NO horizontal band. XCUITest reports no navigation bar element, the web
+view stays at y 0 to 678 on root and pushed screens, and the item is drawn
+in the strip under the vertical status bar (38x38 pt at 399,179). The
+system shows the chevron alone, without the title; the label still reaches
+VoiceOver. The tabs keep the same frames (396,444 to 396,594) on root and
+pushed screens, so there is no reserved placeholder slot. Accessibility
+order: the web content, then Back or Close, then the tabs top to bottom.
+The web view's trailing edge is 382 pt over the whole height, header row
+included, so nothing in the web header sits under the strip.
 
 Neither hosting minimised on scroll. iOS can only minimise a bar that
 tracks a scroll view, and neither tracks the web view's. The behaviour is

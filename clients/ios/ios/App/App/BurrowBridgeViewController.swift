@@ -353,6 +353,7 @@ final class BurrowBridgeViewController: CAPBridgeViewController {
         replacement.policy = policy
         replacement.lastHandoffAt = lastHandoffAt
         replacement.tabBarState = tabBarState
+        replacement.navBack = navBack
         if #available(iOS 18, *), let shell = shell as? DuoShellController {
             shell.replaceContent(with: replacement)
         } else {
@@ -474,6 +475,50 @@ final class BurrowBridgeViewController: CAPBridgeViewController {
         host.onTap = { [weak self] key in self?.tabTapped(key) }
         host.render(tabBarState)
         tabBarHost = host
+        installNavBar()
+    }
+
+    // MARK: Native Back on the iPhone Duo (task 01a1fa7c stage 4)
+
+    /// The web's last `navBarState` target.
+    private(set) var navBack: NativeNavBack?
+    /// The attribute state last pushed to this document, nil when unknown
+    /// (a new document has none).
+    private var pushedVerticalBar: Bool?
+
+    private func installNavBar() {
+        guard #available(iOS 27.1, *), duoShell != nil else { return }
+        // The strip edge is read from the shell and window (the content
+        // itself reports none), the same source as the bottom reservation.
+        duoShell?.registerForTraitChanges(UITraitCollection.systemTraitsAffectingVerticalBarEdge) {
+            [weak self] (_: UIViewController, _: UITraitCollection) in
+            self?.syncNavBar()
+        }
+        syncNavBar()
+    }
+
+    /// `SuiteNative.navBarState` from the web.
+    func applyNavBarState(_ payload: [String: Any]) {
+        navBack = NativeNavBack.parse(payload)
+        syncNavBar()
+    }
+
+    /// Draws the item and sets `<html data-native-vertical-bar>` in the same
+    /// main-thread turn, so the web control and the native one swap with no
+    /// frame where both, or neither, show. A no-op off the Duo.
+    private func syncNavBar() {
+        guard #available(iOS 18, *), let shell = duoShell as? DuoShellController else { return }
+        let vertical = DuoLayout.verticalBarActive(for: self)
+        shell.onNavBack = { [weak self] in self?.navBackTapped() }
+        shell.renderNavBack(navBack, verticalBar: vertical)
+        guard pushedVerticalBar != vertical, let script = NativeNavBarDocument.attributeScript(isDuo: true, verticalBar: vertical) else { return }
+        pushedVerticalBar = vertical
+        webView?.evaluateJavaScript(script)
+    }
+
+    /// The native item's tap: the web clicks its own control.
+    private func navBackTapped() {
+        bridge?.triggerWindowJSEvent(eventName: NativeNavBarDocument.tapEvent)
     }
 
     /// `SuiteNative.tabBarState` from the web.
@@ -576,6 +621,9 @@ final class BurrowBridgeViewController: CAPBridgeViewController {
         documentSentState = false
         pushedTabBarHeight = nil
         pushTabBarHeight()
+        // A new document carries no attribute: set it again, now.
+        pushedVerticalBar = nil
+        syncNavBar()
     }
 
     /// didFinish: a document that has sent no state after the LiveView
