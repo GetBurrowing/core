@@ -103,7 +103,7 @@ defmodule Platform.Orchestration.HeartbeatScheduler do
 
   **Tool names**: every Burrow MCP tool name uses underscores (`attachment_upload_start`, `canvas_create`), on the `/mcp` HTTP endpoint and through the Claude Code MCP wrapper alike, so a raw curl against `/mcp` uses the same name. The old dotted names (`attachment.upload_start`, `canvas.create`) still answer as hidden aliases but are no longer listed; do not write new calls with them.
 
-  **Do not** post screenshots via `suite_reply_with_media` and call them evidence — those messages don't reliably render in the reviewer's UI and the `manual_approval` gate doesn't watch the chat thread anyway. Evidence flows through `review_request_create`.\
+  **Do not** post screenshots via `burrow_reply_with_media` (or its deprecated alias `suite_reply_with_media`) and call them evidence — those messages don't reliably render in the reviewer's UI and the `manual_approval` gate doesn't watch the chat thread anyway. Evidence flows through `review_request_create`.\
   """
 
   # ── Post-processor insertion anchors (task 019fba28 v2 stage 1) ──────────

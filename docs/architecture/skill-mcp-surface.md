@@ -72,18 +72,18 @@ This is worth tightening in a follow-up — either by adding bundle enforcement 
 
 ## 4. Per-plugin access paths
 
-### Claude-channel — [`Startup-Suite/claude-code-suite-channel`](https://github.com/Startup-Suite/claude-code-suite-channel)
+### Claude-channel — [`burrow-channel-claude-code`](https://github.com/GetBurrowing/burrow-channel-claude-code) (formerly `claude-code-suite-channel`)
 
-A narrow chat-only Claude Code channels plugin. Surfaces four tools to the Claude session: `suite_reply`, `suite_reply_with_media`, `suite_reply_chunk`, `suite_typing`. **It does not proxy any Burrow tool surface.** The README (lines 11–21) is explicit: full Burrow tool access requires registering Burrow's `/mcp` as a separate MCP server:
+A narrow chat-only Claude Code channels plugin. Surfaces four tools to the Claude session: `burrow_reply`, `burrow_reply_with_media`, `burrow_reply_chunk`, `burrow_typing` (since plugin 0.5.0; the earlier `suite_*` names are still listed as deprecated aliases). **It does not proxy any Burrow tool surface.** The README (lines 11–21) is explicit: full Burrow tool access requires registering Burrow's `/mcp` as a separate MCP server:
 
 ```bash
-claude mcp add startup-suite --transport http https://<your-suite>/mcp \
+claude mcp add burrow --transport http https://<your-burrow>/mcp \
   --header "Authorization: Bearer <runtime_token>"
 ```
 
 So Claude reaches `skill.*` strictly via the **HTTP `/mcp`** transport — and is therefore subject to the bundle gate.
 
-### OpenClaw — [`Startup-Suite/openclaw-suite-channel`](https://github.com/Startup-Suite/openclaw-suite-channel) (locally cloned as `~/sources/startup-suite-channel`)
+### OpenClaw — [`burrow-channel-openclaw`](https://github.com/GetBurrowing/burrow-channel-openclaw) (formerly `openclaw-suite-channel`)
 
 Two operating modes, controlled by per-account `useMcpTools` config (`src/plugin-state.ts`, `src/channel.ts` line 81):
 
@@ -119,8 +119,8 @@ Once the stage-2 migration has been applied, two quick spot-checks confirm parit
 
 ```bash
 # In a Claude Code session that has the Burrow MCP server configured:
-# (the plugin install + `claude mcp add startup-suite ...` from §4)
-> /mcp                       # confirm "startup-suite" connected
+# (the plugin install + `claude mcp add burrow ...` from §4)
+> /mcp                       # confirm "burrow" connected
 > Use skill_list to show me the registered skills.
 ```
 

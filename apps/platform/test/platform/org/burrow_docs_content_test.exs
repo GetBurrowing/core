@@ -29,8 +29,11 @@ defmodule Platform.Org.BurrowDocsContentTest do
 
   # Tools that agents call but that are NOT served by core's tool surface: they
   # come from the channel plugin each runtime installs, so they never appear in
-  # `ToolSurface.tool_definitions/0`.
-  @channel_plugin_tools ~w(suite_reply suite_reply_chunk suite_reply_with_media suite_typing)
+  # `ToolSurface.tool_definitions/0`. The `suite_*` names are the plugin's
+  # deprecated aliases of the `burrow_*` tools (plugin 0.5.0); the docs still
+  # name them for agents on an older plugin.
+  @channel_plugin_tools ~w(burrow_reply burrow_reply_chunk burrow_reply_with_media burrow_typing
+                           suite_reply suite_reply_chunk suite_reply_with_media suite_typing)
 
   # Tools defined by an optional build-time module rather than by core. Core
   # may not reference that module's code (see extension_boundary_test.exs), and
@@ -99,10 +102,12 @@ defmodule Platform.Org.BurrowDocsContentTest do
   # rule, so this file does not spell those terms (task 01a14b9e stage 5).
   @banned_words ~r/\b(acme)\b/i
   @sha ~r/\A[0-9a-f]{8,40}\z/
-  # A page that documents the separately released `suite` CLI also stamps the
-  # CLI commit it was checked against: `_Last verified at <core>; suite CLI at
-  # <cli>._`, matching its `verified_at_suite_cli` frontmatter key.
-  @last_line ~r/\A_Last verified at ([0-9a-f]{8,40})(?:; suite CLI at ([0-9a-f]{8,40}))?\._\z/
+  # A page that documents the separately released `burrow` CLI also stamps the
+  # CLI commit it was checked against: `_Last verified at <core>; burrow CLI at
+  # <cli>._`, matching its `verified_at_suite_cli` frontmatter key (the key
+  # keeps its pre-rename spelling). The CLI was `suite` before 0.8.0, so the
+  # older `; suite CLI at` stamp is still accepted.
+  @last_line ~r/\A_Last verified at ([0-9a-f]{8,40})(?:; (?:burrow|suite) CLI at ([0-9a-f]{8,40}))?\._\z/
 
   # ── The four checks ───────────────────────────────────────────────────────
 

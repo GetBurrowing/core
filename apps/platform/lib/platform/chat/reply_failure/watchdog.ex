@@ -7,7 +7,7 @@ defmodule Platform.Chat.ReplyFailure.Watchdog do
   behavioural gate found two mentions that failed with nothing observable:
 
     * case 7008: the agent ran a turn and answered in its own terminal,
-      never calling `suite_reply`;
+      never calling `burrow_reply` (or its deprecated alias `suite_reply`);
     * case 7009: the agent's key went bad after it had worked; Claude Code
       resumed its session, the pane read ready, and the dev channel dropped
       the message. No turn ran at all.

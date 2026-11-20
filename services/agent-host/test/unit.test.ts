@@ -30,7 +30,7 @@ import { READ_SCRIPT, detectDrift, isFileKey, parseFiles, redactForRead, sha256H
 import type { Runner } from "../src/exec.ts";
 import { LOGIN_MARKERS, captureArgv, redactPane, scrubLine } from "../src/pane.ts";
 import { Host, withAuth, type AuthDeps } from "../src/host.ts";
-import { FALLBACK, HEADER, loadBurrowConventions, renderUserMemory, userMemoryPath, writeUserMemory } from "../src/conventions.ts";
+import { carriesReplyRule, FALLBACK, HEADER, loadBurrowConventions, renderUserMemory, userMemoryPath, writeUserMemory } from "../src/conventions.ts";
 import { ensureAgentUser } from "../src/users.ts";
 import { homeDir } from "../src/ids.ts";
 import { checkApiKey, parseEnvFile, type Fetch } from "../src/auth.ts";
@@ -586,7 +586,18 @@ describe("Burrow's conventions load whatever the owner's CLAUDE.md says (stage 7
     expect(full.startsWith(HEADER)).toBe(true);
     expect(full).toContain(text);
     expect(renderUserMemory(null)).toContain(FALLBACK);
+    expect(FALLBACK).toContain("burrow_reply");
+    // The fallback also names the pre-0.5.0 plugin's name, so an agent on an
+    // old plugin is not left without a reply tool.
     expect(FALLBACK).toContain("suite_reply");
+  });
+
+  test("--check's reply rule accepts burrow_reply or its deprecated alias suite_reply, and nothing else", () => {
+    expect(carriesReplyRule("reply via `burrow_reply`")).toBe(true);
+    expect(carriesReplyRule("reply via `suite_reply`")).toBe(true);
+    // Control: the check can fail.
+    expect(carriesReplyRule("## Always respond in channel\n\nreply in channel")).toBe(false);
+    expect(carriesReplyRule("")).toBe(false);
   });
 
   test("burrow-cli's BURROW_CONVENTIONS is read from its installed sources; a missing lib is null", async () => {

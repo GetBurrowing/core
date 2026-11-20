@@ -73,7 +73,7 @@ defmodule Platform.Orchestration.DispatchMetrics do
   is valid and does not bind `agent_id` to that runtime, so a report cannot
   be traced to the runtime that sent it.
 
-  `suite_reply` and typing frames are channel events, not tool calls, and
+  `burrow_reply` and typing frames are channel events, not tool calls, and
   are not counted anywhere.
   """
 
