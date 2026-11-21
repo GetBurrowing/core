@@ -106,7 +106,16 @@ defmodule Platform.Design.MoreSheetContrastGuardTest do
                         {[], ".more-sheet-settings[data-nav-pending]"},
                         {[], ".more-sheet:has([data-nav-pending])"},
                         {[], ".more-sheet:has([data-nav-pending]) .sheet-panel"},
-                        {[], ".more-sheet:has([data-nav-pending]) .sheet-backdrop"}
+                        {[], ".more-sheet:has([data-nav-pending]) .sheet-backdrop"},
+                        # The More page (task 01a1fc7f stage 2): the same rows
+                        # on the base-200 ground. Hover base-100 (row label
+                        # and icon on base-100 are measured above), pressed
+                        # base-300 (measured above), no last-row fill.
+                        {[], ".more-page .more-sheet-row:last-child"},
+                        {["@media (hover: hover)"], ".more-page .more-sheet-row:hover"},
+                        {["@media (hover: hover)"], ".more-page .more-sheet-settings:hover"},
+                        {[], ".more-page .more-sheet-row:active"},
+                        {[], ".more-page .more-sheet-settings:active"}
                       ])
 
   @colour_literal ~r/#[0-9a-fA-F]{3,8}\b|\brgba?\(|\bhsla?\(|\boklch\(|\boklab\(|\blab\(|\blch\(|\bhwb\(/

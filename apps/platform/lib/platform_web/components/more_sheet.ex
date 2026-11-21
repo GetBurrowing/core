@@ -179,7 +179,7 @@ defmodule PlatformWeb.Components.MoreSheet do
     ~H"""
     <.more_rows {assigns} />
     <div
-      class="more-page-settings mt-1 border-t border-base-300 pt-1"
+      class="more-page-settings mt-1 border-t border-edge pt-1"
       data-role="more-page-settings"
     >
       <.more_settings_link {assigns} />
