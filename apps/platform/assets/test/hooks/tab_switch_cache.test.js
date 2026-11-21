@@ -261,7 +261,7 @@ function page(doc, key, text) {
   return h(doc, "div", { id: `${key}-page`, class: "h-full", "data-in-call": "" }, list)
 }
 
-function mountShell(doc, { current, user = "u1", masked = false, text = "Sample Person" }) {
+function mountShell(doc, { current, user = "u1", masked = false, text = "Sample Person", activeKey = current }) {
   const root = h(doc, "div", { id: "shell" })
   const hook = h(doc, "div", {
     id: "tab-switch-cache",
@@ -285,6 +285,9 @@ function mountShell(doc, { current, user = "u1", masked = false, text = "Sample 
     )
   }
   nav.appendChild(h(doc, "button", { class: "bottom-nav-tab", "data-destination": "more" }, "More"))
+  // The shell's native tab bridge: data-active-key is the tab that owns the
+  // page ("more" on /more, /settings and the More rows' pages).
+  nav.appendChild(h(doc, "span", { id: "native-tab-bridge", hidden: "", "data-active-key": activeKey }))
   const sheet = h(doc, "nav", { class: "more-sheet-list" })
   for (const key of ["inbox", "files", "skills", "agents", "context", "changelog"]) {
     sheet.appendChild(h(doc, "a", { class: "more-sheet-row", href: `/${key}`, "data-destination": key }, key))
@@ -464,6 +467,78 @@ describe("TabSwitchCache", () => {
     env.land("chat")
     env.tap("meetings")
     expect(layerOf(env.doc).classList.contains("tab-switch-layer--instant")).toBe(false)
+  })
+
+  describe("leaving a page under the More tab (01a1fc7f stage 4)", () => {
+    const html = () => env.doc.documentElement
+    const posture = ({ duo, open }) => {
+      if (duo) html().setAttribute("data-native-duo", "")
+      else html().removeAttribute("data-native-duo")
+      if (open) html().setAttribute("data-native-duo-open", "")
+      else html().removeAttribute("data-native-duo-open")
+    }
+    const instant = () => layerOf(env.doc).classList.contains("tab-switch-layer--instant")
+
+    it("covers at once from Settings on the open Duo (More tab active)", () => {
+      posture({ duo: true, open: true })
+      env.shell({ current: "settings", activeKey: "more" })
+      env.tap("inbox")
+      expect(layerOf(env.doc).getAttribute("data-mode")).toBe("skeleton")
+      expect(instant()).toBe(true)
+
+      env.shell({ current: "settings", activeKey: "more" })
+      env.tap("chat")
+      expect(instant()).toBe(true)
+
+      // A Settings subpage keys on the tab, not its own data-current.
+      env.shell({ current: "settings_profile", activeKey: "more" })
+      env.tap("tasks")
+      expect(instant()).toBe(true)
+    })
+
+    it("keeps the FAST_MS delay leaving any other tab on the open Duo", () => {
+      posture({ duo: true, open: true })
+      env.shell({ current: "tasks" })
+      env.tap("chat")
+      expect(instant()).toBe(false)
+
+      env.shell({ current: "chat" })
+      env.tap("inbox")
+      expect(instant()).toBe(false)
+    })
+
+    it("leaves the closed Duo and other phones unchanged leaving Settings", () => {
+      // Closed Duo: data-native-duo without data-native-duo-open.
+      posture({ duo: true, open: false })
+      env.shell({ current: "settings", activeKey: "more" })
+      env.tap("inbox")
+      expect(instant()).toBe(false)
+
+      // Any other iPhone or a browser: neither attribute.
+      posture({ duo: false, open: false })
+      env.shell({ current: "settings", activeKey: "more" })
+      env.tap("chat")
+      expect(instant()).toBe(false)
+
+      // Open alone (never written off the Duo) is not the posture either.
+      posture({ duo: false, open: true })
+      env.shell({ current: "settings", activeKey: "more" })
+      env.tap("chat")
+      expect(instant()).toBe(false)
+    })
+
+    it("reads the posture at the tap, so a fold flips it live", () => {
+      posture({ duo: true, open: true })
+      env.shell({ current: "settings", activeKey: "more" })
+      posture({ duo: true, open: false })
+      env.tap("chat")
+      expect(instant()).toBe(false)
+
+      env.shell({ current: "settings", activeKey: "more" })
+      posture({ duo: true, open: true })
+      env.tap("tasks")
+      expect(instant()).toBe(true)
+    })
   })
 
   it("styles the instant layer with no reveal delay (app.css)", () => {
