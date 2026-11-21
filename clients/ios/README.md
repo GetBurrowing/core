@@ -249,10 +249,12 @@ size-class change.
 tap fires `burrowNativeBack`. The tab navigation controllers show their
 (titleless) bar only while the side strip is in use, read from the shell
 and window as for the bottom reservation (the content reports no edge on
-iOS 27.2); open, they are hidden and the web header keeps its own control.
-On every edge change and every new document the shell sets or clears
-`<html data-native-vertical-bar>` in the same main-thread turn as the
-item, so app.css hides the web control exactly while the native one
+iOS 27.2), and only while the tabs show: when the web hides the tabs (a
+call, a full-screen viewer, the composer focused) the Back hides with them.
+Open, the bars are hidden and the web header keeps its own control. On
+every edge change, tab show or hide, and new document the shell sets or
+clears `<html data-native-vertical-bar>` in the same main-thread turn as
+the bar, so app.css hides the web control exactly while the native one
 shows. Never set off the Duo.
 
 Measured on the iOS 27.2 Duo simulator, closed (466x678 pt), with the

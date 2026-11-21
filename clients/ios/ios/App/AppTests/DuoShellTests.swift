@@ -386,6 +386,16 @@ final class DuoShellTests: XCTestCase {
         XCTAssertFalse(shell.navBarShown)
     }
 
+    func testTheBackHidesWithTheTabsForACall() {
+        let (shell, host, _) = makeShell()
+        host.render(state(["items": four, "selected": "chat", "visible": true]))
+        shell.renderNavBack(NativeNavBack(kind: .back, label: "Back"), verticalBar: true, tabsShown: false)
+        XCTAssertFalse(shell.navBarShown, "the whole strip hides, Back included")
+        XCTAssertEqual(shell.selectedSlot?.navigationController?.isNavigationBarHidden, true)
+        shell.renderNavBack(NativeNavBack(kind: .back, label: "Back"), verticalBar: true, tabsShown: true)
+        XCTAssertEqual(shell.selectedSlot?.navigationController?.isNavigationBarHidden, false)
+    }
+
     func testTheAttributeIsSetOnlyOnTheDuoWithAnEdge() throws {
         XCTAssertNil(NativeNavBarDocument.attributeScript(isDuo: false, verticalBar: true), "never on another iPhone")
         XCTAssertNil(NativeNavBarDocument.attributeScript(isDuo: false, verticalBar: false))

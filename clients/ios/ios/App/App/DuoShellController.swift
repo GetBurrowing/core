@@ -311,10 +311,13 @@ final class DuoShellController: UITabBarController {
     var onNavBack: (() -> Void)?
 
     /// Draws `back` (nil: none) in the selected slot, clears every other
-    /// slot, and shows the navigation bars only while `verticalBar`.
-    func renderNavBack(_ back: NativeNavBack?, verticalBar: Bool) {
+    /// slot, and shows the navigation bars only while `verticalBar` and
+    /// while the tabs show (`tabsShown`): when the web hides the tabs (a
+    /// call, a full-screen viewer, the composer focused) the whole strip
+    /// hides, Back included (canvas rule 8), and the web shows its own.
+    func renderNavBack(_ back: NativeNavBack?, verticalBar: Bool, tabsShown: Bool = true) {
         navBack = back
-        navBarShown = verticalBar
+        navBarShown = verticalBar && tabsShown
         applyNavBack()
     }
 

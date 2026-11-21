@@ -508,11 +508,14 @@ final class BurrowBridgeViewController: CAPBridgeViewController {
     /// frame where both, or neither, show. A no-op off the Duo.
     private func syncNavBar() {
         guard #available(iOS 18, *), let shell = duoShell as? DuoShellController else { return }
-        let vertical = DuoLayout.verticalBarActive(for: self)
         shell.onNavBack = { [weak self] in self?.navBackTapped() }
-        shell.renderNavBack(navBack, verticalBar: vertical)
-        guard pushedVerticalBar != vertical, let script = NativeNavBarDocument.attributeScript(isDuo: true, verticalBar: vertical) else { return }
-        pushedVerticalBar = vertical
+        shell.renderNavBack(navBack, verticalBar: DuoLayout.verticalBarActive(for: self), tabsShown: tabBarState.shown)
+        // The attribute follows the native bar exactly: while the strip is
+        // hidden with the tabs (a call, the composer focused) the web shows
+        // its own control again, so there is still one Back.
+        let drawn = shell.navBarShown
+        guard pushedVerticalBar != drawn, let script = NativeNavBarDocument.attributeScript(isDuo: true, verticalBar: drawn) else { return }
+        pushedVerticalBar = drawn
         webView?.evaluateJavaScript(script)
     }
 
@@ -526,6 +529,7 @@ final class BurrowBridgeViewController: CAPBridgeViewController {
         documentSentState = true
         tabBarState = tabBarState.applying(payload)
         tabBarHost?.render(tabBarState)
+        syncNavBar()
         observeBackdrop()
         for delay in [0.15, 0.7, 1.6] { scheduleBackdropSample(after: delay) }
         #if DEBUG
@@ -635,6 +639,7 @@ final class BurrowBridgeViewController: CAPBridgeViewController {
             guard let self, self.documentGeneration == generation, !self.documentSentState, self.tabBarState.visible else { return }
             self.tabBarState.visible = false
             self.tabBarHost?.render(self.tabBarState)
+            self.syncNavBar()
             #if DEBUG
                 self.reportTabBarFixture()
             #endif
