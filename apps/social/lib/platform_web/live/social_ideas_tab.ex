@@ -1,13 +1,13 @@
 defmodule PlatformWeb.SocialIdeasTab do
   @moduledoc """
   The Ideas tab (Social authoring 7/11, task 01a16c50-ea67): a board of
-  the scope's ideas in five lanes, Inbox → Drafting → In review →
+  the scope's ideas in derived lanes, Shortlisted / Inbox → Drafting → In review →
   Scheduled → Live, with quick add, and an idea detail
   (`PlatformWeb.SocialIdeaDetail`).
 
   ## Lanes are derived
 
-  A card's lane is `Platform.Social.Ideas.stage/1` of its posts, read by
+  A card's lane derives from posts and votes, read by
   `Platform.Social.IdeaBoard`. Nothing is stored and nothing is dragged:
   an idea moves when its posts move. Each lane is a LiveView stream,
   re-streamed with `reset: true` on every load. The board subscribes to
@@ -44,10 +44,11 @@ defmodule PlatformWeb.SocialIdeasTab do
   use PlatformWeb.SocialTab
 
   alias Platform.Social
-  alias Platform.Social.{Idea, IdeaBoard, IdeaNotes, Ideas, Profile}
+  alias Platform.Social.{Idea, IdeaBoard, IdeaNotes, Ideas, IdeaVotes, Profile}
   alias PlatformWeb.{SocialIdeaDetail, SocialPreview, SocialScope}
 
   @lane_labels %{
+    "shortlisted" => "Shortlisted",
     "inbox" => "Inbox",
     "drafting" => "Drafting",
     "in_review" => "In review",
@@ -56,6 +57,7 @@ defmodule PlatformWeb.SocialIdeasTab do
   }
 
   @empty_copy %{
+    "shortlisted" => "Ideas with at least three votes appear here until drafting begins.",
     "inbox" => "No ideas yet. Add one here; an agent's ideas land here too.",
     "drafting" => "Ideas move here when an agent starts drafting them.",
     "in_review" => "Ideas move here when a draft is submitted for approval.",
@@ -63,7 +65,7 @@ defmodule PlatformWeb.SocialIdeasTab do
     "live" => "Ideas move here when a version is published."
   }
 
-  @events ~w(ideas_lane ideas_open ideas_close ideas_quick_open ideas_quick_cancel
+  @events ~w(ideas_vote ideas_lane ideas_open ideas_close ideas_quick_open ideas_quick_cancel
              ideas_quick_save ideas_ask_draft ideas_compose ideas_archive ideas_note_save
              ideas_options_save)
 
@@ -107,6 +109,7 @@ defmodule PlatformWeb.SocialIdeasTab do
   end
 
   @stream_names %{
+    "shortlisted" => :ideas_shortlisted,
     "inbox" => :ideas_inbox,
     "drafting" => :ideas_drafting,
     "in_review" => :ideas_in_review,
@@ -183,7 +186,11 @@ defmodule PlatformWeb.SocialIdeasTab do
     do: assign(socket, :ideas_detail, nil)
 
   defp load_detail(socket) do
-    case IdeaBoard.detail(socket.assigns.ideas_profiles, socket.assigns.ideas_open) do
+    case IdeaBoard.detail(
+           socket.assigns.ideas_profiles,
+           socket.assigns.ideas_open,
+           user_id(socket)
+         ) do
       nil ->
         socket |> assign(:ideas_open, nil) |> assign(:ideas_detail, nil)
 
@@ -236,6 +243,22 @@ defmodule PlatformWeb.SocialIdeasTab do
   # ── Events ───────────────────────────────────────────────────────────
 
   @impl true
+  def handle_event("ideas_vote", %{"id" => id, "action" => action}, socket)
+      when action in ~w(vote unvote) do
+    result =
+      with_idea(socket, id, fn scope, user_id ->
+        if action == "unvote",
+          do: IdeaVotes.unvote(scope, id, {:user, user_id}),
+          else: IdeaVotes.vote(scope, id, {:user, user_id})
+      end)
+
+    case result do
+      {:ok, _} -> {:noreply, load(socket)}
+      {:error, reason} -> {:noreply, socket |> say(refusal(reason), :warning) |> load()}
+      _ -> {:noreply, socket |> say(refusal(:not_found), :warning) |> load()}
+    end
+  end
+
   def handle_event("ideas_lane", %{"lane" => lane}, socket) do
     if lane in lanes(),
       do: {:noreply, assign(socket, :ideas_lane, lane)},
@@ -413,6 +436,7 @@ defmodule PlatformWeb.SocialIdeasTab do
 
   defp refusal(:not_an_approver), do: "Only approvers of this brand can do that."
   defp refusal(:not_found), do: "That idea is no longer here."
+  defp refusal(:own_idea), do: "You cannot vote for your own idea."
   defp refusal(:idea_archived), do: "This idea is archived."
   defp refusal(:has_published), do: "An idea with a published post can't be archived."
 
@@ -504,7 +528,7 @@ defmodule PlatformWeb.SocialIdeasTab do
         role="tablist"
         aria-label="Lanes"
         data-role="ideas-lane-control"
-        class="grid grid-cols-5 gap-1 rounded-lg border border-base-300 bg-base-200 p-1 sm:hidden"
+        class="grid grid-cols-3 gap-1 rounded-lg border border-base-300 bg-base-200 p-1 sm:hidden"
       >
         <button
           :for={item <- @lane_items}
@@ -530,7 +554,7 @@ defmodule PlatformWeb.SocialIdeasTab do
 
       <div
         data-role="ideas-board"
-        class="flex gap-3 sm:overflow-x-auto sm:pb-2 lg:grid lg:grid-cols-5 lg:overflow-visible"
+        class="flex gap-3 sm:overflow-x-auto sm:pb-2 lg:grid lg:grid-cols-6 lg:overflow-visible"
       >
         <section
           :for={item <- @lane_items}
@@ -596,7 +620,7 @@ defmodule PlatformWeb.SocialIdeasTab do
                 show_brand?={@all?}
                 tz={@tz_for.(card)}
                 composer?={@composer?}
-                can_draft?={card.lane == "inbox" and card.can_write?}
+                can_draft?={card.lane in ~w(inbox shortlisted) and card.can_write?}
               />
             </li>
           </ul>
@@ -746,6 +770,35 @@ defmodule PlatformWeb.SocialIdeasTab do
         </span>
       </button>
 
+      <div class="flex flex-wrap items-center gap-2 border-t border-base-300 px-3 py-2">
+        <span class="text-sm" data-role="idea-vote-count" role="status" aria-live="polite">
+          {@card.vote_count} {if @card.vote_count == 1, do: "vote", else: "votes"}
+        </span>
+        <button
+          :if={!@card.own_idea? and is_nil(@card.idea.archived_at)}
+          type="button"
+          phx-click="ideas_vote"
+          phx-value-id={@card.id}
+          phx-value-action="vote"
+          aria-pressed={to_string(@card.voted)}
+          disabled={@card.voted}
+          data-role="idea-vote"
+          class="btn btn-outline btn-sm min-h-11"
+        >
+          {if @card.voted, do: "Voted", else: "Vote"}
+        </button>
+        <button
+          :if={@card.voted and !@card.own_idea? and is_nil(@card.idea.archived_at)}
+          type="button"
+          phx-click="ideas_vote"
+          phx-value-id={@card.id}
+          phx-value-action="unvote"
+          data-role="idea-unvote"
+          class="btn btn-ghost btn-sm min-h-11"
+        >
+          Withdraw vote
+        </button>
+      </div>
       <div :if={@can_draft?} class="border-t border-base-300 px-3 py-2">
         <SocialIdeaDetail.draft_button
           idea_id={@card.id}

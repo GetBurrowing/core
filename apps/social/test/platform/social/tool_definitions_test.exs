@@ -14,11 +14,11 @@ defmodule Platform.Social.ToolDefinitionsTest do
               social_post_list social_results_get social_clip_propose social_clip_submit social_clip_render
               social_clip_list social_task_request) ++
                     @job_tools ++
-                    ~w(social_idea_create social_idea_list social_idea_note_add social_weekly_note_submit social_weekly_note_list social_studio_draft_create)
+                    ~w(social_idea_create social_idea_list social_idea_vote social_idea_unvote social_idea_archive social_idea_note_add social_weekly_note_submit social_weekly_note_list social_studio_draft_create)
 
   @sentence "A human approves this in Burrow and the platform publishes it; agents cannot approve or publish."
 
-  test "exactly the twenty-three tools, names() and definitions() agree" do
+  test "the registered Social tools, names() and definitions() agree" do
     assert Enum.sort(ToolDefinitions.names()) == Enum.sort(@expected_names)
     assert Enum.map(ToolDefinitions.definitions(), & &1.name) == ToolDefinitions.names()
   end

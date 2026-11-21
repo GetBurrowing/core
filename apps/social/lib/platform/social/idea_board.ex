@@ -10,7 +10,7 @@ defmodule Platform.Social.IdeaBoard do
   ## Lanes are derived
 
   An idea's lane is `Platform.Social.Ideas.stage/1` of its posts, never
-  stored and never dragged: Inbox, Drafting, In review, Scheduled, Live.
+  stored and never dragged. Three votes shortlist an Inbox idea; posts take precedence.
   An idea whose every post failed sits in Drafting (it needs another
   draft); any failed post puts a muted Failed marker on the card.
   """
@@ -19,11 +19,11 @@ defmodule Platform.Social.IdeaBoard do
 
   alias Platform.Repo
   alias Platform.Social
-  alias Platform.Social.{Account, Idea, IdeaNotes, Ideas, Post, PostEvents, Profile}
+  alias Platform.Social.{Account, Idea, IdeaNotes, Ideas, IdeaVotes, Post, PostEvents, Profile}
 
-  @lanes ~w(inbox drafting in_review scheduled live)
+  @lanes ~w(shortlisted inbox drafting in_review scheduled live)
 
-  @doc "The five lanes, in board order."
+  @doc "The derived lanes, in board order."
   @spec lanes() :: [String.t()]
   def lanes, do: @lanes
 
@@ -35,7 +35,7 @@ defmodule Platform.Social.IdeaBoard do
 
   @doc """
   The board's cards for `profiles` (each read through its own org), newest
-  idea first, as seen by `user_id` (the "N waiting on you" count).
+  idea first outside Inbox/Shortlisted; those sort by votes, oldest time and id, as seen by `user_id` (the "N waiting on you" count).
   """
   @spec cards([Profile.t()], Ecto.UUID.t() | nil, DateTime.t()) :: [map()]
   def cards(profiles, user_id, now \\ DateTime.utc_now()) do
@@ -43,6 +43,7 @@ defmodule Platform.Social.IdeaBoard do
       Enum.flat_map(profiles, fn %Profile{} = p -> Ideas.list(p.org_id, p.id) end)
       |> Enum.sort_by(& &1.inserted_at, {:desc, DateTime})
 
+    votes = IdeaVotes.summaries(ideas, {:user, user_id})
     posts = ideas |> Enum.map(& &1.id) |> Ideas.posts_by_idea()
     accounts = accounts(posts |> Map.values() |> List.flatten())
     by_id = Map.new(profiles, &{&1.id, &1})
@@ -50,24 +51,35 @@ defmodule Platform.Social.IdeaBoard do
     names = agent_names(Map.values(agent_ids))
     approver? = approver_fun(user_id)
 
-    for idea <- ideas do
-      idea_posts = Map.get(posts, idea.id, [])
-      profile = Map.get(by_id, idea.profile_id)
-      stage = Ideas.stage(idea_posts)
+    cards =
+      for idea <- ideas do
+        idea_posts = Map.get(posts, idea.id, [])
+        profile = Map.get(by_id, idea.profile_id)
+        vote = Map.fetch!(votes, idea.id)
+        stage = IdeaVotes.stage(idea_posts, vote.vote_count)
 
-      %{
-        id: idea.id,
-        idea: idea,
-        profile: profile,
-        stage: stage,
-        lane: lane(stage),
-        failed?: Enum.any?(idea_posts, &(&1.status == "failed")),
-        platforms: Enum.map(idea_posts, &platform_of(accounts, &1)),
-        agent_name: Map.get(names, Map.get(agent_ids, idea.id)),
-        next_at: next_at(idea_posts, now),
-        waiting: waiting(idea_posts, accounts, profile, approver?)
-      }
-    end
+        %{
+          vote_count: vote.vote_count,
+          voted: vote.voted,
+          own_idea?: idea.created_by_user_id == user_id,
+          id: idea.id,
+          idea: idea,
+          profile: profile,
+          stage: stage,
+          lane: lane(stage),
+          failed?: Enum.any?(idea_posts, &(&1.status == "failed")),
+          platforms: Enum.map(idea_posts, &platform_of(accounts, &1)),
+          agent_name: Map.get(names, Map.get(agent_ids, idea.id)),
+          next_at: next_at(idea_posts, now),
+          waiting: waiting(idea_posts, accounts, profile, approver?)
+        }
+      end
+
+    Enum.sort_by(cards, fn card ->
+      if card.lane in ~w(inbox shortlisted),
+        do: {0, IdeaVotes.order_key(card.idea, card.vote_count)},
+        else: {1, {-DateTime.to_unix(card.idea.inserted_at, :microsecond), card.id}}
+    end)
   end
 
   @doc """
@@ -78,9 +90,11 @@ defmodule Platform.Social.IdeaBoard do
   thread, each `%{note, author_name}`.
   """
   @spec detail([Profile.t()], term()) :: map() | nil
-  def detail(profiles, idea_id) do
+  @spec detail([Profile.t()], term(), Ecto.UUID.t() | nil) :: map() | nil
+  def detail(profiles, idea_id, user_id \\ nil) do
     with %Idea{} = idea <- find_idea(profiles, idea_id),
          %Profile{} = profile <- Enum.find(profiles, &(&1.id == idea.profile_id)) do
+      vote = IdeaVotes.summaries([idea], {:user, user_id}) |> Map.fetch!(idea.id)
       posts = Ideas.posts(idea)
       accounts = accounts(posts)
       agent_id = Ideas.drafting_agent_id(idea, posts, profile)
@@ -101,7 +115,9 @@ defmodule Platform.Social.IdeaBoard do
         source: source(idea),
         posts: posts,
         accounts: accounts,
-        stage: Ideas.stage(posts),
+        stage: IdeaVotes.stage(posts, vote.vote_count),
+        vote_count: vote.vote_count,
+        voted: vote.voted,
         has_published?: Enum.any?(posts, &(&1.status == "published")),
         agent_id: agent_id,
         agent_name: Map.get(names, {"agent", agent_id}),

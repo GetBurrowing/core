@@ -1923,27 +1923,49 @@ defmodule Platform.Social do
           {:ok, Post.t()} | {:error, term()}
   def create_post(org_id, account, attrs, opts \\ []) do
     with {:ok, account} <- fetch(Account, org_id, account),
-         :ok <- refuse_archived(account),
-         {:ok, idea_id} <- post_idea(org_id, account, Keyword.get(opts, :idea_id)) do
+         :ok <- refuse_archived(account) do
+      idea_id = Keyword.get(opts, :idea_id)
+
+      result =
+        if is_nil(idea_id) do
+          insert_post_for_idea(org_id, account, attrs, nil)
+        else
+          Repo.transaction(fn ->
+            lock_profile(org_id, account.profile_id, :share) || Repo.rollback(:not_found)
+
+            case insert_post_for_idea(org_id, account, attrs, idea_id) do
+              {:ok, post} -> post
+              {:error, reason} -> Repo.rollback(reason)
+            end
+          end)
+        end
+
+      case result do
+        {:ok, post} -> {:ok, needs_approval_written(post)}
+        error -> error
+      end
+    end
+  end
+
+  defp insert_post_for_idea(org_id, account, attrs, idea_id) do
+    with {:ok, idea_id} <- post_idea(org_id, account, idea_id) do
       changeset =
         %Post{account_id: account.id, idea_id: idea_id}
         |> Post.changeset(attrs)
         |> ClipMedia.put_media_meta(account.profile_id)
 
       with :ok <- require_channel(changeset, account.profile_id, account),
-           {:ok, post} <- Repo.insert(changeset) do
-        {:ok, needs_approval_written(post)}
-      end
+           do: Repo.insert(changeset)
     end
   end
 
   defp post_idea(_org_id, _account, nil), do: {:ok, nil}
 
   defp post_idea(org_id, %Account{profile_id: profile_id}, idea_id) do
-    case Platform.Social.Ideas.get(org_id, idea_id) do
-      %Platform.Social.Idea{profile_id: ^profile_id, id: id} -> {:ok, id}
-      %Platform.Social.Idea{} -> {:error, :idea_profile_mismatch}
-      nil -> {:error, :not_found}
+    case Platform.Social.Ideas.fetch_for_draft(org_id, idea_id) do
+      {:ok, %Platform.Social.Idea{profile_id: ^profile_id, id: id}} -> {:ok, id}
+      {:ok, %Platform.Social.Idea{}} -> {:error, :idea_profile_mismatch}
+      error -> error
     end
   end
 

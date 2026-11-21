@@ -40,6 +40,7 @@ defmodule Platform.Social.Tools do
     Idea,
     IdeaNote,
     IdeaNotes,
+    IdeaVotes,
     Ideas,
     Post,
     PostEvent,
@@ -59,7 +60,7 @@ defmodule Platform.Social.Tools do
 
   # Social authoring 2/11: the tools that need the calling agent (the idea
   # creator, and the change log's actor on a draft write).
-  @agent_tools ~w(social_idea_create social_idea_list social_idea_note_add social_draft_create
+  @agent_tools ~w(social_idea_vote social_idea_unvote social_idea_archive social_idea_create social_idea_list social_idea_note_add social_draft_create
                   social_draft_update social_weekly_note_submit social_studio_draft_create)
 
   @spec execute(String.t(), map(), map()) :: {:ok, map()} | {:error, map()}
@@ -436,25 +437,70 @@ defmodule Platform.Social.Tools do
     end
   end
 
-  defp agent_tool("social_idea_list", args, scope, _agent) do
+  defp agent_tool(tool, args, scope, agent)
+       when tool in ~w(social_idea_vote social_idea_unvote social_idea_archive) do
+    operation =
+      %{
+        "social_idea_vote" => :vote,
+        "social_idea_unvote" => :unvote,
+        "social_idea_archive" => :archive
+      }[tool]
+
+    case apply(IdeaVotes, operation, [scope, args["idea_id"], {:agent, agent.id}]) do
+      {:ok, result} ->
+        {:ok, result}
+
+      {:error, :not_found} ->
+        {:error, not_found("idea")}
+
+      {:error, reason}
+      when reason in [:own_idea, :idea_archived, :not_idea_author, :idea_has_posts] ->
+        {:error,
+         err(
+           reason,
+           "Idea action refused: #{reason}",
+           false,
+           "Refresh the visible idea and check its author and posts."
+         )}
+
+      error ->
+        {:error, error_envelope(error)}
+    end
+  end
+
+  defp agent_tool("social_idea_list", args, scope, agent) do
     case Social.get_profile(scope, args["profile_id"]) do
       %Profile{} = profile ->
         {limit, offset} = ResultBound.page(args)
         stage = blank_to_nil(args["stage"])
 
-        ideas = Ideas.list(scope, profile.id, archived: args["archived"] == true)
+        ideas =
+          if IdeaVotes.allowed?(profile, {:agent, agent.id}),
+            do: Ideas.list(scope, profile.id, archived: args["archived"] == true),
+            else: []
+
+        votes = IdeaVotes.summaries(ideas, {:agent, agent.id})
         posts = ideas |> Enum.map(& &1.id) |> Ideas.posts_by_idea()
 
         rows =
           ideas
           |> Enum.map(&{&1, Map.get(posts, &1.id, [])})
-          |> Enum.filter(fn {_idea, ps} -> stage == nil or Ideas.stage(ps) == stage end)
+          |> Enum.filter(fn {idea, ps} ->
+            stage == nil or IdeaVotes.stage(ps, votes[idea.id].vote_count) == stage
+          end)
 
         page =
           rows
+          |> Enum.sort_by(fn {idea, ps} ->
+            vote = Map.fetch!(votes, idea.id)
+
+            if IdeaVotes.stage(ps, vote.vote_count) in ~w(inbox shortlisted),
+              do: {0, IdeaVotes.order_key(idea, vote.vote_count)},
+              else: {1, {-DateTime.to_unix(idea.inserted_at, :microsecond), idea.id}}
+          end)
           |> Enum.drop(offset)
           |> Enum.take(limit)
-          |> Enum.map(fn {idea, ps} -> idea_json(idea, ps) end)
+          |> Enum.map(fn {idea, ps} -> idea_json(idea, ps, Map.fetch!(votes, idea.id)) end)
 
         {:ok,
          ResultBound.paged(:ideas, page, length(rows), offset, %{limit: limit, offset: offset})}
@@ -464,7 +510,7 @@ defmodule Platform.Social.Tools do
     end
   end
 
-  defp idea_json(%Idea{} = idea, posts) do
+  defp idea_json(%Idea{} = idea, posts, votes \\ %{vote_count: 0, voted: false}) do
     events = posts |> Enum.map(& &1.id) |> PostEvents.list_for_posts()
 
     revisions =
@@ -496,7 +542,9 @@ defmodule Platform.Social.Tools do
       :inserted_at
     ])
     |> Map.merge(%{
-      stage: Ideas.stage(posts),
+      stage: IdeaVotes.stage(posts, votes.vote_count),
+      vote_count: votes.vote_count,
+      voted: votes.voted,
       posts: Enum.map(posts, &Map.put(post_json(&1), :events, events_json(events, &1.id))),
       open_revisions: revisions,
       notes: idea.id |> IdeaNotes.list() |> Enum.map(&note_json/1)

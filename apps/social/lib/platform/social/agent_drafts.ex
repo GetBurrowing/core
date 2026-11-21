@@ -126,13 +126,23 @@ defmodule Platform.Social.AgentDrafts do
          {:ok, account_ids} <- account_ids(attrs),
          {:ok, profile} <- fetch_profile(scope, profile_id),
          :ok <- refuse_banned(attrs, profile),
-         {:ok, idea_id} <- check_idea(scope, attrs["idea_id"], profile),
          :ok <- check_task_profile(attrs, profile),
          {:ok, accounts} <- fetch_accounts(scope, profile, account_ids),
          :ok <- require_channels(status, profile, accounts) do
       attrs = Map.put(attrs, "status", status)
 
       Repo.transaction(fn ->
+        profile =
+          if is_nil(attrs["idea_id"]),
+            do: profile,
+            else: Social.lock_profile(scope, profile.id, :share) || Repo.rollback(:not_found)
+
+        idea_id =
+          case check_idea(scope, attrs["idea_id"], profile) do
+            {:ok, id} -> id
+            {:error, reason} -> Repo.rollback(reason)
+          end
+
         Enum.map(accounts, fn account ->
           changeset =
             %Post{account_id: account.id, idea_id: idea_id}

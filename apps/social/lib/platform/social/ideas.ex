@@ -286,7 +286,10 @@ defmodule Platform.Social.Ideas do
   def find_or_create_for_clip!(%Clip{id: clip_id} = clip, %Profile{} = profile, user_id) do
     case Repo.one(from(i in Idea, where: i.clip_id == ^clip_id and i.source_kind == "clip")) do
       %Idea{} = idea ->
-        idea
+        case fetch_for_draft(profile.org_id, idea.id) do
+          {:ok, locked} -> locked
+          {:error, reason} -> Repo.rollback(reason)
+        end
 
       nil ->
         %Idea{org_id: profile.org_id, profile_id: profile.id}
@@ -467,12 +470,25 @@ defmodule Platform.Social.Ideas do
   The idea a new draft for `profile` may join: `idea_id` read through the
   scope (another org's is `{:error, :not_found}`, like a missing id) and
   `{:error, :idea_archived}` when archived. The PROFILE check is the
-  caller's (`Platform.Social.AgentDrafts`).
+  caller's. Writers call this inside their insert transaction, after the
+  profile lock: it takes FOR UPDATE on the idea and rechecks archived state.
+  Outside a transaction this remains only a preflight read, never a write guard.
   """
   @spec fetch_for_draft(Social.scope(), term()) ::
           {:ok, Idea.t()} | {:error, :not_found | :idea_archived}
   def fetch_for_draft(scope, idea_id) do
-    case get(scope, idea_id) do
+    idea =
+      case Ecto.UUID.cast(idea_id) do
+        {:ok, id} ->
+          query = scope |> scoped() |> where([i], i.id == ^id)
+          query = if Repo.in_transaction?(), do: lock(query, "FOR UPDATE"), else: query
+          Repo.one(query)
+
+        :error ->
+          nil
+      end
+
+    case idea do
       %Idea{archived_at: nil} = idea -> {:ok, idea}
       %Idea{} -> {:error, :idea_archived}
       nil -> {:error, :not_found}
