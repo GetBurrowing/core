@@ -1335,14 +1335,19 @@ defmodule PlatformWeb.SocialTodayTab do
               </p>
               <ul class="list-none space-y-3">
                 <li
-                  :for={item <- displayed_trends(@studio_trends.current, @studio_trend_filter)}
+                  :for={
+                    {item, position} <-
+                      @studio_trends.current
+                      |> displayed_trends(@studio_trend_filter)
+                      |> Enum.with_index(1)
+                  }
                   class="relative pl-7 space-y-2"
                 >
                   <span
                     data-role="trend-rank"
                     class="absolute left-0 top-3 font-mono font-semibold tabular-nums text-primary"
                   >
-                    {item.rank}
+                    {position}
                   </span>
                   <a
                     href={item.url}

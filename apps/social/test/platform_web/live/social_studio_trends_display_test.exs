@@ -44,7 +44,7 @@ defmodule PlatformWeb.SocialStudioTrendsDisplayTest do
     |> Enum.map(fn {_, attrs, _} -> attrs |> Map.new() |> Map.fetch!("data-story-id") end)
   end
 
-  test "shows ten current articles in source order with original ranks and the full comparison",
+  test "shows ten current articles in source order with display positions and the full comparison",
        %{conn: conn} do
     w = studio_world!()
 
@@ -67,12 +67,13 @@ defmodule PlatformWeb.SocialStudioTrendsDisplayTest do
       |> Floki.find("[data-role='studio-trends'] [data-role='trend-rank']")
       |> Enum.map(fn node -> node |> Floki.text() |> String.trim() |> String.to_integer() end)
 
-    assert ranks == Enum.map(1..10, &(2 * &1 + 1))
+    assert ranks == Enum.to_list(1..10)
     assert has_element?(view, "[data-role='studio-trends']", "Up 80")
     assert has_element?(view, "[data-role='studio-trends']", "Showing up to 10 articles")
     %{current: current, previous: previous} = Trends.latest("wikimedia_pageviews")
     assert length(current.items) == 50
     assert length(previous.items) == 50
+    assert Enum.map(Enum.take(current.items, 10), & &1.rank) == Enum.map(1..10, &(2 * &1 + 1))
   end
 
   test "the existing title filter runs before the ten-article display cap", %{conn: conn} do
