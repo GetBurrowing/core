@@ -159,9 +159,15 @@ defmodule PlatformWeb.SocialStudioDReviewTest do
     new_owner = user!() |> member!(w.org_id)
     {:ok, _} = Social.set_account_owner(w.org_id, w.tiktok, w.approver.id)
     post = studio_post!(w, w.tiktok, "planned")
+    post = force!(post, %{scheduled_at: DateTime.utc_now()})
     {:ok, _} = Social.set_account_owner(w.org_id, w.tiktok, new_owner.id)
     view = open(conn, new_owner, w.profile)
-    open_post(view, post)
+    view |> element("[data-role='social-tab-button'][data-tab='calendar']") |> render_click()
+
+    view
+    |> element("[data-role='studio-calendar-planned'][data-post-id='#{post.id}'] button")
+    |> render_click()
+
     refute has_element?(view, "#studio-plan-form")
     view |> element("[data-role='studio-approve']") |> render_click()
     updated = Social.get_post(w.org_id, post.id)

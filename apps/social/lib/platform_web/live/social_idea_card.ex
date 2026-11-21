@@ -900,6 +900,13 @@ defmodule PlatformWeb.SocialIdeaCard do
   defp actions(assigns) do
     ~H"""
     <div data-role="queue-actions" class="flex flex-wrap items-center gap-2">
+      <p
+        :if={:approve in @v.actions and @v.dom == "queue"}
+        data-role="queue-approval-consequence"
+        class="hidden w-full text-sm text-base-content sm:block"
+      >
+        Approval submits to the connected account immediately if no future time is set.
+      </p>
       <button
         :if={:approve in @v.actions}
         type="button"
@@ -1102,6 +1109,13 @@ defmodule PlatformWeb.SocialIdeaCard do
           <span class="badge badge-info font-medium">Waiting for {@v.owner_name}</span>
         </p>
       <% else %>
+        <p
+          :if={:approve in @v.actions and @v.dom == "queue"}
+          data-role="queue-phone-consequence"
+          class="mb-2 text-sm text-base-content"
+        >
+          Approval submits to the connected account immediately if no future time is set.
+        </p>
         <div class="flex items-center gap-2">
           <button
             :if={:reject in @v.actions}

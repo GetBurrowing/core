@@ -99,6 +99,58 @@ defmodule PlatformWeb.SocialLiveQueueTest do
   # ── Done means 1: one card per idea, Approve all ─────────────────────
 
   describe "an idea with 3 drafts" do
+    test "approval consequence is confined to Queue, not idea detail", %{conn: conn} = ctx do
+      idea = idea!(ctx, "Review in detail")
+      [post] = drafts!(ctx, idea, [ctx.a])
+      child = open(conn, ctx.h1, "/m/social?tab=ideas")
+
+      child |> element("#idea-card-#{idea.id} [data-role='idea-card-open']") |> render_click()
+
+      detail = "#idea-detail-card-#{idea.id}"
+      assert has_element?(child, "#{detail} #idea-detail-#{post.id} [data-role='queue-approve']")
+      refute has_element?(child, "#{detail} [data-role='queue-approval-consequence']")
+      refute has_element?(child, "#{detail} [data-role='queue-phone-consequence']")
+    end
+
+    test "the approval consequence appears only when the viewer has an Approve action",
+         %{conn: conn} = ctx do
+      idea = idea!(ctx, "Copy-only first")
+      [copy] = drafts!(ctx, idea, [ctx.d])
+      child = open(conn, ctx.h1)
+      note = "Approval submits to the connected account immediately if no future time is set."
+
+      assert has_element?(child, in_v(copy, "[data-role='queue-copy']"))
+      refute has_element?(child, "[data-role='social-queue-pane']", note)
+
+      refute has_element?(
+               child,
+               "[data-role='queue-phone-bar'] [data-role='queue-phone-consequence']"
+             )
+
+      [approvable] = drafts!(ctx, idea!(ctx, "Approvable"), [ctx.a])
+      assert is_nil(approvable.scheduled_at)
+      child |> element("[data-role='social-tab-button'][data-tab='queue']") |> render_click()
+      assert has_element?(child, in_v(approvable, "[data-role='queue-approve']"))
+      assert has_element?(child, "[data-role='social-queue-pane']", note)
+
+      # Responsive visibility itself is checked in the browser; pin its class tokens here.
+      assert [inline_classes] =
+               child
+               |> render()
+               |> LazyHTML.from_fragment()
+               |> LazyHTML.query(in_v(approvable, "[data-role='queue-approval-consequence']"))
+               |> LazyHTML.attribute("class")
+
+      assert "hidden" in String.split(inline_classes)
+      assert "sm:block" in String.split(inline_classes)
+
+      assert has_element?(
+               child,
+               "[data-role='queue-phone-bar'][data-post='#{approvable.id}'] [data-role='queue-phone-consequence']",
+               note
+             )
+    end
+
     test "renders one card with 3 real previews, the source, the agent, the title and stage",
          %{conn: conn} = ctx do
       {idea, [li, x, ig]} = three!(ctx)
@@ -547,7 +599,7 @@ defmodule PlatformWeb.SocialLiveQueueTest do
     )
 
     child = open(conn, ctx.h1)
-    assert has_element?(child, "[data-role='social-empty']", "Nothing needs you.")
+    assert has_element?(child, "[data-role='social-empty']", "Nothing is awaiting approval.")
     refute has_element?(child, "[data-role='social-go-connections']")
     assert has_element?(child, "#queue-scheduled-#{post.id}", "LinkedIn post")
 
@@ -570,7 +622,7 @@ defmodule PlatformWeb.SocialLiveQueueTest do
     child |> form("#social-profile-switcher", %{profile_id: empty.id}) |> render_change()
 
     assert has_element?(child, "[data-role='social-empty']", "Connect an account to start.")
-    refute has_element?(child, "[data-role='social-empty']", "Nothing needs you.")
+    assert has_element?(child, "[data-role='social-empty']", "Nothing is awaiting approval.")
     child |> element("[data-role='social-go-connections']") |> render_click()
     assert has_element?(child, "[data-role='social-tab-body'][data-tab='connections']")
   end

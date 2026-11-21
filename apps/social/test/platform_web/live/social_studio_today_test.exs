@@ -644,6 +644,12 @@ defmodule PlatformWeb.SocialStudioTodayTest do
     view |> element("[data-role='social-tab-button'][data-tab='queue']") |> render_click()
     assert has_element?(view, "[data-role='social-queue']", "Legacy item")
     refute has_element?(view, "[data-role='social-queue']", "Studio item")
+
+    assert has_element?(
+             view,
+             "[data-role='social-queue-pane']",
+             "Approval submits to the connected account immediately if no future time is set."
+           )
   end
 
   test "disabling Studio removes its header count without changing legacy queue", %{conn: conn} do
@@ -960,7 +966,7 @@ defmodule PlatformWeb.SocialStudioTodayTest do
     assert has_element?(
              view,
              "[data-role='studio-calendar-planned'][data-post-id='#{planned.id}']",
-             "Planned in Burrow"
+             "Plan only · does not publish"
            )
 
     assert has_element?(
