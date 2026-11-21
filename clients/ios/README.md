@@ -220,7 +220,7 @@ At regular width the system draws the tabs at the top. While the bar is
 not along the bottom (`DuoLayout.barAtBottom`, decided from the bar's frame
 in the window), the bridge pushes `--native-tab-bar-height` 0.
 
-The open posture could not be produced on rock. Xcode 27.2 has no
+The open posture could not be produced on the build Mac. Xcode 27.2 has no
 Simulator.app, DeviceHub has no fold control reachable from `simctl`,
 `devicectl` or AppleScript (assistive access refused), and toggling display
 power crashes SpringBoard. So the open B' rendering is inferred from the

@@ -379,10 +379,19 @@ enum NativeTabBarFactory {
     /// The web theme's inks and scheme on the bar: the selected tab in
     /// `tintColor`, the rest in `unselectedItemTintColor`, the glass in the
     /// web's light or dark.
-    static func paint(_ bar: UITabBar, ink: NativeTabInkColors, style: UIUserInterfaceStyle) {
+    ///
+    /// `strip` is the Duo shell's view (task 01a1fa7c stage 5). The closed
+    /// Duo's side strip does not draw from the UITabBar's `tintColor`: it
+    /// inherits the tint of the tab bar controller's view, which is the
+    /// app's global accent (the asset primary, #ad4b07 in light) unless set.
+    /// So the selected ink goes on that view too, and the strip draws the
+    /// web's ink as the iPhone bar does. Everything else in the shell (the
+    /// native Back) inherits the same ink.
+    static func paint(_ bar: UITabBar, ink: NativeTabInkColors, style: UIUserInterfaceStyle, strip: UIView? = nil) {
         bar.tintColor = ink.selected
         bar.unselectedItemTintColor = ink.unselected
         bar.overrideUserInterfaceStyle = style
+        strip?.tintColor = ink.selected
     }
 
     /// The badge for `key`. On Inbox: the `inbox_badge` label ("1" to "9",
@@ -683,7 +692,7 @@ final class ControllerTabBarHost: NSObject, NativeTabBarHosting, UITabBarControl
 
     private func repaint() {
         let adapted = NativeTabBarBackdrop.adapted(ink, webStyle: state.interfaceStyle, backdrop: backdropStyle)
-        NativeTabBarFactory.paint(shell.tabBar, ink: adapted.ink, style: adapted.style)
+        NativeTabBarFactory.paint(shell.tabBar, ink: adapted.ink, style: adapted.style, strip: shell.view)
     }
 
     /// The label font and the `native-tab-<key>` identifiers on the items
@@ -706,6 +715,8 @@ final class ControllerTabBarHost: NSObject, NativeTabBarHosting, UITabBarControl
     func tabBarController(_ tabBarController: UITabBarController, shouldSelectTab tab: UITab) -> Bool {
         onTap?(tab.identifier)
         guard shell.selectedTab !== tab else { return false }
+        // The system selects through its own path, not `selectedTab`.
+        shell.endEditingBeforeMove()
         pendingKey = tab.identifier
         pendingEpoch += 1
         let epoch = pendingEpoch

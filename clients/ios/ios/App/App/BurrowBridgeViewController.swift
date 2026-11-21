@@ -497,7 +497,7 @@ final class BurrowBridgeViewController: CAPBridgeViewController {
         syncNavBar()
     }
 
-    /// `SuiteNative.navBarState` from the web.
+    /// `BurrowNative.navBarState` from the web.
     func applyNavBarState(_ payload: [String: Any]) {
         navBack = NativeNavBack.parse(payload)
         syncNavBar()

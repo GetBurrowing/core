@@ -358,6 +358,15 @@ final class DuoShellController: UITabBarController {
     /// The keys of the tabs, in order.
     var keys: [String] { tabs.map(\.identifier) }
 
+    /// Any change of selection moves the content, so editing ends while the
+    /// content is still in the old, on-screen slot (see `placeContent`):
+    /// UIKit takes the old tab's page off screen inside this setter.
+    override var selectedTab: UITab? {
+        willSet {
+            if newValue !== selectedTab { endEditingBeforeMove() }
+        }
+    }
+
     /// The slot of `tab`.
     func slot(of tab: UITab?) -> TabSlotViewController? {
         tab.flatMap { navigations[$0.identifier]?.viewControllers.first as? TabSlotViewController }
@@ -368,17 +377,50 @@ final class DuoShellController: UITabBarController {
 
     /// Puts the content in the selected tab's slot (a no-op when it is
     /// already there). Called after every selection or tab-list change.
+    ///
+    /// A move ends editing first (task 01a1fa7c stage 5). Re-parenting the
+    /// web view while it is first responder, its text input session live,
+    /// can leave the keyboard host attached to the old slot: the next focus
+    /// shows the accessory bar with no keys until a relaunch. So when the
+    /// content is about to change slot and anything in it is first
+    /// responder, it resigns (WebKit blurs the focused field) before the
+    /// view leaves its superview, and the next tap starts a fresh session in
+    /// the new slot.
     func placeContent() {
         guard let target = selectedSlot else { return }
+        if target.content !== content { endEditingBeforeMove() }
         for tab in tabs where slot(of: tab) !== target { slot(of: tab)?.release(content) }
         target.host(content)
         // The Back follows the content into the newly selected slot.
         applyNavBack()
     }
 
+    /// How many moves found the content editing and ended it first (the
+    /// DEBUG fixture and the tests read it).
+    private(set) var editingEndedForMove = 0
+
+    /// Resigns whatever in the content is first responder, while the content
+    /// is still in its old slot. A no-op when nothing is editing. The
+    /// controller host also calls it for a tap, before the system selects.
+    func endEditingBeforeMove() {
+        guard content.isViewLoaded, content.view.window != nil, Self.firstResponder(in: content.view) != nil else { return }
+        content.view.endEditing(true)
+        editingEndedForMove += 1
+    }
+
+    /// The first responder in `view`'s subtree, nil when there is none.
+    static func firstResponder(in view: UIView) -> UIView? {
+        if view.isFirstResponder { return view }
+        for subview in view.subviews {
+            if let found = firstResponder(in: subview) { return found }
+        }
+        return nil
+    }
+
     /// Web-load recovery on the Duo: a fresh bridge replaces ONLY the
     /// content. The window root, the tabs and the selection stay.
     func replaceContent(with replacement: UIViewController) {
+        endEditingBeforeMove()
         let old = content
         for tab in tabs { slot(of: tab)?.release(old) }
         old.willMove(toParent: nil)

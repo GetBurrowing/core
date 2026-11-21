@@ -112,7 +112,7 @@ final class DuoShellTests: XCTestCase {
         let order = ["inbox", "chat", "more", "calendar"]
         let next = state([
             "items": order, "selected": "chat", "inbox_badge": "3", "visible": true,
-            "ink": ["selected": "#ad4b07ff", "unselected": "#0000008c"], "scheme": "light",
+            "ink": ["selected": "#8b3b04ff", "unselected": "#0000008c"], "scheme": "light",
         ])
         host.render(next)
         XCTAssertEqual(shell.keys, order, "the web's order")
@@ -124,7 +124,7 @@ final class DuoShellTests: XCTestCase {
         }
         XCTAssertEqual(shell.selectedTab?.identifier, "chat")
         XCTAssertFalse(shell.isTabBarHidden)
-        XCTAssertEqual(rgba(shell.tabBar.tintColor), [0xad, 0x4b, 0x07, 0xff], "today's selected ink")
+        XCTAssertEqual(rgba(shell.tabBar.tintColor), [0x8b, 0x3b, 0x04, 0xff], "the web's selected ink")
         XCTAssertEqual(rgba(shell.tabBar.unselectedItemTintColor), [0, 0, 0, 0x8c])
         XCTAssertEqual(shell.tabBar.overrideUserInterfaceStyle, .light)
 
@@ -134,6 +134,94 @@ final class DuoShellTests: XCTestCase {
         XCTAssertFalse(shell.isTabBarHidden, "the web hiding its own bar does not hide the strip (stage 5)")
         host.render(state(["visible": true], from: cleared))
         XCTAssertFalse(shell.isTabBarHidden)
+    }
+
+    // MARK: Stage 5 round 2: the strip's selected tint is the web's ink
+
+    /// The closed Duo's strip draws its selected tab in the tint of the
+    /// shell's view, not the UITabBar's `tintColor`; unset, that is the
+    /// app's global accent (the asset primary, #ad4b07 in light). The light
+    /// probe ink #8b3b04 must reach the strip as it reaches the iPhone bar,
+    /// and a later ink (a theme change) must follow.
+    func testTheStripTakesTheWebsSelectedInkNotTheAssetPrimary() {
+        let (shell, host, _) = makeShell()
+        let light = state([
+            "items": four, "selected": "chat", "visible": true,
+            "ink": ["selected": "#8b3b04ff", "unselected": "#000000ff"], "scheme": "light",
+        ])
+        host.render(light)
+        XCTAssertEqual(rgba(shell.view.tintColor), [0x8b, 0x3b, 0x04, 0xff], "the strip's tint is the probe ink")
+        XCTAssertNotEqual(rgba(shell.view.tintColor), rgba(BurrowColor.primary.uiColor), "not the asset primary")
+        XCTAssertEqual(rgba(shell.tabBar.tintColor), rgba(shell.view.tintColor), "the strip and the bar agree")
+        host.render(state(["ink": ["selected": "#f47721ff"], "scheme": "dark"], from: light))
+        XCTAssertEqual(rgba(shell.view.tintColor), [0xf4, 0x77, 0x21, 0xff], "a new ink follows")
+    }
+
+    // MARK: Stage 5 round 2: a move never carries a live text input session
+
+    /// A text field that records the moment it resigns.
+    private final class ResignSpyField: UITextField {
+        var onResign: (() -> Void)?
+        override func resignFirstResponder() -> Bool {
+            onResign?()
+            return super.resignFirstResponder()
+        }
+    }
+
+    /// A shell on screen with the content editing in the Chat slot.
+    private func makeEditingShell() throws -> (DuoShellController, ControllerTabBarHost, UIViewController, ResignSpyField, UIWindow, NativeTabBarState) {
+        let (shell, host, content) = makeShell()
+        let first = state(["items": four, "selected": "chat", "visible": true])
+        host.render(first)
+        let window = UIWindow(frame: CGRect(x: 0, y: 0, width: 466, height: 678))
+        window.rootViewController = shell
+        window.makeKeyAndVisible()
+        let field = ResignSpyField(frame: CGRect(x: 10, y: 100, width: 200, height: 40))
+        content.view.addSubview(field)
+        window.layoutIfNeeded()
+        XCTAssertTrue(field.becomeFirstResponder())
+        try XCTSkipUnless(field.isFirstResponder, "the field could not take focus in this host")
+        return (shell, host, content, field, window, first)
+    }
+
+    func testAWebDrivenMoveEndsEditingBeforeTheContentLeavesItsSlot() throws {
+        let (shell, host, content, field, window, first) = try makeEditingShell()
+        let chatSlot = try XCTUnwrap(shell.selectedSlot)
+        var atResign: [String] = []
+        field.onResign = {
+            atResign.append("\(shell.selectedTab?.identifier ?? "none") parent=\(content.parent === chatSlot ? "chat" : "other") window=\(content.view.window != nil)")
+        }
+        host.render(state(["selected": "inbox"], from: first))
+        XCTAssertEqual(atResign.first, "chat parent=chat window=true", "editing ends while the old slot still holds the content, on screen")
+        XCTAssertFalse(field.isFirstResponder)
+        XCTAssertEqual(shell.editingEndedForMove, 1)
+        XCTAssertTrue(content.parent === shell.selectedSlot, "and then the content moves")
+        window.isHidden = true
+    }
+
+    func testATapOnAnotherTabEndsEditingBeforeTheSystemSelects() throws {
+        let (shell, host, content, field, window, _) = try makeEditingShell()
+        let chatSlot = try XCTUnwrap(shell.selectedSlot)
+        var atResign: [String] = []
+        field.onResign = { atResign.append("\(shell.selectedTab?.identifier ?? "none") parent=\(content.parent === chatSlot ? "chat" : "other")") }
+        let calendar = try XCTUnwrap(shell.tabs.first { $0.identifier == "calendar" })
+        XCTAssertTrue(host.tabBarController(shell, shouldSelectTab: calendar))
+        XCTAssertEqual(atResign.first, "chat parent=chat", "resigned before the system's selection")
+        XCTAssertFalse(field.isFirstResponder)
+        XCTAssertEqual(shell.editingEndedForMove, 1)
+        window.isHidden = true
+    }
+
+    func testNoMoveLeavesEditingAlone() throws {
+        let (shell, host, _, field, window, first) = try makeEditingShell()
+        // The same tab again, a badge, a web hide: no move, the keyboard stays.
+        host.render(state(["selected": "chat", "inbox_badge": "2", "visible": false], from: first))
+        XCTAssertTrue(field.isFirstResponder, "no move, no resign")
+        XCTAssertEqual(shell.editingEndedForMove, 0)
+        let chat = try XCTUnwrap(shell.selectedTab)
+        XCTAssertFalse(host.tabBarController(shell, shouldSelectTab: chat), "a reselect")
+        XCTAssertTrue(field.isFirstResponder)
+        window.isHidden = true
     }
 
     // MARK: Stage 5: the strip never hides with the web's floating bar
