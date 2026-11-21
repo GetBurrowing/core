@@ -146,6 +146,9 @@ struct NativeTabBarState: Equatable {
     /// has not sent one (an older web build sends only `inbox_dot`).
     var inboxBadge: String?
     var visible = false
+    /// Whether this document's web has sent any state (false on a fresh
+    /// launch and on a document that sent none, such as sign-in).
+    var webSentState = false
     /// The web theme's tab inks. A key the web left out (it could not
     /// resolve that colour) keeps its previous value.
     var ink = NativeTabInk()
@@ -166,6 +169,14 @@ struct NativeTabBarState: Equatable {
     /// to draw.
     var shown: Bool { visible && !items.isEmpty }
 
+    /// The Duo's side strip (task 01a1fa7c stage 5): shown on every page
+    /// whose web sends state, whatever `visible` says. The strip is a system
+    /// region that covers no content and is the only navigation on the
+    /// closed Duo, so the web hiding its floating bar (a focused composer,
+    /// a conversation, a call, a covering sheet, a tab change's grace hide)
+    /// does not hide it.
+    var stripShown: Bool { webSentState && !items.isEmpty }
+
     /// This state with a bridge payload applied. A missing key, or a value of
     /// the wrong type, leaves that field unchanged. `items` drops unknown and
     /// repeated keys and keeps the first five (logging the cut); a missing or
@@ -174,6 +185,7 @@ struct NativeTabBarState: Equatable {
         _ payload: [String: Any], catalog: [NativeTab] = NativeTab.catalog, log: (String) -> Void = { NSLog("%@", $0) }
     ) -> NativeTabBarState {
         var next = self
+        next.webSentState = true
         if let raw = payload["items"] as? [Any] {
             var keys: [String] = []
             for case let key as String in raw where NativeTab.named(key, in: catalog) != nil && !keys.contains(key) {
@@ -301,10 +313,16 @@ enum NativeTabBarMaterial {
 /// a UITabBar pinned to the bottom of the web view. A UITabBarController
 /// child drew the same glass on an iPhone but needs five empty pages and a
 /// touch-passthrough container, always keeps a selection, and turns into a
-/// sidebar at regular width.
+/// sidebar at regular width. The iPhone Duo is the exception (task 01a1fa7c):
+/// the system puts only a UITabBarController's tabs in its side strip, so
+/// there `ControllerTabBarHost` drives `DuoShellController`.
 @MainActor
 protocol NativeTabBarHosting: AnyObject {
     var bar: UITabBar { get }
+    /// "standalone" or "controller", for the DEBUG probe.
+    var hosting: String { get }
+    /// The style of the content behind the bar, once sampled.
+    var backdropStyle: UIUserInterfaceStyle? { get }
     /// The keys the bar is drawing, in order.
     var renderedKeys: [String] { get }
     /// The tab key tapped. Selection does NOT change on a tap; it follows the
@@ -319,8 +337,23 @@ protocol NativeTabBarHosting: AnyObject {
 
 @MainActor
 enum NativeTabBarFactory {
-    static func make() -> NativeTabBarHosting {
-        StandaloneTabBarHost()
+    /// The host for the bar of `parent` (the bridge). On the Duo (`isDuo`,
+    /// injected so tests can take either branch) with the bridge inside a
+    /// `DuoShellController`, the controller host; everywhere else, and on a
+    /// Duo whose bridge is not in a shell, the standalone bar.
+    static func make(for parent: UIViewController? = nil, isDuo: Bool = DuoDevice.current) -> NativeTabBarHosting {
+        if isDuo, #available(iOS 18, *), let shell = parent?.duoShell as? DuoShellController {
+            return ControllerTabBarHost(shell: shell)
+        }
+        return StandaloneTabBarHost()
+    }
+
+    /// What the web pads the bottom with (`--native-tab-bar-height`): nothing
+    /// while the bar is in the vertical side strip or at the top (the open
+    /// Duo at regular width), else the bar's height above the bottom safe
+    /// area.
+    static func bottomReservation(barHeight: CGFloat, safeAreaBottom: CGFloat, verticalBar: Bool, barAtBottom: Bool = true) -> CGFloat {
+        verticalBar || !barAtBottom ? 0 : heightAboveSafeArea(barHeight: barHeight, safeAreaBottom: safeAreaBottom)
     }
 
     static func item(_ tab: NativeTab, index: Int, compatibleWith traits: UITraitCollection? = nil) -> UITabBarItem {
@@ -346,10 +379,19 @@ enum NativeTabBarFactory {
     /// The web theme's inks and scheme on the bar: the selected tab in
     /// `tintColor`, the rest in `unselectedItemTintColor`, the glass in the
     /// web's light or dark.
-    static func paint(_ bar: UITabBar, ink: NativeTabInkColors, style: UIUserInterfaceStyle) {
+    ///
+    /// `strip` is the Duo shell's view (task 01a1fa7c stage 5). The closed
+    /// Duo's side strip does not draw from the UITabBar's `tintColor`: it
+    /// inherits the tint of the tab bar controller's view, which is the
+    /// app's global accent (the asset primary, #ad4b07 in light) unless set.
+    /// So the selected ink goes on that view too, and the strip draws the
+    /// web's ink as the iPhone bar does. Everything else in the shell (the
+    /// native Back) inherits the same ink.
+    static func paint(_ bar: UITabBar, ink: NativeTabInkColors, style: UIUserInterfaceStyle, strip: UIView? = nil) {
         bar.tintColor = ink.selected
         bar.unselectedItemTintColor = ink.unselected
         bar.overrideUserInterfaceStyle = style
+        strip?.tintColor = ink.selected
     }
 
     /// The badge for `key`. On Inbox: the `inbox_badge` label ("1" to "9",
@@ -380,6 +422,7 @@ enum NativeTabBarFactory {
 
 @MainActor
 final class StandaloneTabBarHost: NSObject, NativeTabBarHosting, UITabBarDelegate {
+    let hosting = "standalone"
     typealias Animator = (TimeInterval, UIView.AnimationOptions, @escaping () -> Void, @escaping (Bool) -> Void) -> Void
     private let animate: Animator
     /// Whether Reduce Motion is on; read at each show or hide.
@@ -538,6 +581,159 @@ final class StandaloneTabBarHost: NSObject, NativeTabBarHosting, UITabBarDelegat
         render(state)
         guard renderedKeys.indices.contains(item.tag) else { return }
         onTap?(renderedKeys[item.tag])
+    }
+}
+
+/// The iPhone Duo's host (task 01a1fa7c stage 1): the web's state drives a
+/// `DuoShellController`, whose tabs the system places in the closed Duo's
+/// side strip. The same contract as the standalone bar: a tap forwards its
+/// key and selection follows the web's next state. One difference: a
+/// UITabBarController always has a selected tab, so `selected: null` keeps
+/// the previous selection instead of showing none.
+@available(iOS 18, *)
+@MainActor
+final class ControllerTabBarHost: NSObject, NativeTabBarHosting, UITabBarControllerDelegate {
+    let hosting = "controller"
+    let shell: DuoShellController
+    var onTap: ((String) -> Void)?
+    private var state = NativeTabBarState()
+    private(set) var ink = NativeTabInkColors.fallback
+    private(set) var backdropStyle: UIUserInterfaceStyle?
+    /// Reduce Motion: the strip shows and hides with no animation.
+    private let reduceMotion: () -> Bool
+    /// Runs a closure after a delay (injected so tests drive the clock).
+    typealias Scheduler = @MainActor (TimeInterval, @escaping @MainActor () -> Void) -> Void
+    private let schedule: Scheduler
+
+    /// The tab a tap selected that the web has not yet confirmed. While it
+    /// is set, a state naming another tab (the old view's grace hide still
+    /// carries the old selection) does not move the selection, so a tap
+    /// animates once and never snaps back and forth.
+    private(set) var pendingKey: String?
+    private var pendingEpoch = 0
+    /// How long a tap's selection waits for the web; after it the web's
+    /// selection wins again (the web declined the move).
+    static let pendingTimeout: TimeInterval = 2
+
+    init(
+        shell: DuoShellController, reduceMotion: @escaping () -> Bool = { UIAccessibility.isReduceMotionEnabled },
+        schedule: @escaping Scheduler = { delay, work in
+            DispatchQueue.main.asyncAfter(deadline: .now() + delay) { MainActor.assumeIsolated { work() } }
+        }
+    ) {
+        self.shell = shell
+        self.reduceMotion = reduceMotion
+        self.schedule = schedule
+        super.init()
+    }
+
+    var bar: UITabBar { shell.tabBar }
+    var renderedKeys: [String] { shell.keys }
+
+    #if DEBUG
+        /// DEBUG, for the fixture: selection moves made in code (no system
+        /// animation) and by the system on a tap.
+        private(set) var programmaticSelections = 0
+        private(set) var nativeSelections = 0
+        var selectionReport: String {
+            "programmatic=\(programmaticSelections) native=\(nativeSelections) selected=\(shell.selectedTab?.identifier ?? "none") strip=\(shell.isTabBarHidden ? "hidden" : "shown")"
+        }
+    #endif
+
+    func install(in parent: UIViewController) {
+        shell.delegate = self
+        NativeTabBarFactory.configure(shell.tabBar)
+        // The bar's accessibility identifier, plus one per tab item.
+        applyItemAttributes()
+        shell.tabBar.registerForTraitChanges([UITraitPreferredContentSizeCategory.self]) { [weak self] (_: UITabBar, _: UITraitCollection) in
+            self?.applyItemAttributes()
+        }
+    }
+
+    func render(_ state: NativeTabBarState) {
+        self.state = state
+        if !state.items.isEmpty, state.items != shell.keys {
+            let previous = shell.selectedTab?.identifier
+            shell.setTabs(shell.makeTabs(for: state.items), animated: false)
+            if let previous, let kept = shell.tabs.first(where: { $0.identifier == previous }) {
+                shell.selectedTab = kept
+            }
+            applyItemAttributes()
+        }
+        // `selected: null` (or a key not drawn) keeps the previous selection.
+        // The web confirming a tap's tab clears the pending tap; any other
+        // key waits until the tap times out.
+        if let key = state.selected, key == pendingKey { pendingKey = nil }
+        if pendingKey == nil, let key = state.selected, let tab = shell.tabs.first(where: { $0.identifier == key }),
+            shell.selectedTab !== tab
+        {
+            shell.selectedTab = tab
+            #if DEBUG
+                programmaticSelections += 1
+            #endif
+        }
+        shell.placeContent()
+        for tab in shell.tabs {
+            tab.badgeValue = NativeTabBarFactory.badge(for: tab.identifier, state)
+        }
+        ink = ink.applying(state.ink)
+        repaint()
+        let hidden = !state.stripShown
+        if shell.isTabBarHidden != hidden {
+            shell.setTabBarHidden(hidden, animated: !reduceMotion())
+        }
+    }
+
+    func applyBackdrop(_ style: UIUserInterfaceStyle?) {
+        guard style != backdropStyle else { return }
+        backdropStyle = style
+        repaint()
+    }
+
+    private func repaint() {
+        let adapted = NativeTabBarBackdrop.adapted(ink, webStyle: state.interfaceStyle, backdrop: backdropStyle)
+        NativeTabBarFactory.paint(shell.tabBar, ink: adapted.ink, style: adapted.style, strip: shell.view)
+    }
+
+    /// The label font and the `native-tab-<key>` identifiers on the items
+    /// the controller built from its tabs.
+    private func applyItemAttributes() {
+        let traits = shell.tabBar.traitCollection
+        for (key, item) in zip(shell.keys, shell.tabBar.items ?? []) {
+            NativeTabLabel.apply(to: item, compatibleWith: traits)
+            item.accessibilityIdentifier = "native-tab-\(key)"
+        }
+    }
+
+    /// A tap goes to the web, which navigates (canvas rule 3, selection
+    /// follows the route). A tap on another tab also lets the system select
+    /// it, so the selection animates exactly once (task 01a1fa7c stage 5;
+    /// refusing the tap and selecting on the web's echo snapped the
+    /// half-started animation). The web's echo of that tab is then a no-op;
+    /// if the web never confirms it within `pendingTimeout`, the web's own
+    /// selection is restored. A reselect changes nothing natively.
+    func tabBarController(_ tabBarController: UITabBarController, shouldSelectTab tab: UITab) -> Bool {
+        onTap?(tab.identifier)
+        guard shell.selectedTab !== tab else { return false }
+        // The system selects through its own path, not `selectedTab`.
+        shell.endEditingBeforeMove()
+        pendingKey = tab.identifier
+        pendingEpoch += 1
+        let epoch = pendingEpoch
+        schedule(Self.pendingTimeout) { [weak self] in
+            guard let self, self.pendingEpoch == epoch, self.pendingKey != nil else { return }
+            self.pendingKey = nil
+            self.render(self.state)
+        }
+        #if DEBUG
+            nativeSelections += 1
+        #endif
+        return true
+    }
+
+    /// The system selected a tab: the one content follows it now.
+    func tabBarController(_ tabBarController: UITabBarController, didSelectTab selectedTab: UITab, previousTab: UITab?) {
+        shell.placeContent()
     }
 }
 

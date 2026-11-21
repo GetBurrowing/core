@@ -1305,6 +1305,7 @@ defmodule PlatformWeb.Tasks.TaskDetailComponent do
               phx-click="detail_close"
               phx-target={@myself}
               aria-label="Close task details"
+              data-native-back="close"
             >
               <span class="hero-x-mark size-4"></span>
             </button>

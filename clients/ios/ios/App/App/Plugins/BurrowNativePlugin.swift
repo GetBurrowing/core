@@ -340,6 +340,7 @@ public class BurrowNativePlugin: CAPPlugin, CAPBridgedPlugin {
         CAPPluginMethod(name: "donate", returnType: CAPPluginReturnPromise),
         CAPPluginMethod(name: "installBadges", returnType: CAPPluginReturnPromise),
         CAPPluginMethod(name: "tabBarState", returnType: CAPPluginReturnPromise),
+        CAPPluginMethod(name: "navBarState", returnType: CAPPluginReturnPromise),
     ]
 
     /// The shell's navigation policy, consulted for every web view
@@ -431,6 +432,18 @@ public class BurrowNativePlugin: CAPPlugin, CAPBridgedPlugin {
         let payload = Dictionary(uniqueKeysWithValues: call.options.compactMap { key, value in (key as? String).map { ($0, value) } })
         DispatchQueue.main.async {
             self.shell?.applyTabBarState(payload)
+            call.resolve()
+        }
+    }
+
+    /// `{back: {kind: "back" | "close", label} | null}`: the web's back
+    /// target, drawn as the system Back or Close at the top of the closed
+    /// iPhone Duo's side strip (task 01a1fa7c stage 4; native_back.js).
+    /// Resolves everywhere; off the Duo it draws nothing.
+    @objc func navBarState(_ call: CAPPluginCall) {
+        let payload = Dictionary(uniqueKeysWithValues: call.options.compactMap { key, value in (key as? String).map { ($0, value) } })
+        DispatchQueue.main.async {
+            self.shell?.applyNavBarState(payload)
             call.resolve()
         }
     }

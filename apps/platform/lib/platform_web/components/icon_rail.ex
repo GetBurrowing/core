@@ -131,8 +131,10 @@ defmodule PlatformWeb.Components.IconRail do
             settings_destinations(),
         else: more_sheet_destinations(scope, Map.get(assigns, :root_user, false))
 
+    # `/more` is the More tab's own page (task 01a1fc7f stage 2, the open
+    # iPhone Duo), so More is selected there, here and in the native strip.
     more_active? =
-      assigns[:more_open] == true or
+      assigns[:more_open] == true or current_path == "/more" or
         (link_winner == nil and
            more_destinations |> active_destination_key(current_path) != nil)
 

@@ -173,6 +173,7 @@ defmodule PlatformWeb.Tasks.StacksComponent do
               phx-target={@myself}
               aria-label="Back"
               data-role="stack-detail-back"
+              data-native-back="back"
             >
               <span class="hero-arrow-left size-4"></span>
             </button>

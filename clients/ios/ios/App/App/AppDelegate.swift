@@ -6,6 +6,11 @@ import UserNotifications
 class AppDelegate: UIResponder, UIApplicationDelegate {
     var window: UIWindow?
 
+    /// Portrait on every iPhone except the open Duo (task 01a1fa7c stage 2).
+    func application(_ application: UIApplication, supportedInterfaceOrientationsFor window: UIWindow?) -> UIInterfaceOrientationMask {
+        OrientationPolicy.mask(for: window)
+    }
+
     func application(
         _ application: UIApplication,
         didFinishLaunchingWithOptions launchOptions: [UIApplication.LaunchOptionsKey: Any]?

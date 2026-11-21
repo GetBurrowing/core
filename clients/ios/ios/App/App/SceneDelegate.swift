@@ -6,7 +6,8 @@ class SceneDelegate: UIResponder, UIWindowSceneDelegate {
     static let switchInstallShortcut = "com.kobo-ai.burrow.switch-install"
 
     var window: UIWindow?
-    private var bridge: BurrowBridgeViewController? { window?.rootViewController as? BurrowBridgeViewController }
+    /// The bridge: the window root, or the iPhone Duo shell's content.
+    private var bridge: BurrowBridgeViewController? { BurrowBridgeViewController.find(in: window?.rootViewController) }
 
     func scene(_ scene: UIScene, willConnectTo session: UISceneSession, options connectionOptions: UIScene.ConnectionOptions) {
         guard let windowScene = scene as? UIWindowScene else { return }
@@ -15,7 +16,13 @@ class SceneDelegate: UIResponder, UIWindowSceneDelegate {
         let shell = BurrowBridgeViewController()
         // Cold launch from the quick action: open on the picker.
         shell.startOnPicker = connectionOptions.shortcutItem?.type == Self.switchInstallShortcut
-        window.rootViewController = shell
+        // On the iPhone Duo a UITabBarController shell, so the system puts the
+        // tabs in the side strip (task 01a1fa7c); the bridge everywhere else.
+        if #available(iOS 18, *) {
+            window.rootViewController = DuoShellController.root(for: shell, isDuo: DuoDevice.current)
+        } else {
+            window.rootViewController = shell
+        }
         window.makeKeyAndVisible()
         self.window = window
 

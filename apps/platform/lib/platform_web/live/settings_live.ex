@@ -519,6 +519,7 @@ defmodule PlatformWeb.SettingsLive do
             phx-click="open_more_sheet"
             aria-label="Back to More"
             data-role="settings-back"
+            data-native-back="back"
             class="-ml-2 flex size-11 shrink-0 items-center justify-center rounded-full active:bg-base-100 focus-visible-ring lg:hidden"
           >
             <span class="hero-chevron-left size-5 text-subtle" aria-hidden="true"></span>

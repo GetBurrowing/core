@@ -317,10 +317,19 @@ final class BurrowBridgeViewController: CAPBridgeViewController {
         }
     }
 
+    /// The bridge under a window root (the root itself, or the Duo shell's
+    /// content).
+    static func find(in root: UIViewController?) -> BurrowBridgeViewController? {
+        ShellRoot.content(of: root) as? BurrowBridgeViewController
+    }
+
     /// Replace the controller, letting Capacitor's normal loadView lifecycle
     /// create its bridge, delegates, script handlers and WKWebView together.
     private func recreateShell(for request: URLRequest) {
-        guard let window = view.window, window.rootViewController === self else {
+        // On the iPhone Duo the bridge is the shell's content, not the window
+        // root: only the content is swapped (task 01a1fa7c stage 1).
+        let shell = duoShell
+        guard let window = view.window, window.rootViewController === self || (shell != nil && window.rootViewController === shell) else {
             showWebLoadError()
             return
         }
@@ -344,7 +353,12 @@ final class BurrowBridgeViewController: CAPBridgeViewController {
         replacement.policy = policy
         replacement.lastHandoffAt = lastHandoffAt
         replacement.tabBarState = tabBarState
-        window.rootViewController = replacement
+        replacement.navBack = navBack
+        if #available(iOS 18, *), let shell = shell as? DuoShellController {
+            shell.replaceContent(with: replacement)
+        } else {
+            window.rootViewController = replacement
+        }
     }
 
     private func showWebLoadError() {
@@ -447,11 +461,71 @@ final class BurrowBridgeViewController: CAPBridgeViewController {
 
     private func installTabBar() {
         guard tabBarHost == nil else { return }
-        let host = NativeTabBarFactory.make()
+        let host = NativeTabBarFactory.make(for: self)
         host.install(in: self)
+        // The closed Duo's side strip: the bottom reservation goes to 0 while
+        // the vertical bar is in use, and comes back when it is not.
+        // Registered on the shell: the content itself reports no edge.
+        if #available(iOS 27.1, *) {
+            (duoShell ?? self).registerForTraitChanges(UITraitCollection.systemTraitsAffectingVerticalBarEdge) {
+                [weak self] (_: UIViewController, _: UITraitCollection) in
+                self?.pushTabBarHeight()
+            }
+        }
         host.onTap = { [weak self] key in self?.tabTapped(key) }
         host.render(tabBarState)
         tabBarHost = host
+        installNavBar()
+    }
+
+    // MARK: Native Back on the iPhone Duo (task 01a1fa7c stage 4)
+
+    /// The web's last `navBarState` target.
+    private(set) var navBack: NativeNavBack?
+    /// The attribute state last pushed to this document, nil when unknown
+    /// (a new document has none).
+    private var pushedVerticalBar: Bool?
+    /// The posture last pushed as `<html data-native-duo-open>`, nil when
+    /// unknown (a new document has none).
+    private var pushedDuoOpen: Bool?
+
+    private func installNavBar() {
+        guard #available(iOS 27.1, *), duoShell != nil else { return }
+        // The strip edge is read from the shell and window (the content
+        // itself reports none), the same source as the bottom reservation.
+        duoShell?.registerForTraitChanges(UITraitCollection.systemTraitsAffectingVerticalBarEdge) {
+            [weak self] (_: UIViewController, _: UITraitCollection) in
+            self?.syncNavBar()
+        }
+        syncNavBar()
+    }
+
+    /// `BurrowNative.navBarState` from the web.
+    func applyNavBarState(_ payload: [String: Any]) {
+        navBack = NativeNavBack.parse(payload)
+        syncNavBar()
+    }
+
+    /// Draws the item and sets `<html data-native-vertical-bar>` in the same
+    /// main-thread turn, so the web control and the native one swap with no
+    /// frame where both, or neither, show. A no-op off the Duo.
+    private func syncNavBar() {
+        guard #available(iOS 18, *), let shell = duoShell as? DuoShellController else { return }
+        shell.onNavBack = { [weak self] in self?.navBackTapped() }
+        shell.renderNavBack(navBack, verticalBar: DuoLayout.verticalBarActive(for: self), tabsShown: tabBarState.stripShown)
+        // The attribute follows the native bar exactly: while the strip is
+        // hidden (a page that sends no state) the web shows its own control
+        // again, so there is still one Back. The web hiding its own bar no
+        // longer hides the strip (stage 5, `stripShown`).
+        let drawn = shell.navBarShown
+        guard pushedVerticalBar != drawn, let script = NativeNavBarDocument.attributeScript(isDuo: true, verticalBar: drawn) else { return }
+        pushedVerticalBar = drawn
+        webView?.evaluateJavaScript(script)
+    }
+
+    /// The native item's tap: the web clicks its own control.
+    private func navBackTapped() {
+        bridge?.triggerWindowJSEvent(eventName: NativeNavBarDocument.tapEvent)
     }
 
     /// `SuiteNative.tabBarState` from the web.
@@ -459,6 +533,7 @@ final class BurrowBridgeViewController: CAPBridgeViewController {
         documentSentState = true
         tabBarState = tabBarState.applying(payload)
         tabBarHost?.render(tabBarState)
+        syncNavBar()
         observeBackdrop()
         for delay in [0.15, 0.7, 1.6] { scheduleBackdropSample(after: delay) }
         #if DEBUG
@@ -516,7 +591,7 @@ final class BurrowBridgeViewController: CAPBridgeViewController {
                 #if DEBUG
                     let before = self.tabBarHost?.bar.overrideUserInterfaceStyle
                 #endif
-                let current = (self.tabBarHost as? StandaloneTabBarHost)?.backdropStyle
+                let current = self.tabBarHost?.backdropStyle
                 self.tabBarHost?.applyBackdrop(NativeTabBarBackdrop.style(forLuminance: luminance, current: current))
                 #if DEBUG
                     // Only the flat backdrop pages wait on the style; a report at
@@ -554,6 +629,28 @@ final class BurrowBridgeViewController: CAPBridgeViewController {
         documentSentState = false
         pushedTabBarHeight = nil
         pushTabBarHeight()
+        // A new document carries no attribute: set it again, now.
+        if let script = NativeNavBarDocument.duoScript(isDuo: DuoDevice.current) { webView?.evaluateJavaScript(script) }
+        pushedVerticalBar = nil
+        syncNavBar()
+        pushedDuoOpen = nil
+        syncDuoPosture()
+    }
+
+    /// Pushes the open/closed posture to the web when it changed. A fold or
+    /// unfold changes the window size, so this runs on layout and on size
+    /// transitions. A no-op on every device but the Duo.
+    private func syncDuoPosture() {
+        guard DuoDevice.current else { return }
+        let open = OrientationPolicy.isOpen(windowSize: view.window?.bounds.size ?? .zero)
+        guard pushedDuoOpen != open, let script = NativeNavBarDocument.postureScript(isDuo: true, open: open) else { return }
+        pushedDuoOpen = open
+        webView?.evaluateJavaScript(script)
+    }
+
+    override func viewWillTransition(to size: CGSize, with coordinator: UIViewControllerTransitionCoordinator) {
+        super.viewWillTransition(to: size, with: coordinator)
+        coordinator.animate(alongsideTransition: nil) { [weak self] _ in self?.syncDuoPosture() }
     }
 
     /// didFinish: a document that has sent no state after the LiveView
@@ -562,24 +659,40 @@ final class BurrowBridgeViewController: CAPBridgeViewController {
     private func hideTabBarUnlessDocumentSendsState() {
         let generation = documentGeneration
         DispatchQueue.main.asyncAfter(deadline: .now() + NativeTabBarDocument.stateGrace) { [weak self] in
-            guard let self, self.documentGeneration == generation, !self.documentSentState, self.tabBarState.visible else { return }
+            guard let self, self.documentGeneration == generation, !self.documentSentState,
+                self.tabBarState.visible || self.tabBarState.webSentState
+            else { return }
             self.tabBarState.visible = false
+            self.tabBarState.webSentState = false
             self.tabBarHost?.render(self.tabBarState)
+            self.syncNavBar()
             #if DEBUG
                 self.reportTabBarFixture()
             #endif
         }
     }
 
-    private func currentTabBarHeight() -> CGFloat {
-        guard let bar = tabBarHost?.bar else { return 0 }
-        return NativeTabBarFactory.heightAboveSafeArea(barHeight: bar.frame.height, safeAreaBottom: view.safeAreaInsets.bottom)
+    /// Whether the bar is somewhere other than the bottom: the closed Duo's
+    /// side strip, or the top of the open Duo at regular width.
+    private var tabBarOffBottom: Bool {
+        guard let bar = tabBarHost?.bar else { return false }
+        if DuoLayout.verticalBarActive(for: self) { return true }
+        guard duoShell != nil else { return false }
+        return !DuoLayout.barAtBottom(barFrameInWindow: bar.convert(bar.bounds, to: nil), windowHeight: view.window?.bounds.height)
     }
 
-    /// Keeps `--native-tab-bar-height` current on layout and rotation.
+    private func currentTabBarHeight() -> CGFloat {
+        guard let bar = tabBarHost?.bar else { return 0 }
+        return NativeTabBarFactory.bottomReservation(
+            barHeight: bar.frame.height, safeAreaBottom: view.safeAreaInsets.bottom, verticalBar: tabBarOffBottom)
+    }
+
+    /// Keeps `--native-tab-bar-height` current on layout and rotation. A 0 is
+    /// pushed only while the bar is off the bottom (the Duo's side strip or
+    /// top bar); otherwise 0 means the bar has not been laid out yet.
     private func pushTabBarHeight() {
         let height = currentTabBarHeight()
-        guard height > 0, height != pushedTabBarHeight else { return }
+        guard height > 0 || tabBarOffBottom, height != pushedTabBarHeight else { return }
         pushedTabBarHeight = height
         webView?.evaluateJavaScript(NativeTabBarDocument.heightUpdate(height))
     }
@@ -587,6 +700,7 @@ final class BurrowBridgeViewController: CAPBridgeViewController {
     override func viewDidLayoutSubviews() {
         super.viewDidLayoutSubviews()
         pushTabBarHeight()
+        syncDuoPosture()
     }
 
     #if DEBUG
@@ -610,17 +724,27 @@ final class BurrowBridgeViewController: CAPBridgeViewController {
             return true
         }
 
+        /// The vertical bar edge as each level of the hierarchy reports it.
+        var verticalBarDebug: String {
+            guard #available(iOS 27.1, *) else { return "vbar=n/a" }
+            let edges: [UIVerticalBarEdge: String] = [.unspecified: "unspecified", .leading: "leading", .trailing: "trailing"]
+            func name(_ traits: UITraitCollection?) -> String { traits.map { edges[$0.verticalBarEdge] ?? "?" } ?? "nil" }
+            return "vbar bridge=\(name(traitCollection)) shell=\(name(duoShell?.traitCollection)) window=\(name(view.window?.traitCollection)) "
+                + "screen=\(name(view.window?.windowScene?.traitCollection))"
+        }
+
         /// Hands the fixture page the probe of what the system drew.
         private func reportTabBarFixture() {
             guard UserDefaults.standard.string(forKey: "BurrowTabBarFixture") != nil, let host = tabBarHost, let root = webView else { return }
             DispatchQueue.main.asyncAfter(deadline: .now() + 0.6) { [weak self] in
                 var report = NativeTabBarProbe.report(bar: host.bar, root: root)
-                report["hosting"] = "standalone"
+                report["hosting"] = host.hosting
                 let transition =
                     "requested=\(self?.tabBarState.shown.description ?? "unknown") hidden=\(host.bar.isHidden) animations=\(host.bar.layer.animationKeys() ?? []) model=\(host.bar.frame) presentation=\(String(describing: host.bar.layer.presentation()?.frame))"
-                report["transition"] = transition
+                report["transition"] = transition + " " + (self?.verticalBarDebug ?? "")
                 WebLoadLog.event("tabbar-transition report \(transition)")
                 report["rendered"] = NativeTabBarProbe.rendered(bar: host.bar, keys: host.renderedKeys)
+                if #available(iOS 18, *), let controller = host as? ControllerTabBarHost { report["selection"] = controller.selectionReport }
                 guard let data = try? JSONSerialization.data(withJSONObject: report), let json = String(data: data, encoding: .utf8) else { return }
                 self?.webView?.evaluateJavaScript("window.burrowFixtureNative && window.burrowFixtureNative(\(json))") { _, error in
                     WebLoadLog.event("tabbar-transition report-delivery error=\(error.map { WebLoadLog.describe($0) } ?? "none")")
@@ -843,6 +967,13 @@ final class BurrowBridgeViewController: CAPBridgeViewController {
             // Capacitor owns preferredStatusBarStyle; this is its setter.
             self.setStatusBarStyle(style)
         }
+    }
+
+    /// Capacitor reads the plist, whose iPhone list now carries landscape for
+    /// the open Duo only (task 01a1fa7c stage 2): narrowed back here, as the
+    /// app delegate does for the whole app.
+    override var supportedInterfaceOrientations: UIInterfaceOrientationMask {
+        OrientationPolicy.mask(for: viewIfLoaded?.window)
     }
 
     override func traitCollectionDidChange(_ previousTraitCollection: UITraitCollection?) {

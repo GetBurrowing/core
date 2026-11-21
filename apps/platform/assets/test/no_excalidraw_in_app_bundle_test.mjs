@@ -114,12 +114,13 @@ const ASSETS = resolve(HERE, "..");
 // bar and Voice tab hooks growing to use them. First-party code with no new
 // dependency (livekit-client was already bundled); the overage is past one
 // 16 KB step, so two. 1120 KB still catches the ~8.2 MB leak.
-// Raised from 1120 KB to 1136 KB for the Social performance ticker.
-// Matched with-modules builds measured main at 1,145,819 bytes and the
-// ticker at 1,150,909 (+5,090 hook/registration bytes; dependencies unchanged).
-// This measurement used an equivalent extension entry, not the release-host
-// generator: CI must still verify its real generated with-Play build.
-// One 16 KB step preserves the separate island-content assertions below.
+//
+// Raised from 1120 KB to 1136 KB by task 01a1fa7c (iPhone Duo: tab bar and
+// Back/Close in the side strip; PR #249): the WITH-Play app.js measured
+// 1,148,511 bytes in CI run 44891585620, 1,631 over 1120 KB, after
+// hooks/native_back.js (the Duo-gated native Back/Close bridge) joined the
+// bundle. First-party code with no new dependency; the overage is under one
+// 16 KB step, so one. 1136 KB still catches the ~8.2 MB leak.
 const MAX_BYTES = 1136 * 1024;
 
 // The profile also sets `env: %{"NODE_PATH" => [.../deps, build_path]}`, and

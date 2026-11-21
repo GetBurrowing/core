@@ -56,6 +56,9 @@
 // stripped, iframes/media/canvases replaced by empty boxes so nothing
 // reloads or plays), and fixed-position descendants are contained by it.
 
+// The open-Duo posture gate, the same read duo_more_page.js makes per click.
+import {openDuo} from "../lib/duo_more_page.js"
+
 export const HOOK_ID = "tab-switch-cache"
 export const CACHE_CAP = 6
 export const FAST_MS = 80
@@ -76,6 +79,22 @@ export const LOGOUT_SELECTOR = 'a[href="/auth/logout"]'
 export const TITLE_SELECTOR = '[data-role="phone-top-bar-title"]'
 
 export const LAYER_CLASS = "tab-switch-layer"
+// Leaving the More page (`/more`, the open iPhone Duo's More tab, task
+// 01a1fc7f stage 3): the layer covers on the tap's frame, with no FAST_MS
+// reveal delay. More is gone on the next frame (design canvas 01a1fc82,
+// "Leaving"); a fast landing may show the skeleton for a frame or two
+// instead of the outgoing page. Every other departure keeps the delay.
+export const INSTANT_FROM = "more"
+// On the OPEN iPhone Duo (both data-native-duo and data-native-duo-open on
+// <html>, read at the tap) every page under the More tab is a page in main:
+// /settings and its subpages too, not only /more (task 01a1fc7f stage 4).
+// Their data-current is their own key ("settings"), so the departure is
+// keyed on the active tab instead: the native tab bridge's data-active-key,
+// which the shell sets to "more" on every page the More tab owns. The closed
+// Duo and every other phone keep the delay there; a More sheet that is open
+// also makes the active key "more", and that path is unchanged.
+export const INSTANT_TAB = "more"
+export const ACTIVE_KEY_SELECTOR = "#native-tab-bridge[data-active-key]"
 const CHIP_CLASS = "tab-switch-chip"
 // Outgoing-main children that are shell furniture, not page content.
 const SKIP_ID = "connection-status"
@@ -303,6 +322,14 @@ export function createTabSwitchCache({
     }
   }
 
+  // Leaving the More page, or (open Duo only) any page under the More tab.
+  function instantDeparture(el) {
+    if (el.getAttribute("data-current") === INSTANT_FROM) return true
+    if (!openDuo(doc)) return false
+    const bridge = doc.querySelector(ACTIVE_KEY_SELECTOR)
+    return !!bridge && bridge.getAttribute("data-active-key") === INSTANT_TAB
+  }
+
   function show(main, el, key, label) {
     if (pending) drop(pending, {restore: true})
     pending = null
@@ -315,6 +342,7 @@ export function createTabSwitchCache({
     layer.setAttribute("data-destination", key)
     layer.setAttribute("aria-busy", "true")
     layer.setAttribute("aria-label", "Loading")
+    if (instantDeparture(el)) layer.classList.add(`${LAYER_CLASS}--instant`)
 
     const entry = cache.get(key)
     let shown = null

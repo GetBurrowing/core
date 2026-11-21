@@ -88,6 +88,12 @@ window event `burrowNativeTab`.
 - Native to web: window event `burrowNativeTab`, `detail: {key, reselect}`.
   `reselect` is true when the tapped key is the selected one. A tap never
   moves the selection; the web's next state does.
+- Back and Close on the iPhone Duo (task 01a1fa7c stages 3 and 4): web to
+  native `SuiteNative.navBarState({back: {kind: "back" | "close", label} | null})`
+  (apps/platform/assets/js/hooks/native_back.js), native to web the window
+  event `burrowNativeBack`, on which the web clicks its own marked control.
+  Only the Duo draws it; every other device resolves the call and draws
+  nothing. See "iPhone Duo: Back and Close in the side strip" below.
 - Document start: a main-frame `WKUserScript` per install host sets
   `<html data-native-tab-bar>` and `--native-tab-bar-height` (the bar's
   height above the bottom safe area, 49px on an iPhone 18 Pro on iOS 27:
@@ -148,11 +154,247 @@ container). Both drew the same floating glass platter with nothing set:
 because:
 
 - it stays a bottom bar at every width. On the image's iOS 27.1 foldable
-  (iPhone Duo, regular width) the controller became a trailing sidebar;
+  (iPhone Duo, regular width) the controller became a trailing sidebar.
+  **Superseded on the Duo by task 01a1fa7c (2026-11-20).** The system puts
+  only a `UITabBarController`'s tabs in the closed Duo's vertical side strip
+  (Tech Talk 111462: a custom `UITabBar` "won't be considered"). So on the
+  Duo only, the window root is `DuoShellController` (`mode = .tabBar`, never
+  the sidebar), with one `UITab` per web key. Each tab's
+  `UINavigationController` root is a `TabSlotViewController`, and the one
+  live `BurrowBridgeViewController` is re-parented into the selected slot.
+  `ControllerTabBarHost` drives it from the same `tabBarState`:
+  - a tap forwards its key and never selects;
+  - `visible:false` calls `setTabBarHidden`;
+  - badges go through `UITab.badgeValue`.
+  Two Duo-only differences: `selected: null` keeps the previous selection
+  (a tab bar controller always has one), and `--native-tab-bar-height` is 0
+  while `verticalBarEdge` is set. The content's sides stop at the slot's
+  safe area, so nothing web-drawn sits under the strip. Web-load recovery
+  swaps only the shell's content. The Duo test is `DuoDevice`: model
+  identifier `iPhone19,4` (`SIMULATOR_MODEL_IDENTIFIER` on the simulator)
+  on iOS 27.1+, decided once per launch. `verticalBarEdge` cannot decide it
+  (it is unspecified on the open inner display in portrait), and the
+  public `UIHingeInteraction` reports the hinge only asynchronously, after a
+  view is on screen, which is too late to pick the window root. Every other
+  iPhone and iPad keeps the standalone bar below;
 - it can show no selection (`selected: null`), while the controller always
   holds one;
 - it needs no child view controller, dummy pages or hit-test passthrough
   over the web view.
+
+**iPhone Duo postures: task 01a1fa7c stage 2, 2026-11-20.**
+
+Measured widths. These come from the iOS 27.2 Duo simulator profile
+(`capabilities.plist`, displays `primary` and `primary-1`, both @3x):
+
+| Display | Pixels | Points |
+| --- | --- | --- |
+| outer | 1398 px wide | 466x678 pt |
+| inner, portrait | 2007x2853 px | 669x951 pt |
+| inner, landscape | 2853x2007 px | 951x669 pt |
+
+Both inner widths are under 1024. That is the `DESKTOP_QUERY` in
+`native_tab_bar.js`, and the web's own desktop nav breakpoint
+(`.bottom-nav lg:hidden`) is also 1024. So the web desktop rail and sidebar
+never show beside the native tabs, and app.css has no `data-native-duo` rule
+(the attribute exists from stage 5, but only to gate native_back.js).
+
+Inner landscape (951) is above 768. There the shared bottom sheet already
+floats as a centred card, a dialog rather than a bottom sheet. Inner
+portrait (669) keeps the bottom sheet.
+
+Layout per posture:
+
+| Posture | Layout |
+| --- | --- |
+| closed | the system's side strip (stage 1) |
+| open, portrait | B': iPad-style regular width |
+| open, landscape | B': iPad-style regular width |
+
+The open layout comes from photos of a real Duo on the stage-1 reference
+board. Apple's apps show a split view or a full-width view with a sidebar
+toggle, and no phone-style bottom bar. `DuoShellController` keeps
+`mode = .tabBar` and does not override the bar placement.
+
+At regular width the system draws the tabs at the top. While the bar is
+not along the bottom (`DuoLayout.barAtBottom`, decided from the bar's frame
+in the window), the bridge pushes `--native-tab-bar-height` 0.
+
+The open posture could not be produced on the build Mac. Xcode 27.2 has no
+Simulator.app, DeviceHub has no fold control reachable from `simctl`,
+`devicectl` or AppleScript (assistive access refused), and toggling display
+power crashes SpringBoard. So the open B' rendering is inferred from the
+board, not screenshotted from Burrow.
+
+Orientation. The plist's iPhone list now carries Portrait, LandscapeLeft and
+LandscapeRight; there is no per-model key, and `~ipad` is unchanged.
+`AppDelegate.application(_:supportedInterfaceOrientationsFor:)` and
+`BurrowBridgeViewController.supportedInterfaceOrientations` narrow that
+list through `OrientationPolicy.mask`:
+
+- iPad: all four orientations.
+- The Duo, open (the window's shorter side is at least 600 pt): portrait
+  and both landscapes.
+- Every other iPhone, and the closed Duo: portrait only.
+
+The app-level mask also caps any controller presented full screen.
+`DuoShellController` re-reads the mask after every size transition and
+size-class change.
+
+**iPhone Duo: Back and Close in the side strip (task 01a1fa7c stage 4, 2026-11-20).**
+`navBarState` puts one leading item in the selected tab's
+`TabSlotViewController.navigationItem.leadingItemGroups`: a
+`chevron.backward` item titled with the web label for `back`, the system
+`.close` item for `close`, nothing for `null`
+(`leftItemsSupplementBackButton` stays false, per Tech Talk 111462). Its
+tap fires `burrowNativeBack`. The tab navigation controllers show their
+(titleless) bar only while the side strip is in use, read from the shell
+and window as for the bottom reservation (the content reports no edge on
+iOS 27.2), and only while the strip shows (since stage 5 the web hiding its own
+bar no longer hides the strip; see below).
+Open, the bars are hidden and the web header keeps its own control. On
+every edge change, tab show or hide, and new document the shell sets or
+clears `<html data-native-vertical-bar>` in the same main-thread turn as
+the bar, so app.css hides the web control exactly while the native one
+shows. Never set off the Duo.
+
+**The Duo gate on the web side (task 01a1fa7c stage 5, 2026-11-21).**
+`BurrowNativePlugin` registers `navBarState` on every iPhone, because a
+Capacitor method cannot be Duo-only, so the method alone does not tell
+native_back.js it is on a Duo. On the Duo only (`DuoDevice.current`), each
+new main-frame document gets `<html data-native-duo>` from
+`NativeNavBarDocument.duoScript`, evaluated in `tabBarDocumentStarted`,
+which then dispatches the window event `burrowNativeDuo`.
+`navBarPlugin()` requires the attribute. Without it there is no
+MutationObserver, no `burrowNativeBack` listener and no call; a native
+build that passes every other check adds one `burrowNativeDuo` listener, so
+a hook that installed before the attribute arrived still activates. On the
+Duo, mutations, navigation and width changes only schedule a push, and the
+push runs at most once per animation frame. The script is nil off the Duo
+(`DuoShellTests.testTheDuoMarkerScriptIsProducedOnlyOnTheDuo`).
+
+**The open-Duo posture on the web side (task 01a1fc7f stage 1, 2026-11-21).**
+On the Duo only, native sets `<html data-native-duo-open>` while the Duo is
+open (the inner display) and removes it while it is closed, then dispatches
+the window event `burrowNativeDuoPosture` after every change. Open and
+closed come from the one rule, `OrientationPolicy.isOpen` (the window's
+shorter side is at least 600 pt), so the web never measures posture itself:
+its viewport on the open Duo sits under the iPad-style top tab bar, and
+`data-native-duo` alone does not say which display is in use.
+`BurrowBridgeViewController.syncDuoPosture` pushes
+`NativeNavBarDocument.postureScript` on every new main-frame document, on
+`viewDidLayoutSubviews` and after every size transition, so it flips live
+on fold and unfold; it evaluates nothing when the posture did not change,
+and nothing at all off the Duo (the script is nil there,
+`DuoShellTests.testThePostureScriptIsProducedOnlyOnTheDuo`).
+
+**The strip never hides with the web's bar; a tap animates once (stage 5, 2026-11-21).**
+Two bugs seen on a real closed Duo at e71a56de8, reproduced on the closed
+simulator with the fixture's "Web tab mode" (the state sequence
+native_tab_bar.js sends when a tab's new LiveView mounts after the 300 ms
+destroy grace: the old view's last state with `visible: false` and the OLD
+selection, then the new view's state):
+- Switching to Chat hid the whole strip. Chat reopens a conversation whose
+  composer has focus, so the web sends `visible: false`, and stage 4 hid
+  the strip with it. Now the Duo strip follows
+  `NativeTabBarState.stripShown`: shown on every page whose web sends
+  state, whatever `visible` says. It hides only on a page that sends none
+  (sign-in, guest pages; the bridge clears `webSentState`). The standalone
+  bar on every other iPhone still follows `shown`. **In a call** (#243,
+  `[data-in-call]`) the strip stays too: it is a system region beside the
+  content and overlaps none of the call controls, and it is the closed
+  Duo's only navigation. The Back stays with it, so the web's own control
+  stays hidden.
+- A tap began to animate and then snapped. `shouldSelectTab` refused the
+  tap and the web's echo set `selectedTab` in code (no animation). Now a
+  tap on another tab lets the system select it (one animation), the content
+  moves in `didSelectTab`, and `ControllerTabBarHost.pendingKey` holds that
+  tab until the web names it: a state naming another tab (the grace hide)
+  does not move the selection. If the web never confirms within 2 s its own
+  selection is restored. A reselect changes nothing natively.
+Measured (fixture DEBUG `selection:` line, calendar then Chat): before,
+`programmatic=2 native=0`, strip hidden after Chat; after,
+`programmatic=0 native=2`, strip shown, and still shown after a web hide.
+
+**Selected-tab tint on the Duo: decision, stage 5.** The strip keeps
+today's selected tint, unchanged from main: `--color-primary` #ad4b07 in
+light, about #ff8b36 in dark. The design canvas's palette rule says the
+strip carries over today's selected tint, and main's selected tab already
+is the brand primary. A neutral selected ink would read the same as the
+near-black unselected glyphs, so selection would vanish, and a Duo-only
+colour would make the Duo disagree with every other iPhone. The fidelity
+clause "not brand orange" rested on a wrong premise about main. Recorded
+as a design deviation, with one more: the Inbox tab root keeps its
+existing "Back to More", mirrored natively, because that is web behaviour
+on main (a regular iPhone shows it on the Inbox root too).
+
+**The strip's selected tint is the web's ink (stage 5 round 2, 2026-11-21).**
+The paragraph above records the decision to keep today's tint. Review then
+found the Duo strip did not draw the web's ink at all. With web theme
+System, light: the web probe (`.bottom-nav [data-native-ink=selected]`) and
+the regular iPhone bar were both #8b3b04, but the strip drew #ad4b07, the
+asset primary. With web theme Dark and the system light, the probe and the
+iPhone bar became #f47721 and the strip stayed #ad4b07. The cause is that
+the closed Duo's side strip does not read `UITabBar.tintColor`. It draws
+in the tint of the tab bar controller's view, and when that is unset the
+view inherits the app's global accent (`ASSETCATALOG_COMPILER_GLOBAL_ACCENT_COLOR_NAME:
+primary`). `NativeTabBarFactory.paint` now also puts the selected ink on
+the shell's view (`strip:`), from `ControllerTabBarHost.repaint`, which is
+the same adapted path the iPhone bar uses. Everything inside the shell
+inherits that ink, including the native Back. Measured on the closed Duo
+simulator with the fixture's light inks, the dominant selected pixel was
+#ad4b07 before and #8b3b04 after. Pinned by
+`DuoShellTests.testTheStripTakesTheWebsSelectedInkNotTheAssetPrimary`. An
+earlier test fed the ink #ad4b07, the same value as the asset, so it could
+not tell the two apart. It now feeds #8b3b04.
+
+**A content move ends editing first (stage 5 round 2, 2026-11-21).** On
+a physical closed Duo, after a notification deep link and one reply, a
+later composer tap showed the keyboard's accessory bar with no keys until
+the app was relaunched. The one web view is re-parented between tab slots
+on every selection change: a web-driven `selectedTab`, a strip tap, and
+recovery. Measured in `DuoShellTests`: with no guard, UIKit resigns the
+web view's first responder inside the `selectedTab` setter, after the
+selection has already moved and in the middle of the transition. The text
+input session is torn down while its view is being moved.
+
+Two approaches were considered:
+- Keep the web view in one persistent container and move only that
+  container. UIKit owns each tab's view hierarchy and the strip, so a view
+  floated over the tab container has to track the selected page's safe
+  area, the navigation bar and the strip's reserved region by hand.
+- End editing before the move. This was chosen: it is small, and it keeps
+  the stage 1 hosting.
+
+Implementation: `DuoShellController.endEditingBeforeMove` resigns whatever
+in the content is first responder (`endEditing(true)`, and WebKit blurs the
+focused field) while the content is still in its old, on-screen slot. It
+runs from:
+- the `selectedTab` override's `willSet`;
+- `ControllerTabBarHost.tabBarController(_:shouldSelectTab:)`, because the
+  system's tap path does not go through the setter;
+- `placeContent`, as a backstop;
+- `replaceContent`.
+
+No `reloadInputViews` is needed, because nothing is first responder after
+the move. The next tap on a field starts a fresh input session in the new
+slot. A state that does not move the content (the same tab, a badge, a web
+hide) leaves the keyboard alone. Pinned by:
+- `testAWebDrivenMoveEndsEditingBeforeTheContentLeavesItsSlot`;
+- `testATapOnAnotherTabEndsEditingBeforeTheSystemSelects`;
+- `testNoMoveLeavesEditingAlone`.
+
+Measured on the iOS 27.2 Duo simulator, closed (466x678 pt), with the
+tab-bar fixture's Nav buttons: the titleless visible navigation bar takes
+NO horizontal band. XCUITest reports no navigation bar element, the web
+view stays at y 0 to 678 on root and pushed screens, and the item is drawn
+in the strip under the vertical status bar (38x38 pt at 399,179). The
+system shows the chevron alone, without the title; the label still reaches
+VoiceOver. The tabs keep the same frames (396,444 to 396,594) on root and
+pushed screens, so there is no reserved placeholder slot. Accessibility
+order: the web content, then Back or Close, then the tabs top to bottom.
+The web view's trailing edge is 382 pt over the whole height, header row
+included, so nothing in the web header sits under the strip.
 
 Neither hosting minimised on scroll. iOS can only minimise a bar that
 tracks a scroll view, and neither tracks the web view's. The behaviour is
