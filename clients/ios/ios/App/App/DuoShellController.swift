@@ -333,9 +333,11 @@ final class DuoShellController: UITabBarController {
 
     /// Draws `back` (nil: none) in the selected slot, clears every other
     /// slot, and shows the navigation bars only while `verticalBar` and
-    /// while the tabs show (`tabsShown`): when the web hides the tabs (a
-    /// call, a full-screen viewer, the composer focused) the whole strip
-    /// hides, Back included (canvas rule 8), and the web shows its own.
+    /// while the strip shows (`tabsShown`, the bridge's
+    /// `NativeTabBarState.stripShown`). Since stage 5 the web hiding its
+    /// floating bar (a call, a full-screen viewer, the composer focused)
+    /// does NOT hide the strip; only a page that sends no state does, and
+    /// then the Back hides with the tabs and the web shows its own.
     func renderNavBack(_ back: NativeNavBack?, verticalBar: Bool, tabsShown: Bool = true) {
         navBack = back
         navBarShown = verticalBar && tabsShown

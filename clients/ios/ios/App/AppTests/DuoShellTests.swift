@@ -26,11 +26,20 @@ final class DuoShellTests: XCTestCase {
     }
 
     /// A shell around a plain content controller, with its host installed.
+    /// Work the host scheduled (a tap's timeout), run by `runScheduled()`.
+    private var scheduled: [@MainActor () -> Void] = []
+
+    private func runScheduled() {
+        let work = scheduled
+        scheduled = []
+        for item in work { item() }
+    }
+
     private func makeShell() -> (DuoShellController, ControllerTabBarHost, UIViewController) {
         let content = UIViewController()
         let shell = DuoShellController(content: content)
         shell.loadViewIfNeeded()
-        let host = ControllerTabBarHost(shell: shell, reduceMotion: { true })
+        let host = ControllerTabBarHost(shell: shell, reduceMotion: { true }, schedule: { [weak self] _, work in self?.scheduled.append(work) })
         host.install(in: content)
         return (shell, host, content)
     }
@@ -122,23 +131,120 @@ final class DuoShellTests: XCTestCase {
         let cleared = state(["inbox_badge": NSNull(), "inbox_dot": false, "visible": false], from: next)
         host.render(cleared)
         XCTAssertNil(shell.tabs.first { $0.identifier == "inbox" }?.badgeValue, "a count of 0 shows nothing")
-        XCTAssertTrue(shell.isTabBarHidden, "visible:false hides the strip (calls, covering sheets)")
+        XCTAssertFalse(shell.isTabBarHidden, "the web hiding its own bar does not hide the strip (stage 5)")
         host.render(state(["visible": true], from: cleared))
         XCTAssertFalse(shell.isTabBarHidden)
     }
 
-    func testATapForwardsTheKeyAndLeavesTheSelectionToTheWeb() throws {
+    // MARK: Stage 5: the strip never hides with the web's floating bar
+
+    /// A conversation with its composer focused, a full-screen viewer, a
+    /// covering sheet, a tab change's grace hide and a call (`data-in-call`,
+    /// #243) all send `visible: false`. The strip is a system region that
+    /// covers none of them and is the closed Duo's only navigation, so it
+    /// stays, and so does the Back.
+    func testAWebHideKeepsTheStripVisible() {
+        let (shell, host, _) = makeShell()
+        let shown = state(["items": four, "selected": "chat", "visible": true])
+        host.render(shown)
+        XCTAssertFalse(shell.isTabBarHidden)
+        let hidden = state(["visible": false], from: shown)
+        XCTAssertFalse(hidden.shown, "the standalone bar still hides")
+        XCTAssertTrue(hidden.stripShown)
+        host.render(hidden)
+        XCTAssertFalse(shell.isTabBarHidden, "the web hid its bar; the strip stays")
+        shell.renderNavBack(NativeNavBack(kind: .back, label: "Back"), verticalBar: true, tabsShown: hidden.stripShown)
+        XCTAssertTrue(shell.navBarShown, "and the Back with it")
+    }
+
+    /// A page that sends no state (sign-in, guest pages): the bridge clears
+    /// `webSentState` and the strip hides, as the bar did before.
+    func testAPageThatSendsNoStateHidesTheStrip() {
+        let (shell, host, _) = makeShell()
+        var current = state(["items": four, "selected": "chat", "visible": true])
+        host.render(current)
+        current.visible = false
+        current.webSentState = false
+        host.render(current)
+        XCTAssertTrue(shell.isTabBarHidden)
+        host.render(state(["visible": true], from: current))
+        XCTAssertFalse(shell.isTabBarHidden, "the next page's state shows it again")
+    }
+
+    // MARK: Stage 5: a tap animates the selection exactly once
+
+    /// The web's sequence on a tab change whose new view mounts late: the
+    /// old view's grace hide still names the OLD tab, then the new view
+    /// names the new one. The system selected the tab on the tap (one
+    /// animation); neither state moves the selection in code.
+    func testATapSelectsOnceAndTheWebsEchoIsANoOp() throws {
+        let (shell, host, content) = makeShell()
+        var taps: [String] = []
+        host.onTap = { taps.append($0) }
+        let start = state(["items": four, "selected": "calendar", "visible": true])
+        host.render(start)
+        let chat = try XCTUnwrap(shell.tabs.first { $0.identifier == "chat" })
+        let moves = host.programmaticSelections
+        XCTAssertTrue(host.tabBarController(shell, shouldSelectTab: chat), "the system selects, and animates, once")
+        XCTAssertEqual(taps, ["chat"])
+        shell.selectedTab = chat
+        host.tabBarController(shell, didSelectTab: chat, previousTab: nil)
+        XCTAssertTrue(content.parent === shell.slot(of: chat), "the content follows the tap")
+        let grace = state(["selected": "calendar", "visible": false], from: start)
+        host.render(grace)
+        XCTAssertEqual(shell.selectedTab?.identifier, "chat", "the old view's grace hide does not snap it back")
+        XCTAssertFalse(shell.isTabBarHidden)
+        host.render(state(["selected": "chat", "visible": false], from: grace))
+        XCTAssertEqual(shell.selectedTab?.identifier, "chat")
+        XCTAssertNil(host.pendingKey, "the web confirmed the tap")
+        XCTAssertEqual(host.programmaticSelections, moves, "no selection was set in code")
+        XCTAssertFalse(shell.isTabBarHidden, "Chat in a conversation keeps the strip")
+    }
+
+    /// The web declined the move (it never names the tapped tab): after the
+    /// timeout its own selection is restored.
+    func testAnUnconfirmedTapFallsBackToTheWebsSelection() throws {
+        let (shell, host, _) = makeShell()
+        host.render(state(["items": four, "selected": "calendar", "visible": true]))
+        let inbox = try XCTUnwrap(shell.tabs.first { $0.identifier == "inbox" })
+        XCTAssertTrue(host.tabBarController(shell, shouldSelectTab: inbox))
+        shell.selectedTab = inbox
+        XCTAssertEqual(scheduled.count, 1)
+        runScheduled()
+        XCTAssertNil(host.pendingKey)
+        XCTAssertEqual(shell.selectedTab?.identifier, "calendar")
+    }
+
+    /// A second tap supersedes the first one's timeout.
+    func testAStaleTimeoutDoesNotUndoANewerTap() throws {
+        let (shell, host, _) = makeShell()
+        let start = state(["items": four, "selected": "calendar", "visible": true])
+        host.render(start)
+        let inbox = try XCTUnwrap(shell.tabs.first { $0.identifier == "inbox" })
+        let more = try XCTUnwrap(shell.tabs.first { $0.identifier == "more" })
+        XCTAssertTrue(host.tabBarController(shell, shouldSelectTab: inbox))
+        shell.selectedTab = inbox
+        XCTAssertTrue(host.tabBarController(shell, shouldSelectTab: more))
+        shell.selectedTab = more
+        let first = scheduled.removeFirst()
+        first()
+        XCTAssertEqual(host.pendingKey, "more")
+        XCTAssertEqual(shell.selectedTab?.identifier, "more")
+    }
+
+    func testATapForwardsTheKeyAndAReselectChangesNothing() throws {
         let (shell, host, _) = makeShell()
         var taps: [String] = []
         host.onTap = { taps.append($0) }
         host.render(state(["items": four, "selected": "chat", "visible": true]))
-        let inbox = try XCTUnwrap(shell.tabs.first { $0.identifier == "inbox" })
-        XCTAssertFalse(host.tabBarController(shell, shouldSelectTab: inbox), "the controller never selects on a tap")
-        XCTAssertEqual(taps, ["inbox"])
-        XCTAssertEqual(shell.selectedTab?.identifier, "chat")
         let chat = try XCTUnwrap(shell.tabs.first { $0.identifier == "chat" })
-        XCTAssertFalse(host.tabBarController(shell, shouldSelectTab: chat))
-        XCTAssertEqual(taps, ["inbox", "chat"], "a tap on the selected tab still goes to the web (reselect)")
+        XCTAssertFalse(host.tabBarController(shell, shouldSelectTab: chat), "a reselect changes nothing natively")
+        XCTAssertEqual(taps, ["chat"], "a tap on the selected tab still goes to the web (reselect)")
+        XCTAssertNil(host.pendingKey)
+        let inbox = try XCTUnwrap(shell.tabs.first { $0.identifier == "inbox" })
+        XCTAssertTrue(host.tabBarController(shell, shouldSelectTab: inbox), "another tab: the system selects it")
+        XCTAssertEqual(taps, ["chat", "inbox"])
+        XCTAssertEqual(host.pendingKey, "inbox")
     }
 
     func testAWebDrivenSwitchMovesTheSelectionAndTheOneContent() throws {
@@ -386,7 +492,8 @@ final class DuoShellTests: XCTestCase {
         XCTAssertFalse(shell.navBarShown)
     }
 
-    func testTheBackHidesWithTheTabsForACall() {
+    /// When the strip hides (a page with no state), the Back hides with it.
+    func testTheBackHidesWithTheStrip() {
         let (shell, host, _) = makeShell()
         host.render(state(["items": four, "selected": "chat", "visible": true]))
         shell.renderNavBack(NativeNavBack(kind: .back, label: "Back"), verticalBar: true, tabsShown: false)

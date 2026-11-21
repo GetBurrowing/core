@@ -208,6 +208,8 @@ final class NativeTabBarTests: XCTestCase {
         let start = NativeTabBarState()
         XCTAssertFalse(start.visible)
         XCTAssertFalse(start.shown)
+        XCTAssertFalse(start.webSentState)
+        XCTAssertFalse(start.stripShown)
         XCTAssertEqual(start.items, [])
         XCTAssertNil(start.selected)
         XCTAssertNil(NativeTabBarFactory.inboxBadge(start))
@@ -215,7 +217,7 @@ final class NativeTabBarTests: XCTestCase {
 
     func testFullPayloadDecodes() {
         let next = state(["items": four, "selected": "inbox", "inbox_dot": true, "visible": true])
-        XCTAssertEqual(next, NativeTabBarState(items: four, selected: "inbox", inboxDot: true, visible: true))
+        XCTAssertEqual(next, NativeTabBarState(items: four, selected: "inbox", inboxDot: true, visible: true, webSentState: true))
         XCTAssertTrue(next.shown)
         XCTAssertEqual(NativeTabBarFactory.inboxBadge(next), "")
     }

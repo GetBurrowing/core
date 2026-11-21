@@ -250,8 +250,8 @@ size-class change.
 tap fires `burrowNativeBack`. The tab navigation controllers show their
 (titleless) bar only while the side strip is in use, read from the shell
 and window as for the bottom reservation (the content reports no edge on
-iOS 27.2), and only while the tabs show: when the web hides the tabs (a
-call, a full-screen viewer, the composer focused) the Back hides with them.
+iOS 27.2), and only while the strip shows (since stage 5 the web hiding its own
+bar no longer hides the strip; see below).
 Open, the bars are hidden and the web header keeps its own control. On
 every edge change, tab show or hide, and new document the shell sets or
 clears `<html data-native-vertical-bar>` in the same main-thread turn as
@@ -272,6 +272,34 @@ a hook that installed before the attribute arrived still activates. On the
 Duo, mutations, navigation and width changes only schedule a push, and the
 push runs at most once per animation frame. The script is nil off the Duo
 (`DuoShellTests.testTheDuoMarkerScriptIsProducedOnlyOnTheDuo`).
+
+**The strip never hides with the web's bar; a tap animates once (stage 5, 2026-11-21).**
+Two bugs seen on a real closed Duo at e71a56de8, reproduced on the closed
+simulator with the fixture's "Web tab mode" (the state sequence
+native_tab_bar.js sends when a tab's new LiveView mounts after the 300 ms
+destroy grace: the old view's last state with `visible: false` and the OLD
+selection, then the new view's state):
+- Switching to Chat hid the whole strip. Chat reopens a conversation whose
+  composer has focus, so the web sends `visible: false`, and stage 4 hid
+  the strip with it. Now the Duo strip follows
+  `NativeTabBarState.stripShown`: shown on every page whose web sends
+  state, whatever `visible` says. It hides only on a page that sends none
+  (sign-in, guest pages; the bridge clears `webSentState`). The standalone
+  bar on every other iPhone still follows `shown`. **In a call** (#243,
+  `[data-in-call]`) the strip stays too: it is a system region beside the
+  content and overlaps none of the call controls, and it is the closed
+  Duo's only navigation. The Back stays with it, so the web's own control
+  stays hidden.
+- A tap began to animate and then snapped. `shouldSelectTab` refused the
+  tap and the web's echo set `selectedTab` in code (no animation). Now a
+  tap on another tab lets the system select it (one animation), the content
+  moves in `didSelectTab`, and `ControllerTabBarHost.pendingKey` holds that
+  tab until the web names it: a state naming another tab (the grace hide)
+  does not move the selection. If the web never confirms within 2 s its own
+  selection is restored. A reselect changes nothing natively.
+Measured (fixture DEBUG `selection:` line, calendar then Chat): before,
+`programmatic=2 native=0`, strip hidden after Chat; after,
+`programmatic=0 native=2`, strip shown, and still shown after a web hide.
 
 **Selected-tab tint on the Duo: decision, stage 5.** The strip keeps
 today's selected tint, unchanged from main: `--color-primary` #ad4b07 in

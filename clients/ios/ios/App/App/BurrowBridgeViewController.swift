@@ -509,10 +509,11 @@ final class BurrowBridgeViewController: CAPBridgeViewController {
     private func syncNavBar() {
         guard #available(iOS 18, *), let shell = duoShell as? DuoShellController else { return }
         shell.onNavBack = { [weak self] in self?.navBackTapped() }
-        shell.renderNavBack(navBack, verticalBar: DuoLayout.verticalBarActive(for: self), tabsShown: tabBarState.shown)
+        shell.renderNavBack(navBack, verticalBar: DuoLayout.verticalBarActive(for: self), tabsShown: tabBarState.stripShown)
         // The attribute follows the native bar exactly: while the strip is
-        // hidden with the tabs (a call, the composer focused) the web shows
-        // its own control again, so there is still one Back.
+        // hidden (a page that sends no state) the web shows its own control
+        // again, so there is still one Back. The web hiding its own bar no
+        // longer hides the strip (stage 5, `stripShown`).
         let drawn = shell.navBarShown
         guard pushedVerticalBar != drawn, let script = NativeNavBarDocument.attributeScript(isDuo: true, verticalBar: drawn) else { return }
         pushedVerticalBar = drawn
@@ -637,8 +638,11 @@ final class BurrowBridgeViewController: CAPBridgeViewController {
     private func hideTabBarUnlessDocumentSendsState() {
         let generation = documentGeneration
         DispatchQueue.main.asyncAfter(deadline: .now() + NativeTabBarDocument.stateGrace) { [weak self] in
-            guard let self, self.documentGeneration == generation, !self.documentSentState, self.tabBarState.visible else { return }
+            guard let self, self.documentGeneration == generation, !self.documentSentState,
+                self.tabBarState.visible || self.tabBarState.webSentState
+            else { return }
             self.tabBarState.visible = false
+            self.tabBarState.webSentState = false
             self.tabBarHost?.render(self.tabBarState)
             self.syncNavBar()
             #if DEBUG
