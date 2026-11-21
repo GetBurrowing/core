@@ -235,7 +235,12 @@ defmodule PlatformWeb.SocialLive do
       &SocialTabs.reduce(&1.assigns.tabs, &1, fn mod, acc -> mod.from_query(acc, query) end)
     )
     |> then(fn socket ->
-      tab = query["tab"] || if(SocialTabs.get(socket.assigns.tabs, "today"), do: "today")
+      tab =
+        query["tab"] ||
+          if(socket.assigns.tab != "connections" and SocialTabs.get(socket.assigns.tabs, "today"),
+            do: "today"
+          )
+
       SocialScope.select_tab(socket, tab)
     end)
   end

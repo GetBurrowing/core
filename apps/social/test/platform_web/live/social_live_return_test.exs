@@ -134,6 +134,7 @@ defmodule PlatformWeb.SocialLiveReturnTest do
     {:ok, second} = Social.create_profile(ctx.org_id, %{name: "ZZZ Return Brand"})
     _ = make_approver!(ctx.org_id, second, ctx.approver)
     second = link!(second, "zprof_second")
+    second = second |> Ecto.Changeset.change(studio_enabled: true) |> Repo.update!()
     {:ok, pending} = Social.create_account(ctx.org_id, second, %{platform: "linkedin"})
     stub_accounts([entry(@account_ref, "linkedin", "zprof_second")])
     first_before = reload(ctx.pending)
@@ -141,6 +142,12 @@ defmodule PlatformWeb.SocialLiveReturnTest do
     child = land(conn, ctx.approver, success_url(@account_ref, "zprof_second"))
 
     assert requests() == [{"GET", "/api/v1/accounts"}]
+
+    assert has_element?(
+             child,
+             "[data-role='social-tab-button'][data-tab='connections'][aria-selected='true']"
+           )
+
     assert has_element?(child, row(pending) <> " [data-state='connected']", "Connected")
     refute has_element?(child, row(ctx.pending))
     assert reload(ctx.pending) == first_before
@@ -151,6 +158,7 @@ defmodule PlatformWeb.SocialLiveReturnTest do
     {:ok, second} = Social.create_profile(ctx.org_id, %{name: "ZZZ Return Brand"})
     _ = make_approver!(ctx.org_id, second, ctx.approver)
     second = link!(second, "zprof_second")
+    second = second |> Ecto.Changeset.change(studio_enabled: true) |> Repo.update!()
     {:ok, pending} = Social.create_account(ctx.org_id, second, %{platform: "linkedin"})
     stub_accounts([])
     first_before = reload(ctx.pending)
@@ -159,11 +167,31 @@ defmodule PlatformWeb.SocialLiveReturnTest do
     child = land(conn, ctx.approver, "/m/social?error=denied&profileId=zprof_second")
 
     assert requests() == []
+
+    assert has_element?(
+             child,
+             "[data-role='social-tab-button'][data-tab='connections'][aria-selected='true']"
+           )
+
     assert notice?(child, "The account wasn't connected (denied).")
     assert has_element?(child, row(pending))
     refute has_element?(child, row(ctx.pending))
     assert reload(pending) == second_before
     assert reload(ctx.pending) == first_before
+  end
+
+  test "an explicit tab takes precedence over a Studio connection return", %{conn: conn} = ctx do
+    _profile = ctx.profile |> Ecto.Changeset.change(studio_enabled: true) |> Repo.update!()
+    stub_accounts([])
+
+    child = land(conn, ctx.approver, "/m/social?error=denied&profileId=#{@profile_ref}&tab=queue")
+
+    assert requests() == []
+
+    assert has_element?(
+             child,
+             "[data-role='social-tab-button'][data-tab='queue'][aria-selected='true']"
+           )
   end
 
   test "a repeat of the same URL is already connected: one row, no write",
