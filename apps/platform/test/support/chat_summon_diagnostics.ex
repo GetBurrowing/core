@@ -15,12 +15,19 @@ defmodule Platform.ChatSummonDiagnostics do
   booleans, counts, participant kinds and the text of the page's flash
   elements. Each observation is guarded, so a failing read is reported as
   "unavailable" and cannot hide the original failure.
+
+  The second group says where the agent's and the actor's participant rows are
+  if they are not in the expected space, and how many spaces share its slug. A
+  lookup scoped to a different org could land the view on another space with
+  the same slug, which these counts would show. They are evidence of location,
+  not proof of which click wrote a row or of which space the view mounted.
   """
 
   import Ecto.Query
 
   alias Platform.Chat
   alias Platform.Chat.Participant
+  alias Platform.Chat.Space
   alias Platform.Repo
   alias Platform.Tenancy
 
@@ -55,6 +62,18 @@ defmodule Platform.ChatSummonDiagnostics do
       line("actor has a participant row", fn ->
         count(participants, &(&1.participant_type == "user" and &1.participant_id == actor.id)) >
           0
+      end),
+      "Where else the rows are (counts only; none of these names the space the view mounted, which is inferred from where the rows are):",
+      line("agent participant rows in OTHER spaces", fn ->
+        rows_elsewhere("agent", agent.id, space.id)
+      end),
+      line("actor participant rows in OTHER spaces", fn ->
+        rows_elsewhere("user", actor.id, space.id)
+      end),
+      line("spaces sharing this space's slug (all orgs)", fn -> slug_spaces(space).total end),
+      line("  of which is this space", fn -> slug_spaces(space).includes_this end),
+      line("actor's first preloaded membership org is this space's org (a fresh read now)", fn ->
+        first_membership_is_space_org?(actor, space)
       end)
     ]
     |> Enum.join("\n")
@@ -62,6 +81,31 @@ defmodule Platform.ChatSummonDiagnostics do
 
   defp agent_row?(participant, agent),
     do: participant.participant_type == "agent" and participant.participant_id == agent.id
+
+  defp rows_elsewhere(type, principal_id, space_id) do
+    Repo.aggregate(
+      from(p in Participant,
+        where:
+          p.participant_type == ^type and p.participant_id == ^principal_id and
+            p.space_id != ^space_id
+      ),
+      :count
+    )
+  end
+
+  defp slug_spaces(space) do
+    ids = Repo.all(from(s in Space, where: s.slug == ^space.slug, select: s.id))
+    %{total: length(ids), includes_this: space.id in ids}
+  end
+
+  # The preload that picks a session's active org is unordered, so this fresh
+  # read need not match the membership a failed mount saw.
+  defp first_membership_is_space_org?(actor, space) do
+    case Tenancy.load_membership(Platform.Accounts.get_user(actor.id)) do
+      %{org: %{id: org_id}} -> org_id == space.org_id
+      _ -> false
+    end
+  end
 
   defp count(participants, fun) when is_list(participants), do: Enum.count(participants, fun)
   defp count(other, _fun), do: other
