@@ -60,8 +60,15 @@ defmodule Platform.ChatSummonDiagnostics do
       line("participant rows in the space (all)", fn -> count(participants, fn _ -> true end) end),
       line("  of which agents", fn -> count(participants, &(&1.participant_type == "agent")) end),
       line("actor has a participant row", fn ->
-        count(participants, &(&1.participant_type == "user" and &1.participant_id == actor.id)) >
-          0
+        # A failed read stays unavailable: comparing its tuple with 0 would
+        # report `true` by term ordering.
+        case count(
+               participants,
+               &(&1.participant_type == "user" and &1.participant_id == actor.id)
+             ) do
+          n when is_integer(n) -> n > 0
+          unavailable -> unavailable
+        end
       end),
       "Where else the rows are (counts only; none of these names the space the view mounted, which is inferred from where the rows are):",
       line("agent participant rows in OTHER spaces", fn ->

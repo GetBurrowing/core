@@ -70,6 +70,7 @@ defmodule Platform.ChatSummonDiagnosticsTest do
     assert text =~ "spaces sharing this space's slug (all orgs): 1"
     assert text =~ "of which is this space: true"
     assert text =~ "participant rows for this agent: 1"
+    assert text =~ "actor has a participant row: true"
   end
 
   test "rows that landed in a same-slug space in another org are counted as elsewhere" do
@@ -112,6 +113,20 @@ defmodule Platform.ChatSummonDiagnosticsTest do
 
     assert text =~ "spaces sharing this space's slug (all orgs): 0"
     assert text =~ "of which is this space: false"
+  end
+
+  test "an unavailable participant read is reported as unavailable, not as a row that exists" do
+    owner = user!("owner")
+    actor = user!("actor")
+    agent = agent!()
+    space = channel!(owner, "diag-unavailable-#{System.unique_integer([:positive])}")
+
+    text = describe(%{space | id: "not-a-uuid"}, actor, agent)
+
+    assert text =~ "participant rows for this agent: {:unavailable,"
+    assert text =~ "actor has a participant row: {:unavailable,"
+    refute text =~ "actor has a participant row: true"
+    refute text =~ "actor has a participant row: false"
   end
 
   test "the output is counts, booleans and labels, with no identifiers" do
