@@ -6,7 +6,7 @@ Burrow is a modular business suite where AI agents are first-class participants 
 
 Burrow used to be called Startup Suite. A phone that installed the app to its home screen before the rename can keep showing the old name under the icon; remove the icon and add it again from the browser to pick up the new one.
 
-[![CI](https://github.com/Startup-Suite/core/actions/workflows/ci.yml/badge.svg)](https://github.com/Startup-Suite/core/actions/workflows/ci.yml)
+[![CI](https://github.com/GetBurrowing/core/actions/workflows/ci.yml/badge.svg)](https://github.com/GetBurrowing/core/actions/workflows/ci.yml)
 [![License: Apache 2.0](https://img.shields.io/badge/License-Apache%202.0-blue.svg)](LICENSE)
 
 ---
@@ -52,6 +52,11 @@ Pluggable OIDC authentication with a dev-mode bypass for local development.
 
 ## Getting Started
 
+### Self-hosting
+
+To run Burrow on your own server, follow the [self-hosting guide](docs/self-hosting.md).
+The rest of Getting Started covers local development.
+
 ### Prerequisites
 
 - **Elixir** ≥ 1.15 with OTP ≥ 26
@@ -62,7 +67,7 @@ Pluggable OIDC authentication with a dev-mode bypass for local development.
 
 ```bash
 # Clone the repository
-git clone https://github.com/Startup-Suite/core.git
+git clone https://github.com/GetBurrowing/core.git
 cd core/apps/platform
 
 # Install dependencies
@@ -113,7 +118,7 @@ core/
 ├── deployment/                # Deployment contracts and templates
 │   ├── schema/
 │   ├── templates/
-│   ├── examples/
+│   ├── examples/              # incl. self-host.install.toml
 │   └── operators/
 │
 ├── docs/

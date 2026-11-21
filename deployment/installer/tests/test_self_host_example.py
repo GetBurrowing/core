@@ -30,6 +30,7 @@ REPO = os.path.dirname(os.path.dirname(INSTALLER))
 EXAMPLE_REL = "deployment/examples/self-host.install.toml"
 EXAMPLE = os.path.join(REPO, EXAMPLE_REL)
 GUIDE = os.path.join(REPO, "docs", "self-hosting.md")
+README = os.path.join(REPO, "README.md")
 MAIN = os.path.join(INSTALLER, "burrow_install", "__main__.py")
 
 sys.path.insert(0, INSTALLER)
@@ -189,6 +190,23 @@ class GuideTest(unittest.TestCase):
         self.assertTrue(os.path.isfile(EXAMPLE))
 
     def test_guide_clones_the_public_repository(self):
+        self.assertIn("git clone https://github.com/GetBurrowing/core.git", self.text)
+
+
+class ReadmeTest(unittest.TestCase):
+    """The repository README sends self-hosters to the guide and clones the public repo."""
+
+    @classmethod
+    def setUpClass(cls):
+        with open(README, encoding="utf-8") as handle:
+            cls.text = handle.read()
+
+    def test_readme_links_the_self_host_guide(self):
+        self.assertIn("](docs/self-hosting.md)", self.text)
+        self.assertTrue(os.path.isfile(GUIDE))
+
+    def test_readme_does_not_clone_the_old_repository(self):
+        self.assertNotIn("Startup-Suite/core.git", self.text)
         self.assertIn("git clone https://github.com/GetBurrowing/core.git", self.text)
 
 
