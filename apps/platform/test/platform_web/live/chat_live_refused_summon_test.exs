@@ -51,6 +51,20 @@ defmodule PlatformWeb.ChatLiveRefusedSummonTest do
     space
   end
 
+  # The same assertion as before: the agent is a participant after the mention.
+  # On a failure the message also carries observations taken after the failed
+  # action. A passing run does no extra work.
+  defp assert_agent_participant!(space, actor, agent, view) do
+    assert Enum.any?(
+             Chat.list_participants(space.id),
+             &(&1.participant_type == "agent" and &1.participant_id == agent.id)
+           )
+  rescue
+    error in ExUnit.AssertionError ->
+      diagnostics = Platform.ChatSummonDiagnostics.describe(space, actor, agent, view)
+      reraise %{error | message: error.message <> "\n\n" <> diagnostics}, __STACKTRACE__
+  end
+
   defp live_as(conn, user, space) do
     conn = init_test_session(conn, current_user_id: user.id)
     {:ok, view, _html} = live(conn, ~p"/chat/#{space.slug}")
@@ -240,10 +254,7 @@ defmodule PlatformWeb.ChatLiveRefusedSummonTest do
       view = live_as(conn, actor, space)
       send_text(view, "@[#{agent.slug}] hello")
 
-      assert Enum.any?(
-               Chat.list_participants(space.id),
-               &(&1.participant_type == "agent" and &1.participant_id == agent.id)
-             )
+      assert_agent_participant!(space, actor, agent, view)
 
       assert Enum.find(Chat.list_participants(space.id), &(&1.participant_id == actor.id)).role ==
                "member"

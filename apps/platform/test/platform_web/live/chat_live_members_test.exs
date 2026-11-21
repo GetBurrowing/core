@@ -106,6 +106,18 @@ defmodule PlatformWeb.ChatLiveMembersTest do
     )
   end
 
+  # The same assertion as before: exactly one agent row after the add. On a
+  # failure the message also carries observations taken after the failed
+  # action. A passing run does no extra work.
+  defp one_agent_row!(space, actor, agent, view) do
+    assert [row] = agent_rows(space.id, agent.id)
+    row
+  rescue
+    error in ExUnit.AssertionError ->
+      diagnostics = Platform.ChatSummonDiagnostics.describe(space, actor, agent, view)
+      reraise %{error | message: error.message <> "\n\n" <> diagnostics}, __STACKTRACE__
+  end
+
   defp agent_row_selector(agent),
     do: "#{@popover} [data-role=members-agent-row][data-agent-id='#{agent.id}']"
 
@@ -1083,7 +1095,7 @@ defmodule PlatformWeb.ChatLiveMembersTest do
       |> with_target("#chat-members")
       |> render_hook("members_add_agent", %{"agent_id" => agent.id})
 
-      assert [row] = agent_rows(space.id, agent.id)
+      row = one_agent_row!(space, actor, agent, view)
       assert row.history_visible_from != nil
       assert role_in_db(space, actor) == "member"
 
