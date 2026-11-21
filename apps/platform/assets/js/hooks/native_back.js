@@ -61,6 +61,11 @@ export const MARKER = "data-native-back"
 export const DRAWN_ATTR = "data-native-vertical-bar"
 export const DUO_ATTR = "data-native-duo"
 export const DUO_EVENT = "burrowNativeDuo"
+// Set on <html> by native while the iPhone Duo is open (the inner display),
+// cleared while it is closed; flips live on fold and unfold, and the event
+// follows every change. Never set off the Duo (task 01a1fc7f stage 1).
+export const DUO_OPEN_ATTR = "data-native-duo-open"
+export const DUO_POSTURE_EVENT = "burrowNativeDuoPosture"
 export const METHOD = "navBarState"
 export const KINDS = ["back", "close"]
 export const DEFAULT_LABELS = { back: "Back", close: "Close" }

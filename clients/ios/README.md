@@ -273,6 +273,21 @@ Duo, mutations, navigation and width changes only schedule a push, and the
 push runs at most once per animation frame. The script is nil off the Duo
 (`DuoShellTests.testTheDuoMarkerScriptIsProducedOnlyOnTheDuo`).
 
+**The open-Duo posture on the web side (task 01a1fc7f stage 1, 2026-11-21).**
+On the Duo only, native sets `<html data-native-duo-open>` while the Duo is
+open (the inner display) and removes it while it is closed, then dispatches
+the window event `burrowNativeDuoPosture` after every change. Open and
+closed come from the one rule, `OrientationPolicy.isOpen` (the window's
+shorter side is at least 600 pt), so the web never measures posture itself:
+its viewport on the open Duo sits under the iPad-style top tab bar, and
+`data-native-duo` alone does not say which display is in use.
+`BurrowBridgeViewController.syncDuoPosture` pushes
+`NativeNavBarDocument.postureScript` on every new main-frame document, on
+`viewDidLayoutSubviews` and after every size transition, so it flips live
+on fold and unfold; it evaluates nothing when the posture did not change,
+and nothing at all off the Duo (the script is nil there,
+`DuoShellTests.testThePostureScriptIsProducedOnlyOnTheDuo`).
+
 **The strip never hides with the web's bar; a tap animates once (stage 5, 2026-11-21).**
 Two bugs seen on a real closed Duo at e71a56de8, reproduced on the closed
 simulator with the fixture's "Web tab mode" (the state sequence
