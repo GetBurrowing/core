@@ -30,6 +30,21 @@ defmodule PlatformWeb.SocialStudioTodayTest do
     assert has_element?(view, "[data-role='social-tab-body'][data-tab='queue']")
   end
 
+  test "switching from a disabled profile to a Studio profile opens Today", %{conn: conn} do
+    w = studio_world!()
+    {:ok, disabled} = Social.create_profile(w.org_id, %{name: "Disabled profile"})
+    view = open(conn, w.approver, "?profile=#{disabled.id}&tab=queue")
+    assert has_element?(view, "[data-role='social-tab-body'][data-tab='queue']")
+
+    view |> form("#social-profile-switcher", %{profile_id: w.profile.id}) |> render_change()
+    assert has_element?(view, "[data-role='social-tab-body'][data-tab='today']")
+
+    view |> element("[data-role='social-tab-button'][data-tab='queue']") |> render_click()
+    assert has_element?(view, "[data-role='social-tab-body'][data-tab='queue']")
+    view |> form("#social-profile-switcher", %{profile_id: disabled.id}) |> render_change()
+    assert has_element?(view, "[data-role='social-tab-body'][data-tab='queue']")
+  end
+
   test "plain Social entry keeps Queue for a profile without Studio", %{conn: conn} do
     w = studio_world!()
     assert {:ok, _} = Social.Studio.set_enabled(w.org_id, w.profile.id, w.approver.id, false)
