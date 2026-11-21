@@ -1055,6 +1055,10 @@ defmodule PlatformWeb.Router do
       # links to Usage / Admin / Prompts, sign out). Ungated in ModuleGate;
       # each row checks its own destination.
       live("/settings", SettingsLive, :index)
+      # Task 01a1fc7f stage 2: the More destinations as a page, the open
+      # iPhone Duo's More tab (assets/js/lib/duo_more_page.js routes there).
+      # Ungated in ModuleGate, like Settings.
+      live("/more", MoreLive, :index)
       # Task 01a19554-fd07 stage 2: the first-run "What do you want to do?"
       # box. A member who is not pending is sent on to /chat by its mount.
       live("/start", FirstRunLive, :index)

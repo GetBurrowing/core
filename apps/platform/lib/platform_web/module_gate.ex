@@ -78,8 +78,13 @@ defmodule PlatformWeb.ModuleGate do
   # `/switcher/connected` (task 01a1ccd4 stage 3) only finishes adding an
   # install to THIS browser's switcher list: it reads and writes nothing on
   # the server, so it is every signed-in user's, like Settings.
+  #
+  # `/more` (task 01a1fc7f stage 2) is the More sheet's rows as a page; the
+  # rows builder already filters every row through the actor's access, so
+  # the page shows nothing its viewer could not open, like Settings.
   @ungated [
     PlatformWeb.AccessViewAsLive,
+    PlatformWeb.MoreLive,
     PlatformWeb.SettingsLive,
     PlatformWeb.SwitcherConnectedLive
   ]

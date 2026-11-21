@@ -377,6 +377,35 @@ defmodule PlatformWeb.Components.IconRailTest do
                ["more"]
     end
 
+    # Task 01a1fc7f stage 2: /more is the More tab's page (the open iPhone
+    # Duo), so More is selected there, on the web tab and the native bridge.
+    test "/more lights More, and only More, and the native bridge says more" do
+      html = render_bottom_rail(%{current_path: "/more"})
+      assert active_keys(html) == ["more"]
+
+      [bridge] =
+        html |> LazyHTML.from_fragment() |> LazyHTML.query("#native-tab-bridge") |> Enum.to_list()
+
+      assert LazyHTML.attribute(bridge, "data-active-key") == ["more"]
+      assert active_keys(render_bottom_rail(%{current_path: "/morex"})) == []
+    end
+
+    test "/more leaves the Inbox badge on the Inbox tab" do
+      doc =
+        LazyHTML.from_fragment(
+          render_bottom_rail(%{current_path: "/more", inbox_unread_count: 3})
+        )
+
+      badge =
+        LazyHTML.query(
+          doc,
+          ~s([data-bottom-rail] a[data-destination="inbox"] [data-role="inbox-badge"])
+        )
+
+      assert badge |> Enum.map(&(&1 |> LazyHTML.text() |> String.trim())) == ["3"]
+      assert doc |> LazyHTML.query(~s([data-role="inbox-badge"])) |> Enum.count() == 1
+    end
+
     test "a path nothing lists lights nothing" do
       assert active_keys(render_bottom_rail(%{current_path: "/nowhere"})) == []
     end

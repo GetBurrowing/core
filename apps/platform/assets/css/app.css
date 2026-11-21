@@ -5852,6 +5852,29 @@ body, .font-suite {
   color: var(--color-base-content);
 }
 
+/* The More page (`/more`, the open iPhone Duo's More tab, task 01a1fc7f
+   stage 2): the sheet's rows laid flat on the tab roots' base-200 ground.
+   Only what the sheet's base-100 assumes is re-pointed: the last row's
+   opaque fill (it exists to cover the sheet's scroll cue, which the page
+   does not render) goes, and hover takes the one-step-lighter base-100 so
+   it still differs from the ground. Pressed (base-300) and current (bar,
+   600, check) stay the sheet's. No destructive row lives here. */
+.more-page .more-sheet-row:last-child {
+  background-color: transparent;
+}
+
+@media (hover: hover) {
+  .more-page .more-sheet-row:hover,
+  .more-page .more-sheet-settings:hover {
+    background-color: var(--color-base-100);
+  }
+}
+
+.more-page .more-sheet-row:active,
+.more-page .more-sheet-settings:active {
+  background-color: var(--color-base-300);
+}
+
 /* ── Optimistic navigation (task 01a166be-b5b9 stage 2) ─────────────────
    Canvas 01a167b0 m2 ("the optimistic tab") and rules 2, 3, 4, 7, 8. State
    comes from assets/js/lib/nav_pending.js, set in the tap's click:

@@ -580,3 +580,230 @@ defmodule PlatformWeb.Components.MoreSheetScopeTest do
     assert "files" in keys(without)
   end
 end
+
+defmodule PlatformWeb.Components.MoreSheetTest.Legacy do
+  @moduledoc false
+  # A VERBATIM copy of `MoreSheet.more_sheet/1` as it stood before task
+  # 01a1fc7f stage 2 moved its body into `more_entries/1`. The equality tests
+  # below render both for the same assigns: the refactor must not change one
+  # byte of the sheet.
+  use Phoenix.Component
+  use PlatformWeb, :verified_routes
+
+  import PlatformWeb.Components.Sheet
+  import PlatformWeb.CoreComponents, only: [icon: 1]
+  import PlatformWeb.AvatarComponents, only: [human_avatar: 1]
+
+  alias PlatformWeb.Components.IconRail
+
+  attr(:gaming, :boolean, default: false)
+  attr(:open, :boolean, default: false)
+  attr(:root_user, :boolean, default: false)
+  attr(:access_scope, :any, default: nil)
+  attr(:current_path, :string, default: nil)
+  attr(:current_user, :any, default: nil)
+  attr(:user, :any, default: nil)
+
+  def more_sheet(assigns) do
+    rows =
+      if assigns[:gaming],
+        do:
+          IconRail.gaming_more_sheet_rows(
+            assigns[:access_scope],
+            Map.get(assigns, :root_user, false)
+          ),
+        else:
+          IconRail.more_sheet_rows(assigns[:access_scope], Map.get(assigns, :root_user, false))
+
+    assigns =
+      assigns
+      |> assign(:rows, rows)
+      |> assign(:last_index, length(rows) - 1)
+      |> assign(
+        :current_key,
+        IconRail.more_sheet_current_key(rows, IconRail.nav_path(assigns[:current_path]))
+      )
+      |> assign(:name, display_name(assigns[:current_user], assigns[:user]))
+      |> assign(:avatar_url, Map.get(assigns[:user] || %{}, :avatar_url))
+      |> assign(:avatar_seed, Map.get(assigns[:user] || %{}, :id))
+
+    ~H"""
+    <.sheet
+      id="more-sheet"
+      open={@open}
+      placement={:bottom}
+      on_close="close_more_sheet"
+      class="more-sheet lg:hidden"
+      handle_close
+      swipe_dismiss
+    >
+      <:title>More</:title>
+
+      <nav class="more-sheet-list" aria-label="More destinations">
+        <%= for {dest, index} <- Enum.with_index(@rows) do %>
+          <%!-- The scroll cue sits just before the last row, which covers it
+               once it is in view (app.css `.more-sheet-cue`). --%>
+          <div
+            :if={index == @last_index}
+            class="more-sheet-cue flex items-end justify-center bg-gradient-to-t from-base-100 pb-1 text-subtle"
+            data-role="more-sheet-cue"
+            aria-hidden="true"
+          >
+            <.icon name="hero-chevron-down" class="size-4" />
+          </div>
+          <.link
+            navigate={dest.path}
+            class={[
+              "more-sheet-row focus-visible-ring",
+              dest.key == @current_key && "more-sheet-row--current"
+            ]}
+            data-destination={dest.key}
+            data-nav-label={dest.label}
+            aria-current={if dest.key == @current_key, do: "page"}
+            aria-label={dest.label}
+          >
+            <.icon
+              name={Map.get(dest, :hero_icon) || "hero-puzzle-piece"}
+              class="more-sheet-icon size-5"
+            />
+            <span class="min-w-0 truncate">{dest.label}</span>
+            <.icon
+              :if={dest.key == @current_key}
+              name="hero-check"
+              class="more-sheet-check ml-auto size-5 shrink-0"
+            />
+          </.link>
+        <% end %>
+      </nav>
+
+      <:actions>
+        <%!-- The divider is the footer's own top border (`.sheet-actions`). --%>
+        <.link
+          navigate={~p"/settings"}
+          class={[
+            "more-sheet-settings focus-visible-ring w-full",
+            @current_key == :settings && "more-sheet-row--current"
+          ]}
+          data-destination="settings"
+          data-nav-label="Settings"
+          aria-current={if @current_key == :settings, do: "page"}
+        >
+          <.human_avatar name={@name} avatar_url={@avatar_url} seed={@avatar_seed} size="sm" />
+          <span class="min-w-0 flex-1">
+            <span class="block truncate text-[15px]">Settings</span>
+            <span class="block truncate text-xs text-subtle" data-role="more-sheet-settings-subtitle">
+              {@name} · profile, appearance, admin
+            </span>
+          </span>
+          <.icon
+            :if={@current_key == :settings}
+            name="hero-check"
+            class="more-sheet-check size-5 shrink-0"
+          />
+          <.icon
+            :if={@current_key != :settings}
+            name="hero-chevron-right"
+            class="size-4 shrink-0 text-subtle"
+          />
+        </.link>
+      </:actions>
+    </.sheet>
+    """
+  end
+
+  defp display_name(name, _user) when is_binary(name) and name != "", do: name
+  defp display_name(%{name: name}, _user) when is_binary(name) and name != "", do: name
+  defp display_name(_, %{name: name}) when is_binary(name) and name != "", do: name
+  defp display_name(_, _), do: "Account"
+end
+
+defmodule PlatformWeb.Components.MoreSheetEqualityTest do
+  @moduledoc """
+  The More sheet renders byte-for-byte what it did before its body became
+  `more_entries/1` (task 01a1fc7f stage 2), for a spread of assigns: closed
+  and open, root and member, Mail on and off, an extension row, a current
+  row, Settings current, a viewer record and the gaming rows.
+
+  async: false — flips `:mail_enabled` and `:extensions`.
+  """
+  use ExUnit.Case, async: false
+
+  import Phoenix.Component
+  import Phoenix.LiveViewTest
+
+  alias PlatformWeb.Components.MoreSheet
+  alias PlatformWeb.Components.MoreSheetTest.Legacy
+
+  defp put_env(key, value) do
+    previous = Application.fetch_env(:platform, key)
+    Application.put_env(:platform, key, value)
+
+    on_exit(fn ->
+      case previous do
+        {:ok, v} -> Application.put_env(:platform, key, v)
+        :error -> Application.delete_env(:platform, key)
+      end
+    end)
+  end
+
+  defp both(attrs) do
+    {render_component(&MoreSheet.more_sheet/1, attrs),
+     render_component(&Legacy.more_sheet/1, attrs)}
+  end
+
+  @user %{id: "0190a0b0-0000-7000-8000-000000000001", name: "Pat Example", avatar_url: nil}
+
+  @cases [
+    %{open: false},
+    %{open: true},
+    %{open: true, root_user: true, current_user: "Pat Example"},
+    %{open: true, root_user: true, current_path: "/files", user: @user},
+    %{open: true, root_user: false, current_path: "/settings", current_user: "Pat Example"},
+    %{open: true, root_user: true, current_path: "/admin/prompts", user: @user},
+    %{open: true, root_user: true, current_path: "/changelog"},
+    %{open: true, gaming: true, root_user: true, current_path: "/files"}
+  ]
+
+  test "Mail on, fixture extension: every case renders the legacy sheet exactly" do
+    put_env(:mail_enabled, true)
+    Platform.FixtureExtension.register()
+
+    for attrs <- @cases do
+      {now, before} = both(attrs)
+      assert now == before, "sheet HTML changed for #{inspect(attrs)}"
+    end
+  end
+
+  test "Mail off: every case renders the legacy sheet exactly" do
+    put_env(:mail_enabled, false)
+
+    for attrs <- @cases do
+      {now, before} = both(attrs)
+      assert now == before, "sheet HTML changed for #{inspect(attrs)}"
+    end
+  end
+
+  test "positive control: the comparison sees a one-row difference" do
+    {now, _} = both(%{open: true, root_user: true})
+    {other, _} = both(%{open: true, root_user: true, current_path: "/files"})
+    refute now == other
+  end
+
+  test "the sheet still carries its chrome and the page variant does not" do
+    sheet = render_component(&MoreSheet.more_sheet/1, %{open: true, root_user: true})
+    assert sheet =~ ~s(data-role="more-sheet-cue")
+
+    assigns = %{}
+
+    page =
+      rendered_to_string(~H"""
+      <MoreSheet.more_entries root_user={true} />
+      """)
+
+    refute page =~ "more-sheet-cue"
+    refute page =~ ~s(id="more-sheet")
+    assert page =~ ~s(data-role="more-page-settings")
+    assert page =~ "line-clamp-2"
+    refute page =~ "min-w-0 truncate"
+  end
+end
