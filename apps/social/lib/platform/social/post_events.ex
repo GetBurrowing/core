@@ -71,6 +71,26 @@ defmodule Platform.Social.PostEvents do
   defp actor_fields({:human, id}) when is_binary(id), do: {"human", id}
   defp actor_fields(:system), do: {"system", nil}
 
+  @doc """
+  Which of `post_ids` an agent created: `%{post_id => agent_id}`, from each
+  post's first `created` event whose actor is an agent. Today reads it to mark
+  agent-drafted Studio posts.
+  """
+  @spec created_by_agents([Ecto.UUID.t()]) :: %{Ecto.UUID.t() => Ecto.UUID.t()}
+  def created_by_agents([]), do: %{}
+
+  def created_by_agents(post_ids) do
+    from(e in PostEvent,
+      where:
+        e.post_id in ^post_ids and e.action == "created" and e.actor_kind == "agent" and
+          not is_nil(e.actor_id),
+      order_by: [desc: e.inserted_at, desc: e.id],
+      select: {e.post_id, e.actor_id}
+    )
+    |> Repo.all()
+    |> Map.new()
+  end
+
   @doc "A post's events, oldest first."
   @spec list_for_post(Ecto.UUID.t()) :: [PostEvent.t()]
   def list_for_post(post_id), do: list_for_posts([post_id]) |> Map.get(post_id, [])

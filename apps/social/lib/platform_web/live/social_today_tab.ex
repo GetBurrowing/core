@@ -59,10 +59,11 @@ defmodule PlatformWeb.SocialTodayTab do
       profiles
       |> Enum.flat_map(fn profile ->
         case Studio.list_posts(profile.org_id, profile.id) do
-          {:ok, posts} -> Enum.map(posts, &%{post: &1, profile: profile})
+          {:ok, posts} -> Enum.map(posts, &%{post: &1, profile: profile, agent_drafted: false})
           _ -> []
         end
       end)
+      |> mark_agent_drafted()
 
     clips = Enum.flat_map(profiles, &clip_items(&1, socket.assigns.user, posts))
 
@@ -608,9 +609,64 @@ defmodule PlatformWeb.SocialTodayTab do
       users: users,
       agents: agents,
       receipt_accounts: receipt_accounts,
-      destinations: destinations
+      destinations: destinations,
+      video: detail_video(post, profile, user)
     }
   end
+
+  # The review panel plays the post's first media file when that file is a
+  # video in the profile's own project and org, whether or not the post came
+  # from a clip render (agent drafts carry media_file_ids and no
+  # clip_render_id). The decision is the stored file's content type, not the
+  # post's origin. Delivery still goes through /files/blob/:id and its own
+  # access checks; this only decides what to render.
+  #
+  # Social access does not imply file access: a viewer who may see the post but
+  # is denied `files.read` on the project gets `:no_access` (a line of text, no
+  # player whose source would 404). `nil` means no video to show.
+  defp detail_video(%{media_file_ids: [id | _]}, profile, user) when is_binary(id) do
+    case Platform.Files.get_file(id) do
+      %{deleted_at: nil, project_id: project_id, content_type: "video/" <> _} = file
+      when is_binary(project_id) and project_id == profile.project_id ->
+        cond do
+          not Platform.Social.OrgFiles.in_org?(file, profile.org_id) -> nil
+          viewer_reads_files?(user, project_id) -> {:play, id}
+          true -> :no_access
+        end
+
+      _ ->
+        nil
+    end
+  end
+
+  defp detail_video(_post, _profile, _user), do: nil
+
+  # The same RBAC decision the blob route applies (`files.read` on the
+  # file's project); a missing viewer reads nothing.
+  defp viewer_reads_files?(nil, _project_id), do: false
+
+  defp viewer_reads_files?(user, project_id) do
+    user
+    |> Platform.Access.Scope.for_user()
+    |> Platform.Access.check("files.read", {:project, project_id})
+    |> Kernel.==(:ok)
+  end
+
+  # An agent-created draft says so on its card (the `created` event's actor)
+  # until a person submits it: only a post still in `draft` carries the label.
+  defp mark_agent_drafted(items) do
+    by_post = items |> Enum.map(& &1.post.id) |> Social.PostEvents.created_by_agents()
+
+    Enum.map(items, fn item ->
+      %{item | agent_drafted: Map.has_key?(by_post, item.post.id) and item.post.status == "draft"}
+    end)
+  end
+
+  # The review panel's own check, from the post's history.
+  defp agent_drafted?(%{post: %{status: "draft"}, history: history}),
+    do: Enum.any?(history, &(&1.action == "created" and &1.actor_kind == "agent"))
+
+  defp agent_drafted?(_detail), do: false
 
   defp account_label(nil), do: "Former account"
 
@@ -789,6 +845,9 @@ defmodule PlatformWeb.SocialTodayTab do
               {item.post.body || "Untitled post"}
             </button>
             <p class="text-sm text-subtle">{item.profile.name}</p>
+            <p :if={item.agent_drafted} class="text-sm text-subtle" data-role="studio-agent-drafted">
+              Drafted by an agent · not reviewed
+            </p>
           </div>
         </section>
         <div class="min-w-0 space-y-3">
@@ -822,18 +881,30 @@ defmodule PlatformWeb.SocialTodayTab do
             class="scroll-mt-4 rounded-box border border-base-content/25 bg-base-100 p-4"
           >
             <h2 class="text-lg font-semibold">Post review</h2>
-            <p>{@studio_post_detail.post.body}</p>
-            <video
-              :if={
-                @studio_post_detail.post.clip_render_id &&
-                  List.first(@studio_post_detail.post.media_file_ids || [])
-              }
-              controls
-              preload="metadata"
-              class="max-h-96 w-full"
-              src={"/files/blob/#{List.first(@studio_post_detail.post.media_file_ids || [])}"}
+            <p
+              :if={agent_drafted?(@studio_post_detail)}
+              class="text-sm text-subtle"
+              data-role="studio-detail-agent-drafted"
             >
-            </video>
+              Drafted by an agent · not reviewed
+            </p>
+            <p>{@studio_post_detail.post.body}</p>
+            <%= case @studio_post_detail.video do %>
+              <% {:play, file_id} -> %>
+                <video
+                  controls
+                  preload="metadata"
+                  class="max-h-96 w-full"
+                  data-role="studio-detail-video"
+                  src={"/files/blob/#{file_id}"}
+                >
+                </video>
+              <% :no_access -> %>
+                <p class="text-sm text-subtle" data-role="studio-detail-video-no-access">
+                  Media unavailable
+                </p>
+              <% nil -> %>
+            <% end %>
             <p :if={@studio_post_detail.account}>
               {@studio_post_detail.account.handle || @studio_post_detail.account.platform}
             </p>

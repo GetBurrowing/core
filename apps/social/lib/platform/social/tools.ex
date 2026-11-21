@@ -46,6 +46,7 @@ defmodule Platform.Social.Tools do
     PostEvents,
     Profile,
     Results,
+    Studio,
     TaskBridge,
     ToolDefinitions
   }
@@ -59,7 +60,7 @@ defmodule Platform.Social.Tools do
   # Social authoring 2/11: the tools that need the calling agent (the idea
   # creator, and the change log's actor on a draft write).
   @agent_tools ~w(social_idea_create social_idea_list social_idea_note_add social_draft_create
-                  social_draft_update social_weekly_note_submit)
+                  social_draft_update social_weekly_note_submit social_studio_draft_create)
 
   @spec execute(String.t(), map(), map()) :: {:ok, map()} | {:error, map()}
   def execute(tool, args, context) do
@@ -376,6 +377,20 @@ defmodule Platform.Social.Tools do
     case AgentDrafts.create_agent_drafts(scope, args["profile_id"], attrs, agent_id: agent.id) do
       {:ok, posts} -> {:ok, %{posts: Enum.map(posts, &post_json/1), count: length(posts)}}
       error -> {:error, error_envelope(error)}
+    end
+  end
+
+  # The Studio draft tool: the profile comes from the account, never from an
+  # argument. The agent id is the authenticated caller's.
+  defp agent_tool("social_studio_draft_create", args, scope, agent) do
+    attrs = Map.drop(args, ["account_id", "org_id"])
+
+    case Studio.create_agent_draft(scope, args["account_id"], agent.id, attrs) do
+      {:ok, post, how} ->
+        {:ok, %{post: post_json(post), replayed: how == :replayed}}
+
+      error ->
+        {:error, studio_draft_error(error)}
     end
   end
 
@@ -1096,6 +1111,98 @@ defmodule Platform.Social.Tools do
 
   defp error_envelope(other),
     do: err(:failed, "social tool failed: #{inspect(other)}", false, "Report this.")
+
+  defp studio_draft_error({:error, :status_not_allowed}) do
+    err(
+      :status_not_allowed,
+      "this tool creates a draft and nothing else; the status was not changed and nothing was created",
+      false,
+      "Omit status or pass draft. A person submits the draft from Today."
+    )
+  end
+
+  defp studio_draft_error({:error, :request_id_required}) do
+    err(
+      :request_id_required,
+      "request_id is required: 1 to 200 characters, chosen by you and reused on a retry",
+      true,
+      "Pass a request_id you generate once per draft and repeat it if you retry."
+    )
+  end
+
+  defp studio_draft_error({:error, :request_id_conflict}) do
+    err(
+      :request_id_conflict,
+      "that request_id was already used for a draft with different content; nothing was changed",
+      false,
+      "Use a new request_id for different content, or repeat the original content to get the original draft."
+    )
+  end
+
+  defp studio_draft_error({:error, :idea_not_supported}) do
+    err(
+      :idea_not_supported,
+      "linking a draft to an idea is not supported in this version; idea_id was refused and nothing was created",
+      false,
+      "Drop idea_id. A person can link ideas later."
+    )
+  end
+
+  defp studio_draft_error({:error, :studio_disabled}) do
+    err(
+      :studio_disabled,
+      "the new Studio flow is not switched on for this profile; nothing was created",
+      false,
+      "Ask a human approver to switch Studio on, or use social_draft_create."
+    )
+  end
+
+  defp studio_draft_error({:error, :studio_needs_project}) do
+    err(
+      :studio_needs_project,
+      "the profile has no live project, which Studio needs; nothing was created",
+      false,
+      "Ask a human approver to set the profile's project."
+    )
+  end
+
+  defp studio_draft_error({:error, :file_not_in_project}) do
+    err(
+      :file_not_in_project,
+      "every media file must be a Burrow Files file in the profile's org and project; nothing was created",
+      true,
+      "Upload it with file_add using project_id = the profile's project, and pass that file id."
+    )
+  end
+
+  defp studio_draft_error({:error, :file_not_ready}) do
+    err(
+      :file_not_ready,
+      "a media file is not ready (its upload is not finished); nothing was created",
+      true,
+      "Wait for the upload to finish, then retry with the same request_id."
+    )
+  end
+
+  defp studio_draft_error({:error, :too_many_files}) do
+    err(
+      :invalid_argument,
+      "media_file_ids must be a list of at most 20 file ids; nothing was created",
+      true,
+      "Pass fewer files."
+    )
+  end
+
+  defp studio_draft_error({:error, :field_not_allowed, fields}) do
+    err(
+      :field_not_allowed,
+      "this tool takes only account_id, request_id, body, media_file_ids, link_url and status draft; refused: #{Enum.join(fields, ", ")}",
+      false,
+      "Drop those fields. Scheduling, approval and publishing are a person's."
+    )
+  end
+
+  defp studio_draft_error(other), do: error_envelope(other)
 
   defp not_found(what),
     do: err(:not_found, "#{what} not found", false, "Check the id with social_profile_list.")
