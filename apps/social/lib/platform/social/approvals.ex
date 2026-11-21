@@ -563,6 +563,13 @@ defmodule Platform.Social.Approvals do
   defp do_approve(canvas_id, clicker, shown_fingerprint, at) do
     approve = fn card, post, account, profile, user_id ->
       with :ok <- refuse_draft_only(account),
+           # decide/5 has acquired the locks and checked current authority.
+           # Refuse an already-expired effective time before claim/time writes.
+           :ok <-
+             Platform.Social.ApprovalDeadline.check_approval(%{
+               post
+               | scheduled_at: at || post.scheduled_at
+             }),
            :ok <- claim(card),
            {:ok, _} <- put_slot(post, at),
            {:ok, approved} <- Social.approve_post(profile.org_id, post, user_id, lock: true),
@@ -585,8 +592,12 @@ defmodule Platform.Social.Approvals do
 
   defp put_slot(post, nil), do: {:ok, post}
 
-  defp put_slot(post, %DateTime{} = at),
-    do: post |> Changeset.change(scheduled_at: at) |> Repo.update()
+  defp put_slot(post, %DateTime{} = at) do
+    # datetime-local inputs can carry zero fractional digits; the column
+    # stores UTC microseconds, so normalize precision without changing time.
+    at = DateTime.from_unix!(DateTime.to_unix(at, :microsecond), :microsecond)
+    post |> Changeset.change(scheduled_at: at) |> Repo.update()
+  end
 
   defp slot_note(nil), do: nil
   defp slot_note(%DateTime{} = at), do: "Into the next slot, " <> DateTime.to_iso8601(at)
@@ -892,6 +903,7 @@ defmodule Platform.Social.Approvals do
         platform: account.platform,
         platform_label: platform_label(account.platform),
         scheduled_at: post.scheduled_at,
+        missed?: Platform.Social.ApprovalDeadline.missed?(post),
         owner_name: account.owner_user_id && first_name(account.owner_user_id),
         posts_as: nil,
         refusal: refusal(post, account, profile)
@@ -1097,6 +1109,7 @@ defmodule Platform.Social.Approvals do
 
     %{
       role: :approver,
+      queue_url: queue_url(post, profile),
       body: post.body || "",
       link_url: post.link_url,
       hashtags: profile.default_hashtags || [],
@@ -1218,6 +1231,9 @@ defmodule Platform.Social.Approvals do
           tone: :muted,
           text: "Rejected by #{user_name(card.decided_by_user_id)}: #{post.rejection_reason}"
         }
+
+      Platform.Social.ApprovalDeadline.missed?(post) ->
+        %{tone: :error, text: "Missed: not approved in time"}
 
       post.status == "published" ->
         %{tone: :success, text: "Published on #{label}", external_url: post.external_url}

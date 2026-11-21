@@ -262,6 +262,20 @@ defmodule PlatformWeb.SocialCalendarTab do
       socket = load(socket)
       {:noreply, assign(socket, :detail, detail_for(socket, approved.id))}
     else
+      {:error, :slot_passed} ->
+        socket = load(socket)
+        detail = detail_for(socket, id)
+
+        detail =
+          detail &&
+            Map.put(
+              detail,
+              :notice,
+              "This post's time has passed, so it was not approved. Choose a new time first."
+            )
+
+        {:noreply, assign(socket, :detail, detail)}
+
       _ ->
         {:noreply,
          socket
@@ -299,10 +313,13 @@ defmodule PlatformWeb.SocialCalendarTab do
 
       %{
         post: post,
+        profile: profile,
         account: account,
         at: Clock.local(utc, zone),
         zone: Clock.label(zone),
         state: Cal.state(post),
+        reason: Cal.reason(post),
+        notice: nil,
         show_body?: post.status == "published" or approver?,
         can_approve?: waiting? and approver? and account.approval_mode != "draft_only",
         fingerprint: if(waiting? and approver?, do: Approvals.fingerprint(post))
@@ -542,6 +559,17 @@ defmodule PlatformWeb.SocialCalendarTab do
   # A side panel at lg, a bottom sheet below (daisy modal).
   @impl true
   def overlay(assigns) do
+    # The post itself does not change when its deadline passes. Make the
+    # clock-derived state/reason explicit assigns so LiveView patches them.
+    detail =
+      assigns.detail &&
+        Map.merge(
+          assigns.detail,
+          %{state: Cal.state(assigns.detail.post), reason: Cal.reason(assigns.detail.post)}
+        )
+
+    assigns = assign(assigns, :detail, detail)
+
     ~H"""
     <div
       :if={@detail}
@@ -564,13 +592,27 @@ defmodule PlatformWeb.SocialCalendarTab do
             <.icon name="hero-x-mark" class="size-5" />
           </button>
         </div>
+        <p
+          :if={@detail.notice}
+          role="alert"
+          data-role="calendar-approval-notice"
+          class="alert alert-warning mt-3 text-sm"
+        >
+          {@detail.notice}
+        </p>
         <div class="mt-3 flex flex-wrap items-center gap-2">
           <span class="font-mono text-xs">
             {Calendar.strftime(@detail.at, "%a %-d %b, %H:%M")} {@detail.zone}
           </span>
           <Cal.state_mark
             state={@detail.state}
-            label={if @detail.state == :waiting, do: "needs approval", else: @detail.post.status}
+            label={
+              Cal.state_label(%{
+                state: @detail.state,
+                post: @detail.post,
+                waiting_on: "needs approval"
+              })
+            }
           />
           <Cal.result_chip :if={@detail.state == :published} post={@detail.post} />
         </div>
@@ -578,15 +620,15 @@ defmodule PlatformWeb.SocialCalendarTab do
           <span class="whitespace-pre-wrap">{@detail.post.body}</span>
         </p>
         <p
-          :if={Cal.reason(@detail.post)}
+          :if={@detail.reason}
           class="mt-3 text-sm"
           data-role="social-post-detail-reason"
         >
           <.icon name="hero-exclamation-triangle-micro" class="size-4 text-error" />
-          {Cal.reason(@detail.post)}
+          {@detail.reason}
         </p>
         <button
-          :if={@detail.can_approve?}
+          :if={@detail.can_approve? and @detail.state != :missed}
           type="button"
           class="btn btn-primary btn-sm mt-3"
           phx-click="calendar_approve"
@@ -596,6 +638,14 @@ defmodule PlatformWeb.SocialCalendarTab do
         >
           <.icon name="hero-check-micro" class="size-4" /> Approve
         </button>
+        <a
+          :if={@detail.can_approve? and @detail.state == :missed}
+          href={Approvals.queue_url(@detail.post, @detail.profile)}
+          class="link mt-3 inline-block text-sm"
+          data-role="calendar-choose-time"
+        >
+          Choose a new time in Queue
+        </a>
         <a
           :if={@detail.post.status == "published" and @detail.post.external_url}
           href={@detail.post.external_url}

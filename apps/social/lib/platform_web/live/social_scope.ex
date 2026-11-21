@@ -162,6 +162,12 @@ defmodule PlatformWeb.SocialScope do
         socket
 
       tab ->
+        # Calendar's detail (and its scoped feedback) belongs only to that tab.
+        socket =
+          if socket.assigns.tab == "calendar" and key != "calendar",
+            do: assign(socket, :detail, nil),
+            else: socket
+
         socket
         |> assign(:tab, key)
         |> tab.module.on_select()

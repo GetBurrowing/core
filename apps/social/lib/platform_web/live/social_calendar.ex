@@ -109,12 +109,18 @@ defmodule PlatformWeb.SocialCalendar do
   The item's state: `:waiting`, `:scheduled`, `:refused`, `:failed` or
   `:published`.
   """
-  def state(%{status: "needs_approval"}), do: :waiting
-  def state(%{status: "approved", refused_reason: r}) when is_binary(r) and r != "", do: :refused
-  def state(%{status: s}) when s in ~w(approved scheduled), do: :scheduled
-  def state(%{status: "failed"}), do: :failed
-  def state(%{status: "published"}), do: :published
-  def state(_post), do: :scheduled
+  def state(post, now \\ DateTime.utc_now())
+
+  def state(%{status: "needs_approval"} = post, now),
+    do: if(Platform.Social.ApprovalDeadline.missed?(post, now), do: :missed, else: :waiting)
+
+  def state(%{status: "approved", refused_reason: r}, _now) when is_binary(r) and r != "",
+    do: :refused
+
+  def state(%{status: s}, _now) when s in ~w(approved scheduled), do: :scheduled
+  def state(%{status: "failed"}, _now), do: :failed
+  def state(%{status: "published"}, _now), do: :published
+  def state(_post, _now), do: :scheduled
 
   # `extra`: `%{waiting_on: %{account_id => label}, brands: %{profile_id => brand}}`.
   defp place(posts, accounts, zone, extra) do
@@ -240,6 +246,12 @@ defmodule PlatformWeb.SocialCalendar do
   end
 
   @doc "Why a failed or refused post did not go out."
+  def reason(%{status: "needs_approval", scheduled_at: %DateTime{} = at} = post) do
+    if Platform.Social.ApprovalDeadline.missed?(post) do
+      "Not approved before #{Calendar.strftime(at, "%a %d %b %H:%M UTC")}. It was not posted. Choose a new time to approve it."
+    end
+  end
+
   def reason(%{status: "failed", error: e}) when is_binary(e) and e != "", do: e
   def reason(%{status: "failed"}), do: "The publish failed."
 
@@ -249,11 +261,13 @@ defmodule PlatformWeb.SocialCalendar do
   def reason(_post), do: nil
 
   @doc "The state's text label for `item`."
+  def state_label(%{state: :missed}), do: "Missed: not approved in time"
   def state_label(%{state: :waiting, waiting_on: who}), do: who
   def state_label(%{state: :scheduled, post: %{status: "approved"}}), do: "approved"
   def state_label(%{state: s}), do: Atom.to_string(s)
 
   @doc "`{icon, badge classes}` for a state."
+  def mark(:missed), do: {"hero-exclamation-triangle-micro", "badge-error"}
   def mark(:waiting), do: {"hero-hand-raised-micro", "badge-outline border-dashed"}
   def mark(:scheduled), do: {"hero-clock-micro", "badge-ghost"}
   def mark(:published), do: {"hero-check-micro", "badge-ghost"}
@@ -266,7 +280,7 @@ defmodule PlatformWeb.SocialCalendar do
   def surface(:scheduled), do: "border border-solid border-base-content/40 bg-base-100"
   def surface(:published), do: "border border-solid border-base-content/20 bg-base-300"
 
-  def surface(s) when s in [:failed, :refused],
+  def surface(s) when s in [:failed, :refused, :missed],
     do: "border-2 border-solid border-error bg-base-100"
 
   def surface(_), do: "border border-solid border-base-content/40 bg-base-100"
@@ -283,7 +297,11 @@ defmodule PlatformWeb.SocialCalendar do
 
     ~H"""
     <span
-      class={["badge badge-sm shrink-0 gap-1 whitespace-nowrap", @badge]}
+      class={[
+        "badge badge-sm shrink-0 gap-1",
+        if(@state == :missed, do: "h-auto max-w-full whitespace-normal", else: "whitespace-nowrap"),
+        @badge
+      ]}
       data-role="social-calendar-state"
       data-state={@state}
     >
@@ -338,7 +356,10 @@ defmodule PlatformWeb.SocialCalendar do
   tooltip on hover and focus and in the button's accessible text.
   """
   def item_chip(assigns) do
-    assigns = assign(assigns, :reason, reason(assigns.item.post))
+    # Cached calendar items retain their placement, but a waiting item's
+    # deadline can pass between loads. Derive its badge on this render too.
+    item = %{assigns.item | state: state(assigns.item.post)}
+    assigns = assign(assigns, item: item, reason: reason(item.post))
 
     ~H"""
     <div
