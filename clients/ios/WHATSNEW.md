@@ -4,6 +4,12 @@ The top `## v<version>` section is sent as the build's "What to Test" by
 `scripts/set_testflight_notes.py`. It must match project.yml's
 MARKETING_VERSION, and it is capped at 4000 characters.
 
+## v1.2: iPhone Duo and call controls
+New in this build:
+- iPhone Duo: with the phone closed, the tab bar and Back/Close move into the side strip; unfolded, More opens as a page.
+- In a call, the tab bar no longer covers the camera controls.
+- Fixed: the keyboard could fail to appear after switching chats.
+
 ## v1.2: voice tab microphone fix
 New in this build: the app now records every microphone permission request and releases the phone's audio when a call ends. Together with the web update already on your install, the Voice tab can no longer fail silently. If it can't get the microphone, it says "Couldn't start the microphone. Hold to try again."
 
