@@ -590,6 +590,16 @@ final class ControllerTabBarHost: NSObject, NativeTabBarHosting, UITabBarControl
     var bar: UITabBar { shell.tabBar }
     var renderedKeys: [String] { shell.keys }
 
+    #if DEBUG
+        /// DEBUG, for the fixture: selection moves made in code (no system
+        /// animation) and by the system on a tap.
+        private(set) var programmaticSelections = 0
+        private(set) var nativeSelections = 0
+        var selectionReport: String {
+            "programmatic=\(programmaticSelections) native=\(nativeSelections) selected=\(shell.selectedTab?.identifier ?? "none") strip=\(shell.isTabBarHidden ? "hidden" : "shown")"
+        }
+    #endif
+
     func install(in parent: UIViewController) {
         shell.delegate = self
         NativeTabBarFactory.configure(shell.tabBar)
@@ -613,6 +623,9 @@ final class ControllerTabBarHost: NSObject, NativeTabBarHosting, UITabBarControl
         // `selected: null` (or a key not drawn) keeps the previous selection.
         if let key = state.selected, let tab = shell.tabs.first(where: { $0.identifier == key }), shell.selectedTab !== tab {
             shell.selectedTab = tab
+            #if DEBUG
+                programmaticSelections += 1
+            #endif
         }
         shell.placeContent()
         for tab in shell.tabs {

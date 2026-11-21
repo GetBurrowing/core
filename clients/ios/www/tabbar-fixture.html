@@ -74,6 +74,7 @@
         <button data-state='{"visible":false}'>Hide bar</button>
         <button data-state='{"visible":true}'>Show bar</button>
         <button id="interrupt-visibility">Hide then show</button>
+        <button id="web-tab-mode">Web tab mode</button>
         <button data-state='{"items":["more","meetings","inbox","calendar","chat"]}'>Reorder</button>
         <button data-state='{"items":["chat","games","calendar","meetings","inbox","more"]}'>Unknown key</button>
         <button data-state='{"items":[],"selected":"chat"}'>Empty items</button>
@@ -94,6 +95,7 @@
       <p id="viewport">viewport: checking</p>
       <p id="rendered">rendered: waiting for the first state</p>
       <p id="glass">glass: waiting for the first state</p>
+      <p id="selection">selection: waiting for the first state</p>
       <div id="rows"></div>
       <pre id="native"></pre>
     </main>
@@ -179,6 +181,36 @@
           });
         });
 
+        // Web tab mode (task 01a1fa7c stage 5): a native tab tap runs the
+        // sequence native_tab_bar.js sends on a real LiveView tab change
+        // whose new view mounts late. At DESTROY_GRACE_MS (300) the old
+        // view's hook sends its last state with visible false (old
+        // selection); at 600 the new view mounts and sends the new
+        // selection. Chat reopens a conversation with its composer focused,
+        // so the web hides its own bar there (visible false).
+        var webTabMode = false;
+        var webSelected = "chat";
+        document.querySelectorAll("button[data-state]").forEach(function (button) {
+          var sent = JSON.parse(button.getAttribute("data-state"));
+          if (typeof sent.selected === "string") button.addEventListener("click", function () { webSelected = sent.selected; });
+        });
+        document.getElementById("web-tab-mode").addEventListener("click", function () {
+          webTabMode = true;
+          var line = document.createElement("li");
+          line.textContent = "web tab mode on";
+          document.getElementById("events").appendChild(line);
+        });
+        function webTabChange(key) {
+          var target = plugin();
+          if (!target || typeof target.tabBarState !== "function") return;
+          var old = webSelected;
+          setTimeout(function () { target.tabBarState({ selected: old, visible: false }).catch(function () {}); }, 300);
+          setTimeout(function () {
+            webSelected = key;
+            target.tabBarState({ selected: key, visible: key !== "chat" }).catch(function () {});
+          }, 600);
+        }
+
         // Interrupt the real native animation: the promise acknowledges the
         // state request, not animation completion. No timer drives this case.
         document.getElementById("interrupt-visibility").addEventListener("click", function () {
@@ -235,6 +267,7 @@
           var item = document.createElement("li");
           item.textContent = detail.key + " reselect=" + (detail.reselect === true);
           document.getElementById("events").appendChild(item);
+          if (webTabMode && detail.reselect !== true) webTabChange(detail.key);
         });
 
         // DEBUG: the shell re-issued a failed load and this page is the result
@@ -269,6 +302,7 @@
             "glass: hosting=" + report.hosting + " effect=" + report.glass_effect + " class=" + report.glass_class +
             " floating=" + report.floating + " platter=" + report.platter + " bar=" + report.bar + " os=" + report.os;
           document.getElementById("native").textContent = "transition: " + report.transition + "\n" + report.tree;
+          if (report.selection) document.getElementById("selection").textContent = "selection: " + report.selection;
         };
       })();
     </script>

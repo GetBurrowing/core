@@ -718,6 +718,7 @@ final class BurrowBridgeViewController: CAPBridgeViewController {
                 report["transition"] = transition + " " + (self?.verticalBarDebug ?? "")
                 WebLoadLog.event("tabbar-transition report \(transition)")
                 report["rendered"] = NativeTabBarProbe.rendered(bar: host.bar, keys: host.renderedKeys)
+                if #available(iOS 18, *), let controller = host as? ControllerTabBarHost { report["selection"] = controller.selectionReport }
                 guard let data = try? JSONSerialization.data(withJSONObject: report), let json = String(data: data, encoding: .utf8) else { return }
                 self?.webView?.evaluateJavaScript("window.burrowFixtureNative && window.burrowFixtureNative(\(json))") { _, error in
                     WebLoadLog.event("tabbar-transition report-delivery error=\(error.map { WebLoadLog.describe($0) } ?? "none")")
