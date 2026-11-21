@@ -149,6 +149,7 @@ defmodule PlatformWeb.SocialLiveReturnTest do
            )
 
     assert has_element?(child, row(pending) <> " [data-state='connected']", "Connected")
+    assert notice?(child, "LinkedIn connected as brand-#{@account_ref}.")
     refute has_element?(child, row(ctx.pending))
     assert reload(ctx.pending) == first_before
   end
@@ -192,6 +193,26 @@ defmodule PlatformWeb.SocialLiveReturnTest do
              child,
              "[data-role='social-tab-button'][data-tab='queue'][aria-selected='true']"
            )
+
+    assert notice?(child, "The account wasn't connected (denied).")
+  end
+
+  test "an explicit Ideas tab wins after a successful Studio connection return",
+       %{conn: conn} = ctx do
+    _profile = ctx.profile |> Ecto.Changeset.change(studio_enabled: true) |> Repo.update!()
+    stub_accounts([entry(@account_ref, "linkedin")])
+
+    child = land(conn, ctx.approver, success_url() <> "&tab=ideas")
+
+    assert requests() == [{"GET", "/api/v1/accounts"}]
+
+    assert has_element?(
+             child,
+             "[data-role='social-tab-button'][data-tab='ideas'][aria-selected='true']"
+           )
+
+    assert notice?(child, "LinkedIn connected as brand-#{@account_ref}.")
+    assert %Account{status: "connected", provider_account_ref: @account_ref} = reload(ctx.pending)
   end
 
   test "a repeat of the same URL is already connected: one row, no write",
