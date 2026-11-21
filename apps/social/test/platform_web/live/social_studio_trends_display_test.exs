@@ -60,17 +60,12 @@ defmodule PlatformWeb.SocialStudioTrendsDisplayTest do
     assert length(displayed_ids(view)) == 10
     assert displayed_ids(view) == Enum.map(1..10, &"article-#{&1}")
 
-    card_text =
+    ranks =
       view
       |> render()
       |> Floki.parse_fragment!()
-      |> Floki.find("[data-role='studio-trends']")
-      |> Floki.text()
-
-    ranks =
-      Regex.scan(~r/Rank (\d+)/, card_text, capture: :all_but_first)
-      |> List.flatten()
-      |> Enum.map(&String.to_integer/1)
+      |> Floki.find("[data-role='studio-trends'] [data-role='trend-rank']")
+      |> Enum.map(fn node -> node |> Floki.text() |> String.trim() |> String.to_integer() end)
 
     assert ranks == Enum.map(1..10, &(2 * &1 + 1))
     assert has_element?(view, "[data-role='studio-trends']", "Up 80")

@@ -680,6 +680,47 @@ defmodule PlatformWeb.SocialTodayTab do
     |> Kernel.==(:ok)
   end
 
+  # A thumbnail uses the same project/org and files.read boundary as the
+  # review player. Never turn an external metadata URL into a viewer request.
+  defp post_thumbnail(post, profile, user) do
+    cover = readable_thumbnail_file(post.cover_file_id, profile, user)
+    media = Enum.map(post.media_file_ids || [], &readable_thumbnail_file(&1, profile, user))
+
+    cond do
+      image_file?(cover) and cover.content_type in Social.Cover.image_types() ->
+        {:image, cover.id}
+
+      file = Enum.find(media, &video_file?/1) ->
+        {:video, file.id}
+
+      file = Enum.find(media, &image_file?/1) ->
+        {:image, file.id}
+
+      true ->
+        nil
+    end
+  end
+
+  defp readable_thumbnail_file(id, profile, user) when is_binary(id) do
+    with %{deleted_at: nil, project_id: project_id} = file <- Platform.Files.get_file(id),
+         true <- is_binary(project_id) and project_id == profile.project_id,
+         true <- Social.OrgFiles.in_org?(file, profile.org_id),
+         true <- viewer_reads_files?(user, project_id) do
+      file
+    else
+      _ -> nil
+    end
+  end
+
+  defp readable_thumbnail_file(_, _, _), do: nil
+
+  defp image_file?(%{content_type: type})
+       when type in ~w(image/jpeg image/png image/gif image/webp), do: true
+
+  defp image_file?(_), do: false
+  defp video_file?(%{content_type: "video/" <> _}), do: true
+  defp video_file?(_), do: false
+
   # An agent-created draft says so on its card (the `created` event's actor)
   # until a person submits it: only a post still in `draft` carries the label.
   defp mark_agent_drafted(items) do
@@ -797,6 +838,24 @@ defmodule PlatformWeb.SocialTodayTab do
 
   @impl true
   def pane(assigns) do
+    user = fresh_user(%{assigns: assigns})
+
+    assigns =
+      assigns
+      |> assign(
+        :studio_post_thumbnails,
+        Map.new(assigns.studio_today_posts, fn item ->
+          {item.post.id, post_thumbnail(item.post, item.profile, user)}
+        end)
+      )
+      |> assign(
+        :studio_clip_videos,
+        Map.new(assigns.studio_today_clips, fn item ->
+          {item.clip.id,
+           detail_video(%{media_file_ids: [hd(item.renders).file_id]}, item.profile, user)}
+        end)
+      )
+
     ~H"""
     <section data-role="social-studio-today" class="space-y-4">
       <h1 class="text-2xl font-semibold">Today</h1>
@@ -821,14 +880,36 @@ defmodule PlatformWeb.SocialTodayTab do
             <h2 class="font-semibold">
               {item.clip.title || item.clip.external_ref || "Imported clip"}
             </h2>
-            <video
-              :if={hd(item.renders).file_id}
-              controls
-              preload="metadata"
-              src={"/files/blob/#{hd(item.renders).file_id}"}
-              class="max-h-96 w-full"
+            <div
+              :if={match?({:play, _}, @studio_clip_videos[item.clip.id])}
+              id={"studio-clip-player-#{item.clip.id}-#{hd(item.renders).id}"}
+              phx-hook="ChatClip"
+              phx-update="ignore"
             >
-            </video>
+              <div
+                data-role="clip-frame"
+                class="aspect-video max-h-[60vh] w-full overflow-hidden rounded bg-base-200"
+              >
+                <video
+                  controls
+                  playsinline
+                  preload="metadata"
+                  src={"/files/blob/#{hd(item.renders).file_id}#t=0.1"}
+                  class="block size-full"
+                >
+                </video>
+              </div>
+              <p
+                data-role="clip-fallback"
+                role="status"
+                class="hidden items-center rounded bg-base-200 p-3 text-sm"
+              >
+                Video unavailable.
+              </p>
+            </div>
+            <p :if={!match?({:play, _}, @studio_clip_videos[item.clip.id])} role="status">
+              Video unavailable.
+            </p>
             <p :for={prepared <- item.prepared}>
               Post prepared for {prepared.account} ·
               <button
@@ -868,14 +949,47 @@ defmodule PlatformWeb.SocialTodayTab do
               phx-value-id={item.post.id}
               data-role="studio-post-open"
               data-post-id={item.post.id}
-              class="link text-left"
+              class="flex w-full items-start gap-3 text-left"
             >
-              {item.post.body || "Untitled post"}
+              <span
+                :if={@studio_post_thumbnails[item.post.id]}
+                id={"studio-post-thumbnail-#{item.post.id}-#{elem(@studio_post_thumbnails[item.post.id], 1)}"}
+                phx-hook="SocialThumbnail"
+                phx-update="ignore"
+                data-role="studio-post-thumbnail"
+                aria-hidden="true"
+                class="block h-32 w-[72px] shrink-0 overflow-hidden rounded bg-base-200"
+              >
+                <img
+                  :if={match?({:image, _}, @studio_post_thumbnails[item.post.id])}
+                  src={"/files/blob/#{elem(@studio_post_thumbnails[item.post.id], 1)}"}
+                  alt=""
+                  loading="lazy"
+                  class="size-full object-cover"
+                />
+                <video
+                  :if={match?({:video, _}, @studio_post_thumbnails[item.post.id])}
+                  src={"/files/blob/#{elem(@studio_post_thumbnails[item.post.id], 1)}#t=0.1"}
+                  preload="metadata"
+                  muted
+                  playsinline
+                  tabindex="-1"
+                  class="size-full object-cover"
+                >
+                </video>
+              </span>
+              <span class="min-w-0 space-y-1">
+                <span class="line-clamp-3">{item.post.body || "Untitled post"}</span>
+                <span class="block text-sm text-subtle">{item.profile.name}</span>
+                <span
+                  :if={item.agent_drafted}
+                  class="block text-sm text-subtle"
+                  data-role="studio-agent-drafted"
+                >
+                  Drafted by an agent · not reviewed
+                </span>
+              </span>
             </button>
-            <p class="text-sm text-subtle">{item.profile.name}</p>
-            <p :if={item.agent_drafted} class="text-sm text-subtle" data-role="studio-agent-drafted">
-              Drafted by an agent · not reviewed
-            </p>
           </div>
         </section>
         <div class="min-w-0 space-y-3">
@@ -1102,9 +1216,11 @@ defmodule PlatformWeb.SocialTodayTab do
           <section class="rounded-box border border-base-content/25 bg-base-100 p-4">
             <h2 class="text-lg font-semibold">Agent ideas</h2>
             <p :if={@studio_pitches == []}>No agent ideas yet.</p>
-            <p :for={item <- @studio_pitches} data-role="studio-agent-idea">
-              {item.idea.title} · {item.profile.name}
-            </p>
+            <ul :if={@studio_pitches != []} class="list-disc pl-5 space-y-1 marker:text-primary">
+              <li :for={item <- @studio_pitches} data-role="studio-agent-idea">
+                {item.idea.title}<span :if={@scope == :all}> · {item.profile.name}</span>
+              </li>
+            </ul>
             <button type="button" phx-click="select_tab" phx-value-tab="ideas" class="link">
               Open Ideas
             </button>
@@ -1113,7 +1229,12 @@ defmodule PlatformWeb.SocialTodayTab do
             data-role="studio-trends"
             class="rounded-box border border-base-content/25 bg-base-100 p-4 space-y-3"
           >
-            <h2 class="text-lg font-semibold">What's moving</h2>
+            <h2 class="flex flex-wrap items-center gap-2 text-lg font-semibold">
+              What's moving
+              <span class="badge badge-primary badge-outline badge-sm" data-role="wikipedia-badge">
+                Wikipedia
+              </span>
+            </h2>
             <p>Most viewed on Wikipedia · English edition</p>
             <p :if={@studio_trend_configuration == :disabled}>
               Trend updates are switched off.
@@ -1190,54 +1311,61 @@ defmodule PlatformWeb.SocialTodayTab do
               }>
                 No matching article titles.
               </p>
-              <div
-                :for={item <- displayed_trends(@studio_trends.current, @studio_trend_filter)}
-                class="border-t border-base-300 py-3 space-y-2"
-              >
-                <a
-                  href={item.url}
-                  target="_blank"
-                  rel="noopener noreferrer"
-                  class="link link-primary font-medium break-words inline-flex min-h-[44px] items-center"
+              <ul class="list-none space-y-3">
+                <li
+                  :for={item <- displayed_trends(@studio_trends.current, @studio_trend_filter)}
+                  class="relative pl-7 space-y-2"
                 >
-                  {item.title}
-                </a>
-                <p class="text-sm opacity-70">
-                  Rank {item.rank} · {trend_movement(@studio_trends, item.id)} · {format_pageviews(
-                    item.pageviews
-                  )} pageviews
-                </p>
-                <button
-                  :if={@scope != :all and @studio_profile_accessible?}
-                  type="button"
-                  phx-click="studio_trend_to_idea"
-                  phx-value-id={item.id}
-                  phx-value-snapshot_id={@studio_trends.current.id}
-                  phx-value-profile_id={@profile.id}
-                  data-role="trend-to-idea"
-                  data-story-id={item.id}
-                  class="btn btn-outline btn-sm min-h-[44px]"
+                  <span
+                    data-role="trend-rank"
+                    class="absolute left-0 top-3 font-mono font-semibold tabular-nums text-primary"
+                  >
+                    {item.rank}
+                  </span>
+                  <a
+                    href={item.url}
+                    target="_blank"
+                    rel="noopener noreferrer"
+                    class="link link-primary font-semibold break-words inline-flex min-h-[44px] items-center"
+                  >
+                    {item.title}
+                  </a>
+                  <p class="text-sm opacity-70">
+                    {trend_movement(@studio_trends, item.id)} · {format_pageviews(item.pageviews)} pageviews
+                  </p>
+                  <button
+                    :if={@scope != :all and @studio_profile_accessible?}
+                    type="button"
+                    phx-click="studio_trend_to_idea"
+                    phx-value-id={item.id}
+                    phx-value-snapshot_id={@studio_trends.current.id}
+                    phx-value-profile_id={@profile.id}
+                    data-role="trend-to-idea"
+                    data-story-id={item.id}
+                    class="btn btn-outline btn-sm min-h-[44px]"
+                  >
+                    {if MapSet.member?(@studio_saved_trends, item.id),
+                      do: "Already saved",
+                      else: "Turn into an idea"}
+                  </button>
+                </li>
+                <li
+                  :for={item <- absent_trends(@studio_trends)}
+                  :if={trend_matches?(item, @studio_trend_filter)}
+                  class="relative pl-7 space-y-2"
                 >
-                  {if MapSet.member?(@studio_saved_trends, item.id),
-                    do: "Already saved",
-                    else: "Turn into an idea"}
-                </button>
-              </div>
-              <div
-                :for={item <- absent_trends(@studio_trends)}
-                :if={trend_matches?(item, @studio_trend_filter)}
-                class="border-t border-base-300 py-3 space-y-2"
-              >
-                <a
-                  href={item.url}
-                  target="_blank"
-                  rel="noopener noreferrer"
-                  class="link link-primary break-words inline-flex min-h-[44px] items-center"
-                >
-                  {item.title}
-                </a>
-                <p>Not in latest observed list</p>
-              </div>
+                  <span aria-hidden="true" class="absolute left-0 top-3">–</span>
+                  <a
+                    href={item.url}
+                    target="_blank"
+                    rel="noopener noreferrer"
+                    class="link link-primary break-words inline-flex min-h-[44px] items-center"
+                  >
+                    {item.title}
+                  </a>
+                  <p>Not in latest observed list</p>
+                </li>
+              </ul>
             </div>
             <p :if={@studio_trend_message} role="status">{@studio_trend_message}</p>
           </section>

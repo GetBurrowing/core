@@ -113,6 +113,23 @@ defmodule Platform.Social.Trends do
     %{current: decode(Enum.at(rows, 0)), previous: decode(Enum.at(rows, 1))}
   end
 
+  @doc "Wikipedia provenance for an already-authorized collection of ideas."
+  def wikipedia_idea_ids([]), do: MapSet.new()
+
+  def wikipedia_idea_ids(ideas) do
+    ids = Enum.map(ideas, & &1.id)
+
+    Repo.all(
+      from(link in IdeaLink,
+        join: idea in Idea,
+        on: idea.id == link.idea_id and idea.profile_id == link.profile_id,
+        where: idea.id in ^ids and link.source == "wikimedia_pageviews",
+        select: idea.id
+      )
+    )
+    |> MapSet.new()
+  end
+
   def source_status(source), do: Repo.get(SourceState, source)
 
   def saved_story_ids(org_id, profile_id, user_id) do

@@ -43,6 +43,7 @@ defmodule Platform.Social.IdeaBoard do
       Enum.flat_map(profiles, fn %Profile{} = p -> Ideas.list(p.org_id, p.id) end)
       |> Enum.sort_by(& &1.inserted_at, {:desc, DateTime})
 
+    wikipedia = Social.Trends.wikipedia_idea_ids(ideas)
     votes = IdeaVotes.summaries(ideas, {:user, user_id})
     posts = ideas |> Enum.map(& &1.id) |> Ideas.posts_by_idea()
     accounts = accounts(posts |> Map.values() |> List.flatten())
@@ -59,6 +60,7 @@ defmodule Platform.Social.IdeaBoard do
         stage = IdeaVotes.stage(idea_posts, vote.vote_count)
 
         %{
+          wikipedia?: MapSet.member?(wikipedia, idea.id),
           vote_count: vote.vote_count,
           voted: vote.voted,
           own_idea?: idea.created_by_user_id == user_id,
@@ -113,6 +115,7 @@ defmodule Platform.Social.IdeaBoard do
         idea: idea,
         profile: profile,
         source: source(idea),
+        wikipedia?: MapSet.member?(Social.Trends.wikipedia_idea_ids([idea]), idea.id),
         posts: posts,
         accounts: accounts,
         stage: IdeaVotes.stage(posts, vote.vote_count),

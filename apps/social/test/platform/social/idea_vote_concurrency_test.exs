@@ -106,7 +106,7 @@ defmodule Platform.Social.IdeaVoteConcurrencyTest do
     ids
   end
 
-  for kind <- [:agent, :user] do
+  for kind <- [:agent] do
     @kind kind
     test "two real connections keep one #{@kind} vote", ctx do
       actor = {@kind, if(@kind == :agent, do: ctx.voter, else: ctx.user)}
@@ -152,6 +152,42 @@ defmodule Platform.Social.IdeaVoteConcurrencyTest do
       assert {:ok, %{vote_count: 1, voted: true}} = Task.await(b, 10_000)
       assert Repo.aggregate(from(v in IdeaVote, where: v.idea_id == ^ctx.idea), :count) == 1
     end
+  end
+
+  test "two real connections refuse human vote and withdrawal while retaining history", ctx do
+    old =
+      Repo.insert!(%IdeaVote{
+        idea_id: ctx.idea,
+        org_id: ctx.org,
+        profile_id: ctx.profile,
+        voter_user_id: ctx.user
+      })
+
+    parent = self()
+
+    workers =
+      for operation <- [:vote, :unvote] do
+        Task.async(fn ->
+          Repo.checkout(fn ->
+            [[pid]] = Repo.query!("SELECT pg_backend_pid()").rows
+            send(parent, {:human_worker, self(), pid})
+
+            receive do
+              :go -> apply(IdeaVotes, operation, [ctx.org, ctx.idea, {:user, ctx.user}])
+            after
+              5_000 -> flunk("human worker was not released")
+            end
+          end)
+        end)
+      end
+
+    assert_receive {:human_worker, a, a_pid}, 5_000
+    assert_receive {:human_worker, b, b_pid}, 5_000
+    assert a_pid != b_pid
+    send(a, :go)
+    send(b, :go)
+    for worker <- workers, do: assert({:error, :agent_only} = Task.await(worker, 5_000))
+    assert Repo.all(from(v in IdeaVote, where: v.idea_id == ^ctx.idea)) == [old]
   end
 
   test "actor revoked while waiting for the profile lock cannot vote", ctx do

@@ -256,4 +256,49 @@ defmodule PlatformWeb.SocialAccountTickerTest do
     assert has_element?(view, "#studio-edit-body", "Unsaved ticker text")
     assert Social.get_post(w.org_id, post.id).body == "Concurrent edit"
   end
+
+  test "ticker reuses platform marks with accessible names and a written unknown fallback", %{
+    w: w
+  } do
+    [row | _] = AccountTicker.rows(w.approver, [w.profile.id])
+
+    for {platform, label} <- [
+          {"x", "X"},
+          {"linkedin", "LinkedIn"},
+          {"instagram", "Instagram"},
+          {"youtube", "YouTube"},
+          {"tiktok", "TikTok"}
+        ] do
+      row = %{row | account: %{row.account | platform: platform}}
+
+      html =
+        render_component(&PlatformWeb.SocialAccountTicker.strip/1,
+          rows: [row],
+          scope: {:profile, w.profile}
+        )
+
+      doc = LazyHTML.from_fragment(html)
+
+      assert Enum.count(
+               LazyHTML.query(
+                 doc,
+                 "[data-ticker-original] [data-role='ticker-platform'][title='#{label}'] svg[aria-hidden='true']"
+               )
+             ) > 0
+
+      assert LazyHTML.query(doc, "[data-ticker-original] [data-role='ticker-platform'] .sr-only")
+             |> LazyHTML.text() =~ label
+    end
+
+    row = %{row | account: %{row.account | platform: "future-platform"}}
+
+    html =
+      render_component(&PlatformWeb.SocialAccountTicker.strip/1,
+        rows: [row],
+        scope: {:profile, w.profile}
+      )
+
+    assert html =~ "future-platform"
+    refute html =~ "hero-globe"
+  end
 end

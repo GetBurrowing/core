@@ -15,45 +15,37 @@ defmodule PlatformWeb.SocialIdeaVotingTest do
     find_live_child(parent, "ext-page-social")
   end
 
-  test "ordinary readers vote, the third vote moves to Shortlisted, and withdrawal moves back", %{
-    conn: conn
-  } do
+  test "readers see agent vote and shortlist changes after refreshing", %{conn: conn} do
     w = approval_fixture()
 
     {:ok, idea} =
       Ideas.create(w.org_id, w.profile.id, %{title: "A shared idea"}, {:agent, w.g.id})
 
-    for user <- [w.h1, w.h2],
-        do: assert({:ok, _} = IdeaVotes.vote(w.org_id, idea.id, {:user, user.id}))
+    for _ <- 1..2 do
+      voter = pinned_agent!(w.org_id)
+      assert {:ok, _} = IdeaVotes.vote(w.org_id, idea.id, {:agent, voter.id})
+    end
 
+    view = open(conn, w.n, "?tab=ideas&profile=#{w.profile.id}")
+    assert has_element?(view, "#ideas-lane-inbox [data-role='idea-vote-count']", "2 agent votes")
+    voter = pinned_agent!(w.org_id)
+    assert {:ok, _} = IdeaVotes.vote(w.org_id, idea.id, {:agent, voter.id})
     view = open(conn, w.n, "?tab=ideas&profile=#{w.profile.id}")
 
     assert has_element?(
              view,
-             "#ideas-lane-inbox [data-idea-id='#{idea.id}'] [data-role='idea-vote-count']",
-             "2 votes"
+             "#ideas-lane-shortlisted [data-idea-id='#{idea.id}']",
+             "3 agent votes"
            )
 
-    view |> element("[data-role='idea-vote'][phx-value-id='#{idea.id}']") |> render_click()
-    assert has_element?(view, "#ideas-lane-shortlisted [data-idea-id='#{idea.id}']", "3 votes")
-    assert has_element?(view, "[data-role='idea-vote'][aria-pressed='true'][disabled]", "Voted")
     view |> element("[data-role='idea-card-open'][phx-value-id='#{idea.id}']") |> render_click()
-    assert has_element?(view, "[data-role='idea-detail-votes']", "3 votes")
-    assert has_element?(view, "[data-role='idea-detail-voted']", "You voted")
+    assert has_element?(view, "[data-role='idea-detail-votes']", "3 agent votes")
+    refute has_element?(view, "[data-role='idea-detail-voted']")
     refute has_element?(view, "[data-role='idea-detail-voters']")
-    refute has_element?(view, "[data-role='idea-voters']")
     view |> element("[data-role='idea-detail-close']") |> render_click()
-    view |> element("[data-role='idea-unvote'][phx-value-id='#{idea.id}']") |> render_click()
-    assert has_element?(view, "#ideas-lane-inbox [data-idea-id='#{idea.id}']", "2 votes")
-  end
-
-  test "a repeated rendered vote action does not accidentally withdraw", %{conn: conn} do
-    w = approval_fixture()
-    {:ok, idea} = Ideas.create(w.org_id, w.profile.id, %{title: "Repeat vote"}, {:agent, w.g.id})
+    assert {:ok, _} = IdeaVotes.unvote(w.org_id, idea.id, {:agent, voter.id})
     view = open(conn, w.n, "?tab=ideas&profile=#{w.profile.id}")
-    render_click(view, "ideas_vote", %{"id" => idea.id, "action" => "vote"})
-    render_click(view, "ideas_vote", %{"id" => idea.id, "action" => "vote"})
-    assert has_element?(view, "[data-role='idea-vote-count']", "1 vote")
+    assert has_element?(view, "#ideas-lane-inbox [data-idea-id='#{idea.id}']", "2 agent votes")
   end
 
   test "replayed vote after profile visibility is lost writes nothing", %{conn: conn} do
@@ -102,7 +94,7 @@ defmodule PlatformWeb.SocialIdeaVotingTest do
     assert String.contains?(hd(rows), "Old shortlisted")
   end
 
-  test "Today reorders after the viewer shortlists an idea", %{conn: conn} do
+  test "Today reorders after an agent shortlists an idea", %{conn: conn} do
     w = studio_world!()
     creator = pinned_agent!(w.org_id)
 
@@ -131,8 +123,8 @@ defmodule PlatformWeb.SocialIdeaVotingTest do
       |> live("/m/social?tab=ideas&profile=#{w.profile.id}")
 
     view = find_live_child(parent, "ext-page-social")
-    view |> element("[data-role='idea-vote'][phx-value-id='#{newer.id}']") |> render_click()
-    assert has_element?(view, "#ideas-lane-shortlisted [data-idea-id='#{newer.id}']", "3 votes")
+    voter = pinned_agent!(w.org_id)
+    assert {:ok, _} = IdeaVotes.vote(w.org_id, newer.id, {:agent, voter.id})
     view |> element("[data-role='social-tab-button'][data-tab='today']") |> render_click()
 
     titles =
@@ -145,7 +137,7 @@ defmodule PlatformWeb.SocialIdeaVotingTest do
     assert [first | _] = titles
     assert first =~ "Newly shortlisted"
     view |> element("[data-role='social-tab-button'][data-tab='ideas']") |> render_click()
-    view |> element("[data-role='idea-unvote'][phx-value-id='#{newer.id}']") |> render_click()
+    assert {:ok, _} = IdeaVotes.unvote(w.org_id, newer.id, {:agent, voter.id})
     view |> element("[data-role='social-tab-button'][data-tab='today']") |> render_click()
 
     titles =

@@ -44,7 +44,7 @@ defmodule PlatformWeb.SocialIdeasTab do
   use PlatformWeb.SocialTab
 
   alias Platform.Social
-  alias Platform.Social.{Idea, IdeaBoard, IdeaNotes, Ideas, IdeaVotes, Profile}
+  alias Platform.Social.{Idea, IdeaBoard, IdeaNotes, Ideas, Profile}
   alias PlatformWeb.{SocialIdeaDetail, SocialPreview, SocialScope}
 
   @lane_labels %{
@@ -57,7 +57,7 @@ defmodule PlatformWeb.SocialIdeasTab do
   }
 
   @empty_copy %{
-    "shortlisted" => "Ideas with at least three votes appear here until drafting begins.",
+    "shortlisted" => "Ideas with at least three agent votes appear here until drafting begins.",
     "inbox" => "No ideas yet. Add one here; an agent's ideas land here too.",
     "drafting" => "Ideas move here when an agent starts drafting them.",
     "in_review" => "Ideas move here when a draft is submitted for approval.",
@@ -243,20 +243,9 @@ defmodule PlatformWeb.SocialIdeasTab do
   # ── Events ───────────────────────────────────────────────────────────
 
   @impl true
-  def handle_event("ideas_vote", %{"id" => id, "action" => action}, socket)
+  def handle_event("ideas_vote", %{"id" => _id, "action" => action}, socket)
       when action in ~w(vote unvote) do
-    result =
-      with_idea(socket, id, fn scope, user_id ->
-        if action == "unvote",
-          do: IdeaVotes.unvote(scope, id, {:user, user_id}),
-          else: IdeaVotes.vote(scope, id, {:user, user_id})
-      end)
-
-    case result do
-      {:ok, _} -> {:noreply, load(socket)}
-      {:error, reason} -> {:noreply, socket |> say(refusal(reason), :warning) |> load()}
-      _ -> {:noreply, socket |> say(refusal(:not_found), :warning) |> load()}
-    end
+    {:noreply, socket |> say("Only agents can vote on ideas.", :warning) |> load()}
   end
 
   def handle_event("ideas_lane", %{"lane" => lane}, socket) do
@@ -509,6 +498,7 @@ defmodule PlatformWeb.SocialIdeasTab do
     <div data-role="social-ideas" class="mx-auto w-full max-w-[96rem] space-y-4 pb-8">
       <div class="flex flex-wrap items-baseline gap-x-3 gap-y-1">
         <h2 class="text-xl font-semibold" data-role="ideas-heading">Ideas</h2>
+        <p class="text-sm text-subtle">Agents vote on ideas. Three agent votes shortlist an idea.</p>
         <p class="text-sm text-base-content">
           Each idea moves along on its own as its posts are drafted, approved and published.
         </p>
@@ -752,6 +742,13 @@ defmodule PlatformWeb.SocialIdeasTab do
             <.icon name="hero-sparkles-micro" class="size-3.5" /> {@card.agent_name}
           </span>
           <span
+            :if={Map.get(@card, :wikipedia?, false)}
+            data-role="idea-wikipedia-source"
+            class="badge badge-primary badge-outline badge-sm"
+          >
+            <.icon name="hero-globe-alt-micro" class="size-3.5" /> From Wikipedia
+          </span>
+          <span
             :if={@card.next_at}
             data-role="idea-card-next"
             class="inline-flex items-center gap-1 font-mono tabular-nums"
@@ -772,32 +769,8 @@ defmodule PlatformWeb.SocialIdeasTab do
 
       <div class="flex flex-wrap items-center gap-2 border-t border-base-300 px-3 py-2">
         <span class="text-sm" data-role="idea-vote-count" role="status" aria-live="polite">
-          {@card.vote_count} {if @card.vote_count == 1, do: "vote", else: "votes"}
+          {@card.vote_count} {if @card.vote_count == 1, do: "agent vote", else: "agent votes"}
         </span>
-        <button
-          :if={!@card.own_idea? and is_nil(@card.idea.archived_at)}
-          type="button"
-          phx-click="ideas_vote"
-          phx-value-id={@card.id}
-          phx-value-action="vote"
-          aria-pressed={to_string(@card.voted)}
-          disabled={@card.voted}
-          data-role="idea-vote"
-          class="btn btn-outline btn-sm min-h-11"
-        >
-          {if @card.voted, do: "Voted", else: "Vote"}
-        </button>
-        <button
-          :if={@card.voted and !@card.own_idea? and is_nil(@card.idea.archived_at)}
-          type="button"
-          phx-click="ideas_vote"
-          phx-value-id={@card.id}
-          phx-value-action="unvote"
-          data-role="idea-unvote"
-          class="btn btn-ghost btn-sm min-h-11"
-        >
-          Withdraw vote
-        </button>
       </div>
       <div :if={@can_draft?} class="border-t border-base-300 px-3 py-2">
         <SocialIdeaDetail.draft_button
