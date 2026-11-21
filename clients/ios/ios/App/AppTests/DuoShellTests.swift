@@ -189,7 +189,8 @@ final class DuoShellTests: XCTestCase {
         let chatSlot = try XCTUnwrap(shell.selectedSlot)
         var atResign: [String] = []
         field.onResign = {
-            atResign.append("\(shell.selectedTab?.identifier ?? "none") parent=\(content.parent === chatSlot ? "chat" : "other") window=\(content.view.window != nil)")
+            let parent = content.parent === chatSlot ? "chat" : "other"
+            atResign.append("\(shell.selectedTab?.identifier ?? "none") parent=\(parent) window=\(content.view.window != nil)")
         }
         host.render(state(["selected": "inbox"], from: first))
         XCTAssertEqual(atResign.first, "chat parent=chat window=true", "editing ends while the old slot still holds the content, on screen")
