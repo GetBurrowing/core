@@ -67,8 +67,9 @@ curl -sS -o /dev/null -w '%{http_code} %{redirect_url}\n' https://burrow.example
 curl -sS -o /dev/null -w '%{http_code}\n' https://auth.burrow.example.com/login
 ```
 
-The first command prints `200`. The second prints a redirect to `https://auth.burrow.example.com/`.
-The third prints `200`: it is the sign-in page.
+The first command prints `200`. The second prints `302 https://burrow.example.com/auth/sign-in`:
+Burrow's sign-in page, titled "Sign in · Burrow", whose **Sign in with a passkey** button hands
+over to pocket-id on the auth name. The third prints `200`: pocket-id is up.
 
 If `/health` does not answer yet, wait a few minutes. On the server,
 `sudo systemctl status burrow-stack` and `sudo cloud-init status --long` show progress.
@@ -168,7 +169,7 @@ curl -sS "${pin[@]}" -o /dev/null -w '%{http_code} %{redirect_url}\n' https://bu
 curl -sS "${pin[@]}" -o /dev/null -w '%{http_code}\n' https://auth.burrow-try.test/login
 ```
 
-Expect `200`, a redirect to `https://auth.burrow-try.test/`, and `200`.
+Expect `200`, `302 https://burrow-try.test/auth/sign-in`, and `200`.
 
 To create the owner, do step 7 inside the VM. The VM does not resolve the `.test` names, and
 Python must trust the install's root, so the block adds a hosts entry and `SSL_CERT_FILE`:
