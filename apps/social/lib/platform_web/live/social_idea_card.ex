@@ -59,7 +59,8 @@ defmodule PlatformWeb.SocialIdeaCard do
   alias PlatformWeb.SocialPreview
 
   @refusals %{
-    slot_passed: "That slot has passed. Pick the time again.",
+    slot_passed: "This post's time has passed, so it was not approved. Choose a new time first.",
+    invalid_approval_time: "Choose a valid future time in UTC.",
     slot_changed: "The next slot moved. Check the new time and approve again.",
     note_required: "Say what should change before asking for a revision.",
     note_too_long: "Keep the note under #{Ideas.max_note()} characters.",
@@ -156,7 +157,7 @@ defmodule PlatformWeb.SocialIdeaCard do
         |> Map.put(:dom, socket.assigns.dom_prefix)
       end
 
-    approvable = Enum.filter(versions, &(:approve in &1.actions))
+    approvable = Enum.filter(versions, &(:approve in &1.actions and not &1.missed?))
     current = socket.assigns.current |> max(0) |> min(max(length(versions) - 1, 0))
 
     mode =
@@ -188,6 +189,7 @@ defmodule PlatformWeb.SocialIdeaCard do
 
     %{
       post: post,
+      missed?: Platform.Social.ApprovalDeadline.missed?(post),
       account: account,
       profile: profile,
       card: card,
@@ -345,6 +347,22 @@ defmodule PlatformWeb.SocialIdeaCard do
       else
         {:error, _} = error -> error
         _ -> {:error, :slot_changed}
+      end
+    end)
+  end
+
+  def handle_event("q_approve_time", params, socket) do
+    decide(socket, params["post-id"], fn user, v ->
+      value = params["at"]
+      value = if is_binary(value) and byte_size(value) == 16, do: value <> ":00", else: value
+
+      with true <-
+             is_binary(value) and Regex.match?(~r/\A\d{4}-\d{2}-\d{2}T\d{2}:\d{2}:\d{2}\z/, value),
+           {:ok, naive} <- NaiveDateTime.from_iso8601(value),
+           {:ok, at} <- DateTime.from_naive(naive, "Etc/UTC") do
+        Approvals.decide_approve_at(v.canvas_id, user, params["fingerprint"], at)
+      else
+        _ -> {:error, :invalid_approval_time}
       end
     end)
   end
@@ -576,7 +594,20 @@ defmodule PlatformWeb.SocialIdeaCard do
 
   @impl true
   def render(assigns) do
-    assigns = assign(assigns, :cur, Enum.at(assigns.versions, assigns.current))
+    versions =
+      Enum.map(assigns.versions, fn version ->
+        %{version | missed?: Platform.Social.ApprovalDeadline.missed?(version.post)}
+      end)
+
+    approvable = Enum.filter(versions, &(:approve in &1.actions and not &1.missed?))
+
+    assigns =
+      assign(assigns,
+        versions: versions,
+        approvable: approvable,
+        confirm_all?: assigns.confirm_all? and length(approvable) > 1,
+        cur: Enum.at(versions, assigns.current)
+      )
 
     ~H"""
     <article
@@ -787,6 +818,42 @@ defmodule PlatformWeb.SocialIdeaCard do
         {Enum.join(@v.alt, ", ")} (alt text comes later)
       </p>
 
+      <p
+        :if={@v.missed?}
+        role="status"
+        data-role="approval-missed"
+        class="text-sm font-medium text-error"
+      >
+        Missed: not approved in time. It was not posted.
+      </p>
+      <form
+        :if={@v.missed? and :approve in @v.actions}
+        id={"queue-approve-time-#{@v.post.id}"}
+        phx-submit="q_approve_time"
+        phx-target={@myself}
+        class="flex flex-col items-stretch gap-2 sm:flex-row sm:items-end"
+      >
+        <input type="hidden" name="post-id" value={@v.post.id} />
+        <input type="hidden" name="fingerprint" value={@v.fingerprint} />
+        <label class="min-w-0 w-full text-sm sm:flex-1" for={"queue-new-time-#{@v.post.id}"}>
+          New time (UTC)
+          <input
+            type="datetime-local"
+            id={"queue-new-time-#{@v.post.id}"}
+            name="at"
+            required
+            step="1"
+            class="input input-bordered min-h-11 w-full"
+          />
+        </label>
+        <button
+          type="submit"
+          class="btn btn-primary min-h-11 w-full sm:w-auto"
+          data-role="queue-approve-new-time"
+        >
+          Approve at new time
+        </button>
+      </form>
       <div data-role="queue-when" class="rounded-lg bg-base-200 px-3 py-2 text-sm">
         <p class="flex items-center gap-1.5 font-medium">
           <.icon name="hero-clock-mini" class="size-4 shrink-0 text-base-content" />
@@ -901,14 +968,14 @@ defmodule PlatformWeb.SocialIdeaCard do
     ~H"""
     <div data-role="queue-actions" class="flex flex-wrap items-center gap-2">
       <p
-        :if={:approve in @v.actions and @v.dom == "queue"}
+        :if={:approve in @v.actions and not @v.missed? and @v.dom == "queue"}
         data-role="queue-approval-consequence"
         class="hidden w-full text-sm text-base-content sm:block"
       >
         Approval submits to the connected account immediately if no future time is set.
       </p>
       <button
-        :if={:approve in @v.actions}
+        :if={:approve in @v.actions and not @v.missed?}
         type="button"
         phx-click="q_approve"
         phx-value-post-id={@v.post.id}
@@ -1104,13 +1171,21 @@ defmodule PlatformWeb.SocialIdeaCard do
           {if @v.post.scheduled_at, do: when_text(@v.post.scheduled_at, @v.tz), else: "Now"}
         </span>
       </p>
+      <p
+        :if={@v.missed?}
+        data-role="queue-bar-missed"
+        role="status"
+        class="mb-2 text-sm font-medium text-error"
+      >
+        Missed: not approved in time
+      </p>
       <%= if @v.role == :waiting do %>
         <p class="pb-1 text-center">
           <span class="badge badge-info font-medium">Waiting for {@v.owner_name}</span>
         </p>
       <% else %>
         <p
-          :if={:approve in @v.actions and @v.dom == "queue"}
+          :if={:approve in @v.actions and not @v.missed? and @v.dom == "queue"}
           data-role="queue-phone-consequence"
           class="mb-2 text-sm text-base-content"
         >
@@ -1141,7 +1216,7 @@ defmodule PlatformWeb.SocialIdeaCard do
             Revise
           </button>
           <button
-            :if={:approve in @v.actions}
+            :if={:approve in @v.actions and not @v.missed?}
             type="button"
             phx-click="q_approve"
             phx-value-post-id={@v.post.id}

@@ -1056,6 +1056,15 @@ defmodule Platform.Social.Tools do
     )
   end
 
+  defp error_envelope({:error, :human_retime_required}) do
+    err(
+      :human_retime_required,
+      "This post's time passed without approval; only a person can choose a new time.",
+      false,
+      "Keep the original missed time. Ask an authorized person to choose a new future time."
+    )
+  end
+
   defp error_envelope({:error, :post_locked}) do
     err(
       :post_locked,

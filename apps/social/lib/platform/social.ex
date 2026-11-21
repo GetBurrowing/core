@@ -2214,12 +2214,23 @@ defmodule Platform.Social do
       `{:error, :not_the_owner}`, and an archived owner is
       `{:error, :approver_archived}`.
 
-  Pass `lock: true` from inside a transaction to re-read the post `FOR
-  UPDATE` (`Platform.Social.Approvals` does).
+  Every call re-reads the post `FOR UPDATE` in a transaction, including
+  calls passed an earlier post struct. The legacy `lock:` option remains
+  accepted, but cannot disable this check. An expired scheduled time is
+  `{:error, :slot_passed}`; untimed approval remains immediate.
   """
   @spec approve_post(Ecto.UUID.t(), Post.t() | Ecto.UUID.t(), Ecto.UUID.t(), keyword()) ::
           {:ok, Post.t()} | {:error, term()}
   def approve_post(org_id, post, approver_user_id, opts \\ []) do
+    Repo.transaction(fn ->
+      case approve_locked(org_id, post, approver_user_id, Keyword.put(opts, :lock, true)) do
+        {:ok, approved} -> approved
+        {:error, reason} -> Repo.rollback(reason)
+      end
+    end)
+  end
+
+  defp approve_locked(org_id, post, approver_user_id, opts) do
     with {:ok, post} <- fetch_for_approval(org_id, post, opts),
          :ok <- refuse_studio(post),
          :ok <- refuse_approved_again(post),
@@ -2229,7 +2240,8 @@ defmodule Platform.Social do
 
       case post_approver_check(profile.org_id, profile, account, approver_user_id) do
         :ok ->
-          Repo.update(changeset)
+          with :ok <- Platform.Social.ApprovalDeadline.check_approval(post),
+               do: Repo.update(changeset)
 
         {:error, :not_a_human} ->
           {:error,

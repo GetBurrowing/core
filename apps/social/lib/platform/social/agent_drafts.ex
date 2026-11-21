@@ -18,7 +18,9 @@ defmodule Platform.Social.AgentDrafts do
   its status inside the transaction, so a human approval that lands between
   the read and the write is never overwritten: anything past
   `needs_approval` is `{:error, :post_locked}` with the row untouched. A post
-  may go `draft -> needs_approval`, never back.
+  may go `draft -> needs_approval`, never back. Once an unapproved scheduled
+  time has passed, an agent may still edit copy but cannot change or clear
+  that time (`:human_retime_required`); only a person can choose a new time.
 
   ## Scope
 
@@ -88,7 +90,12 @@ defmodule Platform.Social.AgentDrafts do
   @editable_statuses ~w(draft needs_approval)
 
   @type error ::
-          {:error, :not_found | :status_not_allowed | :post_locked | :account_archived}
+          {:error,
+           :not_found
+           | :status_not_allowed
+           | :post_locked
+           | :account_archived
+           | :human_retime_required}
           | {:error, :no_accounts | :invalid_range | :invalid_source_url}
           | {:error, :invalid_source | :source_not_in_project | :profile_needs_project}
           | {:error, :invalid_crop_x | {:invalid_platforms, [String.t()]}}
@@ -350,6 +357,7 @@ defmodule Platform.Social.AgentDrafts do
            changeset = agent_changeset(locked, attrs, profile),
            :ok <-
              Social.require_channel(changeset, profile, Repo.get(Account, locked.account_id)),
+           :ok <- Platform.Social.ApprovalDeadline.check_agent_edit(locked, changeset),
            {:ok, updated} <- Repo.update(changeset) do
         log_update(locked, updated, changeset, actor)
         updated

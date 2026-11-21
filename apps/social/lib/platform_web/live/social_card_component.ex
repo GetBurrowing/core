@@ -63,6 +63,7 @@ defmodule PlatformWeb.SocialCardComponent do
   alias Platform.Social.{Approvals, Publishing}
 
   @refusals %{
+    slot_passed: "This post's time has passed, so it was not approved. Choose a new time first.",
     already_decided: "Someone already decided this post.",
     card_changed: "This card changed since it was posted; reload.",
     not_a_social_card: "This card is not a real approval card.",
@@ -265,6 +266,22 @@ defmodule PlatformWeb.SocialCardComponent do
           edit_text={@edit_text}
           canvas_id={@canvas_id}
         />
+
+        <p
+          :if={@view[:missed?]}
+          role="status"
+          data-role="approval-missed"
+          class="text-sm font-medium text-error"
+        >
+          Missed: not approved in time. It was not posted.
+        </p>
+        <a
+          :if={@view[:missed?] and :approve in @view.actions}
+          href={@view.queue_url}
+          class="link text-sm"
+        >
+          Choose a new time in Queue
+        </a>
 
         <.cover_button :if={@cover_controls and @view[:cover]} view={@view} />
 
@@ -636,7 +653,7 @@ defmodule PlatformWeb.SocialCardComponent do
         Edit
       </button>
       <button
-        :if={:approve in @view.actions}
+        :if={:approve in @view.actions and not @view[:missed?]}
         type="button"
         phx-click="social_card_approve"
         phx-value-canvas-id={@canvas_id}

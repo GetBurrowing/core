@@ -192,11 +192,12 @@ defmodule PlatformWeb.SocialLiveCalendarTest do
   describe "states" do
     test "a needs_approval post with scheduled_at is dashed and Waiting on you; approving it from the item makes it solid with no reload",
          %{conn: conn} = ctx do
-      wed = Date.add(ctx.monday, 2)
+      wed = Date.add(ctx.monday, 9)
       {post, _card} = pending_post!(ctx, ctx.a, %{scheduled_at: at(wed, 14)})
       {unplaced, _card} = pending_post!(ctx, ctx.a, %{body: "NO-TIME-YET"})
 
       child = open(conn, ctx.h1)
+      child |> element("[phx-click=\"week_next\"]") |> render_click()
 
       assert has_element?(child, cell(wed, 14) <> " " <> item(post) <> "[data-state='waiting']")
       assert has_element?(child, cell(wed, 14) <> " " <> item(post) <> ".border-dashed")
@@ -215,10 +216,11 @@ defmodule PlatformWeb.SocialLiveCalendarTest do
 
     test "a non-approver sees Waiting on approval and gets no approve; an owned account names its owner",
          %{conn: conn} = ctx do
-      wed = Date.add(ctx.monday, 2)
+      wed = Date.add(ctx.monday, 9)
       {post, _card} = pending_post!(ctx, ctx.a, %{scheduled_at: at(wed, 14)})
 
       child = open(conn, ctx.n)
+      child |> element("[phx-click=\"week_next\"]") |> render_click()
       assert has_element?(child, grid_item(post), "Waiting on approval")
       child |> element(grid_item(post)) |> render_click()
       refute has_element?(child, "[data-role='social-calendar-approve']")
@@ -231,8 +233,10 @@ defmodule PlatformWeb.SocialLiveCalendarTest do
       {:ok, _} = Social.set_account_owner(ctx.org_id, ctx.a, owner.id)
 
       child = open(Phoenix.ConnTest.build_conn(), ctx.h1)
+      child |> element("[phx-click=\"week_next\"]") |> render_click()
       assert has_element?(child, grid_item(post), "Waiting on Omar Owner")
       child = open(Phoenix.ConnTest.build_conn(), owner)
+      child |> element("[phx-click=\"week_next\"]") |> render_click()
       assert has_element?(child, grid_item(post), "Waiting on you")
     end
 
