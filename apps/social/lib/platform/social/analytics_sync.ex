@@ -16,7 +16,7 @@ defmodule Platform.Social.AnalyticsSync do
   import Ecto.Query
   alias Platform.Repo
   alias Platform.Social.{Account, Post, Profile}
-  alias Platform.Social.Analytics.{Backoff, SyncState, Zernio}
+  alias Platform.Social.Analytics.{AccountScope, Backoff, SyncState, Zernio}
 
   @interval 60_000
   @pace 1_100
@@ -83,11 +83,18 @@ defmodule Platform.Social.AnalyticsSync do
   end
 
   defp connected_orgs do
+    provider = AccountScope.provider_filter()
+
     Repo.all(
       from(a in Account,
+        as: :analytics_account,
         join: p in Profile,
         on: p.id == a.profile_id,
-        where: a.provider == "zernio" and a.status == "connected" and is_nil(a.archived_at),
+        where: ^provider,
+        where:
+          a.status == "connected" and is_nil(a.archived_at) and
+            not is_nil(a.provider_account_ref) and a.provider_account_ref != "" and
+            not is_nil(p.provider_profile_ref) and p.provider_profile_ref != "",
         distinct: true,
         select: p.org_id
       )
@@ -95,13 +102,17 @@ defmodule Platform.Social.AnalyticsSync do
   end
 
   defp posts(org_id) do
+    provider = AccountScope.provider_filter()
+
     from(po in Post,
       join: a in Account,
+      as: :analytics_account,
       on: po.account_id == a.id,
       join: p in Profile,
       on: a.profile_id == p.id,
+      where: ^provider,
       where:
-        p.org_id == ^org_id and a.provider == "zernio" and a.status == "connected" and
+        p.org_id == ^org_id and a.status == "connected" and
           is_nil(a.archived_at) and po.status == "published" and
           not is_nil(po.external_id) and po.external_id != "" and
           not is_nil(po.platform_post_id) and po.platform_post_id != "" and

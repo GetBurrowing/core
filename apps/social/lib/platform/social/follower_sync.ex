@@ -8,7 +8,7 @@ defmodule Platform.Social.FollowerSync do
   import Ecto.Query
   alias Platform.Repo
   alias Platform.Social.{Account, AccountTicker, FollowerSyncState, Profile}
-  alias Platform.Social.Analytics.{Backoff, SyncState, Zernio}
+  alias Platform.Social.Analytics.{AccountScope, Backoff, SyncState, Zernio}
 
   @doc "One due account, at most one request. No scheduler or ordinary dev/test startup of its own."
   def sync_org(org_id, opts \\ []) do
@@ -41,9 +41,13 @@ defmodule Platform.Social.FollowerSync do
   end
 
   defp eligible(query) do
+    provider = AccountScope.provider_filter()
+
     from(a in query,
+      as: :analytics_account,
+      where: ^provider,
       where:
-        a.provider == "zernio" and a.status == "connected" and
+        a.status == "connected" and
           is_nil(a.archived_at) and a.platform != "linkedin" and
           not is_nil(a.provider_account_ref) and a.provider_account_ref != ""
     )

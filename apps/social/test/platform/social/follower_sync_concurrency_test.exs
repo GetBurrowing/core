@@ -117,6 +117,66 @@ defmodule Platform.Social.FollowerSyncConcurrencyTest do
     end
   end
 
+  for field <- [:provider, :status] do
+    @field field
+    test "a changed #{@field} after discovery is rechecked on the current locked account", ids do
+      parent = self()
+      ref = make_ref()
+      handler = {__MODULE__, ref}
+
+      :ok =
+        :telemetry.attach(
+          handler,
+          [:platform, :repo, :query],
+          fn _, _, %{query: query}, _ ->
+            if Process.get(:current_account_barrier) &&
+                 String.contains?(query, "LEFT OUTER JOIN \"social_follower_sync_states\"") do
+              Process.delete(:current_account_barrier)
+              send(parent, {:current_account_candidate, self(), ref})
+
+              receive do
+                {:continue_account, ^ref} -> :ok
+              after
+                2000 -> raise "current account recheck barrier timeout"
+              end
+            end
+          end,
+          nil
+        )
+
+      task =
+        Task.async(fn ->
+          Process.put(:current_account_barrier, true)
+          FollowerSync.sync_org(ids.org, pace_ms: 0)
+        end)
+
+      try do
+        assert_receive {:current_account_candidate, worker, ^ref}, 2000
+        value = if @field == :provider, do: "another-provider", else: "reauth_needed"
+
+        {1, _} =
+          Repo.update_all(from(a in Account, where: a.id == ^ids.account), set: [{@field, value}])
+
+        send(worker, {:continue_account, ref})
+        assert {:ok, :idle} = Task.await(task, 3000)
+
+        assert Repo.aggregate(
+                 from(s in FollowerSnapshot, where: s.account_id == ^ids.account),
+                 :count
+               ) == 0
+
+        assert Repo.aggregate(
+                 from(s in FollowerSyncState, where: s.account_id == ^ids.account),
+                 :count
+               ) == 0
+      after
+        send(task.pid, {:continue_account, ref})
+        if Process.alive?(task.pid), do: Task.await(task, 3000)
+        :telemetry.detach(handler)
+      end
+    end
+  end
+
   defp hold(:profile, ids),
     do: Repo.one!(from(p in Profile, where: p.id == ^ids.profile, lock: "FOR UPDATE"))
 
