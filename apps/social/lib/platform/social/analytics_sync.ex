@@ -12,10 +12,11 @@ defmodule Platform.Social.AnalyticsSync do
   Retry deadlines survive restarts, with no immediate network retry.
   """
   use GenServer
+  require Logger
   import Ecto.Query
   alias Platform.Repo
   alias Platform.Social.{Account, Post, Profile}
-  alias Platform.Social.Analytics.{SyncState, Zernio}
+  alias Platform.Social.Analytics.{AccountScope, Backoff, SyncState, Zernio}
 
   @interval 60_000
   @pace 1_100
@@ -39,12 +40,35 @@ defmodule Platform.Social.AnalyticsSync do
   @impl true
   def handle_info(:sweep, opts) do
     if opts[:start] == true do
-      for org <- connected_orgs(), do: sync_org(org, opts)
+      for org <- connected_orgs() do
+        sync_org(org, opts)
+        sync_followers(org, opts)
+      end
+
       Process.send_after(self(), :sweep, Keyword.get(opts, :interval_ms, @interval))
     end
 
     if opts[:notify], do: send(opts[:notify], {:analytics_swept, self()})
     {:noreply, opts}
+  end
+
+  # Only unexpected exceptions from the new follower transaction are isolated.
+  # Exits (including supervisor shutdown) are deliberately not caught.
+  defp sync_followers(org_id, opts) do
+    Platform.Social.FollowerSync.sync_org(org_id, opts)
+  rescue
+    error ->
+      frames =
+        Enum.take(__STACKTRACE__, 3)
+        |> Enum.map(fn {mod, fun, arity, _} ->
+          {mod, fun, if(is_list(arity), do: length(arity), else: arity)}
+        end)
+
+      Logger.error(
+        "[Social.AnalyticsSync] follower_step_failed org=#{org_id} exception=#{inspect(error.__struct__)} frames=#{inspect(frames)}"
+      )
+
+      {:error, :exception}
   end
 
   @doc "Explicit bounded work for one org; never an ordinary dev/test startup hook."
@@ -59,11 +83,18 @@ defmodule Platform.Social.AnalyticsSync do
   end
 
   defp connected_orgs do
+    provider = AccountScope.provider_filter()
+
     Repo.all(
       from(a in Account,
+        as: :analytics_account,
         join: p in Profile,
         on: p.id == a.profile_id,
-        where: a.provider == "zernio" and a.status == "connected" and is_nil(a.archived_at),
+        where: ^provider,
+        where:
+          a.status == "connected" and is_nil(a.archived_at) and
+            not is_nil(a.provider_account_ref) and a.provider_account_ref != "" and
+            not is_nil(p.provider_profile_ref) and p.provider_profile_ref != "",
         distinct: true,
         select: p.org_id
       )
@@ -71,13 +102,17 @@ defmodule Platform.Social.AnalyticsSync do
   end
 
   defp posts(org_id) do
+    provider = AccountScope.provider_filter()
+
     from(po in Post,
       join: a in Account,
+      as: :analytics_account,
       on: po.account_id == a.id,
       join: p in Profile,
       on: a.profile_id == p.id,
+      where: ^provider,
       where:
-        p.org_id == ^org_id and a.provider == "zernio" and a.status == "connected" and
+        p.org_id == ^org_id and a.status == "connected" and
           is_nil(a.archived_at) and po.status == "published" and
           not is_nil(po.external_id) and po.external_id != "" and
           not is_nil(po.platform_post_id) and po.platform_post_id != "" and
@@ -112,7 +147,8 @@ defmodule Platform.Social.AnalyticsSync do
           bootstrap_complete: false,
           pending_baseline_ids: [],
           baseline_retry_at: nil,
-          retry_at: nil
+          retry_at: nil,
+          post_refresh_error: nil
         )
 
         :more
@@ -171,7 +207,11 @@ defmodule Platform.Social.AnalyticsSync do
         if matching == [] do
           pending_baseline(state, post, :baseline_pending)
         else
-          changes = [pending_baseline_ids: List.delete(state.pending_baseline_ids, post.id)]
+          changes = [
+            pending_baseline_ids: List.delete(state.pending_baseline_ids, post.id),
+            retry_at: nil,
+            post_refresh_error: nil
+          ]
 
           changes =
             if state.bootstrap_complete,
@@ -183,6 +223,9 @@ defmodule Platform.Social.AnalyticsSync do
         end
 
       {:error, {:retry_after, _, _} = reason} ->
+        defer(state, reason)
+
+      {:error, {:provider_deferred, _} = reason} ->
         defer(state, reason)
 
       {:error, reason} ->
@@ -253,7 +296,8 @@ defmodule Platform.Social.AnalyticsSync do
         save(state,
           cursor: page.next_cursor,
           replay_cursor: if(page.data == [], do: cursor),
-          retry_at: nil
+          retry_at: nil,
+          post_refresh_error: nil
         )
 
         if page.has_more and page.data != [], do: :more, else: :caught_up
@@ -295,18 +339,49 @@ defmodule Platform.Social.AnalyticsSync do
   defp defer(state, reason) do
     seconds =
       case reason do
-        {:retry_after, _, seconds} when is_integer(seconds) -> max(seconds, 1)
+        {:retry_after, _, seconds} -> Backoff.delay(seconds)
+        {:provider_deferred, at} -> max(DateTime.diff(at, DateTime.utc_now()), 1)
         _ -> 60
       end
 
-    save(state, retry_at: DateTime.add(DateTime.utc_now(), seconds, :second))
+    error =
+      case reason do
+        {:retry_after, _, _} -> "rate_limited"
+        {:provider_deferred, _} -> "pending"
+        {:transport, _} -> "transport"
+        {:http_status, _} -> "http_error"
+        :sync_pending -> "pending"
+        :analytics_unavailable -> "unavailable"
+        :credentials_unavailable -> "credentials_unavailable"
+        _ -> "invalid_response"
+      end
+
+    changes = [
+      retry_at: DateTime.add(DateTime.utc_now(), seconds, :second),
+      post_refresh_error: error
+    ]
+
+    changes =
+      if match?({:retry_after, _, _}, reason),
+        do: Keyword.put(changes, :provider_retry_at, changes[:retry_at]),
+        else: changes
+
+    save(state, changes)
+
     {:deferred, reason}
   end
 
   defp request(fun, opts) do
     # Install-wide lock spaces analytics requests across orgs and nodes.
     Repo.query!("SELECT pg_advisory_xact_lock(734002911)")
-    Process.sleep(max(Keyword.get(opts, :pace_ms, @pace), 0))
-    fun.()
+
+    case Backoff.deadline(DateTime.utc_now()) do
+      nil ->
+        Process.sleep(max(Keyword.get(opts, :pace_ms, @pace), 0))
+        fun.()
+
+      at ->
+        {:error, {:provider_deferred, at}}
+    end
   end
 end

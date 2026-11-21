@@ -54,11 +54,118 @@ defmodule Platform.Social.Analytics.Zernio do
     end
   end
 
-  defp get(path, params) do
+  @doc """
+  Read at most 90 UTC days of followers for one vendor account. Only daily,
+  account-grouped rows are accepted; totals and vendor growth are not used.
+  Null stays unavailable. A partial page is an error, never a complete series.
+  """
+  def account_followers(account_id, opts \\ []) do
+    finish = Keyword.get(opts, :to_date, Date.utc_today())
+
+    start =
+      Keyword.get_lazy(opts, :from_date, fn ->
+        if match?(%Date{}, finish), do: Date.add(finish, -89)
+      end)
+
+    if is_binary(account_id) and account_id != "" and match?(%Date{}, start) and
+         match?(%Date{}, finish) and Date.diff(finish, start) in 0..89 do
+      params = [
+        accountId: account_id,
+        metrics: "followers",
+        groupBy: "account",
+        granularity: "day",
+        attribution: "publish",
+        fromDate: Date.to_iso8601(start),
+        toDate: Date.to_iso8601(finish),
+        limit: 100
+      ]
+
+      case get("/v1/metrics/accounts", params,
+             redirect: false,
+             connect_options: [timeout: 5_000],
+             receive_timeout: 15_000
+           ) do
+        {:ok, body} ->
+          decode_followers(body, account_id, start, finish)
+
+        {:error, {:retry_after, status, seconds}} ->
+          # Honor valid deadlines up to one year; malformed/negative/oversized
+          # values use one day rather than allowing an indefinite deadline.
+          delay = Platform.Social.Analytics.Backoff.delay(seconds)
+
+          {:error, {:retry_after, status, delay}}
+
+        error ->
+          error
+      end
+    else
+      {:error, :invalid_request}
+    end
+  end
+
+  defp decode_followers(
+         %{
+           "data" => data,
+           "pagination" => %{"nextCursor" => nil, "hasMore" => false},
+           "meta" => %{
+             "entity" => "accounts",
+             "granularity" => "day",
+             "groupBy" => "account",
+             "attribution" => "publish",
+             "fromDate" => from,
+             "toDate" => to,
+             "stale" => stale,
+             "staleSince" => stale_since
+           }
+         },
+         account_id,
+         start,
+         finish
+       )
+       when is_list(data) and is_boolean(stale) and
+              (is_nil(stale_since) or is_binary(stale_since)) do
+    with true <- from == Date.to_iso8601(start) and to == Date.to_iso8601(finish),
+         {:ok, rows} <- decode_all(data, &follower_row(&1, account_id, start, finish)),
+         true <- length(rows) == MapSet.size(MapSet.new(rows, & &1.date)) do
+      {:ok, %{data: rows, stale: stale, stale_since: stale_since}}
+    else
+      _ -> {:error, :invalid_response}
+    end
+  end
+
+  defp decode_followers(_, _, _, _), do: {:error, :invalid_response}
+
+  defp follower_row(
+         %{
+           "date" => date,
+           "accountId" => id,
+           "profileId" => profile,
+           "platform" => platform,
+           "metrics" => %{"followers" => count}
+         },
+         id,
+         start,
+         finish
+       )
+       when is_binary(date) and is_binary(profile) and profile != "" and
+              platform in ["tiktok", "instagram", "youtube", "twitter"] and
+              (is_nil(count) or (is_integer(count) and count >= 0)) do
+    with {:ok, day} <- Date.from_iso8601(date),
+         true <- Date.compare(day, start) != :lt and Date.compare(day, finish) != :gt do
+      {:ok,
+       %{date: day, account_id: id, profile_id: profile, platform: platform, followers: count}}
+    else
+      _ -> {:error, :invalid_response}
+    end
+  end
+
+  defp follower_row(_, _, _, _), do: {:error, :invalid_response}
+
+  defp get(path, params, options \\ []) do
     with {:ok, key} <- api_key() do
       key
       |> ZernioHTTP.request()
-      |> Req.get(url: path, params: params, retry: false)
+      |> Req.get(Keyword.merge([url: path, params: params, retry: false], options))
       |> response()
     end
   end

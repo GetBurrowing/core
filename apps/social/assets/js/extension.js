@@ -11,7 +11,8 @@ const ClipReview = lazyClipHook("ClipReview")
 import SocialCalendarZone from "./hooks/social_calendar_zone.js"
 import QueueSwipe from "./hooks/queue_swipe.js"
 import StudioPostFocus from "./hooks/studio_post_focus.js"
+import SocialTicker from "./hooks/social_ticker.js"
 
 const ClosingVideoPreview = lazyClipHook("ClosingVideoPreview")
 
-export default { ClosingVideoPreview, CoverPicker, ClipReview, SocialCalendarZone, QueueSwipe, StudioPostFocus }
+export default { ClosingVideoPreview, CoverPicker, ClipReview, SocialCalendarZone, QueueSwipe, StudioPostFocus, SocialTicker }

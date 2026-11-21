@@ -18,6 +18,7 @@ defmodule Platform.Social.Results do
   exclusive-end UTC interval (both are required). Defaults retain the existing
   inclusive `now` endpoint. Calendar-week callers must resolve local boundaries
   before calling; subtracting seven elapsed days is incorrect across DST.
+  Optional `account_ids` narrows that profile cohort after UUID validation.
   """
   def by_idea(profiles, period, opts \\ []) when period in [7, 30, 90] do
     ids = Enum.map(profiles, fn %Profile{id: id} -> id end)
@@ -30,6 +31,21 @@ defmodule Platform.Social.Results do
         where: p.status == "published",
         preload: [:idea, account: :profile]
       )
+
+    query =
+      case Keyword.fetch(opts, :account_ids) do
+        {:ok, ids} when is_list(ids) ->
+          # Boundary values are validated before SQL; the profile predicate
+          # above still applies, so account selection cannot widen scope.
+          ids = Enum.filter(ids, &Platform.UUID.valid?/1)
+          where(query, [p], p.account_id in ^ids)
+
+        {:ok, _} ->
+          where(query, [p], false)
+
+        :error ->
+          query
+      end
 
     query
     |> published_window(opts, DateTime.add(now, -period, :day), now)

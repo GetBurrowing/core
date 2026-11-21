@@ -72,3 +72,28 @@
     flex-shrink: 0;
   }
 }
+/* Account ticker: native horizontal scrolling remains available without JS.
+   Only the canonical set participates in keyboard and assistive navigation. */
+.social-account-ticker { display: flex; align-items: stretch; min-width: 0; }
+.social-ticker-viewport { min-width: 0; flex: 1; }
+.social-ticker-controls { display: flex; align-items: center; flex-shrink: 0; padding-inline: 0.125rem; border-inline-start: 1px solid color-mix(in oklab, var(--color-base-content) 15%, transparent); }
+.social-ticker-entry {
+  display: flex;
+  align-items: center;
+  flex-shrink: 0;
+  gap: 0.5rem;
+  min-height: 2.875rem;
+  padding: 0.25rem 1rem;
+  line-height: 1.5;
+  white-space: nowrap;
+  border-inline-end: 1px solid color-mix(in oklab, var(--color-base-content) 15%, transparent);
+}
+.social-ticker-entry > * + *::before { content: "·"; margin-inline-end: 0.5rem; }
+.social-ticker-entry:hover { background: color-mix(in oklab, var(--color-base-content) 5%, transparent); }
+.social-ticker-entry:focus-visible { outline: 2px solid var(--color-primary); outline-offset: -2px; }
+.social-ticker-copy { display: none; }
+[data-ticker-ready="true"] .social-ticker-copy:not([hidden]) { display: flex; }
+.social-ticker-copy[hidden] { display: none; }
+.social-ticker-reduced { display: none; }
+[data-ticker-reduced="true"] .social-ticker-reduced { display: inline; max-width: 8rem; padding-inline: 0.5rem; }
+[data-ticker-reduced="true"] [data-ticker-toggle] { display: none; }

@@ -118,6 +118,7 @@ defmodule PlatformWeb.SocialTopBar do
   attr :creatable_orgs, :list, required: true
   attr :tab, :string, required: true
   attr :tab_items, :list, required: true, doc: "[%{key, label, badge}] in strip order"
+  attr :ticker_rows, :list, default: []
 
   def top_bar(assigns) do
     assigns =
@@ -211,6 +212,7 @@ defmodule PlatformWeb.SocialTopBar do
         orgs={@creatable_orgs}
       />
 
+      <PlatformWeb.SocialAccountTicker.strip rows={@ticker_rows} scope={@scope} />
       <nav
         class="tabs tabs-border -mb-px mt-3 flex-nowrap overflow-x-auto whitespace-nowrap"
         role="tablist"

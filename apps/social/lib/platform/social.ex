@@ -505,7 +505,7 @@ defmodule Platform.Social do
   @doc """
   Social authoring 4/11: writes an account's `posting_slots` (a list of
   `%{weekday: 1..7, time: "HH:MM"}` in the profile's timezone) and
-  `weekly_goal` (nil or 1..100), and nothing else
+  `weekly_goal` (nil or 1..100) and optional positive `follower_target`
   (`Account.schedule_changeset/2`). Who may call it is the caller's rule
   (Settings checks the approver).
   """

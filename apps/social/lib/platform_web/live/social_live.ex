@@ -78,6 +78,7 @@ defmodule PlatformWeb.SocialLive do
       |> assign(:detail, nil)
       |> assign(:notice, nil)
       |> assign(:notice_tone, :info)
+      |> assign(:ticker_rows, [])
       |> assign(:create_open?, false)
       |> SocialCreateProfile.assign_creatable(SocialCreateProfile.creatable_orgs(user))
       |> SocialScope.assign_profiles(profiles)
@@ -250,6 +251,7 @@ defmodule PlatformWeb.SocialLive do
   @impl true
   def render(assigns) do
     assigns = assign_views(assigns)
+    assigns = assign(assigns, :ticker_rows, PlatformWeb.SocialAccountTicker.visible_rows(assigns))
 
     ~H"""
     <div class="flex h-full min-h-0 flex-col" data-role="social-tab">
@@ -270,6 +272,7 @@ defmodule PlatformWeb.SocialLive do
             creatable_orgs={@creatable_orgs}
             tab={@tab}
             tab_items={@tab_items}
+            ticker_rows={@ticker_rows}
           />
           <section
             class="min-h-0 flex-1 overflow-y-auto px-4 pt-4 pb-[calc(env(safe-area-inset-bottom)+var(--bottom-nav-height,0px)+var(--bottom-nav-gap,0px)+1rem)] sm:px-6"

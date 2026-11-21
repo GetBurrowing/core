@@ -93,7 +93,28 @@ defmodule Platform.Social.AnalyticsSyncTest do
     Req.Test.stub(Publisher, fn conn ->
       query = URI.decode_query(conn.query_string)
       send(parent, {:http, conn.request_path, query})
-      fun.(conn, query)
+
+      if String.ends_with?(conn.request_path, "/metrics/accounts") do
+        # The same scheduler now makes one bounded follower request after
+        # its post work. These post-feed tests model an empty daily series;
+        # follower persistence and scheduler invocation have their own tests.
+        Req.Test.json(conn, %{
+          "data" => [],
+          "pagination" => %{"nextCursor" => nil, "hasMore" => false},
+          "meta" => %{
+            "entity" => "accounts",
+            "granularity" => "day",
+            "groupBy" => "account",
+            "attribution" => "publish",
+            "fromDate" => query["fromDate"],
+            "toDate" => query["toDate"],
+            "stale" => false,
+            "staleSince" => nil
+          }
+        })
+      else
+        fun.(conn, query)
+      end
     end)
   end
 
@@ -229,12 +250,26 @@ defmodule Platform.Social.AnalyticsSyncTest do
       assert {:ok, {:deferred, _}} = run(c.org)
       state = Repo.get!(SyncState, c.org)
       assert state.cursor == "C0"
+
+      expected =
+        case status do
+          202 -> "pending"
+          424 -> "unavailable"
+          _ -> "rate_limited"
+        end
+
+      assert state.post_refresh_error == expected
       assert DateTime.compare(state.retry_at, DateTime.utc_now()) == :gt
       assert Repo.get!(Post, c.post.id).metrics == %{"views" => 7}
       assert Repo.get!(Post, c.post.id).metrics_synced_at == c.post.metrics_synced_at
       assert_received {:http, _, _}
       assert {:ok, :deferred} = run(c.org)
       refute_received {:http, _, _}
+      expired = DateTime.add(DateTime.utc_now(), -1)
+      Repo.update!(Ecto.Changeset.change(state, retry_at: expired, provider_retry_at: expired))
+      stub(fn conn, _ -> Req.Test.json(conn, page([], "C1")) end)
+      assert {:ok, :caught_up} = run(c.org)
+      assert Repo.get!(SyncState, c.org).post_refresh_error == nil
     end
   end
 
@@ -369,6 +404,7 @@ defmodule Platform.Social.AnalyticsSyncTest do
     assert Repo.get!(SyncState, c.org).cursor == "C2"
     assert_received {:http, _, %{"cursor" => "C0"}}
     assert_received {:http, _, %{"cursor" => "C1"}}
+    assert_received {:http, "/api/v1/metrics/accounts", %{"accountId" => "account-A"}}
     refute_received {:http, _, %{}}
   end
 

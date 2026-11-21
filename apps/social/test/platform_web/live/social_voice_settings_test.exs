@@ -54,6 +54,61 @@ defmodule PlatformWeb.SocialVoiceSettingsTest do
     child |> element("#{slot_card(account_id)} [data-role='social-slot-add']") |> render_click()
   end
 
+  test "an approver saves and clears a per-account follower target without changing the weekly goal",
+       %{conn: conn} do
+    w = world()
+    {:ok, _} = Social.update_account_schedule(w.org_id, w.account, %{weekly_goal: 3})
+    child = open(conn, w.approver)
+    assert has_element?(child, "#{slot_card(w.account.id)} [data-role=social-follower-target]")
+
+    child
+    |> form("#social-slot-form-#{w.account.id}", slot: %{follower_target: "100"})
+    |> render_submit()
+
+    assert Repo.get!(Account, w.account.id).follower_target == 100
+    assert Repo.get!(Account, w.account.id).weekly_goal == 3
+
+    render_hook(child, "slot_save", %{
+      "account_id" => w.account.id,
+      "slot" => %{"follower_target" => "0"}
+    })
+
+    assert Repo.get!(Account, w.account.id).follower_target == 100
+    assert has_element?(child, "#{slot_card(w.account.id)} [data-role=social-slot-errors]")
+
+    child
+    |> form("#social-slot-form-#{w.account.id}", slot: %{follower_target: ""})
+    |> render_submit()
+
+    assert Repo.get!(Account, w.account.id).follower_target == nil
+  end
+
+  test "target updates refuse forged accounts and a revoked approver; LinkedIn offers no target",
+       %{conn: conn} do
+    w = world()
+    other = world()
+    {:ok, li} = Social.create_account(w.org_id, w.profile, %{platform: "linkedin"})
+    child = open(conn, w.approver)
+    refute has_element?(child, "#{slot_card(li.id)} [data-role=social-follower-target]")
+
+    render_hook(child, "slot_save", %{
+      "account_id" => other.account.id,
+      "slot" => %{"follower_target" => "100"}
+    })
+
+    assert Repo.get!(Account, other.account.id).follower_target == nil
+    Repo.update!(Ecto.Changeset.change(w.profile, approver_user_ids: []))
+
+    render_hook(child, "slot_save", %{
+      "account_id" => w.account.id,
+      "slot" => %{"follower_target" => "100"}
+    })
+
+    assert Repo.get!(Account, w.account.id).follower_target == nil
+    viewer = open(conn, w.viewer)
+    refute has_element?(viewer, "[data-role=social-follower-target]")
+  end
+
   test "zero data: create a profile, add a slot, save, reload, and the slot is still there",
        %{conn: conn} do
     org_id = org_id!()
