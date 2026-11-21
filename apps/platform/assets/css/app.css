@@ -6096,6 +6096,19 @@ main:has(> .tab-switch-layer--skeleton) > :not(.tab-switch-layer, #connection-st
   animation: tab-switch-hide 1ms linear 80ms both;
 }
 
+/* Leaving the More page (task 01a1fc7f stage 3, tab_switch_cache.js
+   INSTANT_FROM): no 80ms reveal. The skeleton and the hide land on the
+   tap's frame, so no More row paints after the tap; the Updating chip keeps
+   its own delay. */
+.tab-switch-layer--instant.tab-switch-layer--skeleton {
+  animation: none;
+}
+
+main:has(> .tab-switch-layer--instant) > :not(.tab-switch-layer, #connection-status) {
+  visibility: hidden;
+  animation: none;
+}
+
 /* The snapshot keeps the page's own layout: the pane's height, and it is the
    containing block for anything fixed inside it, so a cloned fixed footer
    cannot escape over the shell. */

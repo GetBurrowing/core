@@ -31,8 +31,12 @@
  * pops to `/more`.
  */
 
-export const DUO_ATTR = "data-native-duo"
-export const DUO_OPEN_ATTR = "data-native-duo-open"
+// The attribute names come from native_back.js, the copy
+// native_back_contract.test.js pins to the Swift side, so the posture gate
+// cannot drift from what native writes.
+import {DUO_ATTR, DUO_OPEN_ATTR} from "../hooks/native_back.js"
+
+export {DUO_ATTR, DUO_OPEN_ATTR}
 export const MORE_PATH = "/more"
 export const MORE_SELECTOR = '#bottom-nav button[data-destination="more"], [phx-click="open_more_sheet"]'
 export const PAGE_SCROLLER_SELECTOR = "#more-page"

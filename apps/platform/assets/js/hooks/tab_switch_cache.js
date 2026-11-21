@@ -76,6 +76,12 @@ export const LOGOUT_SELECTOR = 'a[href="/auth/logout"]'
 export const TITLE_SELECTOR = '[data-role="phone-top-bar-title"]'
 
 export const LAYER_CLASS = "tab-switch-layer"
+// Leaving the More page (`/more`, the open iPhone Duo's More tab, task
+// 01a1fc7f stage 3): the layer covers on the tap's frame, with no FAST_MS
+// reveal delay. More is gone on the next frame (design canvas 01a1fc82,
+// "Leaving"); a fast landing may show the skeleton for a frame or two
+// instead of the outgoing page. Every other departure keeps the delay.
+export const INSTANT_FROM = "more"
 const CHIP_CLASS = "tab-switch-chip"
 // Outgoing-main children that are shell furniture, not page content.
 const SKIP_ID = "connection-status"
@@ -315,6 +321,7 @@ export function createTabSwitchCache({
     layer.setAttribute("data-destination", key)
     layer.setAttribute("aria-busy", "true")
     layer.setAttribute("aria-label", "Loading")
+    if (el.getAttribute("data-current") === INSTANT_FROM) layer.classList.add(`${LAYER_CLASS}--instant`)
 
     const entry = cache.get(key)
     let shown = null

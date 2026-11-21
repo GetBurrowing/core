@@ -1,4 +1,5 @@
 import { describe, it, expect, beforeEach, afterEach, vi } from "vitest"
+import { readFileSync } from "node:fs"
 import {
   createTabSwitchCache,
   createSnapshotCache,
@@ -441,6 +442,36 @@ describe("TabSwitchCache", () => {
     env.tap("meetings")
     layer = layerOf(env.doc)
     expect(layer.querySelector(".tab-switch-skeleton").getAttribute("data-skeleton")).toBe("generic")
+  })
+
+  it("covers at once when leaving the More page, and only then (01a1fc7f stage 3)", () => {
+    env.shell({ current: "more" })
+    env.tap("chat")
+    let layer = layerOf(env.doc)
+    expect(layer.getAttribute("data-mode")).toBe("skeleton")
+    expect(layer.classList.contains("tab-switch-layer--instant")).toBe(true)
+
+    // A cached destination from More is instant too.
+    env.land("chat")
+    env.visit("tasks")
+    env.shell({ current: "more" })
+    env.tap("chat")
+    layer = layerOf(env.doc)
+    expect(layer.getAttribute("data-mode")).toBe("cached")
+    expect(layer.classList.contains("tab-switch-layer--instant")).toBe(true)
+
+    // Any other departure keeps the FAST_MS reveal delay.
+    env.land("chat")
+    env.tap("meetings")
+    expect(layerOf(env.doc).classList.contains("tab-switch-layer--instant")).toBe(false)
+  })
+
+  it("styles the instant layer with no reveal delay (app.css)", () => {
+    const css = readFileSync(new URL("../../css/app.css", import.meta.url), "utf8")
+    expect(css).toMatch(/\.tab-switch-layer--instant\.tab-switch-layer--skeleton\s*\{\s*animation:\s*none;\s*\}/)
+    expect(css).toMatch(
+      /main:has\(> \.tab-switch-layer--instant\) > :not\(\.tab-switch-layer, #connection-status\)\s*\{\s*visibility:\s*hidden;\s*animation:\s*none;\s*\}/,
+    )
   })
 
   it("maps destinations to skeleton shapes", () => {

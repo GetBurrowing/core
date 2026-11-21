@@ -6,6 +6,7 @@ import installDuoMorePage, {
   MORE_SELECTOR,
   openDuo,
 } from "../../js/lib/duo_more_page.js"
+import * as NativeBack from "../../js/hooks/native_back.js"
 
 /**
  * DuoMorePage (task 01a1fc7f stage 2). vitest runs in plain node, so window,
@@ -61,6 +62,14 @@ function env({ duo = true, open = true, path = "/chat" } = {}) {
 // Back), and one it does not (any other tab).
 const moreTab = { closest: (sel) => (sel === MORE_SELECTOR ? moreTab : null) }
 const otherTab = { closest: () => null }
+
+describe("attribute names", () => {
+  it("are native_back.js's own bindings, the copy the Swift contract test pins", () => {
+    expect(DUO_ATTR).toBe(NativeBack.DUO_ATTR)
+    expect(DUO_OPEN_ATTR).toBe(NativeBack.DUO_OPEN_ATTR)
+    expect(DUO_OPEN_ATTR).toBe("data-native-duo-open")
+  })
+})
 
 describe("selector", () => {
   it("catches the More tab button and every open_more_sheet control", () => {
