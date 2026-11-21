@@ -15,7 +15,7 @@ defmodule Platform.Social.ToolDefinitions do
   and six tools a clip runner uses to work Clip Studio's
   job list (list, claim, source download, progress, complete, fail), and (Social authoring
   2/11) create and list ideas, the record one post per account hangs off.
-  Twenty-two in all, including weekly-note submission and listing. No tool
+  Twenty-six in all, including weekly-note submission and listing. No tool
   creates a job (humans enqueue through `Platform.Social.ClipJobs`) and no
   tool writes a review field. Every description
   carries `human_approves/0` verbatim. A human approves in Burrow and the
@@ -35,7 +35,7 @@ defmodule Platform.Social.ToolDefinitions do
             social_post_list social_results_get social_clip_propose social_clip_submit social_clip_render
             social_clip_list social_task_request social_clip_job_list social_clip_job_claim
             social_clip_job_source social_clip_job_progress social_clip_job_complete social_clip_job_fail
-            social_idea_create social_idea_list social_idea_note_add social_weekly_note_submit social_weekly_note_list)
+            social_idea_create social_idea_list social_idea_vote social_idea_unvote social_idea_archive social_idea_note_add social_weekly_note_submit social_weekly_note_list)
 
   @doc "The sentence every tool's description carries."
   @spec human_approves() :: String.t()
@@ -825,7 +825,7 @@ defmodule Platform.Social.ToolDefinitions do
       %{
         name: "social_idea_list",
         description:
-          "List a profile's ideas, newest first, each with its stage (derived from its posts: inbox, drafting, in_review, scheduled, live, failed), its posts with their change log, any open revision notes a human left, and the idea's notes thread (humans and agents, oldest first). " <>
+          "List a profile's ideas with vote counts and whether you voted. Voter identities are not returned. Inbox and shortlisted ideas sort by votes descending, oldest first, then id. Their stage is derived from posts and votes: inbox, shortlisted, drafting, in_review, scheduled, live, failed, its posts with their change log, any open revision notes a human left, and the idea's notes thread (humans and agents, oldest first). " <>
             @human_approves,
         parameters: %{
           profile_id: %{type: "string", required: true, description: "The profile id."},
@@ -833,7 +833,7 @@ defmodule Platform.Social.ToolDefinitions do
             type: "string",
             required: false,
             description:
-              "Only ideas at this stage: inbox, drafting, in_review, scheduled, live or failed."
+              "Only ideas at this stage: inbox, shortlisted, drafting, in_review, scheduled, live or failed."
           },
           archived: %{
             type: "boolean",
@@ -844,11 +844,37 @@ defmodule Platform.Social.ToolDefinitions do
           offset: %{type: "integer", required: false, description: "Rows to skip (default 0)."}
         },
         returns:
-          "%{ideas: [%{id, profile_id, title, brief, source_kind, clip_id, task_id, meeting_id, message_id, source_url, created_by_user_id, created_by_agent_id, archived_at, inserted_at, stage, posts: [#{@post_row} plus events], open_revisions: [%{post_id, note, requested_by_user_id, requested_at}], notes: [%{id, author_kind, author_id, body, inserted_at}]}], total, has_more, limit, offset}",
+          "%{ideas: [%{id, profile_id, title, brief, source_kind, clip_id, task_id, meeting_id, message_id, source_url, created_by_user_id, created_by_agent_id, archived_at, inserted_at, stage, vote_count, voted, posts: [#{@post_row} plus events], open_revisions: [%{post_id, note, requested_by_user_id, requested_at}], notes: [%{id, author_kind, author_id, body, inserted_at}]}], total, has_more, limit, offset}",
         limitations:
           "not_found for a profile outside your org. Posts with no idea are not listed here (social_post_list has them). A revision note stays open until you edit the post (social_draft_update) or a human decides it.",
         when_to_use:
           "To see where each idea stands and what a human asked you to revise. Revise with social_draft_update; the post stays waiting for the human."
+      },
+      %{
+        name: "social_idea_vote",
+        description: "Vote once for another author's visible idea. " <> @human_approves,
+        parameters: %{idea_id: %{type: "string", required: true, description: "The idea id."}},
+        returns: "%{idea_id, vote_count, voted}",
+        limitations:
+          "Own or archived ideas refuse. Repeated votes count once. Hidden ideas return not_found.",
+        when_to_use: "To manage your interest in or authorship of an existing idea."
+      },
+      %{
+        name: "social_idea_unvote",
+        description: "Withdraw your vote from a visible idea. " <> @human_approves,
+        parameters: %{idea_id: %{type: "string", required: true, description: "The idea id."}},
+        returns: "%{idea_id, vote_count, voted}",
+        limitations:
+          "Own or archived ideas refuse. Repeated withdrawals are harmless. Hidden ideas return not_found.",
+        when_to_use: "To manage your interest in or authorship of an existing idea."
+      },
+      %{
+        name: "social_idea_archive",
+        description: "Archive your own idea, without changing any posts. " <> @human_approves,
+        parameters: %{idea_id: %{type: "string", required: true, description: "The idea id."}},
+        returns: "%{idea_id, archived}",
+        limitations: "Author agent only; refuses any linked post. Hidden ideas return not_found.",
+        when_to_use: "To manage your interest in or authorship of an existing idea."
       },
       %{
         name: "social_idea_note_add",

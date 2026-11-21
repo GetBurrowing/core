@@ -16,8 +16,8 @@ defmodule PlatformWeb.SocialIdeaDetail do
       agent, a human or the system, with an edit's before and after.
     * Where the idea came from, as a link.
 
-  A viewer who is not an approver of the idea's profile gets no write
-  controls at all (not disabled ones).
+  A viewer who is not an approver has no drafting or approval controls.
+  Voting on the board is available to current readers other than the author.
   """
 
   use PlatformWeb, :html
@@ -38,6 +38,7 @@ defmodule PlatformWeb.SocialIdeaDetail do
   }
 
   @stage_labels %{
+    "shortlisted" => "Shortlisted",
     "inbox" => "Inbox",
     "drafting" => "Drafting",
     "in_review" => "In review",
@@ -193,6 +194,12 @@ defmodule PlatformWeb.SocialIdeaDetail do
           >
             {@idea.title}
           </h2>
+          <p data-role="idea-detail-votes" class="text-sm">
+            {@detail.vote_count} {if @detail.vote_count == 1, do: "vote", else: "votes"}
+          </p>
+          <p :if={@detail.voted} data-role="idea-detail-voted" class="text-xs text-subtle">
+            You voted
+          </p>
           <div class="flex flex-wrap items-center gap-2">
             <.source_link source={@detail.source} />
             <span

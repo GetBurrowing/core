@@ -104,7 +104,8 @@ defmodule Platform.Social.ClipDecisions do
       publish_after = DateTime.add(now, ClipPublish.window_ms(), :millisecond)
 
       Repo.transaction(fn ->
-        with {:ok, clip} <- lock_clip(clip),
+        with %Profile{} <- Social.lock_profile(org_id, profile.id, :share) || {:error, :not_found},
+             {:ok, clip} <- lock_clip(clip),
              :ok <- pending(clip),
              {:ok, render} <- selected_render(org_id, profile, clip, attrs["render_id"]),
              {:ok, clip} <- review(clip, render, user_id, attrs, now),

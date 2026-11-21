@@ -29,6 +29,23 @@ defmodule Platform.Social.ClipDecisionsTest do
     %{w: world, clip: pending_clip!(world, "first-render-v1"), t0: DateTime.utc_now()}
   end
 
+  test "an agent-archived clip idea cannot acquire posts through clip approval", ctx do
+    creator = agent!()
+
+    {:ok, idea} =
+      Social.Ideas.create(
+        ctx.w.org_id,
+        ctx.w.profile.id,
+        %{title: "Archived clip idea", source_kind: "clip", clip_id: ctx.clip.id},
+        {:agent, creator.id}
+      )
+
+    assert {:ok, _} = Social.IdeaVotes.archive(ctx.w.org_id, idea.id, {:agent, creator.id})
+    assert {:error, :idea_archived} = approve(ctx, ctx.w.approver.id, [ctx.w.tiktok.id])
+    assert Repo.aggregate(from(p in Post, where: p.idea_id == ^idea.id), :count) == 0
+    assert Repo.get!(Clip, ctx.clip.id).review_status == ctx.clip.review_status
+  end
+
   test "a real vendor status failure retries the existing post through the guard", ctx do
     alias Platform.Social.{Publishing, Publisher.Zernio}
     {:ok, %{posts: [post]}} = approve(ctx, ctx.w.approver.id, [ctx.w.tiktok.id])

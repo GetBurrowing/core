@@ -44,16 +44,7 @@ defmodule PlatformWeb.SocialTodayTab do
 
   @impl true
   def load(socket) do
-    profiles = SocialScope.visible_profiles(socket)
-
-    profiles =
-      case socket.assigns.scope do
-        :all -> profiles
-        {:profile, %{id: id}} -> Enum.filter(profiles, &(&1.id == id))
-        _ -> []
-      end
-
-    profiles = Enum.filter(profiles, &accessible?(socket, &1))
+    profiles = visible_scope_profiles(socket)
 
     posts =
       profiles
@@ -79,14 +70,7 @@ defmodule PlatformWeb.SocialTodayTab do
         end)
       end)
 
-    pitches =
-      profiles
-      |> Enum.flat_map(fn profile ->
-        Social.Ideas.list({:tenant, profile.org_id}, profile.id)
-        |> Enum.filter(&(!is_nil(&1.created_by_agent_id)))
-        |> Enum.map(&%{idea: &1, profile: profile})
-      end)
-      |> Enum.take(5)
+    pitches = idea_pitches(profiles)
 
     socket
     |> SocialScope.assign_profiles(SocialScope.visible_profiles(socket))
@@ -118,6 +102,50 @@ defmodule PlatformWeb.SocialTodayTab do
     |> assign(:studio_profile_accessible?, profiles != [])
     |> assign(:studio_loaded_profile_ids, MapSet.new(profiles, & &1.id))
     |> assign(:studio_post_detail, nil)
+  end
+
+  @impl true
+  def on_select(socket) do
+    socket = refresh_authorization(socket)
+    assign(socket, :studio_pitches, idea_pitches(visible_scope_profiles(socket)))
+  end
+
+  defp visible_scope_profiles(socket) do
+    profiles = SocialScope.visible_profiles(socket)
+
+    profiles =
+      case socket.assigns.scope do
+        :all -> profiles
+        {:profile, %{id: id}} -> Enum.filter(profiles, &(&1.id == id))
+        _ -> []
+      end
+
+    Enum.filter(profiles, &accessible?(socket, &1))
+  end
+
+  # Refresh the ideas slice without resetting the post editor or its draft.
+  defp idea_pitches(profiles) do
+    profiles
+    |> Enum.flat_map(fn profile ->
+      Social.Ideas.list({:tenant, profile.org_id}, profile.id)
+      |> Enum.filter(&(!is_nil(&1.created_by_agent_id)))
+      |> Enum.map(&%{idea: &1, profile: profile})
+    end)
+    |> then(fn items ->
+      ideas = Enum.map(items, & &1.idea)
+      votes = Social.IdeaVotes.summaries(ideas)
+      posts = Social.Ideas.posts_by_idea(Enum.map(ideas, & &1.id))
+
+      Enum.sort_by(items, fn item ->
+        count = votes[item.idea.id].vote_count
+
+        shortlisted? =
+          Social.IdeaVotes.stage(Map.get(posts, item.idea.id, []), count) == "shortlisted"
+
+        {if(shortlisted?, do: 0, else: 1), Social.IdeaVotes.order_key(item.idea, count)}
+      end)
+    end)
+    |> Enum.take(5)
   end
 
   # Revalidate cached material without resetting an authorised user's open form.
@@ -1074,7 +1102,9 @@ defmodule PlatformWeb.SocialTodayTab do
           <section class="rounded-box border border-base-content/25 bg-base-100 p-4">
             <h2 class="text-lg font-semibold">Agent ideas</h2>
             <p :if={@studio_pitches == []}>No agent ideas yet.</p>
-            <p :for={item <- @studio_pitches}>{item.idea.title} · {item.profile.name}</p>
+            <p :for={item <- @studio_pitches} data-role="studio-agent-idea">
+              {item.idea.title} · {item.profile.name}
+            </p>
             <button type="button" phx-click="select_tab" phx-value-tab="ideas" class="link">
               Open Ideas
             </button>
