@@ -836,21 +836,43 @@ defmodule PlatformWeb.SocialTodayTab do
 
   defp refresh_scope(socket), do: socket
 
+  @doc "The authorized work shown on Today, shared with Queue's count."
+  def work_items(assigns) do
+    allowed =
+      %{assigns: assigns}
+      |> visible_scope_profiles()
+      |> MapSet.new(& &1.id)
+
+    visible? = fn item -> MapSet.member?(allowed, item.profile.id) end
+
+    %{
+      posts:
+        Enum.filter(assigns.studio_today_posts, fn item ->
+          visible?.(item) and item.post.status in ~w(draft needs_approval approved)
+        end),
+      clips: Enum.filter(assigns.studio_today_clips, visible?)
+    }
+  end
+
   @impl true
   def pane(assigns) do
     user = fresh_user(%{assigns: assigns})
+    work = assigns.studio_work_items
 
     assigns =
       assigns
+      |> assign(:studio_work_posts, work.posts)
+      |> assign(:studio_work_clips, work.clips)
+      |> assign(:studio_work_count, length(work.posts) + length(work.clips))
       |> assign(
         :studio_post_thumbnails,
-        Map.new(assigns.studio_today_posts, fn item ->
+        Map.new(work.posts, fn item ->
           {item.post.id, post_thumbnail(item.post, item.profile, user)}
         end)
       )
       |> assign(
         :studio_clip_videos,
-        Map.new(assigns.studio_today_clips, fn item ->
+        Map.new(work.clips, fn item ->
           {item.clip.id,
            detail_video(%{media_file_ids: [hd(item.renders).file_id]}, item.profile, user)}
         end)
@@ -861,18 +883,18 @@ defmodule PlatformWeb.SocialTodayTab do
       <h1 class="text-2xl font-semibold">Today</h1>
       <div class="grid gap-5 xl:grid-cols-[minmax(0,1fr)_minmax(0,1.2fr)_minmax(0,1fr)]">
         <section class="min-w-0 self-start space-y-3 rounded-box border border-base-content/25 bg-base-100 p-4">
-          <h2 class="text-lg font-semibold">Needs attention</h2>
+          <h2 class="text-lg font-semibold">Prepare and review ({@studio_work_count})</h2>
           <p
-            :if={@studio_today_posts == [] and @studio_today_clips == []}
+            :if={@studio_work_count == 0}
             class="text-subtle"
           >
-            Nothing needs your attention yet.
+            Nothing to prepare or review yet.
           </p>
           <p :if={@studio_post_error && is_nil(@studio_post_detail)} role="alert">
             {@studio_post_error}
           </p>
           <section
-            :for={item <- @studio_today_clips}
+            :for={item <- @studio_work_clips}
             data-role="studio-clip"
             data-clip-id={item.clip.id}
             class="rounded-box border border-base-content/20 bg-base-200/30 p-4 space-y-2"
@@ -938,7 +960,7 @@ defmodule PlatformWeb.SocialTodayTab do
             </form>
           </section>
           <div
-            :for={item <- @studio_today_posts}
+            :for={item <- @studio_work_posts}
             data-role="studio-post"
             data-post-id={item.post.id}
             class="rounded-box border border-base-content/20 bg-base-200/30 p-3"

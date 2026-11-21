@@ -349,13 +349,13 @@ defmodule PlatformWeb.SocialCalendarTab do
         class="space-y-3"
         data-role="studio-calendar"
       >
-        <h2 class="text-lg font-semibold">Studio plans</h2>
+        <h2 class="text-lg font-semibold">Studio plans (not published from Burrow)</h2>
         <div
           :for={item <- @studio_planned}
           data-role="studio-calendar-planned"
           data-post-id={item.post.id}
         >
-          <span>Planned in Burrow</span>
+          <span>Plan only · does not publish</span>
           ·
           <button type="button" class="link" phx-click="studio_open_post" phx-value-id={item.post.id}>
             {item.post.body || "Untitled post"}

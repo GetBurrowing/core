@@ -34,7 +34,7 @@ defmodule PlatformWeb.SocialQueueTab do
   alias Platform.Chat.PubSub, as: ChatPubSub
   alias Platform.Social
   alias Platform.Social.{Account, Approvals, QueueFeed}
-  alias PlatformWeb.{SocialIdeaCard, SocialPreview, SocialScope}
+  alias PlatformWeb.{SocialIdeaCard, SocialPreview, SocialScope, SocialTodayTab}
 
   # An uploaded cover's size cap (task 01a165ec stage 4).
   @cover_max_bytes 15_000_000
@@ -169,7 +169,9 @@ defmodule PlatformWeb.SocialQueueTab do
   # Coming back to the Queue re-reads it, so a draft that arrived while
   # another tab was open is there.
   @impl true
-  def on_select(%{assigns: %{tab: "queue"}} = socket), do: load(socket)
+  def on_select(%{assigns: %{tab: "queue"}} = socket),
+    do: socket |> SocialTodayTab.refresh_authorization() |> load()
+
   def on_select(socket), do: socket
 
   # `?tab=queue&idea=<idea id, or a lone post's id>`: that idea is the one
@@ -458,10 +460,13 @@ defmodule PlatformWeb.SocialQueueTab do
 
   @impl true
   def pane(assigns) do
+    work = assigns.studio_work_items
+
     assigns =
       assign(assigns,
         focus_index: Enum.find_index(assigns.queue_keys, &(&1 == assigns.queue_focus)) || 0,
-        connect?: assigns.scope != :all and assigns[:accounts_empty?] == true
+        connect?: assigns.scope != :all and assigns[:accounts_empty?] == true,
+        studio_work_count: length(work.posts) + length(work.clips)
       )
 
     ~H"""
@@ -469,7 +474,7 @@ defmodule PlatformWeb.SocialQueueTab do
       <section aria-labelledby="queue-needs-you" class="space-y-3">
         <div class="flex flex-wrap items-baseline gap-x-3 gap-y-1">
           <h2 id="queue-needs-you" class="text-xl font-semibold" data-role="queue-heading">
-            Needs you
+            Awaiting approval
           </h2>
           <span
             :if={not @queue_empty?}
@@ -479,6 +484,9 @@ defmodule PlatformWeb.SocialQueueTab do
             {plural(length(@queue_keys), "idea")} · {plural(@queue_post_count, "post")}
           </span>
         </div>
+        <p class="text-sm text-base-content">
+          This is the publishing queue for posts intended for connected accounts.
+        </p>
 
         <nav
           :if={length(@queue_keys) > 1}
@@ -516,6 +524,7 @@ defmodule PlatformWeb.SocialQueueTab do
           data-role="social-empty"
           class="rounded-2xl border border-dashed border-edge px-4 py-8 text-center"
         >
+          <p class="mt-2 text-lg font-medium">Nothing is awaiting approval.</p>
           <%= if @connect? do %>
             <p class="font-medium">Connect an account to start.</p>
             <p class="mt-1 text-sm text-base-content">
@@ -531,14 +540,30 @@ defmodule PlatformWeb.SocialQueueTab do
               Go to Connections
             </button>
           <% else %>
-            <.icon name="hero-check-circle" class="mx-auto size-8 text-success" />
-            <p class="mt-2 text-lg font-medium">Nothing needs you.</p>
-            <p class="mt-1 text-sm text-base-content">
+            <.icon
+              :if={@studio_work_count == 0}
+              name="hero-check-circle"
+              class="mx-auto size-8 text-success"
+            />
+            <p :if={@studio_work_count == 0} class="mt-1 text-sm text-base-content">
               {if @scope == :all,
                 do: "Every brand is caught up.",
                 else: "#{@profile && @profile.name} is caught up."}
             </p>
           <% end %>
+          <p :if={@studio_work_count > 0} class="mt-1 text-sm text-base-content">
+            {@studio_work_count} {if @studio_work_count == 1, do: "item", else: "items"} to prepare or review on Today.
+          </p>
+          <button
+            :if={@studio_work_count > 0}
+            type="button"
+            class="btn btn-primary btn-sm mt-4"
+            phx-click="select_tab"
+            phx-value-tab="today"
+            data-role="queue-open-today"
+          >
+            Open Today
+          </button>
         </div>
 
         <ul id="social-queue" phx-update="stream" class="space-y-4" data-role="social-queue">

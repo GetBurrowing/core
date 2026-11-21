@@ -324,6 +324,13 @@ defmodule PlatformWeb.SocialLive do
   defp assign_views(%{tabs: tabs, tab: current, scope: scope} = assigns) do
     blocked? = fn tab -> scope == :all and not tab.module.all_brands?() end
 
+    work =
+      if Enum.any?(tabs, &(&1.key == "today")),
+        do: PlatformWeb.SocialTodayTab.work_items(assigns),
+        else: %{posts: [], clips: []}
+
+    assigns = assign(assigns, :studio_work_items, work)
+
     assign(assigns,
       tab_items:
         Enum.map(tabs, fn tab ->
