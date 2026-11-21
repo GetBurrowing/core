@@ -14,6 +14,30 @@ defmodule PlatformWeb.SocialStudioTodayTest do
     find_live_child(parent, "ext-page-social")
   end
 
+  test "plain Social entry opens Today for a Studio profile and preserves deliberate navigation",
+       %{conn: conn} do
+    w = studio_world!()
+    view = open(conn, w.approver, "")
+
+    assert has_element?(view, "[data-role='social-tab-body'][data-tab='today']")
+    view |> element("[data-role='social-tab-button'][data-tab='queue']") |> render_click()
+    assert has_element?(view, "[data-role='social-tab-body'][data-tab='queue']")
+  end
+
+  test "an explicit Queue link remains on Queue for a Studio profile", %{conn: conn} do
+    w = studio_world!()
+    view = open(conn, w.approver, "?tab=queue")
+    assert has_element?(view, "[data-role='social-tab-body'][data-tab='queue']")
+  end
+
+  test "plain Social entry keeps Queue for a profile without Studio", %{conn: conn} do
+    w = studio_world!()
+    assert {:ok, _} = Social.Studio.set_enabled(w.org_id, w.profile.id, w.approver.id, false)
+    view = open(conn, w.approver, "")
+    assert has_element?(view, "[data-role='social-tab-body'][data-tab='queue']")
+    refute has_element?(view, "[data-role='social-tab-button'][data-tab='today']")
+  end
+
   test "Today appears for a Studio profile and disappears when switching to a disabled profile",
        %{conn: conn} do
     w = studio_world!()

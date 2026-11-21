@@ -209,6 +209,7 @@ defmodule PlatformWeb.SocialLive do
     end)
   end
 
+  defp select_from_query(socket, profiles, nil), do: select_from_query(socket, profiles, %{})
   defp select_from_query(socket, _profiles, _query), do: socket
 
   @impl true
