@@ -67,6 +67,32 @@ defmodule PlatformWeb.ChatLiveRoomAgentPickerTest do
   defp open(view),
     do: view |> element("button[phx-click*='open_room_agent_picker']") |> render_click()
 
+  # A pick followed by this read has shown an empty participant list on a first
+  # CI pass with nothing to say why (the click's flash is not in that log). On
+  # failure only, the message also carries observations taken after the failed
+  # action (see Platform.ChatSummonDiagnostics) and whether the picker lists
+  # the agent when read (a successful pick may already have closed it). A
+  # passing run does no extra work.
+  defp one_picked_row!(room, actor, agent, view) do
+    assert [row] = rows(room, agent)
+    row
+  rescue
+    error in ExUnit.AssertionError ->
+      diagnostics =
+        Platform.ChatSummonDiagnostics.describe(room, actor, agent, view) <>
+          "\n  picker lists the agent (read now): #{inspect(picker_lists?(view, agent))}"
+
+      reraise %{error | message: error.message <> "\n\n" <> diagnostics}, __STACKTRACE__
+  end
+
+  defp picker_lists?(view, agent) do
+    has_element?(view, option(agent))
+  rescue
+    error -> {:unavailable, error.__struct__}
+  catch
+    kind, _reason -> {:unavailable, kind}
+  end
+
   test "empty room opens the tagging list and one pick joins without navigation or a message", %{
     conn: conn
   } do
@@ -196,6 +222,52 @@ defmodule PlatformWeb.ChatLiveRoomAgentPickerTest do
     assert length(rows(room, eligible)) == 1
   end
 
+  # The failure-only diagnostics must never replace the failure they describe:
+  # with the view's process gone, its read exits, and the original assertion
+  # (message, observations, right-hand value and the wrapper's stack frame) must
+  # still be what the test raises.
+  test "a dead view during the diagnostic read cannot replace the original assertion failure",
+       %{conn: conn} do
+    actor = user!()
+    room = room!(actor)
+    agent = agent!("Never picked")
+    view = mount_room(conn, actor, room)
+
+    dead = spawn(fn -> :ok end)
+    monitor = Process.monitor(dead)
+    assert_receive {:DOWN, ^monitor, :process, ^dead, _reason}
+    {ref, topic, _proxy} = view.proxy
+    broken_view = %{view | proxy: {ref, topic, dead}}
+
+    result =
+      try do
+        {:returned, one_picked_row!(room, actor, agent, broken_view)}
+      rescue
+        error in ExUnit.AssertionError -> {:raised, error, __STACKTRACE__}
+      end
+
+    assert {:raised, error, stacktrace} = result
+    assert error.message =~ "match (=) failed"
+    assert error.right == []
+    assert Macro.to_string(error.expr) =~ "[row] = rows(room, agent)"
+    assert Macro.to_string(error.left) == "[row]"
+    assert error.message =~ "Observed AFTER the failed assertion"
+    assert error.message =~ "picker lists the agent (read now): {:unavailable, :exit}"
+
+    # The stack still points at the failed assertion itself, not at the re-raise.
+    assert {__MODULE__, :one_picked_row!, 4, location} =
+             Enum.find(stacktrace, &match?({__MODULE__, :one_picked_row!, 4, _}, &1))
+
+    failing_line =
+      location[:file]
+      |> to_string()
+      |> File.read!()
+      |> String.split("\n")
+      |> Enum.at(location[:line] - 1)
+
+    assert failing_line =~ "assert [row] = rows(room, agent)"
+  end
+
   for authority <- [:org_admin, :root_admin] do
     test "#{authority} picks without promotion and rechecks revoked authority", %{conn: conn} do
       actor = user!()
@@ -237,7 +309,7 @@ defmodule PlatformWeb.ChatLiveRoomAgentPickerTest do
       open(view)
       assert has_element?(view, option(agent))
       view |> element(option(agent)) |> render_click()
-      assert [%{history_visible_from: history}] = rows(room, agent)
+      %{history_visible_from: history} = one_picked_row!(room, actor, agent, view)
       assert history != nil
 
       assert Enum.find(Chat.list_participants(room.id), &(&1.participant_id == actor.id)).role ==

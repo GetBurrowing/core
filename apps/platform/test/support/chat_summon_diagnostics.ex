@@ -1,8 +1,8 @@
 defmodule Platform.ChatSummonDiagnostics do
   @moduledoc """
   Failure-only diagnostics for the tests that bring an agent into a channel
-  as a root or org admin (`ChatLiveMembersTest` and `ChatLiveRefusedSummonTest`,
-  the `root_admin` and `org_admin` cases).
+  as a root or org admin (`ChatLiveMembersTest`, `ChatLiveRefusedSummonTest`
+  and `ChatLiveRoomAgentPickerTest`, the `root_admin` and `org_admin` cases).
 
   Those tests have failed on a first CI pass and passed on the serial retry,
   each time with a bare empty participant list and nothing to say why. The cause is not known.
