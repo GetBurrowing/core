@@ -31,8 +31,9 @@ defmodule PlatformWeb.SocialLive do
 
   ## One brand at a time, or All brands
 
-  The header select is the brand switcher. Switching keeps the current tab
-  and goes through ONE `PlatformWeb.SocialScope.load_profile/2`, which is
+  The header select is the brand switcher. Selecting a Studio-enabled brand
+  opens Today; otherwise the current legacy tab is kept where available.
+  Switching goes through ONE `PlatformWeb.SocialScope.load_profile/2`, which is
   where every per-profile stream is (re)loaded with `reset: true`, so
   nothing of the previous profile survives a switch. "All brands" sets the
   `:scope` assign to `:all` (`PlatformWeb.SocialScope`); a per-brand tab
@@ -134,9 +135,19 @@ defmodule PlatformWeb.SocialLive do
     socket = SocialScope.assign_profiles(socket, profiles)
 
     cond do
-      id == "all" and profiles != [] -> {:noreply, SocialScope.select_all(socket)}
-      profile = Enum.find(profiles, &(&1.id == id)) -> {:noreply, open_profile(socket, profile)}
-      true -> {:noreply, socket}
+      id == "all" and profiles != [] ->
+        {:noreply, SocialScope.select_all(socket)}
+
+      profile = Enum.find(profiles, &(&1.id == id)) ->
+        socket = open_profile(socket, profile)
+
+        socket =
+          if profile.studio_enabled, do: SocialScope.select_tab(socket, "today"), else: socket
+
+        {:noreply, socket}
+
+      true ->
+        {:noreply, socket}
     end
   end
 
@@ -209,6 +220,7 @@ defmodule PlatformWeb.SocialLive do
     end)
   end
 
+  defp select_from_query(socket, profiles, nil), do: select_from_query(socket, profiles, %{})
   defp select_from_query(socket, _profiles, _query), do: socket
 
   @impl true
