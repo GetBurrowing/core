@@ -313,6 +313,62 @@ as a design deviation, with one more: the Inbox tab root keeps its
 existing "Back to More", mirrored natively, because that is web behaviour
 on main (a regular iPhone shows it on the Inbox root too).
 
+**The strip's selected tint is the web's ink (stage 5 round 2, 2026-11-21).**
+The paragraph above records the decision to keep today's tint. Review then
+found the Duo strip did not draw the web's ink at all. With web theme
+System, light: the web probe (`.bottom-nav [data-native-ink=selected]`) and
+the regular iPhone bar were both #8b3b04, but the strip drew #ad4b07, the
+asset primary. With web theme Dark and the system light, the probe and the
+iPhone bar became #f47721 and the strip stayed #ad4b07. The cause is that
+the closed Duo's side strip does not read `UITabBar.tintColor`. It draws
+in the tint of the tab bar controller's view, and when that is unset the
+view inherits the app's global accent (`ASSETCATALOG_COMPILER_GLOBAL_ACCENT_COLOR_NAME:
+primary`). `NativeTabBarFactory.paint` now also puts the selected ink on
+the shell's view (`strip:`), from `ControllerTabBarHost.repaint`, which is
+the same adapted path the iPhone bar uses. Everything inside the shell
+inherits that ink, including the native Back. Measured on the closed Duo
+simulator with the fixture's light inks, the dominant selected pixel was
+#ad4b07 before and #8b3b04 after. Pinned by
+`DuoShellTests.testTheStripTakesTheWebsSelectedInkNotTheAssetPrimary`. An
+earlier test fed the ink #ad4b07, the same value as the asset, so it could
+not tell the two apart. It now feeds #8b3b04.
+
+**A content move ends editing first (stage 5 round 2, 2026-11-21).** On
+a physical closed Duo, after a notification deep link and one reply, a
+later composer tap showed the keyboard's accessory bar with no keys until
+the app was relaunched. The one web view is re-parented between tab slots
+on every selection change: a web-driven `selectedTab`, a strip tap, and
+recovery. Measured in `DuoShellTests`: with no guard, UIKit resigns the
+web view's first responder inside the `selectedTab` setter, after the
+selection has already moved and in the middle of the transition. The text
+input session is torn down while its view is being moved.
+
+Two approaches were considered:
+- Keep the web view in one persistent container and move only that
+  container. UIKit owns each tab's view hierarchy and the strip, so a view
+  floated over the tab container has to track the selected page's safe
+  area, the navigation bar and the strip's reserved region by hand.
+- End editing before the move. This was chosen: it is small, and it keeps
+  the stage 1 hosting.
+
+Implementation: `DuoShellController.endEditingBeforeMove` resigns whatever
+in the content is first responder (`endEditing(true)`, and WebKit blurs the
+focused field) while the content is still in its old, on-screen slot. It
+runs from:
+- the `selectedTab` override's `willSet`;
+- `ControllerTabBarHost.tabBarController(_:shouldSelectTab:)`, because the
+  system's tap path does not go through the setter;
+- `placeContent`, as a backstop;
+- `replaceContent`.
+
+No `reloadInputViews` is needed, because nothing is first responder after
+the move. The next tap on a field starts a fresh input session in the new
+slot. A state that does not move the content (the same tab, a badge, a web
+hide) leaves the keyboard alone. Pinned by:
+- `testAWebDrivenMoveEndsEditingBeforeTheContentLeavesItsSlot`;
+- `testATapOnAnotherTabEndsEditingBeforeTheSystemSelects`;
+- `testNoMoveLeavesEditingAlone`.
+
 Measured on the iOS 27.2 Duo simulator, closed (466x678 pt), with the
 tab-bar fixture's Nav buttons: the titleless visible navigation bar takes
 NO horizontal band. XCUITest reports no navigation bar element, the web
