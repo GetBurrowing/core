@@ -107,6 +107,8 @@ defmodule PlatformWeb.SocialVoiceSettings do
       account: account,
       slots: Enum.map(account.posting_slots || [], &%{weekday: &1.weekday, time: &1.time}),
       goal: if(account.weekly_goal, do: Integer.to_string(account.weekly_goal), else: ""),
+      follower_goal:
+        if(account.follower_target, do: Integer.to_string(account.follower_target), else: ""),
       days: [],
       time: "09:00",
       errors: [],
@@ -208,7 +210,8 @@ defmodule PlatformWeb.SocialVoiceSettings do
        %{
          card
          | time: Map.get(slot, "time", card.time),
-           goal: Map.get(slot, "weekly_goal", card.goal)
+           goal: Map.get(slot, "weekly_goal", card.goal),
+           follower_goal: Map.get(slot, "follower_target", card.follower_goal)
        }
      end)}
   end
@@ -269,14 +272,19 @@ defmodule PlatformWeb.SocialVoiceSettings do
     with {:ok, profile, _user_id} <- authorize(socket),
          %{} = account <- profile_account(profile, id),
          %{} = card <- Enum.find(socket.assigns.slot_cards, &(&1.account.id == account.id)) do
-      attrs = %{posting_slots: card.slots, weekly_goal: blank_to_nil(card.goal)}
+      attrs = %{
+        posting_slots: card.slots,
+        weekly_goal: blank_to_nil(card.goal),
+        follower_target: blank_to_nil(card.follower_goal)
+      }
 
       case Social.update_account_schedule(profile.org_id, account, attrs) do
         {:ok, account} ->
           {:noreply,
            socket
            |> update_card(id, fn _ -> slot_card(account, profile) end)
-           |> notice("Slots saved for #{account_label(account)}.")}
+           |> PlatformWeb.SocialAccountTicker.load()
+           |> notice("Slots and goals saved for #{account_label(account)}.")}
 
         {:error, %Ecto.Changeset{} = changeset} ->
           {:noreply, update_card(socket, id, &%{&1 | errors: changeset_errors(changeset)})}
@@ -742,6 +750,19 @@ defmodule PlatformWeb.SocialVoiceSettings do
               data-role="social-slot-goal"
             />
           </label>
+          <label :if={@card.account.platform != "linkedin"} class="flex flex-col gap-1 text-sm">
+            <span class="font-medium">Follower target</span>
+            <input
+              type="number"
+              name="slot[follower_target]"
+              value={@card.follower_goal}
+              min="1"
+              max="2147483647"
+              placeholder="No target"
+              class="input w-32"
+              data-role="social-follower-target"
+            />
+          </label>
         </div>
         <ul
           :if={@card.errors != []}
@@ -751,7 +772,7 @@ defmodule PlatformWeb.SocialVoiceSettings do
           <li :for={msg <- @card.errors}>{msg}</li>
         </ul>
         <button type="submit" class="btn btn-neutral btn-sm" data-role="social-slot-save">
-          Save slots
+          Save slots and goals
         </button>
       </form>
     </div>
@@ -794,6 +815,9 @@ defmodule PlatformWeb.SocialVoiceSettings do
           {Enum.map_join(card.slots, ", ", &slot_label/1)}
         </dd>
         <dd :if={card.goal != ""}>{card.goal} posts per week</dd>
+        <dd :if={card.account.platform != "linkedin" and card.follower_goal != ""}>
+          Follower target: {card.follower_goal}
+        </dd>
       </div>
     </dl>
     """

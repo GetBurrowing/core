@@ -84,6 +84,7 @@ defmodule PlatformWeb.SocialScope do
     socket
     |> assign(:can_edit?, profile != nil and match?({:ok, _, _}, SocialHelpers.authorize(socket)))
     |> then(&SocialTabs.reduce(&1.assigns.tabs, &1, fn mod, acc -> mod.load(acc) end))
+    |> PlatformWeb.SocialAccountTicker.load()
   end
 
   @doc """
@@ -102,6 +103,7 @@ defmodule PlatformWeb.SocialScope do
       tabs = Enum.filter(socket.assigns.tabs, & &1.module.all_brands?())
       SocialTabs.reduce(tabs, socket, fn mod, acc -> mod.load(acc) end)
     end)
+    |> PlatformWeb.SocialAccountTicker.load()
   end
 
   @doc "Re-evaluate the Studio tab from freshly visible profiles without switching scope."
@@ -156,8 +158,14 @@ defmodule PlatformWeb.SocialScope do
   @doc "Makes `key` the current tab (an enabled key only) and runs its `on_select/1`."
   def select_tab(socket, key) do
     case SocialTabs.get(socket.assigns.tabs, key) do
-      nil -> socket
-      tab -> socket |> assign(:tab, key) |> tab.module.on_select()
+      nil ->
+        socket
+
+      tab ->
+        socket
+        |> assign(:tab, key)
+        |> tab.module.on_select()
+        |> PlatformWeb.SocialAccountTicker.load()
     end
   end
 end

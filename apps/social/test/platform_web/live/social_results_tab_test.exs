@@ -62,6 +62,35 @@ defmodule PlatformWeb.SocialResultsTabTest do
 
   defp period(v, p), do: render_click(v, "results_period", %{"period" => to_string(p)})
 
+  test "an account results link selects its seven-day cohort without another account's versions",
+       %{conn: conn, w: w} do
+    i = idea(w, "Shared idea")
+    post(w, w.x, i, %{"views" => 50})
+    post(w, w.li, i, %{"views" => 700})
+    post(w, w.x, idea(w, "Too old"), %{"views" => 999}, 20)
+    conn = Plug.Test.init_test_session(conn, current_user_id: w.approver.id)
+
+    {:ok, parent, _} =
+      live(conn, "/m/social?tab=results&profile=#{w.profile.id}&account=#{w.x.id}&period=7")
+
+    v = find_live_child(parent, "ext-page-social")
+    assert has_element?(v, "[data-role=results-account-scope]", w.x.handle)
+    assert has_element?(v, "[data-role=results-account][data-account-id='#{w.x.id}']")
+    refute has_element?(v, "[data-role=results-account][data-account-id='#{w.li.id}']")
+    refute has_element?(v, "[data-role=results-ideas]", "Too old")
+    render_click(v, "results_expand", %{"key" => "idea:#{i.id}"})
+
+    assert length(
+             v
+             |> render()
+             |> Floki.parse_document!()
+             |> Floki.find("[data-role=result-version]")
+           ) == 1
+
+    assert has_element?(v, "[data-role=result-version] [data-metric=views]", "50")
+    refute has_element?(v, "[data-role=result-version]", "700")
+  end
+
   test "expands versions, measured zero, unknown data, no-rate and labeled weekly ring", %{
     conn: c,
     w: w

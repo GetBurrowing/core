@@ -9,12 +9,16 @@ defmodule PlatformWeb.SocialResultsTab do
   @impl true
   def all_brands?, do: true
   @impl true
-  def events, do: ~w(results_period results_expand results_recycle)
+  def events,
+    do: ~w(results_period results_expand results_recycle ticker_results results_all_accounts)
+
   @impl true
   def init(socket),
     do:
       assign(socket,
         results_period: 30,
+        results_account_id: nil,
+        results_scope_key: nil,
         results_rows: [],
         results_accounts: [],
         results_candidates: [],
@@ -26,7 +30,14 @@ defmodule PlatformWeb.SocialResultsTab do
   @impl true
   def load(socket) do
     profiles = profiles(socket)
+    scope_key = scope_key(socket)
+
+    account_id =
+      if socket.assigns.results_scope_key == scope_key, do: socket.assigns.results_account_id
+
+    socket = assign(socket, results_account_id: account_id, results_scope_key: scope_key)
     accounts = Social.list_accounts_for_profiles(fresh_user(socket), Enum.map(profiles, & &1.id))
+    accounts = if account_id, do: Enum.filter(accounts, &(&1.id == account_id)), else: accounts
 
     account_results =
       Enum.map(accounts, fn a ->
@@ -39,7 +50,8 @@ defmodule PlatformWeb.SocialResultsTab do
         }
       end)
 
-    rows = Results.by_idea(profiles, socket.assigns.results_period)
+    result_options = if account_id, do: [account_ids: Enum.map(accounts, & &1.id)], else: []
+    rows = Results.by_idea(profiles, socket.assigns.results_period, result_options)
 
     candidates =
       Enum.map(Results.recycle_candidates(profiles), fn c ->
@@ -55,6 +67,12 @@ defmodule PlatformWeb.SocialResultsTab do
         MapSet.intersection(socket.assigns.results_expanded, MapSet.new(rows, & &1.key))
     )
   end
+
+  defp scope_key(%{assigns: %{scope: {:profile, %{id: id}}}}), do: id
+  defp scope_key(_), do: :all
+
+  @impl true
+  def on_select(socket), do: load(socket)
 
   defp profiles(socket) do
     visible = if human?(fresh_user(socket)), do: SocialScope.visible_profiles(socket), else: []
@@ -75,6 +93,32 @@ defmodule PlatformWeb.SocialResultsTab do
         false
     end
   end
+
+  @impl true
+  def handle_event("ticker_results", %{"account_id" => id}, socket) do
+    visible = SocialScope.visible_profiles(socket)
+    accounts = Social.list_accounts_for_profiles(fresh_user(socket), Enum.map(visible, & &1.id))
+
+    with %{profile_id: profile_id} <- Enum.find(accounts, &(&1.id == id)),
+         %{} = profile <- Enum.find(visible, &(&1.id == profile_id)) do
+      socket =
+        if scope_key(socket) == profile_id,
+          do: socket,
+          else: SocialScope.load_profile(socket, profile)
+
+      socket =
+        socket
+        |> assign(results_account_id: id, results_scope_key: profile_id, results_period: 7)
+        |> SocialScope.select_tab("results")
+
+      {:noreply, socket}
+    else
+      _ -> {:noreply, socket |> load() |> notice("That account is not available.")}
+    end
+  end
+
+  def handle_event("results_all_accounts", _, socket),
+    do: {:noreply, socket |> assign(:results_account_id, nil) |> load()}
 
   @impl true
   def handle_event("results_period", %{"period" => p}, s) when p in ["7", "30", "90"],
@@ -118,13 +162,29 @@ defmodule PlatformWeb.SocialResultsTab do
 
   def handle_event(_, _, s), do: {:noreply, load(s)}
   @impl true
-  def from_query(socket, query),
-    do:
+  def from_query(socket, query) do
+    socket =
       assign(
         socket,
         :weekly_note_query,
         Map.take(query, ~w(profile profile_id weekly_note_week weekly_note_target))
       )
+
+    if Map.has_key?(query, "account") do
+      period =
+        if query["period"] in ["7", "30", "90"], do: String.to_integer(query["period"]), else: 7
+
+      socket
+      |> assign(
+        results_account_id: query["account"],
+        results_scope_key: scope_key(socket),
+        results_period: period
+      )
+      |> load()
+    else
+      socket
+    end
+  end
 
   @impl true
   def pane(assigns) do
@@ -140,6 +200,19 @@ defmodule PlatformWeb.SocialResultsTab do
         scope={@scope}
         query={@weekly_note_query}
       />
+      <div
+        :if={@results_account_id}
+        data-role="results-account-scope"
+        class="flex flex-wrap items-center gap-2"
+      >
+        <span :for={i <- @results_accounts}>
+          {platform_label(i.account.platform)} {i.account.handle}
+        </span>
+        <span :if={@results_accounts == []}>That account is not available.</span>
+        <button type="button" phx-click="results_all_accounts" class="btn btn-ghost btn-sm">
+          All accounts in this brand
+        </button>
+      </div>
       <div class="flex flex-wrap items-center justify-between gap-4">
         <div class="join" role="group" aria-label="Results period">
           <button
@@ -161,6 +234,7 @@ defmodule PlatformWeb.SocialResultsTab do
             :for={i <- @results_accounts}
             class="flex items-center gap-2"
             data-role="results-account"
+            data-account-id={i.account.id}
           >
             <div class="relative flex size-10 shrink-0 items-center justify-center">
               <svg

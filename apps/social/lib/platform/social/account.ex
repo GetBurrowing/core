@@ -49,6 +49,7 @@ defmodule Platform.Social.Account do
     # posts-per-week goal. Written by `schedule_changeset/2` only.
     embeds_many(:posting_slots, Platform.Social.PostingSlot, on_replace: :delete)
     field(:weekly_goal, :integer)
+    field(:follower_target, :integer)
     # Social authoring 9/11: the disconnect alert's once-only marker. Written
     # by `Platform.Social.Health` only; never cast.
     field(:disconnect_alerted_at, :utc_datetime_usec)
@@ -127,16 +128,27 @@ defmodule Platform.Social.Account do
   @doc """
   Social authoring 4/11: the account's `posting_slots` (each
   `%{weekday, time}`, de-duplicated and sorted, at most #{@max_slots}) and
-  `weekly_goal` (nil or 1..100). Only these two fields; written through
+  `weekly_goal` (nil or 1..100) and optional positive `follower_target`.
+  Written through
   `Platform.Social.update_account_schedule/3`.
   """
   @spec schedule_changeset(t(), map()) :: Ecto.Changeset.t()
   def schedule_changeset(%__MODULE__{} = account, attrs) do
     account
-    |> cast(attrs, [:weekly_goal])
+    |> cast(attrs, [:weekly_goal, :follower_target])
     |> cast_embed(:posting_slots, with: &Platform.Social.PostingSlot.changeset/2)
     |> validate_number(:weekly_goal, greater_than_or_equal_to: 1, less_than_or_equal_to: 100)
     |> check_constraint(:weekly_goal, name: :social_accounts_weekly_goal_check)
+    |> validate_number(:follower_target,
+      greater_than_or_equal_to: 1,
+      less_than_or_equal_to: 2_147_483_647
+    )
+    |> check_constraint(:follower_target, name: :social_accounts_follower_target_check)
+    |> validate_change(:follower_target, fn :follower_target, _ ->
+      if account.platform == "linkedin",
+        do: [follower_target: "is not available for LinkedIn"],
+        else: []
+    end)
     |> dedupe_slots()
     |> validate_length(:posting_slots, max: @max_slots, message: "at most %{count} slots")
   end
