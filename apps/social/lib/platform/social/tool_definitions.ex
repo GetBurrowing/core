@@ -30,7 +30,8 @@ defmodule Platform.Social.ToolDefinitions do
 
   @human_approves "A human approves this in Burrow and the platform publishes it; agents cannot approve or publish."
 
-  @names ~w(social_profile_list social_profile_get social_draft_create social_draft_update
+  @names ~w(social_profile_list social_profile_get social_draft_create social_studio_draft_create
+            social_draft_update
             social_post_list social_results_get social_clip_propose social_clip_submit social_clip_render
             social_clip_list social_task_request social_clip_job_list social_clip_job_claim
             social_clip_job_source social_clip_job_progress social_clip_job_complete social_clip_job_fail
@@ -196,6 +197,49 @@ defmodule Platform.Social.ToolDefinitions do
           "status approved, scheduled, published or failed is refused (status_not_allowed), as is any approval, publisher or rejection field (field_not_allowed). Every account must belong to the profile and not be archived. Refs must exist in the profile's org. An idea_id outside your org is not_found; another profile's idea is idea_profile_mismatch; an archived idea is idea_archived. A body containing one of the profile's voice.banned phrases (case-insensitive) is refused with banned_phrase, naming it.",
         when_to_use:
           "When you have post copy ready for a human to review. With no link_url, home_url is appended."
+      },
+      %{
+        name: "social_studio_draft_create",
+        description:
+          "Draft one post in Studio, on one account of a profile that has the new Studio flow on. It is created as a draft and nothing else: it is not submitted, approved, planned or sent, and a person submits it from Today, where it shows as agent-drafted. " <>
+            @human_approves,
+        parameters: %{
+          account_id: %{
+            type: "string",
+            required: true,
+            description:
+              "The account id to draft on (social_profile_get lists them). The profile comes from the account."
+          },
+          request_id: %{
+            type: "string",
+            required: true,
+            description:
+              "Your own id for this draft, 1 to 200 characters, made once and repeated on every retry. It is scoped to you and the account: the same request_id with the same content on the same account returns the draft already made; with different content it is refused (request_id_conflict); on another account of yours it is a separate draft."
+          },
+          body: %{type: "string", required: true, description: "The post text."},
+          media_file_ids: %{
+            type: "array",
+            required: false,
+            description:
+              "Ids of finished Burrow Files uploads in the profile's org and project, at most 20. References only: no bytes pass through this tool.",
+            schema: %{type: "array", items: %{type: "string"}}
+          },
+          link_url: %{
+            type: "string",
+            required: false,
+            description: "The link to post, as is; none is added."
+          },
+          status: %{
+            type: "string",
+            required: false,
+            description: "Omit it, or pass draft. Any other value is refused, not changed."
+          }
+        },
+        returns: "%{post: #{@post_row}, replayed: boolean}",
+        limitations:
+          "Draft only: any status but draft is refused (status_not_allowed), as is any other field (field_not_allowed), including scheduled_at. It cannot submit, approve, plan, schedule or send, and cannot edit or withdraw the draft (social_draft_update edits it while it is a draft). request_id is required (request_id_required). not_found for an account outside your org, exactly as for a missing id; studio_disabled when the profile does not have the new flow on; studio_needs_project without a live project; account_archived for an archived account. A media file that is missing, deleted, or in another project or org is file_not_in_project (all alike); one whose upload is unfinished is file_not_ready. Linking a draft to an idea is not supported in this version: any idea_id is refused (idea_not_supported), never ignored. A body containing one of the profile's voice.banned phrases is refused with banned_phrase, naming it.",
+        when_to_use:
+          "When the profile uses the new Studio flow and you have post copy ready for a person to submit from Today. For a profile on the old flow use social_draft_create."
       },
       %{
         name: "social_draft_update",

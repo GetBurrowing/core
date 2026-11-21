@@ -119,6 +119,7 @@ defmodule Platform.Social.Studio do
 
   alias Platform.Social.{
     Account,
+    AgentDraftRequest,
     Approvals,
     Clip,
     ClipRender,
@@ -263,6 +264,308 @@ defmodule Platform.Social.Studio do
         end
       end)
     end
+  end
+
+  # ── Agent drafts ─────────────────────────────────────────────────────
+
+  @agent_draft_keys ~w(request_id body media_file_ids link_url status)
+  @max_request_id 200
+  @max_agent_media 20
+
+  @doc """
+  The agent tool `social_studio_draft_create`: creates a Studio post, version 1,
+  status `draft`, on `account_id`, and nothing else. No submit, approval, plan,
+  timer or vendor call; a person submits it from Today. `attrs` (string or atom
+  keys): `request_id` (required), `body` (required), `media_file_ids`,
+  `link_url`, and `status` (only `"draft"`; any other value is
+  `{:error, :status_not_allowed}`, never changed). An `idea_id`, with any
+  value, is `{:error, :idea_not_supported}`: v1 does not link drafts to ideas,
+  and the key is refused, never ignored. Any other key is
+  `{:error, :field_not_allowed, keys}`.
+
+  `scope` is the agent's home-org scope, resolved by the caller from the agent
+  (`Platform.Social.Tools`), never from a client argument: the one access rule
+  the legacy agent draft path (`Platform.Social.AgentDrafts`) applies, org
+  visibility through `Social.visible_orgs/1`. On top: Studio on for the profile
+  and a live project (`require_studio_project/1`). The human approver check is
+  NOT used. An account or profile outside the scope reads `:not_found`.
+
+  Lock order is `create_post/4`'s: profile row `FOR SHARE`, then account row
+  `FOR SHARE`. Every
+  decision (Studio on, account live, the agent and its home org, project) is
+  made AGAIN on the locked rows, and again on a retry, before the request is
+  looked up, so a replay never reveals a draft to a caller that lost access.
+
+  Retry safety: `request_id` is unique per (agent, account): Studio's unit is
+  one post on one account. The same id with the same content returns the one
+  existing post (`{:ok, post, :replayed}`); the same id with different content
+  (text, link or media) is `{:error, :request_id_conflict}` and touches
+  nothing; the same id on another account the agent may use is a separate
+  draft; on an account it may not use it is refused like any other call
+  (`:not_found`), before any request row is read, so nothing of the first
+  draft shows. Concurrent repeats are decided by the unique index on
+  `social_agent_draft_requests`: the loser's transaction rolls back whole.
+
+  Media is by reference: each `media_file_ids` entry must be a finalized,
+  live Burrow Files row in the profile's org and project
+  (`:file_not_in_project`, `:file_not_ready`). Banned phrases of the profile's
+  voice refuse the draft (`{:error, :banned_phrase, phrase}`). The post's
+  `created` event has actor `{:agent, agent_id}`; that event is what Today
+  reads to mark it agent-drafted.
+  """
+  @spec create_agent_draft(Social.scope(), term(), term(), map()) ::
+          {:ok, Post.t(), :created | :replayed} | {:error, term()} | {:error, atom(), term()}
+  def create_agent_draft(scope, account_id, agent_id, attrs) when is_map(attrs) do
+    attrs = Map.new(attrs, fn {k, v} -> {to_string(k), v} end)
+
+    with :ok <- refuse_idea(attrs),
+         :ok <- refuse_agent_keys(attrs),
+         :ok <- require_draft_status(attrs),
+         {:ok, request_id} <- request_id(attrs),
+         {:ok, account_id} <- cast_uuid(account_id),
+         {:ok, agent_id} <- cast_uuid(agent_id),
+         {:ok, media_ids} <- media_ids(attrs),
+         %Account{} = account <- Social.get_account(scope, account_id) || {:error, :not_found},
+         %Profile{} = profile <-
+           Social.get_profile(scope, account.profile_id) || {:error, :not_found},
+         :ok <- require_enabled(profile),
+         :ok <- require_live(account) do
+      draft = %{
+        request_id: request_id,
+        body: attrs["body"],
+        media_ids: media_ids,
+        link_url: blank_to_nil(attrs["link_url"]),
+        agent_id: agent_id,
+        account_id: account.id
+      }
+
+      agent_draft_attempt(scope, profile, account, draft)
+    end
+  end
+
+  defp agent_draft_attempt(scope, profile, account, draft) do
+    hash = draft_hash(draft)
+
+    result =
+      Repo.transaction(fn ->
+        # Lock order, as `create_post/4`: profile row, then account row.
+        locked = Social.lock_profile(scope, profile, :share) || Repo.rollback(:not_found)
+
+        locked_account =
+          Social.lock_account(locked, account.id, :share) || Repo.rollback(:not_found)
+
+        # Decided AGAIN on the locked rows, in the check order; the checks
+        # before the transaction were early refusals only.
+        with {:error, reason} <- require_enabled(locked), do: Repo.rollback(reason)
+        with {:error, reason} <- require_live(locked_account), do: Repo.rollback(reason)
+
+        with {:error, reason} <- agent_authority(scope, locked, draft.agent_id),
+             do: Repo.rollback(reason)
+
+        with {:error, reason} <- require_studio_project(locked), do: Repo.rollback(reason)
+
+        # Only now is the request looked up: a replay is decided on the same
+        # authority as a first call.
+        case existing_request(draft.agent_id, locked_account.id, draft.request_id) do
+          nil -> insert_agent_draft!(locked, draft, hash)
+          request -> replay_or_conflict!(request, hash)
+        end
+      end)
+
+    case result do
+      {:ok, {:created, post}} -> {:ok, post, :created}
+      {:ok, {:replayed, post}} -> {:ok, post, :replayed}
+      {:error, {:banned_phrase, phrase}} -> {:error, :banned_phrase, phrase}
+      {:error, :lost_race} -> lost_race(draft, hash)
+      {:error, reason} -> {:error, reason}
+    end
+  end
+
+  # The agent's authority is the legacy draft path's: the org scope the caller
+  # derived from the agent. It is read again under the lock: the agent must
+  # still exist and its home org must still see the profile's org.
+  defp agent_authority(scope, %Profile{org_id: org_id}, agent_id) do
+    with %Platform.Agents.Agent{} = agent <- Repo.get(Platform.Agents.Agent, agent_id),
+         true <- Social.org_visible?(scope, org_id),
+         true <- Social.org_visible?(Platform.Experiments.Tools.home_org(agent), org_id) do
+      :ok
+    else
+      _ -> {:error, :not_found}
+    end
+  end
+
+  defp existing_request(agent_id, account_id, request_id) do
+    Repo.one(
+      from(r in AgentDraftRequest,
+        where:
+          r.agent_id == ^agent_id and r.account_id == ^account_id and
+            r.request_id == ^request_id
+      )
+    )
+  end
+
+  defp replay_or_conflict!(%AgentDraftRequest{content_hash: hash, post_id: post_id}, hash) do
+    case Repo.get(Post, post_id) do
+      %Post{} = post -> {:replayed, post}
+      nil -> Repo.rollback(:not_found)
+    end
+  end
+
+  defp replay_or_conflict!(%AgentDraftRequest{}, _hash), do: Repo.rollback(:request_id_conflict)
+
+  defp insert_agent_draft!(%Profile{} = profile, draft, hash) do
+    changeset =
+      %Post{account_id: draft.account_id, flow: "studio"}
+      |> Post.studio_create_changeset(%{
+        "body" => draft.body,
+        "media_file_ids" => draft.media_ids,
+        "link_url" => draft.link_url,
+        "status" => "draft"
+      })
+
+    unless changeset.valid?, do: Repo.rollback(changeset)
+
+    with phrase when is_binary(phrase) <-
+           Platform.Social.Voice.banned_phrase(
+             Ecto.Changeset.get_field(changeset, :body),
+             profile
+           ),
+         do: Repo.rollback({:banned_phrase, phrase})
+
+    with {:error, reason} <- check_agent_media(draft.media_ids, profile),
+         do: Repo.rollback(reason)
+
+    post = Repo.insert!(changeset)
+    PostEvents.record!(post, "created", {:agent, draft.agent_id})
+
+    request =
+      Repo.insert!(
+        %AgentDraftRequest{
+          agent_id: draft.agent_id,
+          account_id: draft.account_id,
+          post_id: post.id,
+          request_id: draft.request_id,
+          content_hash: hash
+        },
+        # The unique index on (agent, account, request id) decides a race: the
+        # second insert waits for the first to commit, then does nothing.
+        on_conflict: :nothing
+      )
+
+    if own_request?(request, draft),
+      do: {:created, post},
+      else: Repo.rollback(:lost_race)
+  end
+
+  defp own_request?(%AgentDraftRequest{id: id}, draft) do
+    match?(
+      %AgentDraftRequest{id: ^id},
+      existing_request(draft.agent_id, draft.account_id, draft.request_id)
+    )
+  end
+
+  # Another connection committed the same request id first; this transaction
+  # rolled back with nothing written. Answer from the winner's row.
+  defp lost_race(draft, hash) do
+    with %AgentDraftRequest{content_hash: ^hash, post_id: post_id} <-
+           existing_request(draft.agent_id, draft.account_id, draft.request_id),
+         %Post{} = post <- Repo.get(Post, post_id) do
+      {:ok, post, :replayed}
+    else
+      %AgentDraftRequest{} -> {:error, :request_id_conflict}
+      _ -> {:error, :not_found}
+    end
+  end
+
+  defp check_agent_media([], _profile), do: :ok
+
+  defp check_agent_media(ids, %Profile{} = profile) do
+    Enum.find_value(ids, :ok, fn id ->
+      case Platform.Files.get_file(id) do
+        %{deleted_at: nil, project_id: project_id} = file
+        when is_binary(project_id) ->
+          cond do
+            project_id != profile.project_id or
+                not Platform.Social.OrgFiles.in_org?(file, profile.org_id) ->
+              {:error, :file_not_in_project}
+
+            not Platform.Files.finalized_upload?(file) ->
+              {:error, :file_not_ready}
+
+            true ->
+              nil
+          end
+
+        _ ->
+          {:error, :file_not_in_project}
+      end
+    end)
+  end
+
+  defp refuse_idea(attrs),
+    do: if(Map.has_key?(attrs, "idea_id"), do: {:error, :idea_not_supported}, else: :ok)
+
+  defp refuse_agent_keys(attrs) do
+    case Map.keys(attrs) -- @agent_draft_keys do
+      [] -> :ok
+      keys -> {:error, :field_not_allowed, Enum.sort(keys)}
+    end
+  end
+
+  defp require_draft_status(%{"status" => status}) when status != nil and status != "draft",
+    do: {:error, :status_not_allowed}
+
+  defp require_draft_status(_attrs), do: :ok
+
+  defp request_id(%{"request_id" => id}) when is_binary(id) do
+    if String.trim(id) != "" and String.length(id) <= @max_request_id,
+      do: {:ok, id},
+      else: {:error, :request_id_required}
+  end
+
+  defp request_id(_attrs), do: {:error, :request_id_required}
+
+  defp cast_uuid(id) when is_binary(id) do
+    with true <- Platform.UUID.valid?(id),
+         {:ok, uuid} <- Ecto.UUID.cast(id) do
+      {:ok, uuid}
+    else
+      _ -> {:error, :not_found}
+    end
+  end
+
+  defp cast_uuid(_id), do: {:error, :not_found}
+
+  defp media_ids(%{"media_file_ids" => ids})
+       when is_list(ids) and length(ids) <= @max_agent_media do
+    Enum.reduce_while(ids, {:ok, []}, fn id, {:ok, acc} ->
+      case cast_uuid(id) do
+        {:ok, uuid} -> {:cont, {:ok, [uuid | acc]}}
+        _ -> {:halt, {:error, :file_not_in_project}}
+      end
+    end)
+    |> case do
+      {:ok, acc} -> {:ok, Enum.reverse(acc)}
+      error -> error
+    end
+  end
+
+  defp media_ids(%{"media_file_ids" => nil}), do: {:ok, []}
+  defp media_ids(%{"media_file_ids" => _}), do: {:error, :too_many_files}
+  defp media_ids(_attrs), do: {:ok, []}
+
+  defp blank_to_nil(value) when is_binary(value),
+    do: if(String.trim(value) == "", do: nil, else: value)
+
+  defp blank_to_nil(value), do: value
+
+  # What "the same request" means: its content. The destination account and
+  # the request id are the key, never part of the hash.
+  defp draft_hash(draft) do
+    [draft.body, draft.media_ids, draft.link_url]
+    |> Jason.encode!()
+    |> then(&:crypto.hash(:sha256, &1))
+    |> Base.encode16(case: :lower)
   end
 
   @doc "Reads one Studio post in the caller's org (check order 1 to 3)."
