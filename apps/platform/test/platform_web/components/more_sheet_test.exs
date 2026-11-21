@@ -719,10 +719,16 @@ end
 
 defmodule PlatformWeb.Components.MoreSheetEqualityTest do
   @moduledoc """
-  The More sheet renders byte-for-byte what it did before its body became
+  The More sheet renders what it did before its body became
   `more_entries/1` (task 01a1fc7f stage 2), for a spread of assigns: closed
   and open, root and member, Mail on and off, an extension row, a current
   row, Settings current, a viewer record and the gaming rows.
+
+  Equal after one normalisation only: whitespace BETWEEN tags is dropped
+  and runs of whitespace become one space. The rows moved one component
+  down, so HEEx's source indentation, which it keeps as whitespace text
+  between the row tags, is two spaces shallower. Every tag, attribute,
+  value and text is compared as is.
 
   async: false — flips `:mail_enabled` and `:extensions`.
   """
@@ -747,8 +753,15 @@ defmodule PlatformWeb.Components.MoreSheetEqualityTest do
   end
 
   defp both(attrs) do
-    {render_component(&MoreSheet.more_sheet/1, attrs),
-     render_component(&Legacy.more_sheet/1, attrs)}
+    {normalise(render_component(&MoreSheet.more_sheet/1, attrs)),
+     normalise(render_component(&Legacy.more_sheet/1, attrs))}
+  end
+
+  defp normalise(html) do
+    html
+    |> String.replace(~r/>\s+</, "><")
+    |> String.replace(~r/\s+/, " ")
+    |> String.trim()
   end
 
   @user %{id: "0190a0b0-0000-7000-8000-000000000001", name: "Pat Example", avatar_url: nil}
