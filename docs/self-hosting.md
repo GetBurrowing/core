@@ -94,6 +94,7 @@ ssh ubuntu@burrow.example.com 'sudo sh -s' <<'EOF'
 set -e
 umask 077
 mkdir -p /root/burrow-owner && cd /root/burrow-owner
+trap 'rm -f api-key oidc-secret' EXIT
 sed -n 's/^STATIC_API_KEY=//p' /opt/burrow/secrets.env > api-key
 sed -n 's/^OIDC_CLIENT_SECRET=//p' /opt/burrow/secrets.env > oidc-secret
 PYTHONPATH=/root/burrow-installer python3 -m burrow_install bootstrap-admin \
@@ -104,8 +105,9 @@ EOF
 ```
 
 It prints one JSON line containing `"ok": true`, `"admin": "created"` and
-`"oidc_client": "created"`. It never prints the key or the link. Some providers log you in as
-`root` rather than `ubuntu`; use that user name in both commands.
+`"oidc_client": "created"`. It never prints the key or the link. It deletes its copies of the
+two keys when it exits, even on failure, so only `sign-in-link` is left in `/root/burrow-owner`.
+Some providers log you in as `root` rather than `ubuntu`; use that user name in both commands.
 
 Read the one-time sign-in link and open it in your browser within 30 minutes:
 
@@ -147,7 +149,7 @@ python3 -m burrow_install render $wd/try.install.toml --out $wd/render
 
 # Create the VM with $wd/render/user-data as its cloud-init user data.
 deployment/installer/proof/vm-up.sh --name $id --workdir $wd --render $wd/render \
-  --https-port $port --ssh-port $ssh_port
+  --https-port $port --ssh-port $ssh_port --memory 4G
 guest() { deployment/installer/proof/vm-exec.sh --workdir $wd -- "$@"; }
 ```
 
@@ -179,6 +181,7 @@ set -e
 umask 077
 grep -q 'auth.burrow-try.test' /etc/hosts || echo '127.0.0.1 burrow-try.test auth.burrow-try.test' >> /etc/hosts
 mkdir -p /root/burrow-owner && cd /root/burrow-owner
+trap 'rm -f api-key oidc-secret' EXIT
 sed -n 's/^STATIC_API_KEY=//p' /opt/burrow/secrets.env > api-key
 sed -n 's/^OIDC_CLIENT_SECRET=//p' /opt/burrow/secrets.env > oidc-secret
 SSL_CERT_FILE=/opt/burrow/tls/root.crt PYTHONPATH=/root/burrow-installer \

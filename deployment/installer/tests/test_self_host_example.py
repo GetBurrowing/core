@@ -17,7 +17,9 @@ import contextlib
 import io
 import os
 import re
+import shlex
 import shutil
+import subprocess
 import sys
 import tempfile
 import unittest
@@ -41,6 +43,7 @@ PUBLIC_REGISTRY = "ghcr.io/getburrowing/"
 # Containers whose image comes from [images] registry (Burrow's own builds).
 BURROW_CONTAINERS = frozenset(registry.IMAGE_CONTAINERS.values())
 
+TRY_PRIMARY = "burrow-try.test"
 FENCE = re.compile(r"^```[a-z]*\n(.*?)^```", re.M | re.S)
 SUBCOMMAND = re.compile(r"\bburrow_install\s+([a-z][a-z0-9-]*)")
 
@@ -187,6 +190,65 @@ class GuideTest(unittest.TestCase):
 
     def test_guide_clones_the_public_repository(self):
         self.assertIn("git clone https://github.com/GetBurrowing/core.git", self.text)
+
+
+def guide_try_sed(text):
+    """The ``sed -e ... -e ...`` expressions of the throwaway-VM manifest edit."""
+    for block in FENCE.findall(text):
+        joined = block.replace("\\\n", " ")
+        for line in joined.splitlines():
+            if line.lstrip().startswith("sed ") and EXAMPLE_REL in line:
+                words = shlex.split(line)
+                return [words[i + 1] for i, word in enumerate(words) if word == "-e"]
+    return []
+
+
+class ThrowawayVmManifestTest(SelfHostRender):
+    """The guide's sed rewrites three exact lines of the example. If one of
+    them is reformatted, sed matches nothing and still exits 0, so the
+    throwaway path would silently render an ACME install. This runs the
+    guide's own expressions through sed and checks the result."""
+
+    @classmethod
+    def setUpClass(cls):
+        with open(GUIDE, encoding="utf-8") as handle:
+            cls.expressions = guide_try_sed(handle.read())
+
+    def apply(self, source_text):
+        argv = ["sed"]
+        for expression in self.expressions:
+            argv += ["-e", expression]
+        result = subprocess.run(argv, input=source_text, capture_output=True, text=True, check=True)
+        path = os.path.join(self.tmp, "try.install.toml")
+        with open(path, "w", encoding="utf-8") as handle:
+            handle.write(result.stdout)
+        return path
+
+    def test_guide_has_the_three_substitutions(self):
+        self.assertEqual(len(self.expressions), 3, self.expressions)
+
+    def test_the_guide_sed_yields_an_internal_tls_test_install(self):
+        with open(EXAMPLE, encoding="utf-8") as handle:
+            path = self.apply(handle.read())
+        raw = load(path)
+        self.assertEqual(raw["domain"]["primary"], TRY_PRIMARY)
+        self.assertEqual(raw["domain"]["tls"], "internal")
+        self.assertNotIn("acme_email", raw["domain"])
+        code, stdout, stderr = run_cli("validate", path)
+        self.assertEqual((code, stdout.strip(), stderr), (0, "ok", ""))
+        self.render(path)
+
+
+class OwnerBlockTest(unittest.TestCase):
+    def test_every_owner_block_removes_its_key_copies(self):
+        with open(GUIDE, encoding="utf-8") as handle:
+            blocks = [b for b in FENCE.findall(handle.read()) if "bootstrap-admin" in b]
+        self.assertEqual(len(blocks), 2)
+        for block in blocks:
+            self.assertIn("> api-key", block)
+            self.assertIn("trap 'rm -f api-key oidc-secret' EXIT", block)
+            # The trap is armed before the first key copy is written.
+            self.assertLess(block.index("trap "), block.index("> api-key"))
 
 
 if __name__ == "__main__":
