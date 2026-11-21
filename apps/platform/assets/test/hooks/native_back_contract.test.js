@@ -2,7 +2,7 @@ import { describe, it, expect } from "vitest"
 import fs from "node:fs"
 import path from "node:path"
 import { fileURLToPath } from "node:url"
-import { EVENT, ATTR, MARKER, DRAWN_ATTR, METHOD, KINDS, stateOf } from "../../js/hooks/native_back.js"
+import { EVENT, ATTR, MARKER, DRAWN_ATTR, DUO_ATTR, DUO_EVENT, METHOD, KINDS, stateOf } from "../../js/hooks/native_back.js"
 
 /**
  * CONTRACT SOURCE SCAN, web side (task 01a1fa7c stage 3). The Duo side
@@ -37,6 +37,8 @@ describe("native back contract", () => {
     expect(EVENT).toBe("burrowNativeBack")
     expect(MARKER).toBe("data-native-back")
     expect(DRAWN_ATTR).toBe("data-native-vertical-bar")
+    expect(DUO_ATTR).toBe("data-native-duo")
+    expect(DUO_EVENT).toBe("burrowNativeDuo")
     expect(KINDS).toEqual(["back", "close"])
     expect(hookJs).toContain("plugin.navBarState(state)")
   })

@@ -141,6 +141,27 @@ enum NativeNavBarDocument {
         let call = verticalBar ? "setAttribute(\"\(attribute)\", \"\")" : "removeAttribute(\"\(attribute)\")"
         return "(function (root) { if (root) root.\(call); })(document.documentElement);"
     }
+
+    /// Set on `<html>` on the Duo only. `navBarState` is registered on every
+    /// iPhone, so the web needs this to know the bridge can draw anything;
+    /// without it native_back.js installs no observer and makes no call.
+    static let duoAttribute = "data-native-duo"
+    /// Dispatched on `window` right after `duoAttribute` is set, for a hook
+    /// that installed before the attribute arrived.
+    static let duoEvent = "burrowNativeDuo"
+
+    /// The script that marks a new document as the Duo's, nil on every other
+    /// device (the attribute is never set there).
+    static func duoScript(isDuo: Bool) -> String? {
+        guard isDuo else { return nil }
+        return """
+            (function (root) {
+              if (!root) return;
+              root.setAttribute("\(duoAttribute)", "");
+              window.dispatchEvent(new Event("\(duoEvent)"));
+            })(document.documentElement);
+            """
+    }
 }
 
 /// One tab's page: the root of that tab's UINavigationController (stage 4

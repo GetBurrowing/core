@@ -196,7 +196,8 @@ Measured widths. These come from the iOS 27.2 Duo simulator profile
 Both inner widths are under 1024. That is the `DESKTOP_QUERY` in
 `native_tab_bar.js`, and the web's own desktop nav breakpoint
 (`.bottom-nav lg:hidden`) is also 1024. So the web desktop rail and sidebar
-never show beside the native tabs, and there is no `data-native-duo` rule.
+never show beside the native tabs, and app.css has no `data-native-duo` rule
+(the attribute exists from stage 5, but only to gate native_back.js).
 
 Inner landscape (951) is above 768. There the shared bottom sheet already
 floats as a centred card, a dialog rather than a bottom sheet. Inner
@@ -256,6 +257,33 @@ every edge change, tab show or hide, and new document the shell sets or
 clears `<html data-native-vertical-bar>` in the same main-thread turn as
 the bar, so app.css hides the web control exactly while the native one
 shows. Never set off the Duo.
+
+**The Duo gate on the web side (task 01a1fa7c stage 5, 2026-11-21).**
+`BurrowNativePlugin` registers `navBarState` on every iPhone, because a
+Capacitor method cannot be Duo-only, so the method alone does not tell
+native_back.js it is on a Duo. On the Duo only (`DuoDevice.current`), each
+new main-frame document gets `<html data-native-duo>` from
+`NativeNavBarDocument.duoScript`, evaluated in `tabBarDocumentStarted`,
+which then dispatches the window event `burrowNativeDuo`.
+`navBarPlugin()` requires the attribute. Without it there is no
+MutationObserver, no `burrowNativeBack` listener and no call; a native
+build that passes every other check adds one `burrowNativeDuo` listener, so
+a hook that installed before the attribute arrived still activates. On the
+Duo, mutations, navigation and width changes only schedule a push, and the
+push runs at most once per animation frame. The script is nil off the Duo
+(`DuoShellTests.testTheDuoMarkerScriptIsProducedOnlyOnTheDuo`).
+
+**Selected-tab tint on the Duo: decision, stage 5.** The strip keeps
+today's selected tint, unchanged from main: `--color-primary` #ad4b07 in
+light, about #ff8b36 in dark. The design canvas's palette rule says the
+strip carries over today's selected tint, and main's selected tab already
+is the brand primary. A neutral selected ink would read the same as the
+near-black unselected glyphs, so selection would vanish, and a Duo-only
+colour would make the Duo disagree with every other iPhone. The fidelity
+clause "not brand orange" rested on a wrong premise about main. Recorded
+as a design deviation, with one more: the Inbox tab root keeps its
+existing "Back to More", mirrored natively, because that is web behaviour
+on main (a regular iPhone shows it on the Inbox root too).
 
 Measured on the iOS 27.2 Duo simulator, closed (466x678 pt), with the
 tab-bar fixture's Nav buttons: the titleless visible navigation bar takes

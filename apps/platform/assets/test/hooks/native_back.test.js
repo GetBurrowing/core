@@ -4,6 +4,8 @@ import installNativeBack, {
   ATTR,
   MARKER,
   DRAWN_ATTR,
+  DUO_ATTR,
+  DUO_EVENT,
   DESKTOP_QUERY,
   NAV_EVENT,
   OBSERVED_ATTRIBUTES,
@@ -44,11 +46,11 @@ function node({ parent = null, display = "block", hidden = false, attrs = {} } =
   }
 }
 
-function env({ native = true, plugin = { navBarState: vi.fn(() => Promise.resolve()) }, attr = true } = {}) {
+function env({ native = true, plugin = { navBarState: vi.fn(() => Promise.resolve()) }, attr = true, duo = true } = {}) {
   const mql = fakeTarget()
-  const flags = { desktop: false, drawn: false }
+  const flags = { desktop: false, drawn: false, duo }
   const root = {
-    hasAttribute: (n) => (n === ATTR ? attr : n === DRAWN_ATTR ? flags.drawn : false),
+    hasAttribute: (n) => (n === ATTR ? attr : n === DRAWN_ATTR ? flags.drawn : n === DUO_ATTR ? flags.duo : false),
   }
   const body = node({ parent: root })
   root.parentElement = null
@@ -62,7 +64,15 @@ function env({ native = true, plugin = { navBarState: vi.fn(() => Promise.resolv
       removeEventListener: (n, fn) => mql.removeEventListener(n, fn),
     }),
     getComputedStyle: (el) => ({ display: el.display || "block", visibility: el.visibility || "visible" }),
+    requestAnimationFrame: (fn) => {
+      queued.push(fn)
+      return queued.length
+    },
+    cancelAnimationFrame: () => queued.splice(0),
   })
+  // Runs one animation frame.
+  const queued = []
+  const frame = () => queued.splice(0).forEach((fn) => fn())
 
   const doc = Object.assign(fakeTarget(), {
     documentElement: root,
@@ -77,7 +87,7 @@ function env({ native = true, plugin = { navBarState: vi.fn(() => Promise.resolv
     controls = list
   }
 
-  return { win, doc, flags, plugin, body, control, setControls, mql }
+  return { win, doc, flags, plugin, body, control, setControls, mql, frame, queued }
 }
 
 let observers
@@ -138,6 +148,80 @@ describe("feature test", () => {
     const burrow = { navBarState: vi.fn() }
     e.win.Capacitor.Plugins.BurrowNative = burrow
     expect(navBarPlugin(e.win, e.doc)).toBe(burrow)
+  })
+})
+
+describe("Duo only (data-native-duo)", () => {
+  it("a regular iPhone (plugin present, no data-native-duo) gets no observer and no call", () => {
+    const e = env({ duo: false })
+    installNativeBack(e.win, e.doc)
+    mutate()
+    e.win.fire(NAV_EVENT, {})
+    e.frame()
+    expect(navBarPlugin(e.win, e.doc)).toBeNull()
+    expect(observers).toHaveLength(0)
+    expect(e.plugin.navBarState).not.toHaveBeenCalled()
+    expect(e.win.listeners[EVENT]).toBeUndefined()
+    expect(e.win.listeners[NAV_EVENT]).toBeUndefined()
+    expect(e.queued).toHaveLength(0)
+  })
+
+  it("on the Duo, several mutations in one frame send exactly one call", () => {
+    const e = env()
+    installNativeBack(e.win, e.doc)
+    expect(calls(e)).toHaveLength(1)
+    e.setControls([e.control("back")])
+    mutate()
+    mutate()
+    mutate()
+    expect(calls(e)).toHaveLength(1)
+    expect(e.queued).toHaveLength(1)
+    e.frame()
+    expect(calls(e)).toHaveLength(2)
+    e.setControls([])
+    mutate()
+    e.win.fire(NAV_EVENT, {})
+    mutate()
+    e.frame()
+    expect(calls(e)).toHaveLength(3)
+    expect(last(e)).toEqual({ back: null })
+  })
+
+  it("activates when native marks the document after the install", () => {
+    const e = env({ duo: false })
+    installNativeBack(e.win, e.doc)
+    expect(observers).toHaveLength(0)
+    e.flags.duo = true
+    e.win.fire(DUO_EVENT, {})
+    e.win.fire(DUO_EVENT, {})
+    expect(observers).toHaveLength(1)
+    expect(calls(e)).toEqual([{ back: null }])
+    expect(e.win.listeners[EVENT]).toHaveLength(1)
+    expect(e.win.listeners[DUO_EVENT]).toEqual([])
+  })
+
+  it("an event without the attribute does not activate", () => {
+    const e = env({ duo: false })
+    installNativeBack(e.win, e.doc)
+    e.win.fire(DUO_EVENT, {})
+    expect(observers).toHaveLength(0)
+    expect(e.plugin.navBarState).not.toHaveBeenCalled()
+  })
+
+  it("off a native build, nothing waits for the Duo event", () => {
+    const e = env({ native: false, duo: false })
+    installNativeBack(e.win, e.doc)
+    expect(e.win.listeners[DUO_EVENT]).toBeUndefined()
+  })
+
+  it("uninstall cancels a pending frame", () => {
+    const e = env()
+    const off = installNativeBack(e.win, e.doc)
+    e.setControls([e.control("back")])
+    mutate()
+    off()
+    e.frame()
+    expect(calls(e)).toHaveLength(1)
   })
 })
 
@@ -214,6 +298,7 @@ describe("updates", () => {
     expect(last(e).back.kind).toBe("back")
     e.setControls([])
     e.win.fire(NAV_EVENT, {})
+    e.frame()
     expect(last(e)).toEqual({ back: null })
   })
 
@@ -221,9 +306,11 @@ describe("updates", () => {
     const e = env()
     installNativeBack(e.win, e.doc)
     mutate()
+    e.frame()
     expect(calls(e)).toHaveLength(1)
     e.setControls([e.control("back")])
     mutate()
+    e.frame()
     expect(calls(e)).toHaveLength(2)
     expect(last(e).back.kind).toBe("back")
   })
@@ -244,6 +331,7 @@ describe("updates", () => {
     installNativeBack(e.win, e.doc)
     e.flags.desktop = true
     e.mql.fire("change", {})
+    e.frame()
     expect(last(e)).toEqual({ back: null })
   })
 

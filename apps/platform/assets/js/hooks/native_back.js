@@ -10,11 +10,23 @@
  * needs no element of its own. It is separate from native_tab_bar.js, whose
  * `HIDE_SELECTOR` another task owns.
  *
- * ACTIVE ONLY IN A NATIVE BUILD THAT HAS THE BRIDGE: `isNativePlatform()`, a
- * plugin (BurrowNative, else SuiteNative) with a `navBarState` method, and
- * `<html data-native-tab-bar>`. A browser, a PWA, an older app build and a
- * build without the method fail that test; the install then adds no listener
- * and makes no call, so every page behaves as on main.
+ * ACTIVE ONLY ON THE iPHONE DUO: `isNativePlatform()`, a plugin
+ * (BurrowNative, else SuiteNative) with a `navBarState` method,
+ * `<html data-native-tab-bar>` AND `<html data-native-duo>`. The plugin
+ * registers `navBarState` on every iPhone (a Capacitor method cannot be
+ * Duo-only), so the method alone does not pick the Duo; native sets
+ * `data-native-duo` only there (task 01a1fa7c stage 5). A browser, a PWA, an
+ * older app build and a regular iPhone fail that test; the install then adds
+ * no observer and makes no call, so every page behaves as on main.
+ *
+ * LATE ATTRIBUTE: native sets `data-native-duo` from its document-start
+ * message, which can land after app.js runs. So a native build that passes
+ * every check but the Duo one adds ONE window listener for `burrowNativeDuo`,
+ * which native dispatches right after setting the attribute, and activates
+ * then. Native never fires it off the Duo, so there it costs nothing.
+ *
+ * COST: DOM mutations (every streamed chat token) only schedule a push; the
+ * push runs once per animation frame however many mutations landed.
  *
  * CONTRACT:
  *   web to native  navBarState({back: {kind: "back" | "close", label} | null})
@@ -47,6 +59,8 @@ export const EVENT = "burrowNativeBack"
 export const ATTR = "data-native-tab-bar"
 export const MARKER = "data-native-back"
 export const DRAWN_ATTR = "data-native-vertical-bar"
+export const DUO_ATTR = "data-native-duo"
+export const DUO_EVENT = "burrowNativeDuo"
 export const METHOD = "navBarState"
 export const KINDS = ["back", "close"]
 export const DEFAULT_LABELS = { back: "Back", close: "Close" }
@@ -54,13 +68,21 @@ export const DESKTOP_QUERY = "(min-width: 1024px)"
 export const NAV_EVENT = "phx:page-loading-stop"
 export const OBSERVED_ATTRIBUTES = [MARKER, DRAWN_ATTR, "class", "hidden", "style", "aria-label"]
 
-// The plugin when native can draw the nav item, else null.
-export function navBarPlugin(win = globalThis.window, doc = globalThis.document) {
+// The bridge plugin in a native build with the tab bar, whatever the device.
+function bridgePlugin(win, doc) {
   const cap = win?.Capacitor
   if (!cap?.isNativePlatform?.()) return null
   const plugin = cap.Plugins?.BurrowNative || cap.Plugins?.SuiteNative
   if (!plugin || typeof plugin[METHOD] !== "function") return null
   if (!doc?.documentElement?.hasAttribute?.(ATTR)) return null
+  return plugin
+}
+
+// The plugin when native can draw the nav item (the Duo), else null.
+export function navBarPlugin(win = globalThis.window, doc = globalThis.document) {
+  const plugin = bridgePlugin(win, doc)
+  if (!plugin) return null
+  if (!doc.documentElement.hasAttribute(DUO_ATTR)) return null
   return plugin
 }
 
@@ -116,11 +138,16 @@ export function stateOf(win, doc) {
   return { back: { kind, label: labelOf(el, kind) } }
 }
 
-// Installs the bridge; returns an uninstall function (a no-op when inactive).
-export function installNativeBack(win = globalThis.window, doc = globalThis.document) {
-  const plugin = navBarPlugin(win, doc)
-  if (!plugin) return () => {}
+// The frame scheduler: requestAnimationFrame, else a 16ms timer.
+function scheduler(win) {
+  if (typeof win?.requestAnimationFrame === "function") {
+    return { request: (fn) => win.requestAnimationFrame(fn), cancel: (id) => win.cancelAnimationFrame?.(id) }
+  }
+  return { request: (fn) => setTimeout(fn, 16), cancel: (id) => clearTimeout(id) }
+}
 
+// The live bridge; returns its uninstall function.
+function activate(win, doc, plugin) {
   let lastKey = null
   const push = () => {
     const state = stateOf(win, doc)
@@ -130,16 +157,28 @@ export function installNativeBack(win = globalThis.window, doc = globalThis.docu
     send(plugin, state)
   }
 
+  // Mutations, navigation and the width query only schedule a push: at most
+  // one per animation frame.
+  const frames = scheduler(win)
+  let pending = null
+  const schedule = () => {
+    if (pending !== null) return
+    pending = frames.request(() => {
+      pending = null
+      push()
+    })
+  }
+
   const onBack = () => {
     const el = backTarget(win, doc)
     if (el) el.click()
   }
 
   win.addEventListener(EVENT, onBack)
-  win.addEventListener(NAV_EVENT, push)
+  win.addEventListener(NAV_EVENT, schedule)
 
   const MO = win.MutationObserver || globalThis.MutationObserver
-  const observer = MO ? new MO(push) : null
+  const observer = MO ? new MO(schedule) : null
   if (observer) {
     observer.observe(doc.documentElement, {
       subtree: true,
@@ -150,15 +189,41 @@ export function installNativeBack(win = globalThis.window, doc = globalThis.docu
   }
 
   const mql = win.matchMedia ? win.matchMedia(DESKTOP_QUERY) : null
-  if (mql && mql.addEventListener) mql.addEventListener("change", push)
+  if (mql && mql.addEventListener) mql.addEventListener("change", schedule)
 
   push()
 
   return () => {
     win.removeEventListener(EVENT, onBack)
-    win.removeEventListener(NAV_EVENT, push)
+    win.removeEventListener(NAV_EVENT, schedule)
     if (observer) observer.disconnect()
-    if (mql && mql.removeEventListener) mql.removeEventListener("change", push)
+    if (mql && mql.removeEventListener) mql.removeEventListener("change", schedule)
+    if (pending !== null) frames.cancel(pending)
+    pending = null
+  }
+}
+
+// Installs the bridge; returns an uninstall function (a no-op when inactive).
+export function installNativeBack(win = globalThis.window, doc = globalThis.document) {
+  const plugin = navBarPlugin(win, doc)
+  if (plugin) return activate(win, doc, plugin)
+  // Not (yet) the Duo. Only a native build with the bridge waits, with one
+  // listener and no observer, for native to mark the document as the Duo.
+  if (!bridgePlugin(win, doc)) return () => {}
+
+  let off = null
+  const onDuo = () => {
+    if (off) return
+    const ready = navBarPlugin(win, doc)
+    if (!ready) return
+    win.removeEventListener(DUO_EVENT, onDuo)
+    off = activate(win, doc, ready)
+  }
+  win.addEventListener(DUO_EVENT, onDuo)
+
+  return () => {
+    win.removeEventListener(DUO_EVENT, onDuo)
+    if (off) off()
   }
 }
 

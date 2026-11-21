@@ -626,6 +626,7 @@ final class BurrowBridgeViewController: CAPBridgeViewController {
         pushedTabBarHeight = nil
         pushTabBarHeight()
         // A new document carries no attribute: set it again, now.
+        if let script = NativeNavBarDocument.duoScript(isDuo: DuoDevice.current) { webView?.evaluateJavaScript(script) }
         pushedVerticalBar = nil
         syncNavBar()
     }

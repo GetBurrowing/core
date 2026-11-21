@@ -406,4 +406,19 @@ final class DuoShellTests: XCTestCase {
         XCTAssertTrue(cleared.contains("removeAttribute(\"data-native-vertical-bar\")"))
         XCTAssertFalse(cleared.contains("setAttribute"))
     }
+
+    /// `data-native-duo` gates native_back.js: produced only when the Duo
+    /// predicate is true, so a regular iPhone never runs the web observer.
+    func testTheDuoMarkerScriptIsProducedOnlyOnTheDuo() throws {
+        XCTAssertNil(NativeNavBarDocument.duoScript(isDuo: false), "never on another iPhone")
+        let script = try XCTUnwrap(NativeNavBarDocument.duoScript(isDuo: true))
+        XCTAssertTrue(script.contains("setAttribute(\"data-native-duo\", \"\")"))
+        XCTAssertTrue(script.contains("new Event(\"burrowNativeDuo\")"))
+        XCTAssertFalse(script.contains("removeAttribute"))
+    }
+
+    /// The predicate the bridge passes is the launch's own Duo answer.
+    func testTheDuoMarkerFollowsTheLaunchPredicate() {
+        XCTAssertEqual(NativeNavBarDocument.duoScript(isDuo: DuoDevice.current) != nil, DuoDevice.current)
+    }
 }
