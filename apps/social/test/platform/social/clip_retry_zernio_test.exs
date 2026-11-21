@@ -204,7 +204,13 @@ defmodule Platform.Social.ClipRetryZernioTest do
     assert {:error, :rate_limited} = Publishing.publish_post(ctx.w.org_id, ctx.post.id)
     refused = Repo.get!(Post, ctx.post.id)
     assert refused.status == "approved"
-    assert %DateTime{} = until = refused.retry_after
+    assert %DateTime{} = refused.retry_after
+
+    # A fixed window can end between publishing and retrying. Give the wait
+    # guard a definite future deadline, independent of the minute boundary.
+    until = DateTime.add(DateTime.utc_now(), 3_600, :second)
+    refused |> Ecto.Changeset.change(retry_after: until) |> Repo.update!()
+    assert Repo.get!(Post, ctx.post.id).retry_after == until
 
     assert {:error, {:wait_until, ^until}} =
              Social.retry_post(ctx.w.org_id, ctx.post.id, ctx.w.approver.id)
