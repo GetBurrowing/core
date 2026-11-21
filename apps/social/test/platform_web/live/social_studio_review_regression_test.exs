@@ -232,7 +232,7 @@ defmodule PlatformWeb.SocialStudioDReviewTest do
 
     assert has_element?(
              view,
-             "[data-role='studio-clip'] video[src='/files/blob/#{newer_file.id}']"
+             "[data-role='studio-clip'] video[src='/files/blob/#{newer_file.id}#t=0.1']"
            )
 
     assert has_element?(

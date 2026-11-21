@@ -3,7 +3,7 @@ defmodule PlatformWeb.SocialAccountTicker do
   use PlatformWeb, :html
   alias Platform.Social
   alias Platform.Social.AccountTicker
-  alias PlatformWeb.{SocialHelpers, SocialScope}
+  alias PlatformWeb.{SocialHelpers, SocialPreview, SocialScope}
 
   @doc "Refresh the metric slice without touching tabs, streams or an open editor."
   def load(socket) do
@@ -225,8 +225,19 @@ defmodule PlatformWeb.SocialAccountTicker do
 
   defp account_label(assigns) do
     ~H"""
-    <span class="font-semibold">
-      {SocialHelpers.platform_label(@row.account.platform)}
+    <span class="inline-flex items-center gap-1.5 font-semibold">
+      <span
+        :if={@row.account.platform in ~w(x linkedin instagram youtube tiktok)}
+        data-role="ticker-platform"
+        title={SocialHelpers.platform_label(@row.account.platform)}
+        class="inline-flex items-center"
+      >
+        <SocialPreview.glyph platform={@row.account.platform} class="size-4 shrink-0" />
+        <span class="sr-only">{SocialHelpers.platform_label(@row.account.platform)}</span>
+      </span>
+      <span :if={@row.account.platform not in ~w(x linkedin instagram youtube tiktok)}>
+        {SocialHelpers.platform_label(@row.account.platform)}
+      </span>
       <span class="font-normal">{@row.account.handle}</span>
     </span>
     <span :if={@all?} class="text-xs text-subtle">{@row.profile.name}</span>

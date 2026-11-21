@@ -1,6 +1,7 @@
 defmodule Platform.Social.IdeaVotes do
   @moduledoc """
-  Scoped votes and author-only agent archiving. Actor IDs come from the
+  Agent-only votes and author-only agent archiving. Historical human votes
+  remain stored but do not count toward summaries, ordering or shortlisting. Actor IDs come from the
   authenticated caller, never tool arguments. Profile then idea locks serialize
   votes, withdrawals and archive; authority is read again after both locks.
   """
@@ -11,8 +12,10 @@ defmodule Platform.Social.IdeaVotes do
   alias Platform.Agents.Agent
   alias Platform.Social.{Idea, Ideas, IdeaVote, Post, Profile}
 
-  def vote(scope, id, actor), do: mutate(scope, id, actor, :vote)
-  def unvote(scope, id, actor), do: mutate(scope, id, actor, :unvote)
+  def vote(scope, id, {:agent, _} = actor), do: mutate(scope, id, actor, :vote)
+  def vote(_, _, _), do: {:error, :agent_only}
+  def unvote(scope, id, {:agent, _} = actor), do: mutate(scope, id, actor, :unvote)
+  def unvote(_, _, _), do: {:error, :agent_only}
   def archive(scope, id, {:agent, _} = actor), do: mutate(scope, id, actor, :archive)
   def archive(_, _, _), do: {:error, :not_idea_author}
 
@@ -22,7 +25,10 @@ defmodule Platform.Social.IdeaVotes do
 
   def summaries(ideas, actor) do
     ids = Enum.map(ideas, & &1.id)
-    votes = Repo.all(from(v in IdeaVote, where: v.idea_id in ^ids))
+
+    votes =
+      Repo.all(from(v in IdeaVote, where: v.idea_id in ^ids and not is_nil(v.voter_agent_id)))
+
     by_idea = Enum.group_by(votes, & &1.idea_id)
 
     Map.new(ideas, fn idea ->
@@ -131,7 +137,11 @@ defmodule Platform.Social.IdeaVotes do
   defp result(id, actor),
     do: %{
       idea_id: id,
-      vote_count: Repo.aggregate(from(v in IdeaVote, where: v.idea_id == ^id), :count),
+      vote_count:
+        Repo.aggregate(
+          from(v in IdeaVote, where: v.idea_id == ^id and not is_nil(v.voter_agent_id)),
+          :count
+        ),
       voted: Repo.exists?(actor_votes(id, actor))
     }
 

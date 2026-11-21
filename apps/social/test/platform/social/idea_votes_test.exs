@@ -55,8 +55,11 @@ defmodule Platform.Social.IdeaVotesTest do
   end
 
   test "three votes shortlist, withdrawal restores inbox, posts keep their stage", ctx do
-    for user <- [ctx.h1, ctx.h2, ctx.n] do
-      assert {:ok, _} = Platform.Social.IdeaVotes.vote(ctx.org_id, ctx.idea.id, {:user, user.id})
+    voters = for _ <- 1..3, do: pinned_agent!(ctx.org_id)
+
+    for voter <- voters do
+      assert {:ok, _} =
+               Platform.Social.IdeaVotes.vote(ctx.org_id, ctx.idea.id, {:agent, voter.id})
     end
 
     {:ok, %{ideas: rows}} =
@@ -70,7 +73,12 @@ defmodule Platform.Social.IdeaVotesTest do
     assert [%{lane: "shortlisted", vote_count: 3}] =
              Platform.Social.IdeaBoard.cards([ctx.profile], ctx.n.id)
 
-    assert {:ok, _} = Platform.Social.IdeaVotes.unvote(ctx.org_id, ctx.idea.id, {:user, ctx.n.id})
+    assert {:ok, _} =
+             Platform.Social.IdeaVotes.unvote(
+               ctx.org_id,
+               ctx.idea.id,
+               {:agent, List.last(voters).id}
+             )
 
     assert [%{lane: "inbox", vote_count: 2}] =
              Platform.Social.IdeaBoard.cards([ctx.profile], ctx.n.id)
@@ -80,26 +88,37 @@ defmodule Platform.Social.IdeaVotesTest do
 
     Repo.update!(Ecto.Changeset.change(post, idea_id: ctx.idea.id))
 
-    assert {:ok, _} = Platform.Social.IdeaVotes.vote(ctx.org_id, ctx.idea.id, {:user, ctx.n.id})
+    assert {:ok, _} =
+             Platform.Social.IdeaVotes.vote(
+               ctx.org_id,
+               ctx.idea.id,
+               {:agent, List.last(voters).id}
+             )
 
     assert [%{lane: "drafting", vote_count: 3}] =
              Platform.Social.IdeaBoard.cards([ctx.profile], ctx.n.id)
   end
 
-  test "current user visibility and actor status are checked on vote and withdrawal", ctx do
+  test "human actions refuse and current agent status is checked on vote and withdrawal", ctx do
     actor = {:user, ctx.n.id}
-    assert {:ok, _} = Platform.Social.IdeaVotes.vote(ctx.org_id, ctx.idea.id, actor)
+    assert {:error, :agent_only} = Platform.Social.IdeaVotes.vote(ctx.org_id, ctx.idea.id, actor)
     import Ecto.Query
     Repo.delete_all(from(m in Platform.Tenancy.OrgMembership, where: m.user_id == ^ctx.n.id))
-    assert {:error, :not_found} = Platform.Social.IdeaVotes.unvote(:root, ctx.idea.id, actor)
-    assert {:error, :not_found} = Platform.Social.IdeaVotes.vote(:root, ctx.idea.id, actor)
+    assert {:error, :agent_only} = Platform.Social.IdeaVotes.unvote(:root, ctx.idea.id, actor)
+    assert {:error, :agent_only} = Platform.Social.IdeaVotes.vote(:root, ctx.idea.id, actor)
     Repo.update!(Ecto.Changeset.change(ctx.voter, status: "archived"))
     assert {:error, %{code: :not_found}} = call("social_idea_vote", ctx.idea, ctx.voter)
     assert {:error, %{code: :not_found}} = call("social_idea_unvote", ctx.idea, ctx.voter)
   end
 
-  test "same-org names are hidden after membership loss without dropping the count", ctx do
-    assert {:ok, _} = Platform.Social.IdeaVotes.vote(ctx.org_id, ctx.idea.id, {:user, ctx.n.id})
+  test "historical human votes stay private and do not count after membership loss", ctx do
+    Repo.insert!(%Platform.Social.IdeaVote{
+      idea_id: ctx.idea.id,
+      profile_id: ctx.profile.id,
+      org_id: ctx.org_id,
+      voter_user_id: ctx.n.id
+    })
+
     import Ecto.Query
     Repo.delete_all(from(m in Platform.Tenancy.OrgMembership, where: m.user_id == ^ctx.n.id))
 
@@ -108,7 +127,7 @@ defmodule Platform.Social.IdeaVotesTest do
         agent_id: ctx.voter.id
       })
 
-    assert idea.vote_count == 1
+    assert idea.vote_count == 0
     refute Map.has_key?(idea, :voter_names)
     refute inspect(idea) =~ ctx.n.email
   end
@@ -124,7 +143,8 @@ defmodule Platform.Social.IdeaVotesTest do
     assert Enum.map(Platform.Social.IdeaBoard.cards([ctx.profile], ctx.n.id), & &1.id) ==
              Enum.sort([ctx.idea.id, second.id])
 
-    assert {:ok, _} = Platform.Social.IdeaVotes.vote(ctx.org_id, second.id, {:user, ctx.n.id})
+    assert {:ok, _} =
+             Platform.Social.IdeaVotes.vote(ctx.org_id, second.id, {:agent, ctx.voter.id})
 
     assert Enum.map(Platform.Social.IdeaBoard.cards([ctx.profile], ctx.n.id), & &1.id) == [
              second.id,
@@ -137,7 +157,8 @@ defmodule Platform.Social.IdeaVotesTest do
       assert {:error, :not_found} =
                Platform.Social.IdeaVotes.vote(:root, id, {:agent, ctx.voter.id})
 
-      assert {:error, :not_found} = Platform.Social.IdeaVotes.unvote(:root, id, {:user, ctx.n.id})
+      assert {:error, :agent_only} =
+               Platform.Social.IdeaVotes.unvote(:root, id, {:user, ctx.n.id})
 
       assert {:error, :not_found} =
                Platform.Social.IdeaVotes.archive(:root, id, {:agent, ctx.g.id})
@@ -147,12 +168,14 @@ defmodule Platform.Social.IdeaVotesTest do
              ToolArguments.dispatch("social_idea_vote", %{"idea_id" => ctx.idea.id}, %{})
   end
 
-  test "user self-votes refuse; a live root-scoped agent still uses the existing visibility policy",
+  test "human self-votes refuse; a live root-scoped agent still uses the existing visibility policy",
        ctx do
     {:ok, own} = Ideas.create(ctx.org_id, ctx.profile.id, %{title: "Mine"}, {:user, ctx.n.id})
-    assert {:error, :own_idea} = Platform.Social.IdeaVotes.vote(:root, own.id, {:user, ctx.n.id})
 
-    assert {:error, :own_idea} =
+    assert {:error, :agent_only} =
+             Platform.Social.IdeaVotes.vote(:root, own.id, {:user, ctx.n.id})
+
+    assert {:error, :agent_only} =
              Platform.Social.IdeaVotes.unvote(:root, own.id, {:user, ctx.n.id})
 
     root =
@@ -223,7 +246,12 @@ defmodule Platform.Social.IdeaVotesTest do
   end
 
   test "a user denied Social can neither withdraw nor appear in voter names", ctx do
-    assert {:ok, _} = Platform.Social.IdeaVotes.vote(ctx.org_id, ctx.idea.id, {:user, ctx.n.id})
+    Repo.insert!(%Platform.Social.IdeaVote{
+      idea_id: ctx.idea.id,
+      profile_id: ctx.profile.id,
+      org_id: ctx.org_id,
+      voter_user_id: ctx.n.id
+    })
 
     assert {:ok, _} =
              Platform.Access.Grants.deny(%{
@@ -232,7 +260,7 @@ defmodule Platform.Social.IdeaVotesTest do
                resource: {:module, ctx.org_id}
              })
 
-    assert {:error, :not_found} =
+    assert {:error, :agent_only} =
              Platform.Social.IdeaVotes.unvote(ctx.org_id, ctx.idea.id, {:user, ctx.n.id})
 
     {:ok, %{ideas: [idea]}} =
@@ -240,7 +268,7 @@ defmodule Platform.Social.IdeaVotesTest do
         agent_id: ctx.voter.id
       })
 
-    assert idea.vote_count == 1
+    assert idea.vote_count == 0
     refute Map.has_key?(idea, :voter_names)
   end
 

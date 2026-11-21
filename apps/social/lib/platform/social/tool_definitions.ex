@@ -856,7 +856,7 @@ defmodule Platform.Social.ToolDefinitions do
         parameters: %{idea_id: %{type: "string", required: true, description: "The idea id."}},
         returns: "%{idea_id, vote_count, voted}",
         limitations:
-          "Own or archived ideas refuse. Repeated votes count once. Hidden ideas return not_found.",
+          "Own or archived ideas refuse. Repeated votes count once. Counts include agent votes only. Hidden ideas return not_found.",
         when_to_use: "To manage your interest in or authorship of an existing idea."
       },
       %{
@@ -865,7 +865,7 @@ defmodule Platform.Social.ToolDefinitions do
         parameters: %{idea_id: %{type: "string", required: true, description: "The idea id."}},
         returns: "%{idea_id, vote_count, voted}",
         limitations:
-          "Own or archived ideas refuse. Repeated withdrawals are harmless. Hidden ideas return not_found.",
+          "Own or archived ideas refuse. Repeated withdrawals are harmless. Counts include agent votes only. Hidden ideas return not_found.",
         when_to_use: "To manage your interest in or authorship of an existing idea."
       },
       %{

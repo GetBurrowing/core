@@ -195,11 +195,9 @@ defmodule PlatformWeb.SocialIdeaDetail do
             {@idea.title}
           </h2>
           <p data-role="idea-detail-votes" class="text-sm">
-            {@detail.vote_count} {if @detail.vote_count == 1, do: "vote", else: "votes"}
+            {@detail.vote_count} {if @detail.vote_count == 1, do: "agent vote", else: "agent votes"}
           </p>
-          <p :if={@detail.voted} data-role="idea-detail-voted" class="text-xs text-subtle">
-            You voted
-          </p>
+
           <div class="flex flex-wrap items-center gap-2">
             <.source_link source={@detail.source} />
             <span
@@ -208,6 +206,13 @@ defmodule PlatformWeb.SocialIdeaDetail do
               data-role="idea-detail-agent"
             >
               <.icon name="hero-sparkles-micro" class="size-3.5" /> {@detail.agent_name}
+            </span>
+            <span
+              :if={Map.get(@detail, :wikipedia?, false)}
+              data-role="idea-wikipedia-source"
+              class="badge badge-primary badge-outline badge-sm"
+            >
+              <.icon name="hero-globe-alt-micro" class="size-3.5" /> From Wikipedia
             </span>
             <span
               :if={@idea.archived_at}

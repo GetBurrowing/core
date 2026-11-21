@@ -386,14 +386,14 @@ defmodule PlatformWeb.SocialStudioTodayTest do
                items: [
                  %{
                    id: "a",
-                   rank: 1,
+                   rank: 2,
                    title: "AI research",
                    url: "https://example.com/a",
                    pageviews: 4
                  },
                  %{
                    id: "b",
-                   rank: 2,
+                   rank: 1,
                    title: "A bicycle story",
                    url: "https://example.com/b",
                    pageviews: 2
@@ -405,7 +405,7 @@ defmodule PlatformWeb.SocialStudioTodayTest do
     view |> element("[data-role='trends-ai-filter']") |> render_click()
     assert has_element?(view, "[data-role='studio-trends']", "AI research")
     refute has_element?(view, "[data-role='studio-trends']", "A bicycle story")
-    assert has_element?(view, "[data-role='studio-trends']", "Rank 1")
+    assert has_element?(view, "[data-role='studio-trends'] [data-role='trend-rank']", "2")
     view |> form("#social-profile-switcher", %{profile_id: "all"}) |> render_change()
     refute has_element?(view, "[data-role='trend-to-idea']")
 
