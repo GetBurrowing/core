@@ -117,6 +117,14 @@ struct MessagePersonEntity {
     /// (iPadOS 27.0.1, "Message Dalton saying ..."). With `\MessagePersonEntity.person`
     /// it records `com.apple.appintents.IntentPerson` both ways
     /// (MessagePersonEntityMetadataTests pins it).
+    ///
+    /// The builder attribute is explicit because `Transferable` is declared
+    /// in an extension below, so Swift does not infer it from the protocol
+    /// requirement. Without it the compiler records the body as a plain
+    /// `InitCall`, and Xcode 27.2's extractor halts ("Expected a direct
+    /// initialization of 'TransferRepresentation' with builder syntax"),
+    /// exporting NO App Intents metadata for the target.
+    @TransferRepresentationBuilder<MessagePersonEntity>
     static var transferRepresentation: some TransferRepresentation {
         IntentValueRepresentation(
             exporting: \MessagePersonEntity.person,
