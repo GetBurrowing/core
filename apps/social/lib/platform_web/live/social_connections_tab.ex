@@ -797,7 +797,7 @@ defmodule PlatformWeb.SocialConnectionsTab do
     socket =
       case return_profile(profiles, ref) do
         nil -> socket
-        profile -> SocialScope.load_profile(socket, profile)
+        profile -> assign(socket, :profile, profile)
       end
 
     reason = if code, do: " (#{code})", else: ""
@@ -815,8 +815,8 @@ defmodule PlatformWeb.SocialConnectionsTab do
         |> notice("That connection doesn't match a profile you can manage. Nothing changed.")
 
       profile ->
-        # load_profile/2 resets :notice, so the notice is set AFTER it.
-        socket = socket |> SocialScope.load_profile(profile) |> assign(:tab, "connections")
+        # SocialLive loads the final selected profile once after processing the return.
+        socket = socket |> assign(:profile, profile) |> assign(:tab, "connections")
 
         result =
           with {:ok, fresh, user_id} <- authorize(socket) do
@@ -825,7 +825,7 @@ defmodule PlatformWeb.SocialConnectionsTab do
             })
           end
 
-        socket |> restream_accounts() |> notice(return_copy(result, profile))
+        notice(socket, return_copy(result, profile))
     end
   end
 

@@ -129,6 +129,43 @@ defmodule PlatformWeb.SocialLiveReturnTest do
     assert row.status == "connected"
   end
 
+  test "a return for a second visible profile makes only its connection request",
+       %{conn: conn} = ctx do
+    {:ok, second} = Social.create_profile(ctx.org_id, %{name: "ZZZ Return Brand"})
+    _ = make_approver!(ctx.org_id, second, ctx.approver)
+    second = link!(second, "zprof_second")
+    {:ok, pending} = Social.create_account(ctx.org_id, second, %{platform: "linkedin"})
+    stub_accounts([entry(@account_ref, "linkedin", "zprof_second")])
+    first_before = reload(ctx.pending)
+
+    child = land(conn, ctx.approver, success_url(@account_ref, "zprof_second"))
+
+    assert requests() == [{"GET", "/api/v1/accounts"}]
+    assert has_element?(child, row(pending) <> " [data-state='connected']", "Connected")
+    refute has_element?(child, row(ctx.pending))
+    assert reload(ctx.pending) == first_before
+  end
+
+  test "an error return for a second visible profile makes no vendor request",
+       %{conn: conn} = ctx do
+    {:ok, second} = Social.create_profile(ctx.org_id, %{name: "ZZZ Return Brand"})
+    _ = make_approver!(ctx.org_id, second, ctx.approver)
+    second = link!(second, "zprof_second")
+    {:ok, pending} = Social.create_account(ctx.org_id, second, %{platform: "linkedin"})
+    stub_accounts([])
+    first_before = reload(ctx.pending)
+    second_before = reload(pending)
+
+    child = land(conn, ctx.approver, "/m/social?error=denied&profileId=zprof_second")
+
+    assert requests() == []
+    assert notice?(child, "The account wasn't connected (denied).")
+    assert has_element?(child, row(pending))
+    refute has_element?(child, row(ctx.pending))
+    assert reload(pending) == second_before
+    assert reload(ctx.pending) == first_before
+  end
+
   test "a repeat of the same URL is already connected: one row, no write",
        %{conn: conn} = ctx do
     stub_accounts([entry(@account_ref, "linkedin")])

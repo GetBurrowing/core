@@ -85,10 +85,11 @@ defmodule PlatformWeb.SocialLive do
       |> assign(:invite_token, nil)
       |> assign(:invite_nonce, nil)
 
+    query = session["query"]
+    profile = query_profile(profiles, query) || List.first(profiles)
     socket = SocialTabs.reduce(tabs, socket, fn mod, acc -> mod.init(acc) end)
     socket = PlatformWeb.SocialTodayTab.init(socket)
-    socket = SocialScope.load_profile(socket, List.first(profiles))
-    query = session["query"]
+    socket = assign(socket, :profile, profile)
 
     socket =
       case SocialInviteLanding.landing_params(query) do
@@ -114,15 +115,32 @@ defmodule PlatformWeb.SocialLive do
                 profiles,
                 SocialConnectionsTab.return_params(query)
               )
-              |> select_from_query(profiles, query)
 
             is_map(query) and is_map_key(query, "invite_connect") and human?(user) ->
               assign(socket, :landing, %{state: :checking})
 
             true ->
-              select_from_query(socket, profiles, query)
+              socket
           end
       end
+
+    # Resolve return and query profiles before any tab loads enqueue streams.
+    # A second reset before the first render retains the earlier inserts.
+    notice = socket.assigns.notice
+    tab = socket.assigns.tab
+    profile = query_profile(profiles, query) || socket.assigns.profile
+
+    # The initial load previously ran on Queue before processing a return.
+    # Keep that ordering so a return doesn't also trigger Connections' reconcile.
+    socket =
+      socket
+      |> assign(:tab, "queue")
+      |> SocialScope.load_profile(profile)
+      |> assign(:tab, tab)
+      |> assign(:notice, notice)
+
+    socket =
+      if socket.assigns.landing, do: socket, else: select_from_query(socket, profiles, query)
 
     {:ok, socket}
   end
@@ -205,8 +223,9 @@ defmodule PlatformWeb.SocialLive do
   # else ignored. Each tab then reads its own params (`from_query/2`).
   defp select_from_query(socket, profiles, %{} = query) do
     socket =
-      case Enum.find(profiles, &(&1.id == (query["profile"] || query["profile_id"]))) do
+      case query_profile(profiles, query) do
         nil -> socket
+        %{id: id} when socket.assigns.profile.id == id -> socket
         profile -> SocialScope.load_profile(socket, profile)
       end
 
@@ -222,6 +241,11 @@ defmodule PlatformWeb.SocialLive do
 
   defp select_from_query(socket, profiles, nil), do: select_from_query(socket, profiles, %{})
   defp select_from_query(socket, _profiles, _query), do: socket
+
+  defp query_profile(profiles, %{} = query),
+    do: Enum.find(profiles, &(&1.id == (query["profile"] || query["profile_id"])))
+
+  defp query_profile(_profiles, _query), do: nil
 
   @impl true
   def render(assigns) do
