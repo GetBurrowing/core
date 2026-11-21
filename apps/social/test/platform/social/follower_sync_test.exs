@@ -28,12 +28,14 @@ defmodule Platform.Social.FollowerSyncTest do
     %{org: org, profile: profile, account: account}
   end
 
-  defp body(value \\ 97, overrides \\ %{}) do
+  defp body(value \\ 97, overrides \\ %{}, now \\ @now) do
+    finish = DateTime.to_date(now)
+
     Map.merge(
       %{
         "data" => [
           %{
-            "date" => "2026-11-20",
+            "date" => Date.to_iso8601(Date.add(finish, -1)),
             "accountId" => "account-A",
             "profileId" => "profile-A",
             "platform" => "youtube",
@@ -47,8 +49,8 @@ defmodule Platform.Social.FollowerSyncTest do
           "granularity" => "day",
           "groupBy" => "account",
           "attribution" => "publish",
-          "fromDate" => "2026-08-24",
-          "toDate" => "2026-11-21",
+          "fromDate" => Date.to_iso8601(Date.add(finish, -89)),
+          "toDate" => Date.to_iso8601(finish),
           "stale" => false,
           "staleSince" => nil
         }
@@ -121,9 +123,11 @@ defmodule Platform.Social.FollowerSyncTest do
   end
 
   test "failed refresh retains observations and durable backoff blocks a new worker", c do
-    stub(body())
-    assert {:ok, {:refreshed, 1}} = run(c)
-    later = DateTime.add(@now, 3600)
+    # The post reader uses the wall clock; both sides must share its anchor.
+    now = DateTime.utc_now()
+    stub(body(97, %{}, now))
+    assert {:ok, {:refreshed, 1}} = run(c, now)
+    later = DateTime.add(now, 3600)
     stub(%{}, 429, [{"retry-after", "120"}])
     assert {:ok, {:failed, :rate_limited}} = run(c, later)
     assert [%{followers: 97}] = Repo.all(FollowerSnapshot)
@@ -137,8 +141,12 @@ defmodule Platform.Social.FollowerSyncTest do
   end
 
   test "the shared provider deadline prevents sibling-org follower and post requests", c do
+    now = DateTime.utc_now()
     stub(%{}, 429, [{"retry-after", "120"}])
-    assert {:ok, {:failed, :rate_limited}} = run(c)
+    assert {:ok, {:failed, :rate_limited}} = run(c, now)
+    deadline = Repo.get!(SyncState, c.org).provider_retry_at
+    assert deadline == DateTime.add(now, 120)
+    assert DateTime.compare(deadline, DateTime.utc_now()) == :gt
     other_org = org_id!()
 
     {profile, _} =
@@ -151,7 +159,7 @@ defmodule Platform.Social.FollowerSyncTest do
     Repo.update!(Ecto.Changeset.change(profile, provider_profile_ref: "profile-B"))
 
     assert {:ok, :deferred} =
-             FollowerSync.sync_org(other_org, now: DateTime.add(@now, 1), pace_ms: 0)
+             FollowerSync.sync_org(other_org, now: DateTime.add(now, 1), pace_ms: 0)
 
     post_org = org_id!()
 
@@ -170,7 +178,7 @@ defmodule Platform.Social.FollowerSyncTest do
            boot_sweep: false,
            pace_ms: 0,
            max_requests: 1,
-           now: DateTime.add(@now, 1),
+           now: DateTime.add(now, 1),
            interval_ms: 3_600_000,
            notify: self()}
         )
@@ -183,7 +191,7 @@ defmodule Platform.Social.FollowerSyncTest do
 
     refute_received {:follower_http, _}
 
-    expired = DateTime.add(DateTime.utc_now(), -1)
+    expired = DateTime.add(now, -1)
 
     for org <- [c.org, other_org, post_org] do
       Repo.get!(SyncState, org)
@@ -191,12 +199,13 @@ defmodule Platform.Social.FollowerSyncTest do
       |> Repo.update!()
     end
 
-    value = body()
+    resumed_at = DateTime.add(now, 121)
+    value = body(97, %{}, resumed_at)
     entry = %{hd(value["data"]) | "accountId" => "account-B", "profileId" => "profile-B"}
     stub(%{value | "data" => [entry]})
 
     assert {:ok, {:refreshed, 1}} =
-             FollowerSync.sync_org(other_org, now: DateTime.add(@now, 121), pace_ms: 0)
+             FollowerSync.sync_org(other_org, now: resumed_at, pace_ms: 0)
 
     assert_received {:follower_http, %{"accountId" => "account-B"}}
     refute_received {:follower_http, _}
