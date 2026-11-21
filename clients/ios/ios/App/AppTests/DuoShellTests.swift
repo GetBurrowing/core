@@ -613,6 +613,33 @@ final class DuoShellTests: XCTestCase {
         XCTAssertFalse(script.contains("removeAttribute"))
     }
 
+    /// `data-native-duo-open` (task 01a1fc7f stage 1): never touched off the
+    /// Duo, set when open, cleared when closed, and every push announces it.
+    func testThePostureScriptIsProducedOnlyOnTheDuo() throws {
+        XCTAssertNil(NativeNavBarDocument.postureScript(isDuo: false, open: true), "never on another iPhone")
+        XCTAssertNil(NativeNavBarDocument.postureScript(isDuo: false, open: false), "never on another iPhone")
+        let open = try XCTUnwrap(NativeNavBarDocument.postureScript(isDuo: true, open: true))
+        XCTAssertTrue(open.contains("setAttribute(\"data-native-duo-open\", \"\")"))
+        XCTAssertFalse(open.contains("removeAttribute"))
+        XCTAssertTrue(open.contains("window.dispatchEvent(new Event(\"burrowNativeDuoPosture\"))"))
+        let closed = try XCTUnwrap(NativeNavBarDocument.postureScript(isDuo: true, open: false))
+        XCTAssertTrue(closed.contains("removeAttribute(\"data-native-duo-open\")"))
+        XCTAssertFalse(closed.contains("setAttribute"))
+        XCTAssertTrue(closed.contains("window.dispatchEvent(new Event(\"burrowNativeDuoPosture\"))"))
+    }
+
+    /// The posture the bridge pushes comes from the one open/closed rule.
+    func testThePostureSizesTable() {
+        let table: [(CGSize, Bool)] = [
+            (CGSize(width: 466, height: 678), false),
+            (CGSize(width: 669, height: 951), true),
+            (CGSize(width: 951, height: 669), true),
+        ]
+        for (size, open) in table {
+            XCTAssertEqual(OrientationPolicy.isOpen(windowSize: size), open, "\(size)")
+        }
+    }
+
     /// The predicate the bridge passes is the launch's own Duo answer.
     func testTheDuoMarkerFollowsTheLaunchPredicate() {
         XCTAssertEqual(NativeNavBarDocument.duoScript(isDuo: DuoDevice.current) != nil, DuoDevice.current)

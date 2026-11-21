@@ -45,6 +45,7 @@ import {installPublicGamePage} from "./public_game_page"
 import {installDeadViewInstallSwitch} from "./lib/dead_view_install_switch"
 import {installDeadViewTabBar} from "./lib/dead_view_tab_bar"
 import {installNativeBack} from "./hooks/native_back"
+import {installDuoMorePage} from "./lib/duo_more_page"
 import {installConsentReciprocal} from "./lib/switcher_consent_reciprocal"
 
 installPublicGamePage()
@@ -74,6 +75,13 @@ installThemePreviewReceiver(window)
 // run first. Also runs on pages outside the shell, where it only shows the
 // "You left" toast a "Leave call and go" stashed.
 installMeetingPresence(window, document)
+
+// The open iPhone Duo's More tab is a page, /more, not the sheet (task
+// 01a1fc7f stage 2, ./lib/duo_more_page.js). A capture-phase click listener
+// installed before the LiveSocket and nav_pending, so it can stop the More
+// tab's open_more_sheet before either sees it. Inert unless <html> carries
+// both data-native-duo and data-native-duo-open at the click.
+installDuoMorePage(window, document, () => liveSocket)
 
 const csrfToken = document.querySelector("meta[name='csrf-token']").getAttribute("content")
 const liveSocket = new LiveSocket("/live", Socket, {

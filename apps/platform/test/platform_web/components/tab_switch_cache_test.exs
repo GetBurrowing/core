@@ -57,6 +57,7 @@ defmodule PlatformWeb.Components.TabSwitchCacheTest do
             {"/meetings", "meetings"},
             {"/inbox", "inbox"},
             {"/settings", "settings"},
+            {"/more", "more"},
             {"/control/usage", "settings"}
           ] do
         html = render_cache(%{current_path: path}) |> LazyHTML.from_fragment()

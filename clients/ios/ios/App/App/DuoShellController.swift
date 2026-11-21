@@ -162,6 +162,27 @@ enum NativeNavBarDocument {
             })(document.documentElement);
             """
     }
+
+    /// Set on `<html>` while the Duo is open (the inner display), cleared
+    /// while it is closed, by `OrientationPolicy.isOpen`, the one definition
+    /// of open. It flips live on fold and unfold. Never touched off the Duo.
+    static let duoOpenAttribute = "data-native-duo-open"
+    /// Dispatched on `window` after every change of `duoOpenAttribute`.
+    static let duoPostureEvent = "burrowNativeDuoPosture"
+
+    /// The script that sets (open) or clears (closed) the posture attribute
+    /// and announces it, nil off the Duo.
+    static func postureScript(isDuo: Bool, open: Bool) -> String? {
+        guard isDuo else { return nil }
+        let call = open ? "setAttribute(\"\(duoOpenAttribute)\", \"\")" : "removeAttribute(\"\(duoOpenAttribute)\")"
+        return """
+            (function (root) {
+              if (!root) return;
+              root.\(call);
+              window.dispatchEvent(new Event("\(duoPostureEvent)"));
+            })(document.documentElement);
+            """
+    }
 }
 
 /// One tab's page: the root of that tab's UINavigationController (stage 4

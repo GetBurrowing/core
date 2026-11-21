@@ -162,6 +162,10 @@ defmodule PlatformWeb.Components.TabSwitchCache do
   Access does not matter here, only which destination the path is under.
   """
   @spec current_key(String.t() | nil) :: String.t() | nil
+  # The More page (task 01a1fc7f stage 2) is the More tab's root, so a
+  # snapshot taken leaving it is filed under "more".
+  def current_key("/more"), do: "more"
+
   def current_key(current_path) when is_binary(current_path) do
     case IconRail.more_sheet_current_key(IconRail.destinations(root_user: true), current_path) do
       nil -> nil

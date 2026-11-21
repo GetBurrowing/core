@@ -2,7 +2,7 @@ import { describe, it, expect } from "vitest"
 import fs from "node:fs"
 import path from "node:path"
 import { fileURLToPath } from "node:url"
-import { EVENT, ATTR, MARKER, DRAWN_ATTR, DUO_ATTR, DUO_EVENT, METHOD, KINDS, stateOf } from "../../js/hooks/native_back.js"
+import { EVENT, ATTR, MARKER, DRAWN_ATTR, DUO_ATTR, DUO_EVENT, DUO_OPEN_ATTR, DUO_POSTURE_EVENT, METHOD, KINDS, stateOf } from "../../js/hooks/native_back.js"
 
 /**
  * CONTRACT SOURCE SCAN, web side (task 01a1fa7c stage 3). The Duo side
@@ -23,6 +23,7 @@ const tabBarJs = read("apps/platform/assets/js/hooks/native_tab_bar.js")
 const appJs = read("apps/platform/assets/js/app.js")
 const appCss = read("apps/platform/assets/css/app.css")
 const pluginSwift = read("clients/ios/ios/App/App/Plugins/BurrowNativePlugin.swift")
+const duoShellSwift = read("clients/ios/ios/App/App/DuoShellController.swift")
 
 function walk(dir) {
   return fs.readdirSync(dir, { withFileTypes: true }).flatMap((d) => {
@@ -41,6 +42,13 @@ describe("native back contract", () => {
     expect(DUO_EVENT).toBe("burrowNativeDuo")
     expect(KINDS).toEqual(["back", "close"])
     expect(hookJs).toContain("plugin.navBarState(state)")
+  })
+
+  it("pins the open-Duo posture attribute and event to the native names", () => {
+    expect(DUO_OPEN_ATTR).toBe("data-native-duo-open")
+    expect(DUO_POSTURE_EVENT).toBe("burrowNativeDuoPosture")
+    expect(duoShellSwift).toContain(`static let duoOpenAttribute = "${DUO_OPEN_ATTR}"`)
+    expect(duoShellSwift).toContain(`static let duoPostureEvent = "${DUO_POSTURE_EVENT}"`)
   })
 
   it("feature-tests the same plugin and document attribute as the tab bar", () => {

@@ -61,6 +61,14 @@ defmodule PlatformWeb.Components.MoreSheet do
   `close_more_sheet` while the sheet is open).
 
   `lg:hidden`: the desktop icon rail does this job at lg and up.
+
+  ## The page (task 01a1fc7f stage 2)
+
+  The rows and the Settings link are `more_entries/1`, which this sheet calls
+  for its body and its footer. `/more` (`PlatformWeb.MoreLive`, the open
+  iPhone Duo's More tab) renders the same component as a page, without the
+  sheet's chrome. The sheet's HTML is pinned to its pre-refactor markup in
+  more_sheet_test.exs (`MoreSheetEqualityTest`).
   """
   use Phoenix.Component
   use PlatformWeb, :verified_routes
@@ -103,27 +111,7 @@ defmodule PlatformWeb.Components.MoreSheet do
   )
 
   def more_sheet(assigns) do
-    rows =
-      if assigns[:gaming],
-        do:
-          IconRail.gaming_more_sheet_rows(
-            assigns[:access_scope],
-            Map.get(assigns, :root_user, false)
-          ),
-        else:
-          IconRail.more_sheet_rows(assigns[:access_scope], Map.get(assigns, :root_user, false))
-
-    assigns =
-      assigns
-      |> assign(:rows, rows)
-      |> assign(:last_index, length(rows) - 1)
-      |> assign(
-        :current_key,
-        IconRail.more_sheet_current_key(rows, IconRail.nav_path(assigns[:current_path]))
-      )
-      |> assign(:name, display_name(assigns[:current_user], assigns[:user]))
-      |> assign(:avatar_url, Map.get(assigns[:user] || %{}, :avatar_url))
-      |> assign(:avatar_seed, Map.get(assigns[:user] || %{}, :id))
+    assigns = entries_assigns(assigns)
 
     ~H"""
     <.sheet
@@ -137,76 +125,174 @@ defmodule PlatformWeb.Components.MoreSheet do
     >
       <:title>More</:title>
 
-      <nav class="more-sheet-list" aria-label="More destinations">
-        <%= for {dest, index} <- Enum.with_index(@rows) do %>
-          <%!-- The scroll cue sits just before the last row, which covers it
-               once it is in view (app.css `.more-sheet-cue`). --%>
-          <div
-            :if={index == @last_index}
-            class="more-sheet-cue flex items-end justify-center bg-gradient-to-t from-base-100 pb-1 text-subtle"
-            data-role="more-sheet-cue"
-            aria-hidden="true"
-          >
-            <.icon name="hero-chevron-down" class="size-4" />
-          </div>
-          <.link
-            navigate={dest.path}
-            class={[
-              "more-sheet-row focus-visible-ring",
-              dest.key == @current_key && "more-sheet-row--current"
-            ]}
-            data-destination={dest.key}
-            data-nav-label={dest.label}
-            aria-current={if dest.key == @current_key, do: "page"}
-            aria-label={dest.label}
-          >
-            <.icon
-              name={Map.get(dest, :hero_icon) || "hero-puzzle-piece"}
-              class="more-sheet-icon size-5"
-            />
-            <span class="min-w-0 truncate">{dest.label}</span>
-            <.icon
-              :if={dest.key == @current_key}
-              name="hero-check"
-              class="more-sheet-check ml-auto size-5 shrink-0"
-            />
-          </.link>
-        <% end %>
-      </nav>
+      <.more_entries part={:rows} variant={:sheet} entries={@entries} />
 
       <:actions>
         <%!-- The divider is the footer's own top border (`.sheet-actions`). --%>
-        <.link
-          navigate={~p"/settings"}
-          class={[
-            "more-sheet-settings focus-visible-ring w-full",
-            @current_key == :settings && "more-sheet-row--current"
-          ]}
-          data-destination="settings"
-          data-nav-label="Settings"
-          aria-current={if @current_key == :settings, do: "page"}
-        >
-          <.human_avatar name={@name} avatar_url={@avatar_url} seed={@avatar_seed} size="sm" />
-          <span class="min-w-0 flex-1">
-            <span class="block truncate text-[15px]">Settings</span>
-            <span class="block truncate text-xs text-subtle" data-role="more-sheet-settings-subtitle">
-              {@name} · profile, appearance, admin
-            </span>
-          </span>
-          <.icon
-            :if={@current_key == :settings}
-            name="hero-check"
-            class="more-sheet-check size-5 shrink-0"
-          />
-          <.icon
-            :if={@current_key != :settings}
-            name="hero-chevron-right"
-            class="size-4 shrink-0 text-subtle"
-          />
-        </.link>
+        <.more_entries part={:settings} variant={:sheet} entries={@entries} />
       </:actions>
     </.sheet>
     """
+  end
+
+  @doc """
+  The More destinations: the rows list and the Settings link (task 01a1fc7f
+  stage 2). One body for both presentations, so the sheet and the `/more`
+  page (`PlatformWeb.MoreLive`, the open iPhone Duo's More tab) can never
+  show different rows.
+
+    * `part`: `:all` (the rows, then Settings after a divider; the page),
+      `:rows` (the sheet body) or `:settings` (the sheet's pinned footer).
+    * `variant`: `:sheet` renders exactly what the sheet always did (the
+      scroll cue before the last row, single-line labels). `:page` drops the
+      scroll cue (sheet chrome) and lets a label wrap to two lines instead of
+      truncating.
+
+  Takes the same inputs as `more_sheet/1`, or `entries`, the precomputed
+  map `more_sheet/1` builds once and hands to both of its calls.
+  """
+  attr(:part, :atom, default: :all, values: [:all, :rows, :settings])
+  attr(:variant, :atom, default: :page, values: [:page, :sheet])
+  attr(:entries, :map, default: nil, doc: "precomputed by `more_sheet/1`; internal")
+  attr(:gaming, :boolean, default: false)
+  attr(:root_user, :boolean, default: false)
+  attr(:access_scope, :any, default: nil)
+  attr(:current_path, :string, default: nil)
+  attr(:current_user, :any, default: nil)
+  attr(:user, :any, default: nil)
+
+  def more_entries(assigns) do
+    entries = assigns[:entries] || entries_assigns(assigns).entries
+
+    assigns
+    |> assign(entries)
+    |> assign(:label_class, label_class(assigns.variant))
+    |> render_part()
+  end
+
+  # One template per part, so the sheet's two calls render exactly the markup
+  # they always inlined, with no sibling whitespace from the other part.
+  defp render_part(%{part: :rows} = assigns), do: more_rows(assigns)
+  defp render_part(%{part: :settings} = assigns), do: more_settings_link(assigns)
+
+  defp render_part(assigns) do
+    ~H"""
+    <.more_rows {assigns} />
+    <div
+      class="more-page-settings mt-1 border-t border-edge pt-1"
+      data-role="more-page-settings"
+    >
+      <.more_settings_link {assigns} />
+    </div>
+    """
+  end
+
+  defp more_rows(assigns) do
+    ~H"""
+    <nav class="more-sheet-list" aria-label="More destinations">
+      <%= for {dest, index} <- Enum.with_index(@rows) do %>
+        <%!-- The scroll cue sits just before the last row, which covers it
+             once it is in view (app.css `.more-sheet-cue`). The page has
+             none: it is sheet chrome. --%>
+        <div
+          :if={@variant == :sheet and index == @last_index}
+          class="more-sheet-cue flex items-end justify-center bg-gradient-to-t from-base-100 pb-1 text-subtle"
+          data-role="more-sheet-cue"
+          aria-hidden="true"
+        >
+          <.icon name="hero-chevron-down" class="size-4" />
+        </div>
+        <.link
+          navigate={dest.path}
+          class={[
+            "more-sheet-row focus-visible-ring",
+            dest.key == @current_key && "more-sheet-row--current"
+          ]}
+          data-destination={dest.key}
+          data-nav-label={dest.label}
+          aria-current={if dest.key == @current_key, do: "page"}
+          aria-label={dest.label}
+        >
+          <.icon
+            name={Map.get(dest, :hero_icon) || "hero-puzzle-piece"}
+            class="more-sheet-icon size-5"
+          />
+          <span class={["min-w-0", @label_class]}>{dest.label}</span>
+          <.icon
+            :if={dest.key == @current_key}
+            name="hero-check"
+            class="more-sheet-check ml-auto size-5 shrink-0"
+          />
+        </.link>
+      <% end %>
+    </nav>
+    """
+  end
+
+  defp more_settings_link(assigns) do
+    ~H"""
+    <.link
+      navigate={~p"/settings"}
+      class={[
+        "more-sheet-settings focus-visible-ring w-full",
+        @current_key == :settings && "more-sheet-row--current"
+      ]}
+      data-destination="settings"
+      data-nav-label="Settings"
+      aria-current={if @current_key == :settings, do: "page"}
+    >
+      <.human_avatar name={@name} avatar_url={@avatar_url} seed={@avatar_seed} size="sm" />
+      <span class="min-w-0 flex-1">
+        <span class={["block", @label_class, "text-[15px]"]}>Settings</span>
+        <span
+          class={["block", @label_class, "text-xs text-subtle"]}
+          data-role="more-sheet-settings-subtitle"
+        >
+          {@name} · profile, appearance, admin
+        </span>
+      </span>
+      <.icon
+        :if={@current_key == :settings}
+        name="hero-check"
+        class="more-sheet-check size-5 shrink-0"
+      />
+      <.icon
+        :if={@current_key != :settings}
+        name="hero-chevron-right"
+        class="size-4 shrink-0 text-subtle"
+      />
+    </.link>
+    """
+  end
+
+  # The sheet's labels stay on one line (its fit budget, above); the page's
+  # may wrap to two rather than be cut (design canvas 01a1fc82, Type).
+  defp label_class(:sheet), do: "truncate"
+  defp label_class(_page), do: "line-clamp-2 break-words"
+
+  # Everything both presentations render from, computed once per render.
+  defp entries_assigns(assigns) do
+    rows =
+      if assigns[:gaming],
+        do:
+          IconRail.gaming_more_sheet_rows(
+            assigns[:access_scope],
+            Map.get(assigns, :root_user, false)
+          ),
+        else:
+          IconRail.more_sheet_rows(assigns[:access_scope], Map.get(assigns, :root_user, false))
+
+    entries = %{
+      rows: rows,
+      last_index: length(rows) - 1,
+      current_key:
+        IconRail.more_sheet_current_key(rows, IconRail.nav_path(assigns[:current_path])),
+      name: display_name(assigns[:current_user], assigns[:user]),
+      avatar_url: Map.get(assigns[:user] || %{}, :avatar_url),
+      avatar_seed: Map.get(assigns[:user] || %{}, :id)
+    }
+
+    assign(assigns, :entries, entries)
   end
 
   defp display_name(name, _user) when is_binary(name) and name != "", do: name

@@ -485,6 +485,9 @@ final class BurrowBridgeViewController: CAPBridgeViewController {
     /// The attribute state last pushed to this document, nil when unknown
     /// (a new document has none).
     private var pushedVerticalBar: Bool?
+    /// The posture last pushed as `<html data-native-duo-open>`, nil when
+    /// unknown (a new document has none).
+    private var pushedDuoOpen: Bool?
 
     private func installNavBar() {
         guard #available(iOS 27.1, *), duoShell != nil else { return }
@@ -630,6 +633,24 @@ final class BurrowBridgeViewController: CAPBridgeViewController {
         if let script = NativeNavBarDocument.duoScript(isDuo: DuoDevice.current) { webView?.evaluateJavaScript(script) }
         pushedVerticalBar = nil
         syncNavBar()
+        pushedDuoOpen = nil
+        syncDuoPosture()
+    }
+
+    /// Pushes the open/closed posture to the web when it changed. A fold or
+    /// unfold changes the window size, so this runs on layout and on size
+    /// transitions. A no-op on every device but the Duo.
+    private func syncDuoPosture() {
+        guard DuoDevice.current else { return }
+        let open = OrientationPolicy.isOpen(windowSize: view.window?.bounds.size ?? .zero)
+        guard pushedDuoOpen != open, let script = NativeNavBarDocument.postureScript(isDuo: true, open: open) else { return }
+        pushedDuoOpen = open
+        webView?.evaluateJavaScript(script)
+    }
+
+    override func viewWillTransition(to size: CGSize, with coordinator: UIViewControllerTransitionCoordinator) {
+        super.viewWillTransition(to: size, with: coordinator)
+        coordinator.animate(alongsideTransition: nil) { [weak self] _ in self?.syncDuoPosture() }
     }
 
     /// didFinish: a document that has sent no state after the LiveView
@@ -679,6 +700,7 @@ final class BurrowBridgeViewController: CAPBridgeViewController {
     override func viewDidLayoutSubviews() {
         super.viewDidLayoutSubviews()
         pushTabBarHeight()
+        syncDuoPosture()
     }
 
     #if DEBUG
