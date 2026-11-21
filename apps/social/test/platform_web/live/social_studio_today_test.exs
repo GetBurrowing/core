@@ -371,7 +371,7 @@ defmodule PlatformWeb.SocialStudioTodayTest do
            ) == 1
   end
 
-  test "filters the watchlist without changing source rank and requires a brand to save", %{
+  test "numbers filtered watchlist positions while retaining source rank in saved provenance", %{
     conn: conn
   } do
     w = studio_world!()
@@ -383,41 +383,56 @@ defmodule PlatformWeb.SocialStudioTodayTest do
                complete: true,
                observed_at: ~U[2026-11-15 10:00:00Z],
                reporting_date: ~D[2026-11-13],
-               items: [
-                 %{
-                   id: "a",
-                   rank: 2,
-                   title: "AI research",
-                   url: "https://example.com/a",
-                   pageviews: 4
-                 },
-                 %{
-                   id: "b",
-                   rank: 1,
-                   title: "A bicycle story",
-                   url: "https://example.com/b",
-                   pageviews: 2
-                 }
-               ]
+               items:
+                 [
+                   %{
+                     id: "b",
+                     rank: 1,
+                     title: "A bicycle story",
+                     url: "https://example.com/b",
+                     pageviews: 2
+                   }
+                 ] ++
+                   Enum.map(2..12, fn rank ->
+                     %{
+                       id: "ai-#{rank}",
+                       rank: rank,
+                       title: "AI research #{rank}",
+                       url: "https://example.com/ai-#{rank}",
+                       pageviews: 4
+                     }
+                   end)
              })
 
     view = open(conn, w.approver, "?profile=#{w.profile.id}")
     view |> element("[data-role='trends-ai-filter']") |> render_click()
-    assert has_element?(view, "[data-role='studio-trends']", "AI research")
+    assert has_element?(view, "[data-role='studio-trends']", "AI research 2")
     refute has_element?(view, "[data-role='studio-trends']", "A bicycle story")
-    assert has_element?(view, "[data-role='studio-trends'] [data-role='trend-rank']", "2")
+
+    ranks =
+      view
+      |> render()
+      |> LazyHTML.from_fragment()
+      |> LazyHTML.query("[data-role='studio-trends'] [data-role='trend-rank']")
+      |> Enum.map(&(LazyHTML.text(&1) |> String.trim()))
+
+    assert ranks == Enum.map(1..10, &Integer.to_string/1)
+    refute has_element?(view, "[data-role='studio-trends']", "AI research 12")
+    view |> element("[data-role='trend-to-idea'][data-story-id='ai-2']") |> render_click()
+    idea = Platform.Repo.get_by!(Social.Idea, profile_id: w.profile.id)
+    assert idea.brief =~ "rank 2,"
     view |> form("#social-profile-switcher", %{profile_id: "all"}) |> render_change()
     refute has_element?(view, "[data-role='trend-to-idea']")
 
     render_click(view, "studio_trend_to_idea", %{
-      "id" => "a",
+      "id" => "ai-3",
       "snapshot_id" => Social.Trends.latest("wikimedia_pageviews").current.id
     })
 
     assert Platform.Repo.aggregate(
              from(i in Social.Idea, where: i.profile_id == ^w.profile.id),
              :count
-           ) == 0
+           ) == 1
   end
 
   test "labels stories missing from the next comparable observed list", %{conn: conn} do

@@ -269,7 +269,7 @@ defmodule PlatformWeb.SocialTodayRefinementsTest do
              "Wikipedia"
            )
 
-    assert has_element?(view, "[data-role='studio-trends'] ul > li [data-role='trend-rank']", "3")
+    assert has_element?(view, "[data-role='studio-trends'] ul > li [data-role='trend-rank']", "1")
     assert has_element?(view, "[data-role='studio-trends'] ul > li a", "Wikipedia story")
     view |> element("[data-role='social-tab-button'][data-tab='ideas']") |> render_click()
 
