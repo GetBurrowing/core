@@ -5291,6 +5291,16 @@ body, .font-suite {
   }
 }
 
+/* iPhone Duo side strip (task 01a1fa7c stage 3, js/hooks/native_back.js).
+   Native sets <html data-native-vertical-bar> in the same frame as it draws
+   the system Back / Close at the top of the strip; the web control it
+   mirrors then leaves the screen AND the accessibility tree (display: none,
+   not a visual hide), so there is exactly one Back per posture. Without the
+   attribute nothing changes. */
+:root[data-native-vertical-bar] [data-native-back] {
+  display: none !important;
+}
+
 /* The composer's ＋ sheet (redesign rung 11): base-200, the composer's and
    the tab bar's fill (direction canvas 01a16558 m1); its rows and tiles are
    base-100 on it. */

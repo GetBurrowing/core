@@ -116,6 +116,7 @@ defmodule PlatformWeb.Inbox.InboxList do
           phx-click="open_more_sheet"
           aria-label="Back to More"
           data-role="inbox-back"
+          data-native-back="back"
           class="inline-flex size-11 shrink-0 items-center justify-center rounded-full text-subtle focus-visible-ring"
         >
           <.icon name="hero-chevron-left" class="size-[22px]" />

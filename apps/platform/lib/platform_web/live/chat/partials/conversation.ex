@@ -162,6 +162,7 @@ defmodule PlatformWeb.ChatLive.Partials.Conversation do
             class="-ml-3 flex size-11 shrink-0 items-center justify-center rounded-lg text-base-content lg:hidden focus-visible-ring"
             aria-label="Back to chat list"
             data-role="chat-back"
+            data-native-back="back"
           >
             <span class="hero-chevron-left size-5" aria-hidden="true"></span>
           </.link>

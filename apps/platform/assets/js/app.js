@@ -44,6 +44,7 @@ import {installThemePreviewReceiver} from "./hooks/theme_preview_receiver"
 import {installPublicGamePage} from "./public_game_page"
 import {installDeadViewInstallSwitch} from "./lib/dead_view_install_switch"
 import {installDeadViewTabBar} from "./lib/dead_view_tab_bar"
+import {installNativeBack} from "./hooks/native_back"
 import {installConsentReciprocal} from "./lib/switcher_consent_reciprocal"
 
 installPublicGamePage()
@@ -54,6 +55,10 @@ installDeadViewInstallSwitch(document)
 // They also carry the workspace's phone tab bar (GamingShell), whose pill and
 // native-bar bridge are hooks too.
 installDeadViewTabBar(document)
+// The iOS app's system Back / Close in the iPhone Duo side strip (task
+// 01a1fa7c stage 3). Global, not a phx-hook, so it survives LiveView
+// remounts; a no-op outside a native build with `navBarState`.
+installNativeBack(window, document)
 // Another install's consent hop: remember that install so this one's
 // switcher lists it back (reciprocal add).
 installConsentReciprocal(document, window)

@@ -745,6 +745,7 @@ defmodule PlatformWeb.AgentConfigLive do
           <.link
             navigate={~p"/control/#{@agent.slug}"}
             id="agent-config-back"
+            data-native-back="back"
             class="btn btn-ghost btn-sm btn-square"
             aria-label="Back to the agent"
           >

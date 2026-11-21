@@ -120,6 +120,41 @@ final class NativeTabBarContractTests: XCTestCase {
         XCTAssertTrue(try hook.contains("export const DESKTOP_QUERY = \"(min-width: 1024px)\""))
     }
 
+    // MARK: The Back bridge (task 01a1fa7c stage 4)
+
+    private var backHook: String { get throws { try read("apps/platform/assets/js/hooks/native_back.js") } }
+
+    /// `navBarState` and `burrowNativeBack` are the hook's METHOD and EVENT;
+    /// the attribute native sets is the one app.css hides controls under.
+    func testNavBarStateAndBurrowNativeBackMatchTheBackHook() throws {
+        let source = try backHook
+        let method = NSStringFromSelector(#selector(BurrowNativePlugin.navBarState(_:)))
+        XCTAssertEqual(method, "\(NativeNavBarDocument.method):")
+        XCTAssertTrue(source.contains("export const METHOD = \"\(NativeNavBarDocument.method)\""))
+        XCTAssertTrue(source.contains("plugin.navBarState(state)"))
+        XCTAssertEqual(NativeNavBarDocument.tapEvent, "burrowNativeBack")
+        XCTAssertTrue(source.contains("export const EVENT = \"\(NativeNavBarDocument.tapEvent)\""))
+        XCTAssertEqual(NativeNavBarDocument.attribute, "data-native-vertical-bar")
+        XCTAssertTrue(source.contains("export const DRAWN_ATTR = \"\(NativeNavBarDocument.attribute)\""))
+        XCTAssertEqual(NativeNavBarDocument.duoAttribute, "data-native-duo")
+        XCTAssertTrue(source.contains("export const DUO_ATTR = \"\(NativeNavBarDocument.duoAttribute)\""))
+        XCTAssertEqual(NativeNavBarDocument.duoEvent, "burrowNativeDuo")
+        XCTAssertTrue(source.contains("export const DUO_EVENT = \"\(NativeNavBarDocument.duoEvent)\""))
+        XCTAssertTrue(try read("apps/platform/assets/css/app.css").contains(":root[\(NativeNavBarDocument.attribute)] [data-native-back]"))
+        let plugin = try read("clients/ios/ios/App/App/Plugins/BurrowNativePlugin.swift")
+        XCTAssertTrue(plugin.contains("CAPPluginMethod(name: \"navBarState\", returnType: CAPPluginReturnPromise)"))
+    }
+
+    /// The hook's kinds and default labels are the ones `NativeNavBack` reads.
+    func testNavBarPayloadMatchesTheBackHook() throws {
+        let source = try backHook
+        XCTAssertTrue(source.contains("export const KINDS = [\"back\", \"close\"]"))
+        XCTAssertTrue(source.contains("export const DEFAULT_LABELS = { back: \"Back\", close: \"Close\" }"))
+        for kind in [NativeNavBack.Kind.back, .close] {
+            XCTAssertEqual(NativeNavBack.parse(["back": ["kind": kind.rawValue]])?.label, NativeNavBack.defaultLabel(kind))
+        }
+    }
+
     // MARK: The masters' glyphs (task 01a174e8 stage 2)
 
     /// master-mobile.html lines 704-708 (chat, meetings, more) and prototype
@@ -235,9 +270,10 @@ final class NativeTabBarContractTests: XCTestCase {
         let dots = [9.0, 12.0, 15.0].map { peak(chat, at: CGPoint(x: $0, y: 11.5), radius: 0.5, scale: scale) }
         let gaps = [10.5, 13.5].map { peak(chat, at: CGPoint(x: $0, y: 11.5), radius: 0.1, scale: scale) }
         // Keep the raster so a failure can be looked at, not just read.
-        let attachment = XCTAttachment(image: UIGraphicsImageRenderer(size: CGSize(width: 25, height: 25)).image { _ in
-            chatGlyph.draw(in: CGRect(x: 0, y: 0, width: 25, height: 25))
-        })
+        let attachment = XCTAttachment(
+            image: UIGraphicsImageRenderer(size: CGSize(width: 25, height: 25)).image { _ in
+                chatGlyph.draw(in: CGRect(x: 0, y: 0, width: 25, height: 25))
+            })
         attachment.name = "tab-chat dots \(dots) gaps \(gaps)"
         attachment.lifetime = .keepAlways
         add(attachment)
