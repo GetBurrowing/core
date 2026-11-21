@@ -1,0 +1,56 @@
+# Self-host install manifest, schema v1 (ADR 0053, deployment/schema/install-manifest.md).
+#
+# The copy-and-edit manifest for docs/self-hosting.md: one Ubuntu 24.04 server
+# that pulls the public Burrow images itself. Copy this file, then edit three
+# fields: install.name, domain.primary and domain.acme_email. Nothing else needs
+# to change to reach a working sign-in.
+#
+# It is the smallest service set that signs in: core, postgres, the Caddy edge
+# and bundled pocket-id. Files, memory and voice are off. To turn memory on
+# (it needs embeddings), set files, memory and embeddings to true below; the
+# [embeddings] table already says where the model comes from, so the server
+# downloads it at first boot and no file has to be copied.
+#
+# There is deliberately no [[models.endpoints]] entry: an install has no model
+# endpoint unless its owner declares one (local, hosted or byo).
+
+schema_version = 1
+
+[install]
+name = "my-burrow"
+size_tier = "small"
+
+[domain]
+# Two DNS A records must point at the server: this name and auth.<this name>.
+primary = "burrow.example.com"
+tls = "acme"
+acme_email = "you@example.com"
+
+# [host]
+# One OpenSSH public key for the server's default user, if your provider does
+# not add one for you:
+# ssh_authorized_key = "ssh-ed25519 AAAA..."
+
+[services]
+files = false
+memory = false
+voice = false
+embeddings = false
+
+[embeddings]
+mode = "local"
+model_source = "download"
+
+[auth]
+mode = "bundled-pocket-id"
+
+[backup]
+target = "none"
+
+[images]
+registry = "ghcr.io/getburrowing"
+public = true
+source = "registry"
+
+[day2]
+upgrade_channel = "stable"
