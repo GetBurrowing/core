@@ -66,6 +66,11 @@ defmodule PlatformWeb.SocialQueueTab do
     |> assign(:queue_keys, [])
     |> assign(:queue_focus, nil)
     |> assign(:queue_deep_link, nil)
+    |> assign(:queue_target_id, nil)
+    |> assign(:queue_target_selected, nil)
+    |> assign(:queue_target_profile_id, nil)
+    |> assign(:queue_target_notice, nil)
+    |> assign(:queue_target_group, nil)
     |> assign(:queue_profiles, %{})
     |> assign(:queue_empty?, true)
     |> assign(:queue_post_count, 0)
@@ -95,24 +100,82 @@ defmodule PlatformWeb.SocialQueueTab do
     scope = queue_scope(scope, socket.assigns[:profile])
     now = DateTime.utc_now()
 
-    groups = QueueFeed.needs_you(user, scope)
-    scheduled = QueueFeed.scheduled(user, scope, now)
-    failed = QueueFeed.failed(user, scope, now)
-    published = QueueFeed.published(user, scope, now)
+    target =
+      target_post(
+        user,
+        scope,
+        socket.assigns.queue_target_id,
+        socket.assigns.queue_target_profile_id
+      )
+
+    unavailable? = not is_nil(socket.assigns.queue_target_id) and is_nil(target)
+    groups = if unavailable?, do: [], else: QueueFeed.needs_you(user, scope)
+    scheduled = if unavailable?, do: [], else: QueueFeed.scheduled(user, scope, now)
+    failed = if unavailable?, do: [], else: QueueFeed.failed(user, scope, now)
+    published = if unavailable?, do: [], else: QueueFeed.published(user, scope, now)
+
+    target_group =
+      target && Enum.find(groups, fn g -> Enum.any?(g.posts, &(&1.id == target.id)) end)
+
+    target_notice =
+      cond do
+        is_nil(socket.assigns.queue_target_id) ->
+          nil
+
+        is_nil(target) ->
+          "This post is unavailable or you no longer have access."
+
+        is_nil(target_group) ->
+          "This post is no longer awaiting approval. View its current details below."
+
+        true ->
+          nil
+      end
+
+    fallback = if target && is_nil(target_group), do: List.first(QueueFeed.group([target]))
+    # An out-of-Queue exact target is a single read-only detail, not a list
+    # headed by a misleading ordinary Queue/empty state.
+    {groups, scheduled, failed, published} =
+      if fallback, do: {[], [], [], []}, else: {groups, scheduled, failed, published}
 
     all_posts =
       Enum.flat_map(groups, & &1.posts) ++
-        Enum.flat_map(scheduled, & &1.posts) ++ failed ++ published
+        Enum.flat_map(scheduled, & &1.posts) ++
+        failed ++ published ++ if(fallback, do: [target], else: [])
 
     accounts = QueueFeed.accounts(all_posts)
     profiles = QueueFeed.profiles(accounts)
 
+    context =
+      if scheduled == [],
+        do: nil,
+        else: Social.PostPresentation.authorize({:user, user.id}, Map.keys(profiles))
+
+    titles =
+      Map.new(scheduled, fn group ->
+        title =
+          case group do
+            %{idea: %{title: title}} when is_binary(title) ->
+              title
+
+            %{posts: [post | _]} ->
+              case Social.PostPresentation.describe(post, accounts[post.account_id], context) do
+                %{title: title} -> title
+                _ -> "#{Approvals.platform_label(account_platform(accounts, post))} post"
+              end
+          end
+
+        {group.key, title}
+      end)
+
     keys = Enum.map(groups, & &1.key)
 
     focus =
-      if socket.assigns.queue_focus in keys,
-        do: socket.assigns.queue_focus,
-        else: List.first(keys)
+      cond do
+        target_group && socket.assigns.queue_target_selected != target.id -> target_group.key
+        socket.assigns.queue_focus in keys -> socket.assigns.queue_focus
+        true -> List.first(keys)
+      end
 
     idea_rows =
       Enum.map(groups, fn g -> %{key: g.key, group: g, focused?: g.key == focus} end)
@@ -149,14 +212,28 @@ defmodule PlatformWeb.SocialQueueTab do
     |> assign(:queue_canvases, canvases)
     |> assign(:queue_keys, keys)
     |> assign(:queue_focus, focus)
+    |> assign(:queue_target_notice, target_notice)
+    |> assign(
+      :queue_target_selected,
+      if(target_group, do: target.id, else: socket.assigns.queue_target_selected)
+    )
+    |> assign(:queue_target_group, fallback)
+    |> assign(
+      :queue_deep_link,
+      if(target_group, do: target_group.key, else: socket.assigns.queue_deep_link)
+    )
     |> assign(:queue_profiles, profiles)
     |> assign(:queue_accounts, accounts)
+    |> assign(:queue_scheduled_titles, titles)
     |> assign(:queue_empty?, groups == [])
     |> assign(:queue_post_count, groups |> Enum.map(&length(&1.posts)) |> Enum.sum())
     |> assign(:queue_scheduled_empty?, scheduled == [])
     |> assign(:queue_failed_empty?, failed == [])
     |> assign(:queue_published_empty?, published == [])
-    |> assign(:queue_clips_waiting, QueueFeed.clips_waiting(user, scope))
+    |> assign(
+      :queue_clips_waiting,
+      if(unavailable?, do: 0, else: QueueFeed.clips_waiting(user, scope))
+    )
     |> stream(:queue, idea_rows, reset: true)
     |> stream(:queue_scheduled, scheduled, reset: true)
     |> stream(:queue_failed, failed_rows, reset: true)
@@ -178,6 +255,9 @@ defmodule PlatformWeb.SocialQueueTab do
   # on screen (the phone shows one idea at a time). An id that is not in
   # the queue changes nothing.
   @impl true
+  def from_query(socket, %{"post" => id, "tab" => "queue"} = query) when is_binary(id),
+    do: socket |> seed_target(query) |> load()
+
   def from_query(socket, %{"idea" => key}) when is_binary(key) do
     if key in socket.assigns.queue_keys do
       socket |> assign(:queue_focus, key) |> assign(:queue_deep_link, key) |> load()
@@ -187,6 +267,43 @@ defmodule PlatformWeb.SocialQueueTab do
   end
 
   def from_query(socket, _query), do: socket
+
+  defp target_post(_user, _scope, nil, _profile_id), do: nil
+
+  defp target_post(user, scope, id, requested_profile_id) do
+    with {:ok, id} <- Ecto.UUID.cast(id) do
+      profiles =
+        case scope do
+          {:profile, %{} = profile} -> [profile]
+          :all -> Social.list_profiles_for_user(user)
+          _ -> []
+        end
+
+      profiles
+      |> Enum.filter(&(&1.id == requested_profile_id))
+      |> Enum.find_value(fn profile ->
+        with %Social.Post{flow: "legacy"} = post <- Social.get_post(profile.org_id, id),
+             %Account{profile_id: profile_id} when profile_id == profile.id <-
+               Social.get_account(profile.org_id, post.account_id),
+             %{} <- Social.PostPresentation.read(post, {:user, user.id}) do
+          post
+        else
+          _ -> nil
+        end
+      end)
+    else
+      _ -> nil
+    end
+  end
+
+  # Query values select a target; resolution below supplies authority.
+  def seed_target(socket, %{"post" => id, "tab" => "queue"} = query) when is_binary(id),
+    do:
+      socket
+      |> assign(:queue_target_id, id)
+      |> assign(:queue_target_profile_id, query["profile"] || query["profile_id"])
+
+  def seed_target(socket, _query), do: socket
 
   # Phone: Previous / Next idea, or a key.
   @impl true
@@ -471,8 +588,41 @@ defmodule PlatformWeb.SocialQueueTab do
 
     ~H"""
     <div data-role="social-queue-pane" class="mx-auto w-full max-w-6xl space-y-8 pb-56 sm:pb-8">
+      <p
+        :if={@queue_target_notice}
+        id="queue-target-notice"
+        data-role="queue-target-notice"
+        role="status"
+        tabindex="-1"
+        phx-mounted={JS.focus()}
+        class="rounded-xl border border-edge p-3 text-sm"
+      >
+        {@queue_target_notice}
+      </p>
+      <section :if={@queue_target_group} data-role="queue-target-details" aria-label="Post details">
+        <.live_component
+          module={SocialIdeaCard}
+          id={"notification-post-" <> @queue_target_group.key}
+          group={@queue_target_group}
+          viewer={{:user, @user.id}}
+          profiles={@queue_profiles}
+          dom_prefix="notification"
+          deep_link?={true}
+          focused?={true}
+          read_only?={true}
+        />
+      </section>
+
+      <a
+        :if={@queue_target_notice}
+        href={"/m/social?" <> URI.encode_query(%{"profile" => @queue_target_profile_id || "", "tab" => "queue"})}
+        data-role="queue-browse"
+        class="link inline-flex min-h-11 items-center"
+      >
+        Browse Queue
+      </a>
       <section aria-labelledby="queue-needs-you" class="space-y-3">
-        <div class="flex flex-wrap items-baseline gap-x-3 gap-y-1">
+        <div :if={is_nil(@queue_target_notice)} class="flex flex-wrap items-baseline gap-x-3 gap-y-1">
           <h2 id="queue-needs-you" class="text-xl font-semibold" data-role="queue-heading">
             Awaiting approval
           </h2>
@@ -484,7 +634,7 @@ defmodule PlatformWeb.SocialQueueTab do
             {plural(length(@queue_keys), "idea")} · {plural(@queue_post_count, "post")}
           </span>
         </div>
-        <p class="text-sm text-base-content">
+        <p :if={is_nil(@queue_target_notice)} class="text-sm text-base-content">
           This is the publishing queue for posts intended for connected accounts.
         </p>
 
@@ -520,7 +670,7 @@ defmodule PlatformWeb.SocialQueueTab do
         </nav>
 
         <div
-          :if={@queue_empty?}
+          :if={@queue_empty? and is_nil(@queue_target_notice)}
           data-role="social-empty"
           class="rounded-2xl border border-dashed border-edge px-4 py-8 text-center"
         >
@@ -582,6 +732,7 @@ defmodule PlatformWeb.SocialQueueTab do
               show_brand?={@scope == :all}
               focused?={row.focused?}
               deep_link?={@queue_deep_link == row.key}
+              target_post_id={@queue_target_id}
               cover_controls={@scope != :all}
             />
           </li>
@@ -620,7 +771,7 @@ defmodule PlatformWeb.SocialQueueTab do
             data-role="queue-scheduled-row"
             class="space-y-1.5 px-4 py-3"
           >
-            <p class="text-sm font-medium">{group_title(g, @queue_accounts)}</p>
+            <p class="text-sm font-medium">{Map.fetch!(@queue_scheduled_titles, g.key)}</p>
             <ul class="flex flex-wrap gap-x-4 gap-y-1">
               <li
                 :for={p <- g.posts}
@@ -723,11 +874,6 @@ defmodule PlatformWeb.SocialQueueTab do
 
   defp plural(1, word), do: "1 #{word}"
   defp plural(n, word), do: "#{n} #{word}s"
-
-  defp group_title(%{idea: %{title: title}}, _accounts) when is_binary(title), do: title
-
-  defp group_title(%{posts: [p | _]}, accounts),
-    do: "#{Approvals.platform_label(account_platform(accounts, p))} post"
 
   defp account_platform(accounts, %{account_id: id}),
     do: (Map.get(accounts, id) || %{platform: nil}).platform

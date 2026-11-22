@@ -96,6 +96,18 @@ describe("the hook on a 375px phone", () => {
     delete globalThis.window
   })
 
+  it("an exact deep link scrolls the initial phone version and focuses the heading", () => {
+    const { el } = strip(3)
+    el.dataset.current = "2"
+    const heading = { focus: vi.fn() }
+    const card = { scrollIntoView: vi.fn(), querySelector: () => heading }
+    el.closest = () => card
+    const { pushed } = mount(el)
+    expect(el.scrolledTo).toBe(2)
+    expect(heading.focus).toHaveBeenCalledWith({ preventScroll: true })
+    expect(pushed).toEqual([])
+  })
+
   it("a swipe to the second version pushes q_version 1 to the card once it settles", () => {
     const { el, listeners } = strip(3)
     const { pushed } = mount(el)

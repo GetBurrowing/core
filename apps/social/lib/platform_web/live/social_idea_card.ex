@@ -98,12 +98,39 @@ defmodule PlatformWeb.SocialIdeaCard do
        notices: %{},
        confirm_all?: false,
        current: 0,
+       applied_target: nil,
        all_result: nil
      )}
   end
 
   @impl true
-  def update(assigns, socket) do
+  def update_many(updates) do
+    contexts =
+      updates
+      |> Enum.group_by(fn {assigns, socket} ->
+        Map.get(assigns, :viewer, socket.assigns[:viewer])
+      end)
+      |> Map.new(fn {viewer, entries} ->
+        ids =
+          Enum.flat_map(entries, fn {assigns, socket} ->
+            Map.keys(Map.get(assigns, :profiles, socket.assigns[:profiles] || %{}))
+          end)
+          |> Enum.uniq()
+
+        {viewer, Platform.Social.PostPresentation.authorize(viewer, ids)}
+      end)
+
+    Enum.map(updates, fn {assigns, socket} ->
+      viewer = Map.get(assigns, :viewer, socket.assigns[:viewer])
+      {:ok, socket} = update_with_context(assigns, socket, contexts[viewer])
+      socket
+    end)
+  end
+
+  @impl true
+  def update(assigns, socket), do: update_with_context(assigns, socket, nil)
+
+  defp update_with_context(assigns, socket, context) do
     socket =
       socket
       |> assign(
@@ -115,6 +142,8 @@ defmodule PlatformWeb.SocialIdeaCard do
           :show_brand?,
           :focused?,
           :deep_link?,
+          :target_post_id,
+          :read_only?,
           :cover_controls,
           :dom_prefix
         ])
@@ -122,17 +151,24 @@ defmodule PlatformWeb.SocialIdeaCard do
       |> assign_new(:show_brand?, fn -> false end)
       |> assign_new(:focused?, fn -> false end)
       |> assign_new(:deep_link?, fn -> false end)
+      |> assign_new(:target_post_id, fn -> nil end)
+      |> assign_new(:read_only?, fn -> false end)
       |> assign_new(:cover_controls, fn -> false end)
       |> assign_new(:dom_prefix, fn -> "queue" end)
-      |> refresh()
+      |> refresh(context)
 
     {:ok, socket}
   end
 
   # Every version re-read now: the post row, its account, its card and this
   # viewer's role on it. Nothing here is trusted at click time.
-  defp refresh(socket) do
+  defp refresh(socket, context \\ nil) do
     %{group: group, viewer: viewer} = socket.assigns
+
+    context =
+      context ||
+        Platform.Social.PostPresentation.authorize(viewer, Map.keys(socket.assigns.profiles))
+
     ids = Enum.map(group.posts, & &1.id)
 
     posts =
@@ -153,12 +189,24 @@ defmodule PlatformWeb.SocialIdeaCard do
           %Post{} = post <- [posts[id]],
           %Account{} = account <- [accounts[post.account_id]] do
         post
-        |> version(account, profile_for(socket, account), viewer)
+        |> version(account, profile_for(socket, account), viewer, context)
         |> Map.put(:dom, socket.assigns.dom_prefix)
       end
 
+    versions =
+      if socket.assigns.read_only?,
+        do: Enum.map(versions, &%{&1 | actions: [], next_slot: nil}),
+        else: versions
+
+    target_index =
+      if socket.assigns.target_post_id != socket.assigns.applied_target,
+        do: Enum.find_index(versions, &(&1.post.id == socket.assigns.target_post_id))
+
     approvable = Enum.filter(versions, &(:approve in &1.actions and not &1.missed?))
-    current = socket.assigns.current |> max(0) |> min(max(length(versions) - 1, 0))
+
+    current =
+      target_index ||
+        socket.assigns.current |> max(0) |> min(max(length(versions) - 1, 0))
 
     mode =
       if socket.assigns.mode &&
@@ -167,6 +215,7 @@ defmodule PlatformWeb.SocialIdeaCard do
 
     assign(socket,
       versions: versions,
+      applied_target: socket.assigns.target_post_id,
       approvable: approvable,
       current: current,
       mode: mode,
@@ -178,10 +227,16 @@ defmodule PlatformWeb.SocialIdeaCard do
 
   defp profile_for(socket, %Account{profile_id: id}), do: Map.get(socket.assigns.profiles, id)
 
-  defp version(post, account, profile, viewer) do
+  defp version(post, account, profile, viewer, context) do
     card = Approvals.live_card(post.id) || Approvals.latest_card(post.id)
-    view = if card, do: Approvals.card_view(card.id, viewer), else: %{role: :viewer}
+    view = if card, do: Approvals.card_view(card.id, viewer, context), else: %{role: :viewer}
     actions = Map.get(view, :actions, [])
+
+    presentation =
+      if card,
+        do: view,
+        else: Platform.Social.PostPresentation.describe(post, account, context) || %{}
+
     media = media(post)
 
     {alt, flags} =
@@ -189,6 +244,8 @@ defmodule PlatformWeb.SocialIdeaCard do
 
     %{
       post: post,
+      display_title: Map.get(presentation, :title),
+      readable?: Map.has_key?(presentation, :title),
       missed?: Platform.Social.ApprovalDeadline.missed?(post),
       account: account,
       profile: profile,
@@ -300,7 +357,7 @@ defmodule PlatformWeb.SocialIdeaCard do
 
   defp header_title(%{title: title}, _versions) when is_binary(title), do: title
 
-  defp header_title(nil, [v | _]), do: "#{v.label} post"
+  defp header_title(nil, [v | _]), do: v.display_title || "#{v.label} post"
   defp header_title(nil, []), do: "Post"
 
   defp post_source(nil), do: "human"
@@ -330,7 +387,13 @@ defmodule PlatformWeb.SocialIdeaCard do
   # ── Events ────────────────────────────────────────────────────────────
 
   @impl true
-  def handle_event("q_approve", params, socket) do
+  def handle_event(event, params, socket),
+    do: handle_current_event(event, params, refresh(socket))
+
+  defp handle_current_event(_event, _params, %{assigns: %{read_only?: true}} = socket),
+    do: {:noreply, refresh(socket)}
+
+  defp handle_current_event("q_approve", params, socket) do
     decide(socket, params["post-id"], fn user, v ->
       Approvals.decide_approve(v.canvas_id, user, params["fingerprint"])
     end)
@@ -338,7 +401,7 @@ defmodule PlatformWeb.SocialIdeaCard do
 
   # The slot the human was SHOWN is re-derived now; a different answer is
   # refused rather than approving a time nobody saw.
-  def handle_event("q_approve_slot", params, socket) do
+  defp handle_current_event("q_approve_slot", params, socket) do
     decide(socket, params["post-id"], fn user, v ->
       with {:ok, shown, _} <- DateTime.from_iso8601(params["slot"] || ""),
            %DateTime{} = now_slot <- v.next_slot || {:error, :slot_changed},
@@ -351,7 +414,7 @@ defmodule PlatformWeb.SocialIdeaCard do
     end)
   end
 
-  def handle_event("q_approve_time", params, socket) do
+  defp handle_current_event("q_approve_time", params, socket) do
     decide(socket, params["post-id"], fn user, v ->
       value = params["at"]
       value = if is_binary(value) and byte_size(value) == 16, do: value <> ":00", else: value
@@ -367,22 +430,22 @@ defmodule PlatformWeb.SocialIdeaCard do
     end)
   end
 
-  def handle_event("q_edit_open", %{"post-id" => id}, socket),
+  defp handle_current_event("q_edit_open", %{"post-id" => id}, socket),
     do: {:noreply, open_mode(socket, :edit, id, :edit, fn v -> v.post.body || "" end)}
 
-  def handle_event("q_revise_open", %{"post-id" => id}, socket),
+  defp handle_current_event("q_revise_open", %{"post-id" => id}, socket),
     do: {:noreply, open_mode(socket, :revise, id, :edit, fn _ -> "" end)}
 
-  def handle_event("q_reject_open", %{"post-id" => id}, socket),
+  defp handle_current_event("q_reject_open", %{"post-id" => id}, socket),
     do: {:noreply, open_mode(socket, :reject, id, :reject, fn _ -> "" end)}
 
-  def handle_event("q_text", params, socket),
+  defp handle_current_event("q_text", params, socket),
     do: {:noreply, assign(socket, text: params["text"] || "")}
 
-  def handle_event("q_cancel", _params, socket),
+  defp handle_current_event("q_cancel", _params, socket),
     do: {:noreply, assign(socket, mode: nil, mode_post: nil, text: "")}
 
-  def handle_event("q_edit_save", params, socket) do
+  defp handle_current_event("q_edit_save", params, socket) do
     decide(socket, params["post-id"], fn user, v ->
       Approvals.decide_edit(
         v.canvas_id,
@@ -393,29 +456,29 @@ defmodule PlatformWeb.SocialIdeaCard do
     end)
   end
 
-  def handle_event("q_reject_submit", params, socket) do
+  defp handle_current_event("q_reject_submit", params, socket) do
     decide(socket, params["post-id"], fn user, v ->
       Approvals.decide_reject(v.canvas_id, user, params["text"], params["fingerprint"])
     end)
   end
 
-  def handle_event("q_revise_submit", params, socket) do
+  defp handle_current_event("q_revise_submit", params, socket) do
     decide(socket, params["post-id"], fn user, v ->
       org_id = v.profile && v.profile.org_id
       Ideas.request_revision(org_id, v.post.id, user.id, params["text"])
     end)
   end
 
-  def handle_event("q_all_open", _params, socket),
+  defp handle_current_event("q_all_open", _params, socket),
     do: {:noreply, assign(socket, confirm_all?: length(socket.assigns.approvable) > 1)}
 
-  def handle_event("q_all_cancel", _params, socket),
+  defp handle_current_event("q_all_cancel", _params, socket),
     do: {:noreply, assign(socket, confirm_all?: false)}
 
   # Each version through decide_approve/3 with the fingerprint THIS card
   # rendered for it (`fps`, "post_id:fingerprint" pairs). A version missing
   # from `fps` is not approved.
-  def handle_event("q_all_confirm", params, socket) do
+  defp handle_current_event("q_all_confirm", params, socket) do
     shown = parse_fps(params["fps"])
 
     case fresh_user(socket) do
@@ -443,7 +506,7 @@ defmodule PlatformWeb.SocialIdeaCard do
     end
   end
 
-  def handle_event("q_version", %{"index" => index}, socket) do
+  defp handle_current_event("q_version", %{"index" => index}, socket) do
     index =
       case index do
         i when is_integer(i) -> i
@@ -456,7 +519,7 @@ defmodule PlatformWeb.SocialIdeaCard do
     ArgumentError -> {:noreply, socket}
   end
 
-  def handle_event(_event, _params, socket), do: {:noreply, socket}
+  defp handle_current_event(_event, _params, socket), do: {:noreply, socket}
 
   defp open_mode(socket, mode, post_id, needed, initial) do
     case find(socket, post_id) do
@@ -590,10 +653,33 @@ defmodule PlatformWeb.SocialIdeaCard do
   def clock(%DateTime{} = at, tz),
     do: at |> DateTime.shift_zone!(tz) |> Calendar.strftime("%H:%M")
 
+  defp context_line(values),
+    do: values |> Enum.filter(&(is_binary(&1) and String.trim(&1) != "")) |> Enum.join(" · ")
+
   # ── Render ────────────────────────────────────────────────────────────
 
   @impl true
   def render(assigns) do
+    read_refused? =
+      (assigns.read_only? or not is_nil(assigns.target_post_id)) and
+        Enum.any?(assigns.versions, fn version ->
+          not version.readable?
+        end)
+
+    if read_refused? do
+      ~H"""
+      <article id={@id} class="rounded-2xl border border-edge p-4">
+        <p role="status" data-role="queue-target-unavailable">
+          This post is unavailable or you no longer have access.
+        </p>
+      </article>
+      """
+    else
+      render_card(assigns)
+    end
+  end
+
+  defp render_card(assigns) do
     versions =
       Enum.map(assigns.versions, fn version ->
         %{version | missed?: Platform.Social.ApprovalDeadline.missed?(version.post)}
@@ -639,7 +725,11 @@ defmodule PlatformWeb.SocialIdeaCard do
           </span>
         </div>
         <div class="flex flex-wrap items-center gap-x-3 gap-y-2">
-          <h3 data-role="queue-title" class="min-w-0 flex-1 text-lg font-semibold leading-snug">
+          <h3
+            tabindex="-1"
+            data-role="queue-title"
+            class="min-w-0 flex-1 text-lg font-semibold leading-snug"
+          >
             {@header.title}
           </h3>
           <button
@@ -655,6 +745,9 @@ defmodule PlatformWeb.SocialIdeaCard do
         </div>
         <p class="text-[13px] text-subtle" data-role="queue-count">
           {versions_line(@versions)}
+        </p>
+        <p :if={@cur} data-role="queue-post-context" class="text-sm text-subtle">
+          {context_line([@cur.label, @cur.account.handle, @cur.profile && @cur.profile.name])}
         </p>
       </header>
 

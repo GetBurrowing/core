@@ -91,6 +91,9 @@ defmodule PlatformWeb.SocialLive do
     profile = query_profile(profiles, query) || List.first(profiles)
     socket = SocialTabs.reduce(tabs, socket, fn mod, acc -> mod.init(acc) end)
     socket = PlatformWeb.SocialTodayTab.init(socket)
+    # Resolve exact targets before the first stream load; a later reset cannot
+    # remove inserts accumulated in the same initial render.
+    socket = PlatformWeb.SocialQueueTab.seed_target(socket, query)
     socket = assign(socket, :profile, profile)
 
     socket =

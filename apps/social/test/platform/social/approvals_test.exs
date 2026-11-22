@@ -51,8 +51,9 @@ defmodule Platform.Social.ApprovalsTest do
 
       for user <- [ctx.h1, ctx.h2] do
         assert [item] = items(user, post)
-        assert item.title == "Post for #{ctx.profile.name} needs your approval"
-        assert item.body == "LINKEDIN · not scheduled"
+        assert item.title == "Needs approval: LinkedIn post for #{ctx.profile.name}"
+        assert item.body == "LinkedIn · #{ctx.profile.name} · not scheduled"
+        refute item.body =~ ctx.a.handle
         refute item.title =~ "Episode 12"
         refute (item.body || "") =~ "Episode 12"
 

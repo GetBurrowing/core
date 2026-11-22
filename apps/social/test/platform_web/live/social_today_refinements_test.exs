@@ -24,6 +24,42 @@ defmodule PlatformWeb.SocialTodayRefinementsTest do
 
   defp card(post), do: "[data-role='studio-post'][data-post-id='#{post.id}']"
 
+  test "draft rows show a shared bounded title and platform/account before the brand", %{
+    conn: conn
+  } do
+    w = studio_world!()
+
+    first =
+      studio_post!(w, w.tiktok, "draft", %{
+        body: "Can AI ever be funny?\nThe full caption is kept for review."
+      })
+
+    second =
+      studio_post!(w, w.x, "draft", %{body: "AI swarms finding security holes at machine speed"})
+
+    view = open(conn, w)
+
+    assert has_element?(
+             view,
+             "#{card(first)} [data-role='studio-post-title']",
+             "Can AI ever be funny?"
+           )
+
+    assert has_element?(view, "#{card(first)} [data-role='studio-post-context']", "TikTok")
+
+    assert has_element?(
+             view,
+             "#{card(second)} [data-role='studio-post-title']",
+             "AI swarms finding security holes"
+           )
+
+    refute view |> element("#{card(first)} [data-role='studio-post-open']") |> render() =~
+             "The full caption is kept for review."
+
+    view |> element("#{card(first)} [data-role='studio-post-open']") |> render_click()
+    assert render(view) =~ "The full caption is kept for review."
+  end
+
   test "post cards prefer the stored cover, then video frame or image, and keep text-only cards",
        %{conn: conn} do
     w = studio_world!()
@@ -75,11 +111,11 @@ defmodule PlatformWeb.SocialTodayRefinementsTest do
              view
              |> render()
              |> LazyHTML.from_fragment()
-             |> LazyHTML.query("#{card(covered)} span.line-clamp-3")
+             |> LazyHTML.query("#{card(covered)} [data-role='studio-post-title']")
              |> LazyHTML.attribute("class")
 
-    assert "line-clamp-3" in String.split(body_classes)
-    refute "block" in String.split(body_classes)
+    assert "break-words" in String.split(body_classes)
+    refute "truncate" in String.split(body_classes)
 
     refute has_element?(view, "#{card(covered)} video")
 
