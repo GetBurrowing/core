@@ -80,6 +80,8 @@ defmodule Platform.Social.IdeaRegistrationParityTest do
                stage: "inbox",
                vote_count: 0,
                voted: false,
+               selected: false,
+               selected_at: nil,
                posts: [],
                open_revisions: [],
                notes: []
@@ -89,7 +91,7 @@ defmodule Platform.Social.IdeaRegistrationParityTest do
 
       assert MapSet.new(Map.keys(row)) ==
                MapSet.new(
-                 ~w(id profile_id title brief source_kind clip_id task_id meeting_id message_id source_url created_by_user_id created_by_agent_id archived_at inserted_at stage vote_count voted posts open_revisions notes)a
+                 ~w(id profile_id title brief source_kind clip_id task_id meeting_id message_id source_url created_by_user_id created_by_agent_id archived_at inserted_at stage vote_count voted selected selected_at posts open_revisions notes)a
                )
     end
   end

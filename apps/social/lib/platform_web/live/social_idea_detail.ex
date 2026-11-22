@@ -16,8 +16,10 @@ defmodule PlatformWeb.SocialIdeaDetail do
       agent, a human or the system, with an edit's before and after.
     * Where the idea came from, as a link.
 
-  A viewer who is not an approver has no drafting or approval controls.
-  Voting on the board is available to current readers other than the author.
+  A viewer who is not an approver has no drafting or approval controls. A viewer
+  who passes the selection authority may select or unselect the idea for research;
+  the "Add what you find as a note" prompt shows only to those who can add notes.
+  Agents vote on the board; people do not.
   """
 
   use PlatformWeb, :html
@@ -38,7 +40,6 @@ defmodule PlatformWeb.SocialIdeaDetail do
   }
 
   @stage_labels %{
-    "shortlisted" => "Shortlisted",
     "inbox" => "Inbox",
     "drafting" => "Drafting",
     "in_review" => "In review",
@@ -138,6 +139,7 @@ defmodule PlatformWeb.SocialIdeaDetail do
         stage: Map.get(@stage_labels, d.stage, "Inbox"),
         tz: SocialIdeaCard.profile_tz(d.profile),
         group: %{key: d.idea.id, idea: d.idea, posts: d.posts},
+        can_select?: Map.get(d, :can_select?, false) and is_nil(d.idea.archived_at),
         can_archive?: d.can_write? and not d.has_published? and is_nil(d.idea.archived_at),
         can_draft?: d.can_write? and d.posts == [] and is_nil(d.idea.archived_at)
       )
@@ -183,7 +185,11 @@ defmodule PlatformWeb.SocialIdeaDetail do
             <span class="text-xs text-base-content" data-role="idea-detail-brand">
               {@detail.profile.name}
             </span>
-            <span class="badge badge-ghost badge-sm ml-auto font-medium" data-role="idea-detail-stage">
+            <span
+              :if={@detail.stage != "inbox"}
+              class="badge badge-ghost badge-sm ml-auto font-medium"
+              data-role="idea-detail-stage"
+            >
               {@stage}
             </span>
           </div>
@@ -197,6 +203,22 @@ defmodule PlatformWeb.SocialIdeaDetail do
           <p data-role="idea-detail-votes" class="text-sm">
             {@detail.vote_count} {if @detail.vote_count == 1, do: "agent vote", else: "agent votes"}
           </p>
+
+          <div
+            :if={@detail.selected?}
+            data-role="idea-research"
+            class="space-y-1 rounded-lg bg-base-200 px-3 py-2 text-sm"
+          >
+            <h3 class="font-semibold">Research</h3>
+            <p>
+              <span data-role="idea-research-selected-by">
+                Selected for research by {@detail.selected_by_name}.
+              </span>
+              <span :if={@detail.can_write?} data-role="idea-research-prompt">
+                Add what you find as a note.
+              </span>
+            </p>
+          </div>
 
           <div class="flex flex-wrap items-center gap-2">
             <.source_link source={@detail.source} />
@@ -221,7 +243,32 @@ defmodule PlatformWeb.SocialIdeaDetail do
             >
               Archived
             </span>
-            <div :if={@can_draft? or @can_archive?} class="ml-auto flex flex-wrap items-center gap-2">
+            <div
+              :if={@can_draft? or @can_archive? or @can_select?}
+              class="ml-auto flex flex-wrap items-center gap-2"
+            >
+              <button
+                :if={@can_select? and not @detail.selected?}
+                type="button"
+                phx-click="ideas_select"
+                phx-value-id={@idea.id}
+                phx-disable-with="Selecting"
+                data-role="idea-select"
+                class="btn btn-outline btn-sm"
+              >
+                Select for research
+              </button>
+              <button
+                :if={@can_select? and @detail.selected?}
+                type="button"
+                phx-click="ideas_unselect"
+                phx-value-id={@idea.id}
+                phx-disable-with="Unselecting"
+                data-role="idea-unselect"
+                class="btn btn-ghost btn-sm"
+              >
+                Unselect
+              </button>
               <.draft_button
                 :if={@can_draft?}
                 idea_id={@idea.id}

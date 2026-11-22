@@ -85,6 +85,20 @@ defmodule Platform.Social.IdeaNotes do
   @spec list(Ecto.UUID.t()) :: [IdeaNote.t()]
   def list(idea_id), do: list_for_ideas([idea_id]) |> Map.get(idea_id, [])
 
+  @doc "How many notes each idea has, `%{idea_id => n}` (ideas with none are absent). One query."
+  @spec counts_for_ideas([Ecto.UUID.t()]) :: %{Ecto.UUID.t() => pos_integer()}
+  def counts_for_ideas([]), do: %{}
+
+  def counts_for_ideas(idea_ids) do
+    from(n in IdeaNote,
+      where: n.idea_id in ^idea_ids,
+      group_by: n.idea_id,
+      select: {n.idea_id, count(n.id)}
+    )
+    |> Repo.all()
+    |> Map.new()
+  end
+
   @doc "Notes for many ideas, `%{idea_id => [note]}`, each list oldest first."
   @spec list_for_ideas([Ecto.UUID.t()]) :: %{Ecto.UUID.t() => [IdeaNote.t()]}
   def list_for_ideas([]), do: %{}

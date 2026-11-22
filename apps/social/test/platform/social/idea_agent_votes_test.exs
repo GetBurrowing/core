@@ -42,8 +42,8 @@ defmodule Platform.Social.IdeaAgentVotesTest do
 
     assert %{vote_count: 0, voted: false} = IdeaVotes.summaries([idea], {:user, w.n.id})[idea.id]
 
-    assert [%{lane: "inbox", vote_count: 0}] =
-             Platform.Social.IdeaBoard.cards([w.profile], w.n.id)
+    assert %{all: [%{vote_count: 0}], voted: [], counts: %{"voted" => 0}} =
+             Platform.Social.IdeaBoard.views([w.profile], w.n.id)
 
     voter = pinned_agent!(w.org_id)
 

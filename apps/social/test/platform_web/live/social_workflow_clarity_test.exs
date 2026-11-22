@@ -177,7 +177,7 @@ defmodule PlatformWeb.SocialWorkflowClarityTest do
       })
 
     # Trigger an unrelated rerender without selecting Queue again.
-    render_click(view, "ideas_lane", %{"lane" => "shortlisted"})
+    render_click(view, "ideas_vote", %{"id" => Ecto.UUID.generate(), "action" => "vote"})
     refute has_element?(view, "[data-role='queue-open-today']")
     refute render(view) =~ "1 item to prepare or review on Today"
   end
@@ -200,7 +200,7 @@ defmodule PlatformWeb.SocialWorkflowClarityTest do
         resource: {:project, w.project.id}
       })
 
-    render_click(view, "ideas_lane", %{"lane" => "shortlisted"})
+    render_click(view, "ideas_vote", %{"id" => Ecto.UUID.generate(), "action" => "vote"})
     refute has_element?(view, "[data-role='queue-open-today']")
     refute render(view) =~ "1 item to prepare or review on Today"
   end

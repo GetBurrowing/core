@@ -576,9 +576,12 @@ defmodule Platform.Social.Tools do
     with %Profile{} = profile <- Social.get_profile(scope, args["profile_id"]),
          {:ok, project_id} <- Platform.Social.Studio.require_studio_project(profile),
          {:ok, projection} <- board_authority(context, agent, profile, project_id),
-         true <- valid_board_filter?(projection, args) || {:error, :invalid_board_argument} do
+         true <-
+           (valid_board_filter?(projection, args) and valid_selected_filter?(args)) ||
+             {:error, :invalid_board_argument} do
       {limit, offset} = ResultBound.page(args)
       stage = blank_to_nil(args["stage"])
+      selected = args["selected"]
 
       ideas =
         if IdeaVotes.allowed?(profile, {:agent, agent.id}),
@@ -594,7 +597,7 @@ defmodule Platform.Social.Tools do
         |> Enum.filter(fn {idea, ps} ->
           current = IdeaVotes.stage(ps, votes[idea.id].vote_count)
           current = if projection == :narrow, do: narrow_stage(current), else: current
-          stage == nil or current == stage
+          (stage == nil or current == stage) and (selected == nil or selected == selected?(idea))
         end)
 
       page =
@@ -685,6 +688,13 @@ defmodule Platform.Social.Tools do
       blank_to_nil(args["stage"]) in [nil, "inbox", "shortlisted", "in_production"]
   end
 
+  # The research selection, read from the idea row only. Never a vote count,
+  # and never a time the agent can order by.
+  defp selected?(%Idea{selected_at: at}), do: not is_nil(at)
+
+  # A boolean or absent; anything else is invalid_argument. Runs after authority.
+  defp valid_selected_filter?(args), do: Map.get(args, "selected") in [nil, true, false]
+
   defp narrow_stage(stage) when stage in ~w(inbox shortlisted), do: stage
   defp narrow_stage(_stage), do: "in_production"
 
@@ -695,6 +705,7 @@ defmodule Platform.Social.Tools do
       board_stage: narrow_stage(IdeaVotes.stage(posts, votes.vote_count)),
       vote_count: votes.vote_count,
       voted: votes.voted,
+      selected: selected?(idea),
       is_mine: idea.created_by_agent_id == agent_id,
       notes:
         idea.id
@@ -744,6 +755,8 @@ defmodule Platform.Social.Tools do
       stage: IdeaVotes.stage(posts, votes.vote_count),
       vote_count: votes.vote_count,
       voted: votes.voted,
+      selected: selected?(idea),
+      selected_at: idea.selected_at,
       posts: Enum.map(posts, &Map.put(post_json(&1), :events, events_json(events, &1.id))),
       open_revisions: revisions,
       notes: idea.id |> IdeaNotes.list() |> Enum.map(&note_json/1)

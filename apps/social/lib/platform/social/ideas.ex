@@ -32,7 +32,18 @@ defmodule Platform.Social.Ideas do
   alias Ecto.Changeset
   alias Platform.Repo
   alias Platform.Social
-  alias Platform.Social.{Account, Clip, Idea, Post, PostEvents, Profile}
+
+  alias Platform.Social.{
+    Account,
+    Clip,
+    Idea,
+    IdeaSelectionEvent,
+    IdeaVotes,
+    Post,
+    PostEvents,
+    Profile,
+    Studio
+  }
 
   @max_note 2_000
 
@@ -172,6 +183,137 @@ defmodule Platform.Social.Ideas do
         do: {:error, :has_published},
         else: archive(scope, idea.id)
     end
+  end
+
+  # ── Research selection ───────────────────────────────────────────────
+
+  @doc """
+  A person selects an idea for research. `actor` must be `{:user, id}`: any
+  other actor is `{:error, :not_a_human}` before anything is read, so no agent
+  can select, by tool or otherwise.
+
+  One transaction takes the profile `FOR SHARE`, then the idea `FOR UPDATE`
+  (the `Platform.Social.IdeaVotes` order), and decides on the LOCKED rows, in
+  this order: the user is live and the brand is among the user's profiles
+  (`IdeaVotes.allowed?/2`), the idea belongs to the locked profile and org,
+  the user holds project-level `social.use` (`Studio.require_social_use/2`),
+  and only then the idea's own state: archived is `:idea_archived`. Authority
+  comes before state, so an unauthorized caller never learns the idea is
+  already selected.
+
+  Selecting an already-selected idea writes nothing and answers
+  `{:ok, idea, :unchanged}`; the first selector and time stand. Otherwise the
+  marker and a `selected` event are written together and the answer is
+  `{:ok, idea, :changed}`. Posts, votes, drafts, tasks, jobs and messages are
+  never touched. After commit the open Ideas pages refresh once.
+
+  Refusals: `:not_a_human`, `:not_authorized`, `:not_found`, `:idea_archived`.
+  """
+  @spec select_for_research(Social.scope(), term(), term()) ::
+          {:ok, Idea.t(), :changed | :unchanged} | {:error, atom()}
+  def select_for_research(scope, id, actor), do: set_selection(scope, id, actor, :select)
+
+  @doc """
+  The inverse of `select_for_research/3`, with the same authority and order.
+  Any authorized person may unselect, whoever selected: the `unselected` event
+  records who did. Unselecting an idea that is not selected is `:unchanged`.
+  """
+  @spec unselect_for_research(Social.scope(), term(), term()) ::
+          {:ok, Idea.t(), :changed | :unchanged} | {:error, atom()}
+  def unselect_for_research(scope, id, actor), do: set_selection(scope, id, actor, :unselect)
+
+  defp set_selection(scope, id, {:user, user_id}, op) when is_binary(user_id) do
+    with %Idea{} = initial <- get(scope, id) || {:error, :not_found} do
+      result =
+        Repo.transaction(fn ->
+          with %Profile{} = profile <-
+                 Social.lock_profile(scope, initial.profile_id, :share) || {:error, :not_found},
+               %Idea{} = idea <-
+                 Repo.one(from(i in Idea, where: i.id == ^initial.id, lock: "FOR UPDATE")) ||
+                   {:error, :not_found},
+               true <-
+                 (idea.profile_id == profile.id and idea.org_id == profile.org_id) ||
+                   {:error, :not_found},
+               :ok <- selection_authority(profile, user_id),
+               :ok <- if(idea.archived_at, do: {:error, :idea_archived}, else: :ok) do
+            apply_selection(idea, user_id, op)
+          else
+            {:error, reason} -> Repo.rollback(reason)
+          end
+        end)
+
+      case result do
+        {:ok, {idea, :changed}} ->
+          broadcast_changed(idea.profile_id)
+          {:ok, idea, :changed}
+
+        {:ok, {idea, :unchanged}} ->
+          {:ok, idea, :unchanged}
+
+        {:error, reason} ->
+          {:error, reason}
+      end
+    end
+  end
+
+  defp set_selection(_scope, _id, _actor, _op), do: {:error, :not_a_human}
+
+  @doc """
+  Whether `user_id` passes the selection authority on `profile` as read now.
+  For showing or hiding the Select button only: the writers decide again, on
+  locked rows, and never trust this.
+  """
+  @spec may_select?(Profile.t(), term()) :: boolean()
+  def may_select?(%Profile{} = profile, user_id) when is_binary(user_id) do
+    case Social.get_profile(profile.org_id, profile.id) do
+      %Profile{} = fresh -> selection_authority(fresh, user_id) == :ok
+      nil -> false
+    end
+  end
+
+  def may_select?(_profile, _user_id), do: false
+
+  defp selection_authority(%Profile{} = profile, user_id) do
+    with true <- IdeaVotes.allowed?(profile, {:user, user_id}),
+         :ok <- Studio.require_social_use(user_id, profile) do
+      :ok
+    else
+      _ -> {:error, :not_authorized}
+    end
+  end
+
+  defp apply_selection(%Idea{selected_at: nil} = idea, user_id, :select) do
+    idea =
+      idea
+      |> Changeset.change(selected_at: DateTime.utc_now(), selected_by_user_id: user_id)
+      |> Repo.update!()
+
+    record_selection!(idea, "selected", user_id)
+    {idea, :changed}
+  end
+
+  defp apply_selection(%Idea{selected_at: nil} = idea, _user_id, :unselect),
+    do: {idea, :unchanged}
+
+  defp apply_selection(%Idea{} = idea, _user_id, :select), do: {idea, :unchanged}
+
+  defp apply_selection(%Idea{} = idea, user_id, :unselect) do
+    idea =
+      idea
+      |> Changeset.change(selected_at: nil, selected_by_user_id: nil)
+      |> Repo.update!()
+
+    record_selection!(idea, "unselected", user_id)
+    {idea, :changed}
+  end
+
+  defp record_selection!(%Idea{id: idea_id}, action, user_id) do
+    Repo.insert!(%IdeaSelectionEvent{
+      idea_id: idea_id,
+      action: action,
+      actor_kind: "human",
+      actor_id: user_id
+    })
   end
 
   @doc """

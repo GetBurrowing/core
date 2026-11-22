@@ -5,7 +5,7 @@ defmodule Platform.Social.Idea do
   is its own one-post group downstream.
 
   `org_id`, `profile_id`, `created_by_user_id`, `created_by_agent_id` and
-  `archived_at` are set by `Platform.Social.Ideas`, never cast. Exactly one
+  `archived_at`, `selected_at` and `selected_by_user_id` are set by `Platform.Social.Ideas`, never cast. Exactly one
   creator is set at write (`creator/2`). There is no stage column: the stage
   is derived from the posts (`Platform.Social.Ideas.stage/1`), so it cannot
   drift from them.
@@ -41,6 +41,11 @@ defmodule Platform.Social.Idea do
     belongs_to(:created_by_user, Platform.Accounts.User)
     belongs_to(:created_by_agent, Platform.Agents.Agent)
     field(:archived_at, :utc_datetime_usec)
+
+    # Research selection: set only by `Ideas.select_for_research/3` and
+    # `unselect_for_research/3`; never cast. `selected_at` is the state.
+    field(:selected_at, :utc_datetime_usec)
+    belongs_to(:selected_by_user, Platform.Accounts.User)
 
     has_many(:posts, Platform.Social.Post)
 
