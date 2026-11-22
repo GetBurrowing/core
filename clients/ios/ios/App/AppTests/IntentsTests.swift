@@ -319,15 +319,101 @@ final class IntentsTests: XCTestCase {
         let outcome = try await actions.askAgent(agent(a), question: "Is the banner copy final?")
 
         XCTAssertEqual(outcome, .reply("Yes. The copy is final. Ship it today."))
-        XCTAssertEqual(IntentCopy.agentSays(agent: "Saru", reply: "Yes. The copy is final. Ship it today."), "Saru says: Yes. The copy is final.")
+        XCTAssertEqual(
+            IntentCopy.agentSays(agent: "Saru", reply: "Yes. The copy is final. Ship it today."), "Saru says: Yes. The copy is final. Ship it today.")
         let requests = StubURLProtocol.requests
         XCTAssertEqual(requests.count, 5, "dm, post, three polls")
         guard requests.count == 5 else { return }
         XCTAssertEqual(requests[0].url?.path, "/api/app/agents/\(agentID)/dm")
         XCTAssertEqual(requests[1].url?.path, "/api/app/spaces/\(dmID)/messages")
+        let posted = String(decoding: try XCTUnwrap(StubURLProtocol.bodies[1]), as: UTF8.self)
+        XCTAssertTrue(
+            posted.contains(IntentCopy.voiceQuestion("Is the banner copy final?")), "the question, then the ask for a short spoken reply")
         XCTAssertEqual(requests[2].url?.query, "after=q0")
         XCTAssertEqual(requests[4].url?.query, "after=m2", "the cursor moves past messages already seen")
         XCTAssertEqual(clock.sleeps, 3)
+    }
+
+    // MARK: What Siri speaks for a reply (task 01a13c1d)
+
+    func testTheVoiceQuestionIsTheQuestionThenTheSpokenReplyRequest() {
+        XCTAssertEqual(
+            IntentCopy.voiceQuestion("What's deployed today?"),
+            "What's deployed today?\n\n(Asked by voice through Siri, which reads the reply aloud: please answer in one to three "
+                + "short plain sentences, with no markdown, lists, links, code or tables.)")
+    }
+
+    func testAnAlreadyPlainShortReplyIsSpokenUnchanged() {
+        let reply = "Yes. The copy is final and approved. I'll post the link once CI is green."
+        XCTAssertEqual(SpokenReply.text(reply), reply)
+        XCTAssertEqual(IntentCopy.agentSays(agent: "Saru", reply: reply), "Saru says: \(reply)")
+    }
+
+    func testHeadingsBoldItalicAndInlineCodeLoseTheirMarks() {
+        let reply = "## Deployed today\n\n**core** shipped the *new* `ask` route and __two__ fixes, not ~~three~~."
+        XCTAssertEqual(SpokenReply.text(reply), "Deployed today. core shipped the new ask route and two fixes, not three.")
+    }
+
+    func testAnUnderscoreInsideAWordIsKept() {
+        XCTAssertEqual(SpokenReply.text("The ask_outcome line is logged."), "The ask_outcome line is logged.")
+    }
+
+    func testALinkOrImageKeepsOnlyItsText() {
+        let reply = "See [the PR](https://github.com/example/core/pull/1) and ![the chart](https://example.com/c.png) for details."
+        XCTAssertEqual(SpokenReply.text(reply), "See the PR and the chart for details.")
+    }
+
+    func testBulletsAndNumberedItemsBecomeSentences() {
+        let reply = "Deployed today:\n- core 1.4 to production\n* the iOS build\n\u{2022} the web app\n+ [x] the voice worker!\n1. a fix\n2) another fix"
+        XCTAssertEqual(
+            SpokenReply.text(reply),
+            "Deployed today: core 1.4 to production. the iOS build. the web app. the voice worker! a fix. another fix.")
+    }
+
+    func testACodeFenceIsDroppedWithItsContents() {
+        let reply = "Run this:\n```sh\nmix test --only voice\n```\nThen it passes."
+        XCTAssertEqual(SpokenReply.text(reply), "Run this: Then it passes.")
+    }
+
+    func testAURLOnlyLineAndBareURLsAreDropped() {
+        let reply = "The deploy finished.\n\nhttps://example.com/deploys/42\n\nLogs are at <https://example.com/logs> (https://example.com/x) now."
+        XCTAssertEqual(SpokenReply.text(reply), "The deploy finished. Logs are at now.")
+    }
+
+    func testTablePipesAndSeparatorRowsAreDropped() {
+        let reply = "| Service | Version |\n|---|:---:|\n| core | 1.4 |"
+        XCTAssertEqual(SpokenReply.text(reply), "Service, Version. core, 1.4.")
+    }
+
+    func testWhitespaceCollapsesAndABlockquoteLosesItsMark() {
+        XCTAssertEqual(SpokenReply.text("  > Two   spaces\n>  and a\twrapped line  "), "Two spaces and a wrapped line.")
+    }
+
+    func testAReplyWithNothingSpeakableSaysTheReplyIsInBurrow() {
+        XCTAssertEqual(SpokenReply.text("```\ncode only\n```\nhttps://example.com"), "")
+        XCTAssertEqual(IntentCopy.agentSays(agent: "Saru", reply: "https://example.com"), "Saru replied. The full reply is in Burrow.")
+    }
+
+    func testALongReplyIsCutAtTheLastWholeSentenceThatFits() {
+        let first = String(repeating: "a", count: 140) + "."
+        let second = String(repeating: "b", count: 150) + "."
+        let third = "This sentence would pass the cap."
+        // 141 + 1 + 151 = 293 fits; adding the third does not.
+        XCTAssertEqual(SpokenReply.text("\(first) \(second) \(third)"), "\(first) \(second) The full reply is in Burrow.")
+        XCTAssertEqual(SpokenReply.cap, 300)
+    }
+
+    func testAReplyExactlyAtTheCapIsNotCut() {
+        let reply = String(repeating: "a", count: 299) + "."
+        XCTAssertEqual(SpokenReply.text(reply), reply)
+        XCTAssertEqual(SpokenReply.text(reply + " More."), "\(reply) The full reply is in Burrow.")
+    }
+
+    func testAFirstSentenceLongerThanTheCapIsCutAtAWord() {
+        let reply = Array(repeating: "word", count: 100).joined(separator: " ") + "."
+        let spoken = SpokenReply.text(reply)
+        XCTAssertTrue(spoken.hasSuffix("word\u{2026} The full reply is in Burrow."), spoken)
+        XCTAssertLessThanOrEqual(spoken.count, SpokenReply.cap + 1 + IntentCopy.fullReplyInBurrow.count + 1)
     }
 
     func testAskAgentTimesOutAfterTheWindowWithNoExtraRequest() async throws {

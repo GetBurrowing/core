@@ -156,7 +156,8 @@ struct IntentActions {
         return MeetingRequest(host: host, spaceID: nil, spaceName: nil, projectID: picked.uuid)
     }
 
-    /// Opens the person's DM with the agent, posts the question, then polls
+    /// Opens the person's DM with the agent, posts the question (followed by
+    /// `IntentCopy.askedByVoice`, asking for a short spoken reply), then polls
     /// every `AskAgent.pollInterval` for at most `window`, returning the
     /// first message THAT agent wrote after the question. Anyone else's
     /// message is skipped. After the window: `.timedOut`, and no further
@@ -172,7 +173,10 @@ struct IntentActions {
         let text = question.trimmingCharacters(in: .whitespacesAndNewlines)
         guard !text.isEmpty else { throw IntentFailure.emptyMessage }
         let dm = try await call("agent_dm", ref.host) { try await env.client.dmWithAgent(host: ref.host, agentID: ref.uuid) }
-        let posted = try await call("send_message", ref.host) { try await env.client.sendText(host: ref.host, spaceID: dm.spaceID, text: text) }
+        // The agent is asked for a short plain reply, since Siri reads it aloud.
+        let posted = try await call("send_message", ref.host) {
+            try await env.client.sendText(host: ref.host, spaceID: dm.spaceID, text: IntentCopy.voiceQuestion(text))
+        }
         return try await awaitAgentReply(
             host: ref.host, agentUUID: ref.uuid, spaceID: dm.spaceID, after: posted, window: window, isCancelled: isCancelled,
             progress: progress)
