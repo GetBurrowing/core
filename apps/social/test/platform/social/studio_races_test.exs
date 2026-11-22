@@ -211,6 +211,125 @@ defmodule Platform.Social.StudioRacesTest do
 
   # ── the race table ───────────────────────────────────────────────────
 
+  test "discard commits before submit: submit refuses the discarded draft", ctx do
+    post = post!(ctx, ctx.a, "draft")
+    first = hold(fn -> Studio.discard_draft(ctx.org.id, post.id, ctx.u1.id, expect(post)) end)
+    assert {:ok, discarded} = elem(first, 1)
+    second = contend(fn -> Studio.resubmit(ctx.org.id, post.id, ctx.u2.id, expect(post)) end)
+    release(first)
+    assert {:error, :post_discarded} = Task.await(second, 10_000)
+    assert row(post).state_rev == discarded.state_rev
+    assert Enum.count(actions(post.id), &(&1 == "discarded")) == 1
+    refute "submitted" in actions(post.id)
+    no_send()
+  end
+
+  test "submit commits before discard: discard is stale", ctx do
+    post = post!(ctx, ctx.a, "draft")
+    first = hold(fn -> Studio.resubmit(ctx.org.id, post.id, ctx.u1.id, expect(post)) end)
+    assert {:ok, submitted} = elem(first, 1)
+    second = contend(fn -> Studio.discard_draft(ctx.org.id, post.id, ctx.u2.id, expect(post)) end)
+    release(first)
+    assert {:error, {:stale, %{state_rev: rev}}} = Task.await(second, 10_000)
+    assert rev == submitted.state_rev
+    assert row(post).status == "needs_approval"
+    refute "discarded" in actions(post.id)
+    no_send()
+  end
+
+  test "discard commits before edit: edit refuses the discarded draft", ctx do
+    post = post!(ctx, ctx.a, "draft")
+    first = hold(fn -> Studio.discard_draft(ctx.org.id, post.id, ctx.u1.id, expect(post)) end)
+    assert {:ok, discarded} = elem(first, 1)
+
+    second =
+      contend(fn ->
+        Studio.save_version(
+          ctx.org.id,
+          post.id,
+          {:human, ctx.u2.id},
+          %{body: "late edit"},
+          expect(post)
+        )
+      end)
+
+    release(first)
+    assert {:error, :post_discarded} = Task.await(second, 10_000)
+    assert row(post).body == post.body
+    assert row(post).state_rev == discarded.state_rev
+    no_send()
+  end
+
+  test "edit commits before discard: discard is stale", ctx do
+    post = post!(ctx, ctx.a, "draft")
+
+    first =
+      hold(fn ->
+        Studio.save_version(
+          ctx.org.id,
+          post.id,
+          {:human, ctx.u1.id},
+          %{body: "first edit"},
+          expect(post)
+        )
+      end)
+
+    assert {:ok, %{post: edited}} = elem(first, 1)
+    second = contend(fn -> Studio.discard_draft(ctx.org.id, post.id, ctx.u2.id, expect(post)) end)
+    release(first)
+    assert {:error, {:stale, %{state_rev: rev}}} = Task.await(second, 10_000)
+    assert rev == edited.state_rev
+    assert row(post).body == "first edit"
+    refute "discarded" in actions(post.id)
+    no_send()
+  end
+
+  test "discard commits before restore: restore with the old observation is stale", ctx do
+    post = post!(ctx, ctx.a, "draft")
+    first = hold(fn -> Studio.discard_draft(ctx.org.id, post.id, ctx.u1.id, expect(post)) end)
+    assert {:ok, discarded} = elem(first, 1)
+    second = contend(fn -> Studio.restore_draft(ctx.org.id, post.id, ctx.u2.id, expect(post)) end)
+    release(first)
+    assert {:error, {:stale, %{state_rev: rev}}} = Task.await(second, 10_000)
+    assert rev == discarded.state_rev
+    assert row(post).discarded_at != nil
+    refute "restored" in actions(post.id)
+    no_send()
+  end
+
+  test "restore commits before discard: discard with the old observation is stale", ctx do
+    post = post!(ctx, ctx.a, "draft")
+    {:ok, discarded} = Studio.discard_draft(ctx.org.id, post.id, ctx.u1.id, expect(post))
+
+    first =
+      hold(fn -> Studio.restore_draft(ctx.org.id, post.id, ctx.u1.id, expect(discarded)) end)
+
+    assert {:ok, restored} = elem(first, 1)
+
+    second =
+      contend(fn -> Studio.discard_draft(ctx.org.id, post.id, ctx.u2.id, expect(discarded)) end)
+
+    release(first)
+    assert {:error, {:stale, %{state_rev: rev}}} = Task.await(second, 10_000)
+    assert rev == restored.state_rev
+    assert is_nil(row(post).discarded_at)
+    assert Enum.count(actions(post.id), &(&1 == "discarded")) == 1
+    no_send()
+  end
+
+  test "concurrent discards serialize and the second is stale", ctx do
+    post = post!(ctx, ctx.a, "draft")
+    first = hold(fn -> Studio.discard_draft(ctx.org.id, post.id, ctx.u1.id, expect(post)) end)
+    assert {:ok, discarded} = elem(first, 1)
+    second = contend(fn -> Studio.discard_draft(ctx.org.id, post.id, ctx.u2.id, expect(post)) end)
+    release(first)
+    assert {:error, {:stale, %{state_rev: rev}}} = Task.await(second, 10_000)
+    assert rev == discarded.state_rev
+    assert row(post).state_rev == discarded.state_rev
+    assert Enum.count(actions(post.id), &(&1 == "discarded")) == 1
+    no_send()
+  end
+
   test "two approvers at once: the first commits, the second is stale, one receipt", ctx do
     post = post!(ctx, ctx.a)
     first = hold(fn -> approve(ctx, post, ctx.u1) end)

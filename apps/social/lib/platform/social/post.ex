@@ -131,6 +131,7 @@ defmodule Platform.Social.Post do
     field(:flow, :string, default: "legacy")
     field(:version, :integer, default: 1)
     field(:state_rev, :integer, default: 0)
+    field(:discarded_at, :utc_datetime_usec)
     # The destination named at creative acceptance: written once, never cast.
     field(:accepted_account_id, :binary_id)
     belongs_to(:planned_by_user, Platform.Accounts.User)

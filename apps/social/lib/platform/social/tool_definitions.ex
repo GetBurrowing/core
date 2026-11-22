@@ -201,7 +201,7 @@ defmodule Platform.Social.ToolDefinitions do
       %{
         name: "social_studio_draft_create",
         description:
-          "Draft one post in Studio, on one account of a profile that has the new Studio flow on. It is created as a draft and nothing else: it is not submitted, approved, planned or sent, and a person submits it from Today, where it shows as agent-drafted. " <>
+          "Draft one post in Studio, on one account of a profile that has the new Studio flow on. It is created as a draft and nothing else: it is not submitted, approved, planned or sent, and a person submits it from Today, where it shows as agent-drafted. A person-discarded draft must not be recreated without direction. " <>
             @human_approves,
         parameters: %{
           account_id: %{
@@ -244,7 +244,7 @@ defmodule Platform.Social.ToolDefinitions do
       %{
         name: "social_draft_update",
         description:
-          "Edit a post you drafted while it is still draft or needs_approval; draft may move to needs_approval, never back. " <>
+          "Edit a post you drafted while it is still draft or needs_approval; draft may move to needs_approval, never back. A person-discarded draft must not be recreated without direction. " <>
             @human_approves,
         parameters:
           Map.merge(@post_fields, %{

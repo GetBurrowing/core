@@ -17,7 +17,7 @@ defmodule Platform.Social.PostEvent do
 
   @actor_kinds ~w(agent human system)
   @actions ~w(created edited submitted approved rejected revision_requested published failed refused
-              version_saved approval_revoked planned plan_cancelled retargeted)
+              version_saved approval_revoked planned plan_cancelled retargeted discarded restored)
 
   @type t :: %__MODULE__{}
 
