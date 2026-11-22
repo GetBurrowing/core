@@ -1,18 +1,27 @@
 defmodule Platform.Social.IdeaBoard do
   @moduledoc """
-  What the Ideas tab reads (Social authoring 7/11, task 01a16c50-ea67): the
-  board's cards and one idea's detail. Read-only.
+  What the Ideas tab reads: the three views of one list, and one idea's
+  detail. Read-only.
 
   Profiles come from the caller, who takes them from
   `Platform.Social.list_profiles_for_user/1` (the RBAC swap point); every
   idea is read through its profile's org scope (`Platform.Social.Ideas`).
 
-  ## Lanes are derived
+  ## One list, three views
 
-  An idea's lane is `Platform.Social.Ideas.stage/1` of its posts, never
-  stored and never dragged. Three votes shortlist an Inbox idea; posts take precedence.
-  An idea whose every post failed sits in Drafting (it needs another
-  draft); any failed post puts a muted Failed marker on the card.
+  `views/2` reads the active (not archived) ideas of the profiles ONCE, and
+  the agent votes of those ideas ONCE (`Platform.Social.IdeaVotes.summaries/2`,
+  agent votes on the idea's own profile and org), and derives everything in
+  memory:
+
+    * `all`: every active idea, newest first;
+    * `voted`: ideas with at least one agent vote, most votes first, then
+      `IdeaVotes.order_key/2` (oldest, then id);
+    * `selected`: ideas a person selected for research, most recently
+      selected first.
+
+  An idea can be in all three. A vote count never selects an idea and a
+  selection never moves a vote. No lane, stage or post is read for the page.
   """
 
   import Ecto.Query
@@ -21,68 +30,118 @@ defmodule Platform.Social.IdeaBoard do
   alias Platform.Social
   alias Platform.Social.{Account, Idea, IdeaNotes, Ideas, IdeaVotes, Post, PostEvents, Profile}
 
-  @lanes ~w(shortlisted inbox drafting in_review scheduled live)
+  @views ~w(all voted selected)
 
-  @doc "The derived lanes, in board order."
-  @spec lanes() :: [String.t()]
-  def lanes, do: @lanes
-
-  @doc "The lane of a derived stage (`failed` sits in Drafting)."
-  @spec lane(String.t()) :: String.t()
-  def lane("failed"), do: "drafting"
-  def lane(stage) when stage in @lanes, do: stage
-  def lane(_), do: "drafting"
+  @doc "The view keys, in button order."
+  @spec views() :: [String.t()]
+  def views, do: @views
 
   @doc """
-  The board's cards for `profiles` (each read through its own org), newest
-  idea first outside Inbox/Shortlisted; those sort by votes, oldest time and id, as seen by `user_id` (the "N waiting on you" count).
+  The three views for `profiles` as seen by `user_id`:
+  `%{all: [card], voted: [card], selected: [card], counts: %{"all" => n, ...}}`.
+
+  A card is `%{id, idea, profile, vote_count, voted, own_idea?, selected?,
+  selected_at, selected_by_name, creator_name, notes_count, wikipedia?}`.
+  `selected_by_name` is the selector's name, or "a former user" when the
+  selection stands but its user is gone.
   """
-  @spec cards([Profile.t()], Ecto.UUID.t() | nil, DateTime.t()) :: [map()]
-  def cards(profiles, user_id, now \\ DateTime.utc_now()) do
+  @spec views([Profile.t()], Ecto.UUID.t() | nil) :: map()
+  def views(profiles, user_id) do
     ideas =
-      Enum.flat_map(profiles, fn %Profile{} = p -> Ideas.list(p.org_id, p.id) end)
-      |> Enum.sort_by(& &1.inserted_at, {:desc, DateTime})
+      profiles
+      |> Enum.flat_map(fn %Profile{} = p -> Ideas.list(p.org_id, p.id) end)
+      |> Enum.sort_by(&{DateTime.to_unix(&1.inserted_at, :microsecond), &1.id}, :desc)
 
     wikipedia = Social.Trends.wikipedia_idea_ids(ideas)
     votes = IdeaVotes.summaries(ideas, {:user, user_id})
-    posts = ideas |> Enum.map(& &1.id) |> Ideas.posts_by_idea()
-    accounts = accounts(posts |> Map.values() |> List.flatten())
+    notes = IdeaNotes.counts_for_ideas(Enum.map(ideas, & &1.id))
     by_id = Map.new(profiles, &{&1.id, &1})
-    agent_ids = agent_ids_by_idea(ideas, posts, by_id)
-    names = agent_names(Map.values(agent_ids))
-    approver? = approver_fun(user_id)
+    names = people_names(ideas)
 
-    cards =
+    all =
       for idea <- ideas do
-        idea_posts = Map.get(posts, idea.id, [])
-        profile = Map.get(by_id, idea.profile_id)
         vote = Map.fetch!(votes, idea.id)
-        stage = IdeaVotes.stage(idea_posts, vote.vote_count)
 
         %{
-          wikipedia?: MapSet.member?(wikipedia, idea.id),
+          id: idea.id,
+          idea: idea,
+          profile: Map.get(by_id, idea.profile_id),
           vote_count: vote.vote_count,
           voted: vote.voted,
           own_idea?: idea.created_by_user_id == user_id,
-          id: idea.id,
-          idea: idea,
-          profile: profile,
-          stage: stage,
-          lane: lane(stage),
-          failed?: Enum.any?(idea_posts, &(&1.status == "failed")),
-          platforms: Enum.map(idea_posts, &platform_of(accounts, &1)),
-          agent_name: Map.get(names, Map.get(agent_ids, idea.id)),
-          next_at: next_at(idea_posts, now),
-          waiting: waiting(idea_posts, accounts, profile, approver?)
+          selected?: not is_nil(idea.selected_at),
+          selected_at: idea.selected_at,
+          selected_by_name: selector_name(idea, names),
+          creator_name: creator_name(idea, names),
+          notes_count: Map.get(notes, idea.id, 0),
+          wikipedia?: MapSet.member?(wikipedia, idea.id)
         }
       end
 
-    Enum.sort_by(cards, fn card ->
-      if card.lane in ~w(inbox shortlisted),
-        do: {0, IdeaVotes.order_key(card.idea, card.vote_count)},
-        else: {1, {-DateTime.to_unix(card.idea.inserted_at, :microsecond), card.id}}
-    end)
+    voted =
+      all
+      |> Enum.filter(&(&1.vote_count > 0))
+      |> Enum.sort_by(&IdeaVotes.order_key(&1.idea, &1.vote_count))
+
+    selected =
+      all
+      |> Enum.filter(& &1.selected?)
+      |> Enum.sort_by(&{DateTime.to_unix(&1.selected_at, :microsecond), &1.id}, :desc)
+
+    %{
+      all: all,
+      voted: voted,
+      selected: selected,
+      counts: %{"all" => length(all), "voted" => length(voted), "selected" => length(selected)}
+    }
   end
+
+  # `%{{:user | :agent, id} => name}` for every creator and selector, in two queries.
+  defp people_names(ideas) do
+    user_ids =
+      ideas
+      |> Enum.flat_map(&[&1.created_by_user_id, &1.selected_by_user_id])
+      |> Enum.filter(&is_binary/1)
+      |> Enum.uniq()
+
+    agent_ids =
+      ideas |> Enum.map(& &1.created_by_agent_id) |> Enum.filter(&is_binary/1) |> Enum.uniq()
+
+    users =
+      if user_ids == [],
+        do: %{},
+        else:
+          from(u in Platform.Accounts.User,
+            where: u.id in ^user_ids,
+            select: {u.id, u.name, u.email}
+          )
+          |> Repo.all()
+          |> Map.new(fn {id, name, email} ->
+            {{:user, id}, if(is_binary(name) and name != "", do: name, else: email)}
+          end)
+
+    agents =
+      agent_ids
+      |> agent_names()
+      |> Map.new(fn {id, name} -> {{:agent, id}, name} end)
+
+    Map.merge(users, agents)
+  end
+
+  defp selector_name(%Idea{selected_at: nil}, _names), do: nil
+
+  defp selector_name(%Idea{selected_by_user_id: nil}, _names), do: "a former user"
+
+  defp selector_name(%Idea{selected_by_user_id: id}, names),
+    do: Map.get(names, {:user, id}) || "a former user"
+
+  defp creator_name(%Idea{created_by_agent_id: id}, names) when is_binary(id),
+    do: Map.get(names, {:agent, id}) || "An agent"
+
+  defp creator_name(%Idea{created_by_user_id: id}, names) when is_binary(id),
+    do: Map.get(names, {:user, id}) || "Someone"
+
+  defp creator_name(_idea, _names), do: "Someone"
 
   @doc """
   One idea's detail, or nil when it is not an idea of `profiles`:
@@ -118,9 +177,12 @@ defmodule Platform.Social.IdeaBoard do
         wikipedia?: MapSet.member?(Social.Trends.wikipedia_idea_ids([idea]), idea.id),
         posts: posts,
         accounts: accounts,
-        stage: IdeaVotes.stage(posts, vote.vote_count),
+        stage: Ideas.stage(posts),
         vote_count: vote.vote_count,
         voted: vote.voted,
+        selected?: not is_nil(idea.selected_at),
+        selected_at: idea.selected_at,
+        selected_by_name: selector_name(idea, selector_names(idea)),
         has_published?: Enum.any?(posts, &(&1.status == "published")),
         agent_id: agent_id,
         agent_name: Map.get(names, {"agent", agent_id}),
@@ -141,6 +203,8 @@ defmodule Platform.Social.IdeaBoard do
       }
     end
   end
+
+  defp selector_names(%Idea{} = idea), do: people_names([idea])
 
   defp sort_le({a_at, a_id}, {b_at, b_id}) do
     case DateTime.compare(a_at, b_at) do
@@ -199,39 +263,6 @@ defmodule Platform.Social.IdeaBoard do
   defp platform_of(accounts, %Post{account_id: id}),
     do: (Map.get(accounts, id) || %{platform: nil}).platform
 
-  # The drafting agent per idea: the posts' first drafter (one query for
-  # every post's `created` event), else the idea's creator agent, else the
-  # profile's drafting agent.
-  defp agent_ids_by_idea(ideas, posts, profiles) do
-    post_ids = posts |> Map.values() |> List.flatten() |> Enum.map(& &1.id)
-
-    created =
-      if post_ids == [] do
-        %{}
-      else
-        from(e in Platform.Social.PostEvent,
-          where:
-            e.post_id in ^post_ids and e.action == "created" and e.actor_kind == "agent" and
-              not is_nil(e.actor_id),
-          order_by: [asc: e.inserted_at, asc: e.id],
-          select: {e.post_id, e.actor_id}
-        )
-        |> Repo.all()
-        |> Enum.reduce(%{}, fn {post_id, agent_id}, acc -> Map.put_new(acc, post_id, agent_id) end)
-      end
-
-    Map.new(ideas, fn idea ->
-      from_posts =
-        posts
-        |> Map.get(idea.id, [])
-        |> Enum.find_value(&(&1.generated_by_agent_id || Map.get(created, &1.id)))
-
-      profile = Map.get(profiles, idea.profile_id)
-
-      {idea.id, from_posts || idea.created_by_agent_id || (profile && profile.drafting_agent_id)}
-    end)
-  end
-
   defp agent_names(ids) do
     ids = ids |> Enum.filter(&is_binary/1) |> Enum.uniq()
 
@@ -271,34 +302,6 @@ defmodule Platform.Social.IdeaBoard do
     case Map.get(names, {kind, id}) do
       name when is_binary(name) and name != "" -> name
       _ -> if kind == "agent", do: "An agent", else: "Someone"
-    end
-  end
-
-  # The soonest time still ahead among the idea's open posts, else nil.
-  defp next_at(posts, now) do
-    posts
-    |> Enum.filter(&(&1.status in ~w(draft needs_approval approved scheduled)))
-    |> Enum.map(& &1.scheduled_at)
-    |> Enum.filter(&match?(%DateTime{}, &1))
-    |> Enum.filter(&(DateTime.compare(&1, now) != :lt))
-    |> Enum.min(DateTime, fn -> nil end)
-  end
-
-  defp waiting(_posts, _accounts, nil, _approver?), do: 0
-
-  defp waiting(posts, accounts, profile, approver?) do
-    Enum.count(posts, fn post ->
-      post.status == "needs_approval" and
-        match?(%Account{}, Map.get(accounts, post.account_id)) and
-        approver?.(profile, Map.get(accounts, post.account_id))
-    end)
-  end
-
-  defp approver_fun(nil), do: fn _profile, _account -> false end
-
-  defp approver_fun(user_id) do
-    fn profile, account ->
-      Social.post_approver_check(profile.org_id, profile, account, user_id) == :ok
     end
   end
 end

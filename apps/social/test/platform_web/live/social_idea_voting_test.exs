@@ -15,7 +15,9 @@ defmodule PlatformWeb.SocialIdeaVotingTest do
     find_live_child(parent, "ext-page-social")
   end
 
-  test "readers see agent vote and shortlist changes after refreshing", %{conn: conn} do
+  test "readers see agent vote changes after refreshing, with no shortlist on the page", %{
+    conn: conn
+  } do
     w = approval_fixture()
 
     {:ok, idea} =
@@ -26,17 +28,27 @@ defmodule PlatformWeb.SocialIdeaVotingTest do
       assert {:ok, _} = IdeaVotes.vote(w.org_id, idea.id, {:agent, voter.id})
     end
 
-    view = open(conn, w.n, "?tab=ideas&profile=#{w.profile.id}")
-    assert has_element?(view, "#ideas-lane-inbox [data-role='idea-vote-count']", "2 agent votes")
-    voter = pinned_agent!(w.org_id)
-    assert {:ok, _} = IdeaVotes.vote(w.org_id, idea.id, {:agent, voter.id})
-    view = open(conn, w.n, "?tab=ideas&profile=#{w.profile.id}")
+    view = open(conn, w.n, "?tab=ideas&profile=#{w.profile.id}&view=voted")
 
     assert has_element?(
              view,
-             "#ideas-lane-shortlisted [data-idea-id='#{idea.id}']",
+             "#ideas-list [data-idea-id='#{idea.id}'] [data-role='idea-vote-count']",
+             "2 agent votes"
+           )
+
+    voter = pinned_agent!(w.org_id)
+    assert {:ok, _} = IdeaVotes.vote(w.org_id, idea.id, {:agent, voter.id})
+    view = open(conn, w.n, "?tab=ideas&profile=#{w.profile.id}&view=voted")
+
+    assert has_element?(
+             view,
+             "#ideas-list [data-idea-id='#{idea.id}']",
              "3 agent votes"
            )
+
+    # Three votes is only a count: no shortlist label, and nothing selected.
+    refute render(view) =~ "Shortlisted"
+    refute has_element?(view, "#ideas-list [data-idea-id='#{idea.id}'][data-selected='true']")
 
     view |> element("[data-role='idea-card-open'][phx-value-id='#{idea.id}']") |> render_click()
     assert has_element?(view, "[data-role='idea-detail-votes']", "3 agent votes")
@@ -44,8 +56,8 @@ defmodule PlatformWeb.SocialIdeaVotingTest do
     refute has_element?(view, "[data-role='idea-detail-voters']")
     view |> element("[data-role='idea-detail-close']") |> render_click()
     assert {:ok, _} = IdeaVotes.unvote(w.org_id, idea.id, {:agent, voter.id})
-    view = open(conn, w.n, "?tab=ideas&profile=#{w.profile.id}")
-    assert has_element?(view, "#ideas-lane-inbox [data-idea-id='#{idea.id}']", "2 agent votes")
+    view = open(conn, w.n, "?tab=ideas&profile=#{w.profile.id}&view=voted")
+    assert has_element?(view, "#ideas-list [data-idea-id='#{idea.id}']", "2 agent votes")
   end
 
   test "replayed vote after profile visibility is lost writes nothing", %{conn: conn} do

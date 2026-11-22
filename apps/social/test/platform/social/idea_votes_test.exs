@@ -100,8 +100,12 @@ defmodule Platform.Social.IdeaVotesTest do
     assert [%{stage: "shortlisted", vote_count: 3, voted: false}] = rows
     refute Map.has_key?(hd(rows), :voter_names)
 
-    assert [%{lane: "shortlisted", vote_count: 3}] =
-             Platform.Social.IdeaBoard.cards([ctx.profile], ctx.n.id)
+    # The page has no shortlist: the idea is simply in With votes, unselected.
+    assert %{
+             voted: [%{vote_count: 3, selected?: false}],
+             counts: %{"voted" => 1, "selected" => 0}
+           } =
+             Platform.Social.IdeaBoard.views([ctx.profile], ctx.n.id)
 
     assert {:ok, _} =
              Platform.Social.IdeaVotes.unvote(
@@ -110,8 +114,15 @@ defmodule Platform.Social.IdeaVotesTest do
                {:agent, List.last(voters).id}
              )
 
-    assert [%{lane: "inbox", vote_count: 2}] =
-             Platform.Social.IdeaBoard.cards([ctx.profile], ctx.n.id)
+    assert {:ok, %{ideas: [%{stage: "inbox", vote_count: 2}]}} =
+             ToolArguments.dispatch(
+               "social_idea_list",
+               %{"profile_id" => ctx.profile.id},
+               agent_context(ctx.voter, ctx.org_id)
+             )
+
+    assert %{voted: [%{vote_count: 2}]} =
+             Platform.Social.IdeaBoard.views([ctx.profile], ctx.n.id)
 
     {:ok, post} =
       Platform.Social.create_post(ctx.org_id, ctx.a, %{body: "draft", idea_id: ctx.idea.id})
@@ -125,8 +136,15 @@ defmodule Platform.Social.IdeaVotesTest do
                {:agent, List.last(voters).id}
              )
 
-    assert [%{lane: "drafting", vote_count: 3}] =
-             Platform.Social.IdeaBoard.cards([ctx.profile], ctx.n.id)
+    assert {:ok, %{ideas: [%{stage: "drafting", vote_count: 3}]}} =
+             ToolArguments.dispatch(
+               "social_idea_list",
+               %{"profile_id" => ctx.profile.id},
+               agent_context(ctx.voter, ctx.org_id)
+             )
+
+    assert %{voted: [%{vote_count: 3}]} =
+             Platform.Social.IdeaBoard.views([ctx.profile], ctx.n.id)
   end
 
   test "human actions refuse and current agent status is checked on vote and withdrawal", ctx do
@@ -164,7 +182,7 @@ defmodule Platform.Social.IdeaVotesTest do
     refute inspect(idea) =~ ctx.n.email
   end
 
-  test "inbox and shortlist ties use oldest time then id, with counts first", ctx do
+  test "With votes orders by votes, then oldest time, then id; All ideas is newest first", ctx do
     {:ok, second} =
       Ideas.create(ctx.org_id, ctx.profile.id, %{title: "Second"}, {:agent, ctx.g.id})
 
@@ -172,16 +190,34 @@ defmodule Platform.Social.IdeaVotesTest do
     Repo.update!(Ecto.Changeset.change(ctx.idea, inserted_at: time))
     Repo.update!(Ecto.Changeset.change(second, inserted_at: time))
 
-    assert Enum.map(Platform.Social.IdeaBoard.cards([ctx.profile], ctx.n.id), & &1.id) ==
-             Enum.sort([ctx.idea.id, second.id])
+    ids = fn view ->
+      ctx.profile
+      |> then(&Platform.Social.IdeaBoard.views([&1], ctx.n.id))
+      |> Map.fetch!(view)
+      |> Enum.map(& &1.id)
+    end
+
+    assert ids.(:all) == Enum.sort([ctx.idea.id, second.id], :desc)
+    assert ids.(:voted) == []
 
     assert {:ok, _} =
              Platform.Social.IdeaVotes.vote(ctx.org_id, second.id, {:agent, ctx.voter.id})
 
-    assert Enum.map(Platform.Social.IdeaBoard.cards([ctx.profile], ctx.n.id), & &1.id) == [
-             second.id,
-             ctx.idea.id
-           ]
+    assert ids.(:voted) == [second.id]
+
+    other_voter = pinned_agent!(ctx.org_id)
+
+    assert {:ok, _} =
+             Platform.Social.IdeaVotes.vote(ctx.org_id, ctx.idea.id, {:agent, other_voter.id})
+
+    assert ids.(:voted) == Enum.sort([ctx.idea.id, second.id])
+
+    third_voter = pinned_agent!(ctx.org_id)
+
+    assert {:ok, _} =
+             Platform.Social.IdeaVotes.vote(ctx.org_id, ctx.idea.id, {:agent, third_voter.id})
+
+    assert ids.(:voted) == [ctx.idea.id, second.id]
   end
 
   test "malformed idea IDs and an unauthenticated tool call do not query an unscoped idea", ctx do

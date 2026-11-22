@@ -1,9 +1,9 @@
 defmodule PlatformWeb.SocialLiveIdeasTest do
   @moduledoc """
-  The Ideas tab (Social authoring 7/11, task 01a16c50-ea67): the board's
-  five derived lanes, quick add, Draft it, and the idea detail (versions,
-  notes thread, change log, platform options). One describe per Done-means
-  item, then the rest of the ticket's What.
+  The Ideas tab: one list (the lanes were removed in favour of three views,
+  see `SocialLiveIdeasViewsTest`), quick add, Draft it in the detail, and the
+  idea detail (versions, notes thread, change log, platform options). An idea's
+  stage is a detail-only label derived from its posts.
 
   Agents act through `ToolArguments.dispatch/3`, the door both federation
   transports use. `async: false`: the Fake's call log is global, and
@@ -79,8 +79,7 @@ defmodule PlatformWeb.SocialLiveIdeasTest do
     find_live_child(view, "ext-page-social")
   end
 
-  defp card_in(lane, idea_id),
-    do: "[data-role='ideas-lane'][data-lane='#{lane}'] #idea-card-#{idea_id}"
+  defp card(idea_id), do: "#ideas-list #idea-card-#{idea_id}"
 
   defp open_detail(child, idea_id) do
     child |> element("#idea-card-#{idea_id} [data-role='idea-card-open']") |> render_click()
@@ -88,30 +87,16 @@ defmodule PlatformWeb.SocialLiveIdeasTest do
     child
   end
 
-  defp lane_of(child, idea_id) do
-    child
-    |> render()
-    |> LazyHTML.from_fragment()
-    |> LazyHTML.query("[data-role='ideas-lane']:has(#idea-card-#{idea_id})")
-    |> LazyHTML.attribute("data-lane")
-  end
-
   # ── Done means 1: lanes follow the posts, live ───────────────────────
 
   describe "an agent-created idea" do
-    test "appears in Inbox, then moves Drafting → In review → Scheduled → Live with no reload",
+    test "appears in the one list, and its posts move only the stage shown in its detail",
          %{conn: conn} = ctx do
       child = open(conn, ctx.h1)
       assert has_element?(child, "[data-role='social-tab-body'][data-tab='ideas']")
 
       idea = idea!(ctx, "Episode 12 launch")
-      assert has_element?(child, card_in("inbox", idea.id))
-
-      assert has_element?(
-               child,
-               "#idea-card-#{idea.id} [data-role='idea-card-source']",
-               "Agent idea"
-             )
+      assert has_element?(child, card(idea.id))
 
       assert has_element?(
                child,
@@ -120,55 +105,32 @@ defmodule PlatformWeb.SocialLiveIdeasTest do
              )
 
       [li, x] = drafts!(ctx, idea, [ctx.a, ctx.x], %{"status" => "draft"})
-      assert lane_of(child, idea.id) == ["drafting"]
+      assert has_element?(child, card(idea.id))
+      refute has_element?(child, "#idea-card-#{idea.id} [data-role='idea-card-platform']")
+      refute has_element?(child, "#idea-card-#{idea.id} [data-role='idea-card-waiting']")
 
-      for {post, platform} <- [{li, "linkedin"}, {x, "x"}] do
-        assert has_element?(
-                 child,
-                 "#idea-card-#{idea.id} [data-role='idea-card-platform'][data-platform='#{platform}']"
-               )
-
-        assert post.status == "draft"
+      # Posts submitted for approval: still one row; the stage is in the detail.
+      for post <- [li, x] do
+        {:ok, _} =
+          call(
+            "social_draft_update",
+            %{"post_id" => post.id, "status" => "needs_approval"},
+            ctx.agent_ctx
+          )
       end
 
-      # One draft submitted: In review, waiting on this approver.
-      {:ok, _} =
-        call(
-          "social_draft_update",
-          %{"post_id" => li.id, "status" => "needs_approval"},
-          ctx.agent_ctx
-        )
-
-      assert lane_of(child, idea.id) == ["in_review"]
-
-      assert has_element?(
-               child,
-               "#idea-card-#{idea.id} [data-role='idea-card-waiting']",
-               "1 waiting on you"
-             )
-
-      {:ok, _} =
-        call(
-          "social_draft_update",
-          %{"post_id" => x.id, "status" => "needs_approval"},
-          ctx.agent_ctx
-        )
-
-      assert has_element?(
-               child,
-               "#idea-card-#{idea.id} [data-role='idea-card-waiting']",
-               "2 waiting on you"
-             )
+      assert has_element?(child, card(idea.id))
+      open_detail(child, idea.id)
+      assert has_element?(child, "[data-role='idea-detail-stage']", "In review")
 
       # Approve all, from the detail's versions (the shared Needs-you card).
-      open_detail(child, idea.id)
       detail_card = "#idea-detail-card-#{idea.id}"
       assert has_element?(child, "#{detail_card} #idea-detail-#{li.id}")
       child |> element("#{detail_card} [data-role='queue-approve-all']") |> render_click()
       child |> element("#{detail_card} [data-role='queue-approve-all-go']") |> render_click()
 
       assert length(Fake.calls(:publish)) == 2
-      assert lane_of(child, idea.id) == ["scheduled"]
+      assert has_element?(child, "[data-role='idea-detail-stage']", "Scheduled")
 
       # The Fake's publish outcome arrives: Live.
       for post <- [li, x] do
@@ -179,11 +141,12 @@ defmodule PlatformWeb.SocialLiveIdeasTest do
           })
       end
 
-      assert lane_of(child, idea.id) == ["live"]
       assert has_element?(child, "[data-role='idea-detail-stage']", "Live")
+      assert has_element?(child, card(idea.id))
     end
 
-    test "a failed post puts a muted Failed marker on the card", %{conn: conn} = ctx do
+    test "a failed post no longer marks the row; the idea stays in the list",
+         %{conn: conn} = ctx do
       idea = idea!(ctx, "Failing idea")
       [li] = drafts!(ctx, idea, [ctx.a], %{})
 
@@ -193,8 +156,8 @@ defmodule PlatformWeb.SocialLiveIdeasTest do
       {:ok, _} = Publishing.apply_outcome(Repo.get!(Post, li.id), %{kind: :failed, error: "nope"})
 
       child = open(conn, ctx.h1)
-      assert has_element?(child, card_in("drafting", idea.id))
-      assert has_element?(child, "#idea-card-#{idea.id} [data-role='idea-card-failed']", "Failed")
+      assert has_element?(child, card(idea.id))
+      refute has_element?(child, "#idea-card-#{idea.id} [data-role='idea-card-failed']")
     end
   end
 
@@ -221,22 +184,32 @@ defmodule PlatformWeb.SocialLiveIdeasTest do
       assert idea.brief == "Lead with the guest"
       assert idea.source_kind == "human"
       assert idea.created_by_user_id == ctx.h1.id
-      assert has_element?(child, card_in("inbox", idea.id))
+      assert has_element?(child, card(idea.id))
 
       assert has_element?(
                child,
-               "#idea-card-#{idea.id} [data-role='idea-card-source']",
-               "Your idea"
+               "#idea-card-#{idea.id} [data-role='idea-card-agent']",
+               ctx.h1.name
              )
 
+      refute has_element?(child, "#idea-card-#{idea.id} [data-role='idea-draft-it']")
+
+      child |> element("#idea-card-#{idea.id} [data-role='idea-card-open']") |> render_click()
+
       assert has_element?(
                child,
-               "#idea-card-#{idea.id} [data-role='idea-draft-it'][data-mode='agent']",
+               "[data-role='idea-detail'] [data-role='idea-draft-it'][data-mode='agent']",
                "Ask #{ctx.g.name} to draft"
              )
 
+      assert has_element?(
+               child,
+               "[data-role='idea-detail'] [data-role='idea-detail-source']",
+               "Your idea"
+             )
+
       child
-      |> element("#idea-card-#{idea.id} [data-role='idea-draft-it'][data-mode='agent']")
+      |> element("[data-role='idea-detail'] [data-role='idea-draft-it'][data-mode='agent']")
       |> render_click()
 
       [message] =
@@ -250,7 +223,12 @@ defmodule PlatformWeb.SocialLiveIdeasTest do
       assert message.content =~ "Guest spotlight"
       assert message.content =~ "social_draft_create idea_id=#{idea.id}"
       assert message.metadata["social_draft_request"]["idea_id"] == idea.id
-      assert has_element?(child, "[data-role='ideas-notice']", "Asked #{ctx.g.name} to draft it.")
+
+      assert has_element?(
+               child,
+               "[data-role='idea-detail-notice']",
+               "Asked #{ctx.g.name} to draft it."
+             )
     end
 
     test "a blank title is refused on the form and writes nothing", %{conn: conn} = ctx do
@@ -268,9 +246,11 @@ defmodule PlatformWeb.SocialLiveIdeasTest do
       child |> form("#ideas-quick-form", idea: %{title: "Orphan idea"}) |> render_submit()
       [idea] = Social.Ideas.list(ctx.org_id, ctx.profile.id)
 
+      child |> element("#idea-card-#{idea.id} [data-role='idea-card-open']") |> render_click()
+
       refute has_element?(
                child,
-               "#idea-card-#{idea.id} [data-role='idea-draft-it'][data-mode='agent']"
+               "[data-role='idea-detail'] [data-role='idea-draft-it'][data-mode='agent']"
              )
     end
 
@@ -436,7 +416,7 @@ defmodule PlatformWeb.SocialLiveIdeasTest do
         )
 
       child = open(conn, ctx.n)
-      assert has_element?(child, card_in("in_review", idea.id))
+      assert has_element?(child, card(idea.id))
       refute has_element?(child, "[data-role='ideas-quick-open']")
       refute has_element?(child, "#idea-card-#{idea.id} [data-role='idea-card-waiting']")
 
@@ -470,7 +450,9 @@ defmodule PlatformWeb.SocialLiveIdeasTest do
   # ── Done means 6: zero data ──────────────────────────────────────────
 
   describe "a new profile" do
-    test "shows five empty lanes, each with its own copy, and quick add works", %{conn: conn} do
+    test "shows the empty All ideas sentence with three buttons, and quick add works", %{
+      conn: conn
+    } do
       org_id = org_id!()
       space = channel!(org_id)
       owner = named_user!("Zed Owner")
@@ -486,32 +468,21 @@ defmodule PlatformWeb.SocialLiveIdeasTest do
 
       child = open(conn, owner)
 
-      copies =
-        for lane <- ~w(inbox drafting in_review scheduled live) do
-          assert has_element?(child, "[data-role='ideas-lane'][data-lane='#{lane}']")
+      assert has_element?(
+               child,
+               "[data-role='ideas-empty'][data-view='all']",
+               "No ideas yet. Add one, or ask an agent for theirs."
+             )
 
-          [copy] =
-            child
-            |> render()
-            |> LazyHTML.from_fragment()
-            |> LazyHTML.query(
-              "[data-role='ideas-lane'][data-lane='#{lane}'] [data-role='ideas-lane-empty']"
-            )
-            |> Enum.map(&LazyHTML.text/1)
-
-          String.trim(copy)
-        end
-
-      assert length(Enum.uniq(copies)) == 5
-      assert Enum.at(copies, 2) =~ "when a draft is submitted"
+      for view <- ~w(all voted selected),
+          do: assert(has_element?(child, "[data-role='ideas-view-tab'][data-view='#{view}']"))
 
       child |> element("[data-role='ideas-quick-open']") |> render_click()
       child |> form("#ideas-quick-form", idea: %{title: "First idea"}) |> render_submit()
 
       [idea] = Social.Ideas.list(org_id, profile.id)
-      assert has_element?(child, card_in("inbox", idea.id))
-      refute has_element?(child, "[data-lane='inbox'] [data-role='ideas-lane-empty']")
-      assert has_element?(child, "[data-lane='drafting'] [data-role='ideas-lane-empty']")
+      assert has_element?(child, card(idea.id))
+      refute has_element?(child, "[data-role='ideas-empty']")
     end
   end
 
@@ -707,26 +678,26 @@ defmodule PlatformWeb.SocialLiveIdeasTest do
   end
 
   describe "phone" do
-    test "the lanes are a segmented control, one lane on screen at a time", %{conn: conn} = ctx do
+    test "the three views are one row of short labels with the full names accessible",
+         %{conn: conn} = ctx do
       child = open(conn, ctx.h1)
 
       assert has_element?(
                child,
-               "[data-role='ideas-lane-tab'][data-lane='inbox'][aria-selected='true']"
+               "[data-role='ideas-view-control'].grid-cols-3 [data-role='ideas-view-tab'][data-view='all'][aria-current='page']"
              )
-
-      refute has_element?(child, "[data-role='ideas-lane'][data-lane='inbox'].max-sm\\:hidden")
-      assert has_element?(child, "[data-role='ideas-lane'][data-lane='live'].max-sm\\:hidden")
-
-      child |> element("[data-role='ideas-lane-tab'][data-lane='live']") |> render_click()
 
       assert has_element?(
                child,
-               "[data-role='ideas-lane-tab'][data-lane='live'][aria-selected='true']"
+               "[data-role='ideas-view-tab'][data-view='selected'][aria-label^='Selected for research']"
              )
 
-      refute has_element?(child, "[data-role='ideas-lane'][data-lane='live'].max-sm\\:hidden")
-      assert has_element?(child, "[data-role='ideas-lane'][data-lane='inbox'].max-sm\\:hidden")
+      child = open(conn, ctx.h1, "/m/social?tab=ideas&view=voted&profile=#{ctx.profile.id}")
+
+      assert has_element?(
+               child,
+               "[data-role='ideas-view-tab'][data-view='voted'][aria-current='page']"
+             )
     end
   end
 

@@ -96,6 +96,84 @@ defmodule Platform.Social.TransportParityTest do
     end
   end
 
+  test "the selected filter on social_idea_list is one schema on MCP, the socket and code mode",
+       ctx do
+    {runtime, token} = runtime_for(ctx, @granted)
+    {_socket, capabilities} = join_runtime(runtime, token)
+
+    http = http_tools_by_name(token)["social_idea_list"]
+    ws = Enum.find(capabilities.tools, &(&1.name == "social_idea_list"))
+
+    defined =
+      Enum.find(Platform.Social.ToolDefinitions.definitions(), &(&1.name == "social_idea_list"))
+
+    assert %{"type" => "boolean", "description" => text} =
+             http["inputSchema"]["properties"]["selected"]
+
+    refute "selected" in http["inputSchema"]["required"]
+    assert %{type: "boolean", required: false, description: ^text} = ws.parameters.selected
+    assert defined.parameters.selected.description == text
+    assert http["description"] =~ "vote interest"
+    assert ws.description =~ "vote interest"
+
+    # code mode reaches the same handler: the filter works and a non-boolean is refused there too
+    {cm_runtime, _} = runtime_for(ctx, ["social", "code_mode"])
+
+    assert {:ok, _} =
+             Platform.Access.RuntimeProfiles.restrict(cm_runtime, %{
+               "social.ideas" => "all",
+               "skills.read" => "all"
+             })
+
+    {:ok, project} = Platform.Tasks.create_project(%{name: "Selected parity", org_id: ctx.org.id})
+
+    {:ok, profile} =
+      Platform.Social.create_profile(ctx.org.id, %{name: "Parity", project_id: project.id})
+
+    {:ok, chosen} =
+      Platform.Social.Ideas.create(
+        ctx.org.id,
+        profile.id,
+        %{title: "Chosen one"},
+        {:agent, cm_runtime.agent_id}
+      )
+
+    {:ok, _other} =
+      Platform.Social.Ideas.create(
+        ctx.org.id,
+        profile.id,
+        %{title: "Left alone"},
+        {:agent, cm_runtime.agent_id}
+      )
+
+    {:ok, _, :changed} =
+      Platform.Social.Ideas.select_for_research(ctx.org.id, chosen.id, {:user, ctx.owner.id})
+
+    run = fn selected ->
+      Platform.Federation.ToolCall.invoke(
+        "burrow_run",
+        %{
+          "script" =>
+            "burrow.social_idea_list({profile_id: inputs.profile_id, selected: inputs.selected})",
+          "inputs" => %{"profile_id" => profile.id, "selected" => selected}
+        },
+        cm_runtime
+      )
+    end
+
+    assert {:ok, %{ok: true, result: result}} = run.(true)
+    assert inspect(result) =~ "Chosen one"
+    refute inspect(result) =~ "Left alone"
+    refute inspect(result) =~ "selected_at"
+
+    assert {:ok, %{ok: true, result: result}} = run.(false)
+    assert inspect(result) =~ "Left alone"
+    refute inspect(result) =~ "Chosen one"
+
+    assert {:ok, %{ok: false} = refused} = run.("maybe")
+    assert inspect(refused) =~ "Unsupported idea-board argument"
+  end
+
   test "Social profile stays capped by its owner and profile restriction", ctx do
     {runtime, token} = runtime_for(ctx, ["social"])
 
@@ -614,7 +692,7 @@ defmodule Platform.Social.TransportParityTest do
 
     assert MapSet.new(Map.keys(row)) ==
              MapSet.new(
-               ~w(id profile_id title brief source_kind source_url inserted_at board_stage vote_count voted is_mine notes)a
+               ~w(id profile_id title brief source_kind source_url inserted_at board_stage vote_count voted selected is_mine notes)a
              )
 
     refute Map.has_key?(row, :created_by_agent_id)
