@@ -3,7 +3,7 @@ defmodule Platform.Social.StudioClipBoundaryTest do
   Social Studio slice A, the design owner's clip provenance rule: a clip
   carries its own durable `flow` marker (`legacy` | `studio`, DB CHECK), set
   only at insert by Studio intake and never inferred from the profile's
-  `studio_enabled` toggle. Legacy `approve_clip/5` and its undo refuse Studio
+  `studio_enabled` toggle. Legacy `draft_clip/5` and the undo of a pre-B3 approval refuse Studio
   clips, and so does any path that would turn a Studio clip into a legacy post.
 
   Async false: the Fake's call log is global.
@@ -28,7 +28,7 @@ defmodule Platform.Social.StudioClipBoundaryTest do
   end
 
   defp approve(w, clip, now, accounts \\ nil) do
-    Social.approve_clip(
+    Platform.Social.LegacyClipApproval.approve_clip(
       w.org_id,
       clip.id,
       w.approver.id,
@@ -76,7 +76,7 @@ defmodule Platform.Social.StudioClipBoundaryTest do
     end
   end
 
-  describe "ClipDecisions.approve_clip/5" do
+  describe "ClipDecisions.draft_clip/5" do
     test "refuses a Studio clip: no post, no review change, no timer, no publisher call", %{
       w: w,
       t0: t0
@@ -96,9 +96,17 @@ defmodule Platform.Social.StudioClipBoundaryTest do
       assert Fake.calls() == []
     end
 
-    test "still approves a legacy clip (control)", %{w: w, t0: t0} do
+    test "still drafts a legacy clip (control)", %{w: w, t0: t0} do
       clip = pending_clip!(w)
-      assert {:ok, %{posts: [%Post{flow: "legacy", status: "approved"}]}} = approve(w, clip, t0)
+
+      assert {:ok, %{posts: [%Post{flow: "legacy", status: "draft"}]}} =
+               Social.draft_clip(
+                 w.org_id,
+                 clip.id,
+                 w.approver.id,
+                 %{"render_id" => render_id!(clip), "account_ids" => [w.tiktok.id]},
+                 now: t0
+               )
     end
   end
 

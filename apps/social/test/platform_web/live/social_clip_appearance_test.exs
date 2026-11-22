@@ -62,7 +62,7 @@ defmodule PlatformWeb.SocialClipAppearanceTest do
 
     choose(child, "karaoke")
     assert has_element?(child, "[data-role='caption-dirty']")
-    assert has_element?(child, "[data-role='clip-approve'][disabled]")
+    assert has_element?(child, "[data-role='clip-draft'][disabled]")
     preview(child, w.base.id)
     j = job(w)
     assert j.payload["appearance"] == true
@@ -168,7 +168,7 @@ defmodule PlatformWeb.SocialClipAppearanceTest do
 
     assert has_element?(child, "audio[data-role='music-preview'][src='/files/blob/#{song.id}']")
     assert has_element?(child, "[data-role='music-gain']", "-27")
-    assert has_element?(child, "[data-role='clip-approve'][disabled]")
+    assert has_element?(child, "[data-role='clip-draft'][disabled]")
 
     child
     |> element("[data-role='music-settings']")

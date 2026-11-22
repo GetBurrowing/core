@@ -46,7 +46,7 @@ defmodule Platform.Social.RemoveAccountTest do
   end
 
   defp scheduled!(ctx, account, external_id, attrs \\ %{}) do
-    post = approved_post!(ctx.org_id, account, attrs, ctx.approver)
+    post = historical_approved_post!(ctx.org_id, account, attrs, ctx.approver)
 
     post
     |> Ecto.Changeset.change(status: "scheduled", external_id: external_id)
@@ -54,8 +54,9 @@ defmodule Platform.Social.RemoveAccountTest do
   end
 
   defp post!(ctx, account, status) do
-    {:ok, post} = Social.create_post(ctx.org_id, account, %{body: "b", status: status})
-    post
+    # Existing legacy state is input to removal, not a new review request.
+    {:ok, post} = Social.create_post(ctx.org_id, account, %{body: "b"})
+    Repo.update!(Ecto.Changeset.change(post, status: status))
   end
 
   defp published!(ctx, account) do

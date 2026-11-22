@@ -108,7 +108,7 @@ defmodule Platform.Social.Post do
 
     # Social authoring 2/11 (task 01a16c4e). In NO cast list: set only by
     # `Platform.Social.AgentDrafts` (checked against the idea's org and
-    # profile) and `Platform.Social.ClipDecisions.approve_clip/5`. Nil is a
+    # profile) and `Platform.Social.ClipDecisions.draft_clip/5`. Nil is a
     # post that is its own one-post group.
     belongs_to(:idea, Platform.Social.Idea)
 
@@ -363,6 +363,23 @@ defmodule Platform.Social.Post do
     |> validate_required([:body])
     |> validate_length(:body, max: @max_body)
     |> db_constraints()
+  end
+
+  @doc """
+  A human's edit of a legacy draft (`Platform.Social.edit_draft/5`): casts
+  ONLY `body` and `scheduled_at`, bounds the body like the approval card's
+  edit, and, when `submit?`, moves the draft to `needs_approval`. Completeness
+  is the caller's gate (`require_channel/3`), not this changeset's.
+  """
+  @spec draft_edit_changeset(t(), map(), boolean()) :: Ecto.Changeset.t()
+  def draft_edit_changeset(%__MODULE__{} = post, attrs, submit?) do
+    changeset =
+      post
+      |> cast(attrs, [:body, :scheduled_at])
+      |> validate_length(:body, max: @max_body)
+      |> db_constraints()
+
+    if submit?, do: put_change(changeset, :status, "needs_approval"), else: changeset
   end
 
   @doc """

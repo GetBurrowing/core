@@ -30,8 +30,8 @@ defmodule PlatformWeb.SocialComposer do
        reasoning (`Platform.Social.Composer.rationale/4`).
     3. The actions: "Send for approval" (into Needs you, each post at its
        suggested slot), "Save as idea" (the idea alone, stage Inbox) and,
-       only for a user who may approve at least one picked account, "Send
-       and approve". All three re-check everything server side in
+       only for a user who may approve at least one picked account,
+       "Approve scheduled posts". All three re-check everything server side in
        `Platform.Social.Composer`, so a forged event writes nothing.
 
   Nothing here publishes: posts leave only through the approval card's
@@ -120,6 +120,7 @@ defmodule PlatformWeb.SocialComposer do
       accounts: [],
       owners: %{},
       clips: [],
+      media_files: [],
       picked: [],
       idea_form: idea_form(%{}),
       idea_error: nil,
@@ -193,11 +194,13 @@ defmodule PlatformWeb.SocialComposer do
 
   def handle_event("edit", %{"version" => %{"account_id" => id} = params}, socket) do
     case Map.get(socket.assigns.columns, id) do
-      %{state: :ok} = column ->
+      %{state: :ok, result: nil} = column ->
         column = %{
           column
           | text: params["text"] || column.text,
-            title: Map.get(params, "title", column.title)
+            title: Map.get(params, "title", column.title),
+            scheduled_at: Map.get(params, "scheduled_at", column.scheduled_at),
+            media_file_ids: selected_media_ids(params, column, socket)
         }
 
         column = refresh_rationale(column, socket)
@@ -210,14 +213,21 @@ defmodule PlatformWeb.SocialComposer do
 
   def handle_event("regenerate", %{"account_id" => id}, socket) do
     case Enum.find(socket.assigns.accounts, &(&1.id == id)) do
-      nil -> {:noreply, socket}
-      account -> {:noreply, draft_column(socket, account)}
+      nil ->
+        {:noreply, socket}
+
+      account ->
+        if get_in(socket.assigns.columns, [account.id, :result]),
+          do: {:noreply, socket},
+          else: {:noreply, draft_column(socket, account)}
     end
   end
 
   def handle_event("send", %{"mode" => mode}, socket) when mode in ["approval", "approve"] do
     {:noreply, send_composition(socket, mode == "approve")}
   end
+
+  def handle_event("save_drafts", _params, socket), do: {:noreply, save_drafts(socket)}
 
   def handle_event("save_idea", params, socket) do
     params = Map.get(params, "idea", socket.assigns.idea_form.params)
@@ -281,8 +291,12 @@ defmodule PlatformWeb.SocialComposer do
       ref: ref,
       state: :loading,
       error: nil,
+      review_errors: [],
+      result: nil,
       text: "",
       title: nil,
+      scheduled_at: "",
+      media_file_ids: [],
       original_text: nil,
       draft: nil,
       rationale: nil
@@ -303,13 +317,14 @@ defmodule PlatformWeb.SocialComposer do
     end)
   end
 
-  defp column_result(column, {:ok, draft, rationale}, _socket) do
+  defp column_result(column, {:ok, draft, rationale}, socket) do
     %{
       column
       | state: :ok,
         draft: draft,
         text: draft.text,
         title: draft.title,
+        scheduled_at: local_time(rationale.slot, socket.assigns.profile),
         original_text: draft.text,
         rationale: rationale
     }
@@ -368,20 +383,103 @@ defmodule PlatformWeb.SocialComposer do
 
   # ── Send / save ──────────────────────────────────────────────────────
 
+  defp save_drafts(socket) do
+    %{profile: profile, columns: columns, accounts: accounts, user: user} = socket.assigns
+
+    selected =
+      for account <- accounts,
+          %{state: :ok, result: nil} = column <- [Map.get(columns, account.id)],
+          do: {account, column}
+
+    if Enum.any?(selected, fn {_account, column} ->
+         not blank?(column.scheduled_at) and is_nil(publish_time(column.scheduled_at, profile))
+       end) do
+      assign(socket, :send_error, "Choose a valid publish time or leave it empty.")
+    else
+      drafts =
+        Enum.map(selected, fn {account, column} ->
+          slot = publish_time(column.scheduled_at, profile)
+
+          %{
+            account_id: account.id,
+            text: column.text,
+            title: column.title,
+            media_file_ids: column.media_file_ids,
+            scheduled_at: slot,
+            schedule_reason: slot && column.rationale && column.rationale.why_time,
+            prompt_slug: column.draft.prompt_slug,
+            composition_id: socket.assigns.composition_id,
+            original_text: column.original_text
+          }
+        end)
+
+      compose = %{
+        idea: socket.assigns.idea || idea_attrs(socket.assigns.idea_form.params),
+        drafts: drafts
+      }
+
+      case profile && Composer.save_drafts(profile, user && user.id, compose) do
+        {:ok, result} ->
+          socket = mark_results(socket, result.posts, :saved)
+          send(self(), {__MODULE__, :sent, result.idea.id})
+
+          path =
+            "/m/social?" <>
+              URI.encode_query(%{"profile" => profile.id, "tab" => "queue"}) <> "#queue-drafts"
+
+          fresh_profile = Social.get_profile(profile.org_id, profile.id)
+
+          unavailable =
+            Enum.flat_map(result.posts, fn post ->
+              account = Social.get_account(profile.org_id, post.account_id)
+
+              if fresh_profile && account &&
+                   Social.post_approver_check(profile.org_id, fresh_profile, account, user.id) ==
+                     :ok do
+                []
+              else
+                [
+                  "#{account_label(account)}: Saved as a draft. An approver for this account can finish and send it from the Queue."
+                ]
+              end
+            end)
+
+          assign(socket,
+            step: :sent,
+            sent: %{
+              kind: :drafts,
+              title: result.idea.title,
+              lines:
+                [
+                  "#{length(result.posts)} #{if length(result.posts) == 1, do: "draft", else: "drafts"} saved."
+                ] ++ unavailable,
+              path: path
+            },
+            send_error: nil
+          )
+
+        {:error, reason} ->
+          version_refusal(socket, reason)
+
+        nil ->
+          assign(socket, :send_error, "Pick a brand first.")
+      end
+    end
+  end
+
   defp send_composition(socket, approve?) do
     %{profile: profile, columns: columns, accounts: accounts, user: user} = socket.assigns
-    now = DateTime.utc_now()
 
     drafts =
       for account <- accounts,
-          %{state: :ok} = column <- [Map.get(columns, account.id)],
-          not blank?(column.text) do
-        slot = Social.next_free_slot(account, now)
+          %{state: :ok, result: nil} = column <- [Map.get(columns, account.id)] do
+        slot = publish_time(column.scheduled_at, profile)
 
         %{
           account_id: account.id,
           text: column.text,
           title: column.title,
+          media_file_ids: column.media_file_ids,
           scheduled_at: slot,
           schedule_reason: slot && column.rationale && column.rationale.why_time,
           prompt_slug: column.draft.prompt_slug,
@@ -397,6 +495,7 @@ defmodule PlatformWeb.SocialComposer do
 
     case profile && Composer.send(profile, user && user.id, compose, approve: approve?) do
       {:ok, result} ->
+        socket = mark_results(socket, result.posts, :review)
         send(self(), {__MODULE__, :sent, result.idea.id})
 
         assign(socket,
@@ -405,19 +504,74 @@ defmodule PlatformWeb.SocialComposer do
           send_error: nil
         )
 
-      {:error, {:partial, _reason, posts}} ->
-        send(self(), {__MODULE__, :sent, posts |> List.first() |> Map.get(:idea_id)})
+      {:error, {:partial, reason, posts}} ->
+        idea_id = posts |> List.first() |> Map.get(:idea_id)
+        send(self(), {__MODULE__, :sent, idea_id})
 
-        assign(socket,
-          send_error: "Only #{length(posts)} of #{length(drafts)} went out. Check Needs you."
+        socket
+        |> mark_results(posts, :review)
+        |> assign(:idea, Ideas.get(profile.org_id, idea_id))
+        |> version_refusal(
+          reason,
+          "#{length(posts)} sent for review. Correct the remaining versions; those already sent will not be submitted again."
         )
 
       {:error, reason} ->
-        assign(socket, :send_error, send_error_text(reason))
+        version_refusal(socket, reason)
 
       nil ->
         assign(socket, :send_error, "Pick a brand first.")
     end
+  end
+
+  defp mark_results(socket, posts, kind) do
+    columns =
+      Enum.reduce(posts, socket.assigns.columns, fn post, columns ->
+        Map.update!(
+          columns,
+          post.account_id,
+          &Map.merge(&1, %{result: %{post_id: post.id, kind: kind}, review_errors: []})
+        )
+      end)
+
+    assign(socket, :columns, columns)
+  end
+
+  defp version_refusal(socket, reason, message \\ nil) do
+    errors =
+      case reason do
+        {:incomplete_versions, errors} -> errors
+        {:version_failed, id, {:incomplete_post, lines}} -> %{id => lines}
+        {:version_failed, id, %Ecto.Changeset{} = error} -> %{id => changeset_lines(error)}
+        {:version_failed, id, error} -> %{id => [send_error_text(error)]}
+        {:no_account, id} -> %{id => [send_error_text(reason)]}
+        _ -> %{}
+      end
+
+    columns =
+      Map.new(socket.assigns.columns, fn {id, column} ->
+        {id, %{column | review_errors: Map.get(errors, id, [])}}
+      end)
+
+    text =
+      if map_size(errors) > 0,
+        do: errors |> Map.values() |> List.flatten() |> Enum.join(" "),
+        else: send_error_text(reason)
+
+    assign(socket, columns: columns, send_error: message || text)
+  end
+
+  defp changeset_lines(cs) do
+    Enum.map(cs.errors, fn {field, {message, opts}} ->
+      text =
+        Enum.reduce(opts, message, fn {key, value}, text ->
+          if is_binary(value) or is_number(value),
+            do: String.replace(text, "%{#{key}}", to_string(value)),
+            else: text
+        end)
+
+      "#{field} #{text}"
+    end)
   end
 
   defp save_idea(socket, params) do
@@ -501,8 +655,16 @@ defmodule PlatformWeb.SocialComposer do
   defp send_error_text(:profile_has_no_channel),
     do: "This brand has no approval channel yet. Set one in Settings."
 
+  defp send_error_text({:incomplete_post, errors}), do: Enum.join(errors, " ")
+
   defp send_error_text(:no_drafts), do: "There's no version to send yet."
+  defp send_error_text(:schedule_required), do: "Choose a publish time for each post first."
+
   defp send_error_text(:schedule_in_past), do: "A suggested time has passed. Try again."
+  defp send_error_text(:invalid_schedule), do: "Choose a valid publish time or leave it empty."
+
+  defp send_error_text(:invalid_media),
+    do: "A selected file is no longer available. Choose it again."
 
   defp send_error_text({:no_account, _}),
     do: "One of these accounts is gone. Go back and pick again."
@@ -536,7 +698,7 @@ defmodule PlatformWeb.SocialComposer do
   end
 
   defp pick_profile(socket, nil),
-    do: assign(socket, profile: nil, accounts: [], picked: [], clips: [])
+    do: assign(socket, profile: nil, accounts: [], picked: [], clips: [], media_files: [])
 
   defp pick_profile(socket, profile) do
     accounts =
@@ -558,6 +720,7 @@ defmodule PlatformWeb.SocialComposer do
       accounts: accounts,
       owners: owners,
       clips: Enum.reverse(clips),
+      media_files: readable_media(profile, socket.assigns.user),
       picked: for(a <- accounts, ticked_by_default?(a), do: a.id),
       columns: %{},
       idea_form: idea_form(Map.put(socket.assigns.idea_form.params, "profile_id", profile.id))
@@ -612,6 +775,75 @@ defmodule PlatformWeb.SocialComposer do
     user != nil and Composer.approvable_account_ids(profile, picked_accounts, user.id) != []
   end
 
+  defp readable_media(%{project_id: id} = profile, user)
+       when is_binary(id) and not is_nil(user) do
+    scope = Platform.Access.Scope.for_user(user)
+
+    if Platform.Access.check(scope, "files.read", {:project, id}) == :ok do
+      id
+      |> Platform.Files.list_files_for_project(limit: nil)
+      |> Enum.filter(fn file ->
+        Platform.Files.finalized_upload?(file) and
+          Platform.Social.OrgFiles.in_org?(file, profile.org_id) and
+          (String.starts_with?(file.content_type || "", "image/") or
+             String.starts_with?(file.content_type || "", "video/"))
+      end)
+    else
+      []
+    end
+  end
+
+  defp readable_media(_profile, _user), do: []
+
+  defp selected_media_ids(params, column, socket) do
+    if Map.has_key?(params, "media_file_ids") do
+      allowed = Enum.map(readable_media(socket.assigns.profile, socket.assigns.user), & &1.id)
+      params["media_file_ids"] |> List.wrap() |> Enum.filter(&(&1 in allowed)) |> Enum.uniq()
+    else
+      column.media_file_ids
+    end
+  end
+
+  defp local_time(nil, _profile), do: ""
+
+  defp local_time(at, profile) do
+    case DateTime.shift_zone(at, profile.timezone || "Etc/UTC") do
+      {:ok, local} -> Calendar.strftime(local, "%Y-%m-%dT%H:%M")
+      _ -> ""
+    end
+  end
+
+  defp publish_time(value, profile) when is_binary(value) do
+    value = if String.length(value) == 16, do: value <> ":00", else: value
+
+    with {:ok, naive} <- NaiveDateTime.from_iso8601(value),
+         {:ok, local} <- DateTime.from_naive(naive, profile.timezone || "Etc/UTC"),
+         {:ok, utc} <- DateTime.shift_zone(local, "Etc/UTC") do
+      {microsecond, _precision} = utc.microsecond
+      %{utc | microsecond: {microsecond, 6}}
+    else
+      _ -> nil
+    end
+  end
+
+  defp publish_time(_value, _profile), do: nil
+
+  defp schedule_missing?(assigns) do
+    now = DateTime.utc_now()
+
+    Enum.any?(Map.values(assigns.columns), fn column ->
+      if column.state == :ok and is_nil(column.result) and not blank?(column.text) and
+           column.account.approval_mode != "draft_only" do
+        case publish_time(column.scheduled_at, assigns.profile) do
+          %DateTime{} = at -> DateTime.compare(at, now) != :gt
+          _ -> true
+        end
+      else
+        false
+      end
+    end)
+  end
+
   defp profile_id(socket), do: socket.assigns.profile && socket.assigns.profile.id
 
   defp idea_form(params), do: to_form(params, as: :idea, id: "composer-idea")
@@ -643,9 +875,15 @@ defmodule PlatformWeb.SocialComposer do
       assign(assigns,
         composable: composable(assigns_socket(assigns)),
         ordered: ordered_columns(assigns),
+        schedule_missing?: schedule_missing?(assigns),
         loading?: Enum.any?(Map.values(assigns.columns), &(&1.state == :loading)),
         ready:
-          Enum.count(Map.values(assigns.columns), &(&1.state == :ok and not blank?(&1.text))),
+          Enum.count(
+            Map.values(assigns.columns),
+            &(&1.state == :ok and is_nil(&1.result))
+          ),
+        savable:
+          Enum.count(Map.values(assigns.columns), &(&1.state == :ok and is_nil(&1.result))),
         failed: Enum.count(Map.values(assigns.columns), &(&1.state == :error))
       )
 
@@ -912,12 +1150,16 @@ defmodule PlatformWeb.SocialComposer do
           column={column}
           profile={@profile}
           owners={@owners}
+          media_files={@media_files}
           myself={@myself}
         />
       </div>
     </div>
 
     <footer class="space-y-2 border-t border-base-300 px-4 py-3 sm:px-6">
+      <p :if={@schedule_missing?} class="text-sm text-warning" data-role="composer-schedule-required">
+        Choose a publish time for each post first.
+      </p>
       <p :if={@send_error} class="text-sm text-error" role="alert" data-role="composer-send-error">
         {@send_error}
       </p>
@@ -930,6 +1172,16 @@ defmodule PlatformWeb.SocialComposer do
       </p>
       <div class="flex flex-wrap items-center justify-end gap-2">
         <button
+          type="button"
+          class="btn btn-sm min-h-11"
+          disabled={@loading? or @savable == 0}
+          phx-click="save_drafts"
+          phx-target={@myself}
+          data-role="composer-save-drafts"
+        >
+          Save draft
+        </button>
+        <button
           :if={is_nil(@idea)}
           type="button"
           class="btn btn-ghost btn-sm mr-auto"
@@ -941,8 +1193,11 @@ defmodule PlatformWeb.SocialComposer do
         </button>
         <button
           type="button"
-          class={["btn btn-sm flex-1 sm:flex-none", if(@can_approve?, do: "", else: "btn-primary")]}
-          disabled={@loading? or @ready == 0}
+          class={[
+            "btn btn-sm min-h-11 flex-1 sm:flex-none",
+            if(@can_approve?, do: "", else: "btn-primary")
+          ]}
+          disabled={@loading? or @ready == 0 or @schedule_missing?}
           phx-click="send"
           phx-value-mode="approval"
           phx-target={@myself}
@@ -954,26 +1209,27 @@ defmodule PlatformWeb.SocialComposer do
         <button
           :if={@can_approve?}
           type="button"
-          class="btn btn-primary btn-sm flex-1 sm:flex-none"
-          disabled={@loading? or @ready == 0}
+          class="btn btn-primary btn-sm min-h-11 flex-1 sm:flex-none"
+          disabled={@loading? or @ready == 0 or @schedule_missing?}
           phx-click="send"
           phx-value-mode="approve"
           phx-target={@myself}
           phx-disable-with="Approving…"
           data-role="composer-send-approve"
         >
-          <.icon name="hero-check-micro" class="size-4" /> Send and approve
+          <.icon name="hero-check-micro" class="size-4" /> Approve scheduled posts
         </button>
       </div>
     </footer>
     """
   end
 
-  attr :account, :map, required: true
-  attr :column, :map, required: true
-  attr :profile, :map, required: true
-  attr :owners, :map, required: true
-  attr :myself, :any, required: true
+  attr(:account, :map, required: true)
+  attr(:column, :map, required: true)
+  attr(:profile, :map, required: true)
+  attr(:owners, :map, required: true)
+  attr(:media_files, :list, required: true)
+  attr(:myself, :any, required: true)
 
   defp column(assigns) do
     assigns =
@@ -983,7 +1239,8 @@ defmodule PlatformWeb.SocialComposer do
             %{
               "account_id" => assigns.account.id,
               "text" => assigns.column.text,
-              "title" => assigns.column.title
+              "title" => assigns.column.title,
+              "scheduled_at" => assigns.column.scheduled_at
             },
             as: :version,
             id: "composer-version-#{assigns.account.id}"
@@ -1016,7 +1273,7 @@ defmodule PlatformWeb.SocialComposer do
         <button
           type="button"
           class="btn btn-ghost btn-sm btn-square"
-          disabled={@column.state == :loading}
+          disabled={@column.state == :loading or not is_nil(@column.result)}
           phx-click="regenerate"
           phx-value-account_id={@account.id}
           phx-target={@myself}
@@ -1054,6 +1311,12 @@ defmodule PlatformWeb.SocialComposer do
       </div>
 
       <div :if={@column.state == :ok} class="flex min-w-0 flex-col gap-3">
+        <p :if={@column.result} class="text-sm font-medium" data-role="composer-result">
+          {if @column.result.kind == :saved, do: "Saved as a draft", else: "Sent for review"}
+        </p>
+        <ul :if={@column.review_errors != []} class="text-sm text-error" role="alert" data-role="composer-review-error">
+          <li :for={line <- @column.review_errors}>{line}</li>
+        </ul>
         <p
           :if={@column.draft.banned_phrase}
           class="rounded-box border border-warning bg-warning/10 p-2 text-xs"
@@ -1076,6 +1339,7 @@ defmodule PlatformWeb.SocialComposer do
             label="Title"
             phx-debounce="250"
             data-role="composer-edit-title"
+            disabled={not is_nil(@column.result)}
           />
           <.input
             field={@form[:text]}
@@ -1084,7 +1348,43 @@ defmodule PlatformWeb.SocialComposer do
             rows="6"
             phx-debounce="250"
             data-role="composer-edit"
+            disabled={not is_nil(@column.result)}
           />
+          <.input
+            field={@form[:scheduled_at]}
+            type="datetime-local"
+            label={"Publish time (#{@profile.timezone || "Etc/UTC"})"}
+            class="input input-bordered min-h-11 w-full"
+            data-role="composer-publish-time"
+            disabled={not is_nil(@column.result)}
+          />
+          <fieldset class="space-y-1" data-role="composer-media">
+            <legend class="text-sm font-medium">Media from brand Files</legend>
+            <input type="hidden" name="version[media_file_ids][]" value="" />
+            <p :if={@media_files == []} class="text-xs">
+              No readable image or video files in this brand's project.
+            </p>
+            <label :for={file <- @media_files} class="flex items-center gap-2 text-sm">
+              <input
+                type="checkbox"
+                name="version[media_file_ids][]"
+                value={file.id}
+                checked={file.id in @column.media_file_ids}
+                data-role="composer-media-choice"
+                disabled={not is_nil(@column.result)}
+                class="checkbox checkbox-sm"
+              />
+              {file.original_filename || file.name}
+            </label>
+            <p
+              :for={file <- @media_files}
+              :if={file.id in @column.media_file_ids}
+              class="text-xs"
+              data-role="composer-selected-media"
+            >
+              Selected: {file.original_filename || file.name}
+            </p>
+          </fieldset>
         </.form>
 
         <SocialPreview.preview
@@ -1163,6 +1463,14 @@ defmodule PlatformWeb.SocialComposer do
       </div>
     </div>
     <footer class="flex flex-wrap items-center justify-end gap-2 border-t border-base-300 px-4 py-3 sm:px-6">
+      <a
+        :if={@sent.kind == :drafts}
+        href={@sent.path}
+        class="btn btn-primary btn-sm min-h-11"
+        data-role="composer-open-drafts"
+      >
+        Open Drafts
+      </a>
       <button
         type="button"
         class="btn btn-ghost btn-sm mr-auto"
@@ -1173,6 +1481,7 @@ defmodule PlatformWeb.SocialComposer do
         Another idea
       </button>
       <button
+        :if={@sent.kind != :drafts}
         type="button"
         class="btn btn-primary btn-sm"
         phx-click={done_click(@sent.kind, @myself)}
@@ -1193,4 +1502,5 @@ defmodule PlatformWeb.SocialComposer do
   defp sent_heading(:sent), do: "Sent for approval"
   defp sent_heading(:approved), do: "Sent and approved"
   defp sent_heading(:saved), do: "Saved as an idea"
+  defp sent_heading(:drafts), do: "Drafts saved"
 end

@@ -14,7 +14,7 @@ defmodule Platform.Social.TaskBridgeAcceptanceTest do
 
   alias Platform.Federation.ToolArguments
   alias Platform.Meetings.Candidates
-  alias Platform.Repo
+  alias Platform.{Repo, Social}
   alias Platform.Social.{Approvals, Post, RateLimit, Secrets, TaskBridge}
   alias Platform.Social.Publisher.Fake
   alias Platform.Tasks
@@ -25,6 +25,15 @@ defmodule Platform.Social.TaskBridgeAcceptanceTest do
     Fake.reset()
     RateLimit.reset()
     w = bridge_world!()
+
+    w =
+      Enum.reduce([:linkedin, :x], w, fn key, world ->
+        {:ok, account} =
+          Social.update_account(world.org_id, Map.fetch!(world, key), %{status: "connected"})
+
+        Map.put(world, key, account)
+      end)
+
     join!(w.space.id, :agent, w.agent.id)
     join!(w.space.id, :user, w.approver.id)
 
@@ -100,6 +109,8 @@ defmodule Platform.Social.TaskBridgeAcceptanceTest do
                    "profile_id" => w.profile.id,
                    "account_ids" => [w.linkedin.id, w.x.id],
                    "body" => "The doomsday clock bit",
+                   "scheduled_at" =>
+                     DateTime.utc_now() |> DateTime.add(3600) |> DateTime.to_iso8601(),
                    "task_id" => task_id
                  },
                  g

@@ -18,6 +18,10 @@ defmodule Platform.Social.ClipRetryZernioTest do
       )
 
     w = render_world!()
+    # The shared completeness gate refuses a retry onto an unconnected account.
+    for account <- [w.tiktok, w.x],
+        do: Repo.update!(Ecto.Changeset.change(account, status: "connected"))
+
     file = stored_file!(w.project, "retry clip", "clip.mp4", "video/mp4")
 
     {:ok, clip} =
@@ -34,7 +38,7 @@ defmodule Platform.Social.ClipRetryZernioTest do
       )
 
     {:ok, %{posts: posts}} =
-      Social.approve_clip(
+      Platform.Social.LegacyClipApproval.approve_clip(
         w.org_id,
         clip.id,
         w.approver.id,
@@ -156,8 +160,11 @@ defmodule Platform.Social.ClipRetryZernioTest do
       assert Repo.get!(Post, ctx.post.id).external_id == nil
       expect_create(ctx, outcome(ctx, "published", "published"))
 
+      # No vendor job exists, so the retry needs an explicit future time.
       assert {:ok, %{status: "published", publish_attempts: 2}} =
-               Social.retry_post(ctx.w.org_id, ctx.post.id, ctx.w.approver.id)
+               Social.retry_post(ctx.w.org_id, ctx.post.id, ctx.w.approver.id,
+                 scheduled_at: DateTime.add(DateTime.utc_now(), 3600)
+               )
 
       Req.Test.verify!()
     end

@@ -38,9 +38,19 @@ defmodule PlatformWeb.SocialAcceptanceTest do
       })
 
     {:ok, legacy_yt} =
-      Social.create_account(ctx.org_id, legacy, %{platform: "youtube", handle: "Legacy channel"})
+      Social.create_account(ctx.org_id, legacy, %{
+        platform: "youtube",
+        handle: "Legacy channel",
+        status: "connected"
+      })
 
-    {legacy_q1, _} = pending_post!(ctx, legacy_yt, %{body: "LEGACY-Q1 body"})
+    {legacy_q1, _} =
+      pending_post!(ctx, legacy_yt, %{
+        body: "LEGACY-Q1 body",
+        title: "Legacy video",
+        media_file_ids: [media_file!(ctx.org_id, "video/mp4").id]
+      })
+
     legacy_s1 = placed!(ctx, legacy_yt, at(tue, 14), "LEGACY-S1 scheduled")
 
     Map.merge(ctx, %{

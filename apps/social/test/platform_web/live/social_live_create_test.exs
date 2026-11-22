@@ -136,10 +136,18 @@ defmodule PlatformWeb.SocialLiveCreateTest do
       {:ok, htc} = Social.update_profile(org, htc, %{space_id: channel!(org).id})
 
       {:ok, account} =
-        Social.create_account(org, htc, %{platform: "linkedin", handle: "@htc_official"})
+        Social.create_account(org, htc, %{
+          platform: "linkedin",
+          handle: "@htc_official",
+          status: "connected"
+        })
 
       {:ok, post} =
-        Social.create_post(org, account, %{body: "Episode 12", status: "needs_approval"})
+        Social.create_post(org, account, %{
+          body: "Episode 12",
+          status: "needs_approval",
+          scheduled_at: DateTime.add(DateTime.utc_now(), 3600)
+        })
 
       # Switch to HTC so its rows render.
       child |> form("#social-profile-switcher", %{profile_id: htc.id}) |> render_change()

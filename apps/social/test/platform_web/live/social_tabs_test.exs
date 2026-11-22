@@ -42,7 +42,13 @@ defmodule PlatformWeb.SocialTabsTest do
   defp connected, do: %{status: "connected", provider_account_ref: "acc_#{unique()}"}
 
   defp needs_approval!(org_id, account, body) do
-    {:ok, post} = Social.create_post(org_id, account, %{body: body, status: "needs_approval"})
+    {:ok, post} =
+      Social.create_post(org_id, account, %{
+        body: body,
+        status: "needs_approval",
+        scheduled_at: DateTime.add(DateTime.utc_now(), 3600)
+      })
+
     post
   end
 

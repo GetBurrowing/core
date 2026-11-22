@@ -21,7 +21,8 @@ defmodule PlatformWeb.SocialProfileDeepLinkTest do
         provider_profile_ref: "vendor_profile_second"
       })
 
-    {:ok, second_account} = Social.create_account(ctx.org_id, second, %{platform: "youtube"})
+    {:ok, second_account} =
+      Social.create_account(ctx.org_id, second, %{platform: "youtube", status: "connected"})
 
     {:ok, first_idea} =
       Ideas.create(ctx.org_id, ctx.profile.id, %{title: "First profile idea"}, {:user, ctx.h1.id})
@@ -30,7 +31,13 @@ defmodule PlatformWeb.SocialProfileDeepLinkTest do
       Ideas.create(ctx.org_id, second.id, %{title: "Second profile idea"}, {:user, ctx.h1.id})
 
     {first_post, _} = pending_post!(ctx, ctx.a, %{body: "First profile post"})
-    {second_post, _} = pending_post!(ctx, second_account, %{body: "Second profile post"})
+
+    {second_post, _} =
+      pending_post!(ctx, second_account, %{
+        body: "Second profile post",
+        title: "Second profile video",
+        media_file_ids: [media_file!(ctx.org_id, "video/mp4").id]
+      })
 
     Map.merge(ctx, %{
       second: second,

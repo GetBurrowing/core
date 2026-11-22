@@ -31,7 +31,7 @@ defmodule Platform.Social.PublishRetryTest do
   # A post refused by the rate limit, with retry_after moved to `at`.
   defp rate_limited!(ctx, at) do
     Application.put_env(:social, :rate_limit, per_window: 0, window_ms: 3_600_000)
-    post = approved_post!(ctx.org_id, ctx.account)
+    post = historical_approved_post!(ctx.org_id, ctx.account)
     assert {:error, :rate_limited} = Publishing.publish_post(ctx.org_id, post.id)
     Application.put_env(:social, :rate_limit, per_window: 25, window_ms: 3_600_000)
     RateLimit.reset()
@@ -46,7 +46,7 @@ defmodule Platform.Social.PublishRetryTest do
     video = media_file!(ctx.org_id, "video/mp4")
 
     post =
-      approved_post!(ctx.org_id, insta, %{
+      historical_approved_post!(ctx.org_id, insta, %{
         media_file_ids: [video.id],
         media_meta: %{video.id => %{"duration_s" => 30}}
       })

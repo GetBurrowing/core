@@ -19,6 +19,10 @@ defmodule Platform.Social.ClipRetryTest do
     Fake.reset()
     RateLimit.reset()
     w = render_world!()
+    # The shared completeness gate refuses a retry onto an unconnected account.
+    for account <- [w.tiktok, w.x],
+        do: Repo.update!(Ecto.Changeset.change(account, status: "connected"))
+
     file = stored_file!(w.project, "rendered clip #{unique()}", "clip.mp4", "video/mp4")
 
     {:ok, clip} =
@@ -37,7 +41,7 @@ defmodule Platform.Social.ClipRetryTest do
     t0 = DateTime.utc_now()
 
     {:ok, %{posts: posts}} =
-      Social.approve_clip(
+      Platform.Social.LegacyClipApproval.approve_clip(
         w.org_id,
         clip.id,
         w.approver.id,
@@ -59,6 +63,9 @@ defmodule Platform.Social.ClipRetryTest do
     Fake.reset()
   end
 
+  # A failed post with no vendor job needs an explicit future time to retry.
+  defp later, do: DateTime.add(DateTime.utc_now(), 3600)
+
   defp publish_keys,
     do: Fake.calls(:publish) |> Enum.map(fn {:publish, [_, req], _} -> req.idempotency_key end)
 
@@ -74,7 +81,9 @@ defmodule Platform.Social.ClipRetryTest do
     retrier = make_approver!(ctx.w.org_id, ctx.w.profile, member!(user!(), ctx.w.org_id))
 
     assert {:ok, %Post{status: "scheduled"} = retried} =
-             Social.retry_post(ctx.w.org_id, ctx.tiktok_post.id, retrier.id)
+             Social.retry_post(ctx.w.org_id, ctx.tiktok_post.id, retrier.id,
+               scheduled_at: later()
+             )
 
     # One vendor call, for the post asked about; X stays failed, untouched.
     assert publish_keys() == [ctx.tiktok_post.id]
@@ -87,7 +96,12 @@ defmodule Platform.Social.ClipRetryTest do
   test "retrying a scheduled sibling's failed post leaves the sibling alone", ctx do
     tiktok_fails!(ctx)
     x_before = Repo.get!(Post, ctx.x_post.id)
-    assert {:ok, _} = Social.retry_post(ctx.w.org_id, ctx.tiktok_post.id, ctx.w.approver.id)
+
+    assert {:ok, _} =
+             Social.retry_post(ctx.w.org_id, ctx.tiktok_post.id, ctx.w.approver.id,
+               scheduled_at: later()
+             )
+
     assert publish_keys() == [ctx.tiktok_post.id]
     assert Repo.get!(Post, ctx.x_post.id) == x_before
   end
@@ -99,11 +113,17 @@ defmodule Platform.Social.ClipRetryTest do
     Fake.put_next_for(ctx.w.tiktok.id, :publish, {:error, :still_down})
 
     assert {:error, {:publish_failed, :still_down}} =
-             Social.retry_post(ctx.w.org_id, ctx.tiktok_post.id, ctx.w.approver.id)
+             Social.retry_post(ctx.w.org_id, ctx.tiktok_post.id, ctx.w.approver.id,
+               scheduled_at: later()
+             )
 
     assert Repo.get!(Post, ctx.tiktok_post.id).publish_attempts == 2
 
-    assert {:ok, _} = Social.retry_post(ctx.w.org_id, ctx.tiktok_post.id, ctx.w.approver.id)
+    assert {:ok, _} =
+             Social.retry_post(ctx.w.org_id, ctx.tiktok_post.id, ctx.w.approver.id,
+               scheduled_at: later()
+             )
+
     assert Repo.get!(Post, ctx.tiktok_post.id).publish_attempts == 3
     assert Repo.get!(Post, ctx.x_post.id).publish_attempts == 1
   end
@@ -135,7 +155,7 @@ defmodule Platform.Social.ClipRetryTest do
     )
 
     assert {:ok, %Post{status: "scheduled", refused_reason: nil}} =
-             Social.retry_post(ctx.w.org_id, refused.id, ctx.w.approver.id)
+             Social.retry_post(ctx.w.org_id, refused.id, ctx.w.approver.id, scheduled_at: later())
 
     assert publish_keys() == [refused.id]
   end
@@ -197,7 +217,7 @@ defmodule Platform.Social.ClipRetryTest do
     assert {:error, :not_found} = Social.retry_post(ctx.w.org_id, "nope", ctx.w.approver.id)
 
     # A post that is not a clip's is refused by name.
-    plain = approved_post!(ctx.w.org_id, ctx.w.x)
+    plain = historical_approved_post!(ctx.w.org_id, ctx.w.x)
 
     assert {:error, :not_a_clip_post} =
              Social.retry_post(ctx.w.org_id, plain.id, ctx.w.approver.id)

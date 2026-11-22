@@ -239,13 +239,25 @@ defmodule PlatformWeb.SocialIdeaCard do
 
     media = media(post)
 
+    review_fields? =
+      Map.has_key?(presentation, :title) or view.role in [:approver, :waiting, :rejecter]
+
+    publishing_title = if review_fields?, do: (post.platform_options || %{})["title"]
+
     {alt, flags} =
-      split_alt(PlatformLimits.flags(account.platform, flag_input(post, media, account, profile)))
+      split_alt(
+        PlatformLimits.flags(
+          account.platform,
+          flag_input(post, media, account, profile, publishing_title)
+        )
+      )
 
     %{
       post: post,
       display_title: Map.get(presentation, :title),
       readable?: Map.has_key?(presentation, :title),
+      review_fields?: review_fields?,
+      publishing_title: publishing_title,
       missed?: Platform.Social.ApprovalDeadline.missed?(post),
       account: account,
       profile: profile,
@@ -312,10 +324,10 @@ defmodule PlatformWeb.SocialIdeaCard do
   defp fragment(ms) when is_integer(ms), do: "#t=#{:erlang.float_to_binary(ms / 1000, [:short])}"
   defp fragment(_none), do: ""
 
-  defp flag_input(post, media, account, profile) do
+  defp flag_input(post, media, account, profile, title) do
     %{
       body: post.body || "",
-      title: nil,
+      title: title,
       link_url: post.link_url,
       media: media,
       account: %{approval_mode: account.approval_mode, status: account.status},
@@ -892,11 +904,19 @@ defmodule PlatformWeb.SocialIdeaCard do
       >
         {@v.label} · {(@v.status && @v.status.text) || "Needs approval"}
       </p>
+      <p
+        :if={@v.content? and @v.review_fields? and @v.account.platform == "youtube"}
+        data-role="publishing-title"
+        class="text-sm font-medium"
+      >
+        <span>Title (sent to YouTube)</span>: {@v.publishing_title || "Not set"}
+      </p>
       <SocialPreview.preview
         :if={@v.content?}
         id={"#{@v.dom}-preview-#{@v.post.id}"}
         platform={@v.account.platform}
         account={preview_account(@v)}
+        title={@v.publishing_title}
         body={if @mode == :edit, do: @text, else: @v.post.body || ""}
         media={@v.media}
         link_url={@v.post.link_url}
@@ -905,6 +925,18 @@ defmodule PlatformWeb.SocialIdeaCard do
         flags={@v.flags}
       />
 
+      <dl
+        :if={@v.content? and @v.review_fields?}
+        data-role="publishing-review-details"
+        class="space-y-1 text-sm"
+      >
+        <div :for={
+          {label, value} <- Platform.Social.PublishingReview.details(@v.post, @v.account, @v.tz)
+        }>
+          <dt class="font-medium">{label}</dt>
+          <dd class="whitespace-pre-wrap break-words">{value}</dd>
+        </div>
+      </dl>
       <.cover_control :if={@cover_controls and @v.cover} v={@v} />
 
       <p :if={@v.alt != []} data-role="queue-alt-note" class="text-xs text-subtle">

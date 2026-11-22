@@ -52,7 +52,10 @@ defmodule Platform.Social.ApprovalsTest do
       for user <- [ctx.h1, ctx.h2] do
         assert [item] = items(user, post)
         assert item.title == "Needs approval: LinkedIn post for #{ctx.profile.name}"
-        assert item.body == "LinkedIn · #{ctx.profile.name} · not scheduled"
+
+        assert item.body ==
+                 "LinkedIn · #{ctx.profile.name} · #{Calendar.strftime(post.scheduled_at, "%a %d %b %H:%M UTC")}"
+
         refute item.body =~ ctx.a.handle
         refute item.title =~ "Episode 12"
         refute (item.body || "") =~ "Episode 12"
@@ -135,7 +138,13 @@ defmodule Platform.Social.ApprovalsTest do
       profile = Repo.get!(Profile, ctx.profile.id)
 
       # Inserted without the hook, so this call's own return is observed.
-      post = Repo.insert!(%Post{account_id: ctx.a.id, body: "x", status: "needs_approval"})
+      post =
+        Repo.insert!(%Post{
+          account_id: ctx.a.id,
+          body: "x",
+          status: "needs_approval",
+          scheduled_at: DateTime.add(DateTime.utc_now(), 3600)
+        })
 
       assert {:ok, %{unreachable_approvers: [id]}} = Approvals.request_approval(post)
       assert id == outsider.id

@@ -35,7 +35,14 @@ defmodule PlatformWeb.SocialLiveIdeasTest do
     end)
 
     ctx = approval_fixture() |> with_ideas_runtime()
-    {:ok, x} = Social.create_account(ctx.org_id, ctx.profile, %{platform: "x", handle: "@show_x"})
+
+    {:ok, x} =
+      Social.create_account(ctx.org_id, ctx.profile, %{
+        platform: "x",
+        handle: "@show_x",
+        status: "connected"
+      })
+
     Map.merge(ctx, %{x: x})
   end
 
@@ -63,7 +70,8 @@ defmodule PlatformWeb.SocialLiveIdeasTest do
             "profile_id" => ctx.profile.id,
             "idea_id" => idea.id,
             "account_ids" => Enum.map(accounts, & &1.id),
-            "body" => "Episode 12 is out"
+            "body" => "Episode 12 is out",
+            "scheduled_at" => DateTime.utc_now() |> DateTime.add(3600) |> DateTime.to_iso8601()
           },
           attrs
         ),

@@ -120,9 +120,13 @@ defmodule Platform.Social.Approvals do
   def request_approval(%Post{flow: "studio"}), do: {:error, :studio_post}
 
   def request_approval(%Post{status: "needs_approval"} = post) do
-    with {:ok, profile} <- Social.profile_of_post(post),
+    with true <- Platform.UUID.valid?(post.id),
+         %Post{status: "needs_approval"} = post <- Repo.get(Post, post.id),
+         :ok <- Social.refuse_studio(post),
+         {:ok, profile} <- Social.profile_of_post(post),
          {:ok, account} <- fetch_account(post),
-         :ok <- Social.require_channel("needs_approval", profile, account) do
+         :ok <- Social.require_channel("needs_approval", profile, account),
+         :ok <- request_completeness(post, account) do
       case live_card(post.id) do
         %ApprovalCard{} = card ->
           with {:ok, card} <- rerender(card), do: {:ok, %{card: card, unreachable_approvers: []}}
@@ -130,10 +134,23 @@ defmodule Platform.Social.Approvals do
         nil ->
           create_card(post, profile, account)
       end
+    else
+      false -> {:error, :not_found}
+      nil -> {:error, :not_found}
+      %Post{} -> {:error, :not_needs_approval}
+      {:error, _} = error -> error
     end
   end
 
   def request_approval(%Post{}), do: {:error, :not_needs_approval}
+
+  defp request_completeness(_post, %Account{approval_mode: "draft_only"}), do: :ok
+
+  defp request_completeness(post, account) do
+    if live_card(post.id),
+      do: :ok,
+      else: Platform.Social.PublishingCompleteness.check(post, account)
+  end
 
   @doc """
   The post's live (pending or deciding) approval card, or nil. READ ONLY:
@@ -554,6 +571,9 @@ defmodule Platform.Social.Approvals do
       else: {:error, :slot_passed}
   end
 
+  def decide_approve_at(_canvas_id, _clicker, _shown_fingerprint, _at),
+    do: {:error, :publish_time_required}
+
   defp do_approve(canvas_id, clicker, shown_fingerprint, at) do
     approve = fn card, post, account, profile, user_id ->
       with :ok <- refuse_draft_only(account),
@@ -564,6 +584,11 @@ defmodule Platform.Social.Approvals do
                post
                | scheduled_at: at || post.scheduled_at
              }),
+           :ok <-
+             Platform.Social.PublishingCompleteness.check(
+               %{post | scheduled_at: at || post.scheduled_at},
+               account
+             ),
            :ok <- claim(card),
            {:ok, _} <- put_slot(post, at),
            {:ok, approved} <- Social.approve_post(profile.org_id, post, user_id, lock: true),
@@ -974,6 +999,9 @@ defmodule Platform.Social.Approvals do
         ),
       refused_at: post.refused_at,
       retry_after: post.retry_after,
+      existing_job?: is_binary(post.external_id) and String.trim(post.external_id) != "",
+      expected_external_id: Platform.Social.Publishing.existing_job_id(post),
+      scheduled_at: post.scheduled_at,
       action: nil,
       post_id: post.id,
       org_id: profile.org_id
@@ -1015,14 +1043,14 @@ defmodule Platform.Social.Approvals do
     action =
       case kind do
         :media_rejected ->
-          %{kind: :retry_publish, label: "Retry publish", disabled?: false, href: nil}
+          %{kind: :retry_publish, label: retry_label(refusal), disabled?: false, href: nil}
 
         :rate_limited ->
           waiting? =
             match?(%DateTime{}, refusal.retry_after) and
               DateTime.compare(DateTime.utc_now(), refusal.retry_after) == :lt
 
-          %{kind: :publish_now, label: "Publish now", disabled?: waiting?, href: nil}
+          %{kind: :publish_now, label: retry_label(refusal), disabled?: waiting?, href: nil}
 
         :account_archived ->
           %{
@@ -1046,6 +1074,9 @@ defmodule Platform.Social.Approvals do
   end
 
   defp refusal_action(refusal, _viewer, _profile), do: refusal
+
+  defp retry_label(%{existing_job?: true}), do: "Retry existing publish job"
+  defp retry_label(_), do: "Choose a new time"
 
   defp social_path(profile, tab),
     do: "/m/social?" <> URI.encode_query(%{"profile" => profile.id, "tab" => tab})
@@ -1119,6 +1150,9 @@ defmodule Platform.Social.Approvals do
       role: :approver,
       queue_url: queue_url(post, profile),
       body: post.body || "",
+      publishing_title:
+        if(account.platform == "youtube", do: (post.platform_options || %{})["title"]),
+      review_details: Platform.Social.PublishingReview.details(post, account, profile.timezone),
       link_url: post.link_url,
       hashtags: profile.default_hashtags || [],
       media: media(post),

@@ -30,10 +30,19 @@ defmodule PlatformWeb.SocialLiveQueueTest do
     RateLimit.reset()
     ctx = approval_fixture() |> with_ideas_runtime()
 
-    {:ok, x} = Social.create_account(ctx.org_id, ctx.profile, %{platform: "x", handle: "@show_x"})
+    {:ok, x} =
+      Social.create_account(ctx.org_id, ctx.profile, %{
+        platform: "x",
+        handle: "@show_x",
+        status: "connected"
+      })
 
     {:ok, ig} =
-      Social.create_account(ctx.org_id, ctx.profile, %{platform: "instagram", handle: "@show_ig"})
+      Social.create_account(ctx.org_id, ctx.profile, %{
+        platform: "instagram",
+        handle: "@show_ig",
+        status: "connected"
+      })
 
     Map.merge(ctx, %{x: x, ig: ig})
   end
@@ -372,7 +381,12 @@ defmodule PlatformWeb.SocialLiveQueueTest do
 
   test "Calendar chooses exact or legacy link using the clicking viewer read authority",
        %{conn: conn} = ctx do
-    {post, _} = pending_post!(ctx, ctx.a, %{scheduled_at: DateTime.add(DateTime.utc_now(), -60)})
+    {post, _} = pending_post!(ctx, ctx.a)
+    # Model a previously submitted post whose time has elapsed.
+    Repo.update_all(from(p in Post, where: p.id == ^post.id),
+      set: [scheduled_at: DateTime.add(DateTime.utc_now(), -60)]
+    )
+
     path = "/m/social?profile=#{ctx.profile.id}&tab=calendar"
     allowed = open(conn, ctx.h2, path)
     render_click(allowed, "open_post", %{"id" => post.id})
@@ -416,7 +430,13 @@ defmodule PlatformWeb.SocialLiveQueueTest do
             "profile_id" => ctx.profile.id,
             "idea_id" => idea.id,
             "account_ids" => Enum.map(accounts, & &1.id),
-            "body" => "Episode 12 is out"
+            "body" => "Episode 12 is out",
+            "scheduled_at" => DateTime.add(DateTime.utc_now(), 3600),
+            "media_file_ids" =>
+              if(Enum.any?(accounts, &(&1.platform == "instagram")),
+                do: [media_file!(ctx.org_id, "image/png").id],
+                else: []
+              )
           },
           attrs
         ),
@@ -481,7 +501,7 @@ defmodule PlatformWeb.SocialLiveQueueTest do
              )
 
       [approvable] = drafts!(ctx, idea!(ctx, "Approvable"), [ctx.a])
-      assert is_nil(approvable.scheduled_at)
+      assert DateTime.compare(approvable.scheduled_at, DateTime.utc_now()) == :gt
       child |> element("[data-role='social-tab-button'][data-tab='queue']") |> render_click()
       assert has_element?(child, in_v(approvable, "[data-role='queue-approve']"))
       assert has_element?(child, "[data-role='social-queue-pane']", note)
@@ -925,7 +945,11 @@ defmodule PlatformWeb.SocialLiveQueueTest do
     profile = Repo.update!(Ecto.Changeset.change(profile, project_id: project.id))
 
     {:ok, account} =
-      Social.create_account(ctx.org_id, profile, %{platform: "linkedin", handle: "@other_brand"})
+      Social.create_account(ctx.org_id, profile, %{
+        platform: "linkedin",
+        handle: "@other_brand",
+        status: "connected"
+      })
 
     {denied, _} = pending_post!(ctx, account, %{body: "DENIED-BRAND-TITLE"})
 
@@ -964,9 +988,18 @@ defmodule PlatformWeb.SocialLiveQueueTest do
       })
 
     {:ok, yt} =
-      Social.create_account(ctx.org_id, legacy, %{platform: "youtube", handle: "Legacy"})
+      Social.create_account(ctx.org_id, legacy, %{
+        platform: "youtube",
+        handle: "Legacy",
+        status: "connected"
+      })
 
-    {legacy_post, _} = pending_post!(ctx, yt, %{body: "LEGACY-Q1 body"})
+    {legacy_post, _} =
+      pending_post!(ctx, yt, %{
+        body: "LEGACY-Q1 body",
+        title: "Legacy video",
+        media_file_ids: [media_file!(ctx.org_id, "video/mp4").id]
+      })
 
     child = open(conn, ctx.h1)
     assert has_element?(child, card(idea.id))
@@ -1108,7 +1141,14 @@ defmodule PlatformWeb.SocialLiveQueueTest do
 
   describe "Failed and refused (task 01a165f1)" do
     defp refused!(ctx, kind, attrs \\ []) do
-      {post, card} = pending_post!(ctx, ctx.a, %{body: "REFUSED-#{kind} body"})
+      account = Repo.update!(Ecto.Changeset.change(ctx.a, status: "connected"))
+
+      {post, card} =
+        pending_post!(ctx, account, %{
+          body: "REFUSED-#{kind} body",
+          scheduled_at: DateTime.add(DateTime.utc_now(), 1, :day)
+        })
+
       h1 = Platform.Accounts.get_user(ctx.h1.id)
       {:ok, _} = Approvals.decide_approve(card.canvas_id, h1, Approvals.fingerprint(post))
       Fake.reset()
@@ -1149,8 +1189,10 @@ defmodule PlatformWeb.SocialLiveQueueTest do
       assert has_element?(
                child,
                action(media) <> "[data-action='retry_publish']",
-               "Retry publish"
+               "Choose a new time"
              )
+
+      assert has_element?(child, action(media) <> ".min-h-11")
 
       assert has_element?(
                child,
@@ -1159,16 +1201,35 @@ defmodule PlatformWeb.SocialLiveQueueTest do
              )
     end
 
-    test "Retry publishes via the Fake and clears the refusal", %{conn: conn} = ctx do
-      {media, _} = refused!(ctx, "media_rejected")
+    test "existing-job retry uses the same job and clears the refusal", %{conn: conn} = ctx do
+      {media, _} = refused!(ctx, "media_rejected", external_id: "existing-job")
       child = open(conn, ctx.h1)
 
+      assert has_element?(child, action(media), "Retry existing publish job")
       child |> element(action(media)) |> render_click()
 
-      assert [{:publish, _, _}] = Fake.calls(:publish)
+      assert [{:retry, [_, "existing-job"], _}] = Fake.calls(:retry)
+      assert Fake.calls(:publish) == []
       row = Repo.get!(Post, media.id)
       assert {row.status, row.refused_reason} == {"scheduled", nil}
       refute has_element?(child, in_v(media, "[data-role='social-card-refusal']"))
+    end
+
+    test "the card action refuses rendered job A replaced by B before the click",
+         %{conn: conn} = ctx do
+      {post, _card} = refused!(ctx, "media_rejected", external_id: "rendered-A")
+      child = open(conn, ctx.h1)
+      Repo.update_all(from(p in Post, where: p.id == ^post.id), set: [external_id: "current-B"])
+      before = Repo.get!(Post, post.id)
+      child |> element(action(post)) |> render_click()
+      assert Fake.calls() == []
+      assert Repo.get!(Post, post.id) == before
+
+      assert has_element?(
+               child,
+               "[data-role='social-card-notice']",
+               "The publish job changed, so nothing was retried."
+             )
     end
 
     test "a viewer gets the reason and no action", %{conn: conn} = ctx do
@@ -1182,6 +1243,95 @@ defmodule PlatformWeb.SocialLiveQueueTest do
              )
 
       refute has_element?(viewer, "[data-role='social-card-refusal-action']")
+    end
+
+    test "a published existing-job retry reports the saved classification", %{conn: conn} = ctx do
+      {media, _} = refused!(ctx, "media_rejected", external_id: "existing-job")
+      Fake.put_next(:retry, {:ok, %{status: :published, external_id: "existing-job"}})
+      child = open(conn, ctx.h1)
+      child |> element(action(media)) |> render_click()
+      assert Repo.get!(Post, media.id).status == "published"
+      assert has_element?(child, "[data-role='social-card-notice']", "Published.")
+    end
+
+    test "retry without a vendor job opens a time choice without sending", %{conn: conn} = ctx do
+      {media, _} = refused!(ctx, "media_rejected")
+      child = open(conn, ctx.h1)
+      child |> element(action(media)) |> render_click()
+
+      assert Fake.calls(:publish) == []
+
+      assert has_element?(
+               child,
+               in_v(media, "[data-role='retry-schedule'] input[type='datetime-local']")
+             )
+
+      assert Repo.get!(Post, media.id).refused_reason == "media_rejected"
+    end
+
+    test "a past time remains on the chooser and does not publish", %{conn: conn} = ctx do
+      {media, _} = refused!(ctx, "media_rejected")
+      child = open(conn, ctx.h1)
+      child |> element(action(media)) |> render_click()
+
+      child
+      |> form(in_v(media, "[data-role='retry-schedule']"), %{at: "2020-01-01T12:00"})
+      |> render_submit()
+
+      assert has_element?(child, in_v(media, "[data-role='retry-schedule']"))
+
+      assert has_element?(
+               child,
+               in_v(media, "[data-role='social-card-notice']"),
+               "future publish time"
+             )
+
+      assert Fake.calls(:publish) == []
+    end
+
+    test "a job appearing while choosing a time is not retried", %{conn: conn} = ctx do
+      {media, _} = refused!(ctx, "media_rejected")
+      child = open(conn, ctx.h1)
+      child |> element(action(media)) |> render_click()
+      Repo.update_all(from(p in Post, where: p.id == ^media.id), set: [external_id: "new-job"])
+      at = DateTime.utc_now() |> DateTime.add(1, :day) |> Calendar.strftime("%Y-%m-%dT%H:%M:%S")
+      child |> form(in_v(media, "[data-role='retry-schedule']"), %{at: at}) |> render_submit()
+      assert Fake.calls(:publish) == []
+      assert Fake.calls(:retry) == []
+    end
+
+    test "revoked approver cannot submit an already opened retry chooser", %{conn: conn} = ctx do
+      {media, _} = refused!(ctx, "media_rejected")
+      child = open(conn, ctx.h1)
+      child |> element(action(media)) |> render_click()
+
+      Repo.update_all(from(p in Social.Profile, where: p.id == ^ctx.profile.id),
+        set: [approver_user_ids: [ctx.h2.id]]
+      )
+
+      value =
+        DateTime.utc_now() |> DateTime.add(1, :day) |> Calendar.strftime("%Y-%m-%dT%H:%M:%S")
+
+      child |> form(in_v(media, "[data-role='retry-schedule']"), %{at: value}) |> render_submit()
+      assert Fake.calls(:publish) == []
+      assert Fake.calls(:retry) == []
+    end
+
+    test "a confirmed future retry reaches the guarded publish", %{conn: conn} = ctx do
+      {media, _} = refused!(ctx, "media_rejected")
+      child = open(conn, ctx.h1)
+      child |> element(action(media)) |> render_click()
+
+      at =
+        DateTime.utc_now()
+        |> DateTime.add(1, :day)
+        |> DateTime.truncate(:second)
+        |> Map.put(:microsecond, {0, 6})
+
+      value = Calendar.strftime(at, "%Y-%m-%dT%H:%M:%S")
+      child |> form(in_v(media, "[data-role='retry-schedule']"), %{at: value}) |> render_submit()
+      assert [{:publish, [_, %{scheduled_at: ^at}], _}] = Fake.calls(:publish)
+      assert %{status: "scheduled", scheduled_at: ^at} = Repo.get!(Post, media.id)
     end
   end
 end

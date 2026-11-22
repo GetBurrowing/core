@@ -18,6 +18,8 @@ defmodule Platform.Social.ClipMediaTest do
   setup do
     Fake.reset()
     world = render_world!()
+    {:ok, tiktok} = Social.update_account(world.org_id, world.tiktok, %{status: "connected"})
+    world = Map.put(world, :tiktok, tiktok)
     Phoenix.PubSub.subscribe(Platform.PubSub, Social.clips_topic(world.profile.id))
     world
   end
@@ -49,6 +51,8 @@ defmodule Platform.Social.ClipMediaTest do
                  "profile_id" => world.profile.id,
                  "account_ids" => [world.tiktok.id],
                  "body" => "watch this",
+                 "scheduled_at" =>
+                   DateTime.utc_now() |> DateTime.add(3600) |> DateTime.to_iso8601(),
                  "media_file_ids" => [clip.render_file_id]
                },
                %{agent_id: world.agent.id}
@@ -102,11 +106,12 @@ defmodule Platform.Social.ClipMediaTest do
       set: [duration_s: 150.0]
     )
 
+    # Validate metadata and media rules independently on an incomplete draft.
     {:ok, post} =
       Social.create_post(world.org_id, world.x, %{
         body: "long one",
         media_file_ids: [clip.render_file_id],
-        status: "needs_approval"
+        status: "draft"
       })
 
     meta = post.media_meta[clip.render_file_id]

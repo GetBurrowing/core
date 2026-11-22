@@ -83,7 +83,7 @@ defmodule Platform.Social.AgentDrafts do
   @castable ~w(body media_file_ids link_url scheduled_at status task_id meeting_id
                segment_ids episode_url start_s end_s cover_file_id cover_offset_ms
                schedule_reason)a
-  @forbidden ~w(approved_by_user_id approved_at external_url external_id error
+  @forbidden ~w(platform_options approved_by_user_id approved_at external_url external_id error
                 rejection_reason rejected_at cover_error)
   @agent_statuses ~w(draft needs_approval)
   @default_status "needs_approval"
@@ -154,7 +154,19 @@ defmodule Platform.Social.AgentDrafts do
           changeset =
             %Post{account_id: account.id, idea_id: idea_id}
             |> agent_changeset(attrs, profile)
-            |> put_effective_link(profile)
+            |> Platform.Social.PublishingCompleteness.put_title(attrs, account)
+
+          case Social.require_channel(changeset, profile, account) do
+            :ok -> :ok
+            {:error, reason} -> Repo.rollback(reason)
+          end
+
+          changeset = put_effective_link(changeset, profile)
+
+          case Social.require_channel(changeset, profile, account) do
+            :ok -> :ok
+            {:error, reason} -> Repo.rollback(reason)
+          end
 
           case Repo.insert(changeset) do
             {:ok, post} ->
@@ -354,7 +366,12 @@ defmodule Platform.Social.AgentDrafts do
            profile = profile_of(locked),
            :ok <- refuse_banned(attrs, profile),
            :ok <- check_task_profile(attrs, profile),
-           changeset = agent_changeset(locked, attrs, profile),
+           changeset =
+             agent_changeset(locked, attrs, profile)
+             |> Platform.Social.PublishingCompleteness.put_title(
+               attrs,
+               Repo.get!(Account, locked.account_id)
+             ),
            :ok <-
              Social.require_channel(changeset, profile, Repo.get(Account, locked.account_id)),
            :ok <- Platform.Social.ApprovalDeadline.check_agent_edit(locked, changeset),

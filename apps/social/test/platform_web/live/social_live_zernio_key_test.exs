@@ -28,7 +28,9 @@ defmodule PlatformWeb.SocialLiveZernioKeyTest do
 
   setup do
     Fake.reset()
-    approval_fixture()
+    ctx = approval_fixture()
+    {:ok, a} = Platform.Social.update_account(ctx.org_id, ctx.a, %{status: nil})
+    Map.put(ctx, :a, a)
   end
 
   defp open(conn, user, tab \\ "settings") do

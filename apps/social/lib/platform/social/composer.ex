@@ -376,7 +376,7 @@ defmodule Platform.Social.Composer do
   end
 
   defp time_reason(nil, _profile),
-    do: "No posting slots are set for this account, so it goes out when it's approved."
+    do: "No posting slots are set. Publishing review needs an explicit publish time."
 
   defp time_reason(%DateTime{} = slot, profile) do
     tz = profile.timezone || "Etc/UTC"
@@ -487,7 +487,9 @@ defmodule Platform.Social.Composer do
   `:schedule_in_past`, `:profile_has_no_channel`, `:not_an_approver` (with
   `approve: true` and no account this user may approve), or an idea
   changeset. A write failing after earlier writes is
-  `{:error, {:partial, reason, written_posts}}`.
+  `{:error, {:partial, {:version_failed, account_id, reason}, written_posts}}`.
+  The overlapping pre-validation pass reports `{:incomplete_versions, errors}`
+  before writing; errors maps account ids to their missing-field lines.
   """
   @spec send(Profile.t(), term(), map(), keyword()) :: {:ok, map()} | {:error, term()}
   def send(%Profile{} = profile, user_id, %{drafts: drafts} = compose, opts \\ [])
@@ -500,6 +502,8 @@ defmodule Platform.Social.Composer do
          {:ok, plan} <- plan_writes(profile, drafts),
          :ok <- require_channels(profile, plan),
          {:ok, approvable} <- approvable(profile, plan, user, approve?),
+         :ok <- draft_media_access(profile, user, plan),
+         :ok <- review_completeness(plan),
          {:ok, idea} <- idea_for(profile, user, Map.get(compose, :idea)) do
       with {:ok, posts} <- write(profile.org_id, idea, plan, user) do
         {:ok, Map.put(after_send(posts, plan, approvable, user, approve?), :idea, idea)}
@@ -517,6 +521,37 @@ defmodule Platform.Social.Composer do
          {:ok, user} <- live_user(user_id),
          :ok <- may_compose(profile, user) do
       idea_for(profile, user, attrs)
+    end
+  end
+
+  @doc "Saves the selected versions as legacy drafts without submitting them for review."
+  def save_drafts(%Profile{} = profile, user_id, %{drafts: drafts} = compose)
+      when is_list(drafts) do
+    with {:ok, profile} <- reread(profile),
+         {:ok, user} <- live_user(user_id),
+         :ok <- may_compose(profile, user),
+         {:ok, plan} <- plan_writes(profile, drafts, :draft),
+         :ok <- draft_media_access(profile, user, plan) do
+      result =
+        Repo.transaction(fn ->
+          with {:ok, idea} <- idea_for(profile, user, Map.get(compose, :idea), broadcast: false),
+               {:ok, posts} <- write(profile.org_id, idea, plan, user, "draft") do
+            %{idea: idea, posts: posts}
+          else
+            {:error, {:partial, reason, _posts}} -> Repo.rollback(reason)
+            {:error, reason} -> Repo.rollback(reason)
+            {:error, reason, _posts} -> Repo.rollback(reason)
+          end
+        end)
+
+      case result do
+        {:ok, saved} ->
+          Ideas.broadcast_changed(profile.id)
+          {:ok, saved}
+
+        error ->
+          error
+      end
     end
   end
 
@@ -540,9 +575,11 @@ defmodule Platform.Social.Composer do
   defp may_compose(profile, user),
     do: if(can_compose?(profile, user), do: :ok, else: {:error, :approver_no_access})
 
-  defp plan_writes(_profile, []), do: {:error, :no_drafts}
+  defp plan_writes(profile, drafts), do: plan_writes(profile, drafts, :review)
 
-  defp plan_writes(profile, drafts) do
+  defp plan_writes(_profile, [], _mode), do: {:error, :no_drafts}
+
+  defp plan_writes(profile, drafts, mode) do
     accounts = Map.new(Social.list_accounts(profile.org_id, profile_id: profile.id), &{&1.id, &1})
     now = DateTime.utc_now()
 
@@ -551,7 +588,7 @@ defmodule Platform.Social.Composer do
 
       case Map.get(accounts, id) do
         %Account{archived_at: nil} = account ->
-          case valid_draft(draft, account, now) do
+          case valid_draft(draft, account, now, mode) do
             :ok -> {:cont, {:ok, acc ++ [{account, draft}]}}
             {:error, reason} -> {:halt, {:error, reason}}
           end
@@ -562,19 +599,66 @@ defmodule Platform.Social.Composer do
     end)
   end
 
-  defp valid_draft(draft, account, now) do
+  defp valid_draft(draft, account, now, mode) do
     text = Map.get(draft, :text)
 
     cond do
-      not (is_binary(text) and String.trim(text) != "") ->
+      not is_binary(text) or
+          (mode == :review and account.approval_mode == "draft_only" and String.trim(text) == "") ->
         {:error, {:invalid_draft, account.id}}
 
-      match?(%DateTime{}, draft[:scheduled_at]) and
+      not is_nil(draft[:scheduled_at]) and not match?(%DateTime{}, draft[:scheduled_at]) ->
+        {:error, :invalid_schedule}
+
+      (mode == :draft or account.approval_mode == "draft_only") and
+        match?(%DateTime{}, draft[:scheduled_at]) and
           DateTime.compare(draft.scheduled_at, now) != :gt ->
         {:error, :schedule_in_past}
 
       true ->
         :ok
+    end
+  end
+
+  defp draft_media_access(profile, user, plan) do
+    lists = Enum.map(plan, fn {_account, draft} -> Map.get(draft, :media_file_ids, []) end)
+
+    if Enum.all?(lists, &is_list/1) do
+      ids = List.flatten(lists)
+      check_draft_media(profile, user, ids)
+    else
+      {:error, :invalid_media}
+    end
+  end
+
+  defp check_draft_media(_profile, _user, []), do: :ok
+
+  defp check_draft_media(profile, user, ids) do
+    scope = Platform.Access.Scope.for_user(user)
+
+    with project_id when is_binary(project_id) <- profile.project_id,
+         :ok <- Platform.Access.check(scope, "files.read", {:project, project_id}),
+         true <-
+           Enum.all?(ids, fn id ->
+             case Ecto.UUID.cast(id) do
+               :error -> false
+               {:ok, file_id} -> check_draft_file(file_id, profile, project_id)
+             end
+           end) do
+      :ok
+    else
+      _ -> {:error, :invalid_media}
+    end
+  end
+
+  defp check_draft_file(id, profile, project_id) do
+    case Platform.Files.get_file(id) do
+      %{project_id: ^project_id} = file ->
+        Platform.Files.finalized_upload?(file) and
+          Platform.Social.OrgFiles.in_org?(file, profile.org_id)
+
+      _ ->
+        false
     end
   end
 
@@ -596,41 +680,42 @@ defmodule Platform.Social.Composer do
     end
   end
 
-  defp idea_for(%Profile{id: profile_id}, _user, %Idea{profile_id: profile_id} = idea),
+  defp idea_for(profile, user, idea), do: idea_for(profile, user, idea, [])
+
+  defp idea_for(%Profile{id: profile_id}, _user, %Idea{profile_id: profile_id} = idea, _opts),
     do: {:ok, idea}
 
-  defp idea_for(_profile, _user, %Idea{}), do: {:error, :idea_profile_mismatch}
+  defp idea_for(_profile, _user, %Idea{}, _opts), do: {:error, :idea_profile_mismatch}
 
-  defp idea_for(profile, user, attrs) when is_map(attrs) do
+  defp idea_for(profile, user, attrs, opts) when is_map(attrs) do
     attrs =
       attrs
       |> Map.new(fn {k, v} -> {to_string(k), v} end)
       |> Map.put("source_kind", "human")
       |> Map.reject(fn {_k, v} -> is_nil(v) or v == "" end)
 
-    Ideas.create(profile.org_id, profile.id, attrs, {:user, user.id})
+    Ideas.create(profile.org_id, profile.id, attrs, {:user, user.id}, opts)
   end
 
-  defp idea_for(_profile, _user, _), do: {:error, :idea_required}
+  defp idea_for(_profile, _user, _, _opts), do: {:error, :idea_required}
 
-  defp write(org_id, idea, plan, user) do
+  defp write(org_id, idea, plan, user, status \\ "needs_approval") do
     plan
     |> Enum.reduce_while({:ok, []}, fn {%Account{} = account, draft}, {:ok, written} ->
-      attrs = %{
-        body: String.trim(draft.text),
-        status: "needs_approval",
-        scheduled_at: Map.get(draft, :scheduled_at),
-        schedule_reason: schedule_reason(draft),
-        composer_provenance: provenance(Map.put(draft, :platform, account.platform))
-      }
+      attrs = post_attrs(account, draft, status)
 
       case Social.create_post(org_id, account, attrs, idea_id: idea.id) do
         {:ok, post} ->
           PostEvents.record!(post, "created", {:human, user.id})
-          PostEvents.record!(post, "submitted", {:human, user.id})
+
+          if status == "needs_approval",
+            do: PostEvents.record!(post, "submitted", {:human, user.id})
+
           {:cont, {:ok, [post | written]}}
 
         {:error, reason} ->
+          reason = {:version_failed, account.id, reason}
+
           {:halt, {:error, reason, written}}
       end
     end)
@@ -639,6 +724,56 @@ defmodule Platform.Social.Composer do
       {:error, reason, []} -> {:error, reason}
       {:error, reason, written} -> {:error, {:partial, reason, Enum.reverse(written)}}
     end
+  end
+
+  # Overlapping pre-pass: avoid ordinary partial writes, using exactly the
+  # writer's candidate/media preparation. Current state can change afterwards;
+  # create_post and locked approval retain the authoritative checks.
+  defp review_completeness(plan) do
+    errors =
+      Enum.flat_map(plan, fn {account, draft} ->
+        cs = Social.prepare_post_changeset(account, post_attrs(account, draft, "needs_approval"))
+
+        result =
+          cond do
+            not cs.valid? ->
+              {:error,
+               {:incomplete_post,
+                Enum.map(cs.errors, fn {field, {message, _}} -> "#{field} #{message}" end)}}
+
+            account.approval_mode == "draft_only" ->
+              :ok
+
+            true ->
+              Platform.Social.PublishingCompleteness.check(
+                Ecto.Changeset.apply_changes(cs),
+                account
+              )
+          end
+
+        case result do
+          :ok -> []
+          {:error, {:incomplete_post, lines}} -> [{account.id, lines}]
+        end
+      end)
+
+    if errors == [], do: :ok, else: {:error, {:incomplete_versions, Map.new(errors)}}
+  end
+
+  defp post_attrs(account, draft, status) do
+    attrs = %{
+      body: String.trim(draft.text),
+      media_file_ids: Map.get(draft, :media_file_ids, []),
+      title: if(account.platform == "youtube", do: Map.get(draft, :title), else: nil),
+      status: status,
+      scheduled_at: Map.get(draft, :scheduled_at),
+      schedule_reason: schedule_reason(draft),
+      composer_provenance: provenance(Map.put(draft, :platform, account.platform))
+    }
+
+    attrs = if account.platform == "youtube", do: attrs, else: Map.delete(attrs, :title)
+
+    attrs
   end
 
   defp schedule_reason(draft) do

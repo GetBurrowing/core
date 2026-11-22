@@ -26,7 +26,12 @@ defmodule Platform.Social.VoiceTest do
         voice: %{samples: ["We ship small things often."], banned: ["game changer", "Synergy"]}
       })
 
-    {:ok, account} = Social.create_account(org_id, profile, %{platform: "x", handle: "voice"})
+    {:ok, account} =
+      Social.create_account(org_id, profile, %{
+        platform: "x",
+        handle: "voice",
+        status: "connected"
+      })
 
     %{
       org_id: org_id,
@@ -192,7 +197,8 @@ defmodule Platform.Social.VoiceTest do
       {:ok, [post]} =
         AgentDrafts.create_agent_drafts(ctx.scope, ctx.profile.id, %{
           "account_ids" => [ctx.account.id],
-          "body" => "A plain update."
+          "body" => "A plain update.",
+          "scheduled_at" => DateTime.utc_now() |> DateTime.add(3600) |> DateTime.to_iso8601()
         })
 
       assert {:error, :banned_phrase, "Synergy"} =

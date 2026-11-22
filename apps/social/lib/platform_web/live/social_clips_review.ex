@@ -24,13 +24,14 @@ defmodule PlatformWeb.SocialClipsReview do
   controls vanish the moment an approver is removed.
 
   Stage 3 wires the decisions to `Platform.Social.ClipDecisions`:
-  "approve" (the clip's ticked platforms, resolved to THIS profile's live
-  accounts, never ids from params), "reject" (a trimmed, non-blank note)
-  and "undo". Each re-runs the approver check first and writes nothing when
-  it fails; `ClipDecisions` checks again inside. The undo window is
-  `ClipPublish`'s server-side job: the toast's deadline comes from its
-  return value and the component only schedules `send_update_after/4` to
-  drop the toast, never to commit or publish. A clips-topic event inserts a
+  "draft" (the clip's ticked platforms, resolved to THIS profile's live
+  accounts, never ids from params; it writes draft posts, not an approval),
+  "reject" (a trimmed, non-blank note) and "undo" (of a reject only: a draft
+  has no undo window, because nothing was approved or armed to publish). Each
+  re-runs the approver check first and writes nothing when it fails;
+  `ClipDecisions` checks again inside. A reject's undo window is server-side:
+  the toast's deadline comes from its return value and the component only
+  schedules `send_update_after/4` to drop the toast, never to commit. A clips-topic event inserts a
   newly pending clip ("New clip in Review"), removes one decided elsewhere
   and re-reads the render queue; while jobs are open the component
   re-reads them every 5s.
@@ -49,7 +50,7 @@ defmodule PlatformWeb.SocialClipsReview do
   layout from the prototype's `@media (max-width:760px)` block as
   `max-[760px]:` variants: Up next beside the player, platform chips in
   place of the switch rows, and the bottom bar (`.pbar`, approvers only)
-  firing the same approve/reject events.
+  firing the same draft/reject events.
   """
   use PlatformWeb, :live_component
 
@@ -329,40 +330,44 @@ defmodule PlatformWeb.SocialClipsReview do
 
   # approver check → fetch_clip → the clip's ticked platforms resolved to
   # this profile's live accounts (params never name an account) →
-  # ClipDecisions.approve_clip/5. An empty selection writes nothing.
-  def handle_event("approve", %{"id" => id, "render_id" => render_id}, socket) do
+  # ClipDecisions.draft_clip/5. An empty selection writes nothing. The result
+  # is DRAFT posts: nothing is approved or scheduled here, so the toast has no
+  # undo window and no publish time.
+  def handle_event("draft", %{"id" => id, "render_id" => render_id}, socket) do
     socket = authorize(socket)
 
     with true <- socket.assigns.can_decide? and not socket.assigns.appearance_dirty,
          %{profile: profile, user_id: user_id} = socket.assigns,
          {:ok, %Clip{} = clip} <- ClipReviewFeed.fetch_clip(profile.org_id, profile.id, id),
-         [_ | _] = accounts <- ticked_accounts(profile, clip),
-         {:ok, %{clip: decided, posts: posts}} <-
-           ClipDecisions.approve_clip(profile.org_id, clip.id, user_id, %{
+         [_ | _] = accounts <- ticked_accounts(profile, clip) do
+      case ClipDecisions.draft_clip(profile.org_id, clip.id, user_id, %{
              "account_ids" => Enum.map(accounts, & &1.id),
              "render_id" => render_id
            }) do
-      platforms = accounts |> Enum.map(& &1.platform) |> Enum.uniq()
-      until = posts |> Enum.map(& &1.publish_after) |> Enum.reject(&is_nil/1) |> deadline()
+        {:ok, %{clip: drafted, posts: posts}} ->
+          toast =
+            posts
+            |> drafted_toast(profile.id)
+            |> Map.merge(%{clip_id: drafted.id, until: now_ms() + @info_toast_ms})
 
-      {:noreply,
-       socket
-       |> drop_clip(decided.id)
-       |> put_toast(%{
-         kind: :approved,
-         clip_id: decided.id,
-         render_id: decided.reviewed_render_id,
-         lead: "Approved",
-         text:
-           "publishing to #{platforms |> Enum.map(&Approvals.platform_label/1) |> join_and()}",
-         until: until
-       })}
+          {:noreply, socket |> drop_clip(drafted.id) |> put_toast(toast)}
+
+        {:error, reason} ->
+          {:noreply,
+           put_toast(socket, %{
+             kind: :info,
+             clip_id: clip.id,
+             lead: nil,
+             text: draft_refusal(reason),
+             until: now_ms() + @info_toast_ms
+           })}
+      end
     else
       _ -> {:noreply, socket}
     end
   end
 
-  def handle_event("approve", _params, socket), do: {:noreply, authorize(socket)}
+  def handle_event("draft", _params, socket), do: {:noreply, authorize(socket)}
 
   # approver check → a trimmed, non-blank note → ClipDecisions.reject_clip/5.
   def handle_event("reject", %{"id" => id} = params, socket) do
@@ -490,10 +495,33 @@ defmodule PlatformWeb.SocialClipsReview do
     assign(socket, :toast, toast)
   end
 
-  defp deadline([]), do: now_ms() + ClipPublish.window_ms()
-
   defp deadline(times),
     do: times |> Enum.map(&DateTime.to_unix(&1, :millisecond)) |> Enum.min()
+
+  @doc false
+  # The toast after "Create drafts". It names the Queue's Drafts group and
+  # links there, but only when at least one draft was created.
+  def drafted_toast([], _profile_id), do: nil
+
+  def drafted_toast(posts, profile_id) when is_list(posts) do
+    count = length(posts)
+
+    %{
+      kind: :drafted,
+      lead: nil,
+      text:
+        "#{if count == 1, do: "1 draft", else: "#{count} drafts"} created. " <>
+          "Check their details and send them for review.",
+      drafts_path:
+        "/m/social?" <>
+          URI.encode_query(%{"profile" => profile_id, "tab" => "queue"}) <> "#queue-drafts"
+    }
+  end
+
+  # A refusal writes nothing; say so in plain words.
+  defp draft_refusal({:invalid_options, %{"title" => message}}), do: "Title: " <> message
+  defp draft_refusal(:not_the_owner), do: "Only the account's owner can draft to it"
+  defp draft_refusal(_reason), do: "Couldn't create the draft. Nothing was changed"
 
   defp now_ms, do: System.system_time(:millisecond)
 
@@ -956,7 +984,7 @@ defmodule PlatformWeb.SocialClipsReview do
 
     assigns =
       assigns
-      |> assign(:undo?, assigns.toast.kind in [:approved, :rejected])
+      |> assign(:undo?, assigns.toast.kind == :rejected)
       |> assign(:left_ms, left)
       |> assign(:secs, div(left + 999, 1000))
 
@@ -974,7 +1002,7 @@ defmodule PlatformWeb.SocialClipsReview do
       ]}
     >
       <.icon
-        :if={@toast.kind == :approved}
+        :if={@toast.kind == :drafted}
         name="hero-check-circle-solid"
         class="size-5 shrink-0 text-success"
       />
@@ -986,6 +1014,14 @@ defmodule PlatformWeb.SocialClipsReview do
       <span class="truncate text-base-content" data-role="clip-toast-text">
         <b :if={@toast.lead} class="font-semibold">{@toast.lead}</b><span :if={@toast.lead}> · </span>{@toast.text}
       </span>
+      <.link
+        :if={Map.get(@toast, :drafts_path)}
+        navigate={@toast.drafts_path}
+        class="shrink-0 font-semibold text-primary"
+        data-role="clip-toast-drafts-link"
+      >
+        Open drafts
+      </.link>
       <button
         :if={@undo?}
         type="button"
@@ -1718,7 +1754,7 @@ defmodule PlatformWeb.SocialClipsReview do
         <div class="max-[760px]:hidden" data-role="clip-post-to">
           <div class="mb-1 flex items-center justify-between text-xs">
             <span class="font-semibold text-base-content">Post to</span>
-            <span class="text-subtle">publishes on approve</span>
+            <span class="text-subtle">saved as a draft</span>
           </div>
           <ul class="flex flex-col divide-y divide-base-300 rounded-box border border-base-300">
             <li
@@ -1869,7 +1905,7 @@ defmodule PlatformWeb.SocialClipsReview do
       <.icon name="hero-check-badge" class="size-10 text-subtle" />
       <h3 class="text-base font-semibold text-base-content">All caught up</h3>
       <p class="text-sm text-base-content">
-        Approved clips are publishing.<span :if={@jobs != []}> More are rendering on the clip tool.</span>
+        Chosen clips are saved as drafts.<span :if={@jobs != []}> More are rendering on the clip tool.</span>
       </p>
       <button
         type="button"
@@ -1899,14 +1935,11 @@ defmodule PlatformWeb.SocialClipsReview do
     accounts |> Enum.map(& &1.platform) |> Enum.uniq() |> Enum.filter(&(&1 in platforms))
   end
 
-  defp why_line([]), do: "Tick at least one platform to approve"
+  defp why_line([]), do: "Tick at least one platform to make drafts"
 
-  defp why_line(platforms) do
-    "Publishes to #{platforms |> Enum.map(&Approvals.platform_label/1) |> join_and()} now · no second approval"
+  defp why_line(_platforms) do
+    "Makes a draft for each platform you ticked. Nothing is published until a draft is reviewed and approved."
   end
-
-  defp join_and([one]), do: one
-  defp join_and(list), do: Enum.join(Enum.drop(list, -1), ", ") <> " and " <> List.last(list)
 
   # The same Files route Social's cards and cover picker use for media.
   defp media_src(file_id), do: "/files/blob/#{file_id}"

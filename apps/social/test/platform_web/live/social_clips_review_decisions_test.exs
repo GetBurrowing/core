@@ -1,8 +1,8 @@
 defmodule PlatformWeb.SocialClipsReviewDecisionsTest do
   @moduledoc """
   Clip Studio 3/9 (task 01a16662-8c00) stage 3: decisions in the Review bay
-  (`PlatformWeb.SocialClipsReview`): approve and publish, reject with a
-  note, the undo toast, and live landings from the clips topic. Records are
+  (`PlatformWeb.SocialClipsReview`): create drafts, reject with a
+  note, the reject's undo toast, and live landings from the clips topic. Records are
   asserted through 2/9's own reads (`ClipLibrary.platform_status/1`,
   `ClipLibrary.clip_state/1`).
   """
@@ -82,32 +82,32 @@ defmodule PlatformWeb.SocialClipsReviewDecisionsTest do
 
   defp state(clip), do: clip |> Repo.reload!() |> ClipLibrary.clip_state()
 
-  test "approval controls carry the displayed render and forged missing/foreign versions write nothing",
+  test "draft controls carry the displayed render and forged missing/foreign versions write nothing",
        %{conn: conn, w: w} do
     [first, second | _] = three!(w)
     child = open(conn, w.approver)
     selected_id = render_id!(first)
-    assert has_element?(child, "[data-role='clip-approve'][phx-value-render_id='#{selected_id}']")
+    assert has_element?(child, "[data-role='clip-draft'][phx-value-render_id='#{selected_id}']")
 
     assert has_element?(
              child,
-             "[data-role='clips-pbar-approve'][phx-value-render_id='#{selected_id}']"
+             "[data-role='clips-pbar-draft'][phx-value-render_id='#{selected_id}']"
            )
 
-    bay(child) |> render_click("approve", %{"id" => first.id})
-    bay(child) |> render_click("approve", %{"id" => first.id, "render_id" => render_id!(second)})
+    bay(child) |> render_click("draft", %{"id" => first.id})
+    bay(child) |> render_click("draft", %{"id" => first.id, "render_id" => render_id!(second)})
     assert posts(first) == []
     assert Repo.reload!(first).review_status == "pending"
   end
 
-  test "approve with two platforms advances and the count drops", %{conn: conn, w: w} do
+  test "drafting with two platforms advances and the count drops", %{conn: conn, w: w} do
     [first, second, _] = three!(w)
     child = open(conn, w.approver)
 
     assert has_element?(child, "[data-role='clips-position']", "1 of 3")
     assert has_element?(child, "[data-role='clips-count'] b", "3 to review")
 
-    child |> element("[data-role='clip-approve']") |> render_click()
+    child |> element("[data-role='clip-draft']") |> render_click()
 
     assert has_element?(child, "[data-role='clips-position']", "1 of 2")
     assert has_element?(child, "[data-role='clips-count'] b", "2 to review")
@@ -117,57 +117,74 @@ defmodule PlatformWeb.SocialClipsReviewDecisionsTest do
 
     entries = first |> posts() |> Enum.map(&ClipLibrary.platform_status/1)
     assert entries |> Enum.map(& &1.account_id) |> Enum.sort() == Enum.sort([w.ig.id, w.yt.id])
-    assert Enum.all?(entries, &(&1.state == :queued))
-    assert Enum.all?(posts(first), &(&1.clip_id == first.id))
-    assert state(first) == "Publishing"
+    assert Enum.all?(entries, &(&1.state == :draft))
+    assert Enum.all?(posts(first), &(&1.clip_id == first.id and &1.status == "draft"))
+    assert Enum.all?(posts(first), &(is_nil(&1.publish_after) and is_nil(&1.approved_by_user_id)))
+    assert state(first) == "In review"
   end
 
-  test "approving the last clip shows the empty state", %{conn: conn, w: w} do
+  test "drafting the last clip shows the empty state", %{conn: conn, w: w} do
     only = clip!(w, "Only one")
     child = open(conn, w.approver)
 
-    bay(child) |> render_click("approve", %{"id" => only.id, "render_id" => render_id!(only)})
+    bay(child) |> render_click("draft", %{"id" => only.id, "render_id" => render_id!(only)})
 
     assert has_element?(child, "[data-role='clips-empty']", "All caught up")
     assert has_element?(child, "[data-role='clips-count'] b", "0 to review")
   end
 
-  test "approve shows the undo toast with the publishing line", %{conn: conn, w: w} do
+  test "drafting shows a plain toast: no undo, no publish time", %{conn: conn, w: w} do
     [first | _] = three!(w)
     child = open(conn, w.approver)
-    before = System.system_time(:millisecond)
 
-    child |> element("[data-role='clip-approve']") |> render_click()
+    child |> element("[data-role='clip-draft']") |> render_click()
 
-    assert has_element?(child, "[data-role='clip-toast'][role='status'][data-kind='approved']")
-    assert has_element?(child, "[data-role='clip-toast-text'] b", "Approved")
+    assert has_element?(child, "[data-role='clip-toast'][role='status'][data-kind='drafted']")
 
     assert has_element?(
              child,
              "[data-role='clip-toast-text']",
-             "· publishing to Instagram and YouTube"
+             "2 drafts created. Check their details and send them for review."
+           )
+
+    assert has_element?(
+             child,
+             "[data-role='clip-toast-drafts-link'][href='/m/social?profile=#{w.profile.id}&tab=queue#queue-drafts']"
            )
 
     assert has_element?(child, "[data-role='clip-toast'] .hero-check-circle-solid.text-success")
-    assert has_element?(child, "[data-role='clip-toast-undo']", "Undo")
-    assert has_element?(child, "[data-role='clip-toast-undo'] small", "8s")
-    assert has_element?(child, "[data-role='clip-toast-bar'].bg-primary")
+    refute has_element?(child, "[data-role='clip-toast-undo']")
+    refute has_element?(child, "[data-role='clip-toast-bar']")
+    refute render(child) =~ "publishing to"
 
-    # data-until is 2/9's own deadline: the posts' publish_after.
-    [until] =
-      render(child)
-      |> LazyHTML.from_fragment()
-      |> LazyHTML.query("[data-role='clip-toast']")
-      |> LazyHTML.attribute("data-until")
+    # Nothing was approved or armed: no card, no approver, no publish_after.
+    assert [_, _] = posts(first)
+    assert Enum.all?(posts(first), &(&1.status == "draft" and is_nil(&1.publish_after)))
+  end
 
-    deadline =
-      first
-      |> posts()
-      |> Enum.map(&DateTime.to_unix(&1.publish_after, :millisecond))
-      |> Enum.min()
+  test "no control in the bay says approve or publish", %{conn: conn, w: w} do
+    three!(w)
+    child = open(conn, w.approver)
+    html = render(child)
+    assert html =~ "Create drafts"
+    refute html =~ "Approve and publish"
+    refute html =~ "publishes on approve"
+    refute html =~ "no second approval"
+  end
 
-    assert String.to_integer(until) == deadline
-    assert (deadline - before) in 7_000..9_000
+  test "a refused draft says nothing was changed and writes nothing", %{conn: conn, w: w} do
+    [first | _] = three!(w)
+    child = open(conn, w.approver)
+    owner = member!(user!(), w.org_id)
+    {:ok, _} = Social.set_account_owner(w.org_id, w.yt, owner.id)
+
+    child |> element("[data-role='clip-draft']") |> render_click()
+
+    assert has_element?(child, "[data-role='clip-toast'][data-kind='info']")
+    assert has_element?(child, "[data-role='clip-toast-text']", "Only the account's owner")
+    assert posts(first) == []
+    assert Repo.reload!(first).review_status == "pending"
+    assert has_element?(child, "[data-role='clips-count'] b", "3 to review")
   end
 
   test "reject needs a note", %{conn: conn, w: w} do
@@ -202,11 +219,11 @@ defmodule PlatformWeb.SocialClipsReviewDecisionsTest do
     assert has_element?(child, "[data-role='clips-count'] b", "2 to review")
   end
 
-  test "undo restores", %{conn: conn, w: w} do
+  test "undo restores a rejected clip", %{conn: conn, w: w} do
     [first, _second, _] = three!(w)
     child = open(conn, w.approver)
 
-    child |> element("[data-role='clip-approve']") |> render_click()
+    bay(child) |> render_click("reject", %{"id" => first.id, "note" => "too long"})
     assert has_element?(child, "[data-role='clips-count'] b", "2 to review")
 
     child |> element("[data-role='clip-toast-undo']") |> render_click()
@@ -232,30 +249,29 @@ defmodule PlatformWeb.SocialClipsReviewDecisionsTest do
     refute has_element?(child, "[data-role='clip-toast-undo']")
   end
 
-  test "an undo after the window closes just closes the toast", %{conn: conn, w: w} do
+  test "a forged undo of a draft changes nothing: there is no window to undo", %{
+    conn: conn,
+    w: w
+  } do
     [first | _] = three!(w)
     child = open(conn, w.approver)
+    child |> element("[data-role='clip-draft']") |> render_click()
+    before = posts(first)
 
-    child |> element("[data-role='clip-approve']") |> render_click()
-
-    # The window is ClipPublish's: close it server-side.
-    Repo.update_all(from(p in Post, where: p.clip_id == ^first.id),
-      set: [publish_after: DateTime.add(DateTime.utc_now(), -1, :second)]
-    )
-
-    child |> element("[data-role='clip-toast-undo']") |> render_click()
+    bay(child) |> render_click("undo", %{"id" => first.id, "render_id" => render_id!(first)})
 
     refute has_element?(child, "[data-role='clip-toast']")
-    assert has_element?(child, "[data-role='clips-count'] b", "2 to review")
-    assert state(first) == "Publishing"
+    assert posts(first) == before
+    assert Repo.reload!(first).review_status == "approved"
+    assert state(first) == "In review"
   end
 
-  test "a forged approve from a non-approver writes nothing", %{conn: conn, w: w} do
-    clip = clip!(w, "Not yours to approve")
+  test "a forged draft from a non-approver writes nothing", %{conn: conn, w: w} do
+    clip = clip!(w, "Not yours to draft")
     member = member!(user!(), w.org_id)
     child = open(conn, member)
 
-    render_click(with_target(child, "#social-clips-review"), "approve", %{
+    render_click(with_target(child, "#social-clips-review"), "draft", %{
       "id" => clip.id,
       "render_id" => render_id!(clip)
     })
@@ -270,7 +286,7 @@ defmodule PlatformWeb.SocialClipsReviewDecisionsTest do
     refute has_element?(child, "[data-role='clip-toast']")
   end
 
-  test "a forged approve on another org's clip writes nothing", %{conn: conn, w: w} do
+  test "a forged draft on another org's clip writes nothing", %{conn: conn, w: w} do
     three!(w)
     other = render_world!()
 
@@ -292,7 +308,7 @@ defmodule PlatformWeb.SocialClipsReviewDecisionsTest do
     child = open(conn, w.approver)
 
     bay(child)
-    |> render_click("approve", %{
+    |> render_click("draft", %{
       "id" => foreign.id,
       "render_id" => render_id!(foreign),
       "account_ids" => [foreign_ig.id]
@@ -314,7 +330,7 @@ defmodule PlatformWeb.SocialClipsReviewDecisionsTest do
     child = open(conn, w.approver)
 
     bay(child)
-    |> render_click("approve", %{
+    |> render_click("draft", %{
       "id" => first.id,
       "render_id" => render_id!(first),
       "account_ids" => [foreign_ig.id]
@@ -325,7 +341,7 @@ defmodule PlatformWeb.SocialClipsReviewDecisionsTest do
     refute foreign_ig.id in account_ids
   end
 
-  test "an approver removed mid-session cannot approve", %{conn: conn, w: w} do
+  test "an approver removed mid-session cannot draft", %{conn: conn, w: w} do
     [first | _] = three!(w)
     child = open(conn, w.approver)
     assert has_element?(child, "[data-role='clips-decide']")
@@ -335,7 +351,7 @@ defmodule PlatformWeb.SocialClipsReviewDecisionsTest do
       |> Ecto.Changeset.change(approver_user_ids: [])
       |> Repo.update()
 
-    bay(child) |> render_click("approve", %{"id" => first.id, "render_id" => render_id!(first)})
+    bay(child) |> render_click("draft", %{"id" => first.id, "render_id" => render_id!(first)})
 
     assert posts(first) == []
     assert %Clip{review_status: "pending"} = Repo.reload!(first)
@@ -399,7 +415,7 @@ defmodule PlatformWeb.SocialClipsReviewDecisionsTest do
 
     # Selected: the next one is selected, with no toast.
     {:ok, _} =
-      ClipDecisions.approve_clip(w.org_id, first.id, w.approver.id, %{
+      Platform.Social.LegacyClipApproval.approve_clip(w.org_id, first.id, w.approver.id, %{
         "render_id" => render_id!(first),
         "account_ids" => [w.ig.id]
       })
@@ -409,5 +425,22 @@ defmodule PlatformWeb.SocialClipsReviewDecisionsTest do
     assert has_element?(child, "[data-role='clips-bay'][data-clip-id='#{second.id}']")
     assert has_element?(child, "[data-role='clips-position']", "1 of 1")
     refute has_element?(child, "[data-role='clip-toast']")
+  end
+
+  describe "drafted toast" do
+    test "links to the Queue's Drafts group only when a draft was created", %{w: w} do
+      alias PlatformWeb.SocialClipsReview
+
+      assert %{drafts_path: path, text: text} =
+               SocialClipsReview.drafted_toast([:p1, :p2], w.profile.id)
+
+      assert path == "/m/social?profile=#{w.profile.id}&tab=queue#queue-drafts"
+      assert text == "2 drafts created. Check their details and send them for review."
+
+      assert %{text: "1 draft created. Check their details and send them for review."} =
+               SocialClipsReview.drafted_toast([:p1], w.profile.id)
+
+      assert SocialClipsReview.drafted_toast([], w.profile.id) == nil
+    end
   end
 end

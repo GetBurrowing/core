@@ -185,6 +185,25 @@ defmodule Platform.SocialFixtures do
     post
   end
 
+  @doc """
+  Seeds an already-approved legacy post for historical data and downstream
+  dispatch/reporting tests. This is fixture setup, NOT evidence that a new
+  publishing approval succeeded. Use `approved_post!/4` to exercise the real
+  approval path; incomplete or unapproved production cards gain no exemption.
+
+  Normal draft creation still validates and populates post/media fields, and
+  a real human is installed as approver before the approval row is seeded.
+  """
+  def historical_approved_post!(org_id, account, attrs \\ %{}, approver \\ nil) do
+    approver = make_approver!(org_id, account, approver || user!())
+    draft_attrs = Map.merge(%{body: "hello"}, attrs) |> Map.put(:status, "draft")
+    {:ok, post} = Platform.Social.create_post(org_id, account, draft_attrs)
+
+    post
+    |> Platform.Social.Post.approval_changeset(approver.id)
+    |> Repo.update!()
+  end
+
   # ── Social 5/7: the clip pipeline ────────────────────────────────────
 
   @doc "Gives `user` a plain member row in `org_id`."

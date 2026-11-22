@@ -5,7 +5,7 @@ defmodule Platform.Social.PostEvents do
   each change.
 
   `record!/3` is called by the write paths themselves (`AgentDrafts`,
-  `Approvals.decide_*`, `Publishing`, `ClipDecisions.approve_clip/5`,
+  `Approvals.decide_*`, `Publishing`, `ClipDecisions.draft_clip/5`,
   `Ideas.request_revision/4`), inside the transaction that changes the
   post, so the entry commits or rolls back with it. It raises on a bad
   entry, which rolls that transaction back: a state change is never logged

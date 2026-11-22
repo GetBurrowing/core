@@ -46,6 +46,13 @@ defmodule Platform.Social.QueueFeed do
   def needs_you(user, scope), do: user |> posts(scope, status: "needs_approval") |> group()
 
   @doc """
+  Legacy drafts in `scope` (B3's "Drafts" group), oldest first. Read only;
+  editing goes through `Platform.Social.edit_draft/5`.
+  """
+  @spec drafts(term(), scope()) :: [Post.t()]
+  def drafts(user, scope), do: posts(user, scope, status: "draft")
+
+  @doc """
   Approved or scheduled posts going out in the next #{@scheduled_days} days
   (`scheduled_at` from `now`), not refused, grouped by idea, soonest first.
   """

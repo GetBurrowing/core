@@ -12,8 +12,10 @@ defmodule Platform.Social.ClipLibrary do
 
   ## States
 
-    * `queued`: waiting for the undo window (`publish_after` set), not sent,
-      not refused. `draft` and `needs_approval` also read as queued.
+    * `draft` / `in_review`: a `draft` post, or one `needs_approval` (B3:
+      choosing a clip writes drafts). Not queued and not sent.
+    * `queued`: a pre-B3 approval waiting for the undo window
+      (`publish_after` set), not sent, not refused.
     * `uploading`: claimed and in flight (approved, `publish_after` nil, not
       sent, not refused), or accepted by the vendor and processing
       (`scheduled` with no `scheduled_at`, or one already passed). The
@@ -76,7 +78,7 @@ defmodule Platform.Social.ClipLibrary do
   @dates ~w(today this_week older)
   @clip_states ["In review", "Rejected", "Failed", "Scheduled", "Publishing", "Published"]
 
-  @type state :: :queued | :uploading | :scheduled | :published | :failed
+  @type state :: :draft | :in_review | :queued | :uploading | :scheduled | :published | :failed
 
   @type entry :: %{
           post_id: Ecto.UUID.t(),
@@ -116,8 +118,10 @@ defmodule Platform.Social.ClipLibrary do
     }
   end
 
-  defp state(%Post{status: status} = post, _now) when status in ~w(draft needs_approval),
-    do: {:queued, post.publish_after, nil, nil}
+  # B3: a clip draft is not queued to publish, and neither is one waiting on
+  # a person's approval; only a pre-B3 approval inside its window is `:queued`.
+  defp state(%Post{status: "draft"}, _now), do: {:draft, nil, nil, nil}
+  defp state(%Post{status: "needs_approval"}, _now), do: {:in_review, nil, nil, nil}
 
   defp state(%Post{status: "approved", refused_reason: reason} = post, _now)
        when is_binary(reason),
@@ -152,9 +156,10 @@ defmodule Platform.Social.ClipLibrary do
 
     * review pending (or never reviewed): `"In review"`
     * rejected: `"Rejected"`
-    * approved: `"Failed"` if any post failed, else `"Scheduled"` if any is
-      scheduled, else `"Publishing"` if any is queued or uploading, else
-      `"Published"`.
+    * approved (the clip was chosen; this is not a post approval): `"Failed"`
+      if any post failed, else `"Scheduled"` if any is scheduled, else
+      `"In review"` if any is still a draft or waiting for approval, else
+      `"Publishing"` if any is queued or uploading, else `"Published"`.
 
   `entries` are `platform_status/2` entries or posts; omitted, the clip's
   posts are read.
@@ -170,6 +175,7 @@ defmodule Platform.Social.ClipLibrary do
     cond do
       :failed in states -> "Failed"
       :scheduled in states -> "Scheduled"
+      Enum.any?(states, &(&1 in [:draft, :in_review])) -> "In review"
       Enum.any?(states, &(&1 in [:queued, :uploading])) -> "Publishing"
       true -> "Published"
     end

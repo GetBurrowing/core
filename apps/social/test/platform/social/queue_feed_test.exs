@@ -19,7 +19,14 @@ defmodule Platform.Social.QueueFeedTest do
     Fake.reset()
     RateLimit.reset()
     ctx = approval_fixture() |> with_ideas_runtime()
-    {:ok, x} = Social.create_account(ctx.org_id, ctx.profile, %{platform: "x", handle: "@show_x"})
+
+    {:ok, x} =
+      Social.create_account(ctx.org_id, ctx.profile, %{
+        platform: "x",
+        handle: "@show_x",
+        status: "connected"
+      })
+
     Map.merge(ctx, %{x: x})
   end
 
@@ -40,7 +47,8 @@ defmodule Platform.Social.QueueFeedTest do
           %{
             "profile_id" => ctx.profile.id,
             "account_ids" => Enum.map(accounts, & &1.id),
-            "body" => "Out now"
+            "body" => "Out now",
+            "scheduled_at" => DateTime.utc_now() |> DateTime.add(3600) |> DateTime.to_iso8601()
           },
           if(idea, do: Map.put(attrs, "idea_id", idea.id), else: attrs)
         ),
@@ -64,7 +72,11 @@ defmodule Platform.Social.QueueFeedTest do
       drafts!(ctx, early, [ctx.a], %{"scheduled_at" => iso(DateTime.add(now, 2, :day))})
       # The other version of "early" is the group's earliest.
       drafts!(ctx, early, [ctx.x], %{"scheduled_at" => iso(DateTime.add(now, 1, :day))})
-      drafts!(ctx, untimed, [ctx.a, ctx.x])
+      historical = drafts!(ctx, untimed, [ctx.a, ctx.x])
+      # Existing untimed rows still sort last; a new review requires a time.
+      for post <- historical do
+        Repo.get!(Post, post.id) |> Ecto.Changeset.change(scheduled_at: nil) |> Repo.update!()
+      end
 
       [%{id: lone_id}] =
         drafts!(ctx, nil, [ctx.a], %{"scheduled_at" => iso(DateTime.add(now, 5, :day))})

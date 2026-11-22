@@ -69,12 +69,12 @@ defmodule Platform.Social.StudioFlowBoundaryTest do
       assert is_binary(studio.approved_by_user_id)
       refute Publishing.publishable?(studio)
 
-      legacy = approved_post!(w.org_id, w.x, %{body: "legacy"}, w.approver)
+      legacy = historical_approved_post!(w.org_id, w.x, %{body: "legacy"}, w.approver)
       assert Publishing.publishable?(legacy)
     end
 
     test "legacy posts still publish through the same function (control)", %{w: w} do
-      legacy = approved_post!(w.org_id, w.x, %{body: "legacy"}, w.approver)
+      legacy = historical_approved_post!(w.org_id, w.x, %{body: "legacy"}, w.approver)
       assert {:ok, %Post{status: "scheduled"}} = Publishing.publish_post(w.org_id, legacy.id)
       assert [{:publish, _, _}] = Fake.calls(:publish)
     end
@@ -148,7 +148,7 @@ defmodule Platform.Social.StudioFlowBoundaryTest do
     end
 
     test "legacy cancel_post still reaches the vendor (control)", %{w: w} do
-      legacy = approved_post!(w.org_id, w.x, %{body: "legacy"}, w.approver)
+      legacy = historical_approved_post!(w.org_id, w.x, %{body: "legacy"}, w.approver)
       {:ok, scheduled} = Publishing.publish_post(w.org_id, legacy.id)
       Fake.reset()
 
@@ -209,7 +209,7 @@ defmodule Platform.Social.StudioFlowBoundaryTest do
       forged = w |> studio_post!(w.x, "approved") |> forge_sent!("scheduled", "ext-studio-2")
       assert WebhookPlug.post_for_event(w.profile, forged.external_id) == nil
 
-      legacy = approved_post!(w.org_id, w.x, %{body: "legacy"}, w.approver)
+      legacy = historical_approved_post!(w.org_id, w.x, %{body: "legacy"}, w.approver)
       {:ok, legacy} = Publishing.publish_post(w.org_id, legacy.id)
       assert %Post{id: id} = WebhookPlug.post_for_event(w.profile, legacy.external_id)
       assert id == legacy.id
@@ -239,7 +239,7 @@ defmodule Platform.Social.StudioFlowBoundaryTest do
     end
 
     test "PublishRetry.due still lists a legacy rate-limited post (control)", %{w: w} do
-      legacy = approved_post!(w.org_id, w.x, %{body: "legacy"}, w.approver)
+      legacy = historical_approved_post!(w.org_id, w.x, %{body: "legacy"}, w.approver)
 
       legacy =
         force!(legacy,
@@ -292,7 +292,7 @@ defmodule Platform.Social.StudioFlowBoundaryTest do
 
       legacy =
         w.org_id
-        |> approved_post!(w.x, %{body: "legacy"}, w.approver)
+        |> historical_approved_post!(w.x, %{body: "legacy"}, w.approver)
         |> force!(clip_id: clip.id, publish_after: DateTime.add(now, -5, :second))
 
       assert [{org, id}] = ClipPublish.due(now)
@@ -309,7 +309,15 @@ defmodule Platform.Social.StudioFlowBoundaryTest do
       before = Enum.map(studio, &row/1)
 
       {:ok, legacy} =
-        Social.create_post(w.org_id, w.x, %{body: "legacy", status: "needs_approval"})
+        Social.create_post(
+          w.org_id,
+          Repo.update!(Ecto.Changeset.change(w.x, status: "connected")),
+          %{
+            body: "legacy",
+            status: "needs_approval",
+            scheduled_at: DateTime.add(DateTime.utc_now(), 3600)
+          }
+        )
 
       assert {:ok, %{cancelled: 1, shared: 0}} =
                Social.removal_preview(w.org_id, w.profile, w.x.id)
@@ -365,7 +373,7 @@ defmodule Platform.Social.StudioFlowBoundaryTest do
     end
 
     test "status planned is refused on a legacy post", %{w: w} do
-      legacy = approved_post!(w.org_id, w.x, %{body: "legacy"}, w.approver)
+      legacy = historical_approved_post!(w.org_id, w.x, %{body: "legacy"}, w.approver)
 
       assert constraint_of(fn -> set!(legacy, status: "planned") end) ==
                "social_posts_planned_only_studio_check"
@@ -420,7 +428,15 @@ defmodule Platform.Social.StudioFlowBoundaryTest do
       # A card pointing at a post that is then marked Studio: the decision
       # paths must refuse it on the locked row, before approve or publish.
       {:ok, legacy} =
-        Social.create_post(w.org_id, w.x, %{body: "carded", status: "needs_approval"})
+        Social.create_post(
+          w.org_id,
+          Repo.update!(Ecto.Changeset.change(w.x, status: "connected")),
+          %{
+            body: "carded",
+            status: "needs_approval",
+            scheduled_at: DateTime.add(DateTime.utc_now(), 3600)
+          }
+        )
 
       card = Repo.one!(from(c in ApprovalCard, where: c.post_id == ^legacy.id))
       Repo.update_all(from(p in Post, where: p.id == ^legacy.id), set: [flow: "studio"])
