@@ -709,7 +709,7 @@ defmodule Platform.Social.Tools do
     |> Map.put(:is_mine, note.author_kind == "agent" and note.author_id == agent_id)
   end
 
-  defp idea_json(%Idea{} = idea, posts, votes \\ %{vote_count: 0, voted: false}) do
+  defp idea_json(%Idea{} = idea, posts, votes) do
     events = posts |> Enum.map(& &1.id) |> PostEvents.list_for_posts()
 
     revisions =
