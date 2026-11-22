@@ -16,6 +16,7 @@ defmodule PlatformWeb.CalendarLive.Components do
   """
   use Phoenix.Component
   use PlatformWeb, :verified_routes
+  alias Phoenix.LiveView.JS
 
   import PlatformWeb.CoreComponents, only: [icon: 1]
 
@@ -671,6 +672,7 @@ defmodule PlatformWeb.CalendarLive.Components do
   attr(:zone, :string, required: true)
   attr(:today, Date, required: true)
   attr(:selected_id, :any, default: nil)
+  attr(:day_entries, :list, default: [])
 
   @doc "The desktop week: sticky day header, 07–21 gutter, seven columns."
   def week_grid(assigns) do
@@ -697,6 +699,7 @@ defmodule PlatformWeb.CalendarLive.Components do
           {day.day}
         </b>
         <.all_day_chips entries={@entries} day={day} zone={@zone} />
+        <.calendar_day_chips day={day} day_entries={@day_entries} placement="week-desktop" />
       </div>
       <.gutter class="w-14 pr-2" />
       <.day_column
@@ -910,37 +913,43 @@ defmodule PlatformWeb.CalendarLive.Components do
   attr(:today, Date, required: true)
   attr(:entries, :list, required: true)
   attr(:zone, :string, required: true)
+  attr(:day_entries, :list, default: [])
 
   def day_strip(assigns) do
     assigns = assign(assigns, :days, Cal.week_days(assigns.sel_day))
 
     ~H"""
     <div
-      class="sticky top-0 z-[5] flex border-b border-edge bg-base-200 px-2 pb-1 pt-2"
-      role="tablist"
-      aria-label="Days of the week"
+      class="sticky top-0 z-[5] border-b border-edge bg-base-200 px-1 pb-1 pt-2"
       data-role="calendar-day-strip"
     >
-      <button
-        :for={day <- @days}
-        type="button"
-        role="tab"
-        phx-click="select_day"
-        phx-value-date={Date.to_iso8601(day)}
-        aria-selected={to_string(day == @sel_day)}
-        aria-label={"#{Cal.day_label(day)}, #{length(Cal.entries_on(@entries, day, @zone))} items"}
-        class="flex flex-1 flex-col items-center gap-0.5 py-0.5 text-xs uppercase tracking-[.06em] text-subtle"
-      >
-        {String.first(Calendar.strftime(day, "%a"))}
-        <b class={[
-          "inline-flex size-8 items-center justify-center rounded-full text-[13px] font-semibold tracking-normal",
-          day == @sel_day && "bg-primary text-primary-content",
-          day != @sel_day && day == @today && "text-interactive",
-          day != @sel_day && day != @today && "text-base-content"
-        ]}>
-          {day.day}
-        </b>
-      </button>
+      <div class="flex" role="tablist" aria-label="Days of the week">
+        <button
+          :for={day <- @days}
+          type="button"
+          role="tab"
+          phx-click="select_day"
+          phx-value-date={Date.to_iso8601(day)}
+          aria-selected={to_string(day == @sel_day)}
+          aria-label={"#{Cal.day_label(day)}, #{length(Cal.entries_on(@entries, day, @zone))} items"}
+          class="flex min-h-11 min-w-0 flex-1 flex-col items-center gap-0.5 py-0.5 text-xs uppercase tracking-[.06em] text-subtle"
+        >
+          {String.first(Calendar.strftime(day, "%a"))}
+          <b class={[
+            "inline-flex size-8 items-center justify-center rounded-full text-[13px] font-semibold tracking-normal",
+            day == @sel_day && "bg-primary text-primary-content",
+            day != @sel_day && day == @today && "text-interactive",
+            day != @sel_day && day != @today && "text-base-content"
+          ]}>
+            {day.day}
+          </b>
+        </button>
+      </div>
+      <div :if={@day_entries != []} class="flex">
+        <div :for={day <- @days} class="flex min-w-0 flex-1 justify-center">
+          <.calendar_day_chips day={day} day_entries={@day_entries} placement="week-phone" compact />
+        </div>
+      </div>
     </div>
     """
   end
@@ -980,6 +989,7 @@ defmodule PlatformWeb.CalendarLive.Components do
   attr(:entries, :list, required: true)
   attr(:zone, :string, required: true)
   attr(:phone, :boolean, default: false)
+  attr(:day_entries, :list, default: [])
 
   def month_grid(assigns) do
     days = Cal.month_days(assigns.cursor)
@@ -989,7 +999,7 @@ defmodule PlatformWeb.CalendarLive.Components do
         days: days,
         weeks: div(length(days), 7),
         max: if(assigns.phone, do: 6, else: 3),
-        min_row: if(assigns.phone, do: 64, else: 112)
+        min_row: if(assigns.phone, do: 76, else: 112)
       )
 
     ~H"""
@@ -1017,6 +1027,7 @@ defmodule PlatformWeb.CalendarLive.Components do
         aria-label={"#{Cal.day_label(day)}, #{length(Cal.entries_on(@entries, day, @zone))} items"}
         class={[
           "cal-mcell flex min-w-0 flex-col gap-[3px] overflow-hidden border-b border-r border-edge p-1 text-left",
+          @phone && "!p-0",
           day.month != @cursor.month && "cal-mcell-out"
         ]}
         data-date={Date.to_iso8601(day)}
@@ -1028,6 +1039,12 @@ defmodule PlatformWeb.CalendarLive.Components do
         ]}>
           {day.day}
         </span>
+        <.calendar_day_chips
+          day={day}
+          day_entries={@day_entries}
+          placement={if @phone, do: "month-phone", else: "month-desktop"}
+          compact={@phone}
+        />
         <% list = Cal.entries_on(@entries, day, @zone) %>
         <div class={@phone && "flex flex-wrap gap-[3px] pl-1"}>
           <button
@@ -1064,6 +1081,77 @@ defmodule PlatformWeb.CalendarLive.Components do
         </span>
       </div>
     </div>
+    """
+  end
+
+  def day_chip_id(placement, key, day),
+    do:
+      "calendar-day-chip-#{placement}-#{Date.to_iso8601(day)}-#{Base.url_encode64(key, padding: false)}"
+
+  attr(:day, Date, required: true)
+  attr(:day_entries, :list, default: [])
+  attr(:placement, :string, required: true)
+  attr(:compact, :boolean, default: false)
+
+  def calendar_day_chips(assigns) do
+    ~H"""
+    <button
+      :for={entry <- @day_entries}
+      :if={entry.day == @day and entry.items != []}
+      type="button"
+      phx-click="calendar_day_open"
+      phx-value-key={entry.key}
+      phx-value-date={Date.to_iso8601(@day)}
+      phx-value-placement={@placement}
+      id={day_chip_id(@placement, entry.key, @day)}
+      data-role="calendar-extension-chip"
+      data-date={Date.to_iso8601(@day)}
+      aria-label={entry.aria}
+      class={
+        if @compact,
+          do: "inline-flex min-h-11 min-w-11 items-center justify-center",
+          else: "cal-mchip mt-1"
+      }
+    >
+      <span :if={@compact} class="rounded-full bg-base-300 px-2 text-xs font-semibold">
+        {length(entry.items)}
+      </span>
+      <span :if={!@compact}>{entry.label} · {length(entry.items)}</span>
+    </button>
+    """
+  end
+
+  attr(:selected, :map, required: true)
+
+  def calendar_day_list(assigns) do
+    ~H"""
+    <section
+      id={"calendar-day-list-#{@selected.open_seq}"}
+      data-role="calendar-extension-list"
+      tabindex="-1"
+      phx-mounted={JS.focus()}
+      phx-remove={JS.focus(to: "##{@selected.trigger_id}")}
+      class="rounded-box border border-edge bg-base-100 p-3 text-sm"
+    >
+      <div class="flex items-center justify-between gap-3">
+        <h2 class="font-semibold">
+          {@selected.heading} · {Calendar.strftime(@selected.day, "%a %-d %b")}
+        </h2>
+        <button
+          type="button"
+          phx-click="calendar_day_close"
+          aria-label="Close list"
+          class="btn btn-ghost btn-sm"
+        >
+          Close
+        </button>
+      </div>
+      <ul>
+        <li :for={item <- @selected.items} class="flex flex-wrap gap-2 py-1">
+          <span>{item.text}</span><a href={item.href} class="link inline-flex min-h-11 items-center">{item.link_label}</a>
+        </li>
+      </ul>
+    </section>
     """
   end
 

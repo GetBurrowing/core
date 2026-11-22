@@ -292,6 +292,31 @@ defmodule Platform.Extension do
   """
   @callback briefing_sections() :: [briefing_section()]
 
+  @type calendar_day_entry :: %{
+          required(:key) => String.t(),
+          required(:label) => String.t(),
+          required(:day) => Date.t(),
+          required(:heading) => String.t(),
+          required(:aria) => String.t(),
+          required(:items) => [
+            %{
+              required(:text) => String.t(),
+              required(:href) => String.t(),
+              required(:link_label) => String.t()
+            }
+          ]
+        }
+
+  @doc """
+  Page-only day contributions for the current human and visible UTC window.
+  The callback must authorize every returned item before it is counted. `day`
+  and item text use the calendar viewer's supplied zone. This callback is not
+  used by shared calendar entries, feeds, agents or booking.
+  """
+  @callback calendar_day_entries(binary() | nil, DateTime.t(), DateTime.t(), String.t()) :: [
+              calendar_day_entry()
+            ]
+
   @doc """
   Whether this module drives the goal of the chat space `space_id`. `true`
   makes core's goal heartbeat skip that space. Must not raise. Read by
@@ -299,7 +324,8 @@ defmodule Platform.Extension do
   """
   @callback claims_space_goal?(space_id :: String.t()) :: boolean()
 
-  @optional_callbacks briefing_sections: 0,
+  @optional_callbacks calendar_day_entries: 4,
+                      briefing_sections: 0,
                       claims_space_goal?: 1,
                       rail_items: 0,
                       permissions: 0,
