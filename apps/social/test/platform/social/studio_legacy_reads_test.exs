@@ -14,6 +14,7 @@ defmodule Platform.Social.StudioLegacyReadsTest do
   import Ecto.Query
   import Platform.SocialFixtures
   import Platform.SocialStudioFixtures
+  import Platform.SocialApprovalFixtures, only: [ideas_runtime_context!: 2]
 
   alias Platform.Federation.ToolArguments
   alias Platform.Social
@@ -39,7 +40,7 @@ defmodule Platform.Social.StudioLegacyReadsTest do
     Fake.reset()
     w = studio_world!()
     now = DateTime.utc_now()
-    %{w: w, now: now, ctx: %{agent_id: w.agent.id}}
+    %{w: w, now: now, ctx: ideas_runtime_context!(w.agent, w.approver)}
   end
 
   # ── helpers ──────────────────────────────────────────────────────────

@@ -9,6 +9,9 @@ defmodule Platform.Social.IdeaVotesTest do
 
   setup do
     ctx = approval_fixture()
+    project = project!(ctx.org_id)
+    profile = Repo.update!(Ecto.Changeset.change(ctx.profile, project_id: project.id))
+    ctx = %{ctx | profile: profile}
 
     {:ok, idea} =
       Ideas.create(ctx.org_id, ctx.profile.id, %{title: "Discuss this"}, {:agent, ctx.g.id})
@@ -17,7 +20,32 @@ defmodule Platform.Social.IdeaVotesTest do
   end
 
   defp call(tool, idea, agent) do
-    ToolArguments.dispatch(tool, %{"idea_id" => idea.id}, %{agent_id: agent.id})
+    ToolArguments.dispatch(tool, %{"idea_id" => idea.id}, agent_context(agent, idea.org_id))
+  end
+
+  defp agent_context(agent, org_id) do
+    import Ecto.Query
+
+    owner_id =
+      Repo.one!(
+        from(m in Platform.Tenancy.OrgMembership,
+          where: m.org_id == ^org_id and m.role == "member",
+          order_by: [asc: m.inserted_at],
+          limit: 1,
+          select: m.user_id
+        )
+      )
+
+    runtime =
+      Repo.insert!(%Platform.Agents.AgentRuntime{
+        runtime_id: "idea-vote-test-#{System.unique_integer([:positive])}",
+        agent_id: agent.id,
+        owner_user_id: owner_id,
+        status: "active"
+      })
+
+    {:ok, _} = Platform.Access.RuntimeProfiles.create_for_runtime(runtime, ["social"], nil)
+    %{agent_id: agent.id, runtime_id: runtime.runtime_id}
   end
 
   test "repeat votes and withdrawals are idempotent through the real agent tool", ctx do
@@ -63,9 +91,11 @@ defmodule Platform.Social.IdeaVotesTest do
     end
 
     {:ok, %{ideas: rows}} =
-      ToolArguments.dispatch("social_idea_list", %{"profile_id" => ctx.profile.id}, %{
-        agent_id: ctx.voter.id
-      })
+      ToolArguments.dispatch(
+        "social_idea_list",
+        %{"profile_id" => ctx.profile.id},
+        agent_context(ctx.voter, ctx.org_id)
+      )
 
     assert [%{stage: "shortlisted", vote_count: 3, voted: false}] = rows
     refute Map.has_key?(hd(rows), :voter_names)
@@ -123,9 +153,11 @@ defmodule Platform.Social.IdeaVotesTest do
     Repo.delete_all(from(m in Platform.Tenancy.OrgMembership, where: m.user_id == ^ctx.n.id))
 
     {:ok, %{ideas: [idea]}} =
-      ToolArguments.dispatch("social_idea_list", %{"profile_id" => ctx.profile.id}, %{
-        agent_id: ctx.voter.id
-      })
+      ToolArguments.dispatch(
+        "social_idea_list",
+        %{"profile_id" => ctx.profile.id},
+        agent_context(ctx.voter, ctx.org_id)
+      )
 
     assert idea.vote_count == 0
     refute Map.has_key?(idea, :voter_names)
@@ -264,9 +296,11 @@ defmodule Platform.Social.IdeaVotesTest do
              Platform.Social.IdeaVotes.unvote(ctx.org_id, ctx.idea.id, {:user, ctx.n.id})
 
     {:ok, %{ideas: [idea]}} =
-      ToolArguments.dispatch("social_idea_list", %{"profile_id" => ctx.profile.id}, %{
-        agent_id: ctx.voter.id
-      })
+      ToolArguments.dispatch(
+        "social_idea_list",
+        %{"profile_id" => ctx.profile.id},
+        agent_context(ctx.voter, ctx.org_id)
+      )
 
     assert idea.vote_count == 0
     refute Map.has_key?(idea, :voter_names)

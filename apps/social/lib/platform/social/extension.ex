@@ -38,6 +38,11 @@ defmodule Platform.Social.Extension do
         name: "social",
         definitions: Platform.Social.ToolDefinitions.definitions(),
         tool_names: Platform.Social.ToolDefinitions.names(),
+        delegated_permissions:
+          Map.new(
+            ~w(social_idea_list social_idea_create social_idea_vote social_idea_unvote social_idea_note_add social_idea_archive),
+            &{&1, "social.ideas"}
+          ),
         execute: &Platform.Social.Tools.execute/3,
         deny_message: &deny_message/1,
         owns_tool?: &String.starts_with?(&1, "social_")
@@ -50,7 +55,7 @@ defmodule Platform.Social.Extension do
     [
       %{
         module: "social",
-        permissions: ["social.use"],
+        permissions: ["social.use", "social.ideas"],
         rail: [%{key: :social, permission: "social.use"}],
         bundles: %{"social" => "social.use"}
       }

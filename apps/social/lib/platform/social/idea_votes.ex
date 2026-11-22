@@ -12,12 +12,15 @@ defmodule Platform.Social.IdeaVotes do
   alias Platform.Agents.Agent
   alias Platform.Social.{Idea, Ideas, IdeaVote, Post, Profile}
 
-  def vote(scope, id, {:agent, _} = actor), do: mutate(scope, id, actor, :vote)
-  def vote(_, _, _), do: {:error, :agent_only}
-  def unvote(scope, id, {:agent, _} = actor), do: mutate(scope, id, actor, :unvote)
-  def unvote(_, _, _), do: {:error, :agent_only}
-  def archive(scope, id, {:agent, _} = actor), do: mutate(scope, id, actor, :archive)
-  def archive(_, _, _), do: {:error, :not_idea_author}
+  def vote(scope, id, actor, opts \\ [])
+  def vote(scope, id, {:agent, _} = actor, opts), do: mutate(scope, id, actor, :vote, opts)
+  def vote(_, _, _, _), do: {:error, :agent_only}
+  def unvote(scope, id, actor, opts \\ [])
+  def unvote(scope, id, {:agent, _} = actor, opts), do: mutate(scope, id, actor, :unvote, opts)
+  def unvote(_, _, _, _), do: {:error, :agent_only}
+  def archive(scope, id, actor, opts \\ [])
+  def archive(scope, id, {:agent, _} = actor, opts), do: mutate(scope, id, actor, :archive, opts)
+  def archive(_, _, _, _), do: {:error, :not_idea_author}
 
   @doc "Vote summaries for ideas the caller has already read through its visible profiles. Only count and the current actor's vote are returned."
   def summaries(ideas, actor \\ nil)
@@ -61,7 +64,7 @@ defmodule Platform.Social.IdeaVotes do
   def order_key(idea, count),
     do: {-count, DateTime.to_unix(idea.inserted_at, :microsecond), idea.id}
 
-  defp mutate(scope, id, actor, operation) do
+  defp mutate(scope, id, actor, operation, opts) do
     with %Idea{} = initial <- Ideas.get(scope, id) do
       result =
         Repo.transaction(fn ->
@@ -70,6 +73,7 @@ defmodule Platform.Social.IdeaVotes do
                  Repo.one(from(i in Idea, where: i.id == ^initial.id, lock: "FOR UPDATE")),
                true <- idea.profile_id == profile.id and idea.org_id == profile.org_id,
                true <- allowed?(profile, actor),
+               :ok <- Keyword.get(opts, :authorize, fn _ -> :ok end).(profile),
                :ok <- eligible(idea, actor, operation) do
             case operation do
               :archive ->

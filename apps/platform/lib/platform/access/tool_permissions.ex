@@ -94,6 +94,19 @@ defmodule Platform.Access.ToolPermissions do
 
   def for_tool(_), do: nil
 
+  @doc "An extension's narrower runtime permission for a tool, if declared."
+  def delegated_for_tool(name) when is_binary(name) do
+    case Extensions.tool_owner(name) do
+      declaration when is_map(declaration) ->
+        declaration |> Map.get(:delegated_permissions, %{}) |> Map.get(name)
+
+      _ ->
+        nil
+    end
+  end
+
+  def delegated_for_tool(_), do: nil
+
   @spec bundle_permissions(String.t()) :: MapSet.t(String.t())
   def bundle_permissions(bundle) when is_binary(bundle) do
     names =

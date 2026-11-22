@@ -23,6 +23,17 @@ defmodule Platform.Social.ToolDefinitionsTest do
     assert Enum.map(ToolDefinitions.definitions(), & &1.name) == ToolDefinitions.names()
   end
 
+  test "idea guidance distinguishes narrow board data from full Social data" do
+    list = Enum.find(ToolDefinitions.definitions(), &(&1.name == "social_idea_list"))
+    create = Enum.find(ToolDefinitions.definitions(), &(&1.name == "social_idea_create"))
+    assert list.description =~ "untrusted"
+    assert list.description =~ "in_production"
+    assert list.description =~ "social.ideas"
+    assert list.description =~ "social.use"
+    assert list.parameters.archived.description =~ "social.use"
+    assert create.parameters.source_kind.description =~ "social.ideas: agent or url"
+  end
+
   test "results schema exposes only bounded read parameters" do
     tool = Enum.find(ToolDefinitions.definitions(), &(&1.name == "social_results_get"))
     assert tool.parameters.period.schema == %{type: "integer", enum: [7, 30, 90]}

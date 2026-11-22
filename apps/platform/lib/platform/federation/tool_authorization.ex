@@ -122,8 +122,13 @@ defmodule Platform.Federation.ToolAuthorization do
     case reason do
       :forbidden ->
         permission = ToolPermissions.for_tool(permission_name) || "undeclared"
+        delegated = ToolPermissions.delegated_for_tool(permission_name)
 
-        "tool '#{name}' requires permission '#{permission}', which this agent does not hold or is capped at its owner"
+        if is_binary(delegated) do
+          "tool '#{name}' requires permission '#{permission}' or '#{delegated}', which this agent does not hold or is capped at its owner"
+        else
+          "tool '#{name}' requires permission '#{permission}', which this agent does not hold or is capped at its owner"
+        end
 
       {:unknown_tool, nil} ->
         "unknown tool '#{name}' (no such tool in the catalogue — this is a name lookup miss, not a permissions problem)."
