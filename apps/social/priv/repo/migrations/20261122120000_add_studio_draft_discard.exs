@@ -1,4 +1,8 @@
 defmodule Platform.Repo.Migrations.AddStudioDraftDiscard do
+  @moduledoc """
+  PR #267: Retain discarded Studio drafts and their audit history while keeping
+  discarded state limited to drafts and recording discard and restore events.
+  """
   use Ecto.Migration
 
   @old "'created', 'edited', 'submitted', 'approved', 'rejected', 'revision_requested', " <>
