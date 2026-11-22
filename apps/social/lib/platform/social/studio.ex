@@ -405,7 +405,8 @@ defmodule Platform.Social.Studio do
   end
 
   defp replay_or_conflict!(%AgentDraftRequest{content_hash: hash, post_id: post_id}, hash) do
-    case Repo.get(Post, post_id) do
+    case lock_replayed_post(post_id) do
+      %Post{discarded_at: %DateTime{}} -> Repo.rollback(:post_discarded)
       %Post{} = post -> {:replayed, post}
       nil -> Repo.rollback(:not_found)
     end
@@ -467,15 +468,27 @@ defmodule Platform.Social.Studio do
   # Another connection committed the same request id first; this transaction
   # rolled back with nothing written. Answer from the winner's row.
   defp lost_race(draft, hash) do
-    with %AgentDraftRequest{content_hash: ^hash, post_id: post_id} <-
-           existing_request(draft.agent_id, draft.account_id, draft.request_id),
-         %Post{} = post <- Repo.get(Post, post_id) do
-      {:ok, post, :replayed}
-    else
-      %AgentDraftRequest{} -> {:error, :request_id_conflict}
-      _ -> {:error, :not_found}
+    result =
+      Repo.transaction(fn ->
+        with %AgentDraftRequest{content_hash: ^hash, post_id: post_id} <-
+               existing_request(draft.agent_id, draft.account_id, draft.request_id),
+             %Post{discarded_at: nil} = post <- lock_replayed_post(post_id) do
+          post
+        else
+          %Post{discarded_at: %DateTime{}} -> Repo.rollback(:post_discarded)
+          %AgentDraftRequest{} -> Repo.rollback(:request_id_conflict)
+          _ -> Repo.rollback(:not_found)
+        end
+      end)
+
+    case result do
+      {:ok, post} -> {:ok, post, :replayed}
+      {:error, reason} -> {:error, reason}
     end
   end
+
+  defp lock_replayed_post(id),
+    do: Repo.one(from(p in Post, where: p.id == ^id, lock: "FOR SHARE"))
 
   defp check_agent_media([], _profile), do: :ok
 
@@ -574,7 +587,8 @@ defmodule Platform.Social.Studio do
     with %Post{} = post <- Social.get_post(org_id, post_id) || {:error, :not_found},
          {:ok, profile} <- Social.profile_of_post(post),
          :ok <- require_enabled(profile),
-         :ok <- require_studio(post) do
+         :ok <- require_studio(post),
+         true <- is_nil(post.discarded_at) || {:error, :not_found} do
       {:ok, post}
     end
   end
@@ -589,11 +603,110 @@ defmodule Platform.Social.Studio do
          from(po in Post,
            join: a in Account,
            on: a.id == po.account_id,
-           where: a.profile_id == ^profile.id and po.flow == "studio",
+           where: a.profile_id == ^profile.id and po.flow == "studio" and is_nil(po.discarded_at),
            order_by: [asc: po.inserted_at, asc: po.id]
          )
        )}
     end
+  end
+
+  @doc "Recently discarded drafts in one visible profile, limited to accounts this human can discard."
+  def list_discarded_drafts(org_id, profile_id, user_id, page \\ 0)
+      when is_integer(page) and page >= 0 do
+    with {:ok, profile, accounts} <- recovery_accounts(org_id, profile_id, user_id) do
+      account_ids = Map.keys(accounts)
+
+      posts =
+        Repo.all(
+          from(p in Post,
+            where:
+              p.flow == "studio" and p.account_id in ^account_ids and not is_nil(p.discarded_at),
+            order_by: [desc: p.discarded_at, desc: p.id],
+            limit: 20,
+            offset: ^(page * 20)
+          )
+        )
+
+      events = posts |> Enum.map(& &1.id) |> PostEvents.list_for_posts()
+
+      {:ok,
+       Enum.map(posts, fn post ->
+         event =
+           events
+           |> Map.get(post.id, [])
+           |> Enum.reverse()
+           |> Enum.find(&(&1.action == "discarded"))
+
+         account = Map.fetch!(accounts, post.account_id)
+         reason = restore_reason(profile, account, user_id)
+
+         %{
+           post: post,
+           account: account,
+           event: event,
+           history: Map.get(events, post.id, []),
+           can_restore?: is_nil(reason),
+           restore_reason: reason
+         }
+       end)}
+    end
+  end
+
+  @doc "Discarded destination reservations for one render, limited to accounts this human can discard."
+  def discarded_render_reservations(org_id, profile_id, user_id, render_id) do
+    with {:ok, _profile, accounts} <- recovery_accounts(org_id, profile_id, user_id),
+         {:ok, render_id} <- Ecto.UUID.cast(render_id) do
+      account_ids = Map.keys(accounts)
+
+      rows =
+        Repo.all(
+          from(p in Post,
+            where:
+              p.flow == "studio" and
+                (p.account_id in ^account_ids or p.accepted_account_id in ^account_ids) and
+                p.clip_render_id == ^render_id and not is_nil(p.discarded_at),
+            select: %{account_id: p.account_id, accepted_account_id: p.accepted_account_id}
+          )
+        )
+
+      {:ok,
+       Enum.map(rows, fn row ->
+         %{
+           account_id: if(Map.has_key?(accounts, row.account_id), do: row.account_id),
+           accepted_account_id:
+             if(Map.has_key?(accounts, row.accepted_account_id), do: row.accepted_account_id)
+         }
+       end)}
+    else
+      _ -> {:error, :not_found}
+    end
+  end
+
+  defp recovery_accounts(org_id, profile_id, user_id) do
+    with %Platform.Accounts.User{archived_at: nil} = user <- Platform.Accounts.get_user(user_id),
+         %Profile{} = profile <- Social.get_profile(org_id, profile_id),
+         true <- Enum.any?(Social.list_profiles_for_user(user), &(&1.id == profile.id)),
+         :ok <- require_enabled(profile),
+         :ok <- require_social_use(user.id, profile) do
+      accounts =
+        profile.org_id
+        |> Social.list_accounts(profile_id: profile.id, include_archived: true)
+        |> Enum.filter(&(Social.post_rejecter_check(profile.org_id, profile, &1, user.id) == :ok))
+        |> Map.new(&{&1.id, &1})
+
+      {:ok, profile, accounts}
+    else
+      _ -> {:error, :not_found}
+    end
+  end
+
+  defp restore_reason(_profile, %{archived_at: archived_at}, _user_id)
+       when not is_nil(archived_at), do: :account_archived
+
+  defp restore_reason(profile, account, user_id) do
+    if Social.post_approver_check(profile.org_id, profile, account, user_id) == :ok,
+      do: nil,
+      else: :approver_required
   end
 
   defp require_enabled(%Profile{} = profile),
@@ -737,6 +850,7 @@ defmodule Platform.Social.Studio do
                :ok <- require_studio(post),
                :ok <- require_live_unless(ctx, opts),
                :ok <- Keyword.fetch!(opts, :actor_check).(ctx),
+               :ok <- require_not_discarded(ctx, opts),
                :ok <- check_stale(ctx),
                {:ok, result} <- fun.(ctx) do
             result
@@ -785,6 +899,12 @@ defmodule Platform.Social.Studio do
     end
   end
 
+  defp require_not_discarded(%{post: %{discarded_at: nil}}, _opts), do: :ok
+
+  defp require_not_discarded(_ctx, opts) do
+    if Keyword.get(opts, :allow_discarded, false), do: :ok, else: {:error, :post_discarded}
+  end
+
   # Approver (a): `post_approver_check/4` on the post's account, then the
   # project, module lock and `social.use` on the LOCKED profile.
   defp approver_actor(%{actor: {:human, user_id}} = ctx) do
@@ -819,6 +939,97 @@ defmodule Platform.Social.Studio do
   defp stale(post), do: {:error, {:stale, %{state_rev: post.state_rev, version: post.version}}}
 
   defp human(user_id), do: {:human, user_id}
+
+  @doc "Reversibly discard an unapproved Studio draft as an authorized human."
+  def discard_draft(org_id, post_id, user_id, expect) do
+    actor = human(user_id)
+
+    write(
+      org_id,
+      post_id,
+      actor,
+      expect,
+      [actor_check: &rejecter_actor/1, archived: fn _ -> :allow end, allow_discarded: true],
+      fn ctx ->
+        cond do
+          ctx.post.status != "draft" ->
+            {:error, :not_a_draft}
+
+          not is_nil(ctx.post.discarded_at) ->
+            {:error, :already_discarded}
+
+          not discard_safe?(ctx.post) ->
+            {:error, :approval_not_current}
+
+          true ->
+            updated = bump(ctx.post, discarded_at: DateTime.utc_now())
+            PostEvents.record!(updated, "discarded", actor)
+            {:ok, updated}
+        end
+      end
+    )
+  end
+
+  @doc "Restore a previously discarded Studio draft as an authorized human."
+  def restore_draft(org_id, post_id, user_id, expect) do
+    actor = human(user_id)
+
+    write(
+      org_id,
+      post_id,
+      actor,
+      expect,
+      [actor_check: &approver_actor/1, allow_discarded: true],
+      fn ctx ->
+        cond do
+          ctx.post.status != "draft" ->
+            {:error, :not_a_draft}
+
+          is_nil(ctx.post.discarded_at) ->
+            {:error, :not_discarded}
+
+          not discard_safe?(ctx.post) ->
+            {:error, :approval_not_current}
+
+          restore_destination_taken?(ctx.post) ->
+            {:error, :duplicate_destination}
+
+          true ->
+            updated = bump(ctx.post, discarded_at: nil)
+            PostEvents.record!(updated, "restored", actor)
+            {:ok, updated}
+        end
+      end
+    )
+  end
+
+  defp discard_safe?(post) do
+    is_nil(post.scheduled_at) and is_nil(post.planned_by_user_id) and
+      is_nil(post.planned_set_at) and is_nil(post.approved_by_user_id) and
+      is_nil(post.approved_at) and is_nil(current_receipt(post))
+  end
+
+  defp restore_destination_taken?(%Post{clip_render_id: nil}), do: false
+
+  defp restore_destination_taken?(post) do
+    destination =
+      if is_nil(post.accepted_account_id) do
+        dynamic([p], p.account_id == ^post.account_id)
+      else
+        dynamic(
+          [p],
+          p.account_id == ^post.account_id or p.accepted_account_id == ^post.accepted_account_id
+        )
+      end
+
+    Repo.exists?(
+      from(p in Post,
+        where:
+          p.flow == "studio" and p.clip_render_id == ^post.clip_render_id and p.id != ^post.id,
+        where: ^destination
+      )
+    )
+  end
 
   defp actor_id({_kind, id}), do: id
 
@@ -1340,14 +1551,14 @@ defmodule Platform.Social.Studio do
             else: :new
 
         %Post{account_id: current} = post when current == account.id ->
-          {:replay, post}
+          accept_replay(post)
 
         %Post{account_id: current} = post ->
           case Map.fetch(locked, current) do
             {:ok, current_account} ->
               with :ok <- require_live(current_account),
                    :ok <- accept_actor(org_id, profile, current_account, user_id) do
-                {:replay, post}
+                accept_replay(post)
               end
 
             :error ->
@@ -1356,6 +1567,9 @@ defmodule Platform.Social.Studio do
       end
     end
   end
+
+  defp accept_replay(%Post{discarded_at: %DateTime{}}), do: {:error, :draft_discarded}
+  defp accept_replay(%Post{} = post), do: {:replay, post}
 
   defp accept_scoped(_org_id, locked, id) do
     case Map.fetch(locked, id) do

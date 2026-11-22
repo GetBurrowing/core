@@ -221,6 +221,133 @@ defmodule Platform.Social.StudioAgentDraftConcurrencyTest do
   end
 
   describe "duplicate request ids (the unique index)" do
+    test "lost-race replay waits for a concurrent discard and sees the committed marker", ctx do
+      parent = self()
+
+      loser =
+        Task.async(fn ->
+          me = self()
+          handler = {__MODULE__, make_ref()}
+          Process.put(:pause_first_request_lookup, true)
+
+          :ok =
+            :telemetry.attach(
+              handler,
+              [:platform, :repo, :query],
+              fn _, _, %{query: query}, _ ->
+                if self() == me and String.starts_with?(query, "INSERT") and
+                     String.contains?(query, "social_agent_draft_requests") do
+                  send(parent, {:loser_request_insert_attempted, self()})
+                end
+
+                if self() == me and Process.get(:pause_first_request_lookup) and
+                     String.starts_with?(query, "SELECT") and
+                     String.contains?(query, "social_agent_draft_requests") do
+                  Process.put(:pause_first_request_lookup, false)
+                  send(parent, {:first_lookup_complete, self()})
+
+                  receive do
+                    :continue_after_lookup -> :ok
+                  after
+                    10_000 -> raise "lookup barrier timed out"
+                  end
+                end
+              end,
+              nil
+            )
+
+          try do
+            draft(ctx)
+          after
+            :telemetry.detach(handler)
+          end
+        end)
+
+      try do
+        assert_receive {:first_lookup_complete, loser_pid}, 5_000
+        assert loser_pid == loser.pid
+        # The loser has already read an absent request. Commit the winning
+        # request, then hold a discard on its post while the loser resumes.
+        {:ok, post, :created} = draft(ctx)
+
+        discarder =
+          holder(fn ->
+            Studio.discard_draft(ctx.org.id, post.id, ctx.user.id, %{
+              state_rev: post.state_rev,
+              version: post.version
+            })
+          end)
+
+        Process.put(:discard_holder, discarder)
+        {discarder_pid, {:ok, discarded}} = held!()
+        send(loser.pid, :continue_after_lookup)
+        assert_receive {:loser_request_insert_attempted, loser_pid}, 5_000
+        assert loser_pid == loser.pid
+
+        assert blocked_by?(discarder_pid),
+               "lost-race replay must wait for the discarder post lock"
+
+        assert {:ok, _} = release(discarder)
+        assert {:error, :post_discarded} = Task.await(loser, 10_000)
+        assert Repo.get!(Post, post.id).state_rev == discarded.state_rev
+        assert {studio_posts(ctx), requests(ctx), created_events(ctx)} == {1, 1, 1}
+      after
+        send(loser.pid, :continue_after_lookup)
+        Task.shutdown(loser, :brutal_kill)
+
+        if task = Process.delete(:discard_holder) do
+          send(task.pid, :release)
+          Task.shutdown(task, :brutal_kill)
+        end
+      end
+    end
+
+    test "a create replay holds the post share lock until its transaction ends", ctx do
+      {:ok, post, :created} = draft(ctx)
+      replay = holder(fn -> draft(ctx) end)
+      {replay_pid, {:ok, replayed, :replayed}} = held!()
+      assert replayed.id == post.id
+
+      discard =
+        Task.async(fn ->
+          Studio.discard_draft(ctx.org.id, post.id, ctx.user.id, %{
+            state_rev: post.state_rev,
+            version: post.version
+          })
+        end)
+
+      assert blocked_by?(replay_pid), "discard must wait until the replay releases the post"
+      assert {:ok, _} = release(replay)
+      assert {:ok, discarded} = Task.await(discard, 10_000)
+      assert discarded.discarded_at != nil
+    end
+
+    test "a create loser refuses a winner discarded before its transaction commits", ctx do
+      winner =
+        holder(fn ->
+          {:ok, post, :created} = draft(ctx)
+
+          {:ok, discarded} =
+            Studio.discard_draft(ctx.org.id, post.id, ctx.user.id, %{
+              state_rev: post.state_rev,
+              version: post.version
+            })
+
+          discarded
+        end)
+
+      {winner_pid, discarded} = held!()
+      loser = Task.async(fn -> draft(ctx) end)
+
+      assert blocked_by?(winner_pid),
+             "the second request must wait for the winner's unique index entry"
+
+      assert {:ok, _} = release(winner)
+      assert {:error, :post_discarded} = Task.await(loser, 10_000)
+      assert {studio_posts(ctx), requests(ctx), created_events(ctx)} == {1, 1, 1}
+      assert Repo.get!(Post, discarded.id).discarded_at == discarded.discarded_at
+    end
+
     test "a call that races a first call still in flight returns that one draft", ctx do
       winner = holder(fn -> draft(ctx) end)
       {winner_pid, {:ok, won, :created}} = held!()

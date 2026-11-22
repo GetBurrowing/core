@@ -31,6 +31,9 @@ defmodule PlatformWeb.SocialTodayTab do
     |> assign(:studio_post_detail, nil)
     |> assign(:studio_post_error, nil)
     |> assign(:studio_post_message, nil)
+    |> assign(:studio_action_status_sequence, 0)
+    |> assign(:studio_recovery_open, false)
+    |> assign(:studio_recovery_page, 0)
     |> assign(:studio_plan_time, "")
     |> assign(:studio_edit_text, "")
     |> assign(:studio_edit_account, nil)
@@ -40,7 +43,7 @@ defmodule PlatformWeb.SocialTodayTab do
   @impl true
   def events,
     do:
-      ~w(studio_open_post studio_approve_post studio_revoke_post studio_submit_post studio_plan_post studio_cancel_plan studio_save_post studio_request_changes studio_accept_clip studio_trend_to_idea studio_trend_filter studio_trends_refresh)
+      ~w(studio_open_post studio_discard_post studio_recovery_open studio_recovery_page studio_restore_post studio_approve_post studio_revoke_post studio_submit_post studio_plan_post studio_cancel_plan studio_save_post studio_request_changes studio_accept_clip studio_trend_to_idea studio_trend_filter studio_trends_refresh)
 
   @impl true
   def load(socket) do
@@ -306,6 +309,84 @@ defmodule PlatformWeb.SocialTodayTab do
      |> assign(:studio_post_error, nil)
      |> assign(:studio_post_message, nil)
      |> focus_detail(detail)}
+  end
+
+  def handle_event("studio_recovery_open", _params, socket) do
+    {:noreply,
+     socket
+     |> refresh_authorization()
+     |> assign(:studio_recovery_open, true)
+     |> assign(:studio_recovery_page, 0)}
+  end
+
+  def handle_event("studio_recovery_page", %{"direction" => direction}, socket)
+      when direction in ["previous", "next"] do
+    delta = if direction == "next", do: 1, else: -1
+
+    {:noreply,
+     socket
+     |> refresh_authorization()
+     |> assign(:studio_recovery_page, max(0, socket.assigns.studio_recovery_page + delta))}
+  end
+
+  def handle_event("studio_discard_post", _params, socket) do
+    with %{post: post, profile: profile} <- socket.assigns.studio_post_detail,
+         true <- current_profile?(socket, profile.id),
+         %{id: user_id} <- socket.assigns.user,
+         {:ok, _} <-
+           Studio.discard_draft(profile.org_id, post.id, user_id, %{
+             state_rev: post.state_rev,
+             version: post.version
+           }) do
+      {:noreply,
+       socket
+       |> load()
+       |> update(:studio_action_status_sequence, &(&1 + 1))
+       |> assign(:studio_post_message, "Draft discarded. It is retained in Discarded drafts.")}
+    else
+      _ ->
+        {:noreply,
+         failed_action(
+           socket,
+           :studio_post_error,
+           "The draft could not be discarded. Refresh and try again."
+         )}
+    end
+  end
+
+  def handle_event(
+        "studio_restore_post",
+        %{"id" => id, "rev" => rev, "version" => version},
+        socket
+      )
+      when is_binary(id) and is_binary(rev) and is_binary(version) do
+    with {:profile, %{id: profile_id, org_id: org_id}} <- socket.assigns.scope,
+         true <- current_profile?(socket, profile_id),
+         %{id: user_id} <- socket.assigns.user,
+         {state_rev, ""} <- Integer.parse(rev),
+         {version, ""} <- Integer.parse(version),
+         {:ok, items} <-
+           Studio.list_discarded_drafts(
+             org_id,
+             profile_id,
+             user_id,
+             socket.assigns.studio_recovery_page
+           ),
+         true <- Enum.any?(items, &(&1.post.id == id and &1.can_restore?)),
+         {:ok, _} <-
+           Studio.restore_draft(org_id, id, user_id, %{state_rev: state_rev, version: version}) do
+      {:noreply,
+       socket
+       |> load()
+       |> update(:studio_action_status_sequence, &(&1 + 1))
+       |> assign(:studio_post_message, "Draft restored.")}
+    else
+      _ ->
+        {:noreply,
+         socket
+         |> refresh_authorization()
+         |> assign(:studio_post_error, "The draft could not be restored. Refresh and try again.")}
+    end
   end
 
   def handle_event("studio_approve_post", _params, socket) do
@@ -599,6 +680,16 @@ defmodule PlatformWeb.SocialTodayTab do
     end
   end
 
+  defp recovery_actor(%{actor_kind: "human", actor_id: actor_id}) do
+    case Platform.Accounts.get_user(actor_id) do
+      nil -> "Former user"
+      user -> user_name(user)
+    end
+  end
+
+  defp recovery_actor(%{actor_kind: "agent"}), do: "Agent"
+  defp recovery_actor(_), do: "System"
+
   defp post_item(post, profile, user) do
     account = Social.get_account(profile.org_id, post.account_id)
 
@@ -766,6 +857,12 @@ defmodule PlatformWeb.SocialTodayTab do
   defp account_label(account),
     do: Enum.join(Enum.reject([account.platform, account.handle], &is_nil/1), " · ")
 
+  defp post_context(account, profile) do
+    [Platform.Social.Approvals.platform_label(account.platform), account.handle, profile.name]
+    |> Enum.filter(&(is_binary(&1) and String.trim(&1) != ""))
+    |> Enum.join(" · ")
+  end
+
   defp actor_label("human", id, detail), do: user_name(Map.get(detail.users, id))
   defp actor_label("agent", id, detail), do: Map.get(detail.agents, id, "Agent")
   defp actor_label(_, _, _), do: "System"
@@ -790,6 +887,27 @@ defmodule PlatformWeb.SocialTodayTab do
         {:ok, [_ | _] = renders} ->
           render = hd(renders)
 
+          reserved =
+            if user do
+              case Studio.discarded_render_reservations(
+                     profile.org_id,
+                     profile.id,
+                     user.id,
+                     render.id
+                   ) do
+                {:ok, rows} ->
+                  rows
+                  |> Enum.flat_map(&[&1.account_id, &1.accepted_account_id])
+                  |> Enum.reject(&is_nil/1)
+                  |> MapSet.new()
+
+                _ ->
+                  nil
+              end
+            else
+              nil
+            end
+
           prepared =
             posts
             |> Enum.filter(&(&1.profile.id == profile.id and &1.post.clip_render_id == render.id))
@@ -805,7 +923,16 @@ defmodule PlatformWeb.SocialTodayTab do
               clip: clip,
               profile: profile,
               renders: renders,
-              accounts: accounts,
+              accounts:
+                if(reserved,
+                  do: Enum.reject(accounts, &MapSet.member?(reserved, &1.id)),
+                  else: []
+                ),
+              discarded_accounts:
+                if(reserved,
+                  do: Enum.filter(accounts, &MapSet.member?(reserved, &1.id)),
+                  else: []
+                ),
               prepared: prepared
             }
           ]
@@ -836,9 +963,19 @@ defmodule PlatformWeb.SocialTodayTab do
 
     case socket.assigns.studio_post_detail do
       %{profile: profile} ->
-        if current_profile?(socket, profile.id),
-          do: assign(socket, key, message),
-          else: refresh_scope(socket)
+        cond do
+          not current_profile?(socket, profile.id) ->
+            refresh_scope(socket)
+
+          not match?(
+            {:ok, _},
+            Studio.get_post(profile.org_id, socket.assigns.studio_post_detail.post.id)
+          ) ->
+            socket |> load() |> assign(key, "This draft is no longer available.")
+
+          true ->
+            assign(socket, key, message)
+        end
 
       _ ->
         assign(socket, key, message)
@@ -883,8 +1020,21 @@ defmodule PlatformWeb.SocialTodayTab do
     user = fresh_user(%{assigns: assigns})
     work = assigns.studio_work_items
 
+    discarded =
+      case {assigns.studio_recovery_open, assigns.scope, user} do
+        {true, {:profile, %{id: id, org_id: org_id} = profile}, %{id: user_id}} ->
+          case Studio.list_discarded_drafts(org_id, id, user_id, assigns.studio_recovery_page) do
+            {:ok, items} -> Enum.map(items, &Map.put(&1, :profile, profile))
+            _ -> []
+          end
+
+        _ ->
+          []
+      end
+
     assigns =
       assigns
+      |> assign(:studio_discarded, discarded)
       |> assign(:studio_work_posts, work.posts)
       |> assign(:studio_work_clips, work.clips)
       |> assign(:studio_work_count, length(work.posts) + length(work.clips))
@@ -908,6 +1058,73 @@ defmodule PlatformWeb.SocialTodayTab do
       <div class="grid gap-5 xl:grid-cols-[minmax(0,1fr)_minmax(0,1.2fr)_minmax(0,1fr)]">
         <section class="min-w-0 self-start space-y-3 rounded-box border border-base-content/25 bg-base-100 p-4">
           <h2 class="text-lg font-semibold">Prepare and review ({@studio_work_count})</h2>
+          <button
+            :if={match?({:profile, %{id: _}}, @scope)}
+            type="button"
+            class="link inline-flex min-h-[44px] items-center"
+            phx-click="studio_recovery_open"
+            data-role="studio-recovery-open"
+          >
+            Discarded drafts
+          </button>
+          <p :if={@scope == :all}>Choose a brand to view its discarded drafts.</p>
+          <section :if={@studio_recovery_open} aria-label="Discarded drafts" class="space-y-2">
+            <p :if={@studio_discarded == []}>No recoverable drafts in this profile.</p>
+            <button
+              :if={@studio_recovery_page > 0}
+              type="button"
+              phx-click="studio_recovery_page"
+              phx-value-direction="previous"
+            >
+              Previous
+            </button>
+            <div
+              :for={item <- @studio_discarded}
+              data-role="studio-discarded"
+              data-post-id={item.post.id}
+            >
+              <p data-role="studio-recovery-title" class="font-semibold">
+                {Platform.Social.PostPresentation.title(item.post, item.account)}
+              </p>
+              <p data-role="studio-recovery-context">{post_context(item.account, item.profile)}</p>
+              <p>{item.post.body || "Untitled post"}</p>
+              <ul aria-label="Draft history">
+                <li :for={event <- item.history} class="text-sm text-subtle">
+                  {String.replace(event.action, "_", " ")} · {Calendar.strftime(
+                    event.inserted_at,
+                    "%Y-%m-%d %H:%M UTC"
+                  )} · {recovery_actor(event)}
+                </li>
+              </ul>
+              <p :if={item.restore_reason == :account_archived}>
+                Restore unavailable while the account is archived.
+              </p>
+              <p :if={item.restore_reason == :approver_required}>
+                Restore requires the account's authorized approver.
+              </p>
+              <button
+                :if={item.can_restore?}
+                type="button"
+                class="btn btn-ghost min-h-[44px]"
+                phx-click="studio_restore_post"
+                phx-value-id={item.post.id}
+                phx-value-rev={item.post.state_rev}
+                phx-value-version={item.post.version}
+                data-role="studio-restore"
+                data-post-id={item.post.id}
+              >
+                Restore draft
+              </button>
+            </div>
+            <button
+              :if={length(@studio_discarded) == 20}
+              type="button"
+              phx-click="studio_recovery_page"
+              phx-value-direction="next"
+            >
+              Next
+            </button>
+          </section>
           <p
             :if={@studio_work_count == 0}
             class="text-subtle"
@@ -916,6 +1133,16 @@ defmodule PlatformWeb.SocialTodayTab do
           </p>
           <p :if={@studio_post_error && is_nil(@studio_post_detail)} role="alert">
             {@studio_post_error}
+          </p>
+          <p
+            :if={@studio_post_message && is_nil(@studio_post_detail)}
+            id={"studio-action-status-#{@studio_action_status_sequence}"}
+            data-role="studio-action-status"
+            role="status"
+            tabindex="-1"
+            phx-mounted={Phoenix.LiveView.JS.focus()}
+          >
+            {@studio_post_message}
           </p>
           <section
             :for={item <- @studio_work_clips}
@@ -967,6 +1194,9 @@ defmodule PlatformWeb.SocialTodayTab do
                 Open post
               </button>
             </p>
+            <p :for={account <- item.discarded_accounts} data-role="studio-clip-discarded">
+              Discarded for {account_label(account)} · restore from Discarded drafts
+            </p>
             <form id={"studio-clip-#{item.clip.id}"} phx-submit="studio_accept_clip" class="space-y-2">
               <input type="hidden" name="clip_id" value={item.clip.id} />
               <input type="hidden" name="render_id" value={hd(item.renders).id} />
@@ -980,7 +1210,9 @@ defmodule PlatformWeb.SocialTodayTab do
                   </option>
                 </select>
               </label>
-              <button type="submit" class="btn btn-primary">Prepare or open post</button>
+              <button type="submit" class="btn btn-primary" disabled={item.accounts == []}>
+                Prepare or open post
+              </button>
             </form>
           </section>
           <div
@@ -1032,7 +1264,7 @@ defmodule PlatformWeb.SocialTodayTab do
                   {item.title}
                 </span>
                 <span data-role="studio-post-context" class="block text-sm text-subtle">
-                  {Platform.Social.Approvals.platform_label(item.account.platform)} · {item.account.handle} · {item.profile.name}
+                  {post_context(item.account, item.profile)}
                 </span>
                 <span
                   :if={item.agent_drafted}
@@ -1222,6 +1454,15 @@ defmodule PlatformWeb.SocialTodayTab do
               <textarea id="studio-change-reason" name="reason" class="textarea w-full">{@studio_change_reason}</textarea>
               <button type="submit" class="btn btn-outline">Request changes</button>
             </form>
+            <button
+              :if={@studio_post_detail.can_cancel? and @studio_post_detail.post.status == "draft"}
+              type="button"
+              phx-click="studio_discard_post"
+              data-role="studio-discard"
+              class="btn btn-ghost min-h-[44px]"
+            >
+              Discard draft
+            </button>
             <button
               :if={@studio_post_detail.can_approve? and @studio_post_detail.post.status == "draft"}
               type="button"

@@ -1025,6 +1025,15 @@ defmodule Platform.Social.Tools do
 
   # ── Envelopes ────────────────────────────────────────────────────────
 
+  defp error_envelope({:error, :post_discarded}) do
+    err(
+      :post_discarded,
+      "A person discarded this draft; nothing was changed.",
+      false,
+      "Do not recreate it without direction from a person."
+    )
+  end
+
   defp error_envelope({:error, :already_rendering}) do
     err(
       :already_rendering,
