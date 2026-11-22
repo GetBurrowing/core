@@ -815,6 +815,26 @@ class MeetingTest(UpdaterCase):
 
 
 class IrreversibleTest(UpdaterCase):
+    def test_studio_discard_release_list_holds_timer_then_requires_dump_and_blocks_rollback(self):
+        path = os.path.join(REPO_ROOT, "deployment", "release", "irreversible-migrations.txt")
+        with open(path, encoding="utf-8") as source:
+            current = [line.strip() for line in source if re.fullmatch(r"\d{14}", line.strip())]
+        version = "20261122120000"
+        self.assertIn(version, current)
+        self.world["images"]["id-old"]["irreversible"] = [v for v in current if v != version]
+        self.world["images"]["id-new"]["irreversible"] = current
+        self.save_world()
+        held = self.run_updater()
+        self.assertEqual(held["last_result"], "held_irreversible")
+        self.assertEqual(held["pending_irreversible"], [version])
+        self.assertEqual(self.compose_ups(), [])
+        self.request("update")
+        self.assertEqual(self.run_updater(mode="path", now=1_000_100)["last_result"], "ok")
+        self.assertEqual(len(self.calls(["exec", "core-postgres", "pg_dump"])), 1)
+        self.request("rollback", request_id="r2")
+        refused = self.run_updater(mode="path", now=1_000_200)
+        self.assertEqual(refused["last_request"]["reason"], "rollback_blocked_irreversible")
+
     def test_the_timer_holds_a_crossing(self):
         self.world["images"]["id-old"]["irreversible"] = ["20260101_a"]
         self.world["images"]["id-new"]["irreversible"] = ["20260101_a", "20261101_b"]
