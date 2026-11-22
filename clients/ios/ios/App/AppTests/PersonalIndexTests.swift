@@ -605,7 +605,7 @@ final class PersonalIndexTests: XCTestCase {
     // Measured on a tester's iPad (2026-10-14 19:50:27Z, build 13e6b64d6, the
     // Debug intent-trace.log, which records the info-level fetch/route lines
     // too): "Message Dalton" ran `step=send destination=messagePeople(1)` for
-    // a suite-exp person, then `route=person_dm` on suite-exp, with NO
+    // a person on the exp install, then `route=person_dm` on exp, with NO
     // `fetch=people` or `route=people` line for any other install between
     // them. namesakes logs one of those two per host it searches, success or
     // failure, so it never searched. The same process had loaded prod's
@@ -613,7 +613,7 @@ final class PersonalIndexTests: XCTestCase {
     // parsed in person.query, which leaves the gate in front of it:
     // MessagesSendIntent passed `confirmsInstall: install == nil`, and the
     // system fills the optional Install from InstallQuery.defaultResult()
-    // (the selected install). Here host A plays suite-exp and B prod.
+    // (the selected install). Here host A plays exp and B prod.
 
     /// A: an exp user "Dalton Rivera" (or, with `agentOnA`, an agent
     /// "Dalton"); B: the agent "Dalton". Each host answers a search the way
