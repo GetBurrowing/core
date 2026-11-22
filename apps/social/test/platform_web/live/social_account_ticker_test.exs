@@ -42,6 +42,316 @@ defmodule PlatformWeb.SocialAccountTickerTest do
     find_live_child(parent, "ext-page-social")
   end
 
+  test "Wikipedia viewport CSS retains a 120px minimum and flex basis" do
+    css = File.read!(Path.expand("../../../assets/css/clip_review.css", __DIR__))
+    assert [[_, rule]] = Regex.scan(~r/\.social-wiki-viewport\s*\{([^}]*)\}/, css)
+    assert Regex.match?(~r/\bmin-width\s*:\s*120px\s*;/, rule)
+    assert Regex.match?(~r/\bflex\s*:\s*1\s+1\s+120px\s*;/, rule)
+  end
+
+  test "Wikipedia strip uses unfiltered display positions and opens All stories on Today", %{
+    conn: conn,
+    w: w
+  } do
+    original = Application.get_env(:social, :trends)
+    Application.put_env(:social, :trends, enabled: true, source: "wikimedia_pageviews")
+
+    on_exit(fn ->
+      if original,
+        do: Application.put_env(:social, :trends, original),
+        else: Application.delete_env(:social, :trends)
+    end)
+
+    items =
+      for rank <- 2..12 do
+        %{
+          id: "article-#{rank}",
+          rank: rank,
+          title: if(rank == 3, do: "AI research", else: "Story #{rank}"),
+          url: "https://example.test/#{rank}",
+          pageviews: 100
+        }
+      end
+
+    assert {:ok, _} =
+             Social.Trends.record_snapshot(%{
+               source: "wikimedia_pageviews",
+               limit: 20,
+               complete: true,
+               observed_at: ~U[2026-11-20 12:00:00Z],
+               reporting_date: ~D[2026-11-19],
+               items: items
+             })
+
+    view = open(conn, w)
+    assert has_element?(view, "[data-role='ticker-wikipedia']", "Trending on Wikipedia")
+
+    assert has_element?(
+             view,
+             "[data-role='ticker-wikipedia'].flex-wrap [data-wiki-viewport].social-wiki-viewport"
+           )
+
+    assert [label_classes] =
+             view
+             |> render()
+             |> LazyHTML.from_fragment()
+             |> LazyHTML.query("[data-role='ticker-wiki-label']")
+             |> LazyHTML.attribute("class")
+
+    assert "border-e" in String.split(label_classes)
+
+    assert has_element?(
+             view,
+             "[data-role='ticker-wiki-label-mobile'][aria-hidden='true']",
+             "W · Wikipedia"
+           )
+
+    assert has_element?(
+             view,
+             "[data-role='ticker-wiki-label-desktop'][aria-hidden='true']",
+             "W · Trending on Wikipedia"
+           )
+
+    assert has_element?(view, "[data-role='ticker-wiki-label'] .sr-only", "Trending on Wikipedia")
+
+    # Class contract only; the built-page check verifies actual responsive visibility.
+    html = view |> render() |> LazyHTML.from_fragment()
+
+    assert [mobile_classes] =
+             html
+             |> LazyHTML.query("[data-role='ticker-wiki-label-mobile']")
+             |> LazyHTML.attribute("class")
+
+    assert [desktop_classes] =
+             html
+             |> LazyHTML.query("[data-role='ticker-wiki-label-desktop']")
+             |> LazyHTML.attribute("class")
+
+    assert "sm:hidden" in String.split(mobile_classes)
+    assert "hidden" in String.split(desktop_classes)
+    assert "sm:inline" in String.split(desktop_classes)
+
+    assert has_element?(
+             view,
+             "[data-wiki-original] [data-role='ticker-wiki-entry']",
+             "1 · Story 2"
+           )
+
+    assert has_element?(
+             view,
+             "[data-wiki-original] [data-role='ticker-wiki-entry']",
+             "10 · Story 11"
+           )
+
+    refute has_element?(view, "[data-wiki-original] [data-role='ticker-wiki-entry']", "Story 12")
+    refute has_element?(view, "[data-wiki-copy] button:not([tabindex='-1'])")
+
+    view |> element("[data-role='trends-ai-filter']") |> render_click()
+
+    view
+    |> element("[data-wiki-original] [data-role='ticker-wiki-entry']", "Story 2")
+    |> render_click()
+
+    assert has_element?(view, "#social-profile-switcher option[value='all'][selected]")
+    assert has_element?(view, "[data-role='social-tab-body'][data-tab='today']")
+    assert has_element?(view, "[data-role='studio-trends']", "Story 2")
+
+    assert has_element?(
+             view,
+             "[data-role='studio-trends-heading'][tabindex='-1']",
+             "What's moving"
+           )
+
+    assert has_element?(
+             view,
+             "[data-role='studio-trends'] button[aria-pressed='true']",
+             "All stories"
+           )
+
+    assert_push_event(view, "social:focus_trends", %{})
+
+    assert {:ok, _} =
+             Social.Trends.record_snapshot(%{
+               source: "wikimedia_pageviews",
+               limit: 20,
+               complete: true,
+               observed_at: ~U[2026-11-21 12:00:00Z],
+               reporting_date: ~D[2026-11-20],
+               items: [
+                 %{
+                   id: "new",
+                   rank: 5,
+                   title: "Latest story",
+                   url: "https://example.test/new",
+                   pageviews: 10
+                 }
+               ]
+             })
+
+    view |> element("[data-role='trends-refresh']") |> render_click()
+    assert has_element?(view, "[data-wiki-original]", "1 · Latest story")
+    refute has_element?(view, "[data-wiki-original]", "Story 2")
+  end
+
+  test "Wikipedia row hides without a snapshot or when Trends is switched off", %{
+    conn: conn,
+    w: w
+  } do
+    original = Application.get_env(:social, :trends)
+
+    on_exit(fn ->
+      if original,
+        do: Application.put_env(:social, :trends, original),
+        else: Application.delete_env(:social, :trends)
+    end)
+
+    Application.put_env(:social, :trends, enabled: true, source: "wikimedia_pageviews")
+    view = open(conn, w)
+    refute has_element?(view, "[data-role='ticker-wikipedia']")
+
+    stale_date = Date.add(Date.utc_today(), -10)
+
+    assert {:ok, _} =
+             Social.Trends.record_snapshot(%{
+               source: "wikimedia_pageviews",
+               limit: 1,
+               complete: true,
+               observed_at: ~U[2026-11-20 12:00:00Z],
+               reporting_date: stale_date,
+               items: [
+                 %{
+                   id: "one",
+                   rank: 1,
+                   title: "One story",
+                   url: "https://example.test/one",
+                   pageviews: 1
+                 }
+               ]
+             })
+
+    view = open(conn, w)
+    assert has_element?(view, "[data-role='ticker-wikipedia']", "One story")
+
+    assert has_element?(
+             view,
+             "[data-role='ticker-wikipedia']",
+             Calendar.strftime(stale_date, "%d %b")
+           )
+
+    assert has_element?(
+             view,
+             "[data-role='ticker-wiki-label'] .sr-only",
+             Calendar.strftime(stale_date, "%d %b")
+           )
+
+    assert has_element?(
+             view,
+             "[data-role='ticker-wiki-label-desktop']",
+             Calendar.strftime(stale_date, "%d %b")
+           )
+
+    refute has_element?(
+             view,
+             "[data-role='ticker-wiki-label-mobile']",
+             Calendar.strftime(stale_date, "%d %b")
+           )
+
+    Application.put_env(:social, :trends, enabled: false, source: "wikimedia_pageviews")
+    view |> element("[data-role='social-tab-button'][data-tab='queue']") |> render_click()
+    refute has_element?(view, "[data-role='ticker-wikipedia']")
+  end
+
+  test "revoked Social access removes Wikipedia and refuses a stale activation", %{
+    conn: conn,
+    w: w
+  } do
+    original = Application.get_env(:social, :trends)
+    Application.put_env(:social, :trends, enabled: true, source: "wikimedia_pageviews")
+
+    on_exit(fn ->
+      if original,
+        do: Application.put_env(:social, :trends, original),
+        else: Application.delete_env(:social, :trends)
+    end)
+
+    assert {:ok, _} =
+             Social.Trends.record_snapshot(%{
+               source: "wikimedia_pageviews",
+               limit: 1,
+               complete: true,
+               observed_at: ~U[2026-11-20 12:00:00Z],
+               reporting_date: ~D[2026-11-19],
+               items: [
+                 %{
+                   id: "one",
+                   rank: 1,
+                   title: "One story",
+                   url: "https://example.test/one",
+                   pageviews: 1
+                 }
+               ]
+             })
+
+    view = open(conn, w, "&tab=queue")
+    assert has_element?(view, "[data-role='ticker-wikipedia']", "One story")
+
+    assert {:ok, _} =
+             Platform.Access.Grants.deny(%{
+               principal: {:user, w.approver.id},
+               permission: "social.use",
+               resource: {:project, w.project.id}
+             })
+
+    render_click(view, "ticker_wikipedia", %{})
+    refute has_element?(view, "[data-role='ticker-wikipedia']")
+    assert has_element?(view, "[data-role='social-tab-body'][data-tab='queue']")
+  end
+
+  test "the row follows visible enabled profiles even when a disabled brand is selected", %{
+    conn: conn,
+    w: w
+  } do
+    original = Application.get_env(:social, :trends)
+    Application.put_env(:social, :trends, enabled: true, source: "wikimedia_pageviews")
+
+    on_exit(fn ->
+      if original,
+        do: Application.put_env(:social, :trends, original),
+        else: Application.delete_env(:social, :trends)
+    end)
+
+    assert {:ok, _} =
+             Social.Trends.record_snapshot(%{
+               source: "wikimedia_pageviews",
+               limit: 1,
+               complete: true,
+               observed_at: ~U[2026-11-20 12:00:00Z],
+               reporting_date: ~D[2026-11-19],
+               items: [
+                 %{
+                   id: "one",
+                   rank: 1,
+                   title: "One story",
+                   url: "https://example.test/one",
+                   pageviews: 1
+                 }
+               ]
+             })
+
+    {:ok, disabled} = Social.create_profile(w.org_id, %{name: "Disabled brand"})
+
+    {:ok, _} =
+      Social.create_account(w.org_id, disabled, %{platform: "youtube", handle: "@disabled"})
+
+    view = open(conn, w)
+    view |> form("#social-profile-switcher", %{profile_id: disabled.id}) |> render_change()
+    assert has_element?(view, "[data-role='ticker-wikipedia']", "One story")
+
+    assert {:ok, _} = Social.Studio.set_enabled(w.org_id, w.profile.id, w.approver.id, false)
+    view |> element("[data-role='social-tab-button'][data-tab='queue']") |> render_click()
+    refute has_element?(view, "[data-role='ticker-wikipedia']")
+  end
+
   test "strip dates follower changes, scopes views copy and hides duplicate keyboard stops", %{
     conn: conn,
     w: w

@@ -9,6 +9,74 @@ test("automatic motion advances slowly and wraps in source order", () => {
   assert.ok(Math.abs(motion.advance(80, 199.5, 200, 100) - 0.46) < 0.0001)
 })
 
+test("Wikipedia motion goes in the opposite direction at two thirds speed and wraps", () => {
+  const motion = new TickerMotion()
+  assert.equal(motion.advance(0, 0, 200, 100, -0.016), 0)
+  assert.ok(Math.abs(motion.advance(40, 0, 200, 100, -0.016) - 199.36) < 0.0001)
+  motion.toggle()
+  assert.equal(motion.advance(80, 100, 200, 100, -0.016), 100)
+})
+
+test("one control pauses both tracks, including when only Wikipedia overflows", () => {
+  const oldWindow = globalThis.window, oldDocument = globalThis.document, oldResize = globalThis.ResizeObserver
+  const handlers = new Map(), frames = new Map()
+  let id = 0
+  const target = {addEventListener() {}, removeEventListener() {}}
+  globalThis.window = {...target, matchMedia: () => ({...target, matches: false}),
+    requestAnimationFrame: fn => {frames.set(++id, fn); return id}, cancelAnimationFrame: n => frames.delete(n)}
+  let scrolled = 0, focused = 0
+  globalThis.document = {...target, hidden: false,
+    querySelector: selector => selector === "[data-role='studio-trends-heading']" ?
+      {focus: () => focused++, scrollIntoView: () => scrolled++} : null}
+  globalThis.ResizeObserver = undefined
+  const viewport = {scrollLeft: 0, clientWidth: 100, contains: () => false}
+  const wiki = {scrollLeft: 0, clientWidth: 100, contains: target => Boolean(target)}
+  const button = {setAttribute() {}}, wikiCopy = {}, copy = {}
+  let accountWidth = 80
+  const refs = {"[data-ticker-viewport]": viewport, "[data-ticker-original]": {getBoundingClientRect: () => ({width: accountWidth})},
+    "[data-ticker-copy]": copy, "[data-ticker-toggle]": button, "[data-wiki-viewport]": wiki,
+    "[data-wiki-original]": {getBoundingClientRect: () => ({width: 200})}, "[data-wiki-copy]": wikiCopy}
+  const el = {...target, dataset: {scopeKey: "a"}, querySelector: key => refs[key],
+    addEventListener: (name, fn) => handlers.set(name, fn), contains: () => true}
+  const events = new Map()
+  const hook = Object.assign(Object.create(SocialTicker), {el, handleEvent: (name, fn) => events.set(name, fn)})
+  const step = at => { const [key, fn] = frames.entries().next().value; frames.delete(key); fn(at) }
+  try {
+    hook.mounted()
+    events.get("social:focus_trends")()
+    assert.equal(scrolled, 1)
+    assert.equal(focused, 1)
+    let stopped = 0
+    handlers.get("click")({ctrlKey: true, target: {closest: selector => selector.includes("ticker-wiki-entry") ? {} : null},
+      stopPropagation: () => stopped++})
+    assert.equal(stopped, 0, "modified button activation reaches LiveView")
+    assert.equal(button.disabled, false)
+    assert.equal(wikiCopy.hidden, false)
+    step(0); step(40)
+    assert.ok(wiki.scrollLeft > 199 && wiki.scrollLeft < 200)
+    assert.equal(viewport.scrollLeft, 0)
+    handlers.get("click")({target: {closest: selector => selector === "[data-ticker-toggle]"}})
+    assert.equal(frames.size, 0)
+    assert.equal(button.textContent, "Play")
+    handlers.get("click")({target: {closest: selector => selector === "[data-ticker-toggle]"}})
+    assert.equal(frames.size, 1)
+    accountWidth = 200
+    hook._reconcile()
+    step(80); step(120); step(160)
+    assert.ok(viewport.scrollLeft > 0)
+    assert.ok(wiki.scrollLeft < 199.36)
+    hook._interact("focus", true)
+    assert.equal(frames.size, 0)
+    hook._interact("focus", false)
+    hook._motion.setReduced(true); hook._reconcile()
+    assert.equal(frames.size, 0)
+    assert.equal(wikiCopy.hidden, true)
+  } finally {
+    hook.destroyed()
+    globalThis.window = oldWindow; globalThis.document = oldDocument; globalThis.ResizeObserver = oldResize
+  }
+})
+
 test("explicit pause survives hover, focus and touch ending", () => {
   const motion = new TickerMotion()
   motion.toggle()

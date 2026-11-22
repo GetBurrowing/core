@@ -219,7 +219,8 @@ defmodule PlatformWeb.SocialTodayTab do
        socket
        |> assign(:studio_trends, Social.Trends.latest("wikimedia_pageviews"))
        |> assign(:studio_trend_source_status, Social.Trends.source_status("wikimedia_pageviews"))
-       |> assign(:studio_saved_trends, saved_trends(socket, profiles))}
+       |> assign(:studio_saved_trends, saved_trends(socket, profiles))
+       |> PlatformWeb.SocialAccountTicker.load()}
     else
       {:noreply, socket}
     end
@@ -1251,7 +1252,11 @@ defmodule PlatformWeb.SocialTodayTab do
             data-role="studio-trends"
             class="rounded-box border border-base-content/25 bg-base-100 p-4 space-y-3"
           >
-            <h2 class="flex flex-wrap items-center gap-2 text-lg font-semibold">
+            <h2
+              data-role="studio-trends-heading"
+              tabindex="-1"
+              class="flex flex-wrap items-center gap-2 text-lg font-semibold"
+            >
               What's moving
               <span class="badge badge-primary badge-outline badge-sm" data-role="wikipedia-badge">
                 Wikipedia
@@ -1468,7 +1473,7 @@ defmodule PlatformWeb.SocialTodayTab do
     Enum.filter(previous.items, &(movement[&1.id] == :absent_from_sample))
   end
 
-  defp stale_trends?(snapshot) do
+  def stale_trends?(snapshot) do
     config = Application.get_env(:social, :trends, [])
 
     hours =

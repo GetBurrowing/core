@@ -30,7 +30,7 @@ export class TickerMotion {
     else this.interactions.delete(kind)
     this.lastAt = null
   }
-  advance(at, position, width, viewportWidth) {
+  advance(at, position, width, viewportWidth, speed = 0.024) {
     if (!this.running || width <= viewportWidth || width <= 0) {
       this.lastAt = null
       return position
@@ -38,19 +38,28 @@ export class TickerMotion {
     if (this.lastAt === null) { this.lastAt = at; return position }
     const elapsed = Math.max(0, Math.min(at - this.lastAt, 50))
     this.lastAt = at
-    return (position + elapsed * 0.024) % width
+    const next = (position + elapsed * speed) % width
+    return next < 0 ? next + width : next
   }
 }
 
 export default {
   mounted() {
     this._motion = new TickerMotion()
+    this._wikiMotion = new TickerMotion()
     this._motion.paused = readPause()
     this._listeners = []
     this._frame = null
     this._scopeKey = this.el.dataset.scopeKey
     this._position = this.el.querySelector("[data-ticker-viewport]").scrollLeft
     this._writtenScroll = this._position
+    this._wikiPosition = this.el.querySelector("[data-wiki-viewport]")?.scrollLeft ?? 0
+    this._wikiWrittenScroll = this._wikiPosition
+    this.handleEvent?.("social:focus_trends", () => {
+      const heading = document.querySelector("[data-role='studio-trends-heading']")
+      heading?.focus({preventScroll: true})
+      heading?.scrollIntoView({block: "start", inline: "nearest"})
+    })
     this._media = window.matchMedia("(prefers-reduced-motion: reduce)")
     this._motion.setReduced(this._media.matches)
     this._bind(this._media, "change", event => {
@@ -111,6 +120,8 @@ export default {
       this._resize = new ResizeObserver(() => this._reconcile())
       this._resize.observe(this.el)
       this._resize.observe(this.el.querySelector("[data-ticker-original]"))
+      const wiki = this.el.querySelector("[data-wiki-original]")
+      if (wiki) this._resize.observe(wiki)
     }
     this.el.dataset.tickerReady = "true"
     this._reconcile()
@@ -122,6 +133,11 @@ export default {
       this._position = 0
       this._writtenScroll = 0
       this._motion.lastAt = null
+      const wiki = this.el.querySelector("[data-wiki-viewport]")
+      if (wiki) wiki.scrollLeft = 0
+      this._wikiPosition = 0
+      this._wikiWrittenScroll = 0
+      this._wikiMotion.lastAt = null
     }
     this._reconcile()
   },
@@ -137,7 +153,7 @@ export default {
     target.addEventListener(name, callback, opts)
     this._listeners.push([target, name, callback, opts])
   },
-  _viewportContains(target) { return Boolean(this.el.querySelector("[data-ticker-viewport]").contains?.(target)) },
+  _viewportContains(target) { return Boolean(this.el.querySelector("[data-ticker-viewport]").contains?.(target) || this.el.querySelector("[data-wiki-viewport]")?.contains?.(target)) },
   _keyboardFocusWithin(target) { return this._viewportContains(target) && Boolean(target.matches?.(":focus-visible")) },
   _interact(kind, active) { this._motion.interact(kind, active); this._reconcile() },
   _manualPause() {
@@ -152,16 +168,23 @@ export default {
     const original = this.el.querySelector("[data-ticker-original]")
     const width = original.getBoundingClientRect().width
     const overflow = width > viewport.clientWidth
+    const wikiViewport = this.el.querySelector("[data-wiki-viewport]")
+    const wikiOriginal = this.el.querySelector("[data-wiki-original]")
+    const wikiWidth = wikiOriginal?.getBoundingClientRect().width ?? 0
+    const wikiOverflow = Boolean(wikiViewport && wikiWidth > wikiViewport.clientWidth)
+    const wikiCopy = this.el.querySelector("[data-wiki-copy]")
+    if (wikiCopy) wikiCopy.hidden = !wikiOverflow || this._motion.reduced
     this.el.querySelector("[data-ticker-copy]").hidden = !overflow || this._motion.reduced
     this.el.dataset.tickerReduced = String(this._motion.reduced)
     const button = this.el.querySelector("[data-ticker-toggle]")
     button.textContent = this._motion.paused || this._motion.reduced ? "Play" : "Pause"
-    button.disabled = this._motion.reduced || !overflow
+    button.disabled = this._motion.reduced || !(overflow || wikiOverflow)
     button.setAttribute("aria-pressed", String(this._motion.paused))
-    if (!this._motion.running || !overflow) {
+    if (!this._motion.running || !(overflow || wikiOverflow)) {
       if (this._frame !== null) window.cancelAnimationFrame(this._frame)
       this._frame = null
       this._motion.lastAt = null
+      this._wikiMotion.lastAt = null
       return
     }
     if (this._frame !== null) return
@@ -173,6 +196,17 @@ export default {
       this._position = this._motion.advance(at, this._position, width, viewport.clientWidth)
       viewport.scrollLeft = this._position
       this._writtenScroll = viewport.scrollLeft
+      if (wikiOverflow) {
+        if (wikiViewport.scrollLeft !== this._wikiWrittenScroll) this._wikiPosition = wikiViewport.scrollLeft
+        this._wikiMotion.paused = this._motion.paused
+        this._wikiMotion.reduced = this._motion.reduced
+        this._wikiMotion.interactions = this._motion.interactions
+        this._wikiPosition = this._wikiMotion.advance(at, this._wikiPosition, wikiWidth, wikiViewport.clientWidth, -0.016)
+        wikiViewport.scrollLeft = this._wikiPosition
+        this._wikiWrittenScroll = wikiViewport.scrollLeft
+      } else {
+        this._wikiMotion.lastAt = null
+      }
       this._reconcile()
     })
   },
