@@ -60,6 +60,8 @@ export default {
       heading?.focus({preventScroll: true})
       heading?.scrollIntoView({block: "start", inline: "nearest"})
     })
+    this.handleEvent?.("social:ticker_details", payload => this._detailsEvent(payload))
+    this._syncDetails()
     this._media = window.matchMedia("(prefers-reduced-motion: reduce)")
     this._motion.setReduced(this._media.matches)
     this._bind(this._media, "change", event => {
@@ -127,6 +129,7 @@ export default {
     this._reconcile()
   },
   updated() {
+    this._syncDetails()
     if (this.el.dataset.scopeKey !== this._scopeKey) {
       this.el.querySelector("[data-ticker-viewport]").scrollLeft = 0
       this._scopeKey = this.el.dataset.scopeKey
@@ -148,6 +151,17 @@ export default {
     this._resize?.disconnect()
     for (const [target, name, callback, opts] of this._listeners) target.removeEventListener(name, callback, opts)
     this._listeners = []
+  },
+  _syncDetails() {
+    this._motion.interact("details", Boolean(this.el.querySelector("[data-role='ticker-video-details']")))
+  },
+  _detailsEvent({open, account_id}) {
+    this._syncDetails()
+    const target = open
+      ? this.el.querySelector("[data-role='ticker-video-details']")?.querySelector("[data-role='ticker-details-heading']")
+      : account_id ? this.el.querySelector(`#ticker-video-details-button-${account_id}`) : null
+    target?.focus({preventScroll: true})
+    this._reconcile()
   },
   _bind(target, name, callback, opts) {
     target.addEventListener(name, callback, opts)

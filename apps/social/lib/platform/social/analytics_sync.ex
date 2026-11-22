@@ -43,6 +43,7 @@ defmodule Platform.Social.AnalyticsSync do
       for org <- connected_orgs() do
         sync_org(org, opts)
         sync_followers(org, opts)
+        sync_publications(org, opts)
       end
 
       Process.send_after(self(), :sweep, Keyword.get(opts, :interval_ms, @interval))
@@ -50,6 +51,17 @@ defmodule Platform.Social.AnalyticsSync do
 
     if opts[:notify], do: send(opts[:notify], {:analytics_swept, self()})
     {:noreply, opts}
+  end
+
+  defp sync_publications(org_id, opts) do
+    Platform.Social.PublicationSync.step(org_id, opts)
+  rescue
+    error ->
+      Logger.error(
+        "[Social.AnalyticsSync] publication_step_failed exception=#{inspect(error.__struct__)}"
+      )
+
+      {:error, :exception}
   end
 
   # Only unexpected exceptions from the new follower transaction are isolated.

@@ -79,6 +79,7 @@ defmodule PlatformWeb.SocialLive do
       |> assign(:notice, nil)
       |> assign(:notice_tone, :info)
       |> assign(:ticker_rows, [])
+      |> assign(:ticker_details_account_id, nil)
       |> assign(:ticker_wikipedia, nil)
       |> assign(:create_open?, false)
       |> SocialCreateProfile.assign_creatable(SocialCreateProfile.creatable_orgs(user))
@@ -176,6 +177,12 @@ defmodule PlatformWeb.SocialLive do
 
   def handle_event("select_tab", %{"tab" => tab}, socket),
     do: {:noreply, SocialScope.select_tab(socket, tab)}
+
+  def handle_event("ticker_video_details", params, socket),
+    do: {:noreply, PlatformWeb.SocialAccountTicker.open_details(socket, params["account_id"])}
+
+  def handle_event("ticker_video_details_close", _params, socket),
+    do: {:noreply, PlatformWeb.SocialAccountTicker.close_details(socket)}
 
   def handle_event("ticker_wikipedia", _params, socket) do
     if PlatformWeb.SocialAccountTicker.visible_wikipedia(socket.assigns) do

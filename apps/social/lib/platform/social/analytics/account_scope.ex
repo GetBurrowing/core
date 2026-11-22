@@ -11,8 +11,14 @@ defmodule Platform.Social.Analytics.AccountScope do
   import Ecto.Query
   alias Platform.Social.Publisher
 
+  @doc "The same current provider namespace check for a previously loaded account."
+  def zernio_account?(%{provider: provider}),
+    do: provider == "zernio" or (is_nil(provider) and zernio_configured?())
+
+  defp zernio_configured?, do: Publisher.impl() == Platform.Social.Publisher.Zernio
+
   def provider_filter do
-    untagged_zernio? = Publisher.impl() == Platform.Social.Publisher.Zernio
+    untagged_zernio? = zernio_configured?()
 
     dynamic(
       [analytics_account: account],

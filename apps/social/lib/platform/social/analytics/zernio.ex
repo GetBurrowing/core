@@ -103,6 +103,154 @@ defmodule Platform.Social.Analytics.Zernio do
     end
   end
 
+  @doc "Read one bounded YouTube publication-list page; vendor URLs are observations only."
+  def publications(account_ref, opts \\ []) do
+    start = opts[:from_date]
+    finish = opts[:to_date]
+    profile_ref = opts[:profile_ref]
+    cursor = opts[:cursor]
+
+    if nonblank?(account_ref) and nonblank?(profile_ref) and
+         match?(%Date{}, start) and match?(%Date{}, finish) and
+         Date.diff(finish, start) in 0..29 and (is_nil(cursor) or nonblank?(cursor)) do
+      params = [
+        accountId: account_ref,
+        fromDate: Date.to_iso8601(start),
+        toDate: Date.to_iso8601(finish),
+        sort: "published-desc",
+        limit: 50,
+        origin: "all"
+      ]
+
+      params = if is_nil(cursor), do: params, else: params ++ [cursor: cursor]
+
+      case get("/v1/metrics/posts", params,
+             redirect: false,
+             connect_options: [timeout: 5_000],
+             receive_timeout: 15_000
+           ) do
+        {:ok, body} ->
+          decode_publications(body, account_ref, profile_ref, start, finish, cursor)
+
+        {:error, {:retry_after, status, seconds}} ->
+          {:error, {:retry_after, status, Platform.Social.Analytics.Backoff.delay(seconds)}}
+
+        error ->
+          error
+      end
+    else
+      {:error, :invalid_request}
+    end
+  end
+
+  defp decode_publications(
+         %{
+           "data" => data,
+           "pagination" => %{"hasMore" => more, "nextCursor" => next},
+           "meta" => %{
+             "fromDate" => from,
+             "toDate" => to,
+             "stale" => stale,
+             "missingIds" => missing,
+             "staleSince" => stale_since_value
+           }
+         },
+         account_ref,
+         profile_ref,
+         start,
+         finish,
+         cursor
+       )
+       when is_list(data) and is_boolean(more) do
+    with true <- from == Date.to_iso8601(start) and to == Date.to_iso8601(finish),
+         true <- publication_pagination?(more, next, cursor),
+         true <- is_boolean(stale),
+         true <- is_list(missing) and Enum.all?(missing, &is_binary/1),
+         true <- is_nil(stale_since_value) or is_binary(stale_since_value),
+         {:ok, rows} <-
+           decode_all(data, &publication_row(&1, account_ref, profile_ref, start, finish)) do
+      {:ok,
+       %{
+         data: rows,
+         has_more: more,
+         next_cursor: next,
+         stale: stale,
+         stale_since: stale_since_value,
+         missing_ids: missing
+       }}
+    else
+      _ -> {:error, :invalid_response}
+    end
+  end
+
+  defp decode_publications(_, _, _, _, _, _), do: {:error, :invalid_response}
+  defp publication_pagination?(false, nil, _), do: true
+  defp publication_pagination?(true, next, cursor), do: nonblank?(next) and next != cursor
+  defp publication_pagination?(_, _, _), do: false
+
+  defp publication_row(
+         %{
+           "accountId" => account_ref,
+           "profileId" => profile_ref,
+           "platform" => "youtube",
+           "platformPostId" => native_id
+         } = row,
+         account_ref,
+         profile_ref,
+         start,
+         finish
+       )
+       when is_binary(native_id) do
+    with true <- Regex.match?(~r/\A[A-Za-z0-9_-]{11}\z/, native_id),
+         true <- is_nil(row["externalPostId"]) or nonblank?(row["externalPostId"]),
+         true <- is_nil(row["platformPostUrl"]) or is_binary(row["platformPostUrl"]),
+         true <- is_nil(row["syncStatus"]) or nonblank?(row["syncStatus"]),
+         true <- is_nil(row["isOwner"]) or is_boolean(row["isOwner"]),
+         true <- is_nil(row["isAd"]) or is_boolean(row["isAd"]),
+         true <- is_nil(row["metrics"]) or is_map(row["metrics"]),
+         {:ok, published} <- nullable_timestamp(row["publishedAt"]),
+         true <- publication_in_window?(published, start, finish),
+         {:ok, synced} <- nullable_timestamp(row["lastSyncedAt"]) do
+      metrics = row["metrics"] || %{}
+
+      metrics =
+        for {key, value} <- Map.take(metrics, @metric_keys),
+            is_nil(value) or (is_integer(value) and value >= 0),
+            into: %{},
+            do: {key, value}
+
+      {:ok,
+       %{
+         account_ref: account_ref,
+         profile_ref: profile_ref,
+         platform: "youtube",
+         native_id: native_id,
+         external_id: row["externalPostId"],
+         published_at: published,
+         vendor_synced_at: synced,
+         sync_status: row["syncStatus"],
+         metrics: metrics,
+         is_owner: row["isOwner"],
+         is_ad: row["isAd"],
+         vendor_url: row["platformPostUrl"]
+       }}
+    else
+      _ -> {:error, :invalid_response}
+    end
+  end
+
+  defp publication_row(_, _, _, _, _), do: {:error, :invalid_response}
+  defp publication_in_window?(nil, _, _), do: true
+
+  defp publication_in_window?(at, start, finish) do
+    day = DateTime.to_date(at)
+    Date.compare(day, start) != :lt and Date.compare(day, finish) != :gt
+  end
+
+  defp nullable_timestamp(nil), do: {:ok, nil}
+  defp nullable_timestamp(value), do: timestamp(value)
+  defp nonblank?(value), do: is_binary(value) and String.trim(value) != ""
+
   defp decode_followers(
          %{
            "data" => data,
