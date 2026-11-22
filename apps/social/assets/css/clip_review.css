@@ -76,6 +76,7 @@
    Only the canonical set participates in keyboard and assistive navigation. */
 .social-account-ticker { display: flex; align-items: stretch; min-width: 0; }
 .social-ticker-viewport { min-width: 0; flex: 1; }
+.social-wiki-viewport { min-width: 120px; flex: 1 1 120px; }
 .social-ticker-controls { display: flex; align-items: center; flex-shrink: 0; padding-inline: 0.125rem; border-inline-start: 1px solid color-mix(in oklab, var(--color-base-content) 15%, transparent); }
 .social-ticker-entry {
   display: flex;

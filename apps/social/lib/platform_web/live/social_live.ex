@@ -79,6 +79,7 @@ defmodule PlatformWeb.SocialLive do
       |> assign(:notice, nil)
       |> assign(:notice_tone, :info)
       |> assign(:ticker_rows, [])
+      |> assign(:ticker_wikipedia, nil)
       |> assign(:create_open?, false)
       |> SocialCreateProfile.assign_creatable(SocialCreateProfile.creatable_orgs(user))
       |> SocialScope.assign_profiles(profiles)
@@ -173,6 +174,19 @@ defmodule PlatformWeb.SocialLive do
   def handle_event("select_tab", %{"tab" => tab}, socket),
     do: {:noreply, SocialScope.select_tab(socket, tab)}
 
+  def handle_event("ticker_wikipedia", _params, socket) do
+    if PlatformWeb.SocialAccountTicker.visible_wikipedia(socket.assigns) do
+      {:noreply,
+       socket
+       |> SocialScope.select_all()
+       |> SocialScope.select_tab("today")
+       |> assign(:studio_trend_filter, "all")
+       |> push_event("social:focus_trends", %{})}
+    else
+      {:noreply, assign(socket, :ticker_wikipedia, nil)}
+    end
+  end
+
   # The health dot: Connections on the first affected profile, which must
   # be among the profiles visible NOW.
   def handle_event("health_open", %{"profile_id" => id}, socket) do
@@ -258,6 +272,13 @@ defmodule PlatformWeb.SocialLive do
     assigns = assign_views(assigns)
     assigns = assign(assigns, :ticker_rows, PlatformWeb.SocialAccountTicker.visible_rows(assigns))
 
+    assigns =
+      assign(
+        assigns,
+        :ticker_wikipedia,
+        PlatformWeb.SocialAccountTicker.visible_wikipedia(assigns)
+      )
+
     ~H"""
     <div class="flex h-full min-h-0 flex-col" data-role="social-tab">
       <%= cond do %>
@@ -278,6 +299,7 @@ defmodule PlatformWeb.SocialLive do
             tab={@tab}
             tab_items={@tab_items}
             ticker_rows={@ticker_rows}
+            ticker_wikipedia={@ticker_wikipedia}
           />
           <section
             class="min-h-0 flex-1 overflow-y-auto px-4 pt-4 pb-[calc(env(safe-area-inset-bottom)+var(--bottom-nav-height,0px)+var(--bottom-nav-gap,0px)+1rem)] sm:px-6"

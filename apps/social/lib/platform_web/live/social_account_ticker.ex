@@ -8,7 +8,28 @@ defmodule PlatformWeb.SocialAccountTicker do
   @doc "Refresh the metric slice without touching tabs, streams or an open editor."
   def load(socket) do
     ids = scoped_ids(socket.assigns)
-    assign(socket, :ticker_rows, AccountTicker.rows(SocialHelpers.fresh_user(socket), ids))
+
+    socket
+    |> assign(:ticker_rows, AccountTicker.rows(SocialHelpers.fresh_user(socket), ids))
+    |> assign(:ticker_wikipedia, wikipedia_snapshot(socket.assigns))
+  end
+
+  defp wikipedia_allowed?(assigns) do
+    config = Application.get_env(:social, :trends, [])
+    user = SocialHelpers.fresh_user(%{assigns: assigns})
+
+    Keyword.get(config, :enabled, false) == true and SocialHelpers.human?(user) and
+      Enum.any?(SocialScope.visible_profiles(%{assigns: assigns}), fn profile ->
+        profile.studio_enabled and Social.Studio.require_social_use(user.id, profile) == :ok
+      end)
+  end
+
+  defp wikipedia_snapshot(assigns) do
+    if wikipedia_allowed?(assigns), do: Social.Trends.latest("wikimedia_pageviews").current
+  end
+
+  def visible_wikipedia(assigns) do
+    if wikipedia_allowed?(assigns), do: Map.get(assigns, :ticker_wikipedia)
   end
 
   # Render-time authorization only filters the cached metrics; it does not
@@ -47,6 +68,7 @@ defmodule PlatformWeb.SocialAccountTicker do
 
   attr :rows, :list, required: true
   attr :scope, :any, required: true
+  attr :wikipedia, :any, default: nil
 
   def strip(assigns) do
     assigns =
@@ -68,20 +90,70 @@ defmodule PlatformWeb.SocialAccountTicker do
       data-role="social-account-ticker"
       data-scope-key={@scope_key}
       class="social-account-ticker mt-3 rounded-lg border border-base-content/25 bg-base-100 text-sm"
-      aria-label="Account performance"
+      aria-label={
+        if @wikipedia && @wikipedia.items != [],
+          do: "Account performance and Wikipedia trends",
+          else: "Account performance"
+      }
     >
-      <div
-        data-ticker-viewport
-        tabindex="0"
-        aria-label="Account performance, scroll horizontally"
-        class="social-ticker-viewport overflow-x-auto overscroll-x-contain"
-      >
-        <div class="flex w-max" data-ticker-track>
-          <div data-ticker-original class="flex shrink-0">
-            <.entries rows={@rows} all?={@scope == :all} copy?={false} />
+      <div class="min-w-0 flex-1">
+        <div
+          data-ticker-viewport
+          tabindex="0"
+          aria-label="Account performance, scroll horizontally"
+          class="social-ticker-viewport overflow-x-auto overscroll-x-contain"
+        >
+          <div class="flex w-max" data-ticker-track>
+            <div data-ticker-original class="flex shrink-0">
+              <.entries rows={@rows} all?={@scope == :all} copy?={false} />
+            </div>
+            <div data-ticker-copy aria-hidden="true" class="social-ticker-copy flex shrink-0">
+              <.entries rows={@rows} all?={@scope == :all} copy?={true} />
+            </div>
           </div>
-          <div data-ticker-copy aria-hidden="true" class="social-ticker-copy flex shrink-0">
-            <.entries rows={@rows} all?={@scope == :all} copy?={true} />
+        </div>
+        <div
+          :if={@wikipedia && @wikipedia.items != []}
+          data-role="ticker-wikipedia"
+          class="flex min-w-0 flex-wrap items-center border-t border-base-content/25"
+        >
+          <span
+            data-role="ticker-wiki-label"
+            class="shrink-0 border-e border-base-content/25 px-3 text-sm font-semibold"
+          >
+            <span class="sr-only">
+              Trending on Wikipedia<span :if={PlatformWeb.SocialTodayTab.stale_trends?(@wikipedia)}> · {Calendar.strftime(@wikipedia.reporting_date, "%d %b")}</span>
+            </span>
+            <span
+              data-role="ticker-wiki-label-mobile"
+              aria-hidden="true"
+              class="whitespace-nowrap sm:hidden"
+            >
+              <span class="font-serif">W</span> · Wikipedia
+            </span>
+            <span
+              data-role="ticker-wiki-label-desktop"
+              aria-hidden="true"
+              class="hidden whitespace-nowrap sm:inline"
+            >
+              <span class="font-serif">W</span>
+              · Trending on Wikipedia<span :if={PlatformWeb.SocialTodayTab.stale_trends?(@wikipedia)}> · {Calendar.strftime(@wikipedia.reporting_date, "%d %b")}</span>
+            </span>
+          </span>
+          <div
+            data-wiki-viewport
+            tabindex="0"
+            aria-label="Trending on Wikipedia, scroll horizontally"
+            class="social-ticker-viewport social-wiki-viewport overflow-x-auto overscroll-x-contain"
+          >
+            <div class="flex w-max">
+              <div data-wiki-original class="flex shrink-0">
+                <.wikipedia_entries snapshot={@wikipedia} copy?={false} />
+              </div>
+              <div data-wiki-copy aria-hidden="true" class="social-ticker-copy flex shrink-0">
+                <.wikipedia_entries snapshot={@wikipedia} copy?={true} />
+              </div>
+            </div>
           </div>
         </div>
       </div>
@@ -97,6 +169,24 @@ defmodule PlatformWeb.SocialAccountTicker do
         </button>
       </div>
     </section>
+    """
+  end
+
+  attr :snapshot, :map, required: true
+  attr :copy?, :boolean, required: true
+
+  defp wikipedia_entries(assigns) do
+    ~H"""
+    <button
+      :for={{item, position} <- @snapshot.items |> Enum.take(10) |> Enum.with_index(1)}
+      type="button"
+      phx-click="ticker_wikipedia"
+      tabindex={if @copy?, do: "-1"}
+      data-role="ticker-wiki-entry"
+      class="social-ticker-entry"
+    >
+      {position} · {item.title}
+    </button>
     """
   end
 
