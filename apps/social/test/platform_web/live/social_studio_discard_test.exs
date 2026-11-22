@@ -38,6 +38,7 @@ defmodule PlatformWeb.SocialStudioDiscardTest do
     for {post, platform} <- [{ig_post, "Instagram"}, {yt_post, "YouTube"}] do
       row = "[data-role='studio-discarded'][data-post-id='#{post.id}']"
       assert has_element?(view, row <> " [data-role='studio-recovery-title']", "Same caption.")
+      refute has_element?(view, row <> " [data-role='studio-recovery-title']", "More detail.")
 
       assert has_element?(
                view,
