@@ -313,6 +313,7 @@ defmodule PlatformWeb.SocialCalendarTab do
 
       %{
         post: post,
+        queue_url: Social.PostPresentation.url(post, profile, {:user, user_id}),
         profile: profile,
         account: account,
         at: Clock.local(utc, zone),
@@ -640,7 +641,7 @@ defmodule PlatformWeb.SocialCalendarTab do
         </button>
         <a
           :if={@detail.can_approve? and @detail.state == :missed}
-          href={Approvals.queue_url(@detail.post, @detail.profile)}
+          href={@detail.queue_url}
           class="link mt-3 inline-block text-sm"
           data-role="calendar-choose-time"
         >

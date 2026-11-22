@@ -106,9 +106,13 @@ const QueueSwipe = {
     this.el.addEventListener("keydown", this.onKey)
 
     const card = this.el.closest && this.el.closest("[data-deep-link='true']")
-    if (card && !isPhone() && typeof card.scrollIntoView === "function") {
-      card.scrollIntoView({ block: "start" })
+    if (card) {
+      this.go(this.index, "auto")
+      if (typeof card.scrollIntoView === "function") card.scrollIntoView({ block: "start" })
+      const heading = card.querySelector && card.querySelector("[data-role='queue-title']")
+      if (heading && typeof heading.focus === "function") heading.focus({ preventScroll: true })
     }
+
   },
 
   updated() {
@@ -148,10 +152,10 @@ const QueueSwipe = {
     this.pushEventTo(this.el, "q_version", { index: i })
   },
 
-  go(i) {
+  go(i, behavior = "smooth") {
     const col = this.el.children && this.el.children[i]
     if (col && typeof col.scrollIntoView === "function") {
-      col.scrollIntoView({ behavior: "smooth", block: "nearest", inline: "start" })
+      col.scrollIntoView({ behavior, block: "nearest", inline: "start" })
     } else if (typeof this.el.scrollTo === "function") {
       this.el.scrollTo({ left: i * this.el.clientWidth, behavior: "smooth" })
     }

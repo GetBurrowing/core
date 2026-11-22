@@ -187,8 +187,8 @@ defmodule Platform.Social.Approvals do
     with {:ok, space_id, participant} <- card_sender(post, profile, account),
          {:ok, canvas, message} <-
            Chat.create_canvas_with_message(space_id, participant.id, %{
-             title: "Post approval",
-             message_content: "A post is waiting for a human approval.",
+             title: approval_message(profile, account),
+             message_content: approval_message(profile, account),
              document: card_document(card_id, 1)
            }),
          {:ok, card} <-
@@ -242,8 +242,6 @@ defmodule Platform.Social.Approvals do
   defp approval_candidates(%Account{owner_user_id: owner_id}, _profile), do: [owner_id]
 
   defp fan_out(post, profile, account, card, canvas, _message) do
-    url = queue_url(post, profile)
-
     {reachable, unreachable} =
       account
       |> approval_candidates(profile)
@@ -262,9 +260,9 @@ defmodule Platform.Social.Approvals do
           kind: @kind,
           source_type: @source_type,
           source_id: post.id,
-          title: "Post for #{profile.name} needs your approval",
-          body: "#{String.upcase(platform_label(account.platform))} · #{schedule_text(post)}",
-          url: url
+          title: approval_message(profile, account),
+          body: "#{platform_label(account.platform)} · #{profile.name} · #{schedule_text(post)}",
+          url: Platform.Social.PostPresentation.url(post, profile, {:user, user_id})
         })
     end
 
@@ -286,12 +284,8 @@ defmodule Platform.Social.Approvals do
   """
   @spec queue_url(Post.t(), Social.Profile.t()) :: String.t()
   def queue_url(%Post{} = post, profile) do
-    "/m/social?" <>
-      URI.encode_query([
-        {"profile", profile.id},
-        {"tab", "queue"},
-        {"idea", post.idea_id || post.id}
-      ])
+    query = [{"profile", profile.id}, {"tab", "queue"}, {"idea", post.idea_id || post.id}]
+    "/m/social?" <> URI.encode_query(query)
   end
 
   # ── Where the card goes (task 01a14ce1, stage 3) ──────────────────────
@@ -887,7 +881,7 @@ defmodule Platform.Social.Approvals do
   :approver` only.
   """
   @spec card_view(term(), term()) :: map()
-  def card_view(card_id, viewer) do
+  def card_view(card_id, viewer, context \\ nil) do
     with {:ok, card_id} <- Ecto.UUID.cast(card_id),
          %ApprovalCard{} = card <- Repo.get(ApprovalCard, card_id),
          %Post{} = post <- Repo.get(Post, card.post_id),
@@ -909,22 +903,36 @@ defmodule Platform.Social.Approvals do
         refusal: refusal(post, account, profile)
       }
 
-      case viewer_role(viewer, profile, account) do
-        :approver ->
-          base
-          |> Map.merge(approver_view(card, post, account, profile))
-          |> Map.put(:posts_as, posts_as(viewer, profile, account))
-          |> Map.update!(:refusal, &refusal_action(&1, viewer, profile))
+      context =
+        case context do
+          %{viewer: ^viewer} -> context
+          _ -> Platform.Social.PostPresentation.authorize(viewer, [profile.id])
+        end
 
-        :rejecter ->
-          Map.merge(base, rejecter_view(card, post, account, profile))
+      presentation = Platform.Social.PostPresentation.describe(post, account, context) || %{}
+      base = Map.merge(base, presentation)
 
-        :waiting ->
-          Map.merge(base, waiting_view(card, post, account, profile))
+      view =
+        case viewer_role(viewer, profile, account) do
+          :approver ->
+            base
+            |> Map.merge(approver_view(card, post, account, profile))
+            |> Map.put(:posts_as, posts_as(viewer, profile, account))
+            |> Map.update!(:refusal, &refusal_action(&1, viewer, profile))
 
-        :viewer ->
-          Map.put(base, :role, :viewer)
-      end
+          :rejecter ->
+            Map.merge(base, rejecter_view(card, post, account, profile))
+
+          :waiting ->
+            Map.merge(base, waiting_view(card, post, account, profile))
+
+          :viewer ->
+            Map.put(base, :role, :viewer)
+        end
+
+      if Map.has_key?(view, :queue_url) and presentation[:post_url],
+        do: Map.put(view, :queue_url, presentation.post_url),
+        else: view
     else
       _ ->
         %{
@@ -1270,6 +1278,9 @@ defmodule Platform.Social.Approvals do
 
   defp publishing_text(%Post{scheduled_at: %DateTime{} = at}), do: when_text(at)
   defp publishing_text(_), do: "now"
+
+  defp approval_message(profile, account),
+    do: "Needs approval: #{platform_label(account.platform)} post for #{profile.name}"
 
   defp schedule_text(%Post{scheduled_at: %DateTime{} = at}), do: when_text(at)
   defp schedule_text(_), do: "not scheduled"

@@ -46,12 +46,34 @@ defmodule PlatformWeb.SocialTodayTab do
   def load(socket) do
     profiles = visible_scope_profiles(socket)
 
+    accounts_by_profile =
+      Map.new(profiles, fn profile ->
+        {profile.id,
+         Social.list_accounts(profile.org_id, profile_id: profile.id, include_archived: true)}
+      end)
+
+    accounts_by_id =
+      accounts_by_profile |> Map.values() |> List.flatten() |> Map.new(&{&1.id, &1})
+
     posts =
       profiles
       |> Enum.flat_map(fn profile ->
         case Studio.list_posts(profile.org_id, profile.id) do
-          {:ok, posts} -> Enum.map(posts, &%{post: &1, profile: profile, agent_drafted: false})
-          _ -> []
+          {:ok, posts} ->
+            for post <- posts,
+                account = Map.get(accounts_by_id, post.account_id),
+                not is_nil(account) do
+              %{
+                post: post,
+                profile: profile,
+                account: account,
+                title: Platform.Social.PostPresentation.title(post, account),
+                agent_drafted: false
+              }
+            end
+
+          _ ->
+            []
         end
       end)
       |> mark_agent_drafted()
@@ -60,8 +82,9 @@ defmodule PlatformWeb.SocialTodayTab do
 
     goals =
       Enum.flat_map(profiles, fn profile ->
-        profile.org_id
-        |> Social.list_accounts(profile_id: profile.id)
+        accounts_by_profile
+        |> Map.fetch!(profile.id)
+        |> Enum.reject(& &1.archived_at)
         |> Enum.flat_map(fn account ->
           case Social.Results.weekly_progress(account) do
             nil -> []
@@ -1002,8 +1025,15 @@ defmodule PlatformWeb.SocialTodayTab do
                 </video>
               </span>
               <span class="min-w-0 space-y-1">
-                <span class="line-clamp-3">{item.post.body || "Untitled post"}</span>
-                <span class="block text-sm text-subtle">{item.profile.name}</span>
+                <span
+                  data-role="studio-post-title"
+                  class="block break-words font-semibold leading-snug"
+                >
+                  {item.title}
+                </span>
+                <span data-role="studio-post-context" class="block text-sm text-subtle">
+                  {Platform.Social.Approvals.platform_label(item.account.platform)} · {item.account.handle} · {item.profile.name}
+                </span>
                 <span
                   :if={item.agent_drafted}
                   class="block text-sm text-subtle"

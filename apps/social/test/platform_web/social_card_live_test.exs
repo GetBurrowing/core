@@ -41,6 +41,56 @@ defmodule PlatformWeb.SocialCardLiveTest do
     with_target(view, "##{id}")
   end
 
+  test "a non-approving profile reader gets visibly actionable exact-post links", ctx do
+    ctx = with_ideas_runtime(ctx)
+    view = open(ctx.n, ctx)
+
+    assert has_element?(
+             view,
+             in_card(ctx.card, "a[data-role='social-card-title']"),
+             "Episode 12 is live"
+           )
+
+    assert has_element?(
+             view,
+             in_card(ctx.card, "a[data-role='social-card-open']"),
+             "Open in Queue"
+           )
+
+    assert has_element?(view, in_card(ctx.card, "[data-role='social-card-context']"), "LinkedIn")
+    refute has_element?(view, in_card(ctx.card, "[data-role='social-card-approve']"))
+    assert Fake.calls(:publish) == []
+  end
+
+  test "card component events refresh a rendered reader's title access after revocation", ctx do
+    ctx = with_ideas_runtime(ctx)
+    view = open(ctx.n, ctx)
+
+    assert has_element?(
+             view,
+             in_card(ctx.card, "[data-role='social-card-title']"),
+             "Episode 12 is live"
+           )
+
+    before = Repo.get!(Post, ctx.post.id)
+
+    {:ok, _} =
+      Platform.Access.Grants.deny(%{
+        principal: {:user, ctx.n.id},
+        permission: "social.use",
+        resource: {:project, ctx.profile.project_id}
+      })
+
+    render_click(component(view, ctx.card), "social_card_edit_open", %{})
+    refute has_element?(view, in_card(ctx.card, "[data-role='social-card-title']"))
+    refute has_element?(view, in_card(ctx.card, "[data-role='social-card-open']"))
+    refute has_element?(view, in_card(ctx.card, "[data-role='social-card-editor']"))
+    refute has_element?(view, in_card(ctx.card, "[data-role='social-card-preview']"))
+    refute has_element?(view, in_card(ctx.card, "[data-role='social-card-approve']"))
+    assert Repo.get!(Post, ctx.post.id) == before
+    assert Fake.calls(:publish) == []
+  end
+
   test "an approver's Approve publishes once through the Fake", ctx do
     view = open(ctx.h1, ctx)
     assert has_element?(view, in_card(ctx.card, "[data-role='social-card-preview']"))
@@ -90,11 +140,15 @@ defmodule PlatformWeb.SocialCardLiveTest do
     assert length(Fake.calls(:publish)) == 1
   end
 
-  test "a non-approver human sees the status line with no buttons, text or media", ctx do
+  test "a project-less non-approver keeps the minimal card without title, preview, actions or media",
+       ctx do
     file = media_file!(ctx.org_id, "image/png")
 
     {_post, card} =
-      pending_post!(ctx, ctx.a, %{body: "SECRET_PREVIEW_TEXT", media_file_ids: [file.id]})
+      pending_post!(ctx, ctx.a, %{
+        body: "Readable title\nSECRET_PREVIEW_TEXT",
+        media_file_ids: [file.id]
+      })
 
     view = open(ctx.n, ctx, card)
 
@@ -105,6 +159,7 @@ defmodule PlatformWeb.SocialCardLiveTest do
     refute has_element?(view, in_card(card, "video"))
     refute has_element?(view, in_card(card, "[data-role='social-card-preview']"))
     refute render(view) =~ "SECRET_PREVIEW_TEXT"
+    refute has_element?(view, in_card(card, "[data-role='social-card-title']"))
   end
 
   test "an agent's view has no buttons, text or media", ctx do

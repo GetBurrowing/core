@@ -129,13 +129,16 @@ defmodule PlatformWeb.SocialCardComponent do
   # ── Events ────────────────────────────────────────────────────────────
 
   @impl true
-  def handle_event("social_card_approve", params, socket) do
+  def handle_event(event, params, socket),
+    do: handle_current_event(event, params, refresh(socket))
+
+  defp handle_current_event("social_card_approve", params, socket) do
     with_clicker(socket, fn user ->
       Approvals.decide_approve(params["canvas-id"], user, params["fingerprint"])
     end)
   end
 
-  def handle_event("social_card_edit_open", _params, socket) do
+  defp handle_current_event("social_card_edit_open", _params, socket) do
     if :edit in Map.get(socket.assigns.view, :actions, []) do
       {:noreply, assign(socket, mode: :edit, edit_text: socket.assigns.view.body)}
     else
@@ -143,10 +146,10 @@ defmodule PlatformWeb.SocialCardComponent do
     end
   end
 
-  def handle_event("social_card_edit_cancel", _params, socket),
+  defp handle_current_event("social_card_edit_cancel", _params, socket),
     do: {:noreply, assign(socket, mode: nil, edit_text: nil)}
 
-  def handle_event("social_card_edit_save", params, socket) do
+  defp handle_current_event("social_card_edit_save", params, socket) do
     with_clicker(socket, fn user ->
       Approvals.decide_edit(
         params["canvas-id"],
@@ -157,19 +160,19 @@ defmodule PlatformWeb.SocialCardComponent do
     end)
   end
 
-  def handle_event("social_card_reject_open", _params, socket) do
+  defp handle_current_event("social_card_reject_open", _params, socket) do
     if :reject in Map.get(socket.assigns.view, :actions, []),
       do: {:noreply, assign(socket, mode: :reject, reject_text: "")},
       else: {:noreply, socket}
   end
 
-  def handle_event("social_card_reject_change", params, socket),
+  defp handle_current_event("social_card_reject_change", params, socket),
     do: {:noreply, assign(socket, reject_text: params["reason"] || "")}
 
-  def handle_event("social_card_reject_cancel", _params, socket),
+  defp handle_current_event("social_card_reject_cancel", _params, socket),
     do: {:noreply, assign(socket, mode: nil, reject_text: "")}
 
-  def handle_event("social_card_reject_submit", params, socket) do
+  defp handle_current_event("social_card_reject_submit", params, socket) do
     with_clicker(socket, fn user ->
       Approvals.decide_reject(params["canvas-id"], user, params["reason"], params["fingerprint"])
     end)
@@ -178,7 +181,7 @@ defmodule PlatformWeb.SocialCardComponent do
   # Task 01a165f1: Retry publish / Publish now on a refused approved post,
   # as the clicker re-read from the database now. retry_publish/3 re-checks
   # the approver rule and the rate limit; the button is only a hint.
-  def handle_event("social_card_retry_publish", _params, socket) do
+  defp handle_current_event("social_card_retry_publish", _params, socket) do
     user =
       case socket.assigns.viewer do
         {:user, id} -> Platform.Accounts.get_user(id)
@@ -238,6 +241,27 @@ defmodule PlatformWeb.SocialCardComponent do
       class="w-full max-w-xl space-y-3 rounded-xl border border-edge bg-base-100 p-3 text-sm text-base-content sm:p-4"
     >
       <.status_header view={@view} />
+
+      <div
+        :if={@view[:title]}
+        class="flex flex-wrap items-center justify-between gap-x-3"
+        data-role="social-card-identity"
+      >
+        <p data-role="social-card-context" class="min-w-0 break-words text-sm text-subtle">
+          {Enum.filter(
+            [@view.platform_label, @view.handle, @view.profile_name],
+            &(is_binary(&1) and String.trim(&1) != "")
+          )
+          |> Enum.join(" · ")}
+        </p>
+        <a
+          href={@view.post_url}
+          data-role="social-card-open"
+          class="link inline-flex min-h-11 items-center text-sm"
+        >
+          {@view.post_link_label} →
+        </a>
+      </div>
 
       <p
         :if={@view[:posts_as]}
@@ -368,8 +392,23 @@ defmodule PlatformWeb.SocialCardComponent do
           </span>
         <% end %>
       <% end %>
-      <span :if={@view[:profile_name]} class="text-sm font-semibold">{@view.profile_name}</span>
-      <span :if={@view[:handle]} class="text-sm text-subtle">{@view.handle}</span>
+      <a
+        :if={@view[:title]}
+        href={@view.post_url}
+        data-role="social-card-title"
+        class="link min-w-0 flex-1 break-words text-base font-semibold leading-snug"
+      >
+        {@view.title}
+      </a>
+      <span :if={is_nil(@view[:title]) and @view[:platform_label]} class="text-sm">
+        {@view.platform_label}
+      </span>
+      <span :if={is_nil(@view[:title]) and @view[:profile_name]} class="text-sm font-semibold">
+        {@view.profile_name}
+      </span>
+      <span :if={is_nil(@view[:title]) and @view[:handle]} class="text-sm text-subtle">
+        {@view.handle}
+      </span>
       <span
         :if={@view[:found]}
         data-role="social-card-time"

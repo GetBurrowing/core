@@ -38,6 +38,359 @@ defmodule PlatformWeb.SocialLiveQueueTest do
     Map.merge(ctx, %{x: x, ig: ig})
   end
 
+  test "exact post link selects the second platform version rather than version zero",
+       %{conn: conn} = ctx do
+    {idea, [_first, second | _]} = three!(ctx)
+
+    child =
+      open(
+        conn,
+        ctx.n,
+        Platform.Social.PostPresentation.url(second, ctx.profile, {:user, ctx.n.id})
+      )
+
+    assert has_element?(child, "[data-role='queue-versions'][data-current='1']")
+    assert has_element?(child, "[data-role='queue-title']", idea.title)
+
+    child
+    |> element("#queue-card-idea-#{idea.id}-strip")
+    |> render_hook("q_version", %{"index" => 0})
+
+    assert has_element?(child, "[data-role='queue-versions'][data-current='0']")
+    render_click(child, "select_tab", %{"tab" => "queue"})
+    assert has_element?(child, "[data-role='queue-versions'][data-current='0']")
+    assert Fake.calls(:publish) == []
+  end
+
+  test "authorized rejected and untimed posts have explicit detail instead of unrelated Queue",
+       %{conn: conn} = ctx do
+    pending_post!(ctx, ctx.x, %{body: "Another waiting post"})
+    {post, card} = pending_post!(ctx, ctx.a, %{body: "A draft outside Queue"})
+
+    assert {:ok, _} =
+             Approvals.decide_reject(
+               card.canvas_id,
+               ctx.h1,
+               "Please revise",
+               Approvals.fingerprint(post)
+             )
+
+    child =
+      open(
+        conn,
+        ctx.h1,
+        Platform.Social.PostPresentation.url(post, ctx.profile, {:user, ctx.h1.id})
+      )
+
+    assert has_element?(child, "[data-role='queue-target-notice']", "no longer awaiting approval")
+    assert has_element?(child, "[data-role='queue-target-details']", "A draft outside Queue")
+    refute has_element?(child, "[data-role='queue-target-details'] button")
+    refute has_element?(child, "#social-queue [data-role='queue-idea']")
+    assert has_element?(child, "[data-role='queue-browse']")
+    assert Fake.calls(:publish) == []
+  end
+
+  test "missing and forbidden post links give the same useful unavailable feedback",
+       %{conn: conn} = ctx do
+    {_idea, [post | _]} = three!(ctx)
+
+    {:ok, _} =
+      Platform.Access.Grants.deny(%{
+        principal: {:user, ctx.n.id},
+        permission: "social.use",
+        resource: {:project, ctx.profile.project_id}
+      })
+
+    for id <- [post.id, Platform.Types.UUIDv7.generate(), "bad-id"] do
+      child = open(conn, ctx.n, "/m/social?profile=#{ctx.profile.id}&tab=queue&post=#{id}")
+
+      assert has_element?(
+               child,
+               "[data-role='queue-target-notice']",
+               "This post is unavailable or you no longer have access."
+             )
+
+      refute has_element?(child, "[data-role='queue-target-details']")
+      refute has_element?(child, "[data-role='queue-idea']")
+    end
+  end
+
+  test "a forged profile/post pair is unavailable even when both brands are visible",
+       %{conn: conn} = ctx do
+    {:ok, other} = Social.create_profile(ctx.org_id, %{name: "Other brand"})
+    {post, _} = pending_post!(ctx, ctx.a)
+
+    for profile_id <- [other.id, Platform.Types.UUIDv7.generate()] do
+      child = open(conn, ctx.n, "/m/social?profile=#{profile_id}&tab=queue&post=#{post.id}")
+
+      assert has_element?(
+               child,
+               "[data-role='queue-target-notice']",
+               "This post is unavailable or you no longer have access."
+             )
+
+      refute has_element?(child, "[data-role='queue-target-details']")
+    end
+  end
+
+  test "a rendered fallback loses caption access after revocation and a page refresh event",
+       %{conn: conn} = ctx do
+    {:ok, post} = Social.create_post(ctx.org_id, ctx.a, %{body: "Revocable fallback caption"})
+
+    child =
+      open(
+        conn,
+        ctx.n,
+        Platform.Social.PostPresentation.url(post, ctx.profile, {:user, ctx.h1.id})
+      )
+
+    assert has_element?(child, "[data-role='queue-target-details']", "Revocable fallback caption")
+
+    {:ok, _} =
+      Platform.Access.Grants.deny(%{
+        principal: {:user, ctx.n.id},
+        permission: "social.use",
+        resource: {:project, ctx.profile.project_id}
+      })
+
+    render_click(child, "select_tab", %{"tab" => "connections"})
+    render_click(child, "select_tab", %{"tab" => "queue"})
+    refute has_element?(child, "[data-role='queue-target-details']")
+
+    assert has_element?(
+             child,
+             "[data-role='queue-target-notice']",
+             "This post is unavailable or you no longer have access."
+           )
+
+    assert Fake.calls(:publish) == []
+  end
+
+  test "an exact post landing does not trap Next on its original group", %{conn: conn} = ctx do
+    {first, [post | _]} = three!(ctx)
+    {second, _} = three!(ctx)
+
+    child =
+      open(
+        conn,
+        ctx.n,
+        Platform.Social.PostPresentation.url(post, ctx.profile, {:user, ctx.h1.id})
+      )
+
+    assert has_element?(
+             child,
+             "[data-role='queue-idea'][data-idea='#{first.id}'][data-focused='true']"
+           )
+
+    render_click(child, "queue_focus", %{"dir" => "next"})
+
+    assert has_element?(
+             child,
+             "[data-role='queue-idea'][data-idea='#{second.id}'][data-focused='true']"
+           )
+  end
+
+  test "cold HTTP render never includes the caption for a denied exact target",
+       %{conn: conn} = ctx do
+    {post, _} = pending_post!(ctx, ctx.a, %{body: "EXACT-TARGET-PRIVATE-CAPTION"})
+
+    {:ok, _} =
+      Platform.Access.Grants.deny(%{
+        principal: {:user, ctx.n.id},
+        permission: "social.use",
+        resource: {:project, ctx.profile.project_id}
+      })
+
+    html =
+      conn
+      |> Plug.Test.init_test_session(current_user_id: ctx.n.id)
+      |> get(Platform.Social.PostPresentation.url(post, ctx.profile, {:user, ctx.h1.id}))
+      |> html_response(200)
+
+    assert html =~ "This post is unavailable or you no longer have access."
+    refute html =~ "EXACT-TARGET-PRIVATE-CAPTION"
+  end
+
+  test "authorized missing and mismatched exact targets are empty on cold and connected loads",
+       %{conn: conn} = ctx do
+    {_idea, [post | _]} = three!(ctx)
+
+    for {id, profile_id} <- [
+          {Ecto.UUID.generate(), ctx.profile.id},
+          {post.id, Ecto.UUID.generate()}
+        ] do
+      path = "/m/social?profile=#{profile_id}&tab=queue&post=#{id}"
+      child = open(conn, ctx.h1, path)
+
+      assert has_element?(
+               child,
+               "[data-role='queue-target-notice']",
+               "This post is unavailable or you no longer have access."
+             )
+
+      refute has_element?(child, "[data-role='social-queue-row']")
+      refute has_element?(child, "[data-role='queue-idea']")
+      refute has_element?(child, "[data-role='social-queue-pane'] [data-role='social-empty']")
+
+      assert has_element?(
+               child,
+               "[data-role='queue-browse'][href='/m/social?profile=#{profile_id}&tab=queue']"
+             )
+
+      html =
+        conn
+        |> Plug.Test.init_test_session(current_user_id: ctx.h1.id)
+        |> get(path)
+        |> html_response(200)
+
+      assert html =~ "This post is unavailable or you no longer have access."
+      refute html =~ "data-role=\"social-queue-row\""
+      refute html =~ "data-role=\"queue-idea\""
+      refute html =~ "Nothing is awaiting approval."
+    end
+  end
+
+  test "component events refresh title authority without a page reload", %{conn: conn} = ctx do
+    {post, _} = pending_post!(ctx, ctx.a, %{body: "CURRENT-READ-TITLE"})
+
+    child =
+      open(
+        conn,
+        ctx.n,
+        Platform.Social.PostPresentation.url(post, ctx.profile, {:user, ctx.n.id})
+      )
+
+    assert has_element?(child, "[data-role='queue-title']", "CURRENT-READ-TITLE")
+
+    {:ok, _} =
+      Platform.Access.Grants.deny(%{
+        principal: {:user, ctx.n.id},
+        permission: "social.use",
+        resource: {:project, ctx.profile.project_id}
+      })
+
+    child
+    |> with_target("#queue-card-idea-#{post.id}")
+    |> render_click("q_version", %{"index" => "0"})
+
+    refute has_element?(child, "[data-role='queue-title']", "CURRENT-READ-TITLE")
+    assert has_element?(child, "[data-role='queue-target-unavailable']")
+  end
+
+  test "scheduled lone-post title is gated for authorized, denied and project-less readers",
+       %{conn: conn} = ctx do
+    {:ok, post} = Social.create_post(ctx.org_id, ctx.a, %{body: "SCHEDULED-PRIVATE-TITLE"})
+
+    Repo.update_all(from(p in Post, where: p.id == ^post.id),
+      set: [
+        status: "scheduled",
+        approved_by_user_id: ctx.h1.id,
+        approved_at: DateTime.utc_now(),
+        scheduled_at: DateTime.add(DateTime.utc_now(), 3600)
+      ]
+    )
+
+    path = "/m/social?profile=#{ctx.profile.id}&tab=queue"
+    child = open(conn, ctx.n, path)
+    assert has_element?(child, "#queue-scheduled-#{post.id}", "SCHEDULED-PRIVATE-TITLE")
+
+    {:ok, _} =
+      Platform.Access.Grants.deny(%{
+        principal: {:user, ctx.n.id},
+        permission: "social.use",
+        resource: {:project, ctx.profile.project_id}
+      })
+
+    child = open(conn, ctx.n, path)
+    assert has_element?(child, "#queue-scheduled-#{post.id}", "LinkedIn post")
+
+    refute child |> element("#queue-scheduled-#{post.id}") |> render() =~
+             "SCHEDULED-PRIVATE-TITLE"
+
+    Repo.update!(Ecto.Changeset.change(ctx.profile, project_id: nil))
+    child = open(conn, ctx.h2, path)
+    assert has_element?(child, "#queue-scheduled-#{post.id}", "LinkedIn post")
+
+    refute child |> element("#queue-scheduled-#{post.id}") |> render() =~
+             "SCHEDULED-PRIVATE-TITLE"
+  end
+
+  test "a Studio post never becomes a legacy exact target", %{conn: conn} do
+    w = Platform.SocialStudioFixtures.studio_world!()
+
+    post =
+      Platform.SocialStudioFixtures.studio_post!(w, w.tiktok, "draft", %{
+        body: "Studio target private text"
+      })
+
+    child = open(conn, w.approver, "/m/social?profile=#{w.profile.id}&tab=queue&post=#{post.id}")
+
+    assert has_element?(
+             child,
+             "[data-role='queue-target-notice']",
+             "This post is unavailable or you no longer have access."
+           )
+
+    refute has_element?(child, "[data-role='queue-target-details']")
+  end
+
+  test "forged approve and malformed version events cannot change a read-only exact detail",
+       %{conn: conn} = ctx do
+    {:ok, post} = Social.create_post(ctx.org_id, ctx.a, %{body: "Read-only detail"})
+
+    child =
+      open(
+        conn,
+        ctx.h1,
+        Platform.Social.PostPresentation.url(post, ctx.profile, {:user, ctx.h1.id})
+      )
+
+    target = with_target(child, "#notification-post-#{post.id}")
+    before = Repo.get!(Post, post.id)
+    before_events = Repo.aggregate(from(e in PostEvent, where: e.post_id == ^post.id), :count)
+
+    render_click(target, "q_approve", %{
+      "post-id" => post.id,
+      "fingerprint" => Approvals.fingerprint(post)
+    })
+
+    refute has_element?(child, "#notification-post-#{post.id} [data-role='queue-notice']")
+    render_click(target, "q_version", %{"index" => "not-a-version"})
+    refute has_element?(child, "#notification-post-#{post.id} [data-role='queue-notice']")
+    assert Repo.get!(Post, post.id) == before
+
+    assert Repo.aggregate(from(e in PostEvent, where: e.post_id == ^post.id), :count) ==
+             before_events
+
+    assert has_element?(
+             child,
+             "#notification-post-#{post.id} [data-role='queue-versions'][data-current='0']"
+           )
+
+    assert Fake.calls(:publish) == []
+  end
+
+  test "Calendar chooses exact or legacy link using the clicking viewer read authority",
+       %{conn: conn} = ctx do
+    {post, _} = pending_post!(ctx, ctx.a, %{scheduled_at: DateTime.add(DateTime.utc_now(), -60)})
+    path = "/m/social?profile=#{ctx.profile.id}&tab=calendar"
+    allowed = open(conn, ctx.h2, path)
+    render_click(allowed, "open_post", %{"id" => post.id})
+    assert has_element?(allowed, "a[data-role='calendar-choose-time'][href*='post=']")
+
+    {:ok, _} =
+      Platform.Access.Grants.deny(%{
+        principal: {:user, ctx.h1.id},
+        permission: "social.use",
+        resource: {:project, ctx.profile.project_id}
+      })
+
+    denied = open(conn, ctx.h1, path)
+    render_click(denied, "open_post", %{"id" => post.id})
+    assert has_element?(denied, "a[data-role='calendar-choose-time']")
+    refute has_element?(denied, "a[data-role='calendar-choose-time'][href*='post=']")
+  end
+
   # ── Helpers ──────────────────────────────────────────────────────────
 
   defp call(tool, args, agent_ctx), do: ToolArguments.dispatch(tool, args, agent_ctx)
@@ -524,7 +877,9 @@ defmodule PlatformWeb.SocialLiveQueueTest do
           )
         )
 
-      assert item.url == Approvals.queue_url(post, ctx.profile)
+      assert item.url ==
+               Platform.Social.PostPresentation.url(post, ctx.profile, {:user, ctx.h1.id})
+
       assert item.url =~ "idea=#{second.id}"
 
       child = open(conn, ctx.h1, item.url)
@@ -552,6 +907,51 @@ defmodule PlatformWeb.SocialLiveQueueTest do
   end
 
   # ── Scope ────────────────────────────────────────────────────────────
+
+  test "All brands binds each display title to that post's authorized profile",
+       %{conn: conn} = ctx do
+    {allowed, _} = pending_post!(ctx, ctx.a, %{body: "ALLOWED-BRAND-TITLE"})
+    space = channel!(ctx.org_id)
+    for user <- [ctx.h1, ctx.h2, ctx.n], do: join!(space.id, :user, user.id)
+
+    {:ok, profile} =
+      Social.create_profile(ctx.org_id, %{
+        name: "Denied brand",
+        space_id: space.id,
+        approver_user_ids: [ctx.h1.id, ctx.h2.id]
+      })
+
+    project = project!(ctx.org_id)
+    profile = Repo.update!(Ecto.Changeset.change(profile, project_id: project.id))
+
+    {:ok, account} =
+      Social.create_account(ctx.org_id, profile, %{platform: "linkedin", handle: "@other_brand"})
+
+    {denied, _} = pending_post!(ctx, account, %{body: "DENIED-BRAND-TITLE"})
+
+    {:ok, _} =
+      Platform.Access.Grants.deny(%{
+        principal: {:user, ctx.n.id},
+        permission: "social.use",
+        resource: {:project, project.id}
+      })
+
+    child = open(conn, ctx.n, "/m/social?profile=#{ctx.profile.id}&tab=queue")
+    child |> form("#social-profile-switcher", %{profile_id: "all"}) |> render_change()
+
+    assert has_element?(
+             child,
+             "#{card(allowed.id)} [data-role='queue-title']",
+             "ALLOWED-BRAND-TITLE"
+           )
+
+    assert has_element?(child, "#{card(denied.id)} [data-role='queue-title']", "LinkedIn post")
+
+    refute child |> element("#{card(denied.id)} [data-role='queue-title']") |> render() =~
+             "DENIED-BRAND-TITLE"
+
+    assert Fake.calls(:publish) == []
+  end
 
   test "switching brands leaves no row of the other brand", %{conn: conn} = ctx do
     {idea, _} = three!(ctx)
@@ -601,7 +1001,7 @@ defmodule PlatformWeb.SocialLiveQueueTest do
     child = open(conn, ctx.h1)
     assert has_element?(child, "[data-role='social-empty']", "Nothing is awaiting approval.")
     refute has_element?(child, "[data-role='social-go-connections']")
-    assert has_element?(child, "#queue-scheduled-#{post.id}", "LinkedIn post")
+    assert has_element?(child, "#queue-scheduled-#{post.id}", "Goes out Friday")
 
     assert has_element?(
              child,
