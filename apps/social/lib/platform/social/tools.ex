@@ -28,6 +28,8 @@ defmodule Platform.Social.Tools do
   repeats that a human approves and the platform publishes.
   """
 
+  import Ecto.Query
+
   alias Platform.Federation.ResultBound
   alias Platform.Social
 
@@ -60,8 +62,7 @@ defmodule Platform.Social.Tools do
 
   # Social authoring 2/11: the tools that need the calling agent (the idea
   # creator, and the change log's actor on a draft write).
-  @agent_tools ~w(social_idea_vote social_idea_unvote social_idea_archive social_idea_create social_idea_list social_idea_note_add social_draft_create
-                  social_draft_update social_weekly_note_submit social_studio_draft_create)
+  @agent_tools ~w(social_draft_create social_draft_update social_weekly_note_submit social_studio_draft_create)
 
   @spec execute(String.t(), map(), map()) :: {:ok, map()} | {:error, map()}
   def execute(tool, args, context) do
@@ -77,6 +78,22 @@ defmodule Platform.Social.Tools do
 
       tool in @job_tools ->
         with {:ok, scope} <- scope(context), do: job_tool(tool, args, scope, agent(context))
+
+      tool == "social_idea_list" ->
+        with {:ok, scope} <- scope(context),
+             do: idea_list(args, scope, agent(context), context)
+
+      tool == "social_idea_create" ->
+        with {:ok, scope} <- scope(context),
+             do: idea_create(args, scope, agent(context), context)
+
+      tool == "social_idea_note_add" ->
+        with {:ok, scope} <- scope(context),
+             do: idea_note_add(args, scope, agent(context), context)
+
+      tool in ~w(social_idea_vote social_idea_unvote social_idea_archive) ->
+        with {:ok, scope} <- scope(context),
+             do: idea_vote_tool(tool, args, scope, agent(context), context)
 
       tool in @agent_tools ->
         with {:ok, scope} <- scope(context), do: agent_tool(tool, args, scope, agent(context))
@@ -404,23 +421,94 @@ defmodule Platform.Social.Tools do
     end
   end
 
-  defp agent_tool("social_idea_create", args, scope, agent) do
-    attrs = Map.take(args, @idea_keys)
+  defp idea_create(args, scope, agent, context) do
+    result =
+      Platform.Repo.transaction(fn ->
+        with %Profile{} = profile <- Social.lock_profile(scope, args["profile_id"], :share),
+             {:ok, project_id} <- Platform.Social.Studio.require_studio_project(profile),
+             {:ok, projection} <- board_authority(context, agent, profile, project_id),
+             true <- valid_idea_create?(projection, args) || {:error, :invalid_board_argument},
+             {:ok, idea} <-
+               Ideas.create(scope, profile.id, Map.take(args, @idea_keys), {:agent, agent.id},
+                 broadcast: false
+               ) do
+          {idea, projection}
+        else
+          {:error, reason} -> Platform.Repo.rollback(reason)
+          _ -> Platform.Repo.rollback(:not_found)
+        end
+      end)
 
-    case Ideas.create(scope, args["profile_id"], attrs, {:agent, agent.id}) do
-      {:ok, idea} -> {:ok, %{idea: idea_json(idea, [])}}
-      {:error, :not_found} -> {:error, not_found("profile")}
-      error -> {:error, error_envelope(error)}
+    case result do
+      {:ok, {idea, projection}} ->
+        Ideas.broadcast_changed(idea.profile_id)
+        votes = %{vote_count: 0, voted: false}
+
+        row =
+          if projection == :narrow,
+            do: narrow_idea_json(idea, [], votes, agent.id),
+            else: idea_json(idea, [], votes)
+
+        {:ok, %{idea: row}}
+
+      {:error, :forbidden} ->
+        {:error, not_found("profile")}
+
+      {:error, :not_found} ->
+        {:error, not_found("profile")}
+
+      {:error, :studio_needs_project} ->
+        {:error, not_found("profile")}
+
+      {:error, :invalid_board_argument} ->
+        {:error, invalid_board_argument()}
+
+      {:error, reason} ->
+        {:error, error_envelope({:error, reason})}
     end
   end
 
-  # Social authoring 7/11: a note on the idea's thread, by the calling agent.
-  defp agent_tool("social_idea_note_add", args, scope, agent) do
-    case IdeaNotes.add(scope, args["idea_id"], {:agent, agent.id}, args["body"]) do
-      {:ok, note} ->
-        {:ok, %{note: note_json(note)}}
+  defp valid_idea_create?(:full, _), do: true
 
-      {:error, :not_found} ->
+  defp valid_idea_create?(:narrow, args) do
+    Enum.all?(~w(clip_id task_id meeting_id message_id), &(not Map.has_key?(args, &1))) and
+      args["source_kind"] in [nil, "agent", "url"]
+  end
+
+  defp idea_note_add(args, scope, agent, context) do
+    result =
+      with %Idea{} = initial <- Ideas.get(scope, args["idea_id"]) do
+        Platform.Repo.transaction(fn ->
+          with %Profile{} = profile <- Social.lock_profile(scope, initial.profile_id, :share),
+               %Idea{} = idea <-
+                 Platform.Repo.one(
+                   from(i in Idea, where: i.id == ^initial.id, lock: "FOR UPDATE")
+                 ),
+               true <- idea.profile_id == profile.id and idea.org_id == profile.org_id,
+               {:ok, projection} <- board_project_authority(context, agent, profile),
+               true <- projection == :full or is_nil(idea.archived_at),
+               {:ok, note} <-
+                 IdeaNotes.add(scope, idea.id, {:agent, agent.id}, args["body"], broadcast: false) do
+            {note, projection, profile.id}
+          else
+            {:error, reason} -> Platform.Repo.rollback(reason)
+            _ -> Platform.Repo.rollback(:not_found)
+          end
+        end)
+      else
+        _ -> {:error, :not_found}
+      end
+
+    case result do
+      {:ok, {note, projection, profile_id}} ->
+        Ideas.broadcast_changed(profile_id)
+
+        data =
+          if projection == :narrow, do: narrow_note_json(note, agent.id), else: note_json(note)
+
+        {:ok, %{note: data}}
+
+      {:error, reason} when reason in [:forbidden, :not_found, :studio_needs_project] ->
         {:error, not_found("idea")}
 
       {:error, reason} when reason in [:body_required, :body_too_long] ->
@@ -432,13 +520,12 @@ defmodule Platform.Social.Tools do
            "Send a shorter, non-blank note."
          )}
 
-      error ->
-        {:error, error_envelope(error)}
+      {:error, reason} ->
+        {:error, error_envelope({:error, reason})}
     end
   end
 
-  defp agent_tool(tool, args, scope, agent)
-       when tool in ~w(social_idea_vote social_idea_unvote social_idea_archive) do
+  defp idea_vote_tool(tool, args, scope, agent, context) do
     operation =
       %{
         "social_idea_vote" => :vote,
@@ -446,9 +533,21 @@ defmodule Platform.Social.Tools do
         "social_idea_archive" => :archive
       }[tool]
 
-    case apply(IdeaVotes, operation, [scope, args["idea_id"], {:agent, agent.id}]) do
-      {:ok, result} ->
-        {:ok, result}
+    authorize = fn profile ->
+      case board_project_authority(context, agent, profile) do
+        {:ok, _} -> :ok
+        _ -> {:error, :not_found}
+      end
+    end
+
+    case apply(IdeaVotes, operation, [
+           scope,
+           args["idea_id"],
+           {:agent, agent.id},
+           [authorize: authorize]
+         ]) do
+      {:ok, data} ->
+        {:ok, data}
 
       {:error, :not_found} ->
         {:error, not_found("idea")}
@@ -468,46 +567,146 @@ defmodule Platform.Social.Tools do
     end
   end
 
-  defp agent_tool("social_idea_list", args, scope, agent) do
-    case Social.get_profile(scope, args["profile_id"]) do
-      %Profile{} = profile ->
-        {limit, offset} = ResultBound.page(args)
-        stage = blank_to_nil(args["stage"])
+  defp board_project_authority(context, agent, profile) do
+    with {:ok, project_id} <- Platform.Social.Studio.require_studio_project(profile),
+         do: board_authority(context, agent, profile, project_id)
+  end
 
-        ideas =
-          if IdeaVotes.allowed?(profile, {:agent, agent.id}),
-            do: Ideas.list(scope, profile.id, archived: args["archived"] == true),
-            else: []
+  defp idea_list(args, scope, agent, context) do
+    with %Profile{} = profile <- Social.get_profile(scope, args["profile_id"]),
+         {:ok, project_id} <- Platform.Social.Studio.require_studio_project(profile),
+         {:ok, projection} <- board_authority(context, agent, profile, project_id),
+         true <- valid_board_filter?(projection, args) || {:error, :invalid_board_argument} do
+      {limit, offset} = ResultBound.page(args)
+      stage = blank_to_nil(args["stage"])
 
-        votes = IdeaVotes.summaries(ideas, {:agent, agent.id})
-        posts = ideas |> Enum.map(& &1.id) |> Ideas.posts_by_idea()
+      ideas =
+        if IdeaVotes.allowed?(profile, {:agent, agent.id}),
+          do: Ideas.list(scope, profile.id, archived: args["archived"] == true),
+          else: []
 
-        rows =
-          ideas
-          |> Enum.map(&{&1, Map.get(posts, &1.id, [])})
-          |> Enum.filter(fn {idea, ps} ->
-            stage == nil or IdeaVotes.stage(ps, votes[idea.id].vote_count) == stage
-          end)
+      votes = IdeaVotes.summaries(ideas, {:agent, agent.id})
+      posts = ideas |> Enum.map(& &1.id) |> Ideas.posts_by_idea()
 
-        page =
-          rows
-          |> Enum.sort_by(fn {idea, ps} ->
-            vote = Map.fetch!(votes, idea.id)
+      rows =
+        ideas
+        |> Enum.map(&{&1, Map.get(posts, &1.id, [])})
+        |> Enum.filter(fn {idea, ps} ->
+          current = IdeaVotes.stage(ps, votes[idea.id].vote_count)
+          current = if projection == :narrow, do: narrow_stage(current), else: current
+          stage == nil or current == stage
+        end)
 
-            if IdeaVotes.stage(ps, vote.vote_count) in ~w(inbox shortlisted),
-              do: {0, IdeaVotes.order_key(idea, vote.vote_count)},
-              else: {1, {-DateTime.to_unix(idea.inserted_at, :microsecond), idea.id}}
-          end)
-          |> Enum.drop(offset)
-          |> Enum.take(limit)
-          |> Enum.map(fn {idea, ps} -> idea_json(idea, ps, Map.fetch!(votes, idea.id)) end)
+      page =
+        rows
+        |> Enum.sort_by(fn {idea, ps} ->
+          vote = Map.fetch!(votes, idea.id)
 
-        {:ok,
-         ResultBound.paged(:ideas, page, length(rows), offset, %{limit: limit, offset: offset})}
+          if IdeaVotes.stage(ps, vote.vote_count) in ~w(inbox shortlisted),
+            do: {0, IdeaVotes.order_key(idea, vote.vote_count)},
+            else: {1, {-DateTime.to_unix(idea.inserted_at, :microsecond), idea.id}}
+        end)
+        |> Enum.drop(offset)
+        |> Enum.take(limit)
+        |> Enum.map(fn {idea, ps} ->
+          vote = Map.fetch!(votes, idea.id)
 
-      nil ->
+          if projection == :narrow,
+            do: narrow_idea_json(idea, ps, vote, agent.id),
+            else: idea_json(idea, ps, vote)
+        end)
+
+      {:ok,
+       ResultBound.paged(:ideas, page, length(rows), offset, %{limit: limit, offset: offset})}
+    else
+      {:error, :invalid_board_argument} ->
+        {:error, invalid_board_argument()}
+
+      _ ->
         {:error, not_found("profile")}
     end
+  end
+
+  defp invalid_board_argument do
+    err(
+      :invalid_argument,
+      "Unsupported idea-board argument; nothing was written.",
+      true,
+      "Use the arguments available to your board permission."
+    )
+  end
+
+  defp board_authority(
+         %{runtime_id: runtime_id},
+         %{id: agent_id, status: status},
+         profile,
+         project_id
+       )
+       when is_binary(runtime_id) and status != "archived" do
+    alias Platform.Access
+    alias Platform.Access.Scope
+    alias Platform.Agents.AgentRuntime
+
+    with true <- Platform.UUID.valid?(agent_id),
+         %Platform.Agents.Agent{status: current_status} when current_status != "archived" <-
+           Platform.Repo.get(Platform.Agents.Agent, agent_id),
+         true <- IdeaVotes.allowed?(profile, {:agent, agent_id}),
+         %AgentRuntime{agent_id: ^agent_id, status: "active"} = runtime <-
+           Platform.Repo.get_by(AgentRuntime, runtime_id: runtime_id),
+         %Scope{own_cap: %Scope{} = own, owner_cap: %Scope{} = owner} = access <-
+           Scope.for_runtime(runtime),
+         resource = {:project, project_id},
+         false <- Access.locked?(access, "social.use"),
+         :ok <- Access.check(access, "social.use", resource),
+         :ok <- Access.check(access, "social.ideas", resource) do
+      cond do
+        Access.can?(own, "social.use", resource) and Access.can?(owner, "social.use", resource) ->
+          {:ok, :full}
+
+        not Scope.guest?(owner) and Access.can?(own, "social.ideas", resource) and
+            (Access.can?(owner, "social.ideas", resource) or
+               Access.can?(owner, "social.use", resource)) ->
+          {:ok, :narrow}
+
+        true ->
+          {:error, :forbidden}
+      end
+    else
+      _ -> {:error, :forbidden}
+    end
+  end
+
+  defp board_authority(_, _, _, _), do: {:error, :forbidden}
+
+  defp valid_board_filter?(:full, _args), do: true
+
+  defp valid_board_filter?(:narrow, args) do
+    args["archived"] != true and
+      blank_to_nil(args["stage"]) in [nil, "inbox", "shortlisted", "in_production"]
+  end
+
+  defp narrow_stage(stage) when stage in ~w(inbox shortlisted), do: stage
+  defp narrow_stage(_stage), do: "in_production"
+
+  defp narrow_idea_json(idea, posts, votes, agent_id) do
+    idea
+    |> Map.take([:id, :profile_id, :title, :brief, :source_kind, :source_url, :inserted_at])
+    |> Map.merge(%{
+      board_stage: narrow_stage(IdeaVotes.stage(posts, votes.vote_count)),
+      vote_count: votes.vote_count,
+      voted: votes.voted,
+      is_mine: idea.created_by_agent_id == agent_id,
+      notes:
+        idea.id
+        |> IdeaNotes.list()
+        |> Enum.map(&narrow_note_json(&1, agent_id))
+    })
+  end
+
+  defp narrow_note_json(note, agent_id) do
+    note
+    |> Map.take([:id, :idea_id, :author_kind, :body, :inserted_at])
+    |> Map.put(:is_mine, note.author_kind == "agent" and note.author_id == agent_id)
   end
 
   defp idea_json(%Idea{} = idea, posts, votes \\ %{vote_count: 0, voted: false}) do

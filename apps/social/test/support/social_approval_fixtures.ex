@@ -62,6 +62,30 @@ defmodule Platform.SocialApprovalFixtures do
     |> Repo.insert!()
   end
 
+  @doc "Give the existing approval fixture a project and an owner-capped agent runtime."
+  def with_ideas_runtime(ctx) do
+    project = project!(ctx.org_id)
+    profile = Repo.update!(Ecto.Changeset.change(ctx.profile, project_id: project.id))
+
+    ctx
+    |> Map.put(:profile, profile)
+    |> Map.put(:agent_ctx, ideas_runtime_context!(ctx.g, ctx.h1))
+  end
+
+  @doc "A real runtime context for a full-Social test agent and its owner."
+  def ideas_runtime_context!(agent, owner) do
+    runtime =
+      Repo.insert!(%Platform.Agents.AgentRuntime{
+        runtime_id: "social-ideas-fixture-#{System.unique_integer([:positive])}",
+        agent_id: agent.id,
+        owner_user_id: owner.id,
+        status: "active"
+      })
+
+    {:ok, _} = Platform.Access.RuntimeProfiles.create_for_runtime(runtime, ["social"], nil)
+    %{agent_id: agent.id, runtime_id: runtime.runtime_id}
+  end
+
   @doc "A needs_approval post on `account` and its live card."
   def pending_post!(ctx, account, attrs \\ %{}) do
     {:ok, post} =

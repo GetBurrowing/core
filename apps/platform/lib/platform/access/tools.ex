@@ -24,9 +24,29 @@ defmodule Platform.Access.Tools do
     |> profile_arm(runtime)
     |> ToolSurface.list_tools()
     |> Enum.filter(fn tool ->
-      Access.holds_anywhere?(scope, ToolPermissions.for_tool(tool.name))
+      discoverable?(scope, tool.name)
     end)
   end
+
+  defp discoverable?(scope, name) do
+    primary = ToolPermissions.for_tool(name)
+    delegated = ToolPermissions.delegated_for_tool(name)
+
+    Access.holds_anywhere?(scope, primary) or delegated?(scope, primary, delegated)
+  end
+
+  defp delegated?(
+         %Scope{own_cap: %Scope{} = own, owner_cap: %Scope{} = owner} = scope,
+         primary,
+         delegated
+       )
+       when is_binary(primary) and is_binary(delegated) do
+    not Scope.guest?(owner) and not Access.locked?(scope, delegated) and
+      Access.holds_anywhere?(own, delegated) and
+      (Access.holds_anywhere?(owner, delegated) or Access.holds_anywhere?(owner, primary))
+  end
+
+  defp delegated?(_, _, _), do: false
 
   @spec tool_names(AgentRuntime.t()) :: [String.t()]
   def tool_names(runtime), do: runtime |> effective_tools() |> Enum.map(& &1.name)

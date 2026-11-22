@@ -21,14 +21,14 @@ defmodule Platform.Social.IdeasTest do
   setup do
     Fake.reset()
     RateLimit.reset()
-    ctx = approval_fixture()
+    ctx = approval_fixture() |> with_ideas_runtime()
 
     {:ok, x} = Social.create_account(ctx.org_id, ctx.profile, %{platform: "x", handle: "@show_x"})
 
     {:ok, ig} =
       Social.create_account(ctx.org_id, ctx.profile, %{platform: "instagram", handle: "@show_ig"})
 
-    Map.merge(ctx, %{x: x, ig: ig, agent_ctx: %{agent_id: ctx.g.id}})
+    Map.merge(ctx, %{x: x, ig: ig})
   end
 
   defp call(tool, args, agent_ctx), do: ToolArguments.dispatch(tool, args, agent_ctx)

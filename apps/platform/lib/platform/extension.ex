@@ -117,6 +117,10 @@ defmodule Platform.Extension do
     * `:deny_message` (optional) — `(tool_name) -> String.t() | nil`, the
       text a transport reports when it denies one of `:tool_names`; `nil`
       keeps core's own wording;
+    * `:delegated_permissions` (optional) — a map from tool name to a narrower
+      permission. Discovery admits a non-guest runtime when its own cap holds
+      that permission and its owner holds either it or the primary permission.
+      This only controls discovery; handlers must authorize their resource;
     * `:owns_tool?` (optional) — `(tool_name) -> boolean()`, a name space the
       module reserves beyond `:tool_names`, asked only after the exact-name
       lookup misses. It may not cover a core tool name
@@ -128,6 +132,7 @@ defmodule Platform.Extension do
           required(:tool_names) => [String.t()],
           required(:execute) => (String.t(), map(), map() -> term()),
           optional(:permissions) => %{String.t() => String.t()},
+          optional(:delegated_permissions) => %{String.t() => String.t()},
           optional(:deny_message) => (String.t() -> String.t() | nil),
           optional(:owns_tool?) => (String.t() -> boolean())
         }

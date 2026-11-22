@@ -18,9 +18,9 @@ defmodule Platform.Social.QueueFeedTest do
   setup do
     Fake.reset()
     RateLimit.reset()
-    ctx = approval_fixture()
+    ctx = approval_fixture() |> with_ideas_runtime()
     {:ok, x} = Social.create_account(ctx.org_id, ctx.profile, %{platform: "x", handle: "@show_x"})
-    Map.merge(ctx, %{x: x, agent_ctx: %{agent_id: ctx.g.id}})
+    Map.merge(ctx, %{x: x})
   end
 
   defp call(tool, args, ctx), do: ToolArguments.dispatch(tool, args, ctx.agent_ctx)
