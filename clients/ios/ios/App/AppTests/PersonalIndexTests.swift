@@ -478,7 +478,7 @@ final class PersonalIndexTests: XCTestCase {
         let steps = lines.all.filter { $0.hasPrefix("step=") }
         XCTAssertFalse(steps.isEmpty, "positive control: steps were captured", file: file, line: line)
         for entry in steps {
-            for banned in ["Jordan", "jordan", "Coombs", "Ines", "Alvarez", a, b, jordanOnA, jordanOnB, inesOnA] {
+            for banned in ["Sam", "sam", "Moreno", "Ines", "Alvarez", a, b, samOnA, samOnB, inesOnA] {
                 XCTAssertFalse(entry.contains(banned), "a step line names \(banned): \(entry)", file: file, line: line)
             }
         }
@@ -492,12 +492,12 @@ final class PersonalIndexTests: XCTestCase {
             PeopleCache.shared.removeAll(host: b)
         }
         let lines = capturingSteps()
-        _ = try await MessageDestination.messagePerson(entity(jordanOnA, on: a, name: "Jordan"))
+        _ = try await MessageDestination.messagePerson(entity(samOnA, on: a, name: "Sam"))
             .resolvedBurrowDestination(site: "test") { _, people in people[0] }
         XCTAssertEqual(
             lines.steps(PersonResolver.namesakesSite),
             [
-                "home=parsed", "hosts=2 others=1", "query_len=6 source=called kind=user", "load_errors=0 status=none",
+                "home=parsed", "hosts=2 others=1", "query_len=3 source=called kind=user", "load_errors=0 status=none",
                 "cached=0 searched=1 exact=1",
             ])
         XCTAssertEqual(lines.steps("test").last, "matched=several_installs count=2")
@@ -532,11 +532,11 @@ final class PersonalIndexTests: XCTestCase {
             PeopleCache.shared.removeAll(host: a)
             PeopleCache.shared.removeAll(host: b)
         }
-        PeopleCache.shared.remember([entity(jordanOnA, on: a, name: "Jordan")])
+        PeopleCache.shared.remember([entity(samOnA, on: a, name: "Sam")])
         let lines = capturingSteps()
-        _ = try await MessageDestination.people([siriPerson(.unknown, name: "Jordan")])
+        _ = try await MessageDestination.people([siriPerson(.unknown, name: "Sam")])
             .resolvedBurrowDestination(site: "test") { _, people in people[0] }
-        XCTAssertTrue(lines.steps(PersonResolver.namesakesSite).contains("query_len=6 source=spoken kind=user"))
+        XCTAssertTrue(lines.steps(PersonResolver.namesakesSite).contains("query_len=3 source=spoken kind=user"))
         assertNoNamesOrHosts(lines)
     }
 
@@ -552,9 +552,9 @@ final class PersonalIndexTests: XCTestCase {
             request.url?.host == self.b ? (503, Data()) : healthy(request)
         }
         let lines = capturingSteps()
-        let target = try await MessageDestination.messagePerson(entity(jordanOnA, on: a, name: "Jordan"))
+        let target = try await MessageDestination.messagePerson(entity(samOnA, on: a, name: "Sam"))
             .resolvedBurrowDestination(site: "test", choose: noChoice)
-        XCTAssertEqual(target.entityID, EntityRef(host: a, uuid: jordanOnA).id, "behaviour unchanged: no namesake to offer")
+        XCTAssertEqual(target.entityID, EntityRef(host: a, uuid: samOnA).id, "behaviour unchanged: no namesake to offer")
         let steps = lines.steps(PersonResolver.namesakesSite)
         XCTAssertTrue(steps.contains("load_errors=1 status=503"), "\(steps)")
         XCTAssertTrue(steps.contains("cached=0 searched=0 exact=0"), "\(steps)")
@@ -574,7 +574,7 @@ final class PersonalIndexTests: XCTestCase {
             client: BurrowAPIClient(session: StubURLProtocol.session(), tokens: MemoryTokenStore(tokens: [a: "token-for-a"])),
             installs: shared.installs, sleeper: VirtualClock(), now: shared.now, lastMeetingSpaces: shared.lastMeetingSpaces)
         let lines = capturingSteps()
-        let others = await PersonResolver.namesakes(of: entity(jordanOnA, on: a, name: "Jordan"), spoken: nil, env: single)
+        let others = await PersonResolver.namesakes(of: entity(samOnA, on: a, name: "Sam"), spoken: nil, env: single)
         XCTAssertTrue(others.isEmpty)
         XCTAssertEqual(
             lines.steps(PersonResolver.namesakesSite), ["home=parsed", "hosts=1 others=0", "matched=one_install reason=no_other_install"])
@@ -602,7 +602,7 @@ final class PersonalIndexTests: XCTestCase {
 
     // MARK: Task 01a13c1d stage 2: the namesake check runs on every Siri send
 
-    // Measured on Ryan's iPad (2026-10-14 19:50:27Z, build 13e6b64d6, the
+    // Measured on a tester's iPad (2026-10-14 19:50:27Z, build 13e6b64d6, the
     // Debug intent-trace.log, which records the info-level fetch/route lines
     // too): "Message Dalton" ran `step=send destination=messagePeople(1)` for
     // a suite-exp person, then `route=person_dm` on suite-exp, with NO
@@ -756,7 +756,7 @@ final class PersonalIndexTests: XCTestCase {
         defer { clearPeople() }
         let shared = IntentEnvironment.current
         let single = IntentEnvironment(
-            client: SuiteAPIClient(session: StubURLProtocol.session(), tokens: MemoryTokenStore(tokens: [a: "token-for-a"])),
+            client: BurrowAPIClient(session: StubURLProtocol.session(), tokens: MemoryTokenStore(tokens: [a: "token-for-a"])),
             installs: shared.installs, sleeper: VirtualClock(), now: shared.now, lastMeetingSpaces: shared.lastMeetingSpaces)
         let lines = capturingSteps()
         let target = try await siriSend(to: person(daltonOnA, on: a, name: "Dalton Rivera", kind: "user"))
@@ -769,25 +769,25 @@ final class PersonalIndexTests: XCTestCase {
 
     // MARK: Task 01a13c1d stage 5: an id with no host still reaches perform
 
-    // Measured on Ryan's iPad (iOS 27.0.1, 2026-10-23 20:21:50Z, build
+    // Measured on a tester's iPad (iOS 27.0.1, 2026-10-23 20:21:50Z, build
     // 28a9db851, four installs signed in): Siri drafted the send for
     // Messages twice, then moved the draft to Burrow's MessagesSendIntent
     // and asked person.query for the draft's recipient as a bare 36-char id
     // (`req len=36 segments=1 parsed=false`). The query returned nothing
     // (`result count=0`), AppIntents went to NeedsValue, and perform never
     // ran: no `step=send`, no namesake check. These tests use the device's
-    // four hosts; burrow-exp.kobo-ai.com is a clone of prod, so the two
+    // four installs (placeholder hosts); prod-clone is a clone of prod, so the two
     // share uuids.
 
-    private let deviceHosts = ["suite.kobo-ai.com", "burrow-exp.kobo-ai.com", "suite.milvenan.technology", "burrow.red-st.ar"]
+    private let deviceHosts = ["prod.example.com", "prod-clone.example.com", "self-hosted.example.org", "d.example.net"]
     /// No install has it: the measured shape.
     private let foreignID = "c0ffee00-0000-4000-8000-000000000036"
-    /// On prod and on its clone burrow-exp.
-    private let coombsID = "c0000000-0000-4000-8000-0000000000c1"
+    /// On prod and on its clone.
+    private let morenoID = "c0000000-0000-4000-8000-0000000000c1"
     private let daltonAgentID = "da000000-0000-4000-8000-0000000000d1"
-    private let jordanExpID = "10000000-0000-4000-8000-0000000000e1"
+    private let samExpID = "10000000-0000-4000-8000-0000000000e1"
     private let daltonRedID = "da000000-0000-4000-8000-0000000000f1"
-    /// Only burrow.red-st.ar has her.
+    /// Only the fourth install has her.
     private let inesRedID = "1e000000-0000-4000-8000-0000000000f2"
 
     /// IntentEnvironment.current with the device's four installs signed in,
@@ -803,7 +803,7 @@ final class PersonalIndexTests: XCTestCase {
         var tokens: [String: String] = [:]
         for host in deviceHosts { tokens[host] = "token-for-\(host)" }
         IntentEnvironment.current = IntentEnvironment(
-            client: SuiteAPIClient(session: StubURLProtocol.session(), tokens: MemoryTokenStore(tokens: tokens)),
+            client: BurrowAPIClient(session: StubURLProtocol.session(), tokens: MemoryTokenStore(tokens: tokens)),
             installs: store, sleeper: VirtualClock(), now: { Date(timeIntervalSince1970: 4_000_000) },
             lastMeetingSpaces: LastMeetingSpaceStore(defaults: defaults))
         for host in deviceHosts { PeopleCache.shared.removeAll(host: host) }
@@ -813,15 +813,15 @@ final class PersonalIndexTests: XCTestCase {
             let host = request.url?.host ?? ""
             let rows: [(id: String, kind: String, name: String)]
             switch host {
-            case hosts[0], hosts[1]: rows = [(self.coombsID, "user", "Jordan Coombs"), (self.daltonAgentID, "agent", "Dalton")]
-            case hosts[2]: rows = [(self.jordanExpID, "user", "Jordan")]
+            case hosts[0], hosts[1]: rows = [(self.morenoID, "user", "Sam Moreno"), (self.daltonAgentID, "agent", "Dalton")]
+            case hosts[2]: rows = [(self.samExpID, "user", "Sam")]
             default: rows = [(self.daltonRedID, "agent", "Dalton"), (self.inesRedID, "user", "Ines Alvarez")]
             }
             let query =
                 URLComponents(url: request.url!, resolvingAgainstBaseURL: false)?.queryItems?.first { $0.name == "q" }?.value?
                 .lowercased()
             let json = rows.filter { query == nil || $0.name.lowercased().contains(query!) }.map {
-                #"{"id":"\#($0.id)","kind":"\#($0.kind)","name":"\#($0.name)","org_names":["Kobo"]}"#
+                #"{"id":"\#($0.id)","kind":"\#($0.kind)","name":"\#($0.name)","org_names":["Legacy"]}"#
             }
             return (200, Data(#"{"people":[\#(json.joined(separator: ","))]}"#.utf8))
         }
@@ -833,8 +833,8 @@ final class PersonalIndexTests: XCTestCase {
         let steps = lines.all.filter { $0.hasPrefix("step=") }
         XCTAssertFalse(steps.isEmpty, "positive control: steps were captured", file: file, line: line)
         let banned =
-            ["Jordan", "Coombs", "Dalton", "Ines", "Alvarez"] + deviceHosts
-            + [foreignID, coombsID, daltonAgentID, jordanExpID, daltonRedID, inesRedID]
+            ["Sam", "Moreno", "Dalton", "Ines", "Alvarez"] + deviceHosts
+            + [foreignID, morenoID, daltonAgentID, samExpID, daltonRedID, inesRedID]
         for entry in steps {
             for word in banned {
                 XCTAssertFalse(entry.contains(word), "a step line names \(word): \(entry)", file: file, line: line)
@@ -848,7 +848,7 @@ final class PersonalIndexTests: XCTestCase {
         guard #available(iOS 27, *) else { throw XCTSkip("iOS 27") }
         fourInstalls()
         let lines = capturingSteps()
-        let people = [(deviceHosts[0], coombsID), (deviceHosts[1], coombsID), (deviceHosts[2], jordanExpID), (deviceHosts[3], inesRedID)]
+        let people = [(deviceHosts[0], morenoID), (deviceHosts[1], morenoID), (deviceHosts[2], samExpID), (deviceHosts[3], inesRedID)]
         var lengths: [Int] = []
         for (host, uuid) in people {
             let id = EntityRef(host: host, uuid: uuid).id
@@ -858,7 +858,7 @@ final class PersonalIndexTests: XCTestCase {
             XCTAssertEqual(found.first?.isUnresolved, false)
             lengths.append(id.count)
         }
-        XCTAssertEqual(lengths, [54, 59, 62, 53])
+        XCTAssertEqual(lengths, [53, 59, 60, 50])
         XCTAssertEqual(
             lines.steps("person.query").filter { $0.hasPrefix("req ") },
             lengths.map { "req len=\($0) segments=2 parsed=true install=true uuid=true" })
@@ -901,17 +901,17 @@ final class PersonalIndexTests: XCTestCase {
         guard #available(iOS 27, *) else { throw XCTSkip("iOS 27") }
         fourInstalls()
         let lines = capturingSteps()
-        let found = try await MessagePersonEntityQuery().entities(for: [coombsID])
-        XCTAssertEqual(found.map(\.id), [coombsID])
-        XCTAssertEqual(found.first?.name, "Jordan Coombs", "the name of the person the uuid names is carried to perform")
+        let found = try await MessagePersonEntityQuery().entities(for: [morenoID])
+        XCTAssertEqual(found.map(\.id), [morenoID])
+        XCTAssertEqual(found.first?.name, "Sam Moreno", "the name of the person the uuid names is carried to perform")
         var asked: (String, [String])?
         let target = try await siriSend(to: try XCTUnwrap(found.first)).resolvedTarget { name, people in
             asked = (name, people.map(\.id))
             return people[0]
         }
-        let prod = EntityRef(host: deviceHosts[0], uuid: coombsID).id
-        XCTAssertEqual(asked?.0, "Jordan Coombs")
-        XCTAssertEqual(asked.map { Set($0.1) }, [prod, EntityRef(host: deviceHosts[1], uuid: coombsID).id])
+        let prod = EntityRef(host: deviceHosts[0], uuid: morenoID).id
+        XCTAssertEqual(asked?.0, "Sam Moreno")
+        XCTAssertEqual(asked.map { Set($0.1) }, [prod, EntityRef(host: deviceHosts[1], uuid: morenoID).id])
         XCTAssertEqual(target.entityID, asked?.1.first)
         XCTAssertTrue(lines.steps("person.query").contains("foreign kind=bare_uuid installs=2"))
         assertNoPeopleHostsOrIds(lines)

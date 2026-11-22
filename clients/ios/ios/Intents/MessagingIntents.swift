@@ -136,7 +136,7 @@ import GeoToolbox
         /// unset entity parameter from it: a system-run send given only a
         /// destination (IntentsSystemTests, iOS 27 simulator) logged
         /// `install=set`. Task 01a13c1d stage 2: until then a
-        /// set Install skipped the cross-install namesake check, and on Ryan's
+        /// set Install skipped the cross-install namesake check, and on a tester's
         /// iPad (2026-10-14 19:50:27Z, build 13e6b64d6) a Siri send to a name on
         /// two installs went straight to the DM with no search of the other
         /// install (the trace holds no `fetch=people` or `route=people` line

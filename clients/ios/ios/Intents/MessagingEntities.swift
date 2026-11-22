@@ -234,7 +234,7 @@ struct MessagePersonEntityQuery: EntityStringQuery {
     /// The entity for an id Siri asked for that is not `<host>|<uuid>`
     /// (task 01a13c1d stage 5).
     ///
-    /// Measured on Ryan's iPad (iOS 27.0.1, 2026-10-23 20:21:50Z, build
+    /// Measured on a tester's iPad (iOS 27.0.1, 2026-10-23 20:21:50Z, build
     /// 28a9db851): Siri drafted the send for Messages twice, then moved the
     /// draft to Burrow (`com.kobo-ai.burrow.MessagesSendIntent`, after
     /// assistant_service logged "Type identifier conformance failed") and
