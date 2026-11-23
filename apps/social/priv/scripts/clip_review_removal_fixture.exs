@@ -29,10 +29,15 @@ w = render_world!()
 {:ok, _} =
   Platform.Social.update_profile(w.org_id, w.profile, %{name: "Clip Review viewport fixture"})
 
-file = stored_file!(w.project, bytes, "clip.mp4", "video/mp4")
-
 clips =
   for n <- 1..35 do
+    # One file per clip: a repeat submit of one file returns the same clip, and
+    # Files keeps one row per content hash, so each copy ends in its own MP4
+    # "free" box, which players ignore.
+    tag = "clip-#{n}"
+    clip_bytes = bytes <> <<8 + byte_size(tag)::32>> <> "free" <> tag
+    file = stored_file!(w.project, clip_bytes, "clip-#{n}.mp4", "video/mp4")
+
     {:ok, clip} =
       Platform.Social.AgentDrafts.submit_clip(
         w.scope,
@@ -54,6 +59,8 @@ clips =
 # Two histories exercise current fallback and noncurrent-only removal. A post
 # and an open job guard separate clips without attaching shared fixture media.
 for clip <- [Enum.at(clips, 0), Enum.at(clips, 3)] do
+  file = Platform.Repo.get!(Platform.Files.File, clip.render_file_id)
+
   {:ok, _} =
     Platform.Repo.transaction(fn ->
       Platform.Social.ClipVersions.append!(clip.id, file, %{title: clip.title}, %{

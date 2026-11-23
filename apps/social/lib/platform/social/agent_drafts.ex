@@ -496,7 +496,16 @@ defmodule Platform.Social.AgentDrafts do
   `duration_s`/`width`/`height` (used only when the file cannot be probed).
   Any other key, including every review field and `rev`, is ignored.
 
-  In one transaction it inserts the clip with `Clip.submit_changeset/2`
+  Idempotent per profile and exact file: when the profile already has a LIVE
+  clip (`removed_at` nil) whose `render_file_id` is this file, an authorized
+  repeat returns that clip unchanged (its metadata and review state are not
+  edited, nothing is revived, no second clip or render is made, nothing is
+  broadcast) even if the title or caption differ. A removed clip does not
+  count, so a repeat after removal makes a new clip. The authority and file
+  checks run first, under the profile row lock, so a refused caller never
+  sees an existing clip.
+
+  Otherwise, in one transaction it inserts the clip with `Clip.submit_changeset/2`
   (external, rendered, review pending, rev 1; look = the profile's effective
   show look; `submitted_by_agent_id` = `agent_id`) and its rev-1
   `Platform.Social.ClipRender` row, then broadcasts the clip.
@@ -509,52 +518,105 @@ defmodule Platform.Social.AgentDrafts do
   def submit_clip(scope, profile_id, attrs, agent_id) do
     attrs = normalize(attrs)
 
+    # Pre-flight: an early refusal only. The decision of record is made again
+    # on the locked profile inside the transaction (`submit_locked/5`).
     with {:ok, profile} <- fetch_profile(scope, profile_id),
          {:ok, _project} <- render_project(profile),
          {:ok, file} <- check_clip_file(attrs["file_id"], profile),
          :ok <- validate_title(attrs),
-         {:ok, platforms} <- validate_platforms(attrs["platforms"], profile) do
-      look = ClipLook.effective(profile.show_look)
-
-      fields =
-        attrs
-        |> Map.take(~w(title caption speaker episode_code))
-        |> Map.merge(clip_file_meta(file, attrs))
-        |> Map.merge(%{
-          "source_label" => blank_default(attrs["source_label"], "external"),
-          "platforms" => platforms,
-          "render_file_id" => file.id,
-          "look" => look
-        })
+         {:ok, _platforms} <- validate_platforms(attrs["platforms"], profile) do
+      # Probed outside the lock (ffprobe can be slow); used only for a new clip.
+      meta = clip_file_meta(file, attrs)
 
       Repo.transaction(fn ->
-        clip =
-          %Clip{profile_id: profile.id}
-          |> Clip.submit_changeset(fields)
-          |> Changeset.put_change(:submitted_by_agent_id, agent_id)
-          |> Repo.insert()
-          |> case do
-            {:ok, clip} -> clip
-            {:error, cs} -> Repo.rollback(cs)
-          end
-
-        ClipVersions.append!(clip.id, file, %{}, %{
-          headline: clip.title,
-          caption: clip.caption,
-          source: %{"origin" => "external", "source_label" => clip.source_label},
-          provenance: %{"kind" => "external_submit"},
-          completion_key: "external_submit:" <> clip.id
-        })
+        case submit_locked(scope, profile.id, attrs, meta, agent_id) do
+          {:ok, result} -> result
+          {:error, _} = refusal -> Repo.rollback(refusal)
+        end
       end)
       |> case do
-        {:ok, clip} ->
+        {:ok, {:created, clip}} ->
           Social.broadcast_clip(clip)
           {:ok, clip}
 
-        error ->
+        {:ok, {:existing, clip}} ->
+          {:ok, clip}
+
+        {:error, {:error, _} = refusal} ->
+          refusal
+
+        {:error, _} = error ->
           error
       end
     end
+  end
+
+  # Under the profile row lock (`FOR UPDATE`, the broad lock first), so two
+  # submits of one file serialise. Every decision is made again on the locked
+  # profile, in the pre-flight's order, BEFORE an existing clip is looked up:
+  # a refused caller or an invalid file never learns of an existing clip.
+  # Then the profile's oldest LIVE clip (`removed_at` nil, the lifecycle
+  # every Clip read uses) on this exact file is returned untouched (no edit,
+  # no new render, no broadcast); else the clip and its rev-1 render are made.
+  defp submit_locked(scope, profile_id, attrs, meta, agent_id) do
+    with %Profile{} = profile <-
+           Social.lock_profile(scope, profile_id, :update) || {:error, :not_found},
+         {:ok, _project} <- render_project(profile),
+         {:ok, file} <- check_clip_file(attrs["file_id"], profile),
+         :ok <- validate_title(attrs),
+         {:ok, platforms} <- validate_platforms(attrs["platforms"], profile) do
+      case live_clip_for_file(profile.id, file.id) do
+        %Clip{} = existing ->
+          {:ok, {:existing, existing}}
+
+        nil ->
+          {:ok, {:created, insert_submitted(profile, file, attrs, meta, platforms, agent_id)}}
+      end
+    end
+  end
+
+  defp live_clip_for_file(profile_id, file_id) do
+    Repo.one(
+      from(c in Clip,
+        where:
+          c.profile_id == ^profile_id and c.render_file_id == ^file_id and is_nil(c.removed_at),
+        order_by: [asc: c.inserted_at, asc: c.id],
+        limit: 1
+      )
+    )
+  end
+
+  defp insert_submitted(profile, file, attrs, meta, platforms, agent_id) do
+    fields =
+      attrs
+      |> Map.take(~w(title caption speaker episode_code))
+      |> Map.merge(meta)
+      |> Map.merge(%{
+        "source_label" => blank_default(attrs["source_label"], "external"),
+        "platforms" => platforms,
+        "render_file_id" => file.id,
+        "look" => ClipLook.effective(profile.show_look)
+      })
+
+    clip =
+      %Clip{profile_id: profile.id}
+      |> Clip.submit_changeset(fields)
+      |> Changeset.put_change(:submitted_by_agent_id, agent_id)
+      |> Repo.insert()
+      |> case do
+        {:ok, clip} -> clip
+        {:error, cs} -> Repo.rollback(cs)
+      end
+
+    ClipVersions.append!(clip.id, file, %{}, %{
+      headline: clip.title,
+      caption: clip.caption,
+      source: %{"origin" => "external", "source_label" => clip.source_label},
+      provenance: %{"kind" => "external_submit"},
+      completion_key: "external_submit:" <> clip.id
+    })
+
+    clip
   end
 
   defp validate_title(attrs) do
