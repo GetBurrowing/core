@@ -1,6 +1,13 @@
 // KanbanDragDrop hook — HTML5 drag-and-drop for task cards between kanban columns.
 // Attach to the kanban board container. Cards with [data-task-id][draggable="true"]
 // become draggable; columns with [data-column] become drop targets.
+//
+// It also installs the open-iPhone-Duo peek (js/lib/kanban_peek.js, task
+// 01a20937 stage 2): #kanban-board can carry only one phx-hook. Off the open
+// Duo the peek writes nothing, so desktop drag-and-drop and phones are
+// unchanged.
+import { installKanbanPeek } from "../lib/kanban_peek.js";
+
 const KanbanDragDrop = {
   mounted() {
     this._draggedTaskId = null;
@@ -90,6 +97,8 @@ const KanbanDragDrop = {
     this.el.addEventListener("dragover", this._onDragOver);
     this.el.addEventListener("dragleave", this._onDragLeave);
     this.el.addEventListener("drop", this._onDrop);
+
+    this._uninstallPeek = installKanbanPeek(this.el, window, document);
   },
 
   destroyed() {
@@ -98,6 +107,8 @@ const KanbanDragDrop = {
     this.el.removeEventListener("dragover", this._onDragOver);
     this.el.removeEventListener("dragleave", this._onDragLeave);
     this.el.removeEventListener("drop", this._onDrop);
+    if (this._uninstallPeek) this._uninstallPeek();
+    this._uninstallPeek = null;
   },
 
   _clearHighlights() {

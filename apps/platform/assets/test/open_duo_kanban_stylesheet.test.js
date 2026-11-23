@@ -224,6 +224,18 @@ describe("app.css: the open iPhone Duo shows the kanban as fixed lanes", () => {
     expect(decl(board, "justify-content")).toBe("flex-start");
   });
 
+  it("stage 2: the leading padding reads --kanban-lead (js/lib/kanban_peek.js), 16px by default", () => {
+    const board = ruleFor(BOARD).body;
+    expect(decl(board, "padding-inline-start")).toBe("var(--kanban-lead, 16px)");
+    // The start override comes AFTER the shorthand, or the shorthand wins.
+    expect(board.indexOf("padding-inline-start")).toBeGreaterThan(board.indexOf("padding-inline:"));
+    // Snap must align to the same lead, or proximity snap undoes it at rest.
+    expect(decl(board, "scroll-padding-inline-start")).toBe("var(--kanban-lead, 16px)");
+    expect(board.indexOf("scroll-padding-inline-start")).toBeGreaterThan(
+      board.indexOf("scroll-padding-inline:")
+    );
+  });
+
   it("10. RTL: the inline axis uses logical properties only", () => {
     for (const r of rules().filter((r) => r.selector.includes(GATE))) {
       expect(r.body, r.selector).not.toMatch(/(?:^|[;\s])(?:padding|margin)-(?:left|right)\s*:/);

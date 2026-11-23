@@ -5343,7 +5343,14 @@ body, .font-suite {
   gap: 12px;
   overflow-x: auto;
   padding-inline: 16px;
+  /* --kanban-lead is written by js/lib/kanban_peek.js (stage 2) only while
+     the Duo is open: a lead wider than 16px when the lane at the inline end
+     would otherwise show a sliver under 32px. */
+  padding-inline-start: var(--kanban-lead, 16px);
+  /* Snap aligns a lane to the same lead, or proximity snap would pull a
+     widened lead straight back to 16px at rest. */
   scroll-padding-inline: 16px;
+  scroll-padding-inline-start: var(--kanban-lead, 16px);
   scroll-snap-type: x proximity;
 }
 
