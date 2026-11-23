@@ -85,6 +85,19 @@ const hookBody = readFileSync(
 
 const ScrollToBottom = new Function(hookBody)();
 
+// The width path's reading-anchor collaborators (task 01a20618 stage 2): a
+// width change of a reader scrolled past the follow band calls
+// `_holdAnchorAcrossWidthChange`, which reads `_readingAnchor` and calls
+// `_captureAnchor` / `_anchorRows`. They have to be the REAL ones, like every
+// other collaborator here, or this context is a hook that no longer exists.
+// The shim has no layout box (`getBoundingClientRect`), so they find no
+// anchor and move nothing; the arithmetic under test is unchanged.
+const ANCHOR_COLLABORATORS = {
+  _holdAnchorAcrossWidthChange: ScrollToBottom._holdAnchorAcrossWidthChange,
+  _captureAnchor: ScrollToBottom._captureAnchor,
+  _anchorRows: ScrollToBottom._anchorRows,
+};
+
 // ---------------------------------------------------------------------------
 // Scroll-container shim
 // ---------------------------------------------------------------------------
@@ -164,6 +177,7 @@ function makeCtx(scrollEl, { guarded = true } = {}) {
     },
     _keepThreadEntryVisible: ScrollToBottom._keepThreadEntryVisible,
     _onViewportResize: ScrollToBottom._onViewportResize,
+    ...ANCHOR_COLLABORATORS,
     // The realign-restore collaborator (task 01a084bf stage 5, second round).
     // `_onViewportResize` pays back an offset that was held because the pane had
     // no box when its RELOCATION was detected. Nothing in this file relocates
@@ -296,6 +310,7 @@ test("the FIRST arrival on the Chat tab still lands on the newest message", () =
     },
     _keepThreadEntryVisible: ScrollToBottom._keepThreadEntryVisible,
     _onViewportResize: ScrollToBottom._onViewportResize,
+    ...ANCHOR_COLLABORATORS,
     _pendingRealignTop: null,
     _applyPendingRealign: ScrollToBottom._applyPendingRealign,
     _hasMeasurableBox: ScrollToBottom._hasMeasurableBox,
@@ -376,6 +391,7 @@ test("a message arriving while the pane is box-less does not poison the remember
     _reportDistance() {},
     _keepThreadEntryVisible: ScrollToBottom._keepThreadEntryVisible,
     _onViewportResize: ScrollToBottom._onViewportResize,
+    ...ANCHOR_COLLABORATORS,
     _pendingRealignTop: null,
     _applyPendingRealign: ScrollToBottom._applyPendingRealign,
     _hasMeasurableBox: ScrollToBottom._hasMeasurableBox,
