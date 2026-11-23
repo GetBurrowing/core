@@ -82,7 +82,7 @@ defmodule Platform.Goals.Conversation do
   """
   @spec link(Goal.t(), binary()) :: {:ok, Goal.t()} | {:error, term()}
   def link(%Goal{} = goal, space_id) when is_binary(space_id) do
-    with %Space{} = space <- Repo.one(from(s in Space, where: s.id == ^space_id)),
+    with %Space{} = space <- Chat.get_space(space_id),
          {:ok, _space} <- tag(space, goal.id) do
       goal
       |> Ecto.Changeset.change(conversation_space_id: space.id)
@@ -152,7 +152,7 @@ defmodule Platform.Goals.Conversation do
   end
 
   defp new_space(%Goal{} = goal) do
-    case Repo.one(from(u in User, where: u.id == ^goal.owner_user_id)) do
+    case Platform.Accounts.get_user(goal.owner_user_id) do
       %User{} = owner ->
         create_space(owner, coach(goal), goal.org_id, %{"goal_id" => goal.id})
 
@@ -346,17 +346,16 @@ defmodule Platform.Goals.Conversation do
     end
   end
 
-  defp actor_row(space_id, %User{id: id}), do: participant_row(space_id, "user", id)
-  defp actor_row(space_id, %Agent{id: id}), do: participant_row(space_id, "agent", id)
-  defp actor_row(_space_id, _actor), do: nil
-
-  defp participant_row(space_id, type, id) do
-    Repo.one(
-      from(p in Participant,
-        where: p.space_id == ^space_id and p.participant_type == ^type and p.participant_id == ^id
-      )
-    )
+  # Through core's Chat API only: the agent's row by its strict lookup, the
+  # owner's from the space's (two-row) participant list.
+  defp actor_row(space_id, %User{id: id}) do
+    space_id
+    |> Chat.list_participants(participant_type: "user")
+    |> Enum.find(&(&1.participant_id == id))
   end
+
+  defp actor_row(space_id, %Agent{id: id}), do: Chat.get_agent_participant(space_id, id)
+  defp actor_row(_space_id, _actor), do: nil
 
   defp said?(msg),
     do: msg.author_participant_type in ["user", "agent"] and msg.content_type != "system"
@@ -460,7 +459,10 @@ defmodule Platform.Goals.Conversation do
   defp live_space(nil), do: nil
 
   defp live_space(space_id) do
-    Repo.one(from(s in Space, where: s.id == ^space_id and is_nil(s.archived_at)))
+    case Chat.get_space(space_id) do
+      %Space{archived_at: nil} = space -> space
+      _ -> nil
+    end
   end
 
   # The lock order of update_goal/3: clock, then goal. A goal that was never

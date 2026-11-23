@@ -165,6 +165,22 @@ defmodule Platform.Goals.ConversationReplyTest do
     assert Goals.goal_conversation(teammate, c.goal.id) == {:error, :forbidden}
   end
 
+  # The owner check runs BEFORE ensure_space: a non-owner who sees the goal
+  # never causes a space to be made, even though core would refuse the post.
+  test "a granted user's reply creates no space and no chat_spaces row", c do
+    granted = member!(c.org)
+    {:ok, _} = Goals.open_goal(c.owner, c.goal.id, {:user, granted.id})
+    spaces = Repo.aggregate(Platform.Chat.Space, :count)
+    participants = Repo.aggregate(Platform.Chat.Participant, :count)
+
+    assert Goals.say_in_goal(granted, c.goal.id, @words) == {:error, :forbidden}
+
+    assert space_id(c.goal) == nil
+    assert Repo.aggregate(Platform.Chat.Space, :count) == spaces
+    assert Repo.aggregate(Platform.Chat.Participant, :count) == participants
+    refute_received {:signal, _}
+  end
+
   test "a coachless goal still records the reply and signals nobody", c do
     goal = goal!(c.owner, c.org)
 
