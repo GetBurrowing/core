@@ -1042,7 +1042,8 @@ defmodule Platform.Goals do
       add_entry(actor, goal.id, %{
         kind: "ask",
         title: "Proposed change",
-        body: if(is_binary(why), do: String.slice(why, 0, Limits.max_question_chars())),
+        body:
+          if(is_binary(why), do: String.slice(why, 0, Platform.Goals.Limits.max_question_chars())),
         details: %{"request" => "change", "changes" => changes, "status" => "pending"}
       })
     end
