@@ -188,7 +188,10 @@ defmodule Platform.Goals.ToolsTest do
         "goal_retro" => [%{"wake_up_id" => id, "title" => "Review", "summary" => "What happened"}],
         "goal_takeaway_add" => [
           %{"goal_id" => id, "title" => "T", "body" => "B", "sources" => [%{"name" => "S"}]}
-        ]
+        ],
+        "goal_conversation_get" => [%{"goal_id" => id}],
+        "goal_log" => [%{"goal_id" => id, "title" => "Booked"}],
+        "goal_change_propose" => [%{"goal_id" => id, "changes" => %{"outreach" => "off"}}]
       }
     end
 
@@ -202,7 +205,8 @@ defmodule Platform.Goals.ToolsTest do
       for tool <- ToolDefinitions.names() -- ["goal_list", "goal_proposal_get", "goal_propose"] do
         real =
           Map.fetch!(args_for.(c.goal.id), tool) ++
-            if(tool in ["goal_get", "goal_takeaway_add"],
+            if(
+              tool in ~w(goal_get goal_takeaway_add goal_conversation_get goal_log goal_change_propose),
               do: [],
               else: Map.fetch!(args_for.(wake.id), tool)
             )
