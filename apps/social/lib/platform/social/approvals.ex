@@ -952,7 +952,10 @@ defmodule Platform.Social.Approvals do
             Map.merge(base, waiting_view(card, post, account, profile))
 
           :viewer ->
-            Map.put(base, :role, :viewer)
+            Map.merge(base, %{
+              role: :viewer,
+              no_actions_note: no_actions_note(card, post, account, profile, presentation)
+            })
         end
 
       if Map.has_key?(view, :queue_url) and presentation[:post_url],
@@ -1101,6 +1104,47 @@ defmodule Platform.Social.Approvals do
   end
 
   defp viewer_role(_viewer, _profile, _account), do: :viewer
+
+  # Why a :viewer's card has no Approve or Reject: display copy only, it grants
+  # nothing. Said only while the card is still waiting for a decision; a decided
+  # or otherwise settled post has its own status line and gets none. A missed
+  # post keeps its missed line and gets this too: who can act is the same answer.
+  # An owned account answers to its owner, never "the brand's approvers"; an
+  # owner who is gone leaves only a brand approver's Reject. The
+  # approvers' names are the ones the Connections tab already lists for anyone
+  # who can open this brand (the same read check as `presentation` having a
+  # title); a viewer without that read gets the role sentence with no names.
+  defp no_actions_note(card, post, account, profile, presentation) do
+    cond do
+      card.state != "pending" or post.status != "needs_approval" ->
+        nil
+
+      owned?(account) and Social.owner_gone?(account) ->
+        "This account's owner is unavailable. A brand approver can reject this post."
+
+      owned?(account) ->
+        case first_name(account.owner_user_id) do
+          "someone" -> "Only this account's owner can approve or reject this."
+          name -> "Only #{name} can approve or reject this."
+        end
+
+      true ->
+        base = "Only this brand's approvers can approve or reject this."
+
+        names =
+          if Map.has_key?(presentation, :title),
+            do: approver_names(profile),
+            else: []
+
+        if names == [], do: base, else: base <> " Approvers: " <> Enum.join(names, ", ") <> "."
+    end
+  end
+
+  defp approver_names(%Platform.Social.Profile{} = profile) do
+    for id <- profile.approver_user_ids || [],
+        Social.approver_check(profile.org_id, profile, id) == :ok,
+        do: user_name(id)
+  end
 
   defp owned?(%Account{owner_user_id: owner_id}), do: is_binary(owner_id)
 

@@ -115,6 +115,33 @@ defmodule PlatformWeb.SocialClipsReviewTest do
     assert has_element?(child, "[data-role='clips-pbar'] [data-role='clips-pbar-draft']")
   end
 
+  test "the details line says when the clip was added, in UTC, and nothing else about dates",
+       %{conn: conn, w: w} do
+    clip = clip!(w, "Dated")
+    at = ~U[2026-11-23 16:16:42.000000Z]
+    clip |> Ecto.Changeset.change(inserted_at: at) |> Repo.update!()
+    child = open(conn, w.approver)
+
+    assert has_element?(child, "[data-role='clip-meta']", "Added 23 Nov 2026, 16:16 UTC")
+    refute has_element?(child, "[data-role='clip-meta']", "Published")
+    refute has_element?(child, "[data-role='clip-meta']", "Scheduled")
+  end
+
+  test "Reject says why it is greyed until a note is written", %{conn: conn, w: w} do
+    clip!(w, "Needs a note")
+    child = open(conn, w.approver)
+
+    assert has_element?(child, "[data-role='clip-reject'][disabled]")
+    assert has_element?(child, "[data-role='clip-reject-why']", "To reject, write a note first.")
+
+    child
+    |> form("[data-role='clips-details'] form[phx-change='note']")
+    |> render_change(%{"note" => "payoff is cut off"})
+
+    assert has_element?(child, "[data-role='clip-reject']:not([disabled])")
+    refute has_element?(child, "[data-role='clip-reject-why']")
+  end
+
   test "each bay element is present with its copy", %{conn: conn, w: w} do
     [first, second, _] = three!(w)
     render_job!(w, 0.5, 30)
@@ -122,7 +149,14 @@ defmodule PlatformWeb.SocialClipsReviewTest do
 
     # Subhead.
     assert has_element?(child, "[data-role='clips-count'] b", "3 to review")
-    assert has_element?(child, "[data-role='clips-count']", "· one approval publishes")
+
+    assert has_element?(
+             child,
+             "[data-role='clips-count']",
+             "· choosing a clip makes drafts; nothing is posted yet"
+           )
+
+    refute has_element?(child, "[data-role='clips-count']", "one approval publishes")
     assert has_element?(child, "[data-role='clips-rendering-pill']", "1 rendering")
     assert has_element?(child, "[data-role='clips-rendering-pill']", "on clip tool")
 
@@ -223,18 +257,18 @@ defmodule PlatformWeb.SocialClipsReviewTest do
     assert id == second.id
   end
 
-  test "Create drafts is disabled and reads Pick a platform with no platforms ticked",
+  test "Create drafts keeps its label with no platforms ticked and says what to do first",
        %{conn: conn, w: w} do
     clip!(w, "No platforms", %{"platforms" => []})
     child = open(conn, w.approver)
 
-    assert has_element?(child, "[data-role='clip-draft'][disabled]", "Pick a platform")
-    refute has_element?(child, "[data-role='clip-draft']", "Create drafts")
+    assert has_element?(child, "[data-role='clip-draft'][disabled]", "Create drafts")
+    refute has_element?(child, "[data-role='clip-draft']", "Pick a platform")
 
     assert has_element?(
              child,
              "[data-role='clip-why']",
-             "Tick at least one platform to make drafts"
+             "First switch on where this should post, under Post to."
            )
 
     # Toggling a platform on saves it and enables Create drafts.

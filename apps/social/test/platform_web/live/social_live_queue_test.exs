@@ -792,6 +792,147 @@ defmodule PlatformWeb.SocialLiveQueueTest do
     assert Fake.calls(:publish) == []
   end
 
+  # ── Why a card has no buttons (copy and display only) ─────────────────
+
+  describe "why a card has no Approve or Reject" do
+    @only_approvers "Only this brand's approvers can approve or reject this."
+
+    test "an approver sees the actions and no explanation", %{conn: conn} = ctx do
+      {_idea, posts} = three!(ctx)
+      child = open(conn, ctx.h1)
+
+      for post <- posts do
+        assert has_element?(child, in_v(post, "[data-role='queue-approve']"))
+        refute has_element?(child, in_v(post, "[data-role='queue-no-actions']"))
+      end
+
+      refute render(child) =~ "Only this brand's approvers"
+    end
+
+    test "a read-only viewer sees why, names the approvers the Connections tab already names, and no buttons",
+         %{conn: conn} = ctx do
+      {idea, posts} = three!(ctx)
+      child = open(conn, ctx.n)
+
+      for post <- posts do
+        assert has_element?(child, "#{v(post)}[data-version-role='viewer']")
+        assert has_element?(child, in_v(post, "[data-role='queue-no-actions']"), @only_approvers)
+
+        assert has_element?(
+                 child,
+                 in_v(post, "[data-role='queue-no-actions']"),
+                 "Approvers: Hana One, Hugo Two"
+               )
+
+        refute has_element?(child, in_v(post, "[data-role='queue-approve']"))
+        refute has_element?(child, in_v(post, "[data-role='queue-reject']"))
+      end
+
+      refute has_element?(child, "#{card(idea.id)} button")
+
+      # Display only: nothing implies a title or a time would unlock buttons.
+      html = render(child)
+      refute html =~ ~r/add a title|set a time|change the time/i
+    end
+
+    test "with no approver left who can act, the line still explains without naming anyone",
+         %{conn: conn} = ctx do
+      {:ok, _} = Social.update_profile(ctx.org_id, ctx.profile, %{approver_user_ids: []})
+      {_idea, [li | _]} = three!(ctx)
+      child = open(conn, ctx.n)
+
+      assert has_element?(child, in_v(li, "[data-role='queue-no-actions']"), @only_approvers)
+      refute has_element?(child, in_v(li, "[data-role='queue-no-actions']"), "Approvers:")
+    end
+
+    test "an owned account says it is the owner's call, not the brand approvers'",
+         %{conn: conn} = ctx do
+      {:ok, _} = Social.set_account_owner(ctx.org_id, ctx.x, ctx.h2.id)
+      {_idea, [_li, x, _ig]} = three!(ctx)
+      child = open(conn, ctx.n)
+
+      assert has_element?(
+               child,
+               in_v(x, "[data-role='queue-no-actions']"),
+               "Only Hugo can approve or reject this."
+             )
+
+      refute has_element?(child, in_v(x, "[data-role='queue-no-actions']"), "brand's approvers")
+      refute has_element?(child, in_v(x, "[data-role='queue-no-actions']"), "Approvers:")
+    end
+
+    test "an owned account whose owner is archived says the owner is unavailable and approvers can only reject",
+         %{conn: conn} = ctx do
+      {:ok, _} = Social.set_account_owner(ctx.org_id, ctx.x, ctx.h2.id)
+      {_idea, [_li, x, _ig]} = three!(ctx)
+      {:ok, _} = Platform.Accounts.archive_user(Platform.Accounts.get_user(ctx.h2.id))
+      card = Approvals.live_card(x.id)
+
+      unavailable = "This account's owner is unavailable. A brand approver can reject this post."
+
+      assert %{role: :viewer, no_actions_note: ^unavailable} =
+               Approvals.card_view(card.id, {:user, ctx.n.id})
+
+      # The approver keeps exactly the existing Reject-only action.
+      assert %{role: :approver, actions: [:reject]} =
+               Approvals.card_view(card.id, {:user, ctx.h1.id})
+
+      child = open(conn, ctx.n)
+      assert has_element?(child, in_v(x, "[data-role='queue-no-actions']"), unavailable)
+      refute has_element?(child, in_v(x, "[data-role='queue-no-actions']"), "Only Hugo")
+      refute has_element?(child, in_v(x, "[data-role='queue-no-actions']"), "approve or reject")
+    end
+
+    test "a post already decided gets no 'approvers' line from card_view, and leaves the Queue",
+         %{conn: conn} = ctx do
+      {_idea, [li, x, _ig]} = three!(ctx)
+      card = Approvals.live_card(x.id)
+
+      assert %{role: :viewer, no_actions_note: @only_approvers <> _} =
+               Approvals.card_view(card.id, {:user, ctx.n.id})
+
+      assert {:ok, _} =
+               Approvals.decide_reject(
+                 card.canvas_id,
+                 ctx.h1,
+                 "Off brand",
+                 Approvals.fingerprint(x)
+               )
+
+      assert %{role: :viewer, no_actions_note: nil} =
+               Approvals.card_view(card.id, {:user, ctx.n.id})
+
+      child = open(conn, ctx.n)
+      refute has_element?(child, v(x))
+      refute render(child) =~ "Rejected by"
+      # The sibling still waiting does get the line.
+      assert has_element?(child, in_v(li, "[data-role='queue-no-actions']"), @only_approvers)
+    end
+
+    test "a missed post keeps its missed line and also says who can act, for the reader only",
+         %{conn: conn} = ctx do
+      {post, _card} = pending_post!(ctx, ctx.a)
+
+      post
+      |> Ecto.Changeset.change(scheduled_at: DateTime.add(DateTime.utc_now(), -3600))
+      |> Repo.update!()
+
+      child = open(conn, ctx.n)
+
+      assert has_element?(child, in_v(post, "[data-role='approval-missed']"))
+      assert has_element?(child, in_v(post, "[data-role='queue-no-actions']"), @only_approvers)
+      refute has_element?(child, in_v(post, "[data-role='queue-approve-new-time']"))
+      # Nothing suggests the old time can still be approved.
+      refute has_element?(child, in_v(post, "[data-role='queue-no-actions']"), "old time")
+
+      # The approver's existing actions on the same missed card are unchanged.
+      approver = open(conn, ctx.h1)
+      assert has_element?(approver, in_v(post, "[data-role='queue-approve-new-time']"))
+      assert has_element?(approver, in_v(post, "[data-role='queue-reject']"))
+      refute has_element?(approver, in_v(post, "[data-role='queue-no-actions']"))
+    end
+  end
+
   # ── Done means 5 and 8: the stale fingerprint ─────────────────────────
 
   describe "a stale fingerprint" do

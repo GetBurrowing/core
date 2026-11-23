@@ -77,6 +77,47 @@ defmodule PlatformWeb.SocialLiveQueueDraftsTest do
     refute has_element?(view, "#queue-draft-card-#{p.id} [data-role='draft-read-only']")
   end
 
+  defp link!(post, clip), do: post |> Ecto.Changeset.change(clip_id: clip.id) |> Repo.update!()
+
+  defp clip_for!(ctx, profile, title) do
+    {:ok, clip} =
+      Social.create_clip(ctx.org_id, profile, %{
+        source_url: "https://example.com/ep.mp4",
+        start_s: 1.0,
+        end_s: 9.0,
+        title: title
+      })
+
+    clip
+  end
+
+  test "a draft made from a clip says which clip, and only when the clip is this brand's",
+       %{conn: conn} = ctx do
+    clip = clip_for!(ctx, ctx.profile, "Imported clip check")
+    from_clip = link!(draft!(ctx, ctx.a, %{body: "From a clip"}), clip)
+    plain = draft!(ctx, ctx.a, %{body: "Typed by hand"})
+
+    {:ok, other_profile} =
+      Social.create_profile(ctx.org_id, %{
+        name: "Other brand #{System.unique_integer([:positive])}"
+      })
+
+    other = clip_for!(ctx, other_profile, "Another brand's clip")
+    foreign = link!(draft!(ctx, ctx.a, %{body: "Points elsewhere"}), other)
+
+    view = open(conn, ctx, ctx.h1)
+
+    assert has_element?(
+             view,
+             "#queue-draft-card-#{from_clip.id} [data-role='draft-from-clip']",
+             "From clip: Imported clip check"
+           )
+
+    refute has_element?(view, "#queue-draft-card-#{plain.id} [data-role='draft-from-clip']")
+    refute has_element?(view, "#queue-draft-card-#{foreign.id} [data-role='draft-from-clip']")
+    refute render(view) =~ "Another brand&#39;s clip"
+  end
+
   test "a project reader who may not edit sees the draft read only", %{conn: conn} = ctx do
     project = Platform.SocialFixtures.project!(ctx.org_id)
     {:ok, _} = Social.update_profile(ctx.org_id, ctx.profile, %{project_id: project.id})
@@ -524,5 +565,23 @@ defmodule PlatformWeb.SocialLiveQueueDraftsTest do
       refute has_element?(view, form(p))
       refute render(view) =~ "Draft caption"
     end
+  end
+
+  test "a YouTube draft with no title: only an editor is pointed at the title field; a reader gets no pointer",
+       %{conn: conn} = ctx do
+    p = draft!(ctx, ctx.yt, %{body: "Short film"})
+
+    editor = open(conn, ctx, ctx.h1)
+    assert has_element?(editor, "#{form(p)} input[name='title']")
+
+    reader = open(conn, ctx, ctx.n)
+
+    assert has_element?(
+             reader,
+             "#queue-draft-card-#{p.id} [data-role='draft-read-only']",
+             "Only an approver for this account can edit or send this draft."
+           )
+
+    refute has_element?(reader, "#queue-draft-card-#{p.id} input")
   end
 end
