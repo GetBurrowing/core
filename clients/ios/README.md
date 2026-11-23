@@ -281,12 +281,18 @@ closed come from the one rule, `OrientationPolicy.isOpen` (the window's
 shorter side is at least 600 pt), so the web never measures posture itself:
 its viewport on the open Duo sits under the iPad-style top tab bar, and
 `data-native-duo` alone does not say which display is in use.
-`BurrowBridgeViewController.syncDuoPosture` pushes
+`BurrowBridgeViewController.duoPostureScript` yields
 `NativeNavBarDocument.postureScript` on every new main-frame document, on
 `viewDidLayoutSubviews` and after every size transition, so it flips live
-on fold and unfold; it evaluates nothing when the posture did not change,
+on fold and unfold; it yields nothing when the posture did not change,
 and nothing at all off the Duo (the script is nil there,
-`DuoShellTests.testThePostureScriptIsProducedOnlyOnTheDuo`).
+`DuoShellTests.testThePostureScriptIsProducedOnlyOnTheDuo`). On layout and
+after a size transition, `syncLayoutToWeb` sends the
+`--native-tab-bar-height` update and the posture as ONE script, height
+first, so a `burrowNativeDuoPosture` listener already reads the new height
+and the web never renders half of the change (task 01a20618 stage 2). A
+rotation within the open posture sends no posture event; the web
+re-evaluates on window `resize` for that.
 
 **The strip never hides with the web's bar; a tap animates once (stage 5, 2026-11-21).**
 Two bugs seen on a real closed Duo at e71a56de8, reproduced on the closed

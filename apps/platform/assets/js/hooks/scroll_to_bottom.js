@@ -723,6 +723,8 @@ const ScrollToBottom = {
       if (preDistance <= NEAR_BOTTOM_PX) {
         this.scrollEl.scrollTop = this.scrollEl.scrollHeight;
         this._reportDistance();
+      } else {
+        this._holdAnchorAcrossWidthChange();
       }
       this._lastScrollHeight = this.scrollEl.scrollHeight;
       return;
@@ -1148,7 +1150,70 @@ const ScrollToBottom = {
       ? distance > nominal - THRESHOLD_HYSTERESIS_PX
       : distance > nominal + THRESHOLD_HYSTERESIS_PX;
   },
+  // ── The reading anchor across a width change (task 01a20618 stage 2) ────
+  //
+  // A fold, unfold or rotation of the iPhone Duo changes the pane's width,
+  // so every body rewraps and the scrollTop pixel a reader was at no longer
+  // shows the same message. The width path above already snaps a reader who
+  // was following the bottom; a reader scrolled up into history must keep
+  // the message they were reading at the same place on screen instead of
+  // keeping a pixel offset that now points at different text.
+  //
+  // `_captureAnchor` records the first visible row and its offset from the
+  // scroller's top on every report (scroll, patch, resize). By the time the
+  // ResizeObserver delivers the width change the layout has rewrapped under
+  // an unchanged scrollTop, so the row's new offset minus the recorded one
+  // is exactly how far to move. It reads only rows with a layout box and
+  // does nothing without one, so environments with no geometry (and a
+  // reader at the bottom) are unchanged.
+  _anchorRows() {
+    if (typeof this.el.querySelectorAll !== "function") return [];
+    return Array.from(this.el.querySelectorAll("[data-participant-id]")).filter(
+      (row) =>
+        typeof row.getBoundingClientRect === "function" &&
+        !row.classList?.contains?.("hidden"),
+    );
+  },
+  _captureAnchor() {
+    this._readingAnchor = null;
+    if (typeof this.scrollEl.getBoundingClientRect !== "function") return;
+    const rows = this._anchorRows();
+    if (rows.length === 0) return;
+    const box = this.scrollEl.getBoundingClientRect();
+    const top = box.top;
+    // Rows are in document order, so the first one whose top is inside the
+    // viewport (the first message the reader sees whole) is found by
+    // bisection. When none starts inside it (one tall message fills the
+    // pane), the one before it, which spans the top edge, is the anchor.
+    let lo = 0;
+    let hi = rows.length - 1;
+    let found = rows.length;
+    while (lo <= hi) {
+      const mid = (lo + hi) >> 1;
+      if (rows[mid].getBoundingClientRect().top >= top) {
+        found = mid;
+        hi = mid - 1;
+      } else {
+        lo = mid + 1;
+      }
+    }
+    if (found === rows.length || rows[found].getBoundingClientRect().top >= box.bottom) found -= 1;
+    if (found < 0) return;
+    const row = rows[found];
+    this._readingAnchor = { row, offset: row.getBoundingClientRect().top - top };
+  },
+  _holdAnchorAcrossWidthChange() {
+    const anchor = this._readingAnchor;
+    if (!anchor || typeof this.scrollEl.getBoundingClientRect !== "function") return;
+    if (anchor.row.isConnected === false) return;
+    const offset =
+      anchor.row.getBoundingClientRect().top - this.scrollEl.getBoundingClientRect().top;
+    const shift = Math.round(offset - anchor.offset);
+    if (shift !== 0) this.scrollEl.scrollTop = this.scrollEl.scrollTop + shift;
+    this._captureAnchor();
+  },
   _reportDistance(preDistance) {
+    this._captureAnchor();
     // Keep the pre-resize scrollHeight fresh on EVERY report path — not
     // just patches. A rewrap can happen with no LiveView patch at all
     // (webfont swap reflows every body once, mid-conversation), and when

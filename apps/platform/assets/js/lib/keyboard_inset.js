@@ -21,6 +21,8 @@
 // any pan: 0 once iOS has panned all the way down, positive if it panned less.
 // The dock rises by it, so it ends on the keyboard either way.
 
+import { DUO_POSTURE_EVENT } from "../hooks/native_back.js"
+
 // A soft keyboard is ~260px and up; browser chrome collapsing or expanding
 // is under ~120px. Anything between is ambiguous and reads as "closed".
 export const KEYBOARD_MIN_PX = 150
@@ -59,6 +61,11 @@ function startWatcher(win, vv, root) {
   // 714 after landscape -> portrait, data-keyboard-open absent).
   const baselines = new Map([[width, baseline]])
 
+  // Callers' change callbacks (watchKeyboard's `onChange`), run AFTER the
+  // state is on <html> so a caller that measures (ChatDock) reads the new
+  // state, never the one it replaces (task 01a20618 stage 2).
+  const subscribers = new Set()
+
   const apply = (state) => {
     if (state.open === last.open && state.inset === last.inset && state.height === last.height) return
     last = state
@@ -71,6 +78,7 @@ function startWatcher(win, vv, root) {
       root.style.removeProperty(KEYBOARD_INSET_VAR)
       root.style.removeProperty(VISUAL_VIEWPORT_H_VAR)
     }
+    for (const fn of subscribers) fn()
   }
 
   const update = () => {
@@ -90,15 +98,30 @@ function startWatcher(win, vv, root) {
     apply({ ...state, height: state.open ? Math.round(vv.height) : 0 })
   }
 
+  // Task 01a20618 stage 2: also on the window's own resize (a rotation
+  // within the open Duo sends no posture event) and on the native posture
+  // event (a fold or unfold, dispatched in the same script as the new
+  // --native-tab-bar-height). visualViewport alone is not guaranteed to
+  // fire for a size change in an app's web view.
+  const canListen = typeof win.addEventListener === "function"
   vv.addEventListener("resize", update)
   vv.addEventListener("scroll", update)
+  if (canListen) {
+    win.addEventListener("resize", update)
+    win.addEventListener(DUO_POSTURE_EVENT, update)
+  }
   update()
 
   return {
     count: 0,
+    subscribers,
     stop() {
       vv.removeEventListener("resize", update)
       vv.removeEventListener("scroll", update)
+      if (canListen) {
+        win.removeEventListener("resize", update)
+        win.removeEventListener(DUO_POSTURE_EVENT, update)
+      }
       apply({ open: false, inset: 0, height: 0 })
     },
   }
@@ -106,8 +129,9 @@ function startWatcher(win, vv, root) {
 
 // Attaches to window.visualViewport and mirrors the state onto <html> (which
 // LiveView never patches). Returns this caller's detach function; calling it
-// twice counts once. A no-op where there is no visualViewport.
-export function watchKeyboard(win = globalThis.window, doc = globalThis.document) {
+// twice counts once. A no-op where there is no visualViewport. `onChange`,
+// when given, runs after every change of the state, once it is applied.
+export function watchKeyboard(win = globalThis.window, doc = globalThis.document, onChange = null) {
   const vv = win && win.visualViewport
   const root = doc && doc.documentElement
   if (!vv || !root || typeof vv.addEventListener !== "function") return () => {}
@@ -118,11 +142,13 @@ export function watchKeyboard(win = globalThis.window, doc = globalThis.document
     watchers.set(vv, watcher)
   }
   watcher.count += 1
+  if (onChange) watcher.subscribers.add(onChange)
 
   let attached = true
   return () => {
     if (!attached) return
     attached = false
+    if (onChange) watcher.subscribers.delete(onChange)
     watcher.count -= 1
     if (watcher.count > 0) return
     watchers.delete(vv)

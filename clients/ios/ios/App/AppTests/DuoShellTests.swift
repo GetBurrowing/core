@@ -225,6 +225,89 @@ final class DuoShellTests: XCTestCase {
         window.isHidden = true
     }
 
+    // MARK: A fold, unfold or rotation is not a move (task 01a20618 stage 2)
+
+    /// A transition coordinator that runs every completion at once, so a
+    /// size transition can be driven in a unit test.
+    private final class ImmediateTransitionCoordinator: NSObject, UIViewControllerTransitionCoordinator {
+        let containerView: UIView
+        init(container: UIView) { containerView = container }
+
+        var isAnimated: Bool { false }
+        var presentationStyle: UIModalPresentationStyle { .none }
+        var initiallyInteractive: Bool { false }
+        var isInterruptible: Bool { false }
+        var isInteractive: Bool { false }
+        var isCancelled: Bool { false }
+        var transitionDuration: TimeInterval { 0 }
+        var percentComplete: CGFloat { 1 }
+        var completionVelocity: CGFloat { 1 }
+        var completionCurve: UIView.AnimationCurve { .linear }
+        var targetTransform: CGAffineTransform { .identity }
+        func viewController(forKey key: UITransitionContextViewControllerKey) -> UIViewController? { nil }
+        func view(forKey key: UITransitionContextViewKey) -> UIView? { nil }
+
+        func animate(
+            alongsideTransition animation: ((any UIViewControllerTransitionCoordinatorContext) -> Void)?,
+            completion: ((any UIViewControllerTransitionCoordinatorContext) -> Void)? = nil
+        ) -> Bool {
+            animation?(self)
+            completion?(self)
+            return true
+        }
+
+        func animateAlongsideTransition(
+            in view: UIView?, animation: ((any UIViewControllerTransitionCoordinatorContext) -> Void)?,
+            completion: ((any UIViewControllerTransitionCoordinatorContext) -> Void)? = nil
+        ) -> Bool {
+            animate(alongsideTransition: animation, completion: completion)
+        }
+
+        func notifyWhenInteractionEnds(_ handler: @escaping (any UIViewControllerTransitionCoordinatorContext) -> Void) {}
+        func notifyWhenInteractionChanges(_ handler: @escaping (any UIViewControllerTransitionCoordinatorContext) -> Void) {}
+    }
+
+    /// Unfold, rotate, rotate back and fold with the composer focused: the
+    /// keyboard's owner keeps focus, nothing counts as a move, the content
+    /// stays in its slot, and after each transition the content fills the
+    /// slot between its side safe-area insets, top to bottom.
+    func testAFoldUnfoldOrRotationKeepsFocusSlotAndFrame() throws {
+        let (shell, _, content, field, window, _) = try makeEditingShell()
+        let chatSlot = try XCTUnwrap(shell.selectedSlot)
+        var resigned = 0
+        field.onResign = { resigned += 1 }
+        for size in [innerPortrait, innerLandscape, innerPortrait, outerPortrait] {
+            shell.viewWillTransition(to: size, with: ImmediateTransitionCoordinator(container: window))
+            window.frame = CGRect(origin: .zero, size: size)
+            window.layoutIfNeeded()
+            XCTAssertEqual(shell.editingEndedForMove, 0, "size \(size): a transition is not a move")
+            XCTAssertEqual(resigned, 0, "size \(size): editing never ended")
+            XCTAssertTrue(field.isFirstResponder, "size \(size): the composer keeps focus")
+            XCTAssertTrue(content.parent === chatSlot, "size \(size): the content stays in its slot")
+            XCTAssertTrue(shell.selectedSlot === chatSlot, "size \(size): the selection stays")
+            let slot = chatSlot.view!
+            let frame = content.view.convert(content.view.bounds, to: slot)
+            XCTAssertEqual(frame.minX, slot.safeAreaInsets.left, accuracy: 0.5, "size \(size)")
+            XCTAssertEqual(frame.maxX, slot.bounds.width - slot.safeAreaInsets.right, accuracy: 0.5, "size \(size)")
+            XCTAssertEqual(frame.minY, 0, accuracy: 0.5, "size \(size)")
+            XCTAssertEqual(frame.maxY, slot.bounds.height, accuracy: 0.5, "size \(size)")
+            XCTAssertEqual(slot.bounds.size, size, "size \(size): the slot follows the window")
+        }
+        window.isHidden = true
+    }
+
+    /// The bridge's layout script: height before posture, one script.
+    func testTheLayoutScriptSendsTheHeightBeforeThePosture() throws {
+        let posture = try XCTUnwrap(NativeNavBarDocument.postureScript(isDuo: true, open: true))
+        let height = NativeTabBarDocument.heightUpdate(0)
+        let script = try XCTUnwrap(NativeTabBarDocument.layoutScript(height: height, posture: posture))
+        let heightAt = try XCTUnwrap(script.range(of: NativeTabBarDocument.heightVariable)).lowerBound
+        let postureAt = try XCTUnwrap(script.range(of: NativeNavBarDocument.duoPostureEvent)).lowerBound
+        XCTAssertLessThan(heightAt, postureAt)
+        XCTAssertNil(NativeTabBarDocument.layoutScript(height: nil, posture: nil))
+        XCTAssertEqual(NativeTabBarDocument.layoutScript(height: nil, posture: posture), posture)
+    }
+
     // MARK: Stage 5: the strip never hides with the web's floating bar
 
     /// A conversation with its composer focused, a full-screen viewer, a
@@ -413,6 +496,77 @@ final class DuoShellTests: XCTestCase {
         // Slid off the bottom by setTabBarHidden: still the bottom bar.
         XCTAssertTrue(DuoLayout.barAtBottom(barFrameInWindow: CGRect(x: 0, y: 960, width: 669, height: 96), windowHeight: 951))
         XCTAssertTrue(DuoLayout.barAtBottom(barFrameInWindow: .zero, windowHeight: nil), "no window yet: as today")
+    }
+
+    // MARK: The stale bottom reservation (task 01a20618)
+
+    /// `--native-tab-bar-height` as the bridge computes it
+    /// (`BurrowBridgeViewController.currentTabBarHeight`) on the Duo.
+    private func reservation(bar frame: CGRect, windowHeight: CGFloat, safeAreaBottom: CGFloat) -> CGFloat {
+        let offBottom = !DuoLayout.barAtBottom(barFrameInWindow: frame, windowHeight: windowHeight)
+        return NativeTabBarFactory.bottomReservation(barHeight: frame.height, safeAreaBottom: safeAreaBottom, verticalBar: offBottom)
+    }
+
+    /// Frames from the physical Duo's probe log: the side strip in the open
+    /// landscape, mid-turn at the full portrait height, and folded. A
+    /// full-height strip's midY is exactly half the window; it must still
+    /// read as off the bottom, or the bridge reserves 951 - 83 = 868px.
+    func testAFullHeightSideStripIsNeverTheBottomBar() {
+        XCTAssertFalse(DuoLayout.barAtBottom(barFrameInWindow: CGRect(x: 600, y: 0, width: 69, height: 951), windowHeight: 951))
+        XCTAssertFalse(DuoLayout.barAtBottom(barFrameInWindow: CGRect(x: 882, y: 0, width: 69, height: 669), windowHeight: 669))
+        XCTAssertFalse(DuoLayout.barAtBottom(barFrameInWindow: CGRect(x: 397, y: 0, width: 69, height: 678), windowHeight: 678))
+        XCTAssertEqual(reservation(bar: CGRect(x: 600, y: 0, width: 69, height: 951), windowHeight: 951, safeAreaBottom: 83), 0)
+        XCTAssertTrue(DuoLayout.barAtBottom(barFrameInWindow: CGRect(x: 0, y: 868, width: 669, height: 83), windowHeight: 951))
+    }
+
+    /// A laid-out bar's 0 replaces a stale non-zero value; a 0 before the
+    /// bar's first layout is still skipped.
+    func testALaidOutBarsZeroClearsAStaleReservation() {
+        XCTAssertTrue(NativeTabBarDocument.shouldPushHeight(0, pushed: 868, barOffBottom: false, barLaidOut: true))
+        XCTAssertFalse(NativeTabBarDocument.shouldPushHeight(0, pushed: nil, barOffBottom: false, barLaidOut: false))
+        XCTAssertTrue(NativeTabBarDocument.shouldPushHeight(0, pushed: 49, barOffBottom: true, barLaidOut: false))
+        XCTAssertTrue(NativeTabBarDocument.shouldPushHeight(49, pushed: nil, barOffBottom: false, barLaidOut: false))
+        XCTAssertFalse(NativeTabBarDocument.shouldPushHeight(0, pushed: 0, barOffBottom: false, barLaidOut: true))
+    }
+
+    /// The device's sequence, folded -> unfolded in landscape -> portrait,
+    /// replayed layout by layout through the bridge's push rule. The web
+    /// must end with no bottom reservation: the open Duo's bottom bar sits
+    /// inside the 83pt safe area the web already pads by.
+    func testTheUnfoldedLandscapeToPortraitTurnEndsWithNoReservation() {
+        // (bar frame in window, window height, safe-area bottom), in log order.
+        let layouts: [(CGRect, CGFloat, CGFloat)] = [
+            (CGRect(x: 397, y: 0, width: 69, height: 678), 678, 34),
+            (CGRect(x: 0, y: 586, width: 951, height: 83), 669, 83),
+            (CGRect(x: 882, y: 0, width: 69, height: 669), 669, 34),
+            (CGRect(x: 600, y: 0, width: 69, height: 951), 951, 83),
+            (CGRect(x: 0, y: 868, width: 669, height: 83), 951, 83),
+        ]
+        var pushed: CGFloat?
+        for (frame, height, safe) in layouts {
+            let value = reservation(bar: frame, windowHeight: height, safeAreaBottom: safe)
+            let offBottom = !DuoLayout.barAtBottom(barFrameInWindow: frame, windowHeight: height)
+            if NativeTabBarDocument.shouldPushHeight(value, pushed: pushed, barOffBottom: offBottom, barLaidOut: true) { pushed = value }
+        }
+        XCTAssertEqual(pushed, 0)
+    }
+
+    /// The shell hosted in a window at the open sizes: wherever the system
+    /// puts the bar, the reservation the bridge would push is 0 or the
+    /// bar's height above the content's safe area, never more.
+    func testTheHostedShellReservesNoMoreThanTheBarAtTheOpenSizes() throws {
+        let (shell, _, content) = makeShell()
+        let window = UIWindow(frame: CGRect(origin: .zero, size: innerPortrait))
+        window.rootViewController = shell
+        window.makeKeyAndVisible()
+        for size in [innerPortrait, innerLandscape, innerPortrait] {
+            window.frame = CGRect(origin: .zero, size: size)
+            window.layoutIfNeeded()
+            let bar = shell.tabBar.convert(shell.tabBar.bounds, to: nil)
+            let value = reservation(bar: bar, windowHeight: size.height, safeAreaBottom: content.view.safeAreaInsets.bottom)
+            XCTAssertLessThanOrEqual(value, min(bar.width, bar.height), "size \(size) bar \(bar)")
+        }
+        window.isHidden = true
     }
 
     // MARK: Orientation (task 01a1fa7c stage 2)

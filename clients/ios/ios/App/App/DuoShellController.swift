@@ -64,8 +64,17 @@ enum DuoLayout {
     /// layout B'), and the web then reserves nothing at the bottom. Decided
     /// from where the bar is, not from a size class: a bar slid off the
     /// bottom by `setTabBarHidden` still counts as bottom.
+    ///
+    /// A bar taller than it is wide is the side strip, never a bottom bar
+    /// (task 01a20618). Turning the open Duo from landscape to portrait lays
+    /// the strip out once at the full portrait height, 600,0,69x951 in a
+    /// 951pt window, before it moves to the bottom. That frame's midY is
+    /// exactly half the window, so the midY test alone read it as a bottom
+    /// bar, and the bridge pushed `--native-tab-bar-height: 868px` (951 bar
+    /// height less the 83pt safe area), measured on the physical Duo.
     static func barAtBottom(barFrameInWindow frame: CGRect, windowHeight: CGFloat?) -> Bool {
         guard let windowHeight, windowHeight > 0 else { return true }
+        if frame.height > frame.width { return false }
         return frame.midY >= windowHeight / 2
     }
 }

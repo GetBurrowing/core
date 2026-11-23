@@ -41,7 +41,12 @@ export const MENTION_MAX_H_VAR = "--compose-mention-max-h"
 const ChatDock = {
   mounted() {
     this._height = null
-    this._unwatchKeyboard = watchKeyboard()
+    // Re-measured on every keyboard state change, AFTER the watcher has put
+    // the state on <html> (task 01a20618 stage 2): the dock's height
+    // follows `data-keyboard-open`, and the `chat:dock-resized` a measure
+    // dispatches is what ScrollToBottom pins on. A fold, unfold or rotation
+    // reaches the watcher as the native posture event or a window resize.
+    this._unwatchKeyboard = watchKeyboard(window, document, () => this._measure())
     this._viewportChanged = () => this._measure()
     this._viewport = window.visualViewport
     this._viewport?.addEventListener("resize", this._viewportChanged)
