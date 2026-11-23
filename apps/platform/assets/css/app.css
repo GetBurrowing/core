@@ -5301,6 +5301,129 @@ body, .font-suite {
   display: none !important;
 }
 
+/* Open iPhone Duo task board (task 01a20937 stage 1, direction canvas
+   01a2093b-50df). The open Duo is 669 or 951 CSS px wide, under `lg`, so the
+   board used to render the phone section list (`#tasks-mobile-list`, w-full
+   rows the width of the screen) and hide the kanban (`#kanban-board`,
+   `hidden lg:flex`): no columns to scroll between, and every card a
+   screen-wide row. In the open posture the kanban shows instead, as a row of
+   FIXED 288px lanes; the viewport decides how many lanes show, never their
+   width.
+
+   Every rule is gated on the two attributes native writes on <html>
+   (data-native-duo and data-native-duo-open; the same read as `openDuo` in
+   js/lib/duo_more_page.js). Native flips data-native-duo-open live on fold
+   and unfold, so the board follows posture with no JS. The folded front
+   screen (data-native-duo alone), regular iPhones (neither attribute) and
+   desktop never match, so they render exactly as before. A width breakpoint
+   was rejected: min-width 640px would also flip an iPhone in landscape, an
+   iPad and narrow desktop windows.
+
+   Unlayered on purpose, so they beat the Tailwind utilities they override
+   (`hidden`, `lg:hidden`, `w-56`, `min-w-[14rem]`, `truncate`). Lengths are
+   px, never vw, rem or %, and the inline axis uses logical properties only,
+   so right-to-left mirrors. Guarded by
+   assets/test/open_duo_kanban_stylesheet.test.js.
+
+   Deferred, not dropped: the 5-line title clamp at accessibility text sizes
+   (the web cannot read the Dynamic Type step), drag lift and drop colours
+   (kanban_drag_drop.js is unchanged) and cancelling a drag on fold. */
+:root[data-native-duo][data-native-duo-open] #tasks-mobile-list {
+  display: none;
+}
+
+/* The row of lanes. Scroll snap is proximity, not mandatory, so a slow drag
+   can rest between lanes; the trailing padding-inline leaves 16px after the
+   last lane when scrolled fully; flex-start keeps a short board at the
+   inline start with the leftover ground after it. */
+:root[data-native-duo][data-native-duo-open] #kanban-board {
+  display: flex;
+  flex-direction: row;
+  justify-content: flex-start;
+  gap: 12px;
+  overflow-x: auto;
+  padding-inline: 16px;
+  /* --kanban-lead is written by js/lib/kanban_peek.js (stage 2) only while
+     the Duo is open: a lead wider than 16px when the lane at the inline end
+     would otherwise show a sliver under 32px. */
+  padding-inline-start: var(--kanban-lead, 16px);
+  /* Snap aligns a lane to the same lead, or proximity snap would pull a
+     widened lead straight back to 16px at rest. */
+  scroll-padding-inline: 16px;
+  scroll-padding-inline-start: var(--kanban-lead, 16px);
+  scroll-snap-type: x proximity;
+}
+
+/* Opening a task hides the board under the panel, as the section list is
+   hidden today (task_detail_component.ex adds max-lg:hidden to the list). */
+:root[data-native-duo][data-native-duo-open]:has([data-role="task-detail-panel"]) #kanban-board {
+  display: none;
+}
+
+/* A lane is 288px whatever the viewport, and never grows or shrinks. */
+:root[data-native-duo][data-native-duo-open] #kanban-board > [data-column] {
+  flex: none;
+  width: 288px;
+  min-width: 288px;
+  max-width: 288px;
+  scroll-snap-align: start;
+}
+
+/* The column header stays at the top of its lane; the count keeps its size
+   and the name truncates first. */
+:root[data-native-duo][data-native-duo-open] #kanban-board > [data-column] > :first-child {
+  position: sticky;
+  top: 0;
+  z-index: 1;
+  min-width: 0;
+}
+
+:root[data-native-duo][data-native-duo-open] #kanban-board > [data-column] > :first-child > h2 {
+  flex: 1 1 auto;
+  min-width: 0;
+  overflow: hidden;
+  text-overflow: ellipsis;
+  white-space: nowrap;
+}
+
+:root[data-native-duo][data-native-duo-open] #kanban-board > [data-column] > :first-child > :last-child {
+  flex-shrink: 0;
+}
+
+/* The lane's own vertical scroller ends above the phone chrome. */
+:root[data-native-duo][data-native-duo-open] #kanban-board > [data-column] > :last-child {
+  padding-bottom: calc(8px + var(--phone-chrome-bottom, 0px));
+}
+
+/* Every card and card group is exactly the lane's inner width; a card never
+   sets its own width, and nothing inside it can push it wider. */
+:root[data-native-duo][data-native-duo-open] #kanban-board > [data-column] > :last-child > *,
+:root[data-native-duo][data-native-duo-open] #kanban-board [data-role="task-card-group"] > [data-task-id] {
+  width: 100%;
+  min-width: 0;
+  max-width: 100%;
+  overflow-wrap: anywhere;
+}
+
+/* Unbreakable text: a pasted URL or branch name in a title wraps anywhere
+   and the title clamps to 3 lines instead of truncate's single line. */
+:root[data-native-duo][data-native-duo-open] #kanban-board [data-role="card-title"],
+:root[data-native-duo][data-native-duo-open] #kanban-board [data-stack-card] h3 {
+  display: -webkit-box;
+  -webkit-box-orient: vertical;
+  -webkit-line-clamp: 3;
+  line-clamp: 3;
+  overflow: hidden;
+  white-space: normal;
+  overflow-wrap: anywhere;
+}
+
+/* The section list held the phone sort control; with the list hidden, the
+   desktop one (lg-only by default) is shown in the filter rail instead. */
+:root[data-native-duo][data-native-duo-open] [data-role="board-sort-control"] {
+  display: inline-flex;
+}
+
 /* The composer's ＋ sheet (redesign rung 11): base-200, the composer's and
    the tab bar's fill (direction canvas 01a16558 m1); its rows and tiles are
    base-100 on it. */

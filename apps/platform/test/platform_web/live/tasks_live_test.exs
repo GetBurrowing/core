@@ -707,6 +707,50 @@ defmodule PlatformWeb.TasksLiveTest do
     assert has_element?(view, ~s(#tasks-mobile-list [data-role="mobile-board-sort-control"]))
   end
 
+  # Task 01a20937 stage 1: on the open iPhone Duo app.css shows the kanban as a
+  # row of fixed lanes that scrolls sideways (gated on <html> attributes, so
+  # LiveViewTest sees the same markup at every width). Each lane is a group
+  # VoiceOver can announce by position; the phone section list is untouched.
+  test "kanban lanes are labelled groups with their position and count; the section list is unchanged",
+       %{conn: conn} do
+    project = create_project()
+    create_task(project, %{title: "Lane backlog one", status: "backlog"})
+    create_task(project, %{title: "Lane backlog two", status: "backlog"})
+    create_task(project, %{title: "Lane in progress", status: "in_progress"})
+
+    conn = authenticated_conn(conn)
+    {:ok, view, html} = live(conn, ~p"/tasks")
+
+    lanes =
+      html
+      |> LazyHTML.from_fragment()
+      |> LazyHTML.query("#kanban-board > [data-column]")
+      |> Enum.map(fn lane ->
+        {lane |> LazyHTML.attribute("data-column") |> hd(),
+         lane |> LazyHTML.attribute("role") |> hd(),
+         lane |> LazyHTML.attribute("aria-label") |> hd()}
+      end)
+
+    total = length(lanes)
+    assert total >= 3
+
+    for {{_col, role, label}, i} <- Enum.with_index(lanes, 1) do
+      assert role == "group"
+      assert label =~ ~r/^.+, column #{i} of #{total}, \d+ tasks?$/
+    end
+
+    labels = Map.new(lanes, fn {col, _role, label} -> {col, label} end)
+    assert labels["backlog"] =~ ~r/^Backlog, column 1 of #{total}, 2 tasks$/
+    assert labels["in_progress"] =~ ~r/, 1 task$/
+    assert labels["blocked"] =~ ~r/, 0 tasks$/
+
+    # The phone section list renders exactly as before.
+    assert html =~ ~s(class="lg:hidden flex flex-1 flex-col overflow-hidden")
+    assert html =~ ~s(class="hidden lg:flex flex-1 gap-3 overflow-x-auto p-4")
+    assert has_element?(view, ~s(#tasks-mobile-list [data-role="mobile-board-sort-control"]))
+    refute has_element?(view, ~s(#tasks-mobile-list [role="group"]))
+  end
+
   # ── Scope-filter rail (Stage 3 of Tasks v2 — 2026-05-19) ─────────────────
 
   describe "scope-filter rail (Stage 3 — desktop only)" do

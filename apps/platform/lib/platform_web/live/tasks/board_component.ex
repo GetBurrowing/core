@@ -589,8 +589,12 @@ defmodule PlatformWeb.Tasks.BoardComponent do
             <:body>You're not sponsoring any tasks or stacks currently.</:body>
           </.empty_state>
         </div>
+        <%!-- Each lane is a labelled group, "<name>, column <i> of <n>,
+           <count> tasks" (task 01a20937 stage 1, direction canvas
+           01a2093b-50df state 10), so VoiceOver announces where a lane
+           sits in a row that scrolls sideways on the open iPhone Duo. --%>
         <div
-          :for={{col_key, col_label} <- @kanban_columns}
+          :for={{{col_key, col_label}, col_index} <- Enum.with_index(@kanban_columns, 1)}
           :if={
             not ((@sponsor_filter == :mine or search_active?(@task_search_query)) and
                    board_columns_empty?(
@@ -602,6 +606,24 @@ defmodule PlatformWeb.Tasks.BoardComponent do
           }
           id={"column-#{col_key}"}
           data-column={col_key}
+          role="group"
+          aria-label={
+            column_group_label(
+              col_label,
+              col_index,
+              length(@kanban_columns),
+              length(
+                desktop_column_items_for_scope(
+                  @columns,
+                  @desktop_stacks_by_column,
+                  col_key,
+                  @board_scope,
+                  @board_sort,
+                  @stack_board_data
+                )
+              )
+            )
+          }
           class="flex w-56 min-w-[14rem] flex-shrink-0 flex-col rounded-box bg-base-200/50 transition-all duration-150"
         >
           <%!-- Column header --%>
@@ -843,6 +865,13 @@ defmodule PlatformWeb.Tasks.BoardComponent do
   end
 
   defp format_count(n), do: to_string(n)
+
+  # The accessible name of a kanban lane: "<name>, column <i> of <n>, <count>
+  # tasks" (task 01a20937 stage 1).
+  defp column_group_label(label, index, total, count) do
+    noun = if count == 1, do: "task", else: "tasks"
+    "#{label}, column #{index} of #{total}, #{count} #{noun}"
+  end
 
   # ── Board cards (task 01a13884 stage 2) ─────────────────────────────────
   #
