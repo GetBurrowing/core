@@ -478,3 +478,26 @@ test("touch compatibility hover cannot trap motion; real mouse hover still pause
     globalThis.ResizeObserver = oldResize
   }
 })
+
+test("stationary details pause motion, focus the heading and return to the details button", () => {
+  let focused = null
+  let panel = {querySelector: () => ({focus: () => {focused = "heading"}})}
+  const button = {focus: () => {focused = "button"}}
+  const hook = Object.assign(Object.create(SocialTicker), {
+    _motion: new TickerMotion(), _reconcile() {},
+    el: {querySelector: selector => selector === "[data-role='ticker-video-details']" ? panel : button}
+  })
+  hook._detailsEvent({open: true, account_id: "synthetic-account"})
+  assert.equal(hook._motion.running, false)
+  assert.equal(focused, "heading")
+  hook._motion.interact("focus", false)
+  assert.equal(hook._motion.running, false, "moving focus out of viewport cannot resume an open panel")
+  panel = null
+  hook._detailsEvent({open: false, account_id: "synthetic-account"})
+  assert.equal(focused, "button")
+  assert.equal(hook._motion.interactions.has("details"), false)
+  hook._motion.paused = true
+  hook._detailsEvent({open: true, account_id: "synthetic-account"})
+  hook._detailsEvent({open: false, account_id: "synthetic-account"})
+  assert.equal(hook._motion.running, false, "closing preserves the explicit Pause preference")
+})

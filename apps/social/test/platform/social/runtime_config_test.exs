@@ -8,12 +8,14 @@ defmodule Platform.Social.RuntimeConfigTest do
   alias Platform.Social.RuntimeConfig
 
   setup do
+    saved_publications = Application.fetch_env(:social, :youtube_publications_enabled)
     saved_publisher = Application.fetch_env(:social, :publisher)
     saved_zernio = Application.fetch_env(:social, Platform.Social.Publisher.Zernio)
     saved_trends = Application.fetch_env(:social, :trends)
     saved_wikimedia = Application.fetch_env(:social, :trends_wikimedia)
 
     on_exit(fn ->
+      restore(:youtube_publications_enabled, saved_publications)
       restore(:publisher, saved_publisher)
       restore(Platform.Social.Publisher.Zernio, saved_zernio)
       restore(:trends, saved_trends)
@@ -25,6 +27,23 @@ defmodule Platform.Social.RuntimeConfigTest do
 
   defp restore(key, {:ok, value}), do: Application.put_env(:social, key, value)
   defp restore(key, :error), do: Application.delete_env(:social, key)
+
+  test "publication requests default off on every startup, and only explicit true enables" do
+    for value <- [nil, "", "false", "invalid-private-value", "1"] do
+      Application.put_env(:social, :youtube_publications_enabled, true)
+      env = if is_nil(value), do: %{}, else: %{"SOCIAL_YOUTUBE_PUBLICATIONS_ENABLED" => value}
+      log = capture_log(fn -> RuntimeConfig.apply(env) end)
+      assert Application.get_env(:social, :youtube_publications_enabled) == false
+      refute log =~ "invalid-private-value"
+
+      if value in ["invalid-private-value", "1"] do
+        assert log =~ "SOCIAL_YOUTUBE_PUBLICATIONS_ENABLED is invalid"
+      end
+    end
+
+    RuntimeConfig.apply(%{"SOCIAL_YOUTUBE_PUBLICATIONS_ENABLED" => " TrUe "})
+    assert Application.get_env(:social, :youtube_publications_enabled) == true
+  end
 
   describe "with no publisher configured (the prod case)" do
     setup do

@@ -1295,8 +1295,12 @@ defmodule Platform.Social do
     |> Changeset.change(status: "connected", disconnect_alerted_at: nil)
     |> Repo.update()
     |> case do
-      {:ok, account} -> account
-      {:error, changeset} -> Repo.rollback(changeset)
+      {:ok, account} ->
+        Platform.Social.PublicationSync.invalidate_connection!(account)
+        account
+
+      {:error, changeset} ->
+        Repo.rollback(changeset)
     end
   end
 

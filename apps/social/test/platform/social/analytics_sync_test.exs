@@ -118,6 +118,29 @@ defmodule Platform.Social.AnalyticsSyncTest do
     end)
   end
 
+  test "publication switch off preserves the scheduled post and follower analytics sweep", c do
+    saved = Application.fetch_env(:social, :youtube_publications_enabled)
+    Application.put_env(:social, :youtube_publications_enabled, false)
+
+    on_exit(fn ->
+      case saved do
+        {:ok, value} -> Application.put_env(:social, :youtube_publications_enabled, value)
+        :error -> Application.delete_env(:social, :youtube_publications_enabled)
+      end
+    end)
+
+    ready(c.org)
+    stub(fn conn, _ -> Req.Test.json(conn, page([snapshot()])) end)
+    opts = [start: true, boot_sweep: false, pace_ms: 0, max_requests: 1, notify: self()]
+    assert {:noreply, ^opts} = AnalyticsSync.handle_info(:sweep, opts)
+    assert_received {:analytics_swept, _}
+    assert_received {:http, "/api/v1/analytics/delta", _}
+    assert_received {:http, "/api/v1/metrics/accounts", _}
+    refute_received {:http, "/api/v1/metrics/posts", _}
+    assert Repo.get!(Post, c.post.id).metrics == %{"views" => 12400}
+    assert Repo.aggregate(Platform.Social.Analytics.PublicationOrgBudget, :count) == 0
+  end
+
   test "bootstrap captures cursor before baseline, checkpoints and resumes after restart", c do
     Repo.update!(Ecto.Changeset.change(c.post, analytics_external_id: nil))
 

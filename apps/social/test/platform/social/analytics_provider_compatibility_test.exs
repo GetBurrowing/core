@@ -245,7 +245,19 @@ defmodule Platform.Social.AnalyticsProviderCompatibilityTest do
     end
   end
 
-  test "a mixed-provider org requests exactly its Zernio post and follower endpoints", c do
+  test "a mixed-provider org requests exactly its Zernio post, follower and publication endpoints",
+       c do
+    # This control exercises the explicitly enabled publication-list path.
+    saved_publications = Application.fetch_env(:social, :youtube_publications_enabled)
+    Application.put_env(:social, :youtube_publications_enabled, true)
+
+    on_exit(fn ->
+      case saved_publications do
+        {:ok, value} -> Application.put_env(:social, :youtube_publications_enabled, value)
+        :error -> Application.delete_env(:social, :youtube_publications_enabled)
+      end
+    end)
+
     account = Repo.update!(Ecto.Changeset.change(c.account, provider: "zernio"))
 
     {:ok, other} =
@@ -303,6 +315,21 @@ defmodule Platform.Social.AnalyticsProviderCompatibilityTest do
               }
             }
 
+          String.ends_with?(conn.request_path, "/metrics/posts") ->
+            %{
+              "data" => [],
+              "pagination" => %{"nextCursor" => nil, "hasMore" => false},
+              "meta" => %{
+                "entity" => "posts",
+                "granularity" => "total",
+                "fromDate" => q["fromDate"],
+                "toDate" => q["toDate"],
+                "stale" => false,
+                "staleSince" => nil,
+                "missingIds" => []
+              }
+            }
+
           true ->
             suffix = if q["postId"] == "publisher-A", do: "A", else: "B"
 
@@ -324,7 +351,7 @@ defmodule Platform.Social.AnalyticsProviderCompatibilityTest do
       Req.Test.json(conn, response)
     end)
 
-    sweep(max_requests: 4)
+    sweep(max_requests: 4, clock: fn -> @now end)
 
     requests =
       Stream.repeatedly(fn ->
@@ -349,6 +376,15 @@ defmodule Platform.Social.AnalyticsProviderCompatibilityTest do
                 "fromDate" => "2026-08-24",
                 "toDate" => "2026-11-21",
                 "limit" => "100"
+              }},
+             {"/api/v1/metrics/posts",
+              %{
+                "accountId" => "account-A",
+                "fromDate" => "2026-10-23",
+                "toDate" => "2026-11-21",
+                "origin" => "all",
+                "sort" => "published-desc",
+                "limit" => "50"
               }}
            ]
 

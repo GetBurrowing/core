@@ -3,7 +3,14 @@ defmodule Platform.Social.AccountTicker do
   import Ecto.Query
   alias Platform.{Repo, Social}
   alias Platform.Social.{Account, FollowerSnapshot, FollowerSyncState, Post, Profile, Results}
-  alias Platform.Social.Analytics.SyncState
+
+  alias Platform.Social.Analytics.{
+    Publication,
+    PublicationCoverage,
+    Publications,
+    PublicationSyncState,
+    SyncState
+  }
 
   @doc "Persist a validated page for a trusted current account; the sync caller holds its profile/account locks."
   def record(%Account{} = account, %{data: data}, now) do
@@ -53,6 +60,24 @@ defmodule Platform.Social.AccountTicker do
     now = Keyword.get(opts, :now, DateTime.utc_now())
     ids = Enum.map(accounts, & &1.id)
 
+    publication_profiles =
+      for profile <- profiles,
+          match?(%Platform.Accounts.User{archived_at: nil}, user),
+          Social.Studio.require_social_use(user.id, profile) == :ok,
+          into: %{},
+          do: {profile.id, profile}
+
+    publication_ids =
+      for a <- accounts,
+          a.platform == "youtube" and a.status == "connected",
+          Platform.Social.Analytics.AccountScope.zernio_account?(a),
+          Map.has_key?(publication_profiles, a.profile_id),
+          do: a.id
+
+    publication_states =
+      Repo.all(from(s in PublicationSyncState, where: s.account_id in ^publication_ids))
+      |> Enum.group_by(& &1.account_id)
+
     snapshots =
       Repo.all(
         from(s in FollowerSnapshot,
@@ -101,6 +126,10 @@ defmodule Platform.Social.AccountTicker do
         follower_target: if(account.platform != "linkedin", do: account.follower_target),
         follower_state: state,
         views: views(Map.get(versions, account.id, []), synced),
+        latest_video:
+          if(account.id in publication_ids,
+            do: latest_video(account, profile, Map.get(publication_states, account.id, []), now)
+          ),
         views_failed?:
           not is_nil(syncs[profile.org_id]) and
             syncs[profile.org_id].post_refresh_error not in [nil, "pending"],
@@ -111,6 +140,159 @@ defmodule Platform.Social.AccountTicker do
     end)
     |> Enum.sort_by(
       &{&1.profile.name, &1.account.platform, &1.account.handle || "", &1.account.id}
+    )
+  end
+
+  defp latest_video(account, profile, states, now) do
+    binding = %{
+      org_id: profile.org_id,
+      profile_id: profile.id,
+      account_id: account.id,
+      provider_account_ref: account.provider_account_ref,
+      provider_profile_ref: profile.provider_profile_ref,
+      platform: "youtube"
+    }
+
+    video = Publications.latest(binding, now: now)
+    # Native identity is checked again at the presentation boundary, including
+    # cache rows written by an older binary or manually repaired by an operator.
+    video =
+      if video && is_binary(video.native_id) &&
+           Regex.match?(~r/\A[A-Za-z0-9_-]{11}\z/, video.native_id),
+         do: video
+
+    states =
+      Enum.filter(
+        states,
+        &(&1.provider_account_ref == account.provider_account_ref and
+            &1.provider_profile_ref == profile.provider_profile_ref)
+      )
+
+    discovery = project_publication_state(Enum.find(states, &(&1.kind == "discovery")))
+    refresh = project_publication_state(Enum.find(states, &(&1.kind == "refresh")))
+    {discovery, search_incomplete?, newer_possible?} = discovery_coverage(discovery, video)
+
+    refresh_failed? =
+      not is_nil(refresh.last_error) and
+        refresh.last_error not in ["incomplete_observation", "coverage_repaired"] and
+        video_in_window?(video, refresh.from_date, refresh.to_date)
+
+    %{
+      video: video,
+      checked_ranges: discovery.checked_ranges,
+      checked_from: discovery.checked_from,
+      checked_to: discovery.checked_to,
+      discovery: discovery,
+      refresh: refresh,
+      search_incomplete: search_incomplete?,
+      newer_possible: newer_possible?,
+      coverage_unavailable: discovery.coverage_unavailable,
+      figures_stale:
+        not is_nil(video) and
+          (video.source_stale or video.ambiguous_count > 0 or
+             video.sync_status in ["pending", "unavailable"] or refresh_failed?),
+      response_set_aside: not is_nil(video) and video.ambiguous_count > 0,
+      selection_uncertain: newer_not_listed?(binding, video, now),
+      history_incomplete: search_incomplete?,
+      history_exhausted: discovery.history_exhausted,
+      last_error: discovery.last_error || refresh.last_error,
+      fetched_at: video && video.fetched_at
+    }
+  end
+
+  defp project_publication_state(state) do
+    defaults = %{
+      checked_ranges: [],
+      incomplete_ranges: [],
+      coverage_repaired_at: nil,
+      checked_from: nil,
+      checked_to: nil,
+      from_date: nil,
+      to_date: nil,
+      completed_at: nil,
+      cursor: nil,
+      scan_started_at: nil,
+      last_error: nil,
+      attempted_at: nil,
+      history_exhausted: false
+    }
+
+    value = if state, do: Map.merge(defaults, Map.take(state, Map.keys(defaults))), else: defaults
+    checked = PublicationCoverage.normalize(value.checked_ranges)
+    incomplete = PublicationCoverage.normalize(value.incomplete_ranges)
+    unavailable? = not is_list(checked) or not is_list(incomplete)
+
+    value
+    |> Map.put(:checked_ranges, if(not unavailable?, do: checked, else: []))
+    |> Map.put(:incomplete_ranges, if(not unavailable?, do: incomplete, else: []))
+    |> Map.put(:coverage_unavailable, unavailable?)
+  end
+
+  defp discovery_coverage(%{coverage_unavailable: true} = discovery, _video),
+    do: {discovery, true, false}
+
+  defp discovery_coverage(discovery, video) do
+    # Per-page listed_from/listed_to are not completed scan coverage. Only the
+    # durable checked intervals may establish dates checked, with gaps retained.
+    ends =
+      Enum.map(
+        discovery.checked_ranges ++ discovery.incomplete_ranges,
+        &Date.from_iso8601!(&1["to"])
+      )
+
+    ends = if discovery.to_date, do: [discovery.to_date | ends], else: ends
+    frontier = if ends != [], do: Enum.max_by(ends, &Date.to_gregorian_days/1)
+
+    first =
+      cond do
+        video -> DateTime.to_date(video.published_at)
+        discovery.from_date -> discovery.from_date
+        discovery.checked_ranges != [] -> Date.from_iso8601!(hd(discovery.checked_ranges)["from"])
+        true -> nil
+      end
+
+    gaps =
+      if first && frontier && Date.compare(first, frontier) != :gt,
+        do: PublicationCoverage.missing(discovery.checked_ranges, first, frontier),
+        else: []
+
+    incomplete = PublicationCoverage.normalize(discovery.incomplete_ranges ++ gaps)
+
+    incomplete? =
+      discovery.checked_ranges == [] or incomplete != [] or
+        (not is_nil(video) and
+           not PublicationCoverage.covers?(discovery.checked_ranges, first, first))
+
+    newer? =
+      not is_nil(video) and
+        Enum.any?(incomplete, fn interval ->
+          Date.compare(Date.from_iso8601!(interval["to"]), DateTime.to_date(video.published_at)) ==
+            :gt
+        end)
+
+    {Map.put(discovery, :incomplete_ranges, incomplete), incomplete?, newer?}
+  end
+
+  defp video_in_window?(%{published_at: %DateTime{} = published}, %Date{} = first, %Date{} = last) do
+    day = DateTime.to_date(published)
+    Date.compare(day, first) != :lt and Date.compare(day, last) != :gt
+  end
+
+  defp video_in_window?(_, _, _), do: false
+
+  defp newer_not_listed?(_, nil, _), do: false
+
+  defp newer_not_listed?(binding, video, now) do
+    Repo.exists?(
+      from(p in Publication,
+        where: p.account_id == ^binding.account_id and p.profile_id == ^binding.profile_id,
+        where:
+          p.provider_account_ref == ^binding.provider_account_ref and
+            p.provider_profile_ref == ^binding.provider_profile_ref,
+        where:
+          p.platform == "youtube" and p.not_listed and p.published_at > ^video.published_at and
+            p.published_at <= ^now
+      )
     )
   end
 

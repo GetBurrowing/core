@@ -180,4 +180,316 @@ defmodule Platform.Social.AccountTickerTest do
     Repo.insert!(%Social.Analytics.SyncState{org_id: w.org_id, retry_at: DateTime.add(@now, 60)})
     refute own_row(w, a).views_failed?
   end
+
+  defp publication!(w, account, attrs \\ %{}) do
+    struct!(
+      Social.Analytics.Publication,
+      Map.merge(
+        %{
+          account_id: account.id,
+          profile_id: w.profile.id,
+          provider_account_ref: account.provider_account_ref,
+          provider_profile_ref: w.profile.provider_profile_ref,
+          platform: "youtube",
+          native_id: "abcdefghijk",
+          published_at: ~U[2026-10-01 12:00:00.000000Z],
+          vendor_synced_at: @now,
+          fetched_at: @now,
+          last_listed_at: @now,
+          listed_from: ~D[2026-10-01],
+          listed_to: ~D[2026-10-30],
+          is_owner: true,
+          sync_status: "synced",
+          metrics: %{"views" => 0}
+        },
+        attrs
+      )
+    )
+    |> Repo.insert!()
+  end
+
+  test "latest account-associated publication survives seven days, permits null flags and requires project access" do
+    w = Platform.SocialStudioFixtures.studio_world!()
+
+    profile =
+      Repo.update!(Ecto.Changeset.change(w.profile, provider_profile_ref: "publication-profile"))
+
+    w = %{w | profile: profile}
+
+    {:ok, a} =
+      Social.create_account(w.org_id, profile, %{
+        platform: "youtube",
+        provider: "zernio",
+        provider_account_ref: "publication-account",
+        status: "connected"
+      })
+
+    video = publication!(w, a)
+
+    row =
+      Enum.find(AccountTicker.rows(w.approver, [profile.id], now: @now), &(&1.account.id == a.id))
+
+    assert row.latest_video.video.id == video.id
+    assert row.latest_video.video.metrics["views"] == 0
+
+    newer =
+      publication!(w, a, %{
+        native_id: "ZYXWVUTSRQP",
+        published_at: ~U[2026-11-20 12:00:00.000000Z],
+        listed_from: ~D[2026-11-20],
+        listed_to: ~D[2026-11-20],
+        is_owner: nil,
+        is_ad: nil,
+        metrics: %{"views" => 66}
+      })
+
+    row =
+      Enum.find(AccountTicker.rows(w.approver, [profile.id], now: @now), &(&1.account.id == a.id))
+
+    assert row.latest_video.video.id == newer.id
+    assert row.latest_video.video.metrics["views"] == 66
+    assert row.latest_video.history_incomplete
+    assert row.latest_video.checked_from == nil
+    assert row.latest_video.checked_to == nil
+
+    assert {:ok, _} =
+             Platform.Access.Grants.deny(%{
+               principal: {:user, w.approver.id},
+               permission: "social.use",
+               resource: {:project, w.project.id}
+             })
+
+    row =
+      Enum.find(AccountTicker.rows(w.approver, [profile.id], now: @now), &(&1.account.id == a.id))
+
+    assert row.latest_video == nil
+    assert row.views.posts == 0
+  end
+
+  test "projectless legacy accounts retain existing ticker without publication projection", %{
+    w: w,
+    account: a
+  } do
+    publication!(w, a)
+    assert own_row(w, a).latest_video == nil
+    assert own_row(w, a).followers.value == nil
+  end
+
+  defp publication_world! do
+    w = Platform.SocialStudioFixtures.studio_world!()
+
+    profile =
+      Repo.update!(Ecto.Changeset.change(w.profile, provider_profile_ref: "range-profile"))
+
+    {:ok, a} =
+      Social.create_account(w.org_id, profile, %{
+        platform: "youtube",
+        provider: "zernio",
+        provider_account_ref: "range-account",
+        status: "connected"
+      })
+
+    {%{w | profile: profile}, a}
+  end
+
+  defp range(first, last), do: %{"from" => first, "to" => last}
+
+  defp publication_state!(w, a, kind, attrs) do
+    struct!(
+      Social.Analytics.PublicationSyncState,
+      Map.merge(
+        %{
+          account_id: a.id,
+          kind: kind,
+          provider_account_ref: a.provider_account_ref,
+          provider_profile_ref: w.profile.provider_profile_ref
+        },
+        attrs
+      )
+    )
+    |> Repo.insert!()
+  end
+
+  defp latest_projection(w, a),
+    do:
+      Enum.find(
+        AccountTicker.rows(w.approver, [w.profile.id], now: @now),
+        &(&1.account.id == a.id)
+      ).latest_video
+
+  test "an older cached video cannot inherit completeness from a newer checked window" do
+    {w, a} = publication_world!()
+    publication!(w, a)
+    checked = [range("2026-11-01", "2026-11-21")]
+
+    publication_state!(w, a, "discovery", %{
+      checked_ranges: checked,
+      from_date: ~D[2026-11-01],
+      to_date: ~D[2026-11-21],
+      completed_at: @now
+    })
+
+    projection = latest_projection(w, a)
+    assert projection.checked_ranges == checked
+    assert projection.search_incomplete
+    assert projection.newer_possible
+    refute projection.figures_stale
+  end
+
+  test "failed historical discovery does not stale a successfully refreshed video's figures" do
+    {w, a} = publication_world!()
+    publication!(w, a, %{published_at: ~U[2026-11-20 12:00:00.000000Z]})
+    checked = [range("2026-11-01", "2026-11-21")]
+    unfinished = [range("2026-10-01", "2026-10-30")]
+
+    publication_state!(w, a, "discovery", %{
+      checked_ranges: checked,
+      incomplete_ranges: unfinished,
+      from_date: ~D[2026-10-01],
+      to_date: ~D[2026-10-30],
+      last_error: "refresh_failed",
+      attempted_at: @now
+    })
+
+    publication_state!(w, a, "refresh", %{
+      checked_ranges: [range("2026-11-20", "2026-11-20")],
+      from_date: ~D[2026-11-20],
+      to_date: ~D[2026-11-20],
+      completed_at: @now
+    })
+
+    projection = latest_projection(w, a)
+    assert projection.search_incomplete
+    refute projection.newer_possible
+    refute projection.figures_stale
+    assert projection.discovery.incomplete_ranges == unfinished
+    assert projection.discovery.last_error == "refresh_failed"
+    assert projection.refresh.last_error == nil
+  end
+
+  test "refresh pagination alone does not turn completed discovery into an incomplete search" do
+    {w, a} = publication_world!()
+    publication!(w, a, %{published_at: ~U[2026-11-20 12:00:00.000000Z]})
+    checked = [range("2026-11-01", "2026-11-21")]
+
+    publication_state!(w, a, "discovery", %{
+      checked_ranges: checked,
+      from_date: ~D[2026-11-01],
+      to_date: ~D[2026-11-21],
+      completed_at: @now
+    })
+
+    publication_state!(w, a, "refresh", %{
+      incomplete_ranges: [range("2026-11-20", "2026-11-20")],
+      from_date: ~D[2026-11-20],
+      to_date: ~D[2026-11-20],
+      cursor: "opaque"
+    })
+
+    projection = latest_projection(w, a)
+    refute projection.search_incomplete
+    refute projection.newer_possible
+    refute projection.figures_stale
+    assert projection.refresh.cursor == "opaque"
+  end
+
+  test "checked ranges keep gaps and only a failed refresh covering this video stales figures" do
+    {w, a} = publication_world!()
+    publication!(w, a, %{published_at: ~U[2026-11-04 12:00:00.000000Z]})
+    checked = [range("2026-11-01", "2026-11-05"), range("2026-11-10", "2026-11-21")]
+
+    publication_state!(w, a, "discovery", %{
+      checked_ranges: checked,
+      from_date: ~D[2026-11-10],
+      to_date: ~D[2026-11-21],
+      completed_at: @now
+    })
+
+    state =
+      publication_state!(w, a, "refresh", %{
+        from_date: ~D[2026-11-20],
+        to_date: ~D[2026-11-20],
+        last_error: "refresh_failed",
+        attempted_at: @now
+      })
+
+    projection = latest_projection(w, a)
+    assert projection.checked_ranges == checked
+    assert projection.search_incomplete
+    assert projection.newer_possible
+    refute projection.figures_stale
+    Repo.update!(Ecto.Changeset.change(state, from_date: ~D[2026-11-04], to_date: ~D[2026-11-04]))
+    assert latest_projection(w, a).figures_stale
+
+    Repo.update!(
+      Ecto.Changeset.change(Repo.get!(Platform.Social.Analytics.PublicationSyncState, state.id),
+        last_error: "coverage_repaired"
+      )
+    )
+
+    refute latest_projection(w, a).figures_stale
+  end
+
+  test "a demoted newer observation qualifies fallback selection without inventing a date gap" do
+    {w, a} = publication_world!()
+    fallback = publication!(w, a, %{published_at: ~U[2026-11-19 12:00:00.000000Z]})
+
+    publication!(w, a, %{
+      native_id: "ZYXWVUTSRQP",
+      published_at: ~U[2026-11-20 12:00:00.000000Z]
+    })
+
+    binding = %{
+      org_id: w.org_id,
+      profile_id: w.profile.id,
+      account_id: a.id,
+      platform: "youtube",
+      provider_account_ref: a.provider_account_ref,
+      provider_profile_ref: w.profile.provider_profile_ref
+    }
+
+    query = %{kind: "refresh", from_date: ~D[2026-11-20], to_date: ~D[2026-11-20], cursor: nil}
+
+    assert {:ok, _} =
+             Platform.Social.Analytics.Publications.apply_page(
+               binding,
+               query,
+               %{data: [], has_more: false, next_cursor: nil, stale: false, missing_ids: []},
+               @now
+             )
+
+    assert Repo.get_by!(Platform.Social.Analytics.Publication, native_id: "ZYXWVUTSRQP").not_listed
+
+    publication_state!(w, a, "discovery", %{
+      checked_ranges: [range("2026-11-01", "2026-11-21")],
+      from_date: ~D[2026-11-01],
+      to_date: ~D[2026-11-21],
+      completed_at: @now
+    })
+
+    projection = latest_projection(w, a)
+    assert projection.video.id == fallback.id
+    assert projection.selection_uncertain
+    refute projection.search_incomplete
+    refute projection.newer_possible
+  end
+
+  test "malformed persisted coverage cannot silently become a complete empty history" do
+    {w, a} = publication_world!()
+    publication!(w, a)
+
+    publication_state!(w, a, "discovery", %{
+      checked_ranges: [%{"from" => "broken", "to" => "2026-11-21"}],
+      from_date: ~D[2026-11-01],
+      to_date: ~D[2026-11-21],
+      completed_at: @now
+    })
+
+    projection = latest_projection(w, a)
+    assert projection.search_incomplete
+    assert projection.coverage_unavailable
+    assert projection.checked_ranges == []
+    assert projection.discovery.incomplete_ranges == []
+    refute projection.newer_possible
+  end
 end
