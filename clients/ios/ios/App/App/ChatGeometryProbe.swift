@@ -275,7 +275,24 @@
                   }
                   tree = tall.slice(0, 10).join(" | ");
                 }
+                // The first message row starting inside the timeline: its index
+                // and a hash of its DOM id, so "the same message is still in
+                // view" can be read across a fold or rotation. No content.
+                var anchor = "none";
+                if (sc) {
+                  var top = sc.getBoundingClientRect().top;
+                  var rows = sc.querySelectorAll("[data-participant-id]");
+                  for (var r = 0; r < rows.length; r++) {
+                    var rb = rows[r].getBoundingClientRect();
+                    if (rb.top >= top) { anchor = r + "/" + rows.length + "#" + hash(rows[r].id || "") + "@" + n(rb.top - top); break; }
+                  }
+                }
+                var draft = "na";
+                var input = dock && dock.querySelector("textarea, [contenteditable='true']");
+                if (input) draft = ((input.value != null ? input.value : input.textContent) || "").length > 0 ? "nonempty" : "empty";
                 var parts = [
+                  "anchor=" + anchor,
+                  "draft=" + draft,
                   "dockTree=" + tree,
                   "path=" + (location.pathname.split("/")[1] || "") + "#" + hash(location.pathname),
                   "units(vh/dvh/svh/lvh)=" + units,
