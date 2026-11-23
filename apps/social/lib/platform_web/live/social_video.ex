@@ -9,6 +9,7 @@ defmodule PlatformWeb.SocialVideo do
   attr :muted, :boolean, default: false
   attr :class, :any, default: nil
   attr :video_class, :any, default: "block size-full max-w-full object-cover"
+  attr :video_style, :string, default: nil
 
   def player(assigns) do
     ~H"""
@@ -29,6 +30,7 @@ defmodule PlatformWeb.SocialVideo do
         muted={@muted}
         aria-label={@alt}
         class={@video_class}
+        style={@video_style}
       >
       </video>
       <div class="pointer-events-none absolute inset-0 z-20 flex items-center justify-center">

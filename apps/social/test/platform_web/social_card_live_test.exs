@@ -41,6 +41,39 @@ defmodule PlatformWeb.SocialCardLiveTest do
     with_target(view, "##{id}")
   end
 
+  test "card reserves video dimensions without loading the source", ctx do
+    video = media_file!(ctx.org_id, "video/mp4")
+
+    {_post, sized_card} =
+      pending_post!(ctx, ctx.a, %{
+        media_file_ids: [video.id],
+        media_meta: %{video.id => %{"width" => 1080, "height" => 1920}}
+      })
+
+    {_post, plain_card} = pending_post!(ctx, ctx.a, %{media_file_ids: [video.id]})
+
+    render_card = fn card ->
+      render_component(PlatformWeb.SocialCardComponent,
+        id: "video-card-#{card.id}",
+        card_id: card.id,
+        rev: 1,
+        canvas_id: card.canvas_id,
+        viewer: {:user, ctx.h1.id}
+      )
+    end
+
+    sized = render_card.(sized_card) |> Floki.parse_document!()
+    plain = render_card.(plain_card) |> Floki.parse_document!()
+
+    selector =
+      "[data-role='social-video'][data-src='/files/blob/#{video.id}'] video:not([src])[controls][preload='none']"
+
+    assert [_] = Floki.find(sized, selector)
+    assert Floki.attribute(sized, selector, "style") == ["aspect-ratio: 1080 / 1920;"]
+    assert [_] = Floki.find(plain, selector)
+    assert Floki.attribute(plain, selector, "style") in [[], [""]]
+  end
+
   test "a non-approving profile reader gets visibly actionable exact-post links", ctx do
     ctx = with_ideas_runtime(ctx)
     view = open(ctx.n, ctx)

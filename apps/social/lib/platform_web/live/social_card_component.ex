@@ -652,6 +652,7 @@ defmodule PlatformWeb.SocialCardComponent do
             poster={m[:poster] || nil}
             class="mx-auto max-w-full rounded"
             video_class="mx-auto block max-h-80 w-auto max-w-full rounded"
+            video_style={aspect(m)}
           />
           <img
             :if={!String.starts_with?(m.content_type || "", "video/")}
