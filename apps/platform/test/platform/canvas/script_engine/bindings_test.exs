@@ -16,6 +16,7 @@ defmodule Platform.Canvas.ScriptEngine.BindingsTest do
 
   alias Platform.Canvas.ScriptEngine
   alias Platform.Canvas.ScriptEngine.Bindings
+  alias Platform.CodeMode.PermitDiagnostics
   alias Platform.Chat
   alias Platform.Chat.Canvas.Server, as: CanvasServer
   alias Platform.Tenancy
@@ -80,12 +81,21 @@ defmodule Platform.Canvas.ScriptEngine.BindingsTest do
   defp user_actor(user), do: %{type: "user", id: user.id, display_name: user.name}
 
   defp run(source, canvas, actor, extra \\ %{}) do
-    ScriptEngine.run(
-      %{"name" => "h", "engine" => "js", "source" => source},
-      %{"type" => "call", "args" => %{}},
-      %{"keys" => %{}, "collections" => %{}},
-      Map.merge(%{canvas_id: canvas.id, actor: actor, now: 0}, extra)
-    )
+    before = PermitDiagnostics.snapshot()
+
+    result =
+      ScriptEngine.run(
+        %{"name" => "h", "engine" => "js", "source" => source},
+        %{"type" => "call", "args" => %{}},
+        %{"keys" => %{}, "collections" => %{}},
+        Map.merge(%{canvas_id: canvas.id, actor: actor, now: 0}, extra)
+      )
+
+    if match?({:error, "timeout", _}, result) do
+      PermitDiagnostics.report("bindings timeout", before, PermitDiagnostics.snapshot())
+    end
+
+    result
   end
 
   # Records the binding's response (or the error it threw) as ops, so a test

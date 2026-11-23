@@ -27,6 +27,7 @@ defmodule Platform.CodeMode.RuntimeContentionTest do
 
   alias Platform.CodeMode.Limits
   alias Platform.CodeMode.Permits
+  alias Platform.CodeMode.PermitDiagnostics
   alias Platform.CodeMode.Runtime
 
   @wall_ms 1_000
@@ -46,6 +47,7 @@ defmodule Platform.CodeMode.RuntimeContentionTest do
   end
 
   test "native_workers() + 2 looping guests all stop at their wall limit" do
+    before = PermitDiagnostics.snapshot()
     guests = Permits.native_workers() + 2
     limits = %{Limits.get() | fuel_per_ms: 1_000_000_000}
 
@@ -85,37 +87,45 @@ defmodule Platform.CodeMode.RuntimeContentionTest do
     # starved setup call blocks without limit) fails as a named run rather
     # than as a test timeout.
     collected = Task.yield_many(runs, @collect_ms)
+    after_snapshot = PermitDiagnostics.snapshot()
     results = for {_task, {:ok, r}} <- collected, do: r
     crashed = for {_task, {:exit, reason}} <- collected, do: reason
-    assert crashed == [], "runs crashed: #{inspect(crashed)}"
 
-    stuck =
-      for {{task, nil}, i} <- Enum.with_index(collected, 1) do
-        Task.shutdown(task, :brutal_kill)
-        i
+    try do
+      assert crashed == [], "runs crashed: #{inspect(crashed)}"
+
+      stuck =
+        for {{task, nil}, i} <- Enum.with_index(collected, 1) do
+          Task.shutdown(task, :brutal_kill)
+          i
+        end
+
+      report = Enum.map_join(results, "\n", &inspect/1)
+
+      assert stuck == [],
+             "guests #{inspect(stuck)} had not returned #{@collect_ms} ms after starting " <>
+               "(wall #{@wall_ms})\n#{report}"
+
+      for r <- results do
+        assert {:error, kind, _} = r.outcome
+        assert kind in ["fuel", "timeout"], "guest #{r.guest} ended #{kind}\n#{report}"
+
+        assert is_integer(r.idle_after_ms) and r.idle_after_ms <= @grace_ms,
+               "guest #{r.guest}'s Store was busy #{inspect(r.idle_after_ms)} ms after its run " <>
+                 "returned (grace #{@grace_ms} ms)\n#{report}"
+
+        assert r.took_ms <= @wall_ms + @grace_ms + @setup_slack_ms,
+               "guest #{r.guest} returned #{r.took_ms} ms after its run began " <>
+                 "(wall #{@wall_ms} + grace #{@grace_ms} + setup #{@setup_slack_ms})\n#{report}"
       end
 
-    report = Enum.map_join(results, "\n", &inspect/1)
-
-    assert stuck == [],
-           "guests #{inspect(stuck)} had not returned #{@collect_ms} ms after starting " <>
-             "(wall #{@wall_ms})\n#{report}"
-
-    for r <- results do
-      assert {:error, kind, _} = r.outcome
-      assert kind in ["fuel", "timeout"], "guest #{r.guest} ended #{kind}\n#{report}"
-
-      assert is_integer(r.idle_after_ms) and r.idle_after_ms <= @grace_ms,
-             "guest #{r.guest}'s Store was busy #{inspect(r.idle_after_ms)} ms after its run " <>
-               "returned (grace #{@grace_ms} ms)\n#{report}"
-
-      assert r.took_ms <= @wall_ms + @grace_ms + @setup_slack_ms,
-             "guest #{r.guest} returned #{r.took_ms} ms after its run began " <>
-               "(wall #{@wall_ms} + grace #{@grace_ms} + setup #{@setup_slack_ms})\n#{report}"
+      assert Enum.any?(results, & &1.ran)
+      assert %{held: 0, waiting: 0} = wait_for_idle_gate()
+    rescue
+      error in ExUnit.AssertionError ->
+        PermitDiagnostics.report("contention failed", before, after_snapshot)
+        reraise error, __STACKTRACE__
     end
-
-    assert Enum.any?(results, & &1.ran)
-    assert %{held: 0, waiting: 0} = wait_for_idle_gate()
   end
 
   # Milliseconds from `returned` until `store` is idle (its get_fuel probe
