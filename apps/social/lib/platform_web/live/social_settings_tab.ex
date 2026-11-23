@@ -505,15 +505,7 @@ defmodule PlatformWeb.SocialSettingsTab do
         type="text"
         label="Default hashtags (comma-separated)"
       />
-      <.input
-        field={@form[:approver_user_ids]}
-        type="select"
-        multiple
-        class="w-full select h-auto min-h-24 bg-none py-1"
-        size="4"
-        label="Approvers (people only)"
-        options={Enum.map(@options.approvers, &{&1.name || &1.email, &1.id})}
-      />
+      <.approver_checkboxes field={@form[:approver_user_ids]} people={@options.approvers} />
       <.input
         field={@form[:space_id]}
         type="select"
@@ -526,6 +518,53 @@ defmodule PlatformWeb.SocialSettingsTab do
       </button>
     </.form>
     <SocialProjectSetting.row :if={@project_setting} setting={@project_setting} />
+    """
+  end
+
+  # One checkbox per offered person, checked = currently an approver. A plain
+  # click toggles one person (the native multi-select it replaces silently
+  # swapped the whole selection on a plain click). The hidden "" keeps the
+  # key in the submit when nobody is checked; `settings_attrs/3` drops it,
+  # along with any id the picker did not offer.
+  attr(:field, Phoenix.HTML.FormField, required: true)
+  attr(:people, :list, required: true)
+
+  defp approver_checkboxes(assigns) do
+    assigns =
+      assigns
+      |> assign(:selected, assigns.field.value |> List.wrap() |> MapSet.new())
+      |> assign(
+        :errors,
+        Enum.map(assigns.field.errors, &PlatformWeb.CoreComponents.translate_error/1)
+      )
+
+    ~H"""
+    <fieldset class="fieldset py-0" id="social-approvers" data-role="social-approvers">
+      <legend class="label mb-1 font-medium whitespace-normal">Approvers (people only)</legend>
+      <p class="text-xs text-base-content/70">
+        Approvers can approve posts on this profile's accounts.
+      </p>
+      <input type="hidden" name={@field.name <> "[]"} value="" />
+      <label
+        :for={person <- @people}
+        for={"social-approver-#{person.id}"}
+        class="label cursor-pointer justify-start gap-2 py-1 text-base-content"
+      >
+        <input
+          type="checkbox"
+          id={"social-approver-#{person.id}"}
+          name={@field.name <> "[]"}
+          value={person.id}
+          checked={MapSet.member?(@selected, person.id)}
+          class="checkbox checkbox-sm"
+          data-role="social-approver-option"
+        />
+        <span>{person.name || person.email}</span>
+      </label>
+      <p :for={msg <- @errors} class="mt-1 text-sm text-error" data-role="social-approvers-error">
+        {msg}
+      </p>
+    </fieldset>
     """
   end
 end

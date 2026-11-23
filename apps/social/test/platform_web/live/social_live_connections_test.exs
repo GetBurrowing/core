@@ -195,7 +195,7 @@ defmodule PlatformWeb.SocialLiveConnectionsTest do
     options =
       html
       |> LazyHTML.from_fragment()
-      |> LazyHTML.query("select[name='profile[approver_user_ids][]'] option")
+      |> LazyHTML.query("input[type='checkbox'][name='profile[approver_user_ids][]']")
       |> Enum.map(&LazyHTML.attribute(&1, "value"))
       |> List.flatten()
 
@@ -207,7 +207,7 @@ defmodule PlatformWeb.SocialLiveConnectionsTest do
     approver_html =
       html
       |> LazyHTML.from_fragment()
-      |> LazyHTML.query("select[name='profile[approver_user_ids][]']")
+      |> LazyHTML.query("#social-approvers")
       |> LazyHTML.to_html()
 
     refute approver_html =~ ctx.g.name
@@ -253,6 +253,79 @@ defmodule PlatformWeb.SocialLiveConnectionsTest do
     p = Repo.get!(Profile, ctx.profile.id)
     assert p.approver_user_ids == [ctx.h1.id]
     assert p.space_id == ctx.space.id
+  end
+
+  describe "approver checkboxes" do
+    defp approver_box(user), do: "#social-approver-#{user.id}[data-role='social-approver-option']"
+
+    defp submit_approvers(child, ids) do
+      child
+      |> form("#social-settings-form", %{profile: %{approver_user_ids: ids}})
+      |> render_submit()
+    end
+
+    test "each internal member is a checkbox; current approvers are checked",
+         %{conn: conn} = ctx do
+      child = open(conn, ctx.h1, "settings")
+
+      assert has_element?(child, "fieldset#social-approvers legend", "Approvers (people only)")
+
+      assert has_element?(
+               child,
+               "#social-approvers",
+               "Approvers can approve posts on this profile's accounts."
+             )
+
+      for user <- [ctx.h1, ctx.h2, ctx.n] do
+        assert has_element?(child, approver_box(user) <> "[type='checkbox']")
+        assert has_element?(child, "label[for='social-approver-#{user.id}']", user.name)
+      end
+
+      assert has_element?(child, approver_box(ctx.h1) <> "[checked]")
+      assert has_element?(child, approver_box(ctx.h2) <> "[checked]")
+      refute has_element?(child, approver_box(ctx.n) <> "[checked]")
+      refute has_element?(child, "#social-approver-#{ctx.g.id}")
+    end
+
+    test "checking another person adds them", %{conn: conn} = ctx do
+      child = open(conn, ctx.h1, "settings")
+      submit_approvers(child, [ctx.h1.id, ctx.h2.id, ctx.n.id])
+
+      p = Repo.get!(Profile, ctx.profile.id)
+      assert Enum.sort(p.approver_user_ids) == Enum.sort([ctx.h1.id, ctx.h2.id, ctx.n.id])
+      assert has_element?(child, approver_box(ctx.n) <> "[checked]")
+      assert has_element?(child, "[data-role='social-notice']", "Settings saved.")
+    end
+
+    test "unchecking a person removes them", %{conn: conn} = ctx do
+      child = open(conn, ctx.h1, "settings")
+      submit_approvers(child, [ctx.h1.id])
+
+      assert Repo.get!(Profile, ctx.profile.id).approver_user_ids == [ctx.h1.id]
+      assert has_element?(child, approver_box(ctx.h1) <> "[checked]")
+      refute has_element?(child, approver_box(ctx.h2) <> "[checked]")
+    end
+
+    test "an id the picker did not offer is ignored, and the blank sentinel is dropped",
+         %{conn: conn} = ctx do
+      outsider = named_user!("Olly Outsider")
+      child = open(conn, ctx.h1, "settings")
+
+      render_hook(child, "save_settings", %{
+        "profile" => %{"approver_user_ids" => ["", ctx.h1.id, outsider.id, ctx.g.id]}
+      })
+
+      assert Repo.get!(Profile, ctx.profile.id).approver_user_ids == [ctx.h1.id]
+      refute has_element?(child, "#social-approver-#{outsider.id}")
+    end
+
+    test "unchecking everyone submits the key and clears the list", %{conn: conn} = ctx do
+      child = open(conn, ctx.h1, "settings")
+
+      render_hook(child, "save_settings", %{"profile" => %{"approver_user_ids" => [""]}})
+
+      assert Repo.get!(Profile, ctx.profile.id).approver_user_ids == []
+    end
   end
 
   test "a non-approver sees settings read-only", %{conn: conn} = ctx do
