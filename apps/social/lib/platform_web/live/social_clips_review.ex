@@ -72,6 +72,10 @@ defmodule PlatformWeb.SocialClipsReview do
 
   @views ~w(review library)
   @info_toast_ms 3_200
+  # The "N drafts created … Open drafts" confirmation carries a link a person has
+  # to read, reach and tap, so it outlives the 3.2 s info toasts. 10 s, not
+  # "until dismissed": it has no close button and clears itself like the rest.
+  @drafted_toast_ms 10_000
   @landed_ms 3_000
   @jobs_refresh_ms 5_000
   @toast_grace_ms 250
@@ -348,7 +352,7 @@ defmodule PlatformWeb.SocialClipsReview do
           toast =
             posts
             |> drafted_toast(profile.id)
-            |> Map.merge(%{clip_id: drafted.id, until: now_ms() + @info_toast_ms})
+            |> Map.merge(%{clip_id: drafted.id, until: now_ms() + @drafted_toast_ms})
 
           {:noreply, socket |> drop_clip(drafted.id) |> put_toast(toast)}
 
@@ -1017,7 +1021,7 @@ defmodule PlatformWeb.SocialClipsReview do
       <.link
         :if={Map.get(@toast, :drafts_path)}
         navigate={@toast.drafts_path}
-        class="shrink-0 font-semibold text-primary"
+        class="inline-flex min-h-11 min-w-11 shrink-0 items-center justify-center px-2 font-semibold text-primary"
         data-role="clip-toast-drafts-link"
       >
         Open drafts
@@ -1088,7 +1092,8 @@ defmodule PlatformWeb.SocialClipsReview do
         </button>
       </div>
       <span class="text-sm text-base-content max-[760px]:hidden" data-role="clips-count">
-        <b class="font-semibold text-base-content">{@count} to review</b> · one approval publishes
+        <b class="font-semibold text-base-content">{@count} to review</b>
+        · choosing a clip makes drafts; nothing is posted yet
       </span>
       <a
         :if={@jobs != []}
@@ -1607,7 +1612,8 @@ defmodule PlatformWeb.SocialClipsReview do
               @clip.episode_code,
               mmss((@selected_render && @selected_render.duration_s) || @clip.duration_s),
               @clip.source_label,
-              "v#{(@selected_render && @selected_render.rev) || @clip.rev}"
+              "v#{(@selected_render && @selected_render.rev) || @clip.rev}",
+              added(@clip)
             ])}
           </p>
           <p class="mt-2 flex items-center gap-2 text-xs text-base-content" data-role="clip-byline">
@@ -1935,11 +1941,18 @@ defmodule PlatformWeb.SocialClipsReview do
     accounts |> Enum.map(& &1.platform) |> Enum.uniq() |> Enum.filter(&(&1 in platforms))
   end
 
-  defp why_line([]), do: "Tick at least one platform to make drafts"
+  defp why_line([]), do: "First switch on where this should post, under Post to."
 
   defp why_line(_platforms) do
     "Makes a draft for each platform you ticked. Nothing is published until a draft is reviewed and approved."
   end
+
+  # When the clip row was written (the import, or the render job's clip), in
+  # UTC. It says nothing about review, scheduling or publication.
+  defp added(%Clip{inserted_at: %DateTime{} = at}),
+    do: "Added " <> Calendar.strftime(at, "%-d %b %Y, %H:%M UTC")
+
+  defp added(_clip), do: nil
 
   # The same Files route Social's cards and cover picker use for media.
   defp media_src(file_id), do: "/files/blob/#{file_id}"

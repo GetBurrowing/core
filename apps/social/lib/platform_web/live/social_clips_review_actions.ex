@@ -19,7 +19,7 @@ defmodule PlatformWeb.SocialClipsReviewActions do
     <div
       class={
         [
-          "fixed inset-x-0 bottom-0 z-30 hidden gap-2.5 border-t border-base-300 bg-base-100/80 backdrop-blur",
+          "fixed inset-x-0 bottom-0 z-30 hidden flex-wrap gap-2.5 border-t border-base-300 bg-base-100/80 backdrop-blur",
           "px-3 pt-2.5 pb-[calc(10px+env(safe-area-inset-bottom))] max-[760px]:flex",
           # Clears Burrow's own mobile tab bar (core's --bottom-nav-height,
           # 56px below lg, 0 elsewhere); the prototype has no host nav.
@@ -28,6 +28,20 @@ defmodule PlatformWeb.SocialClipsReviewActions do
       }
       data-role="clips-pbar"
     >
+      <p
+        :if={@ticked == []}
+        class="w-full text-center text-xs text-subtle"
+        data-role="clips-pbar-why"
+      >
+        First switch on where this should post, using the buttons under the title.
+      </p>
+      <p
+        :if={@blank?}
+        class="w-full text-center text-xs text-subtle"
+        data-role="clips-pbar-reject-why"
+      >
+        To reject, write a note first.
+      </p>
       <button
         type="button"
         class="btn btn-outline h-[46px] w-[112px] flex-none rounded-full text-base"
@@ -50,7 +64,7 @@ defmodule PlatformWeb.SocialClipsReviewActions do
         phx-target={@myself}
         data-role="clips-pbar-draft"
       >
-        {if @ticked == [], do: "Pick a platform", else: "Create drafts"}
+        Create drafts
       </button>
     </div>
     """
@@ -95,11 +109,18 @@ defmodule PlatformWeb.SocialClipsReviewActions do
           phx-target={@myself}
           data-role="clip-draft"
         >
-          {if @ticked == [], do: "Pick a platform", else: "Create drafts"}
+          Create drafts
         </button>
       </div>
       <p class="text-center text-xs text-subtle" data-role="clip-why">
         {@why_line}
+      </p>
+      <p
+        :if={String.trim(@note) == ""}
+        class="text-center text-xs text-subtle"
+        data-role="clip-reject-why"
+      >
+        To reject, write a note first.
       </p>
     </div>
     """

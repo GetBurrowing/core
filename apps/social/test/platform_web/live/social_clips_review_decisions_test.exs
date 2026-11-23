@@ -162,6 +162,50 @@ defmodule PlatformWeb.SocialClipsReviewDecisionsTest do
     assert Enum.all?(posts(first), &(&1.status == "draft" and is_nil(&1.publish_after)))
   end
 
+  test "the drafts confirmation lasts long enough to follow its link", %{conn: conn, w: w} do
+    three!(w)
+    child = open(conn, w.approver)
+
+    child |> element("[data-role='clip-draft']") |> render_click()
+
+    [until] =
+      child
+      |> render()
+      |> LazyHTML.from_fragment()
+      |> LazyHTML.query("[data-role='clip-toast'][data-kind='drafted']")
+      |> LazyHTML.attribute("data-until")
+
+    left = String.to_integer(until) - System.system_time(:millisecond)
+    assert left > 9_000 and left <= 10_000
+
+    # Past the old 3.2 s lifetime (+ grace) the toast and its link are still there.
+    Process.sleep(3_700)
+    assert has_element?(child, "[data-role='clip-toast'][data-kind='drafted']")
+    assert has_element?(child, "[data-role='clip-toast-drafts-link']", "Open drafts")
+
+    # The link is a 44 px touch target (min-h-11 / min-w-11), phone included.
+    assert has_element?(child, "[data-role='clip-toast-drafts-link'].min-h-11.min-w-11")
+  end
+
+  test "a refused draft toast keeps its short lifetime", %{conn: conn, w: w} do
+    three!(w)
+    child = open(conn, w.approver)
+    owner = member!(user!(), w.org_id)
+    {:ok, _} = Social.set_account_owner(w.org_id, w.yt, owner.id)
+
+    child |> element("[data-role='clip-draft']") |> render_click()
+
+    [until] =
+      child
+      |> render()
+      |> LazyHTML.from_fragment()
+      |> LazyHTML.query("[data-role='clip-toast'][data-kind='info']")
+      |> LazyHTML.attribute("data-until")
+
+    left = String.to_integer(until) - System.system_time(:millisecond)
+    assert left > 0 and left <= 3_200
+  end
+
   test "no control in the bay says approve or publish", %{conn: conn, w: w} do
     three!(w)
     child = open(conn, w.approver)

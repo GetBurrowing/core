@@ -595,7 +595,10 @@ defmodule PlatformWeb.SocialClipsLibrary do
 
         entries ->
           Enum.map(entries, fn entry ->
-            status = platform_label(entry.state)
+            status =
+              [platform_label(entry.state), dated(entry)]
+              |> Enum.reject(&is_nil/1)
+              |> Enum.join(" ")
 
             views =
               if entry.state == :published, do: Platform.Social.MetricCount.format(entry.views)
@@ -605,6 +608,22 @@ defmodule PlatformWeb.SocialClipsLibrary do
       end
     end)
   end
+
+  # The clip row's own insert time: when the clip was added to Burrow. It is
+  # never a scheduling or publication time.
+  defp added(%{inserted_at: %DateTime{} = at}), do: "Added " <> stamp(at)
+  defp added(_), do: nil
+
+  # A date only where the stored field means it: `scheduled` carries the
+  # future `scheduled_at`; `published` carries `published_at`, the moment
+  # Burrow recorded the post as published (nil on older rows, so no date).
+  # Every other state (draft, in review, uploading, queued, failed) gets none.
+  defp dated(%{state: state, at: %DateTime{} = at}) when state in [:scheduled, :published],
+    do: stamp(at)
+
+  defp dated(_), do: nil
+
+  defp stamp(%DateTime{} = at), do: Calendar.strftime(at, "%-d %b %Y, %H:%M UTC")
 
   defp platform_label(:published), do: "Published"
   defp platform_label(:scheduled), do: "Scheduled"
@@ -761,6 +780,7 @@ defmodule PlatformWeb.SocialClipsLibrary do
               {item.clip.title || "Untitled clip"}
             </h3>
             <p data-role="library-meta" class="text-xs text-subtle">{meta(item.clip)}</p>
+            <p data-role="library-added" class="text-xs text-subtle">{added(item.clip)}</p>
             <div class="space-y-1">
               <div
                 :for={{label, state, kind} <- platform_rows(item)}

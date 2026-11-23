@@ -27,7 +27,9 @@ defmodule PlatformWeb.SocialDraftCard do
 
   @impl true
   def update(assigns, socket) do
-    socket = socket |> assign(assigns) |> refresh_access()
+    socket =
+      socket |> assign_new(:clip_title, fn -> nil end) |> assign(assigns) |> refresh_access()
+
     %{post: post, tz: tz} = socket.assigns
     stamp = {post.id, post.updated_at}
 
@@ -284,6 +286,9 @@ defmodule PlatformWeb.SocialDraftCard do
         <span data-role="draft-account" class="font-medium">{account_label(@account)}</span>
         <span :if={@show_brand?} data-role="draft-brand" class="text-base-content">
           · {@profile.name}
+        </span>
+        <span :if={@clip_title} data-role="draft-from-clip" class="text-base-content">
+          · From clip: {@clip_title}
         </span>
       </header>
 

@@ -268,6 +268,7 @@ defmodule PlatformWeb.SocialIdeaCard do
       state: Map.get(view, :state),
       status: Map.get(view, :status),
       owner_name: Map.get(view, :owner_name),
+      no_actions_note: Map.get(view, :no_actions_note),
       waiting?: Map.get(view, :waiting?, false),
       viewer_owner?: is_binary(Map.get(view, :posts_as)),
       edited_by: Map.get(view, :edited_by),
@@ -1014,6 +1015,13 @@ defmodule PlatformWeb.SocialIdeaCard do
         >
           View post
         </a>
+      </p>
+      <p
+        :if={@v.content? and @v.role == :viewer and @v.actions == [] and @v.no_actions_note}
+        data-role="queue-no-actions"
+        class="text-sm text-base-content"
+      >
+        {@v.no_actions_note}
       </p>
       <p :if={@v.edited_by} data-role="queue-edited" class="text-[13px] text-subtle">
         Edited by {@v.edited_by}

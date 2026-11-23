@@ -230,6 +230,7 @@ defmodule PlatformWeb.SocialQueueTab do
     )
     |> assign(:queue_profiles, profiles)
     |> assign(:queue_accounts, accounts)
+    |> assign(:queue_clip_titles, QueueFeed.clip_titles(drafts, accounts, profiles))
     |> assign(:queue_scheduled_titles, titles)
     |> assign(:queue_empty?, groups == [])
     |> assign(:queue_post_count, groups |> Enum.map(&length(&1.posts)) |> Enum.sum())
@@ -678,6 +679,7 @@ defmodule PlatformWeb.SocialQueueTab do
               }
               user={@user}
               show_brand?={@scope == :all}
+              clip_title={Map.get(@queue_clip_titles, post.id)}
             />
           </li>
         </ul>

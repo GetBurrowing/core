@@ -102,6 +102,22 @@ defmodule Platform.Social.QueueFeed do
   def published_at(%Post{updated_at: at}), do: at
 
   @doc """
+  `%{post_id => clip title}` for the drafts that came from a clip. A title is
+  read only through `ClipReviewFeed.fetch_clip/3` for the draft's own visible
+  brand, so a clip of another org or brand is never named.
+  """
+  @spec clip_titles([Post.t()], %{Ecto.UUID.t() => Account.t()}, %{Ecto.UUID.t() => Profile.t()}) ::
+          %{Ecto.UUID.t() => String.t()}
+  def clip_titles(drafts, accounts, profiles) do
+    for %Post{clip_id: clip_id} = post when not is_nil(clip_id) <- drafts,
+        %Account{profile_id: profile_id} <- [accounts[post.account_id]],
+        %Profile{} = profile <- [profiles[profile_id]],
+        {:ok, clip} <- [ClipReviewFeed.fetch_clip(profile.org_id, profile.id, clip_id)],
+        into: %{},
+        do: {post.id, clip.title || "Untitled clip"}
+  end
+
+  @doc """
   Rendered clips waiting for review in `scope` (`ClipReviewFeed.pending_count/2`,
   summed over every visible profile for All brands).
   """

@@ -2556,9 +2556,15 @@ defmodule Platform.Social do
     if owner_id == user_id, do: :ok, else: {:error, :not_the_owner}
   end
 
-  defp owner_gone?(%Account{owner_user_id: nil}), do: false
+  @doc """
+  Whether `account` has an owner who can no longer act (archived or gone).
+  `post_rejecter_check/4` then lets the brand's approvers reject (never
+  approve); the Queue card's no-actions line reads the same answer.
+  """
+  @spec owner_gone?(Account.t()) :: boolean()
+  def owner_gone?(%Account{owner_user_id: nil}), do: false
 
-  defp owner_gone?(%Account{owner_user_id: owner_id}) do
+  def owner_gone?(%Account{owner_user_id: owner_id}) do
     case live_user(owner_id) do
       {:ok, owner} -> not_archived(owner) != :ok
       {:error, _} -> true
