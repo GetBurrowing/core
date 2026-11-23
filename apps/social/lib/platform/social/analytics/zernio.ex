@@ -105,6 +105,12 @@ defmodule Platform.Social.Analytics.Zernio do
 
   @doc "Read one bounded YouTube publication-list page; vendor URLs are observations only."
   def publications(account_ref, opts \\ []) do
+    if Platform.Social.PublicationSync.enabled?(),
+      do: publication_page(account_ref, opts),
+      else: {:error, :disabled}
+  end
+
+  defp publication_page(account_ref, opts) do
     start = opts[:from_date]
     finish = opts[:to_date]
     profile_ref = opts[:profile_ref]
@@ -124,11 +130,18 @@ defmodule Platform.Social.Analytics.Zernio do
 
       params = if is_nil(cursor), do: params, else: params ++ [cursor: cursor]
 
-      case get("/v1/metrics/posts", params,
-             redirect: false,
-             connect_options: [timeout: 5_000],
-             receive_timeout: 15_000
-           ) do
+      response =
+        if Platform.Social.PublicationSync.enabled?() do
+          get("/v1/metrics/posts", params,
+            redirect: false,
+            connect_options: [timeout: 5_000],
+            receive_timeout: 15_000
+          )
+        else
+          {:error, :disabled}
+        end
+
+      case response do
         {:ok, body} ->
           decode_publications(body, account_ref, profile_ref, start, finish, cursor)
 

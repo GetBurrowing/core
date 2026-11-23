@@ -6,6 +6,16 @@ defmodule PlatformWeb.SocialAccountTickerTest do
   alias Platform.Social.{AccountTicker, FollowerSyncState}
 
   setup do
+    saved_publications = Application.fetch_env(:social, :youtube_publications_enabled)
+    Application.put_env(:social, :youtube_publications_enabled, true)
+
+    on_exit(fn ->
+      case saved_publications do
+        {:ok, value} -> Application.put_env(:social, :youtube_publications_enabled, value)
+        :error -> Application.delete_env(:social, :youtube_publications_enabled)
+      end
+    end)
+
     w = studio_world!()
 
     profile =
@@ -656,6 +666,93 @@ defmodule PlatformWeb.SocialAccountTickerTest do
       |> Repo.insert!()
 
     {a, video}
+  end
+
+  test "disabled updates retain cached video and legacy metrics with explicit off-state provenance",
+       %{conn: conn, w: w} do
+    {_account, video} = youtube_publication!(w, %{metrics: %{"views" => 66}})
+    Application.delete_env(:social, :youtube_publications_enabled)
+
+    Req.Test.stub(Social.Publisher.Zernio, fn _ ->
+      flunk("disabled cached display must not request vendor")
+    end)
+
+    view = open(conn, w)
+    selector = "[data-ticker-original] [data-role='ticker-latest-video']"
+    assert has_element?(view, selector, "YouTube updates are off")
+    assert has_element?(view, "#{selector} a[href='https://www.youtube.com/watch?v=abcdefghijk']")
+    assert has_element?(view, selector, "66 lifetime views")
+    assert has_element?(view, selector, "search incomplete")
+    assert has_element?(view, "[data-metric='followers']")
+    assert has_element?(view, "[data-metric='views']")
+
+    view |> element("#{selector} button[data-role='ticker-data-details']") |> render_click()
+    panel = "[data-role='ticker-video-details']"
+    assert has_element?(view, panel, "YouTube updates are off")
+    assert has_element?(view, panel, "Vendor last-sync time")
+    assert has_element?(view, panel, "Last response received by Burrow")
+
+    assert has_element?(
+             view,
+             "#{panel} time[datetime='#{DateTime.to_iso8601(video.vendor_synced_at)}']"
+           )
+
+    assert Repo.get!(Social.Analytics.Publication, video.id).metrics == %{"views" => 66}
+
+    Application.put_env(:social, :youtube_publications_enabled, true)
+    # A configuration change does not push a page refresh. Close/reopen changes
+    # the view state; repeating Open on the already-open account does not.
+    view |> element("#{panel} button[data-role='ticker-details-close']") |> render_click()
+    refute has_element?(view, panel)
+    render_click(view, "ticker_video_details", %{"account_id" => video.account_id})
+    assert has_element?(view, panel)
+    refute has_element?(view, "[data-role='ticker-youtube-updates-off']")
+    assert has_element?(view, selector, "66 lifetime views")
+  end
+
+  test "disabled empty cache and repair history do not promise an active scan", %{w: w} do
+    {account, _} = youtube_publication!(w)
+
+    row =
+      Enum.find(AccountTicker.rows(w.approver, [w.profile.id]), &(&1.account.id == account.id))
+
+    Application.put_env(:social, :youtube_publications_enabled, false)
+
+    repair = %{
+      checked_ranges: [],
+      incomplete_ranges: [],
+      last_error: "coverage_repaired",
+      coverage_repaired_at: ~U[2026-11-22 08:00:00Z]
+    }
+
+    for video <- [nil, row.latest_video.video] do
+      projection =
+        Map.merge(row.latest_video, %{video: video, discovery: repair, refresh: repair})
+
+      shown = row |> Map.put(:latest_video, projection) |> Map.put(:ticker_details_open, true)
+
+      doc =
+        render_component(&PlatformWeb.SocialAccountTicker.strip/1, rows: [shown], scope: :all)
+        |> LazyHTML.from_fragment()
+
+      strip =
+        doc
+        |> LazyHTML.query("[data-ticker-original] [data-role='ticker-latest-video']")
+        |> LazyHTML.text()
+
+      panel = doc |> LazyHTML.query("[data-role='ticker-video-details']") |> LazyHTML.text()
+      assert strip =~ "YouTube updates are off"
+      assert panel =~ "YouTube updates are off"
+      assert panel =~ "Stored search history was invalid and has been reset."
+      refute panel =~ "pending or under way"
+      refute panel =~ "No refresh problem is recorded."
+
+      if video do
+        assert panel =~ "Stored update history was invalid and has been reset."
+      else
+        assert Enum.empty?(LazyHTML.query(doc, "[data-role='ticker-latest-video'] a"))
+      end
+    end
   end
 
   test "compact YouTube entry opens stationary data details with native link and separate provenance",

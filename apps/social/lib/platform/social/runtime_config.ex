@@ -22,6 +22,14 @@ defmodule Platform.Social.RuntimeConfig do
   Optional. Merged into `config :social, Platform.Social.Publisher.Zernio,
   base_url:`. Unset leaves the adapter's default.
 
+  ## `SOCIAL_YOUTUBE_PUBLICATIONS_ENABLED`
+
+  Installation-wide opt-in for publication-list work only. Trimmed,
+  case-insensitive `true` enables it; every other value, including unset,
+  disables it on startup. Other analytics and persisted progress are untouched.
+  Operators must persist changes in the installation environment; changing
+  application env alone lasts only until the next restart.
+
   ## The key
 
   No env var holds the Zernio key, and nothing here reads one. The key lives
@@ -99,6 +107,20 @@ defmodule Platform.Social.RuntimeConfig do
       url ->
         current = Application.get_env(:social, @zernio, [])
         Application.put_env(:social, @zernio, Keyword.put(current, :base_url, url))
+    end
+
+    publication_setting =
+      env
+      |> Map.get("SOCIAL_YOUTUBE_PUBLICATIONS_ENABLED", "")
+      |> String.trim()
+      |> String.downcase()
+
+    Application.put_env(:social, :youtube_publications_enabled, publication_setting == "true")
+
+    if publication_setting not in ["", "true", "false"] do
+      Logger.warning(
+        "[social] SOCIAL_YOUTUBE_PUBLICATIONS_ENABLED is invalid; publication list work is disabled"
+      )
     end
 
     apply_trends(settings)

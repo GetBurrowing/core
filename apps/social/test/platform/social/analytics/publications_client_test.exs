@@ -7,6 +7,16 @@ defmodule Platform.Social.Analytics.PublicationsClientTest do
   @opts [from_date: ~D[2026-11-01], to_date: ~D[2026-11-22], profile_ref: "profile-A"]
 
   setup do
+    saved = Application.fetch_env(:social, :youtube_publications_enabled)
+    Application.put_env(:social, :youtube_publications_enabled, true)
+
+    on_exit(fn ->
+      case saved do
+        {:ok, value} -> Application.put_env(:social, :youtube_publications_enabled, value)
+        :error -> Application.delete_env(:social, :youtube_publications_enabled)
+      end
+    end)
+
     {:ok, _} =
       Platform.Vault.put("social:zernio:api_key", :api_key, "synthetic-publications-key",
         scope: {:integration, nil},
@@ -61,6 +71,21 @@ defmodule Platform.Social.Analytics.PublicationsClientTest do
 
       conn |> Plug.Conn.put_status(status) |> Req.Test.json(body)
     end)
+  end
+
+  test "direct publication-list callers cannot override the default-off gate" do
+    stub(page())
+
+    for setting <- [:unset, false, "invalid", "true"] do
+      if setting == :unset,
+        do: Application.delete_env(:social, :youtube_publications_enabled),
+        else: Application.put_env(:social, :youtube_publications_enabled, setting)
+
+      assert {:error, :disabled} =
+               Zernio.publications("account-A", Keyword.put(@opts, :enabled, true))
+
+      refute_received {:request, _, _}
+    end
   end
 
   test "account list sends only the documented frozen query and opaque cursor" do

@@ -8,6 +8,16 @@ defmodule Platform.Social.PublicationSyncConcurrencyTest do
   alias Platform.Social.Publisher.Zernio, as: Publisher
 
   setup do
+    saved = Application.fetch_env(:social, :youtube_publications_enabled)
+    Application.put_env(:social, :youtube_publications_enabled, true)
+
+    on_exit(fn ->
+      case saved do
+        {:ok, value} -> Application.put_env(:social, :youtube_publications_enabled, value)
+        :error -> Application.delete_env(:social, :youtube_publications_enabled)
+      end
+    end)
+
     Sandbox.mode(Repo, :auto)
     org_id = Platform.SocialFixtures.org_id!()
     {:ok, profile} = Platform.Social.create_profile(org_id, %{name: "Publication isolation"})

@@ -88,6 +88,7 @@ defmodule PlatformWeb.SocialAccountTicker do
             )
       }
       |> Map.put(:ticker_details_open, Map.get(assigns, :ticker_details_account_id) == current.id)
+      |> Map.put(:publication_updates_enabled?, Platform.Social.PublicationSync.enabled?())
     end
   end
 
@@ -115,6 +116,8 @@ defmodule PlatformWeb.SocialAccountTicker do
   attr :wikipedia, :any, default: nil
 
   def strip(assigns) do
+    assigns = assign(assigns, :updates_enabled?, Platform.Social.PublicationSync.enabled?())
+
     assigns =
       assign(
         assigns,
@@ -160,10 +163,20 @@ defmodule PlatformWeb.SocialAccountTicker do
           >
             <div class="flex w-max" data-ticker-track>
               <div data-ticker-original class="flex shrink-0">
-                <.entries rows={@rows} all?={@scope == :all} copy?={false} />
+                <.entries
+                  rows={@rows}
+                  all?={@scope == :all}
+                  copy?={false}
+                  updates_enabled?={@updates_enabled?}
+                />
               </div>
               <div data-ticker-copy aria-hidden="true" class="social-ticker-copy flex shrink-0">
-                <.entries rows={@rows} all?={@scope == :all} copy?={true} />
+                <.entries
+                  rows={@rows}
+                  all?={@scope == :all}
+                  copy?={true}
+                  updates_enabled?={@updates_enabled?}
+                />
               </div>
             </div>
           </div>
@@ -228,7 +241,12 @@ defmodule PlatformWeb.SocialAccountTicker do
           </button>
         </div>
       </div>
-      <.video_details :if={@details_row} row={@details_row} all?={@scope == :all} />
+      <.video_details
+        :if={@details_row}
+        row={@details_row}
+        all?={@scope == :all}
+        updates_enabled?={@updates_enabled?}
+      />
     </section>
     """
   end
@@ -254,11 +272,18 @@ defmodule PlatformWeb.SocialAccountTicker do
   attr :rows, :list, required: true
   attr :all?, :boolean, required: true
   attr :copy?, :boolean, required: true
+  attr :updates_enabled?, :boolean, required: true
 
   defp entries(assigns) do
     ~H"""
     <%= for row <- @rows do %>
-      <.latest_video :if={Map.get(row, :latest_video)} row={row} all?={@all?} copy?={@copy?} />
+      <.latest_video
+        :if={Map.get(row, :latest_video)}
+        row={row}
+        all?={@all?}
+        copy?={@copy?}
+        updates_enabled?={@updates_enabled?}
+      />
       <a
         href={results_url(row)}
         phx-click="ticker_results"
@@ -375,6 +400,7 @@ defmodule PlatformWeb.SocialAccountTicker do
   attr :row, :map, required: true
   attr :all?, :boolean, required: true
   attr :copy?, :boolean, required: true
+  attr :updates_enabled?, :boolean, required: true
 
   defp latest_video(assigns) do
     projection = assigns.row.latest_video
@@ -390,6 +416,9 @@ defmodule PlatformWeb.SocialAccountTicker do
     ~H"""
     <div data-role="ticker-latest-video" data-account-id={@row.account.id} class="social-ticker-entry">
       <.account_label row={@row} all?={@all?} />
+      <span :if={not @updates_enabled?} data-role="ticker-youtube-updates-off">
+        YouTube updates are off
+      </span>
       <%= if @video do %>
         <a
           href={youtube_url(@video)}
@@ -438,6 +467,7 @@ defmodule PlatformWeb.SocialAccountTicker do
 
   attr :row, :map, required: true
   attr :all?, :boolean, required: true
+  attr :updates_enabled?, :boolean, required: true
 
   defp video_details(assigns) do
     projection = assigns.row.latest_video
@@ -487,6 +517,9 @@ defmodule PlatformWeb.SocialAccountTicker do
           Close<span class="sr-only"> data details</span>
         </button>
       </div>
+      <p :if={not @updates_enabled?} data-role="ticker-youtube-updates-off">
+        YouTube updates are off
+      </p>
       <a
         :if={@video}
         href={youtube_url(@video)}
@@ -560,7 +593,8 @@ defmodule PlatformWeb.SocialAccountTicker do
               Complete for {ranges_text(@discovery.checked_ranges)}.
           <% end %>
           <p :if={repair_pending?(@discovery)}>
-            Stored search history was invalid and has been reset. A fresh scan is pending or under way.
+            {"Stored search history was invalid and has been reset." <>
+              if(@updates_enabled?, do: " A fresh scan is pending or under way.", else: "")}
           </p>
           <p :if={@discovery.last_error == "incomplete_observation"}>
             The vendor's page was incomplete (the request itself succeeded).
@@ -610,7 +644,8 @@ defmodule PlatformWeb.SocialAccountTicker do
               No refresh problem is recorded.
             </p>
             <p :if={repair_pending?(@refresh)}>
-              Stored update history was invalid and has been reset. A fresh scan is pending or under way.
+              {"Stored update history was invalid and has been reset." <>
+                if(@updates_enabled?, do: " A fresh scan is pending or under way.", else: "")}
             </p>
             <p :if={@figures_stale}>These figures may be out of date.</p>
             <p :if={@video.ambiguous_count > 0}>

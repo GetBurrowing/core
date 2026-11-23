@@ -247,6 +247,17 @@ defmodule Platform.Social.AnalyticsProviderCompatibilityTest do
 
   test "a mixed-provider org requests exactly its Zernio post, follower and publication endpoints",
        c do
+    # This control exercises the explicitly enabled publication-list path.
+    saved_publications = Application.fetch_env(:social, :youtube_publications_enabled)
+    Application.put_env(:social, :youtube_publications_enabled, true)
+
+    on_exit(fn ->
+      case saved_publications do
+        {:ok, value} -> Application.put_env(:social, :youtube_publications_enabled, value)
+        :error -> Application.delete_env(:social, :youtube_publications_enabled)
+      end
+    end)
+
     account = Repo.update!(Ecto.Changeset.change(c.account, provider: "zernio"))
 
     {:ok, other} =

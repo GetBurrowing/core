@@ -21,20 +21,27 @@ defmodule Platform.Social.PublicationSync do
     Zernio
   }
 
+  @doc "Current installation opt-in; callers cannot override it through request options."
+  def enabled?, do: Application.get_env(:social, :youtube_publications_enabled, false) == true
+
   def step(org_id, opts \\ []) do
-    if Repo.in_transaction?() do
-      {:error, :transaction_context}
-    else
-      if Platform.UUID.valid?(org_id) do
+    cond do
+      not enabled?() ->
+        {:ok, :disabled}
+
+      Repo.in_transaction?() ->
+        {:error, :transaction_context}
+
+      not Platform.UUID.valid?(org_id) ->
+        {:error, :not_found}
+
+      true ->
         # Read metadata only before reservation/try-locks. The client resolves
         # the actual credential after the shared request lock is acquired.
         case Secrets.zernio_key_status() do
           {:set, _} -> run(org_id, opts)
           _ -> {:ok, :idle}
         end
-      else
-        {:error, :not_found}
-      end
     end
   end
 
@@ -78,6 +85,9 @@ defmodule Platform.Social.PublicationSync do
       end
 
     case result do
+      {:error, :disabled} ->
+        {:ok, :disabled}
+
       {:error, reason} when reason in [:provider_deferred, :allowance_deferred] ->
         {:ok, :deferred}
 
@@ -388,6 +398,10 @@ defmodule Platform.Social.PublicationSync do
     Process.sleep(max(Keyword.get(opts, :pace_ms, 1_100), 0))
     if Backoff.deadline(clock(opts)), do: Repo.rollback(:provider_deferred)
 
+    # Disabling during lock acquisition or pacing must not admit HTTP.
+    # A request already beyond the client's final check may still finish.
+    unless enabled?(), do: Repo.rollback(:disabled)
+
     response =
       Zernio.publications(claim.binding.provider_account_ref,
         profile_ref: claim.binding.provider_profile_ref,
@@ -395,6 +409,8 @@ defmodule Platform.Social.PublicationSync do
         to_date: claim.query.to_date,
         cursor: claim.query.cursor
       )
+
+    if response == {:error, :disabled}, do: Repo.rollback(:disabled)
 
     now = clock(opts)
     unless Publications.valid_binding?(claim.binding), do: Repo.rollback(:binding_changed)

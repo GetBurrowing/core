@@ -18,6 +18,16 @@ defmodule Platform.Social.PublicationSyncTest do
   @now ~U[2026-11-22 06:00:00.000000Z]
 
   setup do
+    saved = Application.fetch_env(:social, :youtube_publications_enabled)
+    Application.put_env(:social, :youtube_publications_enabled, true)
+
+    on_exit(fn ->
+      case saved do
+        {:ok, value} -> Application.put_env(:social, :youtube_publications_enabled, value)
+        :error -> Application.delete_env(:social, :youtube_publications_enabled)
+      end
+    end)
+
     {profile, account} = social_account!(org_id!(), "youtube", %{provider: "zernio"})
 
     profile =
@@ -84,6 +94,143 @@ defmodule Platform.Social.PublicationSyncTest do
       send(parent, {:read, query, Repo.in_transaction?()})
       if fun, do: fun.(conn, query), else: Req.Test.json(conn, body(query))
     end)
+  end
+
+  test "disabled admission ignores caller overrides and makes no credential query or state writes",
+       ctx do
+    stub()
+    id = {__MODULE__, self()}
+    caller = self()
+
+    :telemetry.attach(
+      id,
+      [:platform, :repo, :query],
+      fn _, _, metadata, _ ->
+        if self() == caller, do: send(caller, {:admission_sql, metadata.query})
+      end,
+      nil
+    )
+
+    on_exit(fn -> :telemetry.detach(id) end)
+
+    for setting <- [:unset, false, "true", "invalid"] do
+      if setting == :unset,
+        do: Application.delete_env(:social, :youtube_publications_enabled),
+        else: Application.put_env(:social, :youtube_publications_enabled, setting)
+
+      assert {:ok, :disabled} = PublicationSync.step(ctx.profile.org_id, enabled: true)
+      refute_received {:admission_sql, _}
+      refute_received {:read, _, _}
+    end
+
+    assert Repo.aggregate(PublicationOrgBudget, :count) == 0
+    assert Repo.aggregate(PublicationSyncState, :count) == 0
+
+    # Discard SQL emitted by the count probes before the positive control.
+    drain_admission_sql()
+    # Positive control: the same caller-scoped recorder sees real admission SQL.
+    Application.put_env(:social, :youtube_publications_enabled, true)
+    assert {:ok, :refreshed} = step(ctx.profile.org_id)
+    assert_received {:read, _, true}
+    assert_received {:admission_sql, sql}
+    assert is_binary(sql)
+  end
+
+  defp drain_admission_sql do
+    receive do
+      {:admission_sql, _} -> drain_admission_sql()
+    after
+      0 -> :ok
+    end
+  end
+
+  test "disable during request pacing prevents HTTP and retains the committed reservation", ctx do
+    stub()
+    caller = self()
+
+    stopper =
+      Task.async(fn ->
+        receive do
+          :pacing ->
+            Application.put_env(:social, :youtube_publications_enabled, false)
+            send(caller, {:disabled_at, System.monotonic_time(:microsecond)})
+
+          :cancel ->
+            :ok
+        end
+      end)
+
+    on_exit(fn -> send(stopper.pid, :cancel) end)
+
+    clock = fn ->
+      # Observe the existing request clocks around pacing without adding
+      # a test-only sleep hook to the worker. The admission clocks are excluded.
+      {:current_stacktrace, stack} = Process.info(self(), :current_stacktrace)
+
+      if Enum.any?(stack, fn
+           {PublicationSync, :request, 2, _} -> true
+           _ -> false
+         end) do
+        n = Process.get(:publication_request_clock, 0) + 1
+        Process.put(:publication_request_clock, n)
+
+        if n == 2 do
+          Process.put(:pacing_started_at, System.monotonic_time(:microsecond))
+          send(stopper.pid, :pacing)
+        end
+
+        if n == 3 do
+          finished = System.monotonic_time(:microsecond)
+          assert_receive {:disabled_at, at}
+          assert at >= Process.get(:pacing_started_at)
+          assert at < finished
+          assert Application.get_env(:social, :youtube_publications_enabled) == false
+        end
+      end
+
+      @now
+    end
+
+    assert {:ok, :disabled} =
+             PublicationSync.step(ctx.profile.org_id, clock: clock, pace_ms: 1_000)
+
+    Task.await(stopper)
+    refute_received {:read, _, _}
+    assert Repo.get!(PublicationOrgBudget, ctx.profile.org_id).next_attempt_at > @now
+    assert Repo.aggregate(PublicationSyncState, :count) == 0
+    assert Repo.aggregate(Publication, :count) == 0
+    Process.delete(:publication_request_clock)
+    Process.delete(:pacing_started_at)
+  end
+
+  test "switching off retains cache, scan progress and committed allowance", ctx do
+    stub()
+    assert {:ok, :refreshed} = step(ctx.profile.org_id)
+    assert_received {:read, _, true}
+
+    snapshot =
+      {Repo.all(Publication), Repo.all(PublicationSyncState), Repo.all(PublicationOrgBudget)}
+
+    Application.put_env(:social, :youtube_publications_enabled, false)
+    assert {:ok, :disabled} = step(ctx.profile.org_id, DateTime.add(@now, 120))
+    refute_received {:read, _, _}
+
+    assert snapshot ==
+             {Repo.all(Publication), Repo.all(PublicationSyncState),
+              Repo.all(PublicationOrgBudget)}
+  end
+
+  test "an admitted HTTP request may finish after disable and its observation is retained", ctx do
+    stub(fn conn, query ->
+      Application.put_env(:social, :youtube_publications_enabled, false)
+      Req.Test.json(conn, body(query))
+    end)
+
+    assert {:ok, :refreshed} = step(ctx.profile.org_id)
+    assert_received {:read, _, true}
+    assert [%{metrics: %{"views" => 66}}] = Repo.all(Publication)
+    assert {:ok, :disabled} = step(ctx.profile.org_id, DateTime.add(@now, 120))
+    refute_received {:read, _, _}
   end
 
   test "discovery and day refresh share one durable allowance and HTTP stays inside the shared request transaction",
