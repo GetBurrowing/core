@@ -27,7 +27,19 @@ defmodule Platform.Goals do
   alias Platform.Accounts.User
   alias Platform.Agents.Agent
   alias Platform.Chat.Participant
-  alias Platform.Goals.{Entry, Goal, GoalTasks, Grant, Reading, Sources, Stop, Visibility}
+
+  alias Platform.Goals.{
+    Conversation,
+    Entry,
+    Goal,
+    GoalTasks,
+    Grant,
+    Reading,
+    Sources,
+    Stop,
+    Visibility
+  }
+
   alias Platform.Repo
   alias Platform.Tenancy.OrgMembership
 
@@ -109,7 +121,9 @@ defmodule Platform.Goals do
   `coach_agent_id` is the owner's to change, and only to an eligible coach
   (`Platform.Goals.Coaches`; else `{:error, :lead_missing_goals_tools}`) or
   nil; `owner_user_id` and `org_id` never change. Back to kind "personal"
-  is refused while any grant exists.
+  is refused while any grant exists. A coach change also swaps the coach in
+  the goal's conversation space (`Platform.Goals.Conversation.members_sync/2`):
+  the old coach's row is deleted and the new coach reads only from now on.
   """
   @spec update_goal(actor(), term(), map()) :: {:ok, Goal.t()} | {:error, term()}
   def update_goal(actor, goal_id, attrs) when is_map(attrs),
@@ -139,7 +153,8 @@ defmodule Platform.Goals do
              :ok <- check_coach.(actor, goal, attrs),
              changeset = Goal.changeset(goal, attrs),
              :ok <- check_kind_change(changeset, goal) do
-          with {:ok, updated} <- Repo.update(changeset) do
+          with {:ok, updated} <- Repo.update(changeset),
+               :ok <- Conversation.members_sync(updated, goal.coach_agent_id) do
             Platform.Goals.Clock.sync(goal, updated, Platform.Goals.Clock.now())
             {:ok, updated}
           end

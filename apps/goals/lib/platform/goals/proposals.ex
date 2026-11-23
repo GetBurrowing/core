@@ -59,7 +59,19 @@ defmodule Platform.Goals.Proposals do
   alias Platform.Agents.Agent
   alias Platform.Chat
   alias Platform.Goals
-  alias Platform.Goals.{Clock, Coaches, Goal, Limits, Proposal, Signals, Sources, Stop}
+
+  alias Platform.Goals.{
+    Clock,
+    Coaches,
+    Conversation,
+    Goal,
+    Limits,
+    Proposal,
+    Signals,
+    Sources,
+    Stop
+  }
+
   alias Platform.Repo
   alias Platform.Security.ExternalContent
 
@@ -358,6 +370,8 @@ defmodule Platform.Goals.Proposals do
   The person confirms the proposal at `revision`, the revision their screen
   last showed. Creates the goal AS THE PERSON, with the proposal's agent as
   coach and kind personal, in one transaction; at most one goal per proposal.
+  The proposal's space becomes the goal's own conversation in the same
+  transaction (`Platform.Goals.Conversation.link/2`, task 01a20939).
   """
   def confirm_proposal(actor, proposal_id, revision) do
     with {:ok, proposal} <- addressed(actor, proposal_id) do
@@ -368,6 +382,7 @@ defmodule Platform.Goals.Proposals do
                :ok <- check_revision(row, revision),
                :ok <- claim(row, revision),
                {:ok, goal} <- Goals.create_goal(actor, goal_attrs(row)),
+               {:ok, goal} <- Conversation.link(goal, row.space_id),
                {:ok, _stops} <- maybe_put_stops(actor, goal, row.draft["stops"]) do
             row
             |> Ecto.Changeset.change(
@@ -617,39 +632,16 @@ defmodule Platform.Goals.Proposals do
     end
   end
 
-  # The proposal's own conversation space (task 01a1eab6 stage 2). Kind dm so
-  # core routes every later message to the agent as `:directed`; is_direct
-  # false so `Chat.find_or_create_dm/3` never returns it as the person's DM;
-  # `"surface" => "goals"` marks it as owned by this surface, not a chat-rail
-  # conversation. Runs inside the start's transaction, so a refused start
-  # leaves no space behind.
-  defp create_goal_space(%User{} = user, %Agent{} = agent, org_id) do
-    with {:ok, space} <-
-           Chat.create_space(%{
-             kind: "dm",
-             is_direct: false,
-             name: "New goal",
-             created_by: user.id,
-             org_id: org_id,
-             metadata: %{"surface" => "goals"}
-           }),
-         :ok <- add_member(space, "user", user.id, user.name || user.email || "User"),
-         :ok <- add_member(space, "agent", agent.id, agent.name) do
-      {:ok, space}
-    end
-  end
-
-  defp add_member(space, type, id, display_name) do
-    case Chat.add_participant(space.id, %{
-           participant_type: type,
-           participant_id: id,
-           display_name: display_name,
-           joined_at: DateTime.utc_now()
-         }) do
-      {:ok, _participant} -> :ok
-      {:error, reason} -> {:error, reason}
-    end
-  end
+  # The proposal's own conversation space (task 01a1eab6 stage 2), made by
+  # `Platform.Goals.Conversation.create_space/4` (hoisted there by task
+  # 01a20939): kind dm so core routes every later message to the agent as
+  # `:directed`; is_direct false so `Chat.find_or_create_dm/3` never returns
+  # it as the person's DM; `"surface" => "goals"` marks it as owned by this
+  # surface, not a chat-rail conversation. Runs inside the start's
+  # transaction, so a refused start leaves no space behind. At confirm it
+  # becomes the goal's own conversation.
+  defp create_goal_space(%User{} = user, %Agent{} = agent, org_id),
+    do: Conversation.create_space(user, agent, org_id, %{})
 
   defp expire_stale(%User{id: id}, now) do
     Repo.update_all(
