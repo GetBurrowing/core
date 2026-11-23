@@ -24,6 +24,10 @@ defmodule Platform.Social.Extension do
   @behaviour Platform.Extension
 
   @impl true
+  def calendar_day_entries(user_id, from, to, zone),
+    do: Platform.Social.CalendarDayEntries.list(user_id, from, to, zone)
+
+  @impl true
   def canvas_kinds, do: [Platform.Social.CanvasKinds.SocialPostCard]
 
   @deny_publish_or_approve "There is no publish or approve tool: a human approves in Burrow and the platform publishes."
