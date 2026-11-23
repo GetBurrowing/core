@@ -404,6 +404,7 @@ defmodule Platform.Goals.Conversation do
       kind: ask.kind,
       title: ask.title,
       status: ask.status,
+      suggestions: Enum.map(ask.payload["suggestions"] || [], & &1["title"]),
       answers:
         Enum.map(
           ask.answers,
@@ -506,6 +507,51 @@ defmodule Platform.Goals.Conversation do
     space_id
     |> Chat.list_participants(participant_type: "user")
     |> Enum.find(&(&1.participant_id == owner_id))
+  end
+
+  # ── the conversation screen (task 01a20939 stage 4) ───────────────────────
+
+  @doc "The PubSub topic for the goal's conversation records (ids only)."
+  @spec topic(binary()) :: String.t()
+  def topic(goal_id), do: "goals:conversation:#{goal_id}"
+
+  @doc "Tells open conversation screens the goal's records changed."
+  @spec broadcast(binary()) :: :ok
+  def broadcast(goal_id) do
+    Phoenix.PubSub.broadcast(
+      Platform.PubSub,
+      topic(goal_id),
+      {:goal_conversation_changed, goal_id}
+    )
+  end
+
+  @doc """
+  Subscribes the caller to the goal's records topic and, when the goal has a
+  space, to that space's messages (`Platform.Chat.PubSub`). The caller
+  checks access first.
+  """
+  @spec subscribe(Goal.t()) :: :ok
+  def subscribe(%Goal{id: id, conversation_space_id: space_id}) do
+    :ok = Phoenix.PubSub.subscribe(Platform.PubSub, topic(id))
+    if is_binary(space_id), do: Platform.Chat.PubSub.subscribe(space_id)
+    :ok
+  end
+
+  @doc """
+  Moves `owner_id`'s read watermark to the space's newest top-level message,
+  never backwards. `:ok` with no space, no row or no message.
+  """
+  @spec mark_read(Goal.t(), binary()) :: :ok
+  def mark_read(%Goal{conversation_space_id: nil}, _owner_id), do: :ok
+
+  def mark_read(%Goal{conversation_space_id: space_id}, owner_id) do
+    with %Participant{} = row <- owner_row(space_id, owner_id),
+         [newest | _] <- Chat.list_messages(space_id, top_level_only: true, limit: 1),
+         true <- is_nil(row.last_read_message_id) or newest.id > row.last_read_message_id do
+      Chat.mark_space_read(row.id, newest.id)
+    else
+      _ -> :ok
+    end
   end
 
   # ── internals ────────────────────────────────────────────────────────────

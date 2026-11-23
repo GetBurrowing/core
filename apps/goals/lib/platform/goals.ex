@@ -379,8 +379,14 @@ defmodule Platform.Goals do
           |> Repo.insert()
         end
       end)
+      |> tap(&broadcast_entry/1)
     end
   end
+
+  # After the write commits: an open conversation screen re-reads its
+  # records (`Conversation.broadcast/1`, the goal id only).
+  defp broadcast_entry({:ok, %Entry{goal_id: goal_id}}), do: Conversation.broadcast(goal_id)
+  defp broadcast_entry(_result), do: :ok
 
   @doc "Lists newest notebook entries, optionally filtered by kind (limit 50, maximum 200)."
   def list_entries(actor, goal_id, opts \\ []) do
@@ -1014,7 +1020,57 @@ defmodule Platform.Goals do
          {:ok, goal} <- fetch_visible(actor, goal_id, false),
          :ok <- check_member(actor, goal) do
       items = Conversation.timeline(goal, actor: actor, limit: Keyword.get(opts, :limit))
-      {:ok, %{goal_id: goal.id, space_id: goal.conversation_space_id, items: items}}
+
+      {:ok,
+       %{
+         goal_id: goal.id,
+         space_id: goal.conversation_space_id,
+         items: items,
+         members: Conversation.members(goal),
+         setup_until: setup_until(goal)
+       }}
+    end
+  end
+
+  # When the New goal conversation became the goal's (the proposal's
+  # confirmed_at): messages before it are how the goal was set up. nil for a
+  # goal with no confirmed proposal.
+  defp setup_until(goal) do
+    Repo.one(
+      from(p in Platform.Goals.Proposal,
+        where: p.goal_id == ^goal.id and p.status == "confirmed",
+        order_by: [desc: p.confirmed_at],
+        limit: 1,
+        select: p.confirmed_at
+      )
+    )
+  end
+
+  @doc """
+  Subscribes the caller to the goal's conversation: the space's
+  `{:new_message, _}` (when it has a space) and `{:goal_conversation_changed,
+  goal_id}` for its records. Owner or coach only.
+  """
+  @spec subscribe_conversation(actor(), term()) :: :ok | {:error, term()}
+  def subscribe_conversation(actor, goal_id) do
+    with :ok <- check_enabled(),
+         {:ok, goal} <- fetch_visible(actor, goal_id, false),
+         :ok <- check_member(actor, goal) do
+      Conversation.subscribe(goal)
+    end
+  end
+
+  @doc """
+  Moves the owner's read watermark in the goal's conversation to its newest
+  message (`Platform.Chat.mark_space_read/2`). Owner only; a goal with no
+  space is `:ok`.
+  """
+  @spec mark_conversation_read(actor(), term()) :: :ok | {:error, term()}
+  def mark_conversation_read(actor, goal_id) do
+    with :ok <- check_enabled(),
+         {:ok, goal} <- fetch_visible(actor, goal_id, false),
+         :ok <- check_owner(actor, goal) do
+      Conversation.mark_read(goal, actor.id)
     end
   end
 
@@ -1149,6 +1205,10 @@ defmodule Platform.Goals do
           nil -> {:error, :not_found}
           error -> error
         end
+      end)
+      |> tap(fn
+        {:ok, %{goal: goal}} -> Conversation.broadcast(goal.id)
+        _ -> :ok
       end)
     end
   end

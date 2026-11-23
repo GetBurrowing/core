@@ -161,7 +161,9 @@ defmodule Platform.Goals.RevokedTest do
       apply_change: [u, missing],
       dismiss_change: [u, missing],
       conversation_summary: [u, g],
-      ask_reply: [u, c.ask.id]
+      ask_reply: [u, c.ask.id],
+      subscribe_conversation: [u, g],
+      mark_conversation_read: [u, g]
     }
   end
 
