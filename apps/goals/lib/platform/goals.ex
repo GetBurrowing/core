@@ -1018,6 +1018,36 @@ defmodule Platform.Goals do
     end
   end
 
+  @doc """
+  The owner's "Discuss this goal" summary (`Conversation.discuss/2`):
+  `{:ok, nil}` for anyone but the owner, and for a goal with no space yet.
+  """
+  @spec conversation_summary(actor(), term()) :: {:ok, map() | nil} | {:error, term()}
+  def conversation_summary(actor, goal_id) do
+    with :ok <- check_enabled(),
+         {:ok, goal} <- fetch_visible(actor, goal_id, false) do
+      {:ok, if(owner?(actor, goal), do: Conversation.discuss(goal, actor.id))}
+    end
+  end
+
+  @doc """
+  The owner's written reply to check-in `ask_id`, or `{:ok, nil}` (none, or
+  anyone but the owner). A missing or unseen ask is `{:error, :not_found}`.
+  """
+  @spec ask_reply(actor(), term()) :: {:ok, String.t() | nil} | {:error, term()}
+  def ask_reply(actor, ask_id) do
+    with :ok <- check_enabled(),
+         {:ok, id} <- cast_id(ask_id),
+         %Platform.Goals.Ask{} = ask <-
+           Repo.one(from(a in visible_rows(actor, Platform.Goals.Ask), where: a.id == ^id)),
+         {:ok, goal} <- fetch_visible(actor, ask.goal_id, false) do
+      {:ok, if(owner?(actor, goal), do: Conversation.ask_reply(goal, actor.id, ask.id))}
+    else
+      nil -> {:error, :not_found}
+      error -> error
+    end
+  end
+
   defp check_member(actor, goal) do
     if owner?(actor, goal) or coach?(actor, goal), do: :ok, else: {:error, :forbidden}
   end

@@ -896,4 +896,65 @@ defmodule PlatformWeb.GoalsPageTest do
       end
     end
   end
+
+  # ── Discuss this goal (task 01a20939 stage 3) ─────────────────────────────
+
+  test "the owner's Discuss row: preview, a dot for an unread coach message, gone after read",
+       c do
+    coach = agent!()
+    goal = goal!(c.owner, c.org_id, %{coach_agent_id: coach.id})
+    viewer = member!(c.org_id)
+    {:ok, _} = Goals.open_goal(c.owner, goal.id, {:user, viewer.id})
+
+    child = page(c.conn, c.owner, goal)
+
+    assert has_element?(
+             child,
+             "a[data-role=goal-discuss][href='/m/goals?goal=#{goal.id}&talk=1']"
+           )
+
+    assert text(child, "[data-role=goal-discuss]") =~ "Discuss this goal"
+
+    assert text(child, "[data-role=goal-discuss-preview]") ==
+             "Write to #{coach.name} about this goal"
+
+    refute has_element?(child, "[data-role=goal-discuss-unread]")
+
+    # Above the next steps and the notebook.
+    html = render(child)
+    {discuss_at, _} = :binary.match(html, "data-role=\"goal-discuss\"")
+    {check_in_at, _} = :binary.match(html, "data-role=\"goal-check-in\"")
+    assert discuss_at < check_in_at
+
+    # A shared viewer gets no row at all.
+    refute has_element?(page(c.conn, viewer, goal), "[data-role=goal-discuss]")
+
+    {:ok, %{space_id: space_id}} = Goals.say_in_goal(c.owner, goal.id, "Booked Tuesdays")
+    child = page(c.conn, c.owner, goal)
+    assert text(child, "[data-role=goal-discuss-preview]") == "You: Booked Tuesdays"
+    refute has_element?(child, "[data-role=goal-discuss-unread]")
+
+    coach_row = Platform.Chat.get_agent_participant(space_id, coach.id)
+
+    {:ok, reply} =
+      Platform.Chat.post_message(%{
+        space_id: space_id,
+        participant_id: coach_row.id,
+        content_type: "text",
+        content: "Logged it."
+      })
+
+    child = page(c.conn, c.owner, goal)
+    assert text(child, "[data-role=goal-discuss-preview]") == "#{coach.name}: Logged it."
+    assert has_element?(child, "[data-role=goal-discuss-unread] .sr-only", "new messages")
+    refute has_element?(page(c.conn, viewer, goal), "[data-role=goal-discuss]")
+
+    owner_row =
+      space_id
+      |> Platform.Chat.list_participants(participant_type: "user")
+      |> Enum.find(&(&1.participant_id == c.owner.id))
+
+    :ok = Platform.Chat.mark_space_read(owner_row.id, reply.id)
+    refute has_element?(page(c.conn, c.owner, goal), "[data-role=goal-discuss-unread]")
+  end
 end

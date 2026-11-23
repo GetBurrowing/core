@@ -159,7 +159,9 @@ defmodule Platform.Goals.RevokedTest do
       goal_conversation: [u, g, []],
       propose_change: [u, g, %{"outreach" => "off"}, nil],
       apply_change: [u, missing],
-      dismiss_change: [u, missing]
+      dismiss_change: [u, missing],
+      conversation_summary: [u, g],
+      ask_reply: [u, c.ask.id]
     }
   end
 

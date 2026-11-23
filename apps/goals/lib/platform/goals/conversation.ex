@@ -348,11 +348,7 @@ defmodule Platform.Goals.Conversation do
 
   # Through core's Chat API only: the agent's row by its strict lookup, the
   # owner's from the space's (two-row) participant list.
-  defp actor_row(space_id, %User{id: id}) do
-    space_id
-    |> Chat.list_participants(participant_type: "user")
-    |> Enum.find(&(&1.participant_id == id))
-  end
+  defp actor_row(space_id, %User{id: id}), do: owner_row(space_id, id)
 
   defp actor_row(space_id, %Agent{id: id}), do: Chat.get_agent_participant(space_id, id)
   defp actor_row(_space_id, _actor), do: nil
@@ -444,6 +440,73 @@ defmodule Platform.Goals.Conversation do
     ]
 
   defp entry_item(_entry), do: []
+
+  # ── the goal page and the check-in (task 01a20939 stage 3) ────────────────
+
+  @doc """
+  The goal page's "Discuss this goal" row for the owner `owner_id`: nil
+  when the goal has no live space yet, else `%{preview, unread?}`.
+  `preview` is `%{speaker, text}` for the newest message ("You" for the
+  owner, else the author's name), or nil for an empty conversation.
+  `unread?` is true when the newest agent message's id is above the
+  owner's `last_read_message_id` (or the owner has read nothing), the same
+  watermark rule core's unread count uses.
+  """
+  @spec discuss(Goal.t(), binary()) :: map() | nil
+  def discuss(%Goal{} = goal, owner_id) do
+    with space_id when is_binary(space_id) <- goal.conversation_space_id,
+         %Space{} <- live_space(space_id) do
+      said =
+        space_id
+        |> Chat.list_messages(top_level_only: true, limit: 50)
+        |> Enum.filter(&said?/1)
+
+      read = owner_row(space_id, owner_id)
+      read_id = read && read.last_read_message_id
+      latest_agent = Enum.find(said, &(&1.author_participant_type == "agent"))
+
+      %{
+        preview: preview(List.first(said), owner_id),
+        unread?: not is_nil(latest_agent) and (is_nil(read_id) or latest_agent.id > read_id)
+      }
+    else
+      _ -> nil
+    end
+  end
+
+  defp preview(nil, _owner_id), do: nil
+
+  defp preview(msg, owner_id) do
+    speaker =
+      if msg.author_participant_type == "user" and msg.author_user_id == owner_id,
+        do: "You",
+        else: msg.author_display_name || "Coach"
+
+    %{speaker: speaker, text: msg.content || ""}
+  end
+
+  @doc """
+  The owner's newest reply to check-in `ask_id` in the goal's conversation
+  (a message with metadata `"ask_id"`), or nil. Read from the newest 200
+  messages.
+  """
+  @spec ask_reply(Goal.t(), binary(), binary()) :: String.t() | nil
+  def ask_reply(%Goal{conversation_space_id: nil}, _owner_id, _ask_id), do: nil
+
+  def ask_reply(%Goal{conversation_space_id: space_id}, owner_id, ask_id) do
+    space_id
+    |> Chat.list_messages(top_level_only: true, limit: @timeline_limit)
+    |> Enum.find_value(fn msg ->
+      if msg.author_user_id == owner_id and (msg.metadata || %{})["ask_id"] == ask_id,
+        do: msg.content
+    end)
+  end
+
+  defp owner_row(space_id, owner_id) do
+    space_id
+    |> Chat.list_participants(participant_type: "user")
+    |> Enum.find(&(&1.participant_id == owner_id))
+  end
 
   # ── internals ────────────────────────────────────────────────────────────
 

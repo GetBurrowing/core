@@ -255,6 +255,8 @@ defmodule PlatformWeb.GoalsLive do
         toast: nil,
         screen: nil,
         check_choices: %{},
+        check_reply: "",
+        check_reply_error: false,
         retro_question_sent: false,
         new: nil,
         from_brief: is_map(query) and query["from"] == "brief"
@@ -331,35 +333,40 @@ defmodule PlatformWeb.GoalsLive do
     end
   end
 
+  # The reply box's text lives in the socket (task 01a20939 stage 3), so a
+  # failed send keeps it on screen. Only the owner's screen has the box.
+  def handle_event("check_reply", params, socket) do
+    reply = params |> Map.get("reply", "") |> to_string()
+    {:noreply, assign(socket, check_reply: reply)}
+  end
+
+  # Finish records the choices exactly as before, then, when the owner wrote
+  # a non-blank reply, posts it to the goal's conversation
+  # (`Goals.say_in_goal/4`, which wakes the coach). A blank or whitespace
+  # reply posts nothing. A failed send keeps the text and the open screen
+  # with one error line; Finish again retries only the send, because the
+  # choices are already recorded.
   def handle_event("check_finish", params, socket) do
     with {:ok, socket} <- reload_screen(socket, :check),
          true <- matching_screen?(socket, params) do
       screen = socket.assigns.screen
 
-      choices =
-        screen
-        |> GoalsCheckIn.suggestions()
-        |> Enum.with_index()
-        |> Enum.map(fn {_, i} ->
-          %{"index" => i, "choice" => Map.get(socket.assigns.check_choices, i, "not_now")}
-        end)
+      recorded =
+        if GoalsCheckIn.final_answer?(screen.answer),
+          do: :already,
+          else: record_check_in(socket, screen)
 
-      answer =
-        if choices == [] or Enum.any?(choices, &(&1["choice"] == "do")),
-          do: "used",
-          else: "declined"
+      case recorded do
+        :error ->
+          {:noreply, socket}
 
-      case Goals.answer_ask(socket.assigns.user, screen.ask.id, answer, %{"choices" => choices}) do
-        {:ok, _} ->
-          Goals.refresh_brief(socket.assigns.user, screen.ask.id)
+        recorded ->
+          socket = send_check_reply(socket, screen, recorded)
 
           case reload_screen(socket, :check) do
             {:ok, socket} -> {:noreply, socket}
             _ -> {:noreply, socket}
           end
-
-        _ ->
-          {:noreply, socket}
       end
     else
       _ -> {:noreply, socket}
@@ -689,6 +696,50 @@ defmodule PlatformWeb.GoalsLive do
       (not Map.has_key?(params, "goal_id") or params["goal_id"] == goal_id(socket))
   end
 
+  defp record_check_in(socket, screen) do
+    choices =
+      screen
+      |> GoalsCheckIn.suggestions()
+      |> Enum.with_index()
+      |> Enum.map(fn {_, i} ->
+        %{"index" => i, "choice" => Map.get(socket.assigns.check_choices, i, "not_now")}
+      end)
+
+    answer =
+      if choices == [] or Enum.any?(choices, &(&1["choice"] == "do")),
+        do: "used",
+        else: "declined"
+
+    case Goals.answer_ask(socket.assigns.user, screen.ask.id, answer, %{"choices" => choices}) do
+      {:ok, _} ->
+        Goals.refresh_brief(socket.assigns.user, screen.ask.id)
+        :recorded
+
+      _ ->
+        :error
+    end
+  end
+
+  # :already with no pending error is a repeat Finish on a done check-in:
+  # nothing to send.
+  defp send_check_reply(socket, screen, recorded) do
+    reply = String.trim(socket.assigns.check_reply || "")
+
+    cond do
+      not GoalsCheckIn.reply_box?(screen) or reply == "" ->
+        assign(socket, check_reply: "", check_reply_error: false)
+
+      recorded == :already and not socket.assigns.check_reply_error ->
+        socket
+
+      true ->
+        case Goals.say_in_goal(socket.assigns.user, screen.goal.id, reply, ask_id: screen.ask.id) do
+          {:ok, _} -> assign(socket, check_reply: "", check_reply_error: false)
+          {:error, _} -> assign(socket, check_reply_error: true)
+        end
+    end
+  end
+
   defp choice_index(index) when is_integer(index), do: {:ok, index}
 
   defp choice_index(index) when is_binary(index) do
@@ -847,6 +898,8 @@ defmodule PlatformWeb.GoalsLive do
           :if={@screen && @screen.kind == :check}
           screen={@screen}
           choices={@check_choices}
+          reply={@check_reply}
+          reply_error={@check_reply_error}
         />
         <GoalsRetro.screen
           :if={@screen && @screen.kind == :retro}
