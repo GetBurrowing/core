@@ -41,6 +41,8 @@ defmodule PlatformWeb.CalendarLive do
      )
      |> assign(:view, "week")
      |> assign(:selected, nil)
+     |> assign(:calendar_day_selected, nil)
+     |> assign(:calendar_day_open_seq, 0)
      |> assign(:past, nil)
      |> assign(:meeting_cancel_state, :idle)
      |> assign(:meeting_delete_state, :idle)
@@ -159,6 +161,36 @@ defmodule PlatformWeb.CalendarLive do
     today = today(socket.assigns.zone)
     {:noreply, socket |> assign(:today, today) |> put_day(today) |> reload()}
   end
+
+  def handle_event(
+        "calendar_day_open",
+        %{"key" => key, "date" => date, "placement" => placement},
+        socket
+      )
+      when placement in ~w(week-desktop week-phone month-desktop month-phone) do
+    socket = reload(socket)
+
+    selected =
+      Enum.find(socket.assigns.calendar_day_entries, fn entry ->
+        entry.key == key and Date.to_iso8601(entry.day) == date
+      end)
+
+    seq = socket.assigns.calendar_day_open_seq + 1
+
+    selected =
+      if selected do
+        selected
+        |> Map.put(:trigger_id, day_chip_id(placement, selected.key, selected.day))
+        |> Map.put(:open_seq, seq)
+      end
+
+    {:noreply, assign(socket, calendar_day_selected: selected, calendar_day_open_seq: seq)}
+  end
+
+  def handle_event("calendar_day_open", _, socket), do: {:noreply, socket}
+
+  def handle_event("calendar_day_close", _, socket),
+    do: {:noreply, assign(socket, :calendar_day_selected, nil)}
 
   # A phone day-strip tap: the single-day column follows, the week stays.
   def handle_event("select_day", %{"date" => value}, socket) do
@@ -422,6 +454,10 @@ defmodule PlatformWeb.CalendarLive do
   # is the ONE Escape binding: the editor's X, Cancel and backdrop push
   # `close_editor`, and nothing else listens for Escape, so a keypress
   # closes exactly one layer.
+  def handle_event("escape", _, %{assigns: %{calendar_day_selected: selected}} = socket)
+      when not is_nil(selected),
+      do: {:noreply, assign(socket, :calendar_day_selected, nil)}
+
   def handle_event("escape", _, %{assigns: %{editor: %{}}} = socket),
     do: {:noreply, Editor.seed(socket)}
 
@@ -906,6 +942,24 @@ defmodule PlatformWeb.CalendarLive do
 
     {from, _} = CalendarWindow.day_bounds(first, zone)
     {_, to} = CalendarWindow.day_bounds(last, zone)
+
+    user_id =
+      case socket.assigns.current_user_record do
+        %{id: id} -> id
+        _ -> nil
+      end
+
+    day_entries = Platform.Extensions.calendar_day_entries(user_id, from, to, zone)
+    selected = socket.assigns.calendar_day_selected
+
+    selected =
+      if selected do
+        case Enum.find(day_entries, &(&1.key == selected.key and &1.day == selected.day)) do
+          nil -> nil
+          entry -> Map.merge(entry, Map.take(selected, [:trigger_id, :open_seq]))
+        end
+      end
+
     # `:keep`: a cancelled meeting stays on the grid in its slot, struck
     # through (task 01a19e7f stage 4). Only this caller asks for it.
     entries = Events.list_entries(scope, from, to, time_zone: zone, cancelled_meetings: :keep)
@@ -924,6 +978,8 @@ defmodule PlatformWeb.CalendarLive do
       booking_link_count: length(Platform.Calendar.BookingLinks.list(scope)),
       entries: entries,
       visible_entries: visible,
+      calendar_day_entries: day_entries,
+      calendar_day_selected: selected,
       calendars: calendar_rows(socket.assigns, subscriptions),
       spaces: Platform.Calendar.list_spaces(scope),
       projects: Platform.Tasks.list_projects_for_user(socket.assigns.current_user_record)

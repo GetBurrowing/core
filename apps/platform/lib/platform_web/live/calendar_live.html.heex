@@ -58,13 +58,21 @@
       class="clears-tab-bar relative min-h-0 flex-1 overflow-y-auto"
     >
       <.legend meetings_on={@meetings_on} />
+      <.calendar_day_list :if={@calendar_day_selected} selected={@calendar_day_selected} />
       <%= if @view == "month" do %>
-        <.month_grid cursor={@cursor} today={@today} entries={@visible_entries} zone={@zone} />
         <.month_grid
           cursor={@cursor}
           today={@today}
           entries={@visible_entries}
           zone={@zone}
+          day_entries={@calendar_day_entries}
+        />
+        <.month_grid
+          cursor={@cursor}
+          today={@today}
+          entries={@visible_entries}
+          zone={@zone}
+          day_entries={@calendar_day_entries}
           phone
         />
       <% else %>
@@ -74,9 +82,16 @@
           zone={@zone}
           today={@today}
           selected_id={@selected && Map.get(@selected, :id)}
+          day_entries={@calendar_day_entries}
         />
         <div class="lg:hidden" data-role="calendar-phone-week">
-          <.day_strip sel_day={@sel_day} today={@today} entries={@visible_entries} zone={@zone} />
+          <.day_strip
+            sel_day={@sel_day}
+            today={@today}
+            entries={@visible_entries}
+            zone={@zone}
+            day_entries={@calendar_day_entries}
+          />
           <.phone_day
             day={@sel_day}
             entries={@visible_entries}
