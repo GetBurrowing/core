@@ -183,7 +183,10 @@ defmodule Platform.Goals.ConversationSpaceTest do
     assert reload(goal).conversation_space_id == new.id
   end
 
-  test "ensure_space called from several processes gives one space", c do
+  # Sandboxed processes share one connection, so these run one after another:
+  # this pins idempotency across processes. The real overlapping race (and
+  # the FOR UPDATE probe) is ConversationSpaceConcurrencyTest.
+  test "ensure_space from several sandboxed processes in turn gives one space", c do
     {goal, _coach} = coached_goal!(c)
     owner = self()
 
