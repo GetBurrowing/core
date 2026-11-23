@@ -73,6 +73,10 @@ final class BurrowBridgeViewController: CAPBridgeViewController {
     private var pushedTabBarHeight: CGFloat?
     private var backdropObservation: NSKeyValueObservation?
     private var backdropSampling = false
+    #if DEBUG
+        /// Task 01a20618: geometry-only chat probe, Library/Caches/chat-geometry.log.
+        private var geometryProbe: ChatGeometryProbe?
+    #endif
 
     /// DEBUG only: `-BurrowLoginProbe <host>` loads that host's `/auth/login`
     /// with no navigation policy at all, to measure a plain in-WKWebView
@@ -198,6 +202,10 @@ final class BurrowBridgeViewController: CAPBridgeViewController {
             }
         #endif
 
+        #if DEBUG
+            if geometryProbe == nil { geometryProbe = ChatGeometryProbe(controller: self, webView: webView) }
+        #endif
+
         cover.backgroundColor = BurrowColor.surface.uiColor
         cover.frame = webView.bounds
         cover.autoresizingMask = [.flexibleWidth, .flexibleHeight]
@@ -248,6 +256,9 @@ final class BurrowBridgeViewController: CAPBridgeViewController {
         NotificationRouter.shared.openHandler = { [weak self] install, url in
             guard let self else { return }
             // Task 01a1261e: a tap that moves the app to ANOTHER install says so.
+            #if DEBUG
+                self.geometryProbe?.notificationOpen(url)
+            #endif
             let switching = SwitchBanner.shouldShow(currentHost: self.currentInstall?.host, targetHost: install.host)
             self.open(install, at: url)
             if switching { self.switchBanner.show(SwitchBanner.message(install.displayName), in: self) }
@@ -650,7 +661,15 @@ final class BurrowBridgeViewController: CAPBridgeViewController {
 
     override func viewWillTransition(to size: CGSize, with coordinator: UIViewControllerTransitionCoordinator) {
         super.viewWillTransition(to: size, with: coordinator)
-        coordinator.animate(alongsideTransition: nil) { [weak self] _ in self?.syncDuoPosture() }
+        #if DEBUG
+            geometryProbe?.willTransition(to: size)
+        #endif
+        coordinator.animate(alongsideTransition: nil) { [weak self] _ in
+            self?.syncDuoPosture()
+            #if DEBUG
+                self?.geometryProbe?.didTransition()
+            #endif
+        }
     }
 
     /// didFinish: a document that has sent no state after the LiveView
@@ -687,12 +706,15 @@ final class BurrowBridgeViewController: CAPBridgeViewController {
             barHeight: bar.frame.height, safeAreaBottom: view.safeAreaInsets.bottom, verticalBar: tabBarOffBottom)
     }
 
-    /// Keeps `--native-tab-bar-height` current on layout and rotation. A 0 is
-    /// pushed only while the bar is off the bottom (the Duo's side strip or
-    /// top bar); otherwise 0 means the bar has not been laid out yet.
+    /// Keeps `--native-tab-bar-height` current on layout and rotation. See
+    /// `NativeTabBarDocument.shouldPushHeight` for when a 0 is pushed.
     private func pushTabBarHeight() {
         let height = currentTabBarHeight()
-        guard height > 0 || tabBarOffBottom, height != pushedTabBarHeight else { return }
+        let laidOut = view.window != nil && !(tabBarHost?.bar.bounds.isEmpty ?? true)
+        guard
+            NativeTabBarDocument.shouldPushHeight(
+                height, pushed: pushedTabBarHeight, barOffBottom: tabBarOffBottom, barLaidOut: laidOut)
+        else { return }
         pushedTabBarHeight = height
         webView?.evaluateJavaScript(NativeTabBarDocument.heightUpdate(height))
     }
@@ -701,6 +723,9 @@ final class BurrowBridgeViewController: CAPBridgeViewController {
         super.viewDidLayoutSubviews()
         pushTabBarHeight()
         syncDuoPosture()
+        #if DEBUG
+            geometryProbe?.layoutPass()
+        #endif
     }
 
     #if DEBUG
@@ -918,6 +943,9 @@ final class BurrowBridgeViewController: CAPBridgeViewController {
     // MARK: Pull to refresh, status bar
 
     private func webViewURLChanged(_ url: URL?) {
+        #if DEBUG
+            geometryProbe?.urlChanged(url)
+        #endif
         annotateEntity(url)
         guard let scrollView = webView?.scrollView else { return }
         let allowed = url.map { NavigationPolicy.allowsPullToRefresh(path: $0.path) } ?? false
@@ -979,6 +1007,9 @@ final class BurrowBridgeViewController: CAPBridgeViewController {
     override func traitCollectionDidChange(_ previousTraitCollection: UITraitCollection?) {
         super.traitCollectionDidChange(previousTraitCollection)
         syncStatusBarWithWebTheme()
+        #if DEBUG
+            geometryProbe?.traitsChanged(traitCollection)
+        #endif
     }
 }
 
@@ -1007,6 +1038,20 @@ enum NativeTabBarDocument {
               root.style.setProperty("\(heightVariable)", "\(Int(height))px");
             })();
             """
+    }
+
+    /// Whether `pushTabBarHeight` sends `height`. A change is pushed when it
+    /// is non-zero, when the bar is off the bottom (the Duo's side strip or
+    /// top bar), or when the bar is laid out: a 0 before the bar's first
+    /// layout means "not measured yet" and is skipped. Without the laid-out
+    /// case a bottom bar that sits wholly in the safe area (the Duo shell's
+    /// bar, whose height the safe area already includes) could never clear a
+    /// stale non-zero value: the open Duo kept 868px after a landscape to
+    /// portrait turn and the chat padded itself past its last message until
+    /// a force quit (task 01a20618, measured on the device).
+    static func shouldPushHeight(_ height: CGFloat, pushed: CGFloat?, barOffBottom: Bool, barLaidOut: Bool) -> Bool {
+        guard height != pushed else { return false }
+        return height > 0 || barOffBottom || barLaidOut
     }
 
     /// Updates the variable on a page that carries the attribute.

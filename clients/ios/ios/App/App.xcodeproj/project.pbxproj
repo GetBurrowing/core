@@ -81,6 +81,7 @@
 		3EDF9E8869059EFA42347341 /* IntentSourceScanTests.swift in Sources */ = {isa = PBXBuildFile; fileRef = A9DC08ECFA84095D28184D7E /* IntentSourceScanTests.swift */; };
 		3F4E1D034E498577194F5C97 /* CountsCache.swift in Sources */ = {isa = PBXBuildFile; fileRef = 9D27347C121D5A67129627D1 /* CountsCache.swift */; };
 		3FB3C8C0634A765EE81D042E /* Assets.xcassets in Resources */ = {isa = PBXBuildFile; fileRef = 76989E05CECAD7B8B3C424A7 /* Assets.xcassets */; };
+		4158976107878748A217FD70 /* ChatGeometryProbe.swift in Sources */ = {isa = PBXBuildFile; fileRef = BA31D8C7EDC7E1712A3E83DB /* ChatGeometryProbe.swift */; };
 		417E34D941AFD0DAC756386F /* SlabState.swift in Sources */ = {isa = PBXBuildFile; fileRef = FCEC8A0CD2D3DB02BB85718E /* SlabState.swift */; };
 		4477267F5890DCD183087CBB /* Colors.xcassets in Resources */ = {isa = PBXBuildFile; fileRef = F20AEF676C004D2C37F1D06C /* Colors.xcassets */; };
 		45434EE5E79FD1E5AF91F655 /* InstallUnreadStore.swift in Sources */ = {isa = PBXBuildFile; fileRef = 1510D02E40E90C314AC0E673 /* InstallUnreadStore.swift */; };
@@ -474,6 +475,7 @@
 		B33BCD4D7535FD5FA9C86A1B /* InCallScreen.swift */ = {isa = PBXFileReference; lastKnownFileType = sourcecode.swift; path = InCallScreen.swift; sourceTree = "<group>"; };
 		B986C8E0C3CA20D722AA71B3 /* WebMediaCaptureTrace.swift */ = {isa = PBXFileReference; lastKnownFileType = sourcecode.swift; path = WebMediaCaptureTrace.swift; sourceTree = "<group>"; };
 		B9944C7EE764DE0881EC97B3 /* MessagingEntities.swift */ = {isa = PBXFileReference; lastKnownFileType = sourcecode.swift; path = MessagingEntities.swift; sourceTree = "<group>"; };
+		BA31D8C7EDC7E1712A3E83DB /* ChatGeometryProbe.swift */ = {isa = PBXFileReference; lastKnownFileType = sourcecode.swift; path = ChatGeometryProbe.swift; sourceTree = "<group>"; };
 		BA623D3963F4BCFBB477D85D /* PersonalIndex.swift */ = {isa = PBXFileReference; lastKnownFileType = sourcecode.swift; path = PersonalIndex.swift; sourceTree = "<group>"; };
 		BAF90B5FD6EA88A0B9F3A8CC /* PushSeal.swift */ = {isa = PBXFileReference; lastKnownFileType = sourcecode.swift; path = PushSeal.swift; sourceTree = "<group>"; };
 		BE3E8DDF0ACD168B5E66C984 /* companion_identities_v1.json */ = {isa = PBXFileReference; lastKnownFileType = text.json; path = companion_identities_v1.json; sourceTree = "<group>"; };
@@ -641,6 +643,7 @@
 				C502C80B1C599EA47F7B501E /* AuthSession.swift */,
 				D916E0C6383FBD2B8718B163 /* BurrowBridgeViewController.swift */,
 				68ED4E8FE0185474B6E8E85B /* capacitor.config.json */,
+				BA31D8C7EDC7E1712A3E83DB /* ChatGeometryProbe.swift */,
 				8776CD2CC1249496A6F18C86 /* config.xml */,
 				62AAE05CE5E511E314C55BA7 /* DebugPushKeySeam.swift */,
 				7BBBD286FE12062F6F18176A /* DuoShellController.swift */,
@@ -1426,6 +1429,7 @@
 				19A3C80DCCEF7246668ECEF9 /* BurrowShortcuts.swift in Sources */,
 				F8211A6039D9991C73204E10 /* CallController.swift in Sources */,
 				A1323563688D4C9F271926D1 /* CallState.swift in Sources */,
+				4158976107878748A217FD70 /* ChatGeometryProbe.swift in Sources */,
 				1E74718C32E8C5C156475AD1 /* CommunicationNotification.swift in Sources */,
 				6E10B17CE0395C27D3882D82 /* CountsCache.swift in Sources */,
 				641897D3AF57D7EC2D4FDCF0 /* CountsEntry.swift in Sources */,

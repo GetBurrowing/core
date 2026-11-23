@@ -160,6 +160,70 @@ describe("watchKeyboard", () => {
     expect(root.attrs[KEYBOARD_ATTR]).toBeUndefined()
   })
 
+  // Task 01a20618: the open iPhone Duo, with the web view sizes measured on
+  // the device by the DEBUG geometry probe. Folded the web view is 382x678
+  // (side strip), unfolded landscape 867x669 (strip), portrait 669x951. In
+  // the app's WKWebView the keyboard shrinks innerHeight with the visual
+  // viewport (measured 867x323 with the keyboard up in landscape).
+  function duo(width, height) {
+    const vv = fakeViewport(height)
+    const win = { visualViewport: vv, innerHeight: height, innerWidth: width }
+    const root = fakeRoot()
+    const detach = watchKeyboard(win, { documentElement: root })
+    const resize = (w, h, vvH = h) => {
+      win.innerWidth = w
+      win.innerHeight = h
+      vv.height = vvH
+      vv.fire("resize")
+    }
+    return { vv, win, root, detach, resize }
+  }
+
+  function expectClosed(root) {
+    expect(root.attrs[KEYBOARD_ATTR]).toBeUndefined()
+    expect(root.style.props[KEYBOARD_INSET_VAR]).toBeUndefined()
+    expect(root.style.props[VISUAL_VIEWPORT_H_VAR]).toBeUndefined()
+  }
+
+  it("folded -> unfolded in landscape -> portrait with no keyboard never reads as a keyboard (the device repro)", () => {
+    const { root, resize, detach } = duo(382, 678)
+    resize(466, 678)
+    resize(951, 669)
+    resize(867, 669)
+    expectClosed(root)
+    resize(585, 951)
+    resize(669, 951)
+    expectClosed(root)
+    resize(867, 669)
+    expectClosed(root)
+    detach()
+  })
+
+  it("open Duo: keyboard up at 669, turned to landscape with it up, dismissed, turned back: no keyboard state remains", () => {
+    const { root, resize, detach } = duo(669, 951)
+    resize(669, 951, 951 - KEYBOARD)
+    expect(root.attrs[KEYBOARD_ATTR]).toBe("")
+    resize(867, 669, 669 - KEYBOARD)
+    resize(867, 669)
+    resize(669, 951)
+    expectClosed(root)
+    detach()
+  })
+
+  it("fold widths 466 -> 669 -> 466 with the keyboard raised and dismissed at each leave no keyboard state", () => {
+    const { root, resize, detach } = duo(466, 678)
+    resize(466, 678, 678 - KEYBOARD)
+    expect(root.attrs[KEYBOARD_ATTR]).toBe("")
+    resize(466, 678)
+    resize(669, 951)
+    resize(669, 951, 951 - KEYBOARD)
+    expect(root.attrs[KEYBOARD_ATTR]).toBe("")
+    resize(669, 951)
+    resize(466, 678)
+    expectClosed(root)
+    detach()
+  })
+
   it("a width never seen still takes the current height as its baseline", () => {
     const { vv, win, root } = setup()
     win.innerWidth = 844
