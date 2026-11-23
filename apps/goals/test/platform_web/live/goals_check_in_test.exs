@@ -319,8 +319,15 @@ defmodule PlatformWeb.GoalsCheckInTest do
     child |> element("[data-action=check-finish]") |> render_click()
 
     assert [%{answer: "used"}] = answers(c, ask)
+    # Ryan's condition (2026-11-23): "a reply box is fine as long as the
+    # conversation from that reply box finds its way to the goal space".
+    # goal_messages/1 reads the goal's own conversation_space_id space.
+    space_id = Platform.Repo.get!(Platform.Goals.Goal, c.goal.id).conversation_space_id
+    assert is_binary(space_id)
     assert [msg] = goal_messages(c.goal)
+    assert msg.space_id == space_id
     assert msg.content == "Tuesdays work. Saturdays are out."
+    assert msg.metadata["source"] == "goals.reply"
     assert msg.metadata["ask_id"] == ask.id
     assert [_one] = reply_signals()
 
