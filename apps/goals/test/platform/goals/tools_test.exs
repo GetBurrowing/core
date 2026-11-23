@@ -42,9 +42,21 @@ defmodule Platform.Goals.ToolsTest do
   defp wake_status(wake), do: Repo.one!(from(w in WakeUp, where: w.id == ^wake.id)).status
 
   @wake_up_tools ~w(goal_list goal_get goal_wake_up_get goal_do goal_ask goal_wait goal_retro)
-  @all_tools @wake_up_tools ++ ~w(goal_takeaway_add goal_proposal_get goal_propose)
+  @all_tools @wake_up_tools ++
+               ~w(goal_takeaway_add goal_conversation_get goal_log goal_change_propose) ++
+               ~w(goal_proposal_get goal_propose)
 
-  test "the bundle has exactly ten goal_ tools; the wake-up tools say a wake-up takes one outcome" do
+  test "goal_ask tells the coach the person can reply in words, and where (task 01a20939)" do
+    ask = Enum.find(ToolDefinitions.definitions(), &(&1.name == "goal_ask"))
+    assert ask.description =~ "reply to a question in their own words"
+    assert ask.description =~ "goals.reply"
+    assert ask.description =~ "goal_conversation_get"
+
+    get = Enum.find(ToolDefinitions.definitions(), &(&1.name == "goal_get"))
+    assert get.returns =~ "conversation_space_id"
+  end
+
+  test "the bundle has exactly thirteen goal_ tools; the wake-up tools say a wake-up takes one outcome" do
     names = ToolDefinitions.names()
     assert names == @all_tools
     assert Enum.all?(names, &String.starts_with?(&1, "goal_"))
@@ -176,7 +188,10 @@ defmodule Platform.Goals.ToolsTest do
         "goal_retro" => [%{"wake_up_id" => id, "title" => "Review", "summary" => "What happened"}],
         "goal_takeaway_add" => [
           %{"goal_id" => id, "title" => "T", "body" => "B", "sources" => [%{"name" => "S"}]}
-        ]
+        ],
+        "goal_conversation_get" => [%{"goal_id" => id}],
+        "goal_log" => [%{"goal_id" => id, "title" => "Booked"}],
+        "goal_change_propose" => [%{"goal_id" => id, "changes" => %{"outreach" => "off"}}]
       }
     end
 
@@ -190,7 +205,8 @@ defmodule Platform.Goals.ToolsTest do
       for tool <- ToolDefinitions.names() -- ["goal_list", "goal_proposal_get", "goal_propose"] do
         real =
           Map.fetch!(args_for.(c.goal.id), tool) ++
-            if(tool in ["goal_get", "goal_takeaway_add"],
+            if(
+              tool in ~w(goal_get goal_takeaway_add goal_conversation_get goal_log goal_change_propose),
               do: [],
               else: Map.fetch!(args_for.(wake.id), tool)
             )

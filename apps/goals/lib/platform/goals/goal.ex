@@ -35,6 +35,11 @@ defmodule Platform.Goals.Goal do
     belongs_to(:owner_user, Platform.Accounts.User)
     belongs_to(:coach_agent, Platform.Agents.Agent)
 
+    # The goal's own conversation (task 01a20939): owner + coach only. Set by
+    # `Platform.Goals.Conversation` and `Proposals.confirm_proposal/3`, never
+    # cast, so it stays out of @editable.
+    belongs_to(:conversation_space, Platform.Chat.Space)
+
     field(:title, :string)
     field(:why, :string)
     field(:kind, :string, default: "personal")
@@ -105,5 +110,7 @@ defmodule Platform.Goals.Goal do
     |> foreign_key_constraint(:org_id)
     |> foreign_key_constraint(:owner_user_id)
     |> foreign_key_constraint(:coach_agent_id)
+    |> foreign_key_constraint(:conversation_space_id)
+    |> unique_constraint(:conversation_space_id)
   end
 end

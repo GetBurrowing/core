@@ -1,6 +1,7 @@
 defmodule PlatformWeb.GoalsCheckInTest do
   use PlatformWeb.ConnCase, async: false
   import Phoenix.LiveViewTest
+  import Ecto.Query, only: [from: 2]
   import Platform.GoalsFixtures
   import Platform.Goals.OutcomeFixtures
   import Platform.Goals.BriefFixtures
@@ -240,5 +241,185 @@ defmodule PlatformWeb.GoalsCheckInTest do
 
       assert body == hidden_body
     end
+  end
+
+  # ── the reply box (task 01a20939 stage 3) ─────────────────────────────────
+
+  # An eligible external coach, so a reply's goals.reply signal reaches the
+  # captured dispatcher.
+  defp reply_setup(c) do
+    previous = Application.fetch_env(:goals, :wake_up_dispatcher)
+    parent = self()
+
+    Application.put_env(:goals, :wake_up_dispatcher, fn signal ->
+      send(parent, {:signal, signal})
+      :ok
+    end)
+
+    on_exit(fn ->
+      case previous do
+        {:ok, value} -> Application.put_env(:goals, :wake_up_dispatcher, value)
+        :error -> Application.delete_env(:goals, :wake_up_dispatcher)
+      end
+    end)
+
+    coach = coach_agent!(c.owner)
+    {:ok, goal} = Goals.update_goal(c.owner, c.goal.id, %{coach_agent_id: coach.id})
+    %{c | coach: coach, goal: goal}
+  end
+
+  defp reply_signals do
+    receive do
+      {:signal, %{metadata: %{responsibility_key: "goals.reply"}} = s} -> [s | reply_signals()]
+      {:signal, _} -> reply_signals()
+    after
+      0 -> []
+    end
+  end
+
+  defp goal_messages(goal) do
+    case Platform.Repo.get!(Platform.Goals.Goal, goal.id).conversation_space_id do
+      nil ->
+        []
+
+      space_id ->
+        Platform.Repo.all(
+          from(m in Platform.Chat.Message,
+            where: m.space_id == ^space_id,
+            order_by: m.inserted_at
+          )
+        )
+    end
+  end
+
+  defp type_reply(child, text),
+    do: child |> element("#goal-check-in-reply-form") |> render_change(%{"reply" => text})
+
+  test "finish with a reply records the choices, posts once, wakes the coach once, shows the excerpt",
+       c do
+    c = reply_setup(c)
+    ask = queued(c, %{title: "Which days work?"})
+    reply_signals()
+    child = open(c.conn, c.owner, c.goal, ask)
+
+    assert has_element?(
+             child,
+             "textarea[data-role=goal-check-in-reply][aria-label='Your reply to #{c.coach.name}'][maxlength='#{Platform.Goals.Limits.max_question_chars()}'][rows='5']"
+           )
+
+    refute has_element?(child, "textarea[data-role=goal-check-in-reply][required]")
+
+    assert has_element?(
+             child,
+             "#goal-check-in-reply-hint",
+             "Optional. Your reply goes to this goal's conversation, and #{c.coach.name} reads it straight away."
+           )
+
+    type_reply(child, "  Tuesdays work. Saturdays are out.  ")
+    child |> element("[data-action=check-finish]") |> render_click()
+
+    assert [%{answer: "used"}] = answers(c, ask)
+    # The task's condition (2026-11-23): "a reply box is fine as long as the
+    # conversation from that reply box finds its way to the goal space".
+    # goal_messages/1 reads the goal's own conversation_space_id space.
+    space_id = Platform.Repo.get!(Platform.Goals.Goal, c.goal.id).conversation_space_id
+    assert is_binary(space_id)
+    assert [msg] = goal_messages(c.goal)
+    assert msg.space_id == space_id
+    assert msg.content == "Tuesdays work. Saturdays are out."
+    assert msg.metadata["source"] == "goals.reply"
+    assert msg.metadata["ask_id"] == ask.id
+    assert [_one] = reply_signals()
+
+    assert has_element?(
+             child,
+             "[data-role=goal-check-in-replied] .line-clamp-2",
+             "You replied: Tuesdays work. Saturdays are out."
+           )
+
+    assert has_element?(
+             child,
+             "[data-role=goal-check-in-talk][href='/m/goals?goal=#{c.goal.id}&talk=1']",
+             "Conversation with #{c.coach.name}"
+           )
+
+    refute has_element?(child, "[data-role=goal-check-in-reply]")
+
+    # A repeat Finish posts nothing more; a reload still shows the excerpt.
+    render_click(child, "check_finish", %{})
+    assert length(goal_messages(c.goal)) == 1
+    assert reply_signals() == []
+    reloaded = open(c.conn, c.owner, c.goal, ask)
+    assert has_element?(reloaded, "[data-role=goal-check-in-replied]", "You replied:")
+  end
+
+  test "a blank or whitespace reply posts nothing and records the choices as before", c do
+    c = reply_setup(c)
+
+    for text <- ["", "   \n\t "] do
+      ask = queued(c, %{title: "A check-in #{inspect(text)}"})
+      reply_signals()
+      child = open(c.conn, c.owner, c.goal, ask)
+      type_reply(child, text)
+      child |> element("[data-action=check-finish]") |> render_click()
+
+      assert [%{answer: "used", details: %{"choices" => []}}] = answers(c, ask)
+      assert has_element?(child, "[data-role=goals-check-done]", "Your choices are in.")
+      refute has_element?(child, "[data-role=goal-check-in-reply-error]")
+      refute has_element?(child, "[data-role=goal-check-in-replied]")
+    end
+
+    assert goal_messages(c.goal) == []
+    assert reply_signals() == []
+  end
+
+  test "an addressee who is not the owner keeps the choices but gets no reply box", c do
+    c = reply_setup(c)
+    viewer = member!(c.org)
+    {:ok, _} = Goals.open_goal(c.owner, c.goal.id, {:user, viewer.id})
+    ask = queued(c, %{addressed_user_ids: [viewer.id]})
+    child = open(c.conn, viewer, c.goal, ask)
+
+    assert has_element?(child, "[data-action=check-finish]")
+    refute has_element?(child, "[data-role=goal-check-in-reply]")
+    refute has_element?(child, "#goal-check-in-reply-form")
+
+    render_change(child, "check_reply", %{"reply" => "From the viewer"})
+    child |> element("[data-action=check-finish]") |> render_click()
+    assert [%{answer: "used"}] = answers(%{c | owner: viewer}, ask)
+    assert goal_messages(c.goal) == []
+  end
+
+  test "a failed send keeps the text and the choices and shows one error line; Finish retries",
+       c do
+    c = reply_setup(c)
+    ask = queued(c, %{title: "Which days work?"})
+    reply_signals()
+    child = open(c.conn, c.owner, c.goal, ask)
+    too_long = String.duplicate("x", Platform.Goals.Limits.max_question_chars() + 1)
+
+    type_reply(child, too_long)
+    child |> element("[data-action=check-finish]") |> render_click()
+
+    assert [%{answer: "used"}] = answers(c, ask)
+
+    assert has_element?(
+             child,
+             "[data-role=goal-check-in-reply-error][role=alert]",
+             "Couldn't send. Your reply and choices are still here. Try again."
+           )
+
+    assert child |> element("textarea[data-role=goal-check-in-reply]") |> render() =~ too_long
+    refute has_element?(child, "[data-role=goals-check-done]")
+    assert goal_messages(c.goal) == []
+
+    type_reply(child, "Tuesdays work.")
+    child |> element("[data-action=check-finish]") |> render_click()
+
+    assert [%{answer: "used"}] = answers(c, ask)
+    assert [%{content: "Tuesdays work."}] = goal_messages(c.goal)
+    assert [_one] = reply_signals()
+    assert has_element?(child, "[data-role=goals-check-done]")
+    refute has_element?(child, "[data-role=goal-check-in-reply-error]")
   end
 end

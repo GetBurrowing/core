@@ -154,7 +154,16 @@ defmodule Platform.Goals.RevokedTest do
       take_goal_back: [u, g, c.space.id],
       list_contributors: [u, g],
       ensure_space_card: [u, g, c.space.id],
-      space_card: [u, missing]
+      space_card: [u, missing],
+      say_in_goal: [u, g, "A reply", []],
+      goal_conversation: [u, g, []],
+      propose_change: [u, g, %{"outreach" => "off"}, nil],
+      apply_change: [u, missing],
+      dismiss_change: [u, missing],
+      conversation_summary: [u, g],
+      ask_reply: [u, c.ask.id],
+      subscribe_conversation: [u, g],
+      mark_conversation_read: [u, g]
     }
   end
 

@@ -122,7 +122,8 @@ defmodule PlatformWeb.GoalsPage do
          {:ok, retros} <- Goals.list_retros(user, goal.id),
          {:ok, prediction_states} <- Goals.prediction_states(user, goal.id),
          {:ok, pace} <- Goals.expected_pace(user, goal.id),
-         {:ok, streak} <- Goals.practice_streak(user, goal.id) do
+         {:ok, streak} <- Goals.practice_streak(user, goal.id),
+         {:ok, discuss} <- Goals.conversation_summary(user, goal.id) do
       source = Enum.find(sources, &(&1.key == goal.source_key))
       current = Enum.find(stops, &is_nil(&1.reached_on))
       target = target(current, goal)
@@ -155,7 +156,8 @@ defmodule PlatformWeb.GoalsPage do
          clock_time_zone: (clock && clock.time_zone) || "Etc/UTC",
          answer_lines: answer_lines(asks),
          streak: if(goal.agent_mode == "coach", do: streak, else: 0),
-         coach: goal.coach_agent_id && Map.get(authors.agents, goal.coach_agent_id)
+         coach: goal.coach_agent_id && Map.get(authors.agents, goal.coach_agent_id),
+         discuss: discuss
        }}
     end
   end
@@ -346,6 +348,7 @@ defmodule PlatformWeb.GoalsPage do
         <.log_form :if={@page.can_log?} error={@log_error} />
       </div>
 
+      <.discuss_row :if={discuss_row?(@page)} page={@page} />
       <PlatformWeb.GoalsWork.section page={@page} />
       <.up_next_card page={@page} />
 
@@ -619,6 +622,63 @@ defmodule PlatformWeb.GoalsPage do
   defp up_next_label(_), do: "Open your briefing"
 
   defp notebook_tags, do: @notebook_tags
+
+  # ── Discuss this goal (task 01a20939 stage 3) ────────────────────────
+  # The owner's one way into the goal's conversation besides a check-in. A
+  # shared viewer gets no row at all, not a locked one. The dot is the only
+  # unread signal: no push, no chat-list entry.
+
+  @doc false
+  def discuss_row?(page),
+    do: page.card.role == :owner and (not is_nil(page.coach) or not is_nil(page.discuss))
+
+  attr(:page, :map, required: true)
+
+  defp discuss_row(assigns) do
+    assigns =
+      assign(assigns,
+        preview: assigns.page.discuss && assigns.page.discuss.preview,
+        unread: (assigns.page.discuss && assigns.page.discuss.unread?) == true
+      )
+
+    ~H"""
+    <a
+      href={PlatformWeb.GoalsCheckIn.talk_href(@page.card.goal)}
+      class={[
+        card_class(),
+        "focus-visible-ring mt-4 flex min-h-11 items-center gap-3 lg:hover:border-subtle"
+      ]}
+      data-role="goal-discuss"
+    >
+      <span
+        :if={@page.coach}
+        data-agent-slot={@page.coach.slot}
+        class="shrink-0"
+        aria-hidden="true"
+      >
+        <AvatarComponents.agent_avatar
+          name={@page.coach.name || ""}
+          avatar_url={Map.get(@page.coach, :avatar_url)}
+          size="sm"
+        />
+      </span>
+      <span class="min-w-0 flex-1">
+        <span class="block text-sm font-semibold text-base-content">Discuss this goal</span>
+        <span class="block truncate text-xs text-subtle" data-role="goal-discuss-preview">
+          <%= if @preview do %>
+            {@preview.speaker}: {@preview.text}
+          <% else %>
+            Write to {PlatformWeb.GoalsCheckIn.coach_name(@page.coach)} about this goal
+          <% end %>
+        </span>
+      </span>
+      <span :if={@unread} class="flex shrink-0 items-center" data-role="goal-discuss-unread">
+        <span class="size-2.5 rounded-full bg-info" aria-hidden="true"></span>
+        <span class="sr-only">new messages</span>
+      </span>
+    </a>
+    """
+  end
 
   # ── the coach (task 01a1eab7 stage 3) ─────────────────────────────────
 

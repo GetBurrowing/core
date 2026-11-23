@@ -232,6 +232,7 @@ defmodule PlatformWeb.GoalsLive do
   alias PlatformWeb.GoalsRetro
   alias PlatformWeb.GoalsSettings
   alias PlatformWeb.GoalsNew
+  alias PlatformWeb.GoalsTalk
 
   @impl true
   def mount(_params, session, socket) do
@@ -255,6 +256,12 @@ defmodule PlatformWeb.GoalsLive do
         toast: nil,
         screen: nil,
         check_choices: %{},
+        check_reply: "",
+        check_reply_error: false,
+        talk_fold_open: false,
+        talk_text: "",
+        talk_send_error: false,
+        talk_input_key: 0,
         retro_question_sent: false,
         new: nil,
         from_brief: is_map(query) and query["from"] == "brief"
@@ -331,35 +338,82 @@ defmodule PlatformWeb.GoalsLive do
     end
   end
 
+  def handle_event("talk_fold", _params, %{assigns: %{screen: %{kind: :talk}}} = socket),
+    do: {:noreply, assign(socket, :talk_fold_open, not socket.assigns.talk_fold_open)}
+
+  def handle_event("talk_input", params, %{assigns: %{screen: %{kind: :talk}}} = socket),
+    do: {:noreply, assign(socket, :talk_text, params |> Map.get("text", "") |> to_string())}
+
+  # Whitespace sends nothing. A failed send keeps the text with one error
+  # line; a sent one clears the field (a fresh input id, so the client's
+  # value is replaced) and the timeline re-reads.
+  def handle_event("talk_send", params, %{assigns: %{screen: %{kind: :talk}}} = socket) do
+    text = params |> Map.get("text", socket.assigns.talk_text) |> to_string()
+
+    cond do
+      String.trim(text) == "" ->
+        {:noreply, assign(socket, talk_text: "", talk_send_error: false)}
+
+      true ->
+        case Goals.say_in_goal(socket.assigns.user, goal_id(socket), text) do
+          {:ok, _} ->
+            {:noreply,
+             socket
+             |> assign(
+               talk_text: "",
+               talk_send_error: false,
+               talk_input_key: socket.assigns.talk_input_key + 1
+             )
+             |> reload_talk()
+             |> mark_talk_read()}
+
+          {:error, _} ->
+            {:noreply, assign(socket, talk_text: text, talk_send_error: true)}
+        end
+    end
+  end
+
+  def handle_event(event, %{"entry_id" => id}, %{assigns: %{screen: %{kind: :talk}}} = socket)
+      when event in ["talk_apply", "talk_dismiss"] do
+    decide = if event == "talk_apply", do: &Goals.apply_change/2, else: &Goals.dismiss_change/2
+    _ = decide.(socket.assigns.user, id)
+    {:noreply, reload_talk(socket)}
+  end
+
+  # The reply box's text lives in the socket (task 01a20939 stage 3), so a
+  # failed send keeps it on screen. Only the owner's screen has the box.
+  def handle_event("check_reply", params, socket) do
+    reply = params |> Map.get("reply", "") |> to_string()
+    {:noreply, assign(socket, check_reply: reply)}
+  end
+
+  # Finish records the choices exactly as before, then, when the owner wrote
+  # a non-blank reply, posts it to the goal's conversation
+  # (`Goals.say_in_goal/4`, which wakes the coach). A blank or whitespace
+  # reply posts nothing. A failed send keeps the text and the open screen
+  # with one error line; Finish again retries only the send, because the
+  # choices are already recorded.
   def handle_event("check_finish", params, socket) do
     with {:ok, socket} <- reload_screen(socket, :check),
          true <- matching_screen?(socket, params) do
       screen = socket.assigns.screen
 
-      choices =
-        screen
-        |> GoalsCheckIn.suggestions()
-        |> Enum.with_index()
-        |> Enum.map(fn {_, i} ->
-          %{"index" => i, "choice" => Map.get(socket.assigns.check_choices, i, "not_now")}
-        end)
+      recorded =
+        if GoalsCheckIn.final_answer?(screen.answer),
+          do: :already,
+          else: record_check_in(socket, screen)
 
-      answer =
-        if choices == [] or Enum.any?(choices, &(&1["choice"] == "do")),
-          do: "used",
-          else: "declined"
+      case recorded do
+        :error ->
+          {:noreply, socket}
 
-      case Goals.answer_ask(socket.assigns.user, screen.ask.id, answer, %{"choices" => choices}) do
-        {:ok, _} ->
-          Goals.refresh_brief(socket.assigns.user, screen.ask.id)
+        recorded ->
+          socket = send_check_reply(socket, screen, recorded)
 
           case reload_screen(socket, :check) do
             {:ok, socket} -> {:noreply, socket}
             _ -> {:noreply, socket}
           end
-
-        _ ->
-          {:noreply, socket}
       end
     else
       _ -> {:noreply, socket}
@@ -625,7 +679,61 @@ defmodule PlatformWeb.GoalsLive do
   def handle_event(_event, _params, socket), do: {:noreply, socket}
 
   @impl true
+  # The open conversation (task 01a20939 stage 4): a new message in its
+  # space or a changed record re-reads the timeline and moves the owner's
+  # read watermark, so a message read here never shows as unread.
+  def handle_info({event, _}, %{assigns: %{screen: %{kind: :talk}}} = socket)
+      when event in [:new_message, :goal_conversation_changed] do
+    {:noreply, socket |> reload_talk() |> mark_talk_read()}
+  end
+
   def handle_info(message, socket), do: {:noreply, GoalsNew.handle_info(message, socket)}
+
+  # ── the conversation screen (task 01a20939 stage 4) ──────────────────
+
+  defp open_talk(socket) do
+    socket = mount_screen(socket, :talk, nil)
+
+    if Phoenix.LiveView.connected?(socket) do
+      _ = Goals.subscribe_conversation(socket.assigns.user, goal_id(socket))
+      socket |> assign(:talk_space_id, socket.assigns.screen.space_id) |> mark_talk_read()
+    else
+      socket
+    end
+  end
+
+  defp reload_talk(socket) do
+    with {:ok, user} <- screen_user(socket),
+         {:ok, card} <- Goals.describe_goal(user, goal_id(socket)),
+         {:ok, page} <- GoalsPage.load(user, card),
+         {:ok, screen} <- GoalsTalk.load(user, page, nil) do
+      socket
+      |> assign(user: user, card: card, page: page, screen: screen)
+      |> resubscribe_talk()
+    else
+      _ -> socket
+    end
+  end
+
+  # The first message creates the space: subscribe to it then.
+  defp resubscribe_talk(%{assigns: %{screen: %{space_id: id}}} = socket)
+       when is_binary(id) do
+    if Phoenix.LiveView.connected?(socket) and Map.get(socket.assigns, :talk_space_id) != id do
+      Platform.Chat.PubSub.subscribe(id)
+      assign(socket, :talk_space_id, id)
+    else
+      socket
+    end
+  end
+
+  defp resubscribe_talk(socket), do: socket
+
+  defp mark_talk_read(socket) do
+    _ = Goals.mark_conversation_read(socket.assigns.user, goal_id(socket))
+    socket
+  end
+
+  defp open_screen(socket, %{"talk" => "1"}), do: open_talk(socket)
 
   defp open_screen(socket, query) when is_map(query) do
     case {query["check"], query["idea"], query["retro"]} do
@@ -647,6 +755,7 @@ defmodule PlatformWeb.GoalsLive do
 
   defp screen_load(:retro, user, page, id), do: GoalsRetro.load(user, page, id)
   defp screen_load(:check, user, page, id), do: GoalsCheckIn.load(user, page, id)
+  defp screen_load(:talk, user, page, id), do: GoalsTalk.load(user, page, id)
   defp screen_load(:idea, user, page, id), do: GoalsIdea.load(user, page, id)
 
   defp screen_user(socket) do
@@ -687,6 +796,50 @@ defmodule PlatformWeb.GoalsLive do
   defp matching_screen?(socket, params) do
     (not Map.has_key?(params, "ask_id") or params["ask_id"] == socket.assigns.screen.ask.id) and
       (not Map.has_key?(params, "goal_id") or params["goal_id"] == goal_id(socket))
+  end
+
+  defp record_check_in(socket, screen) do
+    choices =
+      screen
+      |> GoalsCheckIn.suggestions()
+      |> Enum.with_index()
+      |> Enum.map(fn {_, i} ->
+        %{"index" => i, "choice" => Map.get(socket.assigns.check_choices, i, "not_now")}
+      end)
+
+    answer =
+      if choices == [] or Enum.any?(choices, &(&1["choice"] == "do")),
+        do: "used",
+        else: "declined"
+
+    case Goals.answer_ask(socket.assigns.user, screen.ask.id, answer, %{"choices" => choices}) do
+      {:ok, _} ->
+        Goals.refresh_brief(socket.assigns.user, screen.ask.id)
+        :recorded
+
+      _ ->
+        :error
+    end
+  end
+
+  # :already with no pending error is a repeat Finish on a done check-in:
+  # nothing to send.
+  defp send_check_reply(socket, screen, recorded) do
+    reply = String.trim(socket.assigns.check_reply || "")
+
+    cond do
+      not GoalsCheckIn.reply_box?(screen) or reply == "" ->
+        assign(socket, check_reply: "", check_reply_error: false)
+
+      recorded == :already and not socket.assigns.check_reply_error ->
+        socket
+
+      true ->
+        case Goals.say_in_goal(socket.assigns.user, screen.goal.id, reply, ask_id: screen.ask.id) do
+          {:ok, _} -> assign(socket, check_reply: "", check_reply_error: false)
+          {:error, _} -> assign(socket, check_reply_error: true)
+        end
+    end
   end
 
   defp choice_index(index) when is_integer(index), do: {:ok, index}
@@ -847,6 +1000,18 @@ defmodule PlatformWeb.GoalsLive do
           :if={@screen && @screen.kind == :check}
           screen={@screen}
           choices={@check_choices}
+          reply={@check_reply}
+          reply_error={@check_reply_error}
+        />
+        <GoalsTalk.screen
+          :if={@screen && @screen.kind == :talk}
+          screen={@screen}
+          owner_id={@user.id}
+          zone={@page.clock_time_zone}
+          fold_open={@talk_fold_open}
+          text={@talk_text}
+          send_error={@talk_send_error}
+          input_key={@talk_input_key}
         />
         <GoalsRetro.screen
           :if={@screen && @screen.kind == :retro}
