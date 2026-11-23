@@ -503,7 +503,18 @@ struct EntityCatalog {
     /// indexes for Siri: collaborators, space mates, org mates and agents.
     /// Every list (not a search) is indexed per host as it arrives.
     func people(hosts: [String], query: String? = nil, directory: Bool = false) async -> [(host: String, person: BurrowPerson)] {
-        await load("people", hosts: hosts) { host in
+        await peopleReport(hosts: hosts, query: query, directory: directory).people
+    }
+
+    /// `people(hosts:query:directory:)`, plus the status of each host whose
+    /// load failed (0 when the failure carried no HTTP status), in host
+    /// order. Task 01a13c1d stage 1: the cross-install namesake check logs
+    /// these, because a failed load otherwise reads exactly like a host
+    /// that has nobody by that name.
+    func peopleReport(hosts: [String], query: String? = nil, directory: Bool = false) async -> (
+        people: [(host: String, person: BurrowPerson)], failures: [Int]
+    ) {
+        let report = await loadReport("people", hosts: hosts) { host in
             let people: [BurrowPerson]
             do {
                 people = try await env.client.people(host: host, query: query, directory: directory)
@@ -519,6 +530,7 @@ struct EntityCatalog {
             }
             return people.map { (host: host, person: $0) }
         }
+        return (people: report.results, failures: report.failures)
     }
 
     /// Every space on each host, as raw rows (for conversation entities).
@@ -574,17 +586,27 @@ struct EntityCatalog {
 
     /// One fetch per host; a host that fails contributes nothing.
     private func load<E>(_ route: String, hosts: [String], fetch: (String) async throws -> [E]) async -> [E] {
+        await loadReport(route, hosts: hosts, fetch: fetch).results
+    }
+
+    /// `load`, plus the status of each host that failed, in host order.
+    private func loadReport<E>(_ route: String, hosts: [String], fetch: (String) async throws -> [E]) async -> (
+        results: [E], failures: [Int]
+    ) {
         var all: [E] = []
+        var failures: [Int] = []
         for host in Self.unique(hosts) where env.install(host) != nil {
             do {
                 let list = try await fetch(host)
                 IntentLog.count(route, host: host, count: list.count)
                 all += list
             } catch {
-                IntentLog.route(route, host: host, status: Self.status(of: error))
+                let status = Self.status(of: error)
+                IntentLog.route(route, host: host, status: status)
+                failures.append(status)
             }
         }
-        return all
+        return (all, failures)
     }
 
     static func status(of error: Error) -> Int {

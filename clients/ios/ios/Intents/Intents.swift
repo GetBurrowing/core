@@ -349,15 +349,33 @@ struct CreateTaskIntent: AppIntent {
 
 // MARK: - Ask an agent
 
+/// Ask an AI agent a question and wait for its answer (task 01a10db6;
+/// sharpened for Siri in task 01a13c1d stage 3).
+///
+/// Why Siri routes a free sentence such as "Ask Dalton what's deployed" to
+/// the messages schema instead of here: Siri's planner fills parameters
+/// from free speech only for schema intents, and this is not one. An App
+/// Shortcut phrase can interpolate an AppEntity (`agent`) but never a
+/// String, so the question cannot ride in the phrase either; when it is
+/// unset, `perform` asks for it out loud ("What should I ask Dalton?").
+/// The app-named phrases in BurrowShortcuts are the route ("Ask Burrow",
+/// "Ask Dalton in Burrow"). The title, description and keywords say "AI
+/// agent" and "wait for its answer" so the planner and Shortcuts search
+/// can tell this apart from sending a message.
 struct AskAgentIntent: AppIntent, ProgressReportingIntent {
-    static var title: LocalizedStringResource = "Ask an Agent"
-    static var description = IntentDescription("Asks an agent a question in your direct message and reads the reply.")
+    static var title: LocalizedStringResource = "Ask an AI Agent"
+    static var description = IntentDescription(
+        "Asks one of your AI agents a question, waits for its answer, and reads the answer aloud.",
+        categoryName: "Agents",
+        searchKeywords: ["ask", "agent", "AI", "assistant", "question", "answer", "reply", "wait"])
 
-    @Parameter(title: "Agent")
+    @Parameter(title: "AI Agent", requestValueDialog: IntentDialog("Which agent should I ask?"))
     var agent: AgentEntity
 
-    @Parameter(title: "Question", inputOptions: String.IntentInputOptions(multiline: true))
-    var question: String
+    /// Optional so an app-named phrase ("Ask Dalton in Burrow") runs
+    /// `perform`, which then asks for it by the agent's name.
+    @Parameter(title: "Question to Ask", inputOptions: String.IntentInputOptions(multiline: true))
+    var question: String?
 
     /// Only disambiguates: an agent names its own install.
     @Parameter(title: "Install")
@@ -367,13 +385,33 @@ struct AskAgentIntent: AppIntent, ProgressReportingIntent {
         Summary("Ask \(\.$agent) \(\.$question)")
     }
 
+    /// The question to post: `question` trimmed, or, when it is unset or
+    /// blank, the answer to `ask("What should I ask <agent>?")`, asked once.
+    /// `ask` is `$question.requestValue` in `perform`; tests inject it,
+    /// because requestValue throws noContext outside Siri. Logs only that a
+    /// question was requested, never the question.
+    static func resolvedQuestion(
+        _ question: String?, agent: String, ask: (String) async throws -> String
+    ) async throws -> String {
+        var text = question?.trimmingCharacters(in: .whitespacesAndNewlines) ?? ""
+        if text.isEmpty {
+            IntentLog.step("ask", "question=requested")
+            text = try await ask(IntentCopy.whatShouldIAsk(agent: agent)).trimmingCharacters(in: .whitespacesAndNewlines)
+        }
+        guard !text.isEmpty else { throw IntentFailure.emptyMessage }
+        return text
+    }
+
     func perform() async throws -> some IntentResult & ProvidesDialog & ShowsSnippetView {
         IntentLog.step("ask", "start")
+        let question = try await Self.resolvedQuestion(question, agent: agent.name) { prompt in
+            try await $question.requestValue(dialog(prompt))
+        }
         progress.totalUnitCount = 100
         let outcome: AskOutcome
         let timedOut: String
         if #available(iOS 27, *) {
-            outcome = try await askInBackground()
+            outcome = try await askInBackground(question)
             timedOut = IntentCopy.agentReplyWillNotify(agent: agent.name)
         } else {
             outcome = try await IntentActions().askAgent(agent, question: question) { fraction in
@@ -401,10 +439,9 @@ struct AskAgentIntent: AppIntent, ProgressReportingIntent {
 // `.timeout` or `.userCancelled` cancel ends it before the next request.
 @available(iOS 27, *)
 extension AskAgentIntent: LongRunningIntent, CancellableIntent {
-    func askInBackground() async throws -> AskOutcome {
+    func askInBackground(_ question: String) async throws -> AskOutcome {
         let cancelled = AskCancelFlag()
         let agent = agent
-        let question = question
         let progress = progress
         return try await performBackgroundTask(
             operation: {

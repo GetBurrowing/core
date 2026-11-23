@@ -167,20 +167,53 @@ enum PersonResolver {
         return given
     }
 
+    // Diagnostics (task 01a13c1d stage 1). Every step below logs at notice
+    // level under `person.namesakes`, so a plain `log show` (no --info)
+    // shows whether the check ran, how many installs it saw, whether a load
+    // failed, and how many people each stage of the match kept. A run that
+    // found no namesake ends in `matched=one_install`, which tells it apart
+    // from a run that never got here. Counts, kinds and fixed case names
+    // only: never the name, a host, an id or a token.
+    static let namesakesSite = "person.namesakes"
+
     /// People on the OTHER signed-in installs who answer to `spoken` (or,
     /// without it, to `calledName(person)`): those already fetched in this
     /// process, and the server's search on each of those installs.
     static func namesakes(of person: MessagePersonEntity, spoken: String?, env: IntentEnvironment) async -> [MessagePersonEntity] {
-        guard let home = EntityRef(person.id)?.host else { return [] }
-        let hosts = env.signedInHosts.filter { $0 != home }
-        guard !hosts.isEmpty else { return [] }
+        let site = namesakesSite
+        guard let home = EntityRef(person.id)?.host else {
+            IntentLog.step(site, "home=unparsed")
+            return []
+        }
+        IntentLog.step(site, "home=parsed")
+        let signedIn = env.signedInHosts
+        let hosts = signedIn.filter { $0 != home }
+        IntentLog.step(site, "hosts=\(signedIn.count) others=\(hosts.count)")
+        guard !hosts.isEmpty else {
+            IntentLog.step(site, "matched=one_install reason=no_other_install")
+            return []
+        }
         let name = spoken ?? calledName(person)
+        IntentLog.step(site, "query_len=\(name.count) source=\(spoken == nil ? "called" : "spoken") kind=\(logKind(person))")
         let onHosts = { (entity: MessagePersonEntity) in EntityRef(entity.id).map { hosts.contains($0.host) } ?? false }
         let cached = PeopleCache.shared.all().filter(onHosts)
         let catalog = EntityCatalog(env: env)
-        let searched = PeopleCache.shared.remember(
-            await catalog.people(hosts: hosts, query: name).map { MessagePersonEntity($0.person, host: $0.host, env: env) })
-        return exact(cached + searched, for: name).filter { $0.id != person.id }
+        let report = await catalog.peopleReport(hosts: hosts, query: name)
+        IntentLog.step(site, "load_errors=\(report.failures.count) status=\(report.failures.first.map(String.init) ?? "none")")
+        let searched = PeopleCache.shared.remember(report.people.map { MessagePersonEntity($0.person, host: $0.host, env: env) })
+        let found = exact(cached + searched, for: name).filter { $0.id != person.id }
+        IntentLog.step(site, "cached=\(cached.count) searched=\(searched.count) exact=\(found.count)")
+        if found.isEmpty { IntentLog.step(site, "matched=one_install reason=no_namesake") }
+        return found
+    }
+
+    /// The person's kind as a fixed case name for the log: a value the
+    /// server sent is never logged as is.
+    static func logKind(_ person: MessagePersonEntity) -> String {
+        switch person.kind {
+        case "user", "agent", MessagePersonEntity.unresolvedKind: return person.kind
+        default: return "other"
+        }
     }
 
     /// `person`, unless someone on another signed-in install answers to the

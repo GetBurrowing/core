@@ -15,11 +15,28 @@ struct BurrowShortcuts: AppShortcutsProvider {
             phrases: ["Show my approvals in \(.applicationName)"],
             shortTitle: "My Approvals",
             systemImageName: "checkmark.seal")
+        // Why "Ask Dalton what's deployed" alone is read as a message, not an
+        // Ask (task 01a13c1d stage 3): Siri fills parameters from free speech
+        // only for SCHEMA intents. AskAgentIntent is not one, so with no app
+        // name in the sentence Siri's planner picks the messages schema
+        // (CreateDraftMessage, then SendDraftMessage, then
+        // MessagesSendIntent). And an App Shortcut phrase can interpolate
+        // only an AppEntity or AppEnum parameter, never a String, so no
+        // phrase can carry the question: Siri asks for it as a follow-up
+        // ("What should I ask Dalton?", AskAgentIntent.resolvedQuestion).
+        // These app-named phrases are the reliable route: say "Ask Burrow",
+        // or "Ask Dalton in Burrow", then answer with the question. The
+        // `agent` phrases fill only after ShortcutParameterRefresh publishes
+        // the agents (sign-in, or the app going to the background).
         AppShortcut(
             intent: AskAgentIntent(),
             phrases: [
+                "Ask \(.applicationName)",
+                "Ask \(.applicationName) a question",
                 "Ask an agent in \(.applicationName)",
                 "Ask \(\.$agent) in \(.applicationName)",
+                "Ask \(.applicationName) \(\.$agent)",
+                "Ask \(\.$agent) a question in \(.applicationName)",
             ],
             shortTitle: "Ask an Agent",
             systemImageName: "cpu")
