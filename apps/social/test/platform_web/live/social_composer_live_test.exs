@@ -14,6 +14,7 @@ defmodule PlatformWeb.SocialComposerLiveTest do
 
   import Ecto.Query, only: [from: 2]
   import Phoenix.LiveViewTest
+  import Platform.SocialFixtures, only: [media_file!: 2]
   import Platform.SocialApprovalFixtures
   import Platform.SocialComposerFixtures
 
@@ -28,6 +29,12 @@ defmodule PlatformWeb.SocialComposerLiveTest do
     on_exit(restore)
 
     ctx = approval_fixture()
+    image = media_file!(ctx.org_id, "image/png")
+
+    {:ok, profile} =
+      Social.update_profile(ctx.org_id, ctx.profile, %{project_id: image.project_id})
+
+    ctx = Map.merge(ctx, %{profile: profile, image: image})
     {:ok, x} = Social.create_account(ctx.org_id, ctx.profile, %{platform: "x", handle: "@show_x"})
 
     {:ok, ig} =
@@ -72,6 +79,27 @@ defmodule PlatformWeb.SocialComposerLiveTest do
     |> render_submit()
 
     render_async(child)
+    child
+  end
+
+  defp complete_versions(child, accounts, ctx) do
+    at =
+      DateTime.utc_now()
+      |> DateTime.add(86_400)
+      |> DateTime.shift_zone!(ctx.profile.timezone || "Etc/UTC")
+      |> Calendar.strftime("%Y-%m-%dT%H:%M")
+
+    for account <- accounts do
+      version = %{scheduled_at: at}
+
+      version =
+        if account.platform == "instagram",
+          do: Map.put(version, :media_file_ids, [ctx.image.id]),
+          else: version
+
+      child |> form("#composer-edit-#{account.id}", version: version) |> render_change()
+    end
+
     child
   end
 
@@ -248,6 +276,7 @@ defmodule PlatformWeb.SocialComposerLiveTest do
       stub_llm!()
       child = conn |> open(ctx.h1) |> new_idea() |> draft([ctx.a, ctx.x, ctx.ig])
 
+      complete_versions(child, [ctx.a, ctx.x, ctx.ig], ctx)
       child |> element("[data-role='composer-send']") |> render_click()
 
       assert has_element?(child, "[data-role='composer-sent'][data-kind='sent']")
@@ -341,6 +370,7 @@ defmodule PlatformWeb.SocialComposerLiveTest do
       assert has_element?(child, col(ctx.ig) <> "[data-state='ok']")
       assert has_element?(child, "[data-role='composer-left-out']")
 
+      complete_versions(child, [ctx.a, ctx.ig], ctx)
       child |> element("[data-role='composer-send']", "Send 2 for approval") |> render_click()
 
       posts = composer_posts(ctx)
@@ -368,11 +398,12 @@ defmodule PlatformWeb.SocialComposerLiveTest do
       stub_llm!()
       child = conn |> open(ctx.h1) |> new_idea() |> draft([ctx.a])
 
+      complete_versions(child, [ctx.a], ctx)
       child |> element("[data-role='composer-send-approve']") |> render_click()
 
       assert has_element?(child, "[data-role='composer-sent'][data-kind='approved']")
       assert [post] = composer_posts(ctx)
-      assert post.status in Post.approved_statuses()
+      assert post.status == "scheduled"
       assert post.approved_by_user_id == ctx.h1.id
 
       assert Repo.exists?(
@@ -393,6 +424,7 @@ defmodule PlatformWeb.SocialComposerLiveTest do
       {:ok, _} = Social.set_account_owner(ctx.org_id, ctx.x, ctx.h2.id)
       child = conn |> open(ctx.h1) |> new_idea() |> draft([ctx.a, ctx.x])
 
+      complete_versions(child, [ctx.a, ctx.x], ctx)
       child |> element("[data-role='composer-send-approve']") |> render_click()
 
       assert has_element?(child, "[data-role='composer-sent-lines']", "Sent to Hugo Two")

@@ -295,7 +295,7 @@ defmodule PlatformWeb.SocialCardLiveTest do
     assert Repo.get!(Post, ctx.post.id).status == "needs_approval"
   end
 
-  test "a refused publish in chat: the approver gets Retry publish, a viewer the reason only (task 01a165f1)",
+  test "a refused publish in chat: the approver chooses a new time, a viewer gets the reason only (task 01a165f1)",
        ctx do
     h1 = Platform.Accounts.get_user(ctx.h1.id)
     fp = Approvals.card_view(ctx.card.id, {:user, ctx.h1.id}).fingerprint
@@ -323,7 +323,7 @@ defmodule PlatformWeb.SocialCardLiveTest do
            )
 
     action = in_card(ctx.card, "[data-role='social-card-refusal-action']")
-    assert has_element?(view, action, "Retry publish")
+    assert has_element?(view, action, "Choose a new time")
 
     viewer = open(ctx.n, ctx)
 
@@ -336,6 +336,15 @@ defmodule PlatformWeb.SocialCardLiveTest do
     refute has_element?(viewer, action)
 
     view |> element(action) |> render_click()
+    assert Fake.calls(:publish) == []
+    assert Repo.get!(Post, ctx.post.id).refused_reason == "media_rejected"
+
+    at = DateTime.utc_now() |> DateTime.add(1, :day) |> Calendar.strftime("%Y-%m-%dT%H:%M:%S")
+
+    view
+    |> form(in_card(ctx.card, "[data-role='retry-schedule']"), %{at: at})
+    |> render_submit()
+
     assert [{:publish, _, _}] = Fake.calls(:publish)
     assert Repo.get!(Post, ctx.post.id).refused_reason == nil
     refute has_element?(view, in_card(ctx.card, "[data-role='social-card-refusal']"))

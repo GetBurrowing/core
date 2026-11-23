@@ -25,7 +25,12 @@ defmodule Platform.Social.ApprovalAcceptanceTest do
       assert draft.status == "draft"
       assert Repo.all(from(c in ApprovalCard, where: c.post_id == ^draft.id)) == []
 
-      {:ok, pending} = Social.update_post(ctx.org_id, draft, %{status: "needs_approval"})
+      {:ok, pending} =
+        Social.update_post(ctx.org_id, draft, %{
+          status: "needs_approval",
+          scheduled_at: DateTime.add(DateTime.utc_now(), 3600)
+        })
+
       assert pending.status == "needs_approval"
       card = live_card!(pending)
 

@@ -1380,18 +1380,36 @@ defmodule Platform.VaultTest do
       owner_id = Ecto.UUID.generate()
       stranger_id = Ecto.UUID.generate()
       slug = unique_slug("del-deny-tel")
+      other_slug = unique_slug("del-deny-interloper")
+      other_accessor = Ecto.UUID.generate()
 
-      insert_credential!(slug, value: "v1", scope: {:agent, owner_id})
+      %Credential{id: credential_id} =
+        insert_credential!(slug, value: "v1", scope: {:agent, owner_id})
+
+      insert_credential!(other_slug, value: "v2", scope: {:agent, Ecto.UUID.generate()})
 
       ref = :telemetry_test.attach_event_handlers(self(), [[:platform, :vault, :access_denied]])
+      on_exit(fn -> :telemetry.detach(ref) end)
+
+      # A different process can emit the same VM-wide event first.
+      task =
+        Task.async(fn ->
+          receive do
+            :go -> Vault.get(other_slug, accessor: {:agent, other_accessor})
+          end
+        end)
+
+      assert :ok = Ecto.Adapters.SQL.Sandbox.allow(Repo, self(), task.pid)
+      send(task.pid, :go)
+      assert {:error, :access_denied} = Task.await(task)
 
       assert {:error, :access_denied} = Vault.delete(slug, accessor: {:agent, stranger_id})
 
-      assert_receive {[:platform, :vault, :access_denied], ^ref, _measurements, meta}
+      assert_receive {[:platform, :vault, :access_denied], ^ref, _measurements,
+                      %{credential_id: ^credential_id} = meta}
+
       assert meta.slug == slug
       assert meta.accessor == {:agent, stranger_id}
-
-      :telemetry.detach(ref)
     end
   end
 

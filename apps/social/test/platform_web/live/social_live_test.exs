@@ -25,7 +25,11 @@ defmodule PlatformWeb.SocialLiveTest do
       Social.create_profile(org_id, %{name: name, space_id: channel!(org_id).id})
 
     {:ok, account} =
-      Social.create_account(org_id, profile, %{platform: "linkedin", handle: "@#{name}"})
+      Social.create_account(org_id, profile, %{
+        platform: "linkedin",
+        handle: "@#{name}",
+        status: "connected"
+      })
 
     {profile, account}
   end
@@ -33,9 +37,14 @@ defmodule PlatformWeb.SocialLiveTest do
   defp needs_approval!(org_id, account, n) do
     for i <- 1..n//1 do
       {:ok, post} =
-        Social.create_post(org_id, account, %{body: "post #{i}", status: "needs_approval"})
+        Social.create_post(org_id, account, %{
+          body: "post #{i}",
+          status: "needs_approval",
+          scheduled_at: DateTime.add(DateTime.utc_now(), 3600)
+        })
 
-      post
+      # Historical untimed cards exercise Queue counts and the empty Calendar.
+      Platform.Repo.update!(Ecto.Changeset.change(post, scheduled_at: nil))
     end
   end
 

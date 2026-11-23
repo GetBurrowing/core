@@ -79,7 +79,10 @@ defmodule PlatformWeb.SocialClipsReviewPhoneTest do
   defp selected?(child, clip),
     do: has_element?(child, "[data-role='clips-bay'][data-clip-id='#{clip.id}']")
 
-  test "the bottom bar carries Reject and Approve with the desktop rules", %{conn: conn, w: w} do
+  test "the bottom bar carries Reject and Create drafts with the desktop rules", %{
+    conn: conn,
+    w: w
+  } do
     clip = clip!(w, "Phone decide")
     child = open(conn, w.approver)
 
@@ -100,8 +103,8 @@ defmodule PlatformWeb.SocialClipsReviewPhoneTest do
 
     assert has_element?(
              child,
-             "#{pbar} [data-role='clips-pbar-approve'].btn.btn-primary.btn-lg:not([disabled])",
-             "Approve and publish"
+             "#{pbar} [data-role='clips-pbar-draft'].btn.btn-primary.btn-lg:not([disabled])",
+             "Create drafts"
            )
 
     # A note enables Reject (no title), like the desktop footer.
@@ -116,15 +119,15 @@ defmodule PlatformWeb.SocialClipsReviewPhoneTest do
     for p <- ~w(instagram youtube),
         do: bay(child) |> render_click("toggle_platform", %{"platform" => p})
 
-    assert has_element?(child, "[data-role='clips-pbar-approve'][disabled]", "Pick a platform")
-    assert has_element?(child, "[data-role='clip-approve'][disabled]", "Pick a platform")
+    assert has_element?(child, "[data-role='clips-pbar-draft'][disabled]", "Pick a platform")
+    assert has_element?(child, "[data-role='clip-draft'][disabled]", "Pick a platform")
 
-    # The bar fires the same approve event as the desktop button.
+    # The bar fires the same draft event as the desktop button.
     bay(child) |> render_click("toggle_platform", %{"platform" => "youtube"})
-    child |> element("[data-role='clips-pbar-approve']") |> render_click()
+    child |> element("[data-role='clips-pbar-draft']") |> render_click()
 
     assert %{review_status: "approved"} = Repo.reload!(clip)
-    assert has_element?(child, "[data-role='clip-toast'][data-kind='approved']")
+    assert has_element?(child, "[data-role='clip-toast'][data-kind='drafted']")
     refute has_element?(child, "[data-role='clips-pbar']")
   end
 
@@ -149,7 +152,7 @@ defmodule PlatformWeb.SocialClipsReviewPhoneTest do
 
     assert has_element?(child, "[data-role='clips-details']")
     refute has_element?(child, "[data-role='clips-pbar']")
-    refute has_element?(child, "[data-role='clips-pbar-approve']")
+    refute has_element?(child, "[data-role='clips-pbar-draft']")
     refute has_element?(child, "[data-role='clips-pbar-reject']")
     refute has_element?(child, "[data-role='clip-platform-chip']:not([disabled])")
   end

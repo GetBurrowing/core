@@ -1038,6 +1038,15 @@ defmodule Platform.Social.Tools do
 
   # ── Envelopes ────────────────────────────────────────────────────────
 
+  defp error_envelope({:error, {:incomplete_post, lines}}) do
+    err(
+      "incomplete_post",
+      Enum.join(lines, "\n"),
+      true,
+      "Complete these fields before requesting publishing review."
+    )
+  end
+
   defp error_envelope({:error, :post_discarded}) do
     err(
       :post_discarded,
@@ -1596,6 +1605,7 @@ defmodule Platform.Social.Tools do
       :inserted_at,
       :updated_at
     ])
+    |> Map.put(:title, (p.platform_options || %{})["title"])
   end
 
   defp clip_json(%Clip{} = c),

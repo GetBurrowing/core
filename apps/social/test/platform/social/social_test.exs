@@ -266,7 +266,16 @@ defmodule Platform.SocialTest do
     test "hard-deleting the approving user is refused (restrict)", ctx do
       user = user!()
       make_approver!(ctx.org_a, ctx.profile, user)
-      {:ok, _} = Social.approve_post(ctx.org_a, ctx.post, user.id)
+      {:ok, _} = Social.update_account(ctx.org_a, ctx.account, %{status: "connected"})
+
+      {:ok, post} =
+        Social.update_post(ctx.org_a, ctx.post, %{
+          title: "Approval cascade fixture",
+          media_file_ids: [media_file!(ctx.org_a, "video/mp4").id],
+          scheduled_at: DateTime.add(DateTime.utc_now(), 3600)
+        })
+
+      {:ok, _} = Social.approve_post(ctx.org_a, post, user.id)
 
       error =
         assert_raise Postgrex.Error, fn ->

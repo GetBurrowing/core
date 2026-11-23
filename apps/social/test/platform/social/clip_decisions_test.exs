@@ -1,10 +1,12 @@
 defmodule Platform.Social.ClipDecisionsTest do
   @moduledoc """
-  Clip Studio 2/9 (task 01a16662) stage 2: a human's one-step clip decision.
-  Approve writes one approved post per account (no approval card, no second
-  approval) whose `publish_after` closes an 8s server-side window; a test
-  instance of `Platform.Social.ClipPublish` publishes them only after it.
-  Undo inside the window takes everything back; reject needs a note.
+  Clip Studio 2/9 (task 01a16662) stage 2: a human's clip decision.
+  Choosing a clip now makes drafts (`clip_draft_test.exs` covers
+  `draft_clip/5`). What stays here is what still applies to approved clip
+  posts of a release before the B3 clip integration: the 8s `publish_after`
+  window, the undo inside it, retry, and reject. Those rows come from the
+  test-support `Platform.Social.LegacyClipApproval`, which is the real
+  `draft_clip/5` then `approve_post/4` then the old `publish_after`.
 
   The clock is injected with `:now`; nothing sleeps. The Fake's call log is
   global and ClipPublish runs in its own process, so this file is not async
@@ -16,7 +18,7 @@ defmodule Platform.Social.ClipDecisionsTest do
   import Platform.SocialFixtures
 
   alias Platform.Social
-  alias Platform.Social.{AgentDrafts, ApprovalCard, Clip, ClipPublish, Post, RateLimit}
+  alias Platform.Social.{AgentDrafts, Clip, ClipPublish, Post, RateLimit}
   alias Platform.Social.Publisher.Fake
 
   @publisher :clip_decisions_test_publish
@@ -136,7 +138,7 @@ defmodule Platform.Social.ClipDecisionsTest do
   end
 
   defp approve(ctx, user_id, account_ids, opts \\ []) do
-    Social.approve_clip(
+    Platform.Social.LegacyClipApproval.approve_clip(
       ctx.w.org_id,
       ctx.clip.id,
       user_id,
@@ -188,7 +190,7 @@ defmodule Platform.Social.ClipDecisionsTest do
       end)
 
     assert {:ok, %{clip: approved, posts: [post]}} =
-             Social.approve_clip(
+             Platform.Social.LegacyClipApproval.approve_clip(
                ctx.w.org_id,
                ctx.clip.id,
                ctx.w.approver.id,
@@ -258,7 +260,7 @@ defmodule Platform.Social.ClipDecisionsTest do
     other_approver = make_approver!(ctx.w.org_id, ctx.w.profile, user!())
 
     assert {:ok, %{posts: [new_post]}} =
-             Social.approve_clip(
+             Platform.Social.LegacyClipApproval.approve_clip(
                ctx.w.org_id,
                ctx.clip.id,
                ctx.w.approver.id,
@@ -311,7 +313,11 @@ defmodule Platform.Social.ClipDecisionsTest do
       attrs = %{"render_id" => id, "account_ids" => [ctx.w.tiktok.id]}
 
       assert {:error, :render_not_found} =
-               Social.approve_clip(ctx.w.org_id, ctx.clip.id, ctx.w.approver.id, attrs,
+               Platform.Social.LegacyClipApproval.approve_clip(
+                 ctx.w.org_id,
+                 ctx.clip.id,
+                 ctx.w.approver.id,
+                 attrs,
                  publish_server: @publisher
                )
 
@@ -323,7 +329,7 @@ defmodule Platform.Social.ClipDecisionsTest do
     before = post_count()
 
     assert {:error, :render_not_found} =
-             Social.approve_clip(
+             Platform.Social.LegacyClipApproval.approve_clip(
                ctx.w.org_id,
                ctx.clip.id,
                ctx.w.approver.id,
@@ -337,137 +343,6 @@ defmodule Platform.Social.ClipDecisionsTest do
   test "version identity cannot be injected through editable post attrs", ctx do
     cs = Post.changeset(%Post{}, %{"body" => "body", "clip_render_id" => render_id!(ctx.clip)})
     assert Ecto.Changeset.get_field(cs, :clip_render_id) == nil
-  end
-
-  describe "approve_clip/5" do
-    test "approve with 2 accounts writes 2 approved posts with clip_id and no approval card",
-         ctx do
-      assert {:ok, %{clip: clip, posts: [p1, p2]}} =
-               Social.approve_clip(
-                 ctx.w.org_id,
-                 ctx.clip.id,
-                 ctx.w.approver.id,
-                 %{
-                   "render_id" => render_id!(ctx.clip),
-                   "account_ids" => both(ctx),
-                   "title" => "Human title",
-                   "caption" => "Watch this"
-                 },
-                 now: ctx.t0,
-                 publish_server: @publisher
-               )
-
-      assert clip.review_status == "approved"
-      assert clip.reviewed_by_user_id == ctx.w.approver.id
-      assert clip.reviewed_at == ctx.t0
-      assert {clip.title, clip.caption} == {"Human title", "Watch this"}
-
-      posts = clip_posts(ctx.clip.id)
-      assert Enum.map(posts, & &1.id) |> Enum.sort() == Enum.sort([p1.id, p2.id])
-      assert Enum.map(posts, & &1.account_id) |> Enum.sort() == Enum.sort(both(ctx))
-
-      for post <- posts do
-        assert post.status == "approved"
-        assert post.clip_id == ctx.clip.id
-        assert post.approved_by_user_id == ctx.w.approver.id
-        assert post.publish_after == at(ctx, 8_000)
-        assert post.media_file_ids == [ctx.clip.render_file_id]
-        assert post.generated_by_agent_id == ctx.w.agent.id
-        assert post.is_aigc == true
-        assert post.body =~ "Watch this"
-        assert post.link_url == "https://www.youtube.com/@clipshow"
-        assert post.body =~ post.link_url
-        assert post.media_meta[ctx.clip.render_file_id]["duration_s"] == 30.0
-        assert post.publish_attempts == 0
-      end
-
-      assert Repo.aggregate(
-               from(c in ApprovalCard, where: c.post_id in ^Enum.map(posts, & &1.id)),
-               :count
-             ) == 0
-
-      assert Fake.calls(:publish) == []
-    end
-
-    test "a non-approver cannot approve a clip", ctx do
-      before = post_count()
-      stranger = member!(user!(), ctx.w.org_id)
-
-      assert {:error, :not_an_approver} = approve(ctx, stranger.id, both(ctx))
-      assert_untouched(ctx, before)
-
-      # The approver gate comes first: a non-approver learns nothing about
-      # the accounts, not even that the list is empty.
-      assert {:error, :not_an_approver} = approve(ctx, stranger.id, [])
-      assert_untouched(ctx, before)
-    end
-
-    test "an agent id cannot approve a clip", ctx do
-      before = post_count()
-      assert {:error, :not_a_human} = approve(ctx, ctx.w.agent.id, both(ctx))
-      assert_untouched(ctx, before)
-    end
-
-    test "a cross-org account is refused and nothing is written", ctx do
-      before = post_count()
-      other = render_world!()
-
-      assert {:error, :account_not_in_profile} =
-               approve(ctx, ctx.w.approver.id, [ctx.w.tiktok.id, other.x.id])
-
-      assert_untouched(ctx, before)
-
-      # An account of another profile in the same org, and an archived one, alike.
-      {_, sibling} = social_account!(ctx.w.org_id, "x")
-      assert {:error, :account_not_in_profile} = approve(ctx, ctx.w.approver.id, [sibling.id])
-      {:ok, _} = Social.archive_account(ctx.w.org_id, ctx.w.x)
-      assert {:error, :account_not_in_profile} = approve(ctx, ctx.w.approver.id, [ctx.w.x.id])
-      assert_untouched(ctx, before)
-    end
-
-    test "no account ids is no_platforms", ctx do
-      assert {:error, :no_platforms} = approve(ctx, ctx.w.approver.id, [])
-      assert {:error, :no_platforms} = approve(ctx, ctx.w.approver.id, nil)
-    end
-
-    test "a non-owner approving an owned account rolls back everything", ctx do
-      before = post_count()
-      owner = member!(user!(), ctx.w.org_id)
-      {:ok, _} = Social.set_account_owner(ctx.w.org_id, ctx.w.x, owner.id)
-
-      # tiktok (unowned) is written and approved first, then x refuses.
-      assert {:error, :not_the_owner} = approve(ctx, ctx.w.approver.id, both(ctx))
-      assert_untouched(ctx, before)
-    end
-
-    test "a draft_only account is refused", ctx do
-      before = post_count()
-
-      {:ok, draft_only} =
-        Social.create_account(ctx.w.org_id, ctx.w.profile, %{
-          platform: "linkedin",
-          approval_mode: "draft_only"
-        })
-
-      assert {:error, :account_draft_only} =
-               approve(ctx, ctx.w.approver.id, [ctx.w.tiktok.id, draft_only.id])
-
-      assert_untouched(ctx, before)
-    end
-
-    test "a missing, cross-org or already decided clip is refused", ctx do
-      assert {:error, :not_found} =
-               Social.approve_clip(ctx.w.org_id, Ecto.UUID.generate(), ctx.w.approver.id, %{})
-
-      assert {:error, :not_found} =
-               Social.approve_clip(org_id!(), ctx.clip.id, ctx.w.approver.id, %{
-                 "account_ids" => both(ctx)
-               })
-
-      assert {:ok, _} = approve(ctx, ctx.w.approver.id, [ctx.w.tiktok.id])
-      assert {:error, :not_pending} = approve(ctx, ctx.w.approver.id, [ctx.w.x.id])
-      assert length(clip_posts(ctx.clip.id)) == 1
-    end
   end
 
   describe "the publish window" do
@@ -570,7 +445,7 @@ defmodule Platform.Social.ClipDecisionsTest do
       t1 = at(ctx, 20_000)
 
       {:ok, %{posts: posts}} =
-        Social.approve_clip(
+        Platform.Social.LegacyClipApproval.approve_clip(
           ctx.w.org_id,
           ctx.clip.id,
           ctx.w.approver.id,

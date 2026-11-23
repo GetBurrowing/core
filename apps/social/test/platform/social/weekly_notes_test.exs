@@ -13,7 +13,7 @@ defmodule Platform.Social.WeeklyNotesTest do
     agent = pinned_agent!(c.org_id)
     profile = c.profile |> Ecto.Changeset.change(drafting_agent_id: agent.id) |> Repo.update!()
 
-    approved_post!(c.org_id, c.a)
+    historical_approved_post!(c.org_id, c.a)
     |> Ecto.Changeset.change(status: "published", published_at: ~U[2026-10-21 12:00:00.000000Z])
     |> Repo.update!()
 
@@ -251,7 +251,7 @@ defmodule Platform.Social.WeeklyNotesTest do
         created_by_user_id: c.h1.id
       })
 
-    approved_post!(c.org_id, c.a)
+    historical_approved_post!(c.org_id, c.a)
     |> Ecto.Changeset.change(
       status: "published",
       idea_id: source.id,
@@ -282,7 +282,7 @@ defmodule Platform.Social.WeeklyNotesTest do
         created_by_user_id: c.h1.id
       })
 
-    approved_post!(c.org_id, c.a)
+    historical_approved_post!(c.org_id, c.a)
     |> Ecto.Changeset.change(
       status: "published",
       idea_id: source.id,
@@ -324,7 +324,7 @@ defmodule Platform.Social.WeeklyNotesTest do
         profile =
           c.profile |> Ecto.Changeset.change(drafting_agent_id: agent.id) |> Repo.update!()
 
-        approved_post!(c.org_id, c.a)
+        historical_approved_post!(c.org_id, c.a)
         |> Ecto.Changeset.change(
           status: "published",
           published_at: ~U[2026-10-21 12:00:00.000000Z]

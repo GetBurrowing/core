@@ -180,14 +180,19 @@ enum IntentFailure: Error, Equatable, CustomLocalizedStringResourceConvertible {
 enum IntentLog {
     static let logger = Logger(subsystem: "com.kobo-ai.burrow", category: "intents")
 
+    /// Tests only (task 01a13c1d stage 1): receives every line exactly as
+    /// IntentTrace records it, so a test can assert what a run logged. The
+    /// app never sets it.
+    static var observer: ((String) -> Void)?
+
     static func route(_ name: String, host: String, status: Int) {
         logger.info("intent route=\(name, privacy: .public) host=\(host, privacy: .public) status=\(status)")
-        IntentTrace.append("route=\(name) host=\(host) status=\(status)")
+        record("route=\(name) host=\(host) status=\(status)")
     }
 
     static func count(_ name: String, host: String, count: Int) {
         logger.info("intent fetch=\(name, privacy: .public) host=\(host, privacy: .public) count=\(count)")
-        IntentTrace.append("fetch=\(name) host=\(host) count=\(count)")
+        record("fetch=\(name) host=\(host) count=\(count)")
     }
 
     /// A step inside an intent: where it is, and a fixed detail (a case
@@ -195,7 +200,12 @@ enum IntentLog {
     /// counts: never a name, a handle, an id or text.
     static func step(_ site: String, _ detail: String) {
         logger.notice("intent step=\(site, privacy: .public) \(detail, privacy: .public)")
-        IntentTrace.append("step=\(site) \(detail)")
+        record("step=\(site) \(detail)")
+    }
+
+    private static func record(_ line: String) {
+        IntentTrace.append(line)
+        observer?(line)
     }
 }
 

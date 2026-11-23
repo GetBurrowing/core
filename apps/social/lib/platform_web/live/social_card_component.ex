@@ -93,6 +93,9 @@ defmodule PlatformWeb.SocialCardComponent do
   def refusal_copy({:wait_until, %DateTime{} = at}, _view),
     do: "This post goes out at #{Calendar.strftime(at, "%H:%M")}."
 
+  def refusal_copy({:incomplete_post, lines}, _view), do: Enum.join(lines, "\n")
+  def refusal_copy(:publish_time_required, _view), do: "Choose a publish time."
+
   def refusal_copy(reason, _view),
     do: Map.get(@refusals, reason, "That did not work: #{inspect(reason)}")
 
@@ -104,6 +107,7 @@ defmodule PlatformWeb.SocialCardComponent do
        reject_text: "",
        edit_text: nil,
        notice: nil,
+       retry_open: false,
        cover_controls: false
      )}
   end
@@ -123,7 +127,12 @@ defmodule PlatformWeb.SocialCardComponent do
 
     # A decided card, or one this viewer may no longer act on, closes the forms.
     mode = if Map.get(view, :actions, []) == [], do: nil, else: socket.assigns.mode
-    assign(socket, view: view, mode: mode)
+
+    retry_open =
+      socket.assigns.retry_open and
+        match?(%{existing_job?: false, action: %{disabled?: false}}, view[:refusal])
+
+    assign(socket, view: view, mode: mode, retry_open: retry_open)
   end
 
   # ── Events ────────────────────────────────────────────────────────────
@@ -181,7 +190,7 @@ defmodule PlatformWeb.SocialCardComponent do
   # Task 01a165f1: Retry publish / Publish now on a refused approved post,
   # as the clicker re-read from the database now. retry_publish/3 re-checks
   # the approver rule and the rate limit; the button is only a hint.
-  defp handle_current_event("social_card_retry_publish", _params, socket) do
+  defp handle_current_event("social_card_retry_publish", params, socket) do
     user =
       case socket.assigns.viewer do
         {:user, id} -> Platform.Accounts.get_user(id)
@@ -192,21 +201,87 @@ defmodule PlatformWeb.SocialCardComponent do
 
     result =
       cond do
-        is_nil(user) -> {:error, :not_an_approver}
-        is_nil(refusal) -> {:error, :not_refused}
-        true -> Publishing.retry_publish(refusal.org_id, refusal.post_id, user.id)
+        is_nil(user) ->
+          {:error, :not_an_approver}
+
+        is_nil(refusal) ->
+          {:error, :not_refused}
+
+        is_nil(refusal.action) or refusal.action.disabled? or
+            refusal.action.kind not in [:retry_publish, :publish_now] ->
+          {:error, :not_an_approver}
+
+        true ->
+          with {:ok, expected} <- PlatformWeb.SocialRetryTime.expected_job(params) do
+            if refusal.existing_job? or not is_nil(expected) do
+              Publishing.retry_publish(refusal.org_id, refusal.post_id, user.id,
+                expected_external_id: expected
+              )
+            else
+              :choose_time
+            end
+          end
       end
 
+    if result == :choose_time do
+      {:noreply, assign(socket, retry_open: true, notice: nil)}
+    else
+      retry_result(socket, result)
+    end
+  end
+
+  defp handle_current_event("social_card_retry_schedule", params, socket) do
+    refusal = socket.assigns.view[:refusal]
+
+    user =
+      case socket.assigns.viewer do
+        {:user, id} -> Platform.Accounts.get_user(id)
+        _ -> nil
+      end
+
+    result =
+      with true <- socket.assigns.retry_open,
+           %{action: %{disabled?: false, kind: kind}} <- refusal,
+           true <- kind in [:retry_publish, :publish_now],
+           %{id: user_id} <- user,
+           {:ok, expected} <- PlatformWeb.SocialRetryTime.expected_job(params),
+           {:ok, at} <- PlatformWeb.SocialRetryTime.parse(params["at"]) do
+        Publishing.retry_publish(refusal.org_id, refusal.post_id, user_id,
+          scheduled_at: at,
+          expected_external_id: expected
+        )
+      else
+        {:error, reason} -> {:error, reason}
+        _ -> {:error, :not_refused}
+      end
+
+    retry_result(socket, result)
+  end
+
+  defp handle_current_event("social_card_retry_cancel", _params, socket),
+    do: {:noreply, assign(socket, retry_open: false)}
+
+  defp retry_result(socket, result) do
     notice =
       case result do
-        {:ok, _post} -> nil
+        {:ok, %{status: "scheduled"}} -> "Scheduled."
+        {:ok, %{status: "published"}} -> "Published."
+        {:ok, _post} -> "Retry completed."
+        {:error, :invalid_retry_time} -> "Choose a future publish time."
+        {:error, :publish_job_changed} -> "The publish job changed, so nothing was retried."
         {:error, {:media_rejected, _}} -> nil
         {:error, {:publish_failed, _}} -> nil
         {:error, reason} when reason in @refused_again -> nil
         {:error, reason} -> refusal_copy(reason, socket.assigns.view)
       end
 
-    {:noreply, socket |> assign(notice: notice) |> refresh()}
+    {:noreply,
+     socket
+     |> assign(
+       notice: notice,
+       retry_open: not match?({:ok, _}, result) and socket.assigns.retry_open
+     )
+     |> refresh()}
   end
 
   # The user is re-read from the database at click time.
@@ -273,11 +348,42 @@ defmodule PlatformWeb.SocialCardComponent do
 
       <.refusal :if={@view[:refusal]} refusal={@view.refusal} myself={@myself} />
 
+      <form
+        :if={
+          (@retry_open and @view[:refusal]) && @view.refusal.action && !@view.refusal.existing_job?
+        }
+        phx-submit="social_card_retry_schedule"
+        phx-target={@myself}
+        data-role="retry-schedule"
+      >
+        <input type="hidden" name="expected_job" value={@view.refusal.expected_external_id || ""} />
+        <label>
+          Choose when to publish (UTC)
+          <input
+            type="datetime-local"
+            name="at"
+            required
+            step="1"
+            class="input input-bordered min-h-11"
+            value={PlatformWeb.SocialRetryTime.prefill(@view.refusal.scheduled_at)}
+          />
+        </label>
+        <button type="submit" class="btn min-h-11">Retry at this time</button>
+        <button
+          type="button"
+          phx-click="social_card_retry_cancel"
+          phx-target={@myself}
+          class="btn min-h-11"
+        >
+          Cancel
+        </button>
+      </form>
+
       <p
         :if={@notice}
         role="alert"
         data-role="social-card-notice"
-        class="rounded-lg border border-error/40 px-3 py-2 text-sm text-error"
+        class="whitespace-pre-line rounded-lg border border-error/40 px-3 py-2 text-sm text-error"
       >
         {@notice}
       </p>
@@ -355,7 +461,7 @@ defmodule PlatformWeb.SocialCardComponent do
     """
   end
 
-  attr :view, :map, required: true
+  attr(:view, :map, required: true)
 
   defp status_header(assigns) do
     ~H"""
@@ -430,8 +536,8 @@ defmodule PlatformWeb.SocialCardComponent do
     """
   end
 
-  attr :refusal, :map, required: true
-  attr :myself, :any, required: true
+  attr(:refusal, :map, required: true)
+  attr(:myself, :any, required: true)
 
   # Task 01a165f1, canvas 01a165f1-f2a4 node m2: the reason line, when it
   # was refused, and at most one action. Viewers get no action at all.
@@ -477,12 +583,13 @@ defmodule PlatformWeb.SocialCardComponent do
             <button
               type="button"
               phx-click="social_card_retry_publish"
+              phx-value-expected_job={@refusal.expected_external_id || ""}
               phx-target={@myself}
               phx-disable-with="Publishing"
               disabled={action.disabled?}
               data-role="social-card-refusal-action"
               data-action={action.kind}
-              class="peer btn btn-outline btn-sm"
+              class="peer btn btn-outline btn-sm min-h-11"
             >
               {action.label}
             </button>
@@ -503,15 +610,18 @@ defmodule PlatformWeb.SocialCardComponent do
   defp hhmm(%DateTime{} = at), do: Calendar.strftime(at, "%H:%M")
   defp hhmm(_), do: ""
 
-  attr :view, :map, required: true
-  attr :myself, :any, required: true
-  attr :mode, :atom, default: nil
-  attr :edit_text, :string, default: nil
-  attr :canvas_id, :string, default: nil
+  attr(:view, :map, required: true)
+  attr(:myself, :any, required: true)
+  attr(:mode, :atom, default: nil)
+  attr(:edit_text, :string, default: nil)
+  attr(:canvas_id, :string, default: nil)
 
   defp preview(assigns) do
     ~H"""
     <div class="space-y-2">
+      <p :if={@view.platform == "youtube"} data-role="publishing-title" class="text-sm font-medium">
+        <span>Title (sent to YouTube)</span>: {@view[:publishing_title] || "Not set"}
+      </p>
       <div role="tablist" class="flex gap-1" data-role="social-card-tabs">
         <span
           role="tab"
@@ -604,6 +714,12 @@ defmodule PlatformWeb.SocialCardComponent do
             {@view.link_url}
           </a>
         </p>
+        <dl data-role="publishing-review-details" class="space-y-1 text-sm">
+          <div :for={{label, value} <- @view[:review_details] || []}>
+            <dt class="font-medium">{label}</dt>
+            <dd class="whitespace-pre-wrap break-words">{value}</dd>
+          </div>
+        </dl>
         <p
           data-role="social-card-count"
           data-over-limit={to_string(@view.over_limit?)}
@@ -619,7 +735,7 @@ defmodule PlatformWeb.SocialCardComponent do
     """
   end
 
-  attr :view, :map, required: true
+  attr(:view, :map, required: true)
 
   # The video post's Cover control (task 01a165ec stage 4), queue only
   # (`cover_controls`): a quiet text button that opens the parent page's
@@ -663,10 +779,10 @@ defmodule PlatformWeb.SocialCardComponent do
     "#{div(s, 60)}:#{s |> rem(60) |> Integer.to_string() |> String.pad_leading(2, "0")}"
   end
 
-  attr :view, :map, required: true
-  attr :myself, :any, required: true
-  attr :canvas_id, :string, required: true
-  attr :id, :string, required: true
+  attr(:view, :map, required: true)
+  attr(:myself, :any, required: true)
+  attr(:canvas_id, :string, required: true)
+  attr(:id, :string, required: true)
 
   defp actions(assigns) do
     ~H"""
@@ -718,10 +834,10 @@ defmodule PlatformWeb.SocialCardComponent do
     """
   end
 
-  attr :view, :map, required: true
-  attr :myself, :any, required: true
-  attr :canvas_id, :string, required: true
-  attr :reject_text, :string, default: ""
+  attr(:view, :map, required: true)
+  attr(:myself, :any, required: true)
+  attr(:canvas_id, :string, required: true)
+  attr(:reject_text, :string, default: "")
 
   defp reject_box(assigns) do
     ~H"""

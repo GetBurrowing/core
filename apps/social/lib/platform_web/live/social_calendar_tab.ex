@@ -262,6 +262,13 @@ defmodule PlatformWeb.SocialCalendarTab do
       socket = load(socket)
       {:noreply, assign(socket, :detail, detail_for(socket, approved.id))}
     else
+      {:error, {:incomplete_post, lines}} ->
+        socket = load(socket)
+        detail = detail_for(socket, id)
+
+        {:noreply,
+         assign(socket, :detail, detail && Map.put(detail, :notice, Enum.join(lines, "\n")))}
+
       {:error, :slot_passed} ->
         socket = load(socket)
         detail = detail_for(socket, id)
@@ -597,7 +604,7 @@ defmodule PlatformWeb.SocialCalendarTab do
           :if={@detail.notice}
           role="alert"
           data-role="calendar-approval-notice"
-          class="alert alert-warning mt-3 text-sm"
+          class="alert alert-warning mt-3 whitespace-pre-line text-sm"
         >
           {@detail.notice}
         </p>

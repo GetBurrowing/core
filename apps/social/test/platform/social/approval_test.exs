@@ -22,8 +22,16 @@ defmodule Platform.Social.ApprovalTest do
   setup do
     org_id = org_id!()
     {:ok, profile} = Social.create_profile(org_id, %{name: "Approvals"})
-    {:ok, account} = Social.create_account(org_id, profile, %{platform: "linkedin"})
-    {:ok, post} = Social.create_post(org_id, account, %{body: "draft"})
+
+    {:ok, account} =
+      Social.create_account(org_id, profile, %{platform: "linkedin", status: "connected"})
+
+    {:ok, post} =
+      Social.create_post(org_id, account, %{
+        body: "draft",
+        scheduled_at: DateTime.add(DateTime.utc_now(), 3600)
+      })
+
     %{org_id: org_id, profile: profile, account: account, post: post, agent: agent!()}
   end
 

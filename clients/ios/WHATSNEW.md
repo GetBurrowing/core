@@ -4,6 +4,15 @@ The top `## v<version>` section is sent as the build's "What to Test" by
 `scripts/set_testflight_notes.py`. It must match project.yml's
 MARKETING_VERSION, and it is capped at 4000 characters.
 
+## v1.2: Siri Ask and the "which one?" check
+New in this build:
+- Siri Ask now reaches the agent. Say "Ask Burrow" or "Ask Dalton in Burrow", then say your question when Siri asks for it. Siri reads back a short spoken reply instead of a long text answer.
+- When you send a message with Siri and a person with the same name exists on another of your installs, Siri now asks which one you mean, every time.
+
+Please try:
+1. Say "Ask <agent> in Burrow", answer with a question, and check that the agent gets it and Siri reads a short reply.
+2. If you are signed in to two installs that both have someone with the same name, say "Message <name> in Burrow" and check that Siri asks which one.
+
 ## v1.2: iPhone Duo and call controls
 New in this build:
 - iPhone Duo: with the phone closed, the tab bar and Back/Close move into the side strip; unfolded, More opens as a page.

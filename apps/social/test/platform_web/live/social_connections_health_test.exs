@@ -41,7 +41,13 @@ defmodule PlatformWeb.SocialConnectionsHealthTest do
 
     Repo.delete!(ctx.d)
 
-    post = approved_post!(ctx.org_id, warn, %{body: "refused yesterday"}, ctx.h1)
+    post =
+      approved_post!(
+        ctx.org_id,
+        warn,
+        %{body: "refused yesterday", scheduled_at: DateTime.add(DateTime.utc_now(), 1, :day)},
+        ctx.h1
+      )
 
     {:ok, refused} =
       post
@@ -125,7 +131,13 @@ defmodule PlatformWeb.SocialConnectionsHealthTest do
 
   test "last posted links to the live post; the drafting agent shows when set",
        %{conn: conn} = ctx do
-    post = approved_post!(ctx.org_id, ctx.ok, %{body: "out"}, ctx.h1)
+    post =
+      approved_post!(
+        ctx.org_id,
+        ctx.ok,
+        %{body: "out", scheduled_at: DateTime.add(DateTime.utc_now(), 1, :day)},
+        ctx.h1
+      )
 
     Repo.update_all(from(p in Post, where: p.id == ^post.id),
       set: [
@@ -157,8 +169,12 @@ defmodule PlatformWeb.SocialConnectionsHealthTest do
            )
   end
 
-  test "an approver gets one fix per reason; Retry re-runs the guarded publish",
+  test "an approver gets one fix per reason; existing-job retry keeps the job",
        %{conn: conn} = ctx do
+    Repo.update_all(from(p in Post, where: p.id == ^ctx.refused.id),
+      set: [external_id: "existing-job"]
+    )
+
     child = open(conn, ctx.h1)
 
     assert has_element?(
@@ -172,13 +188,16 @@ defmodule PlatformWeb.SocialConnectionsHealthTest do
              row(ctx.warn) <> " [data-role='social-account-fix'][data-fix='retry']"
            )
 
+    assert has_element?(child, row(ctx.warn) <> " [data-fix='retry'].min-h-11")
+
     refute has_element?(child, row(ctx.ok) <> " [data-role='social-account-fix']")
 
     child
     |> element(row(ctx.warn) <> " [data-role='social-account-fix'][data-fix='retry']")
     |> render_click()
 
-    assert [_] = Fake.calls(:publish)
+    assert [{:retry, [_, "existing-job"], _}] = Fake.calls(:retry)
+    assert Fake.calls(:publish) == []
     assert %{status: "scheduled", refused_reason: nil} = Repo.get!(Post, ctx.refused.id)
     assert has_element?(child, row(ctx.warn) <> " [data-role='social-account-health']", "Healthy")
 
@@ -188,6 +207,25 @@ defmodule PlatformWeb.SocialConnectionsHealthTest do
              "accounts-#{ctx.ok.id}",
              "accounts-#{ctx.warn.id}"
            ]
+  end
+
+  test "the Connections action refuses a rendered job A replaced by B before clicking",
+       %{conn: conn} = ctx do
+    Repo.update_all(from(p in Post, where: p.id == ^ctx.refused.id),
+      set: [external_id: "rendered-A"]
+    )
+
+    child = open(conn, ctx.h1)
+
+    Repo.update_all(from(p in Post, where: p.id == ^ctx.refused.id),
+      set: [external_id: "current-B"]
+    )
+
+    before = Repo.get!(Post, ctx.refused.id)
+    child |> element(row(ctx.warn) <> " [data-fix='retry']") |> render_click()
+    assert Fake.calls() == []
+    assert Repo.get!(Post, ctx.refused.id) == before
+    assert render(child) =~ "The publish job changed, so nothing was retried."
   end
 
   test "a non-approver sees health read-only, with no fix buttons", %{conn: conn} = ctx do
@@ -211,6 +249,118 @@ defmodule PlatformWeb.SocialConnectionsHealthTest do
     # The handler refuses too.
     render_click(child, "retry_publish", %{"post_id" => ctx.refused.id})
     assert Fake.calls(:publish) == []
+  end
+
+  test "a published retry reports the saved classification", %{conn: conn} = ctx do
+    Repo.update_all(from(p in Post, where: p.id == ^ctx.refused.id),
+      set: [external_id: "existing-job"]
+    )
+
+    Fake.put_next(:retry, {:ok, %{status: :published, external_id: "existing-job"}})
+    child = open(conn, ctx.h1)
+    child |> element(row(ctx.warn) <> " [data-fix='retry']") |> render_click()
+    assert Repo.get!(Post, ctx.refused.id).status == "published"
+    assert render(child) =~ "Published."
+  end
+
+  test "an incomplete retry shows each missing publishing field", %{conn: conn} = ctx do
+    Repo.update_all(from(a in Social.Account, where: a.id == ^ctx.warn.id),
+      set: [platform: "youtube"]
+    )
+
+    child = open(conn, ctx.h1)
+    child |> element(row(ctx.warn) <> " [data-fix='retry']") |> render_click()
+    value = DateTime.utc_now() |> DateTime.add(1, :day) |> Calendar.strftime("%Y-%m-%dT%H:%M:%S")
+    child |> form("[data-role='retry-schedule']", %{at: value}) |> render_submit()
+
+    assert {:error, {:incomplete_post, _}} =
+             Platform.Social.Publishing.retry_publish(ctx.org_id, ctx.refused.id, ctx.h1.id,
+               scheduled_at: DateTime.add(DateTime.utc_now(), 1, :day)
+             )
+
+    assert render(child) =~ "Add a video title"
+    assert render(child) =~ "Add a video."
+    assert Fake.calls(:publish) == []
+  end
+
+  test "a retry without a vendor job asks for a time before publishing", %{conn: conn} = ctx do
+    child = open(conn, ctx.h1)
+    child |> element(row(ctx.warn) <> " [data-fix='retry']") |> render_click()
+
+    assert Fake.calls(:publish) == []
+    assert has_element?(child, "[data-role='retry-schedule'] input[type='datetime-local']")
+    assert has_element?(child, "[data-role='retry-schedule']", "Choose when to publish")
+    assert Repo.get!(Post, ctx.refused.id).refused_reason == "media_rejected"
+  end
+
+  test "a past retry time is refused without publishing", %{conn: conn} = ctx do
+    child = open(conn, ctx.h1)
+    child |> element(row(ctx.warn) <> " [data-fix='retry']") |> render_click()
+    child |> form("[data-role='retry-schedule']", %{at: "2020-01-01T12:00"}) |> render_submit()
+    assert has_element?(child, "[data-role='retry-schedule']")
+    assert render(child) =~ "Choose a future publish time"
+    assert Fake.calls(:publish) == []
+  end
+
+  test "a job appearing while the chooser is open is not retried", %{conn: conn} = ctx do
+    child = open(conn, ctx.h1)
+    child |> element(row(ctx.warn) <> " [data-fix='retry']") |> render_click()
+
+    Repo.update_all(from(p in Post, where: p.id == ^ctx.refused.id),
+      set: [external_id: "new-job"]
+    )
+
+    at = DateTime.utc_now() |> DateTime.add(1, :day) |> Calendar.strftime("%Y-%m-%dT%H:%M:%S")
+    child |> form("[data-role='retry-schedule']", %{at: at}) |> render_submit()
+    assert Fake.calls(:publish) == []
+    assert Fake.calls(:retry) == []
+  end
+
+  test "revoked approver cannot submit an already opened retry chooser", %{conn: conn} = ctx do
+    child = open(conn, ctx.h1)
+    child |> element(row(ctx.warn) <> " [data-fix='retry']") |> render_click()
+
+    Repo.update_all(from(p in Social.Profile, where: p.id == ^ctx.profile.id),
+      set: [approver_user_ids: [ctx.h2.id]]
+    )
+
+    value = DateTime.utc_now() |> DateTime.add(1, :day) |> Calendar.strftime("%Y-%m-%dT%H:%M:%S")
+    child |> form("[data-role='retry-schedule']", %{at: value}) |> render_submit()
+    assert Fake.calls(:publish) == []
+    assert Fake.calls(:retry) == []
+  end
+
+  test "a future saved time is offered for confirmation and does not send", %{conn: conn} = ctx do
+    at =
+      DateTime.utc_now()
+      |> DateTime.add(1, :day)
+      |> DateTime.truncate(:second)
+      |> Map.put(:microsecond, {0, 6})
+
+    Repo.update_all(from(p in Post, where: p.id == ^ctx.refused.id), set: [scheduled_at: at])
+    child = open(conn, ctx.h1)
+    child |> element(row(ctx.warn) <> " [data-fix='retry']") |> render_click()
+    value = Calendar.strftime(at, "%Y-%m-%dT%H:%M:%S")
+    assert has_element?(child, "[data-role='retry-schedule'] input[value='#{value}']")
+    assert Fake.calls(:publish) == []
+  end
+
+  test "a confirmed future time reaches the guarded retry and reports its saved status",
+       %{conn: conn} = ctx do
+    child = open(conn, ctx.h1)
+    child |> element(row(ctx.warn) <> " [data-fix='retry']") |> render_click()
+
+    at =
+      DateTime.utc_now()
+      |> DateTime.add(1, :day)
+      |> DateTime.truncate(:second)
+      |> Map.put(:microsecond, {0, 6})
+
+    value = Calendar.strftime(at, "%Y-%m-%dT%H:%M:%S")
+    child |> form("[data-role='retry-schedule']", %{at: value}) |> render_submit()
+    assert [{:publish, [_, %{scheduled_at: ^at}], _}] = Fake.calls(:publish)
+    assert %{status: "scheduled", scheduled_at: ^at} = Repo.get!(Post, ctx.refused.id)
+    assert render(child) =~ "Scheduled."
   end
 
   test "the personal Instagram fix is a Reconnect on the connected row", %{conn: conn} = ctx do

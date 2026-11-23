@@ -28,7 +28,11 @@ defmodule PlatformWeb.SocialLiveCoverTest do
       Social.update_profile(ctx.org_id, ctx.profile, %{project_id: project!(ctx.org_id).id})
 
     {:ok, ig} =
-      Social.create_account(ctx.org_id, profile, %{platform: "instagram", handle: "@htc_reels"})
+      Social.create_account(ctx.org_id, profile, %{
+        platform: "instagram",
+        handle: "@htc_reels",
+        status: "connected"
+      })
 
     video = media_file!(ctx.org_id, "video/mp4")
     Map.merge(ctx, %{profile: profile, ig: ig, video: video})
@@ -315,13 +319,28 @@ defmodule PlatformWeb.SocialLiveCoverTest do
     test "names the platform: YouTube needs an upload, others pick their own",
          %{conn: conn} = ctx do
       {:ok, yt} =
-        Social.create_account(ctx.org_id, ctx.profile, %{platform: "youtube", handle: "HTC"})
+        Social.create_account(ctx.org_id, ctx.profile, %{
+          platform: "youtube",
+          handle: "HTC",
+          status: "connected"
+        })
 
       {:ok, tt} =
-        Social.create_account(ctx.org_id, ctx.profile, %{platform: "tiktok", handle: "@htc"})
+        Social.create_account(ctx.org_id, ctx.profile, %{
+          platform: "tiktok",
+          handle: "@htc",
+          status: "connected"
+        })
 
       meta = %{ctx.video.id => %{"duration_s" => 42.5}}
-      {yt_post, _} = pending_post!(ctx, yt, %{media_file_ids: [ctx.video.id], media_meta: meta})
+
+      {yt_post, _} =
+        pending_post!(ctx, yt, %{
+          title: "Cover video",
+          media_file_ids: [ctx.video.id],
+          media_meta: meta
+        })
+
       {tt_post, _} = pending_post!(ctx, tt, %{media_file_ids: [ctx.video.id], media_meta: meta})
 
       child = conn |> open(ctx.h1) |> open_picker(yt_post)

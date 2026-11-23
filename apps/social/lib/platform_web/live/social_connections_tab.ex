@@ -98,7 +98,7 @@ defmodule PlatformWeb.SocialConnectionsTab do
 
   @events ~w(connect_account open_add_account close_add_account add_account set_mode
              open_remove cancel_remove remove_account open_invite close_invite
-             create_invite cancel_invite retry_publish)
+             create_invite cancel_invite retry_publish retry_schedule retry_cancel)
 
   @impl true
   def enabled?, do: true
@@ -112,6 +112,7 @@ defmodule PlatformWeb.SocialConnectionsTab do
     |> assign(:type_checked_profile_ids, MapSet.new())
     |> assign(:removing, nil)
     |> assign(:invite_dialog, nil)
+    |> assign(:retry_schedule, nil)
   end
 
   # Connections for the current profile. `can_edit?` (set by
@@ -121,6 +122,7 @@ defmodule PlatformWeb.SocialConnectionsTab do
   def load(%{assigns: %{profile: nil}} = socket) do
     socket
     |> assign(:removing, nil)
+    |> assign(:retry_schedule, nil)
     |> assign(:accounts_empty?, true)
     |> assign(:pending_accounts?, false)
     |> assign(:untyped_accounts?, false)
@@ -140,6 +142,7 @@ defmodule PlatformWeb.SocialConnectionsTab do
 
     socket
     |> assign(:removing, nil)
+    |> assign(:retry_schedule, nil)
     |> assign(:accounts_empty?, accounts == [])
     |> assign_reconcile_flags(accounts)
     |> assign(:connectable_platforms, platforms)
@@ -351,24 +354,81 @@ defmodule PlatformWeb.SocialConnectionsTab do
   # approvers only, and only for a post on one of THIS profile's accounts;
   # `Publishing.retry_publish/3` re-checks the approver and runs the whole
   # publish guard again.
-  def handle_event("retry_publish", %{"post_id" => post_id}, socket) when is_binary(post_id) do
+  def handle_event("retry_publish", %{"post_id" => post_id} = params, socket)
+      when is_binary(post_id) do
     with {:ok, profile, user_id} <- authorize(socket),
-         %{account_id: account_id} <- Social.get_post(profile.org_id, post_id),
-         %Account{} <- profile_account(profile, account_id) do
-      result = Publishing.retry_publish(profile.org_id, post_id, user_id)
-      {:noreply, socket |> restream_accounts() |> notice(retry_copy(result))}
+         %{account_id: account_id} = post <- Social.get_post(profile.org_id, post_id),
+         %Account{} <- profile_account(profile, account_id),
+         {:ok, expected} <- PlatformWeb.SocialRetryTime.expected_job(params) do
+      if existing_job?(post) or not is_nil(expected) do
+        result =
+          Publishing.retry_publish(profile.org_id, post_id, user_id,
+            expected_external_id: expected
+          )
+
+        {:noreply, socket |> restream_accounts() |> notice(retry_copy(result))}
+      else
+        {:noreply,
+         assign(socket, :retry_schedule, %{
+           post_id: post_id,
+           scheduled_at: post.scheduled_at,
+           expected_external_id: expected
+         })}
+      end
     else
       {:error, :not_an_approver} ->
         {:noreply, notice(socket, "Only an approver of this profile can change it.")}
+
+      {:error, :publish_job_changed} ->
+        {:noreply,
+         socket |> restream_accounts() |> notice(retry_copy({:error, :publish_job_changed}))}
 
       _ ->
         {:noreply, notice(socket, "That post could not be retried. Try again.")}
     end
   end
 
+  def handle_event("retry_schedule", %{"at" => at} = params, socket) do
+    with %{post_id: post_id} <- socket.assigns.retry_schedule,
+         {:ok, profile, user_id} <- authorize(socket),
+         %{account_id: account_id} <- Social.get_post(profile.org_id, post_id),
+         %Account{} <- profile_account(profile, account_id),
+         {:ok, expected} <- PlatformWeb.SocialRetryTime.expected_job(params),
+         {:ok, selected} <- PlatformWeb.SocialRetryTime.parse(at) do
+      result =
+        Publishing.retry_publish(profile.org_id, post_id, user_id,
+          scheduled_at: selected,
+          expected_external_id: expected
+        )
+
+      socket = if match?({:ok, _}, result), do: assign(socket, :retry_schedule, nil), else: socket
+      {:noreply, socket |> restream_accounts() |> notice(retry_copy(result))}
+    else
+      {:error, :invalid_retry_time} ->
+        {:noreply, notice(socket, "Choose a future publish time.")}
+
+      {:error, :not_an_approver} ->
+        {:noreply, notice(socket, "Only an approver of this profile can change it.")}
+
+      _ ->
+        {:noreply,
+         socket
+         |> assign(:retry_schedule, nil)
+         |> notice("That post could not be retried. Try again.")}
+    end
+  end
+
+  def handle_event("retry_cancel", _params, socket),
+    do: {:noreply, assign(socket, :retry_schedule, nil)}
+
   def handle_event(_event, _params, socket), do: {:noreply, socket}
 
-  defp retry_copy({:ok, _post}), do: "Retried. The post is on its way."
+  defp existing_job?(post),
+    do: is_binary(post.external_id) and String.trim(post.external_id) != ""
+
+  defp retry_copy({:ok, %{status: "scheduled"}}), do: "Scheduled."
+  defp retry_copy({:ok, %{status: "published"}}), do: "Published."
+  defp retry_copy({:ok, _post}), do: "Retry completed."
 
   defp retry_copy({:error, {:wait_until, at}}),
     do: "Still rate limited. Retry after #{Calendar.strftime(at, "%H:%M")} UTC."
@@ -376,8 +436,15 @@ defmodule PlatformWeb.SocialConnectionsTab do
   defp retry_copy({:error, {:publish_failed, _}}),
     do: "Retried, and the platform refused it again. See the reason on the row."
 
+  defp retry_copy({:error, :publish_job_changed}),
+    do: "The publish job changed, so nothing was retried."
+
   defp retry_copy({:error, :not_refused}), do: "That post is no longer waiting for a retry."
-  defp retry_copy(_error), do: "Retried, but it still can't be sent. See the reason on the row."
+
+  defp retry_copy({:error, {:incomplete_post, lines}}) when is_list(lines),
+    do: Enum.join(lines, " ")
+
+  defp retry_copy(_error), do: "The post could not be retried. See the reason on the row."
 
   # Pending invites (unused, uncancelled, unexpired) for an APPROVER of the
   # current profile only; anyone else gets an empty list. Used and expired
@@ -986,6 +1053,22 @@ defmodule PlatformWeb.SocialConnectionsTab do
         />
       </li>
     </ul>
+    <form :if={@can_edit? and @retry_schedule} phx-submit="retry_schedule" data-role="retry-schedule">
+      <input type="hidden" name="expected_job" value={@retry_schedule.expected_external_id || ""} />
+      <label>
+        Choose when to publish (UTC)
+        <input
+          type="datetime-local"
+          name="at"
+          required
+          step="1"
+          class="input input-bordered min-h-11"
+          value={PlatformWeb.SocialRetryTime.prefill(@retry_schedule.scheduled_at)}
+        />
+      </label>
+      <button type="submit" class="btn min-h-11">Retry at this time</button>
+      <button type="button" phx-click="retry_cancel" class="btn min-h-11">Cancel</button>
+    </form>
     <section
       :if={@can_edit? and not @invites_empty?}
       class="mt-4"
@@ -1018,9 +1101,9 @@ defmodule PlatformWeb.SocialConnectionsTab do
     """
   end
 
-  attr :open?, :boolean, required: true
-  attr :form, :any, required: true
-  attr :options, :list, required: true
+  attr(:open?, :boolean, required: true)
+  attr(:form, :any, required: true)
+  attr(:options, :list, required: true)
 
   defp add_account(assigns) do
     ~H"""
@@ -1072,10 +1155,10 @@ defmodule PlatformWeb.SocialConnectionsTab do
 
   @mode_labels %{"approve_first" => "Approve first", "draft_only" => "Draft-only"}
 
-  attr :account, :map, required: true
-  attr :owner, :map, default: nil
-  attr :can_edit?, :boolean, required: true
-  attr :can_connect?, :boolean, required: true
+  attr(:account, :map, required: true)
+  attr(:owner, :map, default: nil)
+  attr(:can_edit?, :boolean, required: true)
+  attr(:can_connect?, :boolean, required: true)
 
   defp account_row(assigns) do
     assigns = assign(assigns, :mode_labels, @mode_labels)
@@ -1202,7 +1285,7 @@ defmodule PlatformWeb.SocialConnectionsTab do
     ok: {"badge-success", "hero-check-circle-micro", "Healthy"}
   }
 
-  attr :state, :atom, required: true
+  attr(:state, :atom, required: true)
 
   # The state pill: text AND an icon, so it reads without colour.
   defp health_pill(assigns) do
@@ -1226,12 +1309,12 @@ defmodule PlatformWeb.SocialConnectionsTab do
     info: "hero-information-circle-micro"
   }
 
-  attr :account, :map, required: true
-  attr :health, :map, required: true
-  attr :owner, :map, default: nil
-  attr :context, :map, required: true
-  attr :can_edit?, :boolean, required: true
-  attr :can_connect?, :boolean, required: true
+  attr(:account, :map, required: true)
+  attr(:health, :map, required: true)
+  attr(:owner, :map, default: nil)
+  attr(:context, :map, required: true)
+  attr(:can_edit?, :boolean, required: true)
+  attr(:can_connect?, :boolean, required: true)
 
   # Under the row: the reasons in plain words (each with at most ONE fix,
   # approvers only), then last posted, who approves and who drafts. The
@@ -1267,6 +1350,7 @@ defmodule PlatformWeb.SocialConnectionsTab do
             :if={@can_edit?}
             fix={reason.fix}
             account={@account}
+            post={@health.last_failure}
             can_connect?={@can_connect?}
           />
         </li>
@@ -1299,9 +1383,10 @@ defmodule PlatformWeb.SocialConnectionsTab do
     """
   end
 
-  attr :fix, :any, required: true
-  attr :account, :map, required: true
-  attr :can_connect?, :boolean, required: true
+  attr(:fix, :any, required: true)
+  attr(:account, :map, required: true)
+  attr(:post, :any, required: true)
+  attr(:can_connect?, :boolean, required: true)
 
   defp reason_fix(%{fix: {:retry, post_id}} = assigns) do
     assigns = assign(assigns, :post_id, post_id)
@@ -1309,14 +1394,15 @@ defmodule PlatformWeb.SocialConnectionsTab do
     ~H"""
     <button
       type="button"
-      class="btn btn-outline btn-sm shrink-0 max-sm:w-full"
+      class="btn btn-outline btn-sm min-h-11 shrink-0 max-sm:w-full"
       phx-click="retry_publish"
+      phx-value-expected_job={if @post, do: Publishing.existing_job_id(@post) || "", else: ""}
       phx-value-post_id={@post_id}
       phx-disable-with="Retrying..."
       data-role="social-account-fix"
       data-fix="retry"
     >
-      Retry publish
+      {if @post && existing_job?(@post), do: "Retry existing publish job", else: "Choose a new time"}
     </button>
     """
   end
@@ -1352,7 +1438,7 @@ defmodule PlatformWeb.SocialConnectionsTab do
     end
   end
 
-  attr :invite, :map, required: true
+  attr(:invite, :map, required: true)
 
   # A pending invite row. There is no Copy link here: only the token's
   # sha256 is stored, so the link exists once, in the dialog that made it.
@@ -1385,8 +1471,8 @@ defmodule PlatformWeb.SocialConnectionsTab do
     """
   end
 
-  attr :dialog, :map, required: true
-  attr :options, :list, required: true
+  attr(:dialog, :map, required: true)
+  attr(:options, :list, required: true)
 
   # A dialog from sm up, a bottom sheet below (daisy modal-bottom).
   defp invite_dialog(assigns) do
@@ -1488,8 +1574,8 @@ defmodule PlatformWeb.SocialConnectionsTab do
     """
   end
 
-  attr :account, :map, required: true
-  attr :preview, :map, required: true
+  attr(:account, :map, required: true)
+  attr(:preview, :map, required: true)
 
   # The inline confirm panel under a row (not a modal): the consequence
   # sentence with the real counts, then Cancel (focused on open) and

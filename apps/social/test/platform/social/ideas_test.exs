@@ -23,10 +23,19 @@ defmodule Platform.Social.IdeasTest do
     RateLimit.reset()
     ctx = approval_fixture() |> with_ideas_runtime()
 
-    {:ok, x} = Social.create_account(ctx.org_id, ctx.profile, %{platform: "x", handle: "@show_x"})
+    {:ok, x} =
+      Social.create_account(ctx.org_id, ctx.profile, %{
+        platform: "x",
+        handle: "@show_x",
+        status: "connected"
+      })
 
     {:ok, ig} =
-      Social.create_account(ctx.org_id, ctx.profile, %{platform: "instagram", handle: "@show_ig"})
+      Social.create_account(ctx.org_id, ctx.profile, %{
+        platform: "instagram",
+        handle: "@show_ig",
+        status: "connected"
+      })
 
     Map.merge(ctx, %{x: x, ig: ig})
   end
@@ -53,7 +62,9 @@ defmodule Platform.Social.IdeasTest do
           "idea_id" => idea.id,
           "account_ids" => [ctx.a.id, ctx.x.id, ctx.ig.id],
           "body" => "Episode 12 is out",
-          "status" => "draft"
+          "status" => "draft",
+          "scheduled_at" => DateTime.utc_now() |> DateTime.add(3600) |> DateTime.to_iso8601(),
+          "media_file_ids" => [media_file!(ctx.org_id, "image/png").id]
         },
         ctx.agent_ctx
       )

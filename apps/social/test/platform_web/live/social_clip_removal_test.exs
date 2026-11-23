@@ -67,7 +67,7 @@ defmodule PlatformWeb.SocialClipRemovalTest do
     assert has_element?(child, "[data-role=clip-delete-dialog]", "Delete Last clip v1?")
     child |> element("[data-role=clip-delete-confirm]") |> render_click()
     refute has_element?(child, "[data-role=clip-player]")
-    refute has_element?(child, "[data-role=clip-approve]")
+    refute has_element?(child, "[data-role=clip-draft]")
     assert has_element?(child, "[data-role=clips-queue-count]", "0")
     assert Social.get_clip(w.org_id, clip.id) == nil
   end
@@ -100,7 +100,7 @@ defmodule PlatformWeb.SocialClipRemovalTest do
 
     assert has_element?(
              child,
-             "[data-role=clip-approve][phx-value-render_id='#{render_id!(clip)}']"
+             "[data-role=clip-draft][phx-value-render_id='#{render_id!(clip)}']"
            )
   end
 

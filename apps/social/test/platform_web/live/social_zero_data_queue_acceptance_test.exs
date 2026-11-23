@@ -201,6 +201,8 @@ defmodule PlatformWeb.SocialZeroDataQueueAcceptanceTest do
                  "profile_id" => profile.id,
                  "account_ids" => [account.id],
                  "body" => "Episode one is live.",
+                 "scheduled_at" =>
+                   DateTime.utc_now() |> DateTime.add(3600) |> DateTime.to_iso8601(),
                  "schedule_reason" => "Posted while the episode is fresh."
                },
                %{agent_id: agent.id}
@@ -239,7 +241,7 @@ defmodule PlatformWeb.SocialZeroDataQueueAcceptanceTest do
     assert [%{"platform" => "linkedin", "accountId" => "zacc_li_q"}] = body["platforms"]
 
     post = Repo.get!(Post, post_id)
-    assert post.status in Post.approved_statuses()
+    assert post.status == "scheduled"
     assert post.external_id == "zp_q1"
     assert post.approved_by_user_id == user.id
 

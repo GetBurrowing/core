@@ -125,7 +125,7 @@ defmodule Platform.Social.AnalyticsProviderCompatibilityTest do
     test "the scheduled sweep reaches untagged #{@platform} post accounts with correct follower scope",
          c do
       account = Repo.update!(Ecto.Changeset.change(c.account, platform: @platform))
-      post = approved_post!(c.org, account)
+      post = historical_approved_post!(c.org, account)
 
       post =
         Repo.update!(
@@ -259,7 +259,7 @@ defmodule Platform.Social.AnalyticsProviderCompatibilityTest do
 
     posts =
       for {row, suffix} <- [{account, "A"}, {other, "B"}], into: %{} do
-        post = approved_post!(c.org, row)
+        post = historical_approved_post!(c.org, row)
 
         post =
           Repo.update!(

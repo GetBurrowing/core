@@ -420,7 +420,7 @@ defmodule Platform.Social.IdeaPermissionConcurrencyTest do
         Repo.checkout(fn ->
           [[pid]] = Repo.query!("SELECT pg_backend_pid()").rows
           send(parent, {:worker, pid})
-          approve_clip(ctx, clip, render, parent)
+          draft_clip_for(ctx, clip, render, parent)
         end)
       end)
 
@@ -566,7 +566,7 @@ defmodule Platform.Social.IdeaPermissionConcurrencyTest do
     holder =
       Task.async(fn ->
         Repo.transaction(fn ->
-          assert {:ok, %{posts: [post]}} = approve_clip(ctx, clip, render, parent)
+          assert {:ok, %{posts: [post]}} = draft_clip_for(ctx, clip, render, parent)
           [[pid]] = Repo.query!("SELECT pg_backend_pid()").rows
           send(parent, {:holder, pid, post.id})
 
@@ -649,8 +649,8 @@ defmodule Platform.Social.IdeaPermissionConcurrencyTest do
     {clip, render, idea}
   end
 
-  defp approve_clip(ctx, clip, render, test_process) do
-    Platform.Social.approve_clip(
+  defp draft_clip_for(ctx, clip, render, test_process) do
+    Platform.Social.draft_clip(
       ctx.org.id,
       clip.id,
       ctx.owner.id,

@@ -44,11 +44,21 @@ defmodule Platform.Social.ComposerTest do
       conn |> Plug.Conn.put_status(201) |> Req.Test.json(%{"post" => %{"_id" => "zp_1"}})
     end)
 
-    ctx = approval_fixture()
-    {:ok, x} = Social.create_account(ctx.org_id, ctx.profile, %{platform: "x", handle: "@htc"})
+    ctx = approval_fixture() |> with_ideas_runtime()
+
+    {:ok, x} =
+      Social.create_account(ctx.org_id, ctx.profile, %{
+        platform: "x",
+        handle: "@htc",
+        status: "connected"
+      })
 
     {:ok, ig} =
-      Social.create_account(ctx.org_id, ctx.profile, %{platform: "instagram", handle: "@htc.ig"})
+      Social.create_account(ctx.org_id, ctx.profile, %{
+        platform: "instagram",
+        handle: "@htc.ig",
+        status: "connected"
+      })
 
     Map.merge(ctx, %{x: x, ig: ig})
   end
@@ -64,7 +74,29 @@ defmodule Platform.Social.ComposerTest do
     for account <- accounts do
       d = Map.fetch!(drafts, account.platform)
 
+      media_file_ids =
+        if account.platform == "instagram" do
+          profile = Repo.get!(Platform.Social.Profile, account.profile_id)
+
+          {:ok, file} =
+            Platform.Files.create_file(%{
+              project_id: profile.project_id,
+              name: "composer.png",
+              original_filename: "composer.png",
+              content_type: "image/png",
+              byte_size: 1,
+              content_hash: String.duplicate("a", 64),
+              storage_key: "files/#{profile.project_id}/#{unique()}/composer.png"
+            })
+
+          [file.id]
+        else
+          []
+        end
+
       %{
+        scheduled_at: DateTime.add(DateTime.utc_now(), 3600),
+        media_file_ids: media_file_ids,
         account_id: account.id,
         text: d.text,
         title: d.title,
@@ -389,7 +421,7 @@ defmodule Platform.Social.ComposerTest do
       assert code =~ "Social.create_post"
       assert code =~ "Approvals.decide_approve"
 
-      refute code =~ "Publishing"
+      refute code =~ ~r/\bPublishing(?:\.|\s*[,}\n])/
       refute code =~ "publish_post"
       refute code =~ ~s("approved")
       refute code =~ ~s("scheduled")
@@ -407,7 +439,7 @@ defmodule Platform.Social.ComposerTest do
 
       assert approved.id == post.id
       row = Repo.get!(Post, post.id)
-      assert row.status in Post.approved_statuses()
+      assert row.status == "scheduled"
       assert row.approved_by_user_id == ctx.h1.id
 
       assert Repo.exists?(
@@ -484,11 +516,14 @@ defmodule Platform.Social.ComposerTest do
     test "a past time, an empty version or a foreign account writes nothing", ctx do
       [x] = drafts_for(ctx.result, [ctx.x])
       past = Map.put(x, :scheduled_at, DateTime.add(DateTime.utc_now(), -60))
+      account_id = ctx.x.id
 
-      assert {:error, :schedule_in_past} =
+      assert {:error,
+              {:incomplete_versions,
+               %{^account_id => ["The publish time has passed. Choose a new one."]}}} =
                Composer.send(ctx.profile, ctx.h1.id, %{idea: idea_attrs(), drafts: [past]})
 
-      assert {:error, {:invalid_draft, _}} =
+      assert {:error, {:incomplete_versions, %{^account_id => ["Add the post text."]}}} =
                Composer.send(ctx.profile, ctx.h1.id, %{
                  idea: idea_attrs(),
                  drafts: [%{x | text: "  "}]

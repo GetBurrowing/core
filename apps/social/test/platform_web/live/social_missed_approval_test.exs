@@ -13,6 +13,13 @@ defmodule PlatformWeb.SocialMissedApprovalTest do
     approval_fixture()
   end
 
+  # Already-submitted cards whose deadlines elapsed, not new past submissions.
+  defp historical_pending_post!(ctx, at) do
+    {post, card} = pending_post!(ctx, ctx.a)
+    post = post |> Ecto.Changeset.change(scheduled_at: at) |> Repo.update!()
+    {post, card}
+  end
+
   defp open(conn, ctx, tab) do
     conn = Plug.Test.init_test_session(conn, current_user_id: ctx.h1.id)
     {:ok, parent, _} = live(conn, "/m/social?tab=#{tab}&profile=#{ctx.profile.id}")
@@ -21,7 +28,7 @@ defmodule PlatformWeb.SocialMissedApprovalTest do
 
   test "a cached Calendar item derives its missed state again when rendered", ctx do
     at = DateTime.add(DateTime.utc_now(), -60)
-    {post, _card} = pending_post!(ctx, ctx.a, %{scheduled_at: at})
+    {post, _card} = historical_pending_post!(ctx, at)
 
     html =
       render_component(&SocialCalendar.item_chip/1,
@@ -43,7 +50,7 @@ defmodule PlatformWeb.SocialMissedApprovalTest do
   test "Calendar retains a missed approval with a distinct accessible label and its original slot",
        %{conn: conn} = ctx do
     at = DateTime.add(DateTime.utc_now(), -60)
-    {post, _card} = pending_post!(ctx, ctx.a, %{scheduled_at: at})
+    {post, _card} = historical_pending_post!(ctx, at)
     view = open(conn, ctx, "calendar")
 
     if SocialCalendar.week_start(DateTime.to_date(at)) !=
@@ -65,7 +72,7 @@ defmodule PlatformWeb.SocialMissedApprovalTest do
   test "Queue shows the miss and a human future-time control even without posting slots",
        %{conn: conn} = ctx do
     {post, _card} =
-      pending_post!(ctx, ctx.a, %{scheduled_at: DateTime.add(DateTime.utc_now(), -60)})
+      historical_pending_post!(ctx, DateTime.add(DateTime.utc_now(), -60))
 
     view = open(conn, ctx, "queue")
 
@@ -123,7 +130,7 @@ defmodule PlatformWeb.SocialMissedApprovalTest do
 
   test "a non-approver sees no replacement-time action", %{conn: conn} = ctx do
     {post, _card} =
-      pending_post!(ctx, ctx.a, %{scheduled_at: DateTime.add(DateTime.utc_now(), -60)})
+      historical_pending_post!(ctx, DateTime.add(DateTime.utc_now(), -60))
 
     conn = Plug.Test.init_test_session(conn, current_user_id: ctx.n.id)
     {:ok, parent, _} = live(conn, "/m/social?tab=queue&profile=#{ctx.profile.id}")
@@ -156,7 +163,7 @@ defmodule PlatformWeb.SocialMissedApprovalTest do
 
   test "chat approval card describes the miss without a direct late approve control", ctx do
     {post, card} =
-      pending_post!(ctx, ctx.a, %{scheduled_at: DateTime.add(DateTime.utc_now(), -60)})
+      historical_pending_post!(ctx, DateTime.add(DateTime.utc_now(), -60))
 
     html =
       render_component(PlatformWeb.SocialCardComponent,
@@ -176,7 +183,7 @@ defmodule PlatformWeb.SocialMissedApprovalTest do
 
   test "invalid or past replacement times do not decide or publish", %{conn: conn} = ctx do
     {post, card} =
-      pending_post!(ctx, ctx.a, %{scheduled_at: DateTime.add(DateTime.utc_now(), -60)})
+      historical_pending_post!(ctx, DateTime.add(DateTime.utc_now(), -60))
 
     view = open(conn, ctx, "queue")
 
@@ -190,7 +197,7 @@ defmodule PlatformWeb.SocialMissedApprovalTest do
 
   test "a replacement-time submission rechecks revoked approval authority", %{conn: conn} = ctx do
     {post, card} =
-      pending_post!(ctx, ctx.a, %{scheduled_at: DateTime.add(DateTime.utc_now(), -60)})
+      historical_pending_post!(ctx, DateTime.add(DateTime.utc_now(), -60))
 
     view = open(conn, ctx, "queue")
     profile = Repo.get!(Profile, ctx.profile.id)

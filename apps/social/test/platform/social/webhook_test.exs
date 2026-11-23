@@ -24,7 +24,7 @@ defmodule Platform.Social.WebhookTest do
     org_id = org_id!()
     {profile, account} = social_account!(org_id, "linkedin")
     put_secret!(profile.id, @secret)
-    post = approved_post!(org_id, account, %{body: "ship it"})
+    post = historical_approved_post!(org_id, account, %{body: "ship it"})
     {:ok, scheduled} = Publishing.publish_post(org_id, post.id)
     %{org_id: org_id, profile: profile, account: account, post: scheduled}
   end
@@ -75,7 +75,7 @@ defmodule Platform.Social.WebhookTest do
 
     test "no Vault secret for the profile", ctx do
       {other_profile, other_account} = social_account!(ctx.org_id, "linkedin")
-      other = approved_post!(ctx.org_id, other_account)
+      other = historical_approved_post!(ctx.org_id, other_account)
       {:ok, other} = Publishing.publish_post(ctx.org_id, other.id)
       before = row(other)
       payload = body(other.external_id, "published")
@@ -147,7 +147,7 @@ defmodule Platform.Social.WebhookTest do
     test "a delivery naming another profile's post does not change it", ctx do
       {q_profile, q_account} = social_account!(ctx.org_id, "linkedin")
       put_secret!(q_profile.id, "q-secret-not-real")
-      q_post = approved_post!(ctx.org_id, q_account)
+      q_post = historical_approved_post!(ctx.org_id, q_account)
       {:ok, q_post} = Publishing.publish_post(ctx.org_id, q_post.id)
       before = row(q_post)
 

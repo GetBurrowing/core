@@ -156,7 +156,8 @@ struct IntentActions {
         return MeetingRequest(host: host, spaceID: nil, spaceName: nil, projectID: picked.uuid)
     }
 
-    /// Opens the person's DM with the agent, posts the question, then polls
+    /// Opens the person's DM with the agent, posts the question (followed by
+    /// `IntentCopy.askedByVoice`, asking for a short spoken reply), then polls
     /// every `AskAgent.pollInterval` for at most `window`, returning the
     /// first message THAT agent wrote after the question. Anyone else's
     /// message is skipped. After the window: `.timedOut`, and no further
@@ -172,7 +173,10 @@ struct IntentActions {
         let text = question.trimmingCharacters(in: .whitespacesAndNewlines)
         guard !text.isEmpty else { throw IntentFailure.emptyMessage }
         let dm = try await call("agent_dm", ref.host) { try await env.client.dmWithAgent(host: ref.host, agentID: ref.uuid) }
-        let posted = try await call("send_message", ref.host) { try await env.client.sendText(host: ref.host, spaceID: dm.spaceID, text: text) }
+        // The agent is asked for a short plain reply, since Siri reads it aloud.
+        let posted = try await call("send_message", ref.host) {
+            try await env.client.sendText(host: ref.host, spaceID: dm.spaceID, text: IntentCopy.voiceQuestion(text))
+        }
         return try await awaitAgentReply(
             host: ref.host, agentUUID: ref.uuid, spaceID: dm.spaceID, after: posted, window: window, isCancelled: isCancelled,
             progress: progress)
@@ -191,9 +195,16 @@ struct IntentActions {
         let start = env.now()
         func finish(_ outcome: AskOutcome) -> AskOutcome {
             let seconds = Int(env.now().timeIntervalSince(start).rounded())
+            // The count line is info level, which a plain `log show` drops;
+            // the step line (notice) carries the same outcome so the device
+            // proof survives it (task 01a13c1d stage 1).
             switch outcome {
-            case .reply: IntentLog.count("ask_outcome.answered", host: ref.host, count: seconds)
-            case .timedOut: IntentLog.count("ask_outcome.timed_out", host: ref.host, count: seconds)
+            case .reply:
+                IntentLog.count("ask_outcome.answered", host: ref.host, count: seconds)
+                IntentLog.step("ask", "outcome=answered seconds=\(seconds)")
+            case .timedOut:
+                IntentLog.count("ask_outcome.timed_out", host: ref.host, count: seconds)
+                IntentLog.step("ask", "outcome=timed_out seconds=\(seconds)")
             }
             return outcome
         }

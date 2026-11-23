@@ -190,8 +190,14 @@ defmodule Platform.Social.StudioApproveTest do
     end
 
     test "a legacy post is not a studio post", %{w: w} do
+      {:ok, account} = Social.update_account(w.org_id, w.x, %{status: "connected"})
+
       {:ok, legacy} =
-        Social.create_post(w.org_id, w.x, %{body: "legacy", status: "needs_approval"})
+        Social.create_post(w.org_id, account, %{
+          body: "legacy",
+          status: "needs_approval",
+          scheduled_at: DateTime.add(DateTime.utc_now(), 3600)
+        })
 
       assert {:error, :not_studio_post} =
                Studio.approve_version(w.org_id, legacy.id, w.approver.id, expect(legacy))

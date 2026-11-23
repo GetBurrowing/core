@@ -2,7 +2,7 @@ defmodule PlatformWeb.SocialZeroDataComposerAcceptanceTest do
   @moduledoc """
   The composer from zero social data (Social authoring 6/11, task 01a16c50):
   create a profile, save the key, connect a stubbed LinkedIn, compose an
-  idea, Send and approve, and the post is published to the stub.
+  idea, choose a future time, approve, and the post is scheduled at the stub.
 
   Same discipline as `social_zero_data_queue_acceptance_test.exs`: setup
   creates ONLY core rows (a live human member of one live org, a chat
@@ -162,7 +162,7 @@ defmodule PlatformWeb.SocialZeroDataComposerAcceptanceTest do
     child
   end
 
-  test "zero data: profile, key, stubbed LinkedIn, compose, Send and approve, published to the stub",
+  test "zero data: profile, key, stubbed LinkedIn, compose, choose time and approve at the stub",
        %{user: user, channel: channel} do
     stub_zernio()
     stub_llm!()
@@ -229,16 +229,23 @@ defmodule PlatformWeb.SocialZeroDataComposerAcceptanceTest do
                "[data-role='social-preview'][data-platform='linkedin']"
            )
 
-    # (5) Send and approve, as the human who composed it.
+    # (5) Explicit future-time control, then approval as the composing human.
+    child
+    |> form("#composer-edit-#{account.id}", version: %{scheduled_at: "2099-01-02T13:45"})
+    |> render_change()
+
     child |> element("[data-role='composer-send-approve']") |> render_click()
     assert has_element?(child, "[data-role='composer-sent'][data-kind='approved']")
 
-    # (6) Published to the stub, once, for the connected account.
+    # (6) Scheduled at the stub, once, for the connected account.
     assert [{"POST", "/api/v1/posts", _, body}] =
              Enum.filter(drain_requests(), &match?({"POST", "/api/v1/posts", _, _}, &1))
 
     body = Jason.decode!(body)
     assert body["content"] =~ "LinkedIn long-form on the launch."
+    assert {:ok, chosen_time, 0} = DateTime.from_iso8601(body["scheduledFor"])
+    assert DateTime.compare(chosen_time, ~U[2099-01-02 13:45:00Z]) == :eq
+    refute Map.has_key?(body, "publishNow")
     assert [%{"platform" => "linkedin", "accountId" => "zacc_li_c"}] = body["platforms"]
 
     assert [%Idea{source_kind: "human"} = idea] = Repo.all(Idea)

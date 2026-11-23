@@ -449,6 +449,7 @@ defmodule PlatformWeb.SocialClipsLibraryTest do
         external_url: "https://example.com/ig"
       )
 
+    connect!(w.tiktok)
     tt = post!(w, clip, w.tiktok, "failed", error: "TOKEN_EXPIRED", publish_attempts: 2)
     view = open(conn, w.approver, w.profile)
     detail(view, clip)
@@ -468,6 +469,10 @@ defmodule PlatformWeb.SocialClipsLibraryTest do
     refute has_element?(view, "#library-detail", "views")
     refute has_element?(view, "[data-role=library-reconnected]")
     view |> element("[data-post-id='#{tt.id}'] [data-role=library-retry]") |> render_click()
+    assert has_element?(view, "[data-role=library-retry-chooser]", "Choose when to publish")
+    assert Fake.calls(:publish) == []
+    at = future()
+    submit_retry(view, tt, at)
 
     assert [%{id: id}] =
              Enum.map(Fake.calls(:publish), fn {:publish, [_, req], _} ->
@@ -480,7 +485,460 @@ defmodule PlatformWeb.SocialClipsLibraryTest do
     assert retried.status == "scheduled"
     assert retried.publish_attempts == tt.publish_attempts + 1
     assert retried.approved_by_user_id == w.approver.id
+    assert DateTime.compare(retried.scheduled_at, at) == :eq
     refute has_element?(view, "[data-role=library-retry]")
+  end
+
+  defp connect!(account),
+    do: account |> Ecto.Changeset.change(status: "connected") |> Repo.update!()
+
+  # With a stale expectation and with none, the server refuses a timed retry of
+  # a job-bearing post with the same line, so the refusal alone cannot show
+  # which option the caller sent. Trace the call the LiveView makes.
+  defp trace_retry_post(view) do
+    :erlang.trace_pattern({Platform.Social.ClipDecisions, :retry_post, 4}, true, [:global])
+    :erlang.trace(view.pid, true, [:call, {:tracer, self()}])
+
+    on_exit(fn ->
+      :erlang.trace_pattern({Platform.Social.ClipDecisions, :retry_post, 4}, false, [:global])
+    end)
+  end
+
+  defp assert_retry_expected(view, expected) do
+    pid = view.pid
+
+    assert_receive {:trace, ^pid, :call,
+                    {Platform.Social.ClipDecisions, :retry_post, [_, _, _, opts]}},
+                   1000
+
+    assert Keyword.fetch(opts, :expected_external_id) == {:ok, expected}
+  end
+
+  defp submit_retry(view, post, %DateTime{} = at),
+    do: submit_retry(view, post, Calendar.strftime(at, "%Y-%m-%dT%H:%M"))
+
+  defp submit_retry(view, post, value) when is_binary(value),
+    do:
+      view
+      |> form("#library-retry-chooser-#{post.id}", %{"at" => value})
+      |> render_submit()
+
+  defp future(secs \\ 7200),
+    do:
+      DateTime.utc_now()
+      |> DateTime.add(secs)
+      |> DateTime.truncate(:second)
+      |> Map.put(:second, 0)
+
+  defp open_chooser(view, clip, post) do
+    detail(view, clip)
+    view |> element("[data-post-id='#{post.id}'] [data-role=library-retry]") |> render_click()
+  end
+
+  describe "Retry at a new time" do
+    setup %{w: w} do
+      alias Platform.Social.Publisher.Fake
+      Fake.reset()
+      Platform.Social.RateLimit.reset()
+      connect!(w.tiktok)
+      clip = clip!(w, "Chooser clip", %{}, review_status: "approved")
+      post = post!(w, clip, w.tiktok, "failed", error: "TOKEN_EXPIRED", publish_attempts: 1)
+      %{clip: clip, post: post}
+    end
+
+    test "button says Retry at a new time and opens the titled chooser with the zone", %{
+      conn: conn,
+      w: w,
+      clip: clip,
+      post: post
+    } do
+      view = open(conn, w.approver, w.profile)
+      detail(view, clip)
+      assert has_element?(view, "[data-role=library-retry]", "Retry at a new time")
+      refute has_element?(view, "[data-role=library-retry-chooser]")
+      open_chooser(view, clip, post)
+      assert has_element?(view, "[data-role=library-retry-chooser]", "Choose when to publish")
+
+      assert has_element?(
+               view,
+               "[data-role=library-retry-chooser] input[type=datetime-local][name=at]"
+             )
+
+      assert has_element?(view, "[data-role=library-retry-chooser] label", "UTC")
+      assert has_element?(view, "[data-role=library-retry-submit]", "Retry at this time")
+
+      # 44 px touch targets, same min-h-11 pattern as the Queue draft editor
+      assert has_element?(view, "[data-role=library-retry].min-h-11", "Retry at a new time")
+
+      assert has_element?(
+               view,
+               "[data-role=library-retry-chooser] input[type=datetime-local].min-h-11"
+             )
+
+      assert has_element?(view, "[data-role=library-retry-submit].min-h-11")
+      assert has_element?(view, "[data-role=library-retry-cancel].min-h-11")
+      # opening writes nothing and calls nothing
+      assert Repo.get!(Platform.Social.Post, post.id) == post
+      assert Platform.Social.Publisher.Fake.calls(:publish) == []
+    end
+
+    test "submits the chosen time, read in the profile zone, as explicit UTC", %{
+      conn: conn,
+      w: w,
+      clip: clip,
+      post: post
+    } do
+      w.profile |> Ecto.Changeset.change(timezone: "America/Denver") |> Repo.update!()
+      view = open(conn, w.approver, w.profile)
+      open_chooser(view, clip, post)
+      assert has_element?(view, "[data-role=library-retry-chooser] label", "America/Denver")
+
+      local =
+        DateTime.utc_now() |> DateTime.add(5 * 86_400) |> DateTime.shift_zone!("America/Denver")
+
+      value = Calendar.strftime(local, "%Y-%m-%dT12:00")
+      html = submit_retry(view, post, value)
+      saved = Repo.get!(Platform.Social.Post, post.id)
+
+      expected =
+        DateTime.new!(DateTime.to_date(local), ~T[12:00:00], "America/Denver")
+        |> DateTime.shift_zone!("Etc/UTC")
+
+      assert DateTime.compare(saved.scheduled_at, expected) == :eq
+      assert saved.status == "scheduled"
+      assert html =~ "Scheduled for"
+      assert html =~ "12:00"
+      refute has_element?(view, "[data-role=library-retry-chooser]")
+    end
+
+    test "a past time keeps the chooser open with the line and changes nothing", %{
+      conn: conn,
+      w: w,
+      clip: clip,
+      post: post
+    } do
+      view = open(conn, w.approver, w.profile)
+      open_chooser(view, clip, post)
+      submit_retry(view, post, future(-3600))
+      assert has_element?(view, "[data-role=library-retry-chooser]")
+
+      assert has_element?(
+               view,
+               "[data-role=library-retry-error]",
+               "The publish time has passed. Choose a new one."
+             )
+
+      assert Repo.get!(Platform.Social.Post, post.id) == post
+      assert Platform.Social.Publisher.Fake.calls(:publish) == []
+      # no dead end: a good time now works from the same chooser
+      submit_retry(view, post, future())
+      assert Repo.get!(Platform.Social.Post, post.id).status == "scheduled"
+    end
+
+    test "a disconnected account keeps the chooser open with the Reconnect line", %{
+      conn: conn,
+      w: w,
+      clip: clip
+    } do
+      yt_account =
+        Social.list_accounts(w.org_id, profile_id: w.profile.id)
+        |> Enum.find(&(&1.platform == "youtube"))
+
+      yt = post!(w, clip, yt_account, "failed", error: "TOKEN_EXPIRED")
+      view = open(conn, w.approver, w.profile)
+      open_chooser(view, clip, yt)
+      submit_retry(view, yt, future())
+      assert has_element?(view, "[data-role=library-retry-chooser]")
+      assert has_element?(view, "[data-role=library-retry-error] li", "Reconnect the account.")
+      assert Repo.get!(Platform.Social.Post, yt.id) == yt
+    end
+
+    test "a completeness refusal keeps the chooser open with the returned lines", %{
+      conn: conn,
+      w: w,
+      clip: clip,
+      post: post
+    } do
+      post |> Ecto.Changeset.change(body: nil) |> Repo.update!()
+      before = Repo.get!(Platform.Social.Post, post.id)
+      view = open(conn, w.approver, w.profile)
+      open_chooser(view, clip, post)
+      submit_retry(view, post, future())
+      assert has_element?(view, "[data-role=library-retry-chooser]")
+      assert has_element?(view, "[data-role=library-retry-error] li")
+      assert Repo.get!(Platform.Social.Post, post.id) == before
+      assert Platform.Social.Publisher.Fake.calls(:publish) == []
+    end
+
+    test "blank or malformed input is refused without calling retry", %{
+      conn: conn,
+      w: w,
+      clip: clip,
+      post: post
+    } do
+      view = open(conn, w.approver, w.profile)
+      open_chooser(view, clip, post)
+
+      for bad <- ["", "   ", "not-a-time", "2030-13-45T99:99", "2030-01-01"] do
+        event(view, "retry", %{clip_id: clip.id, post_id: post.id, at: bad})
+        assert has_element?(view, "[data-role=library-retry-chooser]")
+        assert has_element?(view, "[data-role=library-retry-error]", "Choose a date and time")
+        assert Repo.get!(Platform.Social.Post, post.id) == post
+      end
+
+      # missing or non-string time never reaches retry either
+      event(view, "retry", %{clip_id: clip.id, post_id: post.id})
+      event(view, "retry", %{clip_id: clip.id, post_id: post.id, at: nil})
+      assert Repo.get!(Platform.Social.Post, post.id) == post
+      assert Platform.Social.Publisher.Fake.calls(:publish) == []
+    end
+
+    test "every Social.retry_post call passes the rendered expected_external_id (source guard)" do
+      src = File.read!("lib/platform_web/live/social_clips_library.ex")
+      assert src =~ "scheduled_at: at_utc"
+      # Every call carries an explicit expectation of the rendered job.
+      calls = Regex.scan(~r/Social\.retry_post\(.*?\)\n/s, src)
+      assert length(calls) == 2
+      assert Enum.all?(calls, fn [c] -> c =~ "expected_external_id:" end)
+      assert src =~ "expected_external_id: nil"
+      assert src =~ ~r/defp retry_existing_job.*?expected_external_id: job_id/s
+    end
+
+    test "failed post with an external_id offers Retry existing publish job and no chooser", %{
+      conn: conn,
+      w: w,
+      clip: clip,
+      post: post
+    } do
+      slot = %{future(3600) | microsecond: {0, 6}}
+
+      post
+      |> Ecto.Changeset.change(external_id: "vendor-job-1", scheduled_at: slot)
+      |> Repo.update!()
+
+      view = open(conn, w.approver, w.profile)
+      detail(view, clip)
+
+      assert has_element?(
+               view,
+               "[data-post-id='#{post.id}'] [data-role=library-retry]",
+               "Retry existing publish job"
+             )
+
+      assert has_element?(
+               view,
+               "[data-role=library-retry].min-h-11",
+               "Retry existing publish job"
+             )
+
+      refute has_element?(view, "[data-role=library-retry]", "Retry at a new time")
+      view |> element("[data-post-id='#{post.id}'] [data-role=library-retry]") |> render_click()
+      refute has_element?(view, "[data-role=library-retry-chooser]")
+      refute has_element?(view, "input[type=datetime-local]")
+
+      saved = Repo.get!(Platform.Social.Post, post.id)
+      assert saved.external_id == "vendor-job-1"
+      # same job: the existing time is untouched, no time was passed
+      assert DateTime.compare(saved.scheduled_at, slot) == :eq
+      assert saved.status in ~w(scheduled approved published)
+      refute render(view) =~ "on its way"
+    end
+
+    test "the existing-job button explains it keeps the scheduled time", %{
+      conn: conn,
+      w: w,
+      clip: clip,
+      post: post
+    } do
+      post |> Ecto.Changeset.change(external_id: "vendor-job-3") |> Repo.update!()
+      view = open(conn, w.approver, w.profile)
+      detail(view, clip)
+
+      assert has_element?(
+               view,
+               "[data-post-id='#{post.id}'] [data-role=library-retry-explainer]",
+               "Retries the existing publish job; this does not change its scheduled time."
+             )
+
+      # A chooser row (no vendor job) has no such line.
+      Platform.Social.Post
+      |> Repo.get!(post.id)
+      |> Ecto.Changeset.change(external_id: nil)
+      |> Repo.update!()
+
+      view = open(conn, w.approver, w.profile)
+      detail(view, clip)
+      refute has_element?(view, "[data-role=library-retry-explainer]")
+    end
+
+    test "a job id that vanished before the click is refused, shown, and the row refreshed", %{
+      conn: conn,
+      w: w,
+      clip: clip,
+      post: post
+    } do
+      post |> Ecto.Changeset.change(external_id: "vendor-job-4") |> Repo.update!()
+      view = open(conn, w.approver, w.profile)
+      detail(view, clip)
+
+      assert has_element?(
+               view,
+               "[data-post-id='#{post.id}'] [data-role=library-retry]",
+               "Retry existing publish job"
+             )
+
+      # The job id is cleared elsewhere after the row was drawn.
+      Platform.Social.Post
+      |> Repo.get!(post.id)
+      |> Ecto.Changeset.change(external_id: nil)
+      |> Repo.update!()
+
+      before = Repo.get!(Platform.Social.Post, post.id)
+      view |> element("[data-post-id='#{post.id}'] [data-role=library-retry]") |> render_click()
+
+      assert render(view) =~ "The publish job changed, so nothing was retried."
+      assert Repo.get!(Platform.Social.Post, post.id) == before
+      assert Platform.Social.Publisher.Fake.calls(:publish) == []
+      # Refreshed: the row now offers the new-time retry, not the stale button.
+      assert has_element?(
+               view,
+               "[data-post-id='#{post.id}'] [data-role=library-retry]",
+               "Retry at a new time"
+             )
+
+      refute has_element?(view, "[data-role=library-retry]", "Retry existing publish job")
+    end
+
+    test "job A rendered, replaced by B before the click: refused, nothing retried", %{
+      conn: conn,
+      w: w,
+      clip: clip,
+      post: post
+    } do
+      alias Platform.Social.{Post, Publisher.Fake}
+      Fake.reset()
+      post |> Ecto.Changeset.change(external_id: "vendor-job-A") |> Repo.update!()
+      view = open(conn, w.approver, w.profile)
+      detail(view, clip)
+
+      assert has_element?(
+               view,
+               "[data-post-id='#{post.id}'] [data-role=library-retry]",
+               "Retry existing publish job"
+             )
+
+      # A different job id lands after the row was drawn, before the click.
+      Post
+      |> Repo.get!(post.id)
+      |> Ecto.Changeset.change(external_id: "vendor-job-B")
+      |> Repo.update!()
+
+      before = Repo.get!(Post, post.id)
+      trace_retry_post(view)
+
+      view |> element("[data-post-id='#{post.id}'] [data-role=library-retry]") |> render_click()
+
+      assert_retry_expected(view, "vendor-job-A")
+      assert render(view) =~ "The publish job changed, so nothing was retried."
+      assert Repo.get!(Post, post.id) == before
+      assert Repo.get!(Post, post.id).status == "failed"
+      assert Fake.calls(:publish) == []
+    end
+
+    test "no job rendered, job B appears before the timed retry: refused, nothing retried", %{
+      conn: conn,
+      w: w,
+      clip: clip,
+      post: post
+    } do
+      alias Platform.Social.{Post, Publisher.Fake}
+      Fake.reset()
+      view = open(conn, w.approver, w.profile)
+      open_chooser(view, clip, post)
+      assert has_element?(view, "[data-role=library-retry-chooser]", "Choose when to publish")
+
+      Post
+      |> Repo.get!(post.id)
+      |> Ecto.Changeset.change(external_id: "vendor-job-B")
+      |> Repo.update!()
+
+      before = Repo.get!(Post, post.id)
+      trace_retry_post(view)
+
+      submit_retry(view, post, future())
+
+      assert_retry_expected(view, nil)
+      assert render(view) =~ "The publish job changed, so nothing was retried."
+      assert Repo.get!(Post, post.id) == before
+      assert Repo.get!(Post, post.id).status == "failed"
+      assert Fake.calls(:publish) == []
+    end
+
+    test "the server's changed-job refusal reads the same on screen" do
+      assert PlatformWeb.SocialClipsLibrary.retry_refusal(:publish_job_changed) ==
+               [
+                 "The publish job changed, so nothing was retried. The status below is up to date."
+               ]
+    end
+
+    test "a forged time on an external_id post neither reschedules nor retries", %{
+      conn: conn,
+      w: w,
+      clip: clip,
+      post: post
+    } do
+      post |> Ecto.Changeset.change(external_id: "vendor-job-2") |> Repo.update!()
+      before = Repo.get!(Platform.Social.Post, post.id)
+      view = open(conn, w.approver, w.profile)
+      detail(view, clip)
+      event(view, "retry_open", %{clip_id: clip.id, post_id: post.id})
+      refute has_element?(view, "[data-role=library-retry-chooser]")
+
+      event(view, "retry", %{clip_id: clip.id, post_id: post.id, at: "2099-01-01T10:00"})
+      assert Repo.get!(Platform.Social.Post, post.id) == before
+      assert Platform.Social.Publisher.Fake.calls(:publish) == []
+    end
+
+    test "blank external_id keeps Retry at a new time and the chooser", %{
+      conn: conn,
+      w: w,
+      clip: clip,
+      post: post
+    } do
+      post |> Ecto.Changeset.change(external_id: "  ") |> Repo.update!()
+      view = open(conn, w.approver, w.profile)
+      open_chooser(view, clip, post)
+      assert has_element?(view, "[data-role=library-retry]", "Retry at a new time")
+      assert has_element?(view, "[data-role=library-retry-chooser] input[name=at]")
+      refute has_element?(view, "[data-role=library-retry]", "Retry existing publish job")
+    end
+
+    test "a reader or agent sees no chooser and a forged open writes nothing", %{
+      conn: conn,
+      w: w,
+      clip: clip,
+      post: post
+    } do
+      reader = member!(user!(), w.org_id)
+      view = open(conn, reader, w.profile)
+      detail(view, clip)
+      refute has_element?(view, "[data-role=library-retry]")
+      event(view, "retry_open", %{clip_id: clip.id, post_id: post.id})
+      refute has_element?(view, "[data-role=library-retry-chooser]")
+      event(view, "retry", %{clip_id: clip.id, post_id: post.id, at: "2099-01-01T10:00"})
+      assert Repo.get!(Platform.Social.Post, post.id) == post
+      assert Platform.Social.Publisher.Fake.calls(:publish) == []
+    end
+
+    test "a published or cancelled post offers no chooser", %{conn: conn, w: w, clip: clip} do
+      cancelled = post!(w, clip, w.ig, "failed", error: "cancelled before publishing")
+      view = open(conn, w.approver, w.profile)
+      detail(view, clip)
+      event(view, "retry_open", %{clip_id: clip.id, post_id: cancelled.id})
+      event(view, "retry", %{clip_id: clip.id, post_id: cancelled.id, at: "2099-01-01T10:00"})
+      assert Repo.get!(Platform.Social.Post, cancelled.id) == cancelled
+      assert Platform.Social.Publisher.Fake.calls(:publish) == []
+    end
   end
 
   test "detail shows recorded renderer, reviewer, rejection note and Review path without invented source",

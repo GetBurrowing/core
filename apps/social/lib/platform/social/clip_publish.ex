@@ -4,11 +4,14 @@ defmodule Platform.Social.ClipPublish do
   Posts retain their explicit `clip_render_id`, media and text from approval;
   sweeps, retries and undo never resolve the clip's latest render.
 
-  `Platform.Social.ClipDecisions.approve_clip/5` writes one approved post per
-  selected account with `publish_after` = the decision time + `window_ms/0`
-  (8s). Nothing publishes before then; inside the window
-  `undo_clip_decision/4` deletes the posts. This server publishes them once
-  the window has closed. There is no client timer and no second approval.
+  Until the B3 clip integration, `ClipDecisions.approve_clip/5` wrote one
+  approved post per selected account with `publish_after` = the decision
+  time + `window_ms/0` (8s). That entry is gone: choosing a clip now writes
+  `draft` posts (`ClipDecisions.draft_clip/5`) with no `publish_after`, and
+  this server never selects them (it takes only `approved` posts). It
+  remains for approved clip posts that earlier releases left in their window
+  or in the database, and `undo_clip_decision/4` still deletes those inside
+  it. There is no client timer and no second approval.
 
   Core has no job runner (no Oban), so this is Social's, shaped like
   `Platform.Social.RateLimit`'s and `Platform.Social.PublishRetry`'s sweeps:

@@ -241,7 +241,11 @@ defmodule Platform.Social.AccountOwnerTest do
   describe "an unowned account" do
     test "is unchanged: any profile approver approves, a non-approver is refused", ctx do
       {:ok, unowned} =
-        Social.create_account(ctx.org_id, ctx.profile, %{platform: "x", handle: "@htc_x"})
+        Social.create_account(ctx.org_id, ctx.profile, %{
+          platform: "x",
+          handle: "@htc_x",
+          status: "connected"
+        })
 
       {post, card} = pending_post!(ctx, unowned)
       assert Repo.get!(Account, unowned.id).owner_user_id == nil

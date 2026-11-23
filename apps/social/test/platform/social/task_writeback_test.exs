@@ -18,6 +18,15 @@ defmodule Platform.Social.TaskWritebackTest do
     Fake.reset()
     RateLimit.reset()
     w = bridge_world!()
+
+    w =
+      Enum.reduce([:linkedin, :x], w, fn key, world ->
+        {:ok, account} =
+          Social.update_account(world.org_id, Map.fetch!(world, key), %{status: "connected"})
+
+        Map.put(world, key, account)
+      end)
+
     seg = segment_id()
     candidate!(w.meeting, seg)
     {:ok, %{task: task, request: req}} = TaskBridge.request(w.scope, w.ctx, meeting_ask(w, [seg]))
@@ -29,6 +38,7 @@ defmodule Platform.Social.TaskWritebackTest do
       AgentDrafts.create_agent_drafts(w.scope, w.profile.id, %{
         "account_ids" => Enum.map(accounts, & &1.id),
         "body" => "the doomsday clock bit",
+        "scheduled_at" => DateTime.utc_now() |> DateTime.add(3600) |> DateTime.to_iso8601(),
         "task_id" => task.id
       })
 
@@ -227,7 +237,8 @@ defmodule Platform.Social.TaskWritebackTest do
       {:ok, [loose]} =
         AgentDrafts.create_agent_drafts(w.scope, w.profile.id, %{
           "account_ids" => [w.x.id],
-          "body" => "no task"
+          "body" => "no task",
+          "scheduled_at" => DateTime.utc_now() |> DateTime.add(3600) |> DateTime.to_iso8601()
         })
 
       assert TaskBridge.post_changed(loose.id) == :noop
@@ -238,6 +249,7 @@ defmodule Platform.Social.TaskWritebackTest do
         AgentDrafts.create_agent_drafts(w.scope, w.profile.id, %{
           "account_ids" => [w.x.id],
           "body" => "plain task",
+          "scheduled_at" => DateTime.utc_now() |> DateTime.add(3600) |> DateTime.to_iso8601(),
           "task_id" => plain.id
         })
 

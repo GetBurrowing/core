@@ -174,6 +174,15 @@ defmodule Platform.Extensions do
     if implements?(ext, :briefing_sections, 0), do: ext.briefing_sections(), else: []
   end
 
+  @doc "Optional extension contributions used only by the human calendar page."
+  def calendar_day_entries(user_id, from, to, zone) do
+    Enum.flat_map(list(), fn ext ->
+      if implements?(ext, :calendar_day_entries, 4),
+        do: ext.calendar_day_entries(user_id, from, to, zone),
+        else: []
+    end)
+  end
+
   @doc """
   Whether any extension claims the goal of the chat space `space_id`
   (`claims_space_goal?/1` is optional), read per call.

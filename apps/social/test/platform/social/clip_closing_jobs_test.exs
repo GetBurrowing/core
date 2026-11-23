@@ -147,7 +147,7 @@ defmodule Platform.Social.ClipClosingJobsTest do
     assert Platform.Social.ClosingVideoSnapshot.dump(base.closing_video) == contract
 
     assert {:ok, %{posts: [approved_post]}} =
-             Platform.Social.approve_clip(
+             Platform.Social.LegacyClipApproval.approve_clip(
                c.w.org_id,
                completed.id,
                c.w.approver.id,
