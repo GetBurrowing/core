@@ -1314,7 +1314,12 @@ defmodule PlatformWeb.SocialComposer do
         <p :if={@column.result} class="text-sm font-medium" data-role="composer-result">
           {if @column.result.kind == :saved, do: "Saved as a draft", else: "Sent for review"}
         </p>
-        <ul :if={@column.review_errors != []} class="text-sm text-error" role="alert" data-role="composer-review-error">
+        <ul
+          :if={@column.review_errors != []}
+          class="text-sm text-error"
+          role="alert"
+          data-role="composer-review-error"
+        >
           <li :for={line <- @column.review_errors}>{line}</li>
         </ul>
         <p
