@@ -129,8 +129,12 @@ defmodule Platform.Social.ClipVersionsTest do
     assert {:error, :not_found} =
              ClipVersions.get(w.scope, same_org_profile.id, w.clip.id, first.id)
 
+    other_file = stored_file!(w.project, "another clip #{unique()}", "other.mp4", "video/mp4")
+
     {:ok, other_clip} =
-      AgentDrafts.submit_clip(w.scope, w.profile.id, %{file_id: w.original_file.id}, w.agent.id)
+      AgentDrafts.submit_clip(w.scope, w.profile.id, %{file_id: other_file.id}, w.agent.id)
+
+    assert other_clip.id != w.clip.id
 
     assert {:error, :not_found} = ClipVersions.get(w.scope, w.profile.id, other_clip.id, first.id)
   end
