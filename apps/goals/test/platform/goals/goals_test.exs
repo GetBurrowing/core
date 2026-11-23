@@ -276,7 +276,12 @@ defmodule Platform.Goals.GoalsTest do
        "the update is restricted to gr.goal_id in subquery(visible_goals(coach)), and the " <>
          "grant came from space_grants(coach, goal_id)"},
       {"platform/goals/space_updates.ex", {:number_now, 3},
-       "the query inner-joins subquery(Visibility.visible_goals(coach)), so it is scoped"}
+       "the query inner-joins subquery(Visibility.visible_goals(coach)), so it is scoped"},
+      {"platform/goals/conversation.ex", {:goal_row, 2},
+       "locks or re-reads the goal of a %Goal{} the caller already loaded through an " <>
+         "actor-scoped read (confirm_proposal/3's create_goal/2, update_goal/3's " <>
+         "fetch_visible); Conversation takes no actor and returns only the goal's own " <>
+         "space (task 01a20939)"}
     ]
 
     defp by_id_reads(source) do
@@ -466,8 +471,11 @@ defmodule Platform.Goals.GoalsTest do
     test "only the audited context, visibility, the clock and the space claim bind goals" do
       # The two actor-less queries are Clock.due/2 and SpaceClaim.claimed?/1
       # (Goals 7/8 stage 4), which returns a boolean and nothing else.
+      # Conversation.goal_row/2 (task 01a20939) locks or re-reads a goal its
+      # caller already loaded through an actor-scoped read; see
+      # @unscoped_by_id_allowed.
       allowed =
-        ~w(platform/goals.ex platform/goals/visibility.ex platform/goals/clock.ex platform/goals/space_claim.ex)
+        ~w(platform/goals.ex platform/goals/visibility.ex platform/goals/clock.ex platform/goals/space_claim.ex platform/goals/conversation.ex)
 
       found =
         for file <- Path.wildcard(Path.join(@lib, "**/*.ex")),

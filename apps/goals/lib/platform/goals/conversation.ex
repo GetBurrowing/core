@@ -80,7 +80,7 @@ defmodule Platform.Goals.Conversation do
   """
   @spec link(Goal.t(), binary()) :: {:ok, Goal.t()} | {:error, term()}
   def link(%Goal{} = goal, space_id) when is_binary(space_id) do
-    with %Space{} = space <- Repo.get(Space, space_id),
+    with %Space{} = space <- Repo.one(from(s in Space, where: s.id == ^space_id)),
          {:ok, _space} <- tag(space, goal.id) do
       goal
       |> Ecto.Changeset.change(conversation_space_id: space.id)
@@ -108,7 +108,7 @@ defmodule Platform.Goals.Conversation do
       Repo.transaction(fn ->
         lock_clock(goal_id)
 
-        case lock_goal(goal_id) do
+        case goal_row(goal_id, :lock) do
           nil -> Repo.rollback(:not_found)
           goal -> ensure_locked(goal)
         end
@@ -138,7 +138,7 @@ defmodule Platform.Goals.Conversation do
 
   defp lost_race(goal_id, changeset) do
     if Keyword.has_key?(changeset.errors, :conversation_space_id) do
-      with %Goal{conversation_space_id: id} when is_binary(id) <- Repo.get(Goal, goal_id),
+      with %Goal{conversation_space_id: id} when is_binary(id) <- goal_row(goal_id, :read),
            %Space{} = space <- live_space(id) do
         {:ok, space}
       else
@@ -150,7 +150,7 @@ defmodule Platform.Goals.Conversation do
   end
 
   defp new_space(%Goal{} = goal) do
-    case Repo.get(User, goal.owner_user_id) do
+    case Repo.one(from(u in User, where: u.id == ^goal.owner_user_id)) do
       %User{} = owner ->
         create_space(owner, coach(goal), goal.org_id, %{"goal_id" => goal.id})
 
@@ -234,12 +234,18 @@ defmodule Platform.Goals.Conversation do
     Repo.one(from(c in GoalClock, where: c.goal_id == ^goal_id, lock: "FOR UPDATE"))
   end
 
-  defp lock_goal(goal_id) do
-    Repo.one(from(g in Goal, where: g.id == ^goal_id, lock: "FOR UPDATE"))
-  end
+  # The one by-id read of a goal here, actor-less by design: every caller of
+  # this module passes a %Goal{} it already loaded through an actor-scoped
+  # read (create_goal/2 in confirm_proposal/3, fetch_visible in update_goal/3),
+  # so the id is one the caller may see. Allowed in goals_test.exs's source
+  # guard with that reason.
+  defp goal_row(goal_id, :lock),
+    do: Repo.one(from(g in Goal, where: g.id == ^goal_id, lock: "FOR UPDATE"))
+
+  defp goal_row(goal_id, :read), do: Repo.one(from(g in Goal, where: g.id == ^goal_id))
 
   defp coach(%Goal{coach_agent_id: nil}), do: nil
-  defp coach(%Goal{coach_agent_id: id}), do: Repo.get(Agent, id)
+  defp coach(%Goal{coach_agent_id: id}), do: Repo.one(from(a in Agent, where: a.id == ^id))
 
   defp member?(%Participant{participant_type: type, participant_id: id}, type, id), do: true
   defp member?(_row, _type, _id), do: false
