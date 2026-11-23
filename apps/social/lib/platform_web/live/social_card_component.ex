@@ -645,17 +645,15 @@ defmodule PlatformWeb.SocialCardComponent do
         class="w-full space-y-2 rounded-lg border border-edge bg-base-100 p-3"
       >
         <div :for={m <- @view.media} data-role="social-card-media" class="w-full">
-          <video
+          <PlatformWeb.SocialVideo.player
             :if={String.starts_with?(m.content_type || "", "video/")}
+            id={"social-card-video-#{@view.card_id}-#{:erlang.phash2(m.src)}"}
             src={m.src <> (m[:fragment] || "")}
             poster={m[:poster] || nil}
-            controls
-            playsinline
-            preload="metadata"
-            class="mx-auto block max-h-80 w-auto max-w-full rounded"
-            style={aspect(m)}
-          >
-          </video>
+            class="mx-auto max-w-full rounded"
+            video_class="mx-auto block max-h-80 w-auto max-w-full rounded"
+            video_style={aspect(m)}
+          />
           <img
             :if={!String.starts_with?(m.content_type || "", "video/")}
             src={m.src}

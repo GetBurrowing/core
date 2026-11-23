@@ -50,6 +50,36 @@ defmodule PlatformWeb.SocialPreviewTest do
     |> LazyHTML.text()
   end
 
+  for platform <- ~w(linkedin x instagram youtube tiktok) do
+    test "#{platform} video waits for Play and exposes native controls", %{conn: conn} do
+      view =
+        mount_preview(conn, %{platform: unquote(platform), body: "A local clip", media: [@video]})
+
+      assert has_element?(
+               view,
+               "[phx-hook='SocialVideo'][data-src='/files/blob/vid'] video[preload='none'][controls][playsinline]:not([src])"
+             )
+
+      refute has_element?(view, "video[autoplay]")
+      assert has_element?(view, "button[data-role=video-play].min-h-11.min-w-11", "Play video")
+    end
+  end
+
+  test "deferred video keeps its uploaded poster and selected frame", %{conn: conn} do
+    view =
+      mount_preview(conn, %{
+        platform: "youtube",
+        body: "A local clip",
+        media: [%{@video | src: "/files/blob/vid#t=1"}],
+        cover: "/files/blob/cover"
+      })
+
+    assert has_element?(
+             view,
+             "[data-src='/files/blob/vid#t=1'] video[preload='none'][poster='/files/blob/cover']:not([src])"
+           )
+  end
+
   @long String.duplicate("abcd ", 200)
 
   for platform <- ~w(linkedin instagram youtube tiktok) do
