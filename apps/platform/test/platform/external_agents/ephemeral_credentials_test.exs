@@ -93,6 +93,10 @@ defmodule Platform.ExternalAgents.EphemeralCredentialsTest do
         wait_for_restart(old_pid, attempts - 1)
 
       pid when is_pid(pid) ->
+        # Registration precedes init; use the remaining polling budget to
+        # wait until this process has created and owns the replacement table.
+        :sys.get_state(pid, attempts * 20)
+        assert :ets.info(:external_agents_ephemeral_credentials, :owner) == pid
         pid
     end
   end
