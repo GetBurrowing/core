@@ -31,7 +31,7 @@ defmodule Platform.Social.Cover do
 
   @fields [:cover_file_id, :cover_offset_ms]
   @image_types ~w(image/jpeg image/png)
-  @editable_statuses ~w(draft needs_approval)
+  @editable_statuses ~w(draft quality_review needs_approval)
 
   @both "choose either an uploaded cover or a frame, not both"
   @not_video "a cover applies only to a video post"

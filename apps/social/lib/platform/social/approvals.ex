@@ -23,7 +23,9 @@ defmodule Platform.Social.Approvals do
 
   Each `decide_*` call, in ONE transaction:
 
-    1. locks the card by the CLICKED canvas id (`FOR UPDATE`); a canvas
+    1. preflights the card/post identifiers, then locks the profile and
+       account for share before the card/post locks (the global lock order);
+       locks the card by the CLICKED canvas id (`FOR UPDATE`); a canvas
        without a card is `:not_a_social_card` (a lookalike an agent made);
     2. requires the card `pending`, else `:already_decided`;
     3. compares the canvas document's digest with the stored `card_digest`,
@@ -65,7 +67,16 @@ defmodule Platform.Social.Approvals do
   alias Platform.Chat
   alias Platform.Repo
   alias Platform.Social
-  alias Platform.Social.{Account, ApprovalCard, OwnerDm, Post, PostEvents, Publishing}
+
+  alias Platform.Social.{
+    Account,
+    ApprovalCard,
+    OwnerDm,
+    Post,
+    PostEvents,
+    Publishing,
+    QualityReview
+  }
 
   @kind "social_post_approval"
   @source_type "social_post"
@@ -124,6 +135,7 @@ defmodule Platform.Social.Approvals do
          %Post{status: "needs_approval"} = post <- Repo.get(Post, post.id),
          :ok <- Social.refuse_studio(post),
          {:ok, profile} <- Social.profile_of_post(post),
+         :ok <- QualityReview.check_approval(profile, post),
          {:ok, account} <- fetch_account(post),
          :ok <- Social.require_channel("needs_approval", profile, account),
          :ok <- request_completeness(post, account) do
@@ -577,6 +589,7 @@ defmodule Platform.Social.Approvals do
   defp do_approve(canvas_id, clicker, shown_fingerprint, at) do
     approve = fn card, post, account, profile, user_id ->
       with :ok <- refuse_draft_only(account),
+           :ok <- QualityReview.check_approval(profile, post),
            # decide/5 has acquired the locks and checked current authority.
            # Refuse an already-expired effective time before claim/time writes.
            :ok <-
@@ -623,8 +636,9 @@ defmodule Platform.Social.Approvals do
 
   @doc """
   A human approver edits the post's text from the card. Only `body`
-  changes; the post stays `needs_approval`, the card stays pending (with
-  `edited_by`), and the inbox rows stay.
+  changes; a gated post returns to quality review and its old final card is
+  superseded. Otherwise the post stays `needs_approval`, the card stays
+  pending (with `edited_by`), and the inbox rows stay.
   """
   @spec decide_edit(Ecto.UUID.t(), map(), map(), String.t() | nil) ::
           {:ok, map()} | {:error, refusal() | term()}
@@ -633,7 +647,11 @@ defmodule Platform.Social.Approvals do
     body = Map.get(attrs, :body) || Map.get(attrs, "body")
 
     edit = fn card, post, _account, profile, user_id ->
-      with {:ok, edited} <- post |> Post.human_edit_changeset(%{body: body}) |> Repo.update(),
+      with {:ok, edited} <-
+             post
+             |> Post.human_edit_changeset(%{body: body})
+             |> QualityReview.route_submission(profile)
+             |> Repo.update(),
            _event =
              PostEvents.record!(edited, "edited", {:human, user_id},
                body_before: post.body,
@@ -646,9 +664,11 @@ defmodule Platform.Social.Approvals do
 
     result = decide(:edit, canvas_id, clicker, shown_fingerprint, edit)
 
-    with {:ok, {card, edited, _profile}} <- result,
-         {:ok, card} <- rerender(card) do
-      {:ok, %{post: edited, card: card}}
+    with {:ok, {card, edited, _profile}} <- result do
+      if edited.status == "quality_review", do: Social.needs_approval_written(edited)
+      card = Repo.get!(ApprovalCard, card.id)
+
+      with {:ok, card} <- rerender(card), do: {:ok, %{post: edited, card: card}}
     end
   end
 
@@ -697,26 +717,47 @@ defmodule Platform.Social.Approvals do
     # transaction's connection would otherwise starve.
     live = live_document(canvas_id)
 
-    Repo.transaction(fn ->
-      with {:ok, card} <- lock_card(canvas_id),
-           :ok <- refuse_not_pending(card),
-           :ok <- check_digest(card, live),
-           {:ok, post} <- lock_post(card.post_id),
-           :ok <- Social.refuse_studio(post),
-           :ok <- refuse_not_needs_approval(post),
-           :ok <- check_fingerprint(post, shown_fingerprint),
-           {:ok, account} <- fetch_account(post),
-           {:ok, profile} <- Social.profile_of_post(post),
-           :ok <- decide_check(action, profile, account, user_id) do
-        case body.(card, post, account, profile, user_id) do
-          {:error, %Changeset{} = changeset} -> Repo.rollback(changeset_reason(changeset))
+    with {:ok, observed} <- decision_context(canvas_id) do
+      Repo.transaction(fn ->
+        with profile when not is_nil(profile) <-
+               Social.lock_profile(observed.profile.org_id, observed.profile.id, :share),
+             %Account{} = account <-
+               Social.lock_account(profile, observed.post.account_id, :share),
+             {:ok, card} <- lock_card(canvas_id),
+             true <- card.post_id == observed.post.id || {:error, :post_changed},
+             :ok <- refuse_not_pending(card),
+             :ok <- check_digest(card, live),
+             {:ok, post} <- lock_post(card.post_id),
+             true <- post.account_id == account.id || {:error, :post_changed},
+             :ok <- Social.refuse_studio(post),
+             :ok <- refuse_not_needs_approval(post),
+             :ok <- check_fingerprint(post, shown_fingerprint),
+             :ok <- decide_check(action, profile, account, user_id) do
+          case body.(card, post, account, profile, user_id) do
+            {:error, %Changeset{} = changeset} -> Repo.rollback(changeset_reason(changeset))
+            {:error, reason} -> Repo.rollback(reason)
+            result -> result
+          end
+        else
           {:error, reason} -> Repo.rollback(reason)
-          result -> result
+          _ -> Repo.rollback(:not_found)
         end
-      else
-        {:error, reason} -> Repo.rollback(reason)
-      end
-    end)
+      end)
+    end
+  end
+
+  # Preflight identifiers establish which profile to lock, never authority.
+  # The card/post binding and actor are checked again on locked rows above.
+  defp decision_context(canvas_id) do
+    with {:ok, id} <- Ecto.UUID.cast(canvas_id),
+         %ApprovalCard{} = card <- Repo.get_by(ApprovalCard, canvas_id: id),
+         %Post{} = post <- Repo.get(Post, card.post_id),
+         {:ok, profile} <- Social.profile_of_post(post) do
+      {:ok, %{post: post, profile: profile}}
+    else
+      {:error, _} = error -> error
+      _ -> {:error, :not_a_social_card}
+    end
   end
 
   # Task 01a14ce1: the owner rule. Approve and edit need the account's owner
@@ -915,6 +956,12 @@ defmodule Platform.Social.Approvals do
       base = %{
         found: true,
         card_id: card.id,
+        post_id: post.id,
+        org_id: profile.org_id,
+        quality_required?:
+          card.state == "pending" and post.status == "needs_approval" and
+            QualityReview.check_approval(profile, post) != :ok,
+        quality_pass: quality_pass(post),
         state: card.state,
         status: status_line(card, post, account),
         profile_name: profile.name,
@@ -958,6 +1005,8 @@ defmodule Platform.Social.Approvals do
             })
         end
 
+      view = quality_actions(view, card, post, profile, account, viewer)
+
       if Map.has_key?(view, :queue_url) and presentation[:post_url],
         do: Map.put(view, :queue_url, presentation.post_url),
         else: view
@@ -970,6 +1019,38 @@ defmodule Platform.Social.Approvals do
         }
     end
   end
+
+  defp quality_pass(post) do
+    if QualityReview.valid_pass?(post),
+      do: %{name: user_name(post.quality_passed_by_user_id), at: post.quality_passed_at}
+  end
+
+  defp quality_actions(%{quality_required?: true} = view, card, post, profile, account, viewer) do
+    view =
+      if Map.has_key?(view, :actions),
+        do:
+          Map.update!(
+            view,
+            :actions,
+            &Enum.reject(&1, fn action -> action in [:approve, :copy] end)
+          ),
+        else: view
+
+    if card.state == "pending" and post.status == "needs_approval" and
+         match?({:user, _}, viewer) and
+         Social.post_preparer_check(profile.org_id, profile, account, elem(viewer, 1)) == :ok do
+      Map.update(
+        view,
+        :actions,
+        [:return_to_quality_review],
+        &(&1 ++ [:return_to_quality_review])
+      )
+    else
+      view
+    end
+  end
+
+  defp quality_actions(view, _card, _post, _profile, _account, _viewer), do: view
 
   # ── Refused publish (task 01a165f1) ──────────────────────────────────
 

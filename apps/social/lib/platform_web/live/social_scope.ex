@@ -55,6 +55,7 @@ defmodule PlatformWeb.SocialScope do
 
     socket
     |> assign(:profiles, profiles)
+    |> assign(:quality_counts, Social.quality_review_counts(Enum.map(profiles, & &1.id)))
     |> assign(:legacy_counts, legacy_counts)
     |> assign(:counts, counts)
     |> SocialTopBar.assign_status()

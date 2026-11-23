@@ -1261,9 +1261,10 @@ defmodule Platform.Social.Tools do
   defp error_envelope({:error, :status_not_allowed}) do
     err(
       :status_not_allowed,
-      "status not allowed: an agent may set only draft or needs_approval. " <> @human,
+      "status not allowed: an agent may set draft or needs_approval, or quality_review on a brand with quality reviewers. " <>
+        @human,
       true,
-      "Omit status (it defaults to needs_approval) or pass draft."
+      "Omit status to request review (quality_review on a brand with quality reviewers, otherwise needs_approval), or pass draft."
     )
   end
 
@@ -1298,7 +1299,7 @@ defmodule Platform.Social.Tools do
   defp error_envelope({:error, :post_locked}) do
     err(
       :post_locked,
-      "post locked: it is past needs_approval and can no longer be edited by an agent. " <>
+      "post locked: it is past review and can no longer be edited by an agent. " <>
         @human,
       false,
       "Draft a new post with social_draft_create if a change is needed."

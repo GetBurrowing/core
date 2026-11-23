@@ -265,6 +265,8 @@ defmodule PlatformWeb.SocialIdeaCard do
       canvas_id: card && card.canvas_id,
       role: Map.get(view, :role, :viewer),
       actions: actions,
+      quality_required?: Map.get(view, :quality_required?, false),
+      quality_pass: Map.get(view, :quality_pass),
       state: Map.get(view, :state),
       status: Map.get(view, :status),
       owner_name: Map.get(view, :owner_name),
@@ -443,6 +445,23 @@ defmodule PlatformWeb.SocialIdeaCard do
     end)
   end
 
+  defp handle_current_event("q_return_quality", %{"post-id" => id}, socket) do
+    decide(socket, id, fn user, v ->
+      if :return_to_quality_review in v.actions do
+        case Platform.Social.return_to_quality_review(v.profile.org_id, v.post.id, user.id) do
+          {:ok, post} = result ->
+            send(self(), {PlatformWeb.SocialDraftCard, :quality_sent, post.id})
+            result
+
+          error ->
+            error
+        end
+      else
+        {:error, :not_an_approver}
+      end
+    end)
+  end
+
   defp handle_current_event("q_edit_open", %{"post-id" => id}, socket),
     do: {:noreply, open_mode(socket, :edit, id, :edit, fn v -> v.post.body || "" end)}
 
@@ -568,6 +587,14 @@ defmodule PlatformWeb.SocialIdeaCard do
         true -> fun.(user, v)
       end
 
+    case result do
+      {:ok, %{post: %{status: "quality_review", id: id}}} ->
+        send(self(), {PlatformWeb.SocialDraftCard, :quality_sent, id})
+
+      _ ->
+        :ok
+    end
+
     socket =
       case result do
         {:ok, _} ->
@@ -591,6 +618,18 @@ defmodule PlatformWeb.SocialIdeaCard do
   end
 
   defp all_ids(socket), do: Enum.map(socket.assigns.approvable, & &1.post.id)
+
+  defp copy(:quality_review_required, socket, post_id) do
+    case find(socket, post_id) do
+      %{post: %{status: status, refused_reason: refused}}
+      when status == "failed" or
+             (status == "approved" and not is_nil(refused)) ->
+        "This older post has no valid quality pass. Its publishing outcome needs separate investigation before a new job can be started."
+
+      _ ->
+        PlatformWeb.SocialCardComponent.refusal_copy(:quality_review_required)
+    end
+  end
 
   defp copy(reason, _socket, _post_id) when is_atom(reason) and is_map_key(@refusals, reason),
     do: Map.fetch!(@refusals, reason)
@@ -905,6 +944,15 @@ defmodule PlatformWeb.SocialIdeaCard do
       >
         {@v.label} · {(@v.status && @v.status.text) || "Needs approval"}
       </p>
+      <p :if={@v.quality_required?} data-role="quality-required" class="text-sm text-base-content">
+        This needs a quality review before it can be approved.
+      </p>
+      <p :if={@v.quality_pass} data-role="quality-pass-badge" class="text-sm text-base-content">
+        Quality review: {@v.quality_pass.name},
+        <time datetime={DateTime.to_iso8601(@v.quality_pass.at)}>
+          {Calendar.strftime(@v.quality_pass.at, "%a %d %b, %H:%M UTC")}
+        </time>
+      </p>
       <p
         :if={@v.content? and @v.review_fields? and @v.account.platform == "youtube"}
         data-role="publishing-title"
@@ -1100,6 +1148,18 @@ defmodule PlatformWeb.SocialIdeaCard do
   defp actions(assigns) do
     ~H"""
     <div data-role="queue-actions" class="flex flex-wrap items-center gap-2">
+      <button
+        :if={:return_to_quality_review in @v.actions}
+        type="button"
+        phx-click="q_return_quality"
+        phx-value-post-id={@v.post.id}
+        phx-target={@myself}
+        data-role="queue-return-quality"
+        data-post-id={@v.post.id}
+        class="btn btn-primary min-h-11"
+      >
+        Send to quality review
+      </button>
       <p
         :if={:approve in @v.actions and not @v.missed? and @v.dom == "queue"}
         data-role="queue-approval-consequence"
@@ -1325,6 +1385,17 @@ defmodule PlatformWeb.SocialIdeaCard do
           Approval submits to the connected account immediately if no future time is set.
         </p>
         <div class="flex items-center gap-2">
+          <button
+            :if={:return_to_quality_review in @v.actions}
+            type="button"
+            phx-click="q_return_quality"
+            phx-value-post-id={@v.post.id}
+            phx-target={@myself}
+            data-role="queue-bar-return-quality"
+            class="btn btn-primary min-h-12 flex-1"
+          >
+            Send to quality review
+          </button>
           <button
             :if={:reject in @v.actions}
             type="button"

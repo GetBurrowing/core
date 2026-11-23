@@ -1314,6 +1314,26 @@ defmodule PlatformWeb.SocialLiveQueueTest do
 
     defp action(post), do: in_v(post, "[data-role='social-card-refusal-action']")
 
+    test "a refused legacy retry points to investigation without a quality reroute",
+         %{conn: conn} = ctx do
+      {post, _} = refused!(ctx, "media_rejected")
+      Repo.update!(Ecto.Changeset.change(ctx.profile, quality_reviewer_user_ids: [ctx.n.id]))
+      child = open(conn, ctx.h1)
+      child |> element(action(post)) |> render_click()
+      at = DateTime.utc_now() |> DateTime.add(1, :day) |> Calendar.strftime("%Y-%m-%dT%H:%M:%S")
+      child |> form(in_v(post, "[data-role='retry-schedule']"), %{at: at}) |> render_submit()
+
+      assert has_element?(
+               child,
+               in_v(post, "[data-role='social-card-notice']"),
+               "This older post has no valid quality pass. Its publishing outcome needs separate investigation before a new job can be started."
+             )
+
+      refute has_element?(child, in_v(post, "[data-role='social-card-return-quality']"))
+      assert Repo.get!(Post, post.id) == post
+      assert Fake.calls() == []
+    end
+
     test "each refusal is listed with its reason and its one action", %{conn: conn} = ctx do
       {media, _} = refused!(ctx, "media_rejected")
       {archived, _} = refused!(ctx, "account_archived")

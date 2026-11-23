@@ -197,6 +197,7 @@ defmodule PlatformWeb.SocialSettingsTab do
       "voice_notes" => profile.voice_notes,
       "default_hashtags" => Enum.join(profile.default_hashtags || [], ", "),
       "approver_user_ids" => profile.approver_user_ids || [],
+      "quality_reviewer_user_ids" => profile.quality_reviewer_user_ids || [],
       "space_id" => profile.space_id
     }
 
@@ -212,6 +213,13 @@ defmodule PlatformWeb.SocialSettingsTab do
     approver_ids =
       params
       |> Map.get("approver_user_ids", [])
+      |> List.wrap()
+      |> Enum.filter(&MapSet.member?(offered_users, &1))
+      |> Enum.uniq()
+
+    quality_ids =
+      params
+      |> Map.get("quality_reviewer_user_ids", [])
       |> List.wrap()
       |> Enum.filter(&MapSet.member?(offered_users, &1))
       |> Enum.uniq()
@@ -236,6 +244,7 @@ defmodule PlatformWeb.SocialSettingsTab do
       voice_notes: blank_to_nil(params["voice_notes"]),
       default_hashtags: hashtags,
       approver_user_ids: approver_ids,
+      quality_reviewer_user_ids: quality_ids,
       space_id: space_id
     }
   end
@@ -514,6 +523,18 @@ defmodule PlatformWeb.SocialSettingsTab do
         label="Approvers (people only)"
         options={Enum.map(@options.approvers, &{&1.name || &1.email, &1.id})}
       />
+      <.input
+        field={@form[:quality_reviewer_user_ids]}
+        type="select"
+        multiple
+        class="w-full select h-auto min-h-24 bg-none py-1"
+        size="4"
+        label="Quality reviewers (people only)"
+        options={Enum.map(@options.approvers, &{&1.name || &1.email, &1.id})}
+      />
+      <p class="text-sm text-subtle">
+        Quality reviewers pass posts to final review. Approvers make the final decision.
+      </p>
       <.input
         field={@form[:space_id]}
         type="select"

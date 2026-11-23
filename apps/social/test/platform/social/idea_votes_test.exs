@@ -23,18 +23,19 @@ defmodule Platform.Social.IdeaVotesTest do
     ToolArguments.dispatch(tool, %{"idea_id" => idea.id}, agent_context(agent, idea.org_id))
   end
 
-  defp agent_context(agent, org_id) do
+  defp agent_context(agent, org_id, owner_id \\ nil) do
     import Ecto.Query
 
     owner_id =
-      Repo.one!(
-        from(m in Platform.Tenancy.OrgMembership,
-          where: m.org_id == ^org_id and m.role == "member",
-          order_by: [asc: m.inserted_at],
-          limit: 1,
-          select: m.user_id
+      owner_id ||
+        Repo.one!(
+          from(m in Platform.Tenancy.OrgMembership,
+            where: m.org_id == ^org_id and m.role == "member",
+            order_by: [asc: m.inserted_at],
+            limit: 1,
+            select: m.user_id
+          )
         )
-      )
 
     runtime =
       Repo.insert!(%Platform.Agents.AgentRuntime{
@@ -331,11 +332,20 @@ defmodule Platform.Social.IdeaVotesTest do
     assert {:error, :agent_only} =
              Platform.Social.IdeaVotes.unvote(ctx.org_id, ctx.idea.id, {:user, ctx.n.id})
 
+    # Name both runtime owners: equal membership timestamps cannot choose
+    # the intentionally denied user as the positive reader's owner.
+    assert {:error, %{code: :not_found}} =
+             ToolArguments.dispatch(
+               "social_idea_list",
+               %{"profile_id" => ctx.profile.id},
+               agent_context(ctx.voter, ctx.org_id, ctx.n.id)
+             )
+
     {:ok, %{ideas: [idea]}} =
       ToolArguments.dispatch(
         "social_idea_list",
         %{"profile_id" => ctx.profile.id},
-        agent_context(ctx.voter, ctx.org_id)
+        agent_context(ctx.voter, ctx.org_id, ctx.h1.id)
       )
 
     assert idea.vote_count == 0

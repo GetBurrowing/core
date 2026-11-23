@@ -434,7 +434,7 @@ defmodule PlatformWeb.SocialComposer do
               account = Social.get_account(profile.org_id, post.account_id)
 
               if fresh_profile && account &&
-                   Social.post_approver_check(profile.org_id, fresh_profile, account, user.id) ==
+                   Social.post_preparer_check(profile.org_id, fresh_profile, account, user.id) ==
                      :ok do
                 []
               else
@@ -634,7 +634,34 @@ defmodule PlatformWeb.SocialComposer do
         Enum.map(result.posts, &"In Needs you: #{label.(&1)}#{when_line(&1, tz)}")
       end
 
-    %{kind: if(approve?, do: :approved, else: :sent), title: result.idea.title, lines: lines}
+    quality = Map.get(result, :quality_review, [])
+    quality_ids = MapSet.new(quality, & &1.id)
+
+    lines =
+      if quality == [],
+        do: lines,
+        else:
+          Enum.map(
+            quality,
+            &"In quality review: #{label.(&1)}#{String.replace_prefix(when_line(&1, tz), ", goes out ", ", requested publish time ")}"
+          ) ++
+            if(approve?,
+              do: lines,
+              else:
+                Enum.map(
+                  Enum.reject(result.posts, &MapSet.member?(quality_ids, &1.id)),
+                  &"In Needs you: #{label.(&1)}#{when_line(&1, tz)}"
+                )
+            )
+
+    kind =
+      cond do
+        quality != [] -> :quality_review
+        approve? -> :approved
+        true -> :sent
+      end
+
+    %{kind: kind, title: result.idea.title, lines: lines}
   end
 
   defp when_line(%{scheduled_at: %DateTime{} = at}, tz) do
@@ -1204,7 +1231,9 @@ defmodule PlatformWeb.SocialComposer do
           phx-disable-with="Sending…"
           data-role="composer-send"
         >
-          Send {@ready} for approval
+          {if @profile && Social.QualityReview.enabled?(@profile),
+            do: "Send for quality review",
+            else: "Send #{@ready} for approval"}
         </button>
         <button
           :if={@can_approve?}
@@ -1461,7 +1490,9 @@ defmodule PlatformWeb.SocialComposer do
         <span class="mx-auto flex size-12 items-center justify-center rounded-full bg-success/15 text-success">
           <.icon name="hero-check" class="size-6" />
         </span>
-        <h3 class="text-lg font-semibold">{sent_heading(@sent.kind)}</h3>
+        <h3 data-role="composer-sent-heading" class="text-lg font-semibold">
+          {sent_heading(@sent.kind)}
+        </h3>
         <ul class="space-y-1.5 text-left text-sm" data-role="composer-sent-lines">
           <li :for={line <- @sent.lines} class="rounded-box bg-base-200 px-3 py-2">{line}</li>
         </ul>
@@ -1492,7 +1523,11 @@ defmodule PlatformWeb.SocialComposer do
         phx-click={done_click(@sent.kind, @myself)}
         data-role="composer-done"
       >
-        {if @sent.kind == :saved, do: "Done", else: "Open Needs you"}
+        {cond do
+          @sent.kind == :saved -> "Done"
+          @sent.kind == :quality_review -> "Open Quality review"
+          true -> "Open Needs you"
+        end}
       </button>
     </footer>
     """
@@ -1504,6 +1539,7 @@ defmodule PlatformWeb.SocialComposer do
     do:
       "composer_close" |> JS.push(target: myself) |> JS.push("select_tab", value: %{tab: "queue"})
 
+  defp sent_heading(:quality_review), do: "Quality review requested"
   defp sent_heading(:sent), do: "Sent for approval"
   defp sent_heading(:approved), do: "Sent and approved"
   defp sent_heading(:saved), do: "Saved as an idea"

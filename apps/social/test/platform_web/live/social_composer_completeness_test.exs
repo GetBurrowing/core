@@ -39,6 +39,23 @@ defmodule PlatformWeb.SocialComposerCompletenessTest do
     child
   end
 
+  test "a gated brand requests quality review without a combined approval control", ctx do
+    Repo.update!(Ecto.Changeset.change(ctx.profile, quality_reviewer_user_ids: [ctx.n.id]))
+    child = open_draft(ctx)
+    refute has_element?(child, "[data-role='composer-send-approve']")
+    assert has_element?(child, "[data-role='composer-send']", "Send for quality review")
+
+    child
+    |> form("#composer-edit-#{ctx.a.id}", version: %{scheduled_at: "2099-01-02T13:45"})
+    |> render_change()
+
+    child |> element("[data-role='composer-send']") |> render_click()
+    assert [%Post{status: "quality_review", approved_by_user_id: nil}] = Repo.all(Post)
+    assert has_element?(child, "[data-role='composer-sent-heading']", "Quality review requested")
+    assert has_element?(child, "[data-role='composer-sent-lines']", "In quality review")
+    refute Repo.exists?(Platform.Social.ApprovalCard)
+  end
+
   defp media!(project) do
     {:ok, file} =
       Platform.Files.create_file(%{

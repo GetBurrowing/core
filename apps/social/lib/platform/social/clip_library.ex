@@ -121,7 +121,9 @@ defmodule Platform.Social.ClipLibrary do
   # B3: a clip draft is not queued to publish, and neither is one waiting on
   # a person's approval; only a pre-B3 approval inside its window is `:queued`.
   defp state(%Post{status: "draft"}, _now), do: {:draft, nil, nil, nil}
-  defp state(%Post{status: "needs_approval"}, _now), do: {:in_review, nil, nil, nil}
+
+  defp state(%Post{status: status}, _now) when status in ~w(quality_review needs_approval),
+    do: {:in_review, nil, nil, nil}
 
   defp state(%Post{status: "approved", refused_reason: reason} = post, _now)
        when is_binary(reason),

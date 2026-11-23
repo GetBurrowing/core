@@ -561,6 +561,38 @@ defmodule PlatformWeb.SocialClipsLibraryTest do
     refute has_element?(view, "[data-role=library-retry]")
   end
 
+  for status <- ["failed", "approved"] do
+    test "a legacy #{status} no-job retry explains separate investigation", %{conn: conn, w: w} do
+      alias Platform.Social.Publisher.Fake
+      Fake.reset()
+      Platform.Social.RateLimit.reset()
+      clip = clip!(w, "Older post outcome", %{}, review_status: "approved")
+      connect!(w.tiktok)
+
+      fields =
+        if unquote(status) == "approved",
+          do: [refused_reason: "media_rejected", refused_at: DateTime.utc_now()],
+          else: []
+
+      post = post!(w, clip, w.tiktok, unquote(status), fields)
+      Repo.update!(Ecto.Changeset.change(w.profile, quality_reviewer_user_ids: [w.approver.id]))
+      view = open(conn, w.approver, w.profile)
+      detail(view, clip)
+      view |> element("[data-post-id='#{post.id}'] [data-role=library-retry]") |> render_click()
+      submit_retry(view, post, future())
+
+      assert has_element?(
+               view,
+               "#library-detail",
+               "This older post has no valid quality pass. Its publishing outcome needs separate investigation before a new job can be started."
+             )
+
+      assert Repo.get!(Platform.Social.Post, post.id) == post
+      assert Fake.calls() == []
+      refute has_element?(view, "[data-role='social-card-return-quality']")
+    end
+  end
+
   defp connect!(account),
     do: account |> Ecto.Changeset.change(status: "connected") |> Repo.update!()
 
