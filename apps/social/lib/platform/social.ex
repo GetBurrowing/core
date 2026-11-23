@@ -1949,14 +1949,21 @@ defmodule Platform.Social do
 
   defp insert_post_for_idea(org_id, account, attrs, idea_id) do
     with {:ok, idea_id} <- post_idea(org_id, account, idea_id) do
-      changeset =
-        %Post{account_id: account.id, idea_id: idea_id}
-        |> Post.changeset(attrs)
-        |> ClipMedia.put_media_meta(account.profile_id)
+      changeset = prepare_post_changeset(account, attrs, idea_id)
 
       with :ok <- require_channel(changeset, account.profile_id, account),
            do: Repo.insert(changeset)
     end
+  end
+
+  @doc false
+  # Shared candidate preparation only: callers still perform their own scope,
+  # authority and channel checks; the writer always revalidates before insert.
+  def prepare_post_changeset(account, attrs, idea_id \\ nil) do
+    %Post{account_id: account.id, idea_id: idea_id}
+    |> Post.changeset(attrs)
+    |> Platform.Social.PublishingCompleteness.put_title(attrs, account)
+    |> ClipMedia.put_media_meta(account.profile_id)
   end
 
   defp post_idea(_org_id, _account, nil), do: {:ok, nil}
@@ -1982,6 +1989,10 @@ defmodule Platform.Social do
       changeset =
         post
         |> Post.changeset(attrs)
+        |> Platform.Social.PublishingCompleteness.put_title(
+          attrs,
+          Repo.get!(Account, post.account_id)
+        )
         |> ClipMedia.put_media_meta(profile_id_of_account(post.account_id))
 
       with :ok <- refuse_scheduling_on_archived(org_id, post, changeset),
@@ -1992,6 +2003,98 @@ defmodule Platform.Social do
       end
     end
   end
+
+  @doc """
+  A human edits a legacy draft from the Queue's Drafts group (B3).
+
+  `attrs` may hold only `:body`, `:scheduled_at` (a `DateTime` or nil) and
+  `:title` (the YouTube publishing title, through
+  `PublishingCompleteness.put_title/3`, which leaves other platform options
+  alone; a title for any other platform is refused here); other keys are ignored.
+  Everything happens in ONE transaction on the row locked `FOR UPDATE`: a
+  legacy `draft` is required (`:studio_post` / `:not_a_draft`), and the actor
+  passes `post_approver_check/4`, the rule `set_cover/4` and
+  `set_platform_options/4` apply to the same row.
+
+  `submit: false` (default) saves the edits, even if incomplete, but through
+  the ordinary field validators. `submit: true` also moves the draft to
+  `needs_approval` through the ordinary review-status gate
+  (`require_channel/3`, which runs `PublishingCompleteness`) on the EDITED
+  row; if it is incomplete, everything rolls back and the answer is
+  `{:error, {:incomplete_post, lines}}`. `attrs` takes atom keys only; any
+  other key is refused with `{:error, {:invalid_keys, keys}}` and nothing is
+  written (it would otherwise be dropped silently). The approval-card hook
+  (`needs_approval_written/1`) runs only after the transaction has committed.
+  """
+  @spec edit_draft(Ecto.UUID.t(), Ecto.UUID.t(), term(), map(), keyword()) ::
+          {:ok, Post.t()} | {:error, term()}
+  def edit_draft(org_id, post_id, actor_user_id, attrs, opts \\ []) when is_map(attrs) do
+    case Enum.reject(Map.keys(attrs), &is_atom/1) do
+      [] -> do_edit_draft(org_id, post_id, actor_user_id, attrs, opts)
+      bad -> {:error, {:invalid_keys, bad}}
+    end
+  end
+
+  defp do_edit_draft(org_id, post_id, actor_user_id, attrs, opts) do
+    submit? = Keyword.get(opts, :submit, false) == true
+
+    Repo.transaction(fn ->
+      with %Post{} = locked <- lock_post(org_id, post_id) || {:error, :not_found},
+           :ok <- refuse_studio(locked),
+           :ok <- require_legacy_draft(locked),
+           {:ok, profile} <- profile_of_post(locked),
+           account = Repo.get!(Account, locked.account_id),
+           :ok <- post_approver_check(profile.org_id, profile, account, actor_user_id),
+           changeset = draft_edit_changeset(locked, attrs, account, submit?),
+           :ok <- draft_changeset_valid(changeset),
+           :ok <- refuse_scheduling_on_archived(org_id, locked, changeset),
+           :ok <- require_channel(changeset, profile, account),
+           {:ok, updated} <- Repo.update(changeset) do
+        if changeset.changes != %{} do
+          Platform.Social.PostEvents.record!(updated, "edited", {:human, actor_user_id},
+            body_before: locked.body,
+            body_after: updated.body
+          )
+        end
+
+        updated
+      else
+        {:error, reason} -> Repo.rollback(reason)
+      end
+    end)
+    |> case do
+      {:ok, updated} when submit? -> {:ok, needs_approval_written(updated)}
+      result -> result
+    end
+  end
+
+  defp require_legacy_draft(%Post{flow: "legacy", status: "draft"}), do: :ok
+  defp require_legacy_draft(%Post{}), do: {:error, :not_a_draft}
+
+  defp draft_edit_changeset(locked, attrs, account, submit?) do
+    changeset =
+      Post.draft_edit_changeset(locked, Map.take(attrs, [:body, :scheduled_at]), submit?)
+
+    cond do
+      not Map.has_key?(attrs, :title) ->
+        changeset
+
+      # `put_title/3` ignores a title for a platform that has none; an edit
+      # that names one is a mistake the person should see.
+      account.platform != "youtube" ->
+        Changeset.add_error(changeset, :title, "is only used for YouTube")
+
+      true ->
+        Platform.Social.PublishingCompleteness.put_title(
+          changeset,
+          %{title: attrs.title},
+          account
+        )
+    end
+  end
+
+  defp draft_changeset_valid(%Changeset{valid?: true}), do: :ok
+  defp draft_changeset_valid(%Changeset{} = changeset), do: {:error, changeset}
 
   @doc """
   A human sets or clears a video post's cover (task 01a165ec stage 2).
@@ -2026,7 +2129,9 @@ defmodule Platform.Social do
              account = Repo.get!(Account, locked.account_id),
              :ok <- post_approver_check(profile.org_id, profile, account, actor_user_id),
              ctx = %{org_id: profile.org_id, profile_id: profile.id},
-             {:ok, updated} <- locked |> Post.cover_changeset(attrs, ctx) |> Repo.update() do
+             changeset = Post.cover_changeset(locked, attrs, ctx),
+             :ok <- require_channel(changeset, profile, account),
+             {:ok, updated} <- Repo.update(changeset) do
           updated
         else
           {:error, reason} -> Repo.rollback(reason)
@@ -2082,7 +2187,8 @@ defmodule Platform.Social do
              {:ok, profile} <- profile_of_post(locked),
              account = Repo.get!(Account, locked.account_id),
              :ok <- post_approver_check(profile.org_id, profile, account, actor_user_id),
-             {:ok, options} <- options_for(account.platform, attrs) do
+             {:ok, options} <- options_for(account.platform, attrs),
+             :ok <- require_channel(Post.options_changeset(locked, options), profile, account) do
           if options == (locked.platform_options || %{}) do
             locked
           else
@@ -2141,7 +2247,11 @@ defmodule Platform.Social do
   def require_channel(status, profile, account \\ nil)
 
   def require_channel(%Changeset{} = changeset, profile, account),
-    do: require_channel(Changeset.get_field(changeset, :status), profile, account)
+    do:
+      with(
+        :ok <- require_channel(Changeset.get_field(changeset, :status), profile, account),
+        do: Platform.Social.PublishingCompleteness.submission(changeset, account)
+      )
 
   def require_channel("needs_approval", _profile, %Account{owner_user_id: owner_id})
       when is_binary(owner_id),
@@ -2217,7 +2327,7 @@ defmodule Platform.Social do
   Every call re-reads the post `FOR UPDATE` in a transaction, including
   calls passed an earlier post struct. The legacy `lock:` option remains
   accepted, but cannot disable this check. An expired scheduled time is
-  `{:error, :slot_passed}`; untimed approval remains immediate.
+  `{:error, :slot_passed}`; publishing approval also requires a complete item and explicit future time.
   """
   @spec approve_post(Ecto.UUID.t(), Post.t() | Ecto.UUID.t(), Ecto.UUID.t(), keyword()) ::
           {:ok, Post.t()} | {:error, term()}
@@ -2236,20 +2346,72 @@ defmodule Platform.Social do
          :ok <- refuse_approved_again(post),
          {:ok, profile} <- profile_of_post(post),
          {:ok, account} <- account_of_post(post) do
-      changeset = Post.approval_changeset(post, approver_user_id)
+      write_checked_approval(post, profile, account, approver_user_id, opts)
+    end
+  end
 
-      case post_approver_check(profile.org_id, profile, account, approver_user_id) do
-        :ok ->
-          with :ok <- Platform.Social.ApprovalDeadline.check_approval(post),
-               do: Repo.update(changeset)
-
-        {:error, :not_a_human} ->
-          {:error,
-           Changeset.add_error(changeset, :approved_by_user_id, @not_a_user, reason: :not_a_human)}
-
-        {:error, reason} ->
-          {:error, reason}
+  @doc false
+  # Retry caller retains its eligibility checks; this boundary repeats them
+  # on the locked row and shares authority/completeness with ordinary approval.
+  def reapprove_post(org_id, post_id, approver_user_id, opts \\ []) do
+    Repo.transaction(fn ->
+      with {:ok, post} <- fetch_for_approval(org_id, post_id, lock: true),
+           :ok <- refuse_studio(post),
+           :ok <- retry_approval_status(post),
+           {:ok, profile} <- profile_of_post(post),
+           {:ok, account} <- account_of_post(post),
+           {:ok, updated} <-
+             write_checked_approval(
+               post,
+               profile,
+               account,
+               approver_user_id,
+               Keyword.put(opts, :retry, true)
+             ) do
+        updated
+      else
+        {:error, reason} -> Repo.rollback(reason)
       end
+    end)
+  end
+
+  defp retry_approval_status(%Post{status: "failed", error: error})
+       when error != "cancelled before publishing", do: :ok
+
+  defp retry_approval_status(%Post{status: "approved", refused_reason: reason})
+       when is_binary(reason), do: :ok
+
+  defp retry_approval_status(_), do: {:error, :not_failed}
+
+  defp write_checked_approval(post, profile, account, approver_user_id, opts) do
+    at = Keyword.get(opts, :scheduled_at, post.scheduled_at)
+
+    at =
+      if match?(%DateTime{}, at),
+        do: DateTime.from_unix!(DateTime.to_unix(at, :microsecond), :microsecond),
+        else: at
+
+    effective = %{post | scheduled_at: at}
+    changeset = Post.approval_changeset(post, approver_user_id)
+
+    case post_approver_check(profile.org_id, profile, account, approver_user_id) do
+      :ok ->
+        with :ok <- Platform.Social.ApprovalDeadline.check_approval(effective),
+             :ok <- Platform.Social.PublishingCompleteness.check(effective, account) do
+          changeset = Changeset.put_change(changeset, :scheduled_at, effective.scheduled_at)
+
+          changeset =
+            if opts[:retry], do: Changeset.change(changeset, error: nil), else: changeset
+
+          Repo.update(changeset)
+        end
+
+      {:error, :not_a_human} ->
+        {:error,
+         Changeset.add_error(changeset, :approved_by_user_id, @not_a_user, reason: :not_a_human)}
+
+      {:error, reason} ->
+        {:error, reason}
     end
   end
 
@@ -2625,10 +2787,10 @@ defmodule Platform.Social do
 
   # Clip decisions (Clip Studio 2/9)
   #
-  # A human's one-step clip decision (task 01a16662): see
+  # A human's clip decision (task 01a16662; choosing a clip makes drafts, B3): see
   # `Platform.Social.ClipDecisions`. Each takes opts with an injectable `:now`.
 
-  defdelegate approve_clip(org_id, clip_id, user_id, attrs, opts \\ []),
+  defdelegate draft_clip(org_id, clip_id, user_id, attrs, opts \\ []),
     to: Platform.Social.ClipDecisions
 
   defdelegate reject_clip(org_id, clip_id, user_id, note, opts \\ []),
@@ -2637,7 +2799,7 @@ defmodule Platform.Social do
   defdelegate undo_clip_decision(org_id, clip_id, user_id, opts \\ []),
     to: Platform.Social.ClipDecisions
 
-  defdelegate retry_post(org_id, post_id, user_id), to: Platform.Social.ClipDecisions
+  defdelegate retry_post(org_id, post_id, user_id, opts \\ []), to: Platform.Social.ClipDecisions
 
   # ── Clip rendering (Social 5/7) ──────────────────────────────────────
 

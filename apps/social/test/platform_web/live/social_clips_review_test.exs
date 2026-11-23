@@ -107,12 +107,12 @@ defmodule PlatformWeb.SocialClipsReviewTest do
 
     assert has_element?(
              child,
-             "[data-role='clips-details'] > [data-role='clips-decide'] [data-role='clip-approve']"
+             "[data-role='clips-details'] > [data-role='clips-decide'] [data-role='clip-draft']"
            )
 
     refute has_element?(child, "[data-role='clips-details-body'] [data-role='clips-decide']")
     assert has_element?(child, "[data-role='clips-player-stack'] [data-role='clip-frame']")
-    assert has_element?(child, "[data-role='clips-pbar'] [data-role='clips-pbar-approve']")
+    assert has_element?(child, "[data-role='clips-pbar'] [data-role='clips-pbar-draft']")
   end
 
   test "each bay element is present with its copy", %{conn: conn, w: w} do
@@ -181,7 +181,7 @@ defmodule PlatformWeb.SocialClipsReviewTest do
     assert has_element?(child, "[data-role='clip-caption-count']", "0/2200")
     assert has_element?(child, "[data-role='clip-caption'][maxlength='2200']")
     assert has_element?(child, "[data-role='clips-details']", "Post to")
-    assert has_element?(child, "[data-role='clips-details']", "publishes on approve")
+    assert has_element?(child, "[data-role='clips-details']", "saved as a draft")
 
     for label <- ~w(TikTok X Instagram YouTube) do
       assert has_element?(child, "[data-role='clip-platform-row']", label)
@@ -206,14 +206,14 @@ defmodule PlatformWeb.SocialClipsReviewTest do
 
     assert has_element?(
              child,
-             "[data-role='clip-approve']:not([disabled])",
-             "Approve and publish"
+             "[data-role='clip-draft']:not([disabled])",
+             "Create drafts"
            )
 
     assert has_element?(
              child,
              "[data-role='clip-why']",
-             "Publishes to Instagram and YouTube now · no second approval"
+             "Makes a draft for each platform you ticked. Nothing is published until a draft is reviewed and approved."
            )
 
     # Navigation moves the selection and asks the hook to sync the URL.
@@ -223,30 +223,35 @@ defmodule PlatformWeb.SocialClipsReviewTest do
     assert id == second.id
   end
 
-  test "Approve is disabled and reads Pick a platform with no platforms ticked",
+  test "Create drafts is disabled and reads Pick a platform with no platforms ticked",
        %{conn: conn, w: w} do
     clip!(w, "No platforms", %{"platforms" => []})
     child = open(conn, w.approver)
 
-    assert has_element?(child, "[data-role='clip-approve'][disabled]", "Pick a platform")
-    refute has_element?(child, "[data-role='clip-approve']", "Approve and publish")
-    assert has_element?(child, "[data-role='clip-why']", "Tick at least one platform to approve")
+    assert has_element?(child, "[data-role='clip-draft'][disabled]", "Pick a platform")
+    refute has_element?(child, "[data-role='clip-draft']", "Create drafts")
 
-    # Toggling a platform on saves it and enables Approve.
+    assert has_element?(
+             child,
+             "[data-role='clip-why']",
+             "Tick at least one platform to make drafts"
+           )
+
+    # Toggling a platform on saves it and enables Create drafts.
     child
     |> element("[data-role='clip-platform-row'][data-platform='youtube'] input")
     |> render_click()
 
     assert has_element?(
              child,
-             "[data-role='clip-approve']:not([disabled])",
-             "Approve and publish"
+             "[data-role='clip-draft']:not([disabled])",
+             "Create drafts"
            )
 
     assert has_element?(
              child,
              "[data-role='clip-why']",
-             "Publishes to YouTube now · no second approval"
+             "Makes a draft for each platform you ticked. Nothing is published until a draft is reviewed and approved."
            )
   end
 
@@ -280,7 +285,7 @@ defmodule PlatformWeb.SocialClipsReviewTest do
 
     assert has_element?(child, "[data-role='clips-empty']", "All caught up")
     assert has_element?(child, "[data-role='clips-empty'] .hero-check-badge")
-    assert has_element?(child, "[data-role='clips-empty']", "Approved clips are publishing.")
+    assert has_element?(child, "[data-role='clips-empty']", "Chosen clips are saved as drafts.")
     refute has_element?(child, "[data-role='clips-empty']", "More are rendering")
     assert has_element?(child, "[data-role='clips-queue']", "Nothing left to review.")
     assert has_element?(child, "[data-role='clips-count'] b", "0 to review")
@@ -292,7 +297,7 @@ defmodule PlatformWeb.SocialClipsReviewTest do
     assert has_element?(
              child,
              "[data-role='clips-empty']",
-             "Approved clips are publishing. More are rendering on the clip tool."
+             "Chosen clips are saved as drafts. More are rendering on the clip tool."
            )
 
     child |> element("[data-role='clips-open-library']", "Open Library") |> render_click()
@@ -321,7 +326,7 @@ defmodule PlatformWeb.SocialClipsReviewTest do
 
     assert has_element?(child, "[data-role='clips-details']")
     refute has_element?(child, "[data-role='clips-decide']")
-    refute has_element?(child, "[data-role='clip-approve']")
+    refute has_element?(child, "[data-role='clip-draft']")
     refute has_element?(child, "[data-role='clip-reject']")
     assert has_element?(child, "[data-role='clip-caption'][disabled]")
     assert has_element?(child, "[data-role='clip-note'][disabled]")
@@ -581,7 +586,7 @@ defmodule PlatformWeb.SocialClipsReviewTest do
     assert has_element?(child, "#clip-player-#{clip.id}-r#{old.rev}")
     refute has_element?(child, "[data-role=clips-pbar]")
     refute has_element?(child, "[data-role=use-closing-video]")
-    refute has_element?(child, "[data-role=clip-approve]")
+    refute has_element?(child, "[data-role=clip-draft]")
     bay(child) |> render_click("use_closing_video", %{"base_render_id" => old.id})
     assert has_element?(child, "[data-role=closing-render-error]")
     {:ok, after_jobs} = ClipJobs.list_jobs(w.org_id, w.profile.id)
@@ -592,7 +597,7 @@ defmodule PlatformWeb.SocialClipsReviewTest do
     |> render_click()
 
     assert has_element?(child, "#clip-player-#{clip.id}-r#{updated.rev}")
-    assert has_element?(child, "[data-role=clip-approve]")
+    assert has_element?(child, "[data-role=clip-draft]")
   end
 
   @tag :ffmpeg
@@ -658,7 +663,7 @@ defmodule PlatformWeb.SocialClipsReviewTest do
     |> Repo.update!()
 
     {:ok, _} =
-      Social.approve_clip(
+      Platform.Social.LegacyClipApproval.approve_clip(
         w.org_id,
         clip.id,
         w.approver.id,

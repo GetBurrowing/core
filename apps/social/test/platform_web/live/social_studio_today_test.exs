@@ -650,8 +650,14 @@ defmodule PlatformWeb.SocialStudioTodayTest do
     w = studio_world!()
     studio_post!(w, w.tiktok, "needs_approval", %{body: "Studio item"})
 
+    {:ok, account} = Social.update_account(w.org_id, w.x, %{status: "connected"})
+
     {:ok, _legacy} =
-      Social.create_post(w.org_id, w.x, %{body: "Legacy item", status: "needs_approval"})
+      Social.create_post(w.org_id, account, %{
+        body: "Legacy item",
+        status: "needs_approval",
+        scheduled_at: DateTime.add(DateTime.utc_now(), 3600)
+      })
 
     view = open(conn, w.approver, "?profile=#{w.profile.id}")
     assert has_element?(view, "[data-role='social-needs-approval']", "2 need approval")

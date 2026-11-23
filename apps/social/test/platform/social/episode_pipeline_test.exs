@@ -192,13 +192,13 @@ defmodule Platform.Social.EpisodePipelineTest do
       assert render.source["source_file_id"] == c.source.id
 
       assert {:error, _} =
-               Platform.Social.approve_clip(c.w.org_id, clip.id, c.w.outsider.id, %{
+               Platform.Social.draft_clip(c.w.org_id, clip.id, c.w.outsider.id, %{
                  "render_id" => render.id,
                  "account_ids" => [c.w.tiktok.id]
                })
 
       assert {:ok, _} =
-               Platform.Social.approve_clip(c.w.org_id, clip.id, c.w.approver.id, %{
+               Platform.Social.draft_clip(c.w.org_id, clip.id, c.w.approver.id, %{
                  "render_id" => render.id,
                  "account_ids" => [c.w.tiktok.id]
                })

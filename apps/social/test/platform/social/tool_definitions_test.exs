@@ -74,7 +74,7 @@ defmodule Platform.Social.ToolDefinitionsTest do
     end
 
     # The decisions live in Platform.Social, outside the tool surface.
-    assert function_exported?(Platform.Social, :approve_clip, 5)
+    assert function_exported?(Platform.Social, :draft_clip, 5)
     refute Enum.any?(ToolDefinitions.names(), &(&1 =~ "decide"))
   end
 

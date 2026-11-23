@@ -34,8 +34,8 @@ defmodule Platform.Social.ClipStatusTest do
 
   test "platform_status maps every post status" do
     cases = [
-      {post(status: "draft"), :queued},
-      {post(status: "needs_approval"), :queued},
+      {post(status: "draft"), :draft},
+      {post(status: "needs_approval"), :in_review},
       {post(status: "approved", publish_after: later(5)), :queued},
       {post(status: "approved", publish_after: nil), :uploading},
       {post(status: "scheduled", external_id: "z1", scheduled_at: nil), :uploading},
@@ -88,6 +88,14 @@ defmodule Platform.Social.ClipStatusTest do
 
     assert ClipLibrary.clip_state(approved, e.([:published, :uploading])) == "Publishing"
     assert ClipLibrary.clip_state(approved, e.([:queued, :published])) == "Publishing"
+
+    # A chosen clip whose posts are still drafts (or waiting on a person)
+    # is in review, never "Publishing"; a failure or a schedule still leads.
+    assert ClipLibrary.clip_state(approved, e.([:draft, :draft])) == "In review"
+    assert ClipLibrary.clip_state(approved, e.([:draft, :in_review])) == "In review"
+    assert ClipLibrary.clip_state(approved, e.([:in_review, :published])) == "In review"
+    assert ClipLibrary.clip_state(approved, e.([:draft, :scheduled])) == "Scheduled"
+    assert ClipLibrary.clip_state(approved, e.([:draft, :failed])) == "Failed"
     assert ClipLibrary.clip_state(approved, e.([:published, :published])) == "Published"
     assert ClipLibrary.clip_state(approved, e.([:failed, :published])) == "Failed"
   end
@@ -122,7 +130,7 @@ defmodule Platform.Social.ClipStatusTest do
       t0 = DateTime.utc_now()
 
       {:ok, %{posts: posts}} =
-        Social.approve_clip(
+        Platform.Social.LegacyClipApproval.approve_clip(
           w.org_id,
           clip.id,
           w.approver.id,
@@ -179,12 +187,7 @@ defmodule Platform.Social.ClipStatusTest do
                Enum.sort([ctx.ig.id, ctx.w.tiktok.id])
 
       # A refusal before the vendor is failed too, with its own reconnect.
-      {:ok, refused} =
-        Social.approve_post(
-          ctx.w.org_id,
-          elem(Social.create_post(ctx.w.org_id, ctx.w.x, %{body: "x"}), 1),
-          ctx.w.approver.id
-        )
+      refused = historical_approved_post!(ctx.w.org_id, ctx.w.x, %{}, ctx.w.approver)
 
       {:ok, _} = Social.archive_account(ctx.w.org_id, ctx.w.x)
       {:error, :account_archived} = Publishing.publish_post(ctx.w.org_id, refused.id)

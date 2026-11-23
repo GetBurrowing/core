@@ -2,7 +2,7 @@ defmodule PlatformWeb.SocialClipsReviewActions do
   @moduledoc "Desktop and phone decision controls; authorization stays in the review component."
   use PlatformWeb, :html
 
-  # [reviewHTML .pbar] the phone bottom bar: the same approve/reject events
+  # [reviewHTML .pbar] the phone bottom bar: the same draft/reject events
   # and enabled rules as the desktop footer. Rendered only for an approver
   # with a clip selected; hidden above 760px.
   attr :clip, :any, required: true
@@ -44,13 +44,13 @@ defmodule PlatformWeb.SocialClipsReviewActions do
         type="button"
         class="btn btn-primary btn-lg h-[46px] flex-1 rounded-full text-base"
         disabled={@ticked == [] or @appearance_dirty}
-        phx-click="approve"
+        phx-click="draft"
         phx-value-render_id={@render_id}
         phx-value-id={@clip.id}
         phx-target={@myself}
-        data-role="clips-pbar-approve"
+        data-role="clips-pbar-draft"
       >
-        {if @ticked == [], do: "Pick a platform", else: "Approve and publish"}
+        {if @ticked == [], do: "Pick a platform", else: "Create drafts"}
       </button>
     </div>
     """
@@ -89,13 +89,13 @@ defmodule PlatformWeb.SocialClipsReviewActions do
           type="button"
           class="btn btn-primary flex-1 rounded-full"
           disabled={@ticked == [] or @appearance_dirty}
-          phx-click="approve"
+          phx-click="draft"
           phx-value-render_id={@render_id}
           phx-value-id={@clip.id}
           phx-target={@myself}
-          data-role="clip-approve"
+          data-role="clip-draft"
         >
-          {if @ticked == [], do: "Pick a platform", else: "Approve and publish"}
+          {if @ticked == [], do: "Pick a platform", else: "Create drafts"}
         </button>
       </div>
       <p class="text-center text-xs text-subtle" data-role="clip-why">

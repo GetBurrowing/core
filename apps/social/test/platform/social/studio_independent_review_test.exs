@@ -120,7 +120,7 @@ defmodule Platform.Social.StudioIndependentReviewTest do
       decision_at = DateTime.add(now, -60, :second)
 
       {:ok, %{posts: [post]}} =
-        Social.approve_clip(
+        Platform.Social.LegacyClipApproval.approve_clip(
           w.org_id,
           clip.id,
           w.approver.id,

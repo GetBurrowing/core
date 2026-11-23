@@ -46,6 +46,12 @@ defmodule Platform.Social.ToolDefinitions do
   def names, do: @names
 
   @post_fields %{
+    title: %{
+      type: "string",
+      required: false,
+      description:
+        "YouTube publishing title, at most 100 characters. Stored as the title sent to YouTube. No arbitrary platform options are accepted."
+    },
     body: %{type: "string", required: false, description: "The post text."},
     media_file_ids: %{
       type: "array",

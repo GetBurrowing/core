@@ -15,20 +15,29 @@ defmodule Platform.Social.AgentDraftsTest do
     {:ok, profile} =
       Social.create_profile(org_a, %{name: "HTC", home_url: @home, space_id: channel!(org_a).id})
 
-    {:ok, acc1} = Social.create_account(org_a, profile, %{platform: "x", handle: "@htc"})
-    {:ok, acc2} = Social.create_account(org_a, profile, %{platform: "linkedin", handle: "htc"})
+    {:ok, acc1} =
+      Social.create_account(org_a, profile, %{platform: "x", handle: "@htc", status: "connected"})
+
+    {:ok, acc2} =
+      Social.create_account(org_a, profile, %{
+        platform: "linkedin",
+        handle: "htc",
+        status: "connected"
+      })
+
     {:ok, archived} = Social.create_account(org_a, profile, %{platform: "tiktok"})
     {:ok, archived} = Social.archive_account(org_a, archived)
 
     {:ok, other_profile} =
       Social.create_profile(org_a, %{name: "Other show", space_id: channel!(org_a).id})
 
-    {:ok, other_acc} = Social.create_account(org_a, other_profile, %{platform: "x"})
+    {:ok, other_acc} =
+      Social.create_account(org_a, other_profile, %{platform: "x", status: "connected"})
 
     {:ok, profile_b} =
       Social.create_profile(org_b, %{name: "B show", space_id: channel!(org_b).id})
 
-    {:ok, acc_b} = Social.create_account(org_b, profile_b, %{platform: "x"})
+    {:ok, acc_b} = Social.create_account(org_b, profile_b, %{platform: "x", status: "connected"})
 
     %{
       org_a: org_a,
@@ -55,7 +64,14 @@ defmodule Platform.Social.AgentDraftsTest do
       AgentDrafts.create_agent_drafts(
         ctx.scope,
         ctx.profile.id,
-        Map.merge(%{"account_ids" => [ctx.acc1.id], "body" => "hi"}, attrs)
+        Map.merge(
+          %{
+            "account_ids" => [ctx.acc1.id],
+            "body" => "hi",
+            "scheduled_at" => DateTime.add(DateTime.utc_now(), 3600)
+          },
+          attrs
+        )
       )
 
     post
@@ -66,7 +82,8 @@ defmodule Platform.Social.AgentDraftsTest do
       assert {:ok, posts} =
                AgentDrafts.create_agent_drafts(ctx.scope, ctx.profile.id, %{
                  "account_ids" => [ctx.acc1.id, ctx.acc2.id],
-                 "body" => "New episode"
+                 "body" => "New episode",
+                 "scheduled_at" => DateTime.add(DateTime.utc_now(), 3600)
                })
 
       assert Enum.map(posts, & &1.account_id) == [ctx.acc1.id, ctx.acc2.id]
@@ -278,7 +295,9 @@ defmodule Platform.Social.AgentDraftsTest do
     test ":root may draft in any org", ctx do
       assert {:ok, [post]} =
                AgentDrafts.create_agent_drafts(:root, ctx.profile_b.id, %{
-                 "account_ids" => [ctx.acc_b.id]
+                 "account_ids" => [ctx.acc_b.id],
+                 "body" => "Another show",
+                 "scheduled_at" => DateTime.add(DateTime.utc_now(), 3600)
                })
 
       assert post.status == "needs_approval"
@@ -470,7 +489,9 @@ defmodule Platform.Social.AgentDraftsTest do
 
       {:ok, [_other]} =
         AgentDrafts.create_agent_drafts(:root, ctx.profile_b.id, %{
-          "account_ids" => [ctx.acc_b.id]
+          "account_ids" => [ctx.acc_b.id],
+          "body" => "Another show",
+          "scheduled_at" => DateTime.add(DateTime.utc_now(), 3600)
         })
 
       Repo.update_all(from(p in Post, where: p.id == ^post.id),
@@ -602,6 +623,7 @@ defmodule Platform.Social.AgentDraftsTest do
                AgentDrafts.create_agent_drafts(ctx.scope, ctx.profile.id, %{
                  "account_ids" => [ctx.acc1.id],
                  "body" => "clip",
+                 "scheduled_at" => DateTime.add(DateTime.utc_now(), 3600),
                  "media_file_ids" => [ctx.video.id],
                  "cover_file_id" => ctx.png.id
                })

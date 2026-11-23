@@ -14,7 +14,7 @@ defmodule Platform.Social.WeeklyNoteTest do
   end
 
   defp post(c, metrics, opts \\ []) do
-    approved_post!(c.org, c.account)
+    historical_approved_post!(c.org, c.account)
     |> Ecto.Changeset.change(
       status: Keyword.get(opts, :status, "published"),
       published_at: Keyword.get(opts, :at, @at),

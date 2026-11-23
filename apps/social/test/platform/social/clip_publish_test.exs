@@ -14,7 +14,6 @@ defmodule Platform.Social.ClipPublishTest do
   import Ecto.Query
   import Platform.SocialFixtures
 
-  alias Platform.Social
   alias Platform.Social.{AgentDrafts, ClipPublish, Post, RateLimit}
   alias Platform.Social.Publisher.Fake
 
@@ -42,7 +41,7 @@ defmodule Platform.Social.ClipPublishTest do
     start_supervised!({ClipPublish, name: parked, interval_ms: :infinity, boot_sweep: false})
 
     {:ok, %{posts: posts}} =
-      Social.approve_clip(
+      Platform.Social.LegacyClipApproval.approve_clip(
         ctx.w.org_id,
         ctx.clip.id,
         ctx.w.approver.id,
@@ -122,7 +121,7 @@ defmodule Platform.Social.ClipPublishTest do
     assert due_ids.() == []
 
     # A plain approved post with a publish_after is never this sweep's.
-    plain = approved_post!(ctx.w.org_id, ctx.w.x)
+    plain = historical_approved_post!(ctx.w.org_id, ctx.w.x)
     Repo.update_all(from(p in Post, where: p.id == ^plain.id), set: [publish_after: now])
     assert due_ids.() == []
   end

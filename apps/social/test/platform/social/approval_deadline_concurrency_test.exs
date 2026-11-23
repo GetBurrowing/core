@@ -30,7 +30,8 @@ defmodule Platform.Social.ApprovalDeadlineConcurrencyTest do
         approver_user_ids: [user.id]
       })
 
-    {:ok, account} = Social.create_account(org.id, profile, %{platform: "linkedin"})
+    {:ok, account} =
+      Social.create_account(org.id, profile, %{platform: "linkedin", status: "connected"})
 
     {:ok, post} =
       Social.create_post(org.id, account, %{
@@ -73,6 +74,201 @@ defmodule Platform.Social.ApprovalDeadlineConcurrencyTest do
     end)
 
     %{org: org, user: user, post: post}
+  end
+
+  test "approval rechecks completeness after its post-lock wait", ctx do
+    parent = self()
+
+    holder =
+      Task.async(fn ->
+        Repo.transaction(fn ->
+          locked = Social.lock_post(ctx.org.id, ctx.post.id)
+          Repo.update!(Ecto.Changeset.change(locked, body: "   "))
+          [[pid]] = Repo.query!("SELECT pg_backend_pid()").rows
+          send(parent, {:incomplete_held, pid})
+
+          receive do
+            :release -> :ok
+          after
+            5000 -> Repo.rollback(:holder_timeout)
+          end
+        end)
+      end)
+
+    assert_receive {:incomplete_held, holder_pid}, 5000
+
+    caller =
+      Task.async(fn ->
+        Repo.checkout(fn ->
+          [[pid]] = Repo.query!("SELECT pg_backend_pid()").rows
+          send(parent, {:incomplete_caller, pid})
+          Social.approve_post(ctx.org.id, ctx.post, ctx.user.id)
+        end)
+      end)
+
+    try do
+      assert_receive {:incomplete_caller, caller_pid}, 5000
+      assert caller_pid != holder_pid
+      blocked!(caller_pid, holder_pid)
+      send(holder.pid, :release)
+      assert {:ok, :ok} = Task.await(holder, 5000)
+      assert {:error, {:incomplete_post, ["Add the post text."]}} = Task.await(caller, 5000)
+
+      assert %{status: "needs_approval", approved_at: nil, body: "   "} =
+               Repo.get!(Post, ctx.post.id)
+    after
+      send(holder.pid, :release)
+      Task.shutdown(holder, :brutal_kill)
+      Task.shutdown(caller, :brutal_kill)
+    end
+  end
+
+  test "new-job confirmation refuses a job id appearing during the lock wait", ctx do
+    alias Platform.Social.{Publishing, Publisher.Fake}
+    Fake.reset()
+    {:ok, approved} = Social.approve_post(ctx.org.id, ctx.post, ctx.user.id)
+    post = Repo.update!(Post.refusal_changeset(approved, "media_rejected", "Fix media", nil))
+    parent = self()
+
+    holder =
+      Task.async(fn ->
+        Repo.transaction(fn ->
+          locked = Social.lock_post(ctx.org.id, post.id)
+          Repo.update!(Ecto.Changeset.change(locked, external_id: "concurrent-job"))
+          [[pid]] = Repo.query!("SELECT pg_backend_pid()").rows
+          send(parent, {:job_held, pid})
+
+          receive do
+            :release -> :ok
+          after
+            5000 -> Repo.rollback(:holder_timeout)
+          end
+        end)
+      end)
+
+    assert_receive {:job_held, holder_pid}, 5000
+
+    caller =
+      Task.async(fn ->
+        Repo.checkout(fn ->
+          [[pid]] = Repo.query!("SELECT pg_backend_pid()").rows
+          send(parent, {:job_caller, pid})
+
+          Publishing.retry_publish(ctx.org.id, post.id, ctx.user.id,
+            scheduled_at: DateTime.add(DateTime.utc_now(), 7200)
+          )
+        end)
+      end)
+
+    try do
+      assert_receive {:job_caller, caller_pid}, 5000
+      assert caller_pid != holder_pid
+      blocked!(caller_pid, holder_pid)
+      send(holder.pid, :release)
+      assert {:ok, :ok} = Task.await(holder, 5000)
+      assert {:error, :publish_job_changed} = Task.await(caller, 5000)
+      assert Fake.calls(:publish) == []
+      assert Fake.calls(:retry) == []
+      assert %{status: "approved", external_id: "concurrent-job"} = Repo.get!(Post, post.id)
+    after
+      send(holder.pid, :release)
+      Task.shutdown(holder, :brutal_kill)
+      Task.shutdown(caller, :brutal_kill)
+    end
+  end
+
+  for {operation, change} <- [
+        failed: :replace,
+        failed: :remove,
+        failed: :revoke,
+        approved: :replace,
+        approved: :remove
+      ] do
+    @retry_operation operation
+    @retry_change change
+    test "#{operation} same-job retry refuses #{change} after its lock wait", ctx do
+      alias Platform.Social.{Clip, Publishing, Publisher.Fake}
+      Fake.reset()
+      {:ok, approved} = Social.approve_post(ctx.org.id, ctx.post, ctx.user.id)
+      {:ok, profile} = Social.profile_of_post(approved)
+      clip = Repo.insert!(%Clip{profile_id: profile.id, origin: "external"})
+      status = if @retry_operation == :failed, do: "failed", else: "approved"
+
+      post =
+        Repo.update!(
+          Ecto.Changeset.change(approved,
+            clip_id: clip.id,
+            status: status,
+            external_id: "original-job",
+            error: "Earlier refusal",
+            refused_reason: "media_rejected"
+          )
+        )
+
+      parent = self()
+
+      holder =
+        Task.async(fn ->
+          Repo.transaction(fn ->
+            locked = Social.lock_post(ctx.org.id, post.id)
+
+            case @retry_change do
+              :replace ->
+                Repo.update!(Ecto.Changeset.change(locked, external_id: "different-job"))
+
+              :remove ->
+                Repo.update!(Ecto.Changeset.change(locked, external_id: nil))
+
+              :revoke ->
+                Repo.update!(Ecto.Changeset.change(ctx.user, archived_at: DateTime.utc_now()))
+            end
+
+            [[pid]] = Repo.query!("SELECT pg_backend_pid()").rows
+            send(parent, {:same_job_held, pid})
+
+            receive do
+              :release -> :ok
+            after
+              5000 -> Repo.rollback(:holder_timeout)
+            end
+          end)
+        end)
+
+      assert_receive {:same_job_held, holder_pid}, 5000
+
+      caller =
+        Task.async(fn ->
+          Repo.checkout(fn ->
+            [[pid]] = Repo.query!("SELECT pg_backend_pid()").rows
+            send(parent, {:same_job_caller, pid})
+
+            case @retry_operation do
+              :failed -> Social.retry_post(ctx.org.id, post.id, ctx.user.id)
+              :approved -> Publishing.retry_publish(ctx.org.id, post.id, ctx.user.id)
+            end
+          end)
+        end)
+
+      try do
+        assert_receive {:same_job_caller, caller_pid}, 5000
+        assert caller_pid != holder_pid
+        blocked!(caller_pid, holder_pid)
+        send(holder.pid, :release)
+        assert {:ok, :ok} = Task.await(holder, 5000)
+        reason = if @retry_change == :revoke, do: :approver_archived, else: :publish_job_changed
+        assert {:error, ^reason} = Task.await(caller, 5000)
+        row = Repo.get!(Post, post.id)
+        assert row.status == post.status
+        assert row.approved_at == post.approved_at
+        assert row.error == post.error
+        assert Fake.calls(:publish) == []
+        assert Fake.calls(:retry) == []
+      after
+        send(holder.pid, :release)
+        Task.shutdown(holder, :brutal_kill)
+        Task.shutdown(caller, :brutal_kill)
+      end
+    end
   end
 
   for operation <- [:approve, :agent_retime] do

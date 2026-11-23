@@ -1,6 +1,7 @@
 defmodule Platform.Social.ClipIdeasTest do
   @moduledoc """
-  Social authoring 2/11 (task 01a16c4e): `ClipDecisions.approve_clip/5`
+  Social authoring 2/11 (task 01a16c4e): `ClipDecisions.draft_clip/5`
+  (and, for a pre-B3 approval, the test-support `LegacyClipApproval`)
   finds or creates ONE idea per clip (source_kind clip, the clip's title)
   and every post it writes joins it, each with a `created` and an
   `approved` change log entry naming the human. One approval still
@@ -36,7 +37,7 @@ defmodule Platform.Social.ClipIdeasTest do
   end
 
   defp approve(ctx) do
-    Social.approve_clip(
+    Platform.Social.LegacyClipApproval.approve_clip(
       ctx.w.org_id,
       ctx.clip.id,
       ctx.w.approver.id,

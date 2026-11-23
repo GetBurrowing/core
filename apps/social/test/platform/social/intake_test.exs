@@ -118,7 +118,7 @@ defmodule Platform.Social.IntakeTest do
       [clip] = clips(w)
 
       assert {:error, :studio_clip} =
-               Social.approve_clip(
+               Social.draft_clip(
                  w.org_id,
                  clip.id,
                  w.approver.id,

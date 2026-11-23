@@ -1194,7 +1194,7 @@ defmodule Platform.Social.Publisher.ZernioTest do
     test "an approved post is scheduled via Zernio, then published by apply_outcome", ctx do
       {_, account} = account!(ctx.org_id, "linkedin")
       put_key!(account)
-      post = approved_post!(ctx.org_id, account, %{body: "via zernio"})
+      post = historical_approved_post!(ctx.org_id, account, %{body: "via zernio"})
       capture_post(201, %{"post" => %{"_id" => "zp_swap"}})
 
       assert {:ok, %Post{status: "scheduled", external_id: "zp_swap"}} =
@@ -1218,7 +1218,7 @@ defmodule Platform.Social.Publisher.ZernioTest do
       {:ok, draft} = Platform.Social.create_post(ctx.org_id, account, %{body: "draft"})
       assert {:error, :not_approved} = Publishing.publish_post(ctx.org_id, draft.id)
 
-      post = approved_post!(ctx.org_id, account)
+      post = historical_approved_post!(ctx.org_id, account)
 
       assert {:error, {:publish_failed, :credentials_unavailable}} =
                Publishing.publish_post(ctx.org_id, post.id)
@@ -1269,7 +1269,7 @@ defmodule Platform.Social.Publisher.ZernioTest do
     test "Zernio publish stores platformPostId", ctx do
       {_, account} = account!(ctx.org_id, "linkedin")
       put_key!(account)
-      post = approved_post!(ctx.org_id, account, %{body: "via zernio"})
+      post = historical_approved_post!(ctx.org_id, account, %{body: "via zernio"})
 
       capture_post(
         201,
@@ -1297,7 +1297,7 @@ defmodule Platform.Social.Publisher.ZernioTest do
     test "Zernio status stores platformPostId", ctx do
       {_, account} = account!(ctx.org_id, "linkedin")
       put_key!(account)
-      post = approved_post!(ctx.org_id, account)
+      post = historical_approved_post!(ctx.org_id, account)
       capture_post(201, %{"post" => openapi_post("zp_st", "scheduled", %{"status" => "pending"})})
 
       assert {:ok, %Post{status: "scheduled", platform_post_id: nil}} =
@@ -1327,7 +1327,7 @@ defmodule Platform.Social.Publisher.ZernioTest do
     test "Zernio webhook stores platformPostId", ctx do
       {_, account} = account!(ctx.org_id, "linkedin")
       put_key!(account)
-      post = approved_post!(ctx.org_id, account)
+      post = historical_approved_post!(ctx.org_id, account)
       capture_post(201, %{"post" => openapi_post("zp_wh", "scheduled", %{})})
       {:ok, scheduled} = Publishing.publish_post(ctx.org_id, post.id)
 

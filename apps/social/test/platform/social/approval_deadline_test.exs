@@ -17,6 +17,11 @@ defmodule Platform.Social.ApprovalDeadlineTest do
   defp past, do: DateTime.add(DateTime.utc_now(), -3600)
   defp future, do: DateTime.add(DateTime.utc_now(), 3600)
 
+  defp historical_pending!(ctx, account, attrs) do
+    {post, card} = pending_post!(ctx, account)
+    {Repo.update!(Ecto.Changeset.change(post, attrs)), card}
+  end
+
   defp untouched(post, card, before_post, before_card, before_events) do
     assert Repo.get!(Post, post.id) == before_post
     assert Repo.get!(ApprovalCard, card.id) == before_card
@@ -25,7 +30,7 @@ defmodule Platform.Social.ApprovalDeadlineTest do
   end
 
   test "ordinary overdue approval refuses without deciding, approving or publishing", ctx do
-    {post, card} = pending_post!(ctx, ctx.a, %{scheduled_at: past()})
+    {post, card} = historical_pending!(ctx, ctx.a, %{scheduled_at: past()})
     before_post = Repo.get!(Post, post.id)
     before_card = Repo.get!(ApprovalCard, card.id)
     before_events = PostEvents.list_for_post(post.id)
@@ -50,13 +55,15 @@ defmodule Platform.Social.ApprovalDeadlineTest do
     assert Fake.calls(:publish) == []
   end
 
-  test "deliberately untimed approval still invokes the publisher", ctx do
-    {post, card} = pending_post!(ctx, ctx.a)
+  test "a historical untimed approval now requires an explicit publish time", ctx do
+    {post, card} = historical_pending!(ctx, ctx.a, %{scheduled_at: nil})
 
-    assert {:ok, _} =
+    assert {:error, {:incomplete_post, ["Choose a publish time."]}} =
              Approvals.decide_approve(card.canvas_id, ctx.h1, Approvals.fingerprint(post))
 
-    assert length(Fake.calls(:publish)) == 1
+    assert Fake.calls(:publish) == []
+    assert Repo.get!(Post, post.id) == post
+    assert Repo.get!(ApprovalCard, card.id) == card
   end
 
   test "future stored time still approves and invokes the publisher", ctx do
@@ -75,7 +82,7 @@ defmodule Platform.Social.ApprovalDeadlineTest do
   end
 
   test "a human can replace a missed time explicitly with a future one", ctx do
-    {post, card} = pending_post!(ctx, ctx.a, %{scheduled_at: past()})
+    {post, card} = historical_pending!(ctx, ctx.a, %{scheduled_at: past()})
     at = future()
 
     assert {:ok, %{post: approved}} =
@@ -86,7 +93,7 @@ defmodule Platform.Social.ApprovalDeadlineTest do
   end
 
   test "an agent cannot move or clear a missed deadline", ctx do
-    {post, card} = pending_post!(ctx, ctx.a, %{scheduled_at: past()})
+    {post, card} = historical_pending!(ctx, ctx.a, %{scheduled_at: past()})
     before_post = Repo.get!(Post, post.id)
     before_card = Repo.get!(ApprovalCard, card.id)
     before_events = PostEvents.list_for_post(post.id)
@@ -106,7 +113,7 @@ defmodule Platform.Social.ApprovalDeadlineTest do
   end
 
   test "agent body edits preserve a missed deadline and cannot hide it in draft", ctx do
-    {post, _card} = pending_post!(ctx, ctx.a, %{scheduled_at: past()})
+    {post, _card} = historical_pending!(ctx, ctx.a, %{scheduled_at: past()})
 
     assert {:ok, edited} =
              AgentDrafts.update_agent_draft(
@@ -146,7 +153,7 @@ defmodule Platform.Social.ApprovalDeadlineTest do
   end
 
   test "a human rejection does not let an agent erase the original missed time", ctx do
-    {post, card} = pending_post!(ctx, ctx.a, %{scheduled_at: past()})
+    {post, card} = historical_pending!(ctx, ctx.a, %{scheduled_at: past()})
 
     assert {:ok, _} =
              Approvals.decide_reject(

@@ -312,7 +312,7 @@ defmodule Platform.Social.ClipRemovalTest do
     approver =
       Task.async(fn ->
         Ecto.Adapters.SQL.Sandbox.unboxed_run(Repo, fn ->
-          Social.approve_clip(w.org_id, w.clip.id, w.approver.id, %{
+          Platform.Social.LegacyClipApproval.approve_clip(w.org_id, w.clip.id, w.approver.id, %{
             "render_id" => w.first,
             "account_ids" => [w.tiktok.id]
           })

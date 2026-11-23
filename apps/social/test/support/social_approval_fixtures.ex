@@ -38,12 +38,17 @@ defmodule Platform.SocialApprovalFixtures do
       })
 
     {:ok, a} =
-      Social.create_account(org_id, profile, %{platform: "linkedin", handle: "@htc_official"})
+      Social.create_account(org_id, profile, %{
+        platform: "linkedin",
+        handle: "@htc_official",
+        status: "connected"
+      })
 
     {:ok, d} =
       Social.create_account(org_id, profile, %{
         platform: "linkedin",
         handle: "@htc_drafts",
+        status: "connected",
         approval_mode: "draft_only"
       })
 
@@ -92,7 +97,14 @@ defmodule Platform.SocialApprovalFixtures do
       Social.create_post(
         ctx.org_id,
         account,
-        Map.merge(%{body: "Episode 12 is live: listen now", status: "needs_approval"}, attrs)
+        Map.merge(
+          %{
+            body: "Episode 12 is live: listen now",
+            status: "needs_approval",
+            scheduled_at: DateTime.add(DateTime.utc_now(), 3600)
+          },
+          attrs
+        )
       )
 
     {post, live_card!(post)}

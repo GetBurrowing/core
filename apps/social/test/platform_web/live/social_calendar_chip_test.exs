@@ -366,7 +366,9 @@ defmodule PlatformWeb.SocialCalendarChipTest do
   end
 
   test "untimed posts and published posts do not affect the count", %{conn: conn} = ctx do
-    pending_post!(ctx, ctx.a, %{body: "Untimed", scheduled_at: nil})
+    # A pending card retained from before completeness checks required a time.
+    {untimed, _} = pending_post!(ctx, ctx.a, %{body: "Untimed", scheduled_at: ctx.at})
+    Repo.update!(Ecto.Changeset.change(untimed, scheduled_at: nil))
     {published, _} = pending_post!(ctx, ctx.a, %{body: "Already published", scheduled_at: ctx.at})
 
     Repo.update_all(from(p in Post, where: p.id == ^published.id),

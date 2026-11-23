@@ -10,7 +10,17 @@ defmodule Platform.Social.TaskBridgeTest do
   alias Platform.Tasks
 
   setup do
-    %{w: bridge_world!()}
+    w = bridge_world!()
+
+    w =
+      Enum.reduce([:linkedin, :x], w, fn key, world ->
+        {:ok, account} =
+          Social.update_account(world.org_id, Map.fetch!(world, key), %{status: "connected"})
+
+        Map.put(world, key, account)
+      end)
+
+    %{w: w}
   end
 
   defp refuses(w, expected, fun) do
@@ -363,7 +373,7 @@ defmodule Platform.Social.TaskBridgeTest do
           space_id: w.space.id
         })
 
-      {:ok, a2} = Social.create_account(w.org_id, p2, %{platform: "x"})
+      {:ok, a2} = Social.create_account(w.org_id, p2, %{platform: "x", status: "connected"})
       %{task: task, p2: p2, a2: a2}
     end
 
@@ -372,6 +382,8 @@ defmodule Platform.Social.TaskBridgeTest do
                AgentDrafts.create_agent_drafts(w.scope, w.profile.id, %{
                  "account_ids" => [w.linkedin.id],
                  "body" => "doomsday",
+                 "scheduled_at" =>
+                   DateTime.utc_now() |> DateTime.add(3600) |> DateTime.to_iso8601(),
                  "task_id" => task.id
                })
 
@@ -390,6 +402,8 @@ defmodule Platform.Social.TaskBridgeTest do
                AgentDrafts.create_agent_drafts(w.scope, p2.id, %{
                  "account_ids" => [a2.id],
                  "body" => "doomsday",
+                 "scheduled_at" =>
+                   DateTime.utc_now() |> DateTime.add(3600) |> DateTime.to_iso8601(),
                  "task_id" => task.id
                })
 
@@ -416,6 +430,8 @@ defmodule Platform.Social.TaskBridgeTest do
                AgentDrafts.create_agent_drafts(w.scope, p2.id, %{
                  "account_ids" => [a2.id],
                  "body" => "fine",
+                 "scheduled_at" =>
+                   DateTime.utc_now() |> DateTime.add(3600) |> DateTime.to_iso8601(),
                  "task_id" => plain.id
                })
 

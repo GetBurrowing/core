@@ -78,8 +78,11 @@ defmodule PlatformWeb.SocialQueueTab do
     |> assign(:queue_failed_empty?, true)
     |> assign(:queue_published_empty?, true)
     |> assign(:queue_clips_waiting, 0)
+    |> assign(:queue_drafts_empty?, true)
+    |> assign(:queue_drafts_notice, nil)
     |> assign(:cover_picker, nil)
     |> Phoenix.LiveView.stream_configure(:queue, dom_id: &"queue-idea-#{&1.key}")
+    |> Phoenix.LiveView.stream_configure(:queue_drafts, dom_id: &"queue-draft-#{&1.id}")
     |> Phoenix.LiveView.stream_configure(:queue_scheduled, dom_id: &"queue-scheduled-#{&1.key}")
     |> Phoenix.LiveView.stream_configure(:queue_failed, dom_id: &"queue-#{&1.id}")
     |> Phoenix.LiveView.stream_configure(:queue_published, dom_id: &"queue-published-#{&1.id}")
@@ -111,6 +114,7 @@ defmodule PlatformWeb.SocialQueueTab do
     unavailable? = not is_nil(socket.assigns.queue_target_id) and is_nil(target)
     groups = if unavailable?, do: [], else: QueueFeed.needs_you(user, scope)
     scheduled = if unavailable?, do: [], else: QueueFeed.scheduled(user, scope, now)
+    drafts = if unavailable?, do: [], else: QueueFeed.drafts(user, scope)
     failed = if unavailable?, do: [], else: QueueFeed.failed(user, scope, now)
     published = if unavailable?, do: [], else: QueueFeed.published(user, scope, now)
 
@@ -135,19 +139,21 @@ defmodule PlatformWeb.SocialQueueTab do
     fallback = if target && is_nil(target_group), do: List.first(QueueFeed.group([target]))
     # An out-of-Queue exact target is a single read-only detail, not a list
     # headed by a misleading ordinary Queue/empty state.
-    {groups, scheduled, failed, published} =
-      if fallback, do: {[], [], [], []}, else: {groups, scheduled, failed, published}
+    {groups, scheduled, failed, published, drafts} =
+      if fallback,
+        do: {[], [], [], [], []},
+        else: {groups, scheduled, failed, published, drafts}
 
     all_posts =
       Enum.flat_map(groups, & &1.posts) ++
         Enum.flat_map(scheduled, & &1.posts) ++
-        failed ++ published ++ if(fallback, do: [target], else: [])
+        failed ++ published ++ drafts ++ if(fallback, do: [target], else: [])
 
     accounts = QueueFeed.accounts(all_posts)
     profiles = QueueFeed.profiles(accounts)
 
     context =
-      if scheduled == [],
+      if scheduled == [] and drafts == [],
         do: nil,
         else: Social.PostPresentation.authorize({:user, user.id}, Map.keys(profiles))
 
@@ -227,6 +233,7 @@ defmodule PlatformWeb.SocialQueueTab do
     |> assign(:queue_scheduled_titles, titles)
     |> assign(:queue_empty?, groups == [])
     |> assign(:queue_post_count, groups |> Enum.map(&length(&1.posts)) |> Enum.sum())
+    |> assign(:queue_drafts_empty?, drafts == [])
     |> assign(:queue_scheduled_empty?, scheduled == [])
     |> assign(:queue_failed_empty?, failed == [])
     |> assign(:queue_published_empty?, published == [])
@@ -235,6 +242,7 @@ defmodule PlatformWeb.SocialQueueTab do
       if(unavailable?, do: 0, else: QueueFeed.clips_waiting(user, scope))
     )
     |> stream(:queue, idea_rows, reset: true)
+    |> stream(:queue_drafts, drafts, reset: true)
     |> stream(:queue_scheduled, scheduled, reset: true)
     |> stream(:queue_failed, failed_rows, reset: true)
     |> stream(:queue_published, published, reset: true)
@@ -247,7 +255,11 @@ defmodule PlatformWeb.SocialQueueTab do
   # another tab was open is there.
   @impl true
   def on_select(%{assigns: %{tab: "queue"}} = socket),
-    do: socket |> SocialTodayTab.refresh_authorization() |> load()
+    do:
+      socket
+      |> assign(:queue_drafts_notice, nil)
+      |> SocialTodayTab.refresh_authorization()
+      |> load()
 
   def on_select(socket), do: socket
 
@@ -406,6 +418,16 @@ defmodule PlatformWeb.SocialQueueTab do
     do:
       {:noreply,
        socket |> load() |> SocialScope.assign_profiles(SocialScope.visible_profiles(socket))}
+
+  # B3: a draft was sent for review from its card: re-read, so it leaves
+  # Drafts and appears through the ordinary review placement.
+  def handle_info({PlatformWeb.SocialDraftCard, :sent, _post_id}, socket),
+    do:
+      {:noreply,
+       socket
+       |> assign(:queue_drafts_notice, "Sent for review.")
+       |> load()
+       |> SocialScope.assign_profiles(SocialScope.visible_profiles(socket))}
 
   def handle_info(_message, _socket), do: :unhandled
 
@@ -621,6 +643,46 @@ defmodule PlatformWeb.SocialQueueTab do
       >
         Browse Queue
       </a>
+      <p
+        :if={@queue_drafts_notice}
+        role="status"
+        data-role="drafts-notice"
+        class="rounded-xl border border-edge p-3 text-sm font-medium"
+      >
+        {@queue_drafts_notice}
+      </p>
+      <section
+        :if={not @queue_drafts_empty?}
+        id="queue-drafts"
+        aria-labelledby="queue-drafts-heading"
+        data-role="queue-drafts"
+        class="space-y-3"
+      >
+        <h2 id="queue-drafts-heading" class="text-xl font-semibold">Drafts</h2>
+        <p class="text-sm text-base-content">
+          Not sent for review yet. Finish the caption and time, then send it.
+        </p>
+        <ul id="social-queue-drafts" phx-update="stream" class="space-y-4">
+          <li
+            :for={{dom_id, post} <- @streams.queue_drafts}
+            id={dom_id}
+            data-role="queue-draft-row"
+          >
+            <.live_component
+              module={PlatformWeb.SocialDraftCard}
+              id={"queue-draft-" <> post.id}
+              post={post}
+              account={Map.fetch!(@queue_accounts, post.account_id)}
+              profile={
+                Map.fetch!(@queue_profiles, Map.fetch!(@queue_accounts, post.account_id).profile_id)
+              }
+              user={@user}
+              show_brand?={@scope == :all}
+            />
+          </li>
+        </ul>
+      </section>
+
       <section aria-labelledby="queue-needs-you" class="space-y-3">
         <div :if={is_nil(@queue_target_notice)} class="flex flex-wrap items-baseline gap-x-3 gap-y-1">
           <h2 id="queue-needs-you" class="text-xl font-semibold" data-role="queue-heading">

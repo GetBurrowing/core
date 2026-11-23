@@ -4,7 +4,7 @@ defmodule PlatformWeb.SocialClipsLibrary do
 
   alias Platform.{Accounts, Repo, Social}
   alias Platform.Social.ClipLibrary
-  alias PlatformWeb.SocialCalendar
+  alias PlatformWeb.{SocialCalendar, SocialCalendarClock}
   alias Phoenix.LiveView.JS
 
   @filters [
@@ -23,6 +23,8 @@ defmodule PlatformWeb.SocialClipsLibrary do
      |> assign(:detail_id, nil)
      |> assign(:detail, nil)
      |> assign(:retry_error, nil)
+     |> assign(:retry_notice, nil)
+     |> assign(:retry_chooser, nil)
      |> assign(:filters, %{})
      |> assign(:show_chip?, false)
      |> assign(:loaded_profile_id, nil)
@@ -42,6 +44,8 @@ defmodule PlatformWeb.SocialClipsLibrary do
         |> assign(:detail_id, nil)
         |> assign(:detail, nil)
         |> assign(:retry_error, nil)
+        |> assign(:retry_notice, nil)
+        |> assign(:retry_chooser, nil)
       else
         socket
       end
@@ -94,27 +98,52 @@ defmodule PlatformWeb.SocialClipsLibrary do
     {:noreply, socket}
   end
 
-  def handle_event("retry", %{"clip_id" => id, "post_id" => post_id}, socket) do
-    socket = socket |> assign(:detail_id, id) |> assign(:retry_error, nil) |> load()
+  # Retrying a failed post needs a human-chosen publish time. This opens the
+  # chooser for an eligible failed post; nothing is published or written here.
+  def handle_event("retry_open", %{"clip_id" => id, "post_id" => post_id}, socket) do
+    socket =
+      socket
+      |> assign(:detail_id, id)
+      |> assign(:retry_error, nil)
+      |> assign(:retry_notice, nil)
+      |> assign(:retry_chooser, nil)
+      |> load()
 
     socket =
       case detail_row(socket, post_id) do
-        %{entry: %{state: :failed}, can_retry?: true} ->
-          case Social.retry_post(
-                 socket.assigns.library_profile.org_id,
-                 post_id,
-                 socket.assigns.user_id
-               ) do
-            {:ok, _} ->
-              socket
+        %{entry: %{state: :failed}, can_retry?: true, job_id: nil} ->
+          assign(socket, :retry_chooser, post_id)
 
-            {:error, _} ->
-              assign(
-                socket,
-                :retry_error,
-                "Retry could not complete. Refresh the account and try again."
-              )
-          end
+        _ ->
+          socket
+      end
+
+    {:noreply, socket}
+  end
+
+  # A failed post that already has a vendor job is retried as that same job,
+  # at its existing time. No time is chosen or sent.
+  def handle_event("retry_existing", %{"clip_id" => id, "post_id" => post_id}, socket) do
+    # The expectation is the job id the human was shown: read from the row
+    # already rendered in assigns, before any reload can replace it.
+    rendered = rendered_row(socket, id, post_id)
+
+    socket =
+      socket
+      |> assign(:detail_id, id)
+      |> assign(:retry_error, nil)
+      |> assign(:retry_notice, nil)
+      |> assign(:retry_chooser, nil)
+
+    socket =
+      case rendered do
+        %{entry: %{state: :failed}, can_retry?: true, job_id: job_id} when is_binary(job_id) ->
+          retry_existing_job(socket, post_id, job_id)
+
+        # The rendered row had no vendor job to retry: refuse; `load/1` below
+        # refreshes the row.
+        %{can_retry?: true} ->
+          assign(socket, :retry_error, retry_refusal(:publish_job_changed))
 
         _ ->
           socket
@@ -123,16 +152,173 @@ defmodule PlatformWeb.SocialClipsLibrary do
     {:noreply, load(socket)}
   end
 
+  def handle_event("retry_cancel", _params, socket) do
+    {:noreply, socket |> assign(:retry_chooser, nil) |> assign(:retry_error, nil)}
+  end
+
+  def handle_event(
+        "retry",
+        %{"clip_id" => id, "post_id" => post_id, "at" => at},
+        socket
+      )
+      when is_binary(at) do
+    # The chooser only renders for a row with no job; that rendered "no job"
+    # is what the timed retry expects, read before any reload.
+    rendered = rendered_row(socket, id, post_id)
+
+    socket =
+      socket
+      |> assign(:detail_id, id)
+      |> assign(:retry_error, nil)
+      |> assign(:retry_notice, nil)
+
+    socket =
+      case rendered do
+        %{entry: %{state: :failed}, can_retry?: true, job_id: nil} ->
+          retry_at(socket, post_id, at)
+
+        # A time can never reschedule an existing remote job, and a forged
+        # event for a row that was never rendered does nothing.
+        _ ->
+          assign(socket, :retry_chooser, nil)
+      end
+
+    {:noreply, load(socket)}
+  end
+
   def handle_event(event, _params, socket) when event in ~w(open_detail retry reconnect) do
-    {:noreply, socket |> assign(:detail_id, nil) |> load()}
+    {:noreply, socket |> assign(:detail_id, nil) |> assign(:retry_chooser, nil) |> load()}
   end
 
   def handle_event(_event, _params, socket), do: {:noreply, load(socket)}
+
+  # The chosen wall time is read in the profile's zone and sent as an explicit
+  # UTC instant. Blank or malformed input never reaches Social.retry_post/4.
+  defp retry_at(socket, post_id, input) do
+    zone = retry_zone(socket.assigns.library_profile)
+
+    case parse_local_time(input, zone) do
+      {:ok, at_utc} ->
+        socket.assigns.library_profile.org_id
+        |> Social.retry_post(post_id, socket.assigns.user_id,
+          scheduled_at: at_utc,
+          expected_external_id: nil
+        )
+        |> retry_outcome(socket, zone)
+
+      :error ->
+        assign(socket, :retry_error, ["Choose a date and time to publish."])
+    end
+  end
+
+  defp retry_existing_job(socket, post_id, job_id) do
+    zone = retry_zone(socket.assigns.library_profile)
+
+    socket.assigns.library_profile.org_id
+    |> Social.retry_post(post_id, socket.assigns.user_id, expected_external_id: job_id)
+    |> retry_outcome(socket, zone)
+  end
+
+  defp retry_outcome({:ok, %{status: status} = post}, socket, zone)
+       when status in ~w(scheduled approved published) do
+    notice =
+      case {status, post.scheduled_at} do
+        {"published", _} -> "Published."
+        {_, %DateTime{} = at} -> "Scheduled for #{format_local(at, zone)}."
+        _ -> "Scheduled."
+      end
+
+    socket |> assign(:retry_chooser, nil) |> assign(:retry_notice, notice)
+  end
+
+  defp retry_outcome({:ok, _post}, socket, _zone) do
+    socket
+    |> assign(:retry_chooser, nil)
+    |> assign(:retry_error, ["Retry did not go through. Check the status below."])
+  end
+
+  # The server refuses when the job it was asked to retry changed or
+  # disappeared under its lock, or when a time was supplied for an existing job.
+  defp retry_outcome({:error, reason}, socket, _zone)
+       when reason in [:publish_job_changed, :existing_job_schedule_not_allowed],
+       do:
+         socket
+         |> assign(:retry_chooser, nil)
+         |> assign(:retry_error, retry_refusal(:publish_job_changed))
+
+  defp retry_outcome({:error, :publish_time_required}, socket, _zone),
+    do: assign(socket, :retry_error, ["Choose a date and time to publish."])
+
+  defp retry_outcome({:error, :slot_passed}, socket, _zone),
+    do: assign(socket, :retry_error, ["The publish time has passed. Choose a new one."])
+
+  defp retry_outcome({:error, {:incomplete_post, lines}}, socket, _zone) when is_list(lines),
+    do: assign(socket, :retry_error, lines)
+
+  defp retry_outcome({:error, _}, socket, _zone) do
+    socket
+    |> assign(:retry_chooser, nil)
+    |> assign(:retry_error, ["Retry could not complete. Refresh the account and try again."])
+  end
+
+  @doc false
+  def retry_refusal(:publish_job_changed),
+    do: ["The publish job changed, so nothing was retried. The status below is up to date."]
+
+  # Only a failed post with a nonblank vendor external_id has a job to retry.
+  # The id is captured when the row is drawn and travels with the row.
+  defp job_id(org_id, %{state: :failed, post_id: post_id}) do
+    case Social.get_post(org_id, post_id) do
+      %{} = post -> Platform.Social.Publishing.existing_job_id(post)
+      _ -> nil
+    end
+  end
+
+  defp job_id(_org_id, _entry), do: nil
+
+  defp retry_zone(profile), do: SocialCalendarClock.profile_zone(profile)
+
+  defp parse_local_time(input, zone) do
+    input = String.trim(input)
+    input = if byte_size(input) == 16, do: input <> ":00", else: input
+
+    with true <- Regex.match?(~r/\A\d{4}-\d{2}-\d{2}T\d{2}:\d{2}:\d{2}\z/, input),
+         {:ok, naive} <- NaiveDateTime.from_iso8601(input),
+         {:ok, local} <- local_to_datetime(naive, zone) do
+      # The post's utc_datetime_usec column rejects second precision.
+      {:ok, %{DateTime.shift_zone!(local, "Etc/UTC") | microsecond: {0, 6}}}
+    else
+      _ -> :error
+    end
+  end
+
+  # A skipped wall time (spring-forward gap) is refused; a repeated one takes
+  # its earlier instant.
+  defp local_to_datetime(naive, zone) do
+    case DateTime.from_naive(naive, zone) do
+      {:ok, dt} -> {:ok, dt}
+      {:ambiguous, first, _} -> {:ok, first}
+      _ -> :error
+    end
+  end
+
+  defp format_local(at, zone) do
+    local = DateTime.shift_zone!(at, zone)
+    "#{Calendar.strftime(local, "%a %-d %b, %H:%M")} #{local.zone_abbr}"
+  end
 
   defp detail_row(%{assigns: %{detail: %{rows: rows}}}, post_id),
     do: Enum.find(rows, &(&1.entry.post_id == post_id))
 
   defp detail_row(_, _), do: nil
+
+  # The row as last rendered for this clip's open detail, or nil.
+  defp rendered_row(socket, clip_id, post_id) do
+    case socket.assigns do
+      %{detail: %{clip: %{id: ^clip_id}}} -> detail_row(socket, post_id)
+      _ -> nil
+    end
+  end
 
   # Only the current visible profile can supply a detail, including forged
   # events and refreshes. UUID casting happens before any database query.
@@ -156,6 +342,7 @@ defmodule PlatformWeb.SocialClipsLibrary do
                   can_connect?:
                     is_nil(account.archived_at) and
                       Social.approver_check(org_id, profile, socket.assigns.user_id) == :ok,
+                  job_id: job_id(org_id, entry),
                   can_retry?:
                     is_nil(account.archived_at) and
                       Social.post_approver_check(org_id, profile, account, socket.assigns.user_id) ==
@@ -175,7 +362,13 @@ defmodule PlatformWeb.SocialClipsLibrary do
 
       assign(socket, :detail, %{clip: clip, rows: rows, missing: missing})
     else
-      _ -> socket |> assign(:detail_id, nil) |> assign(:detail, nil) |> assign(:retry_error, nil)
+      _ ->
+        socket
+        |> assign(:detail_id, nil)
+        |> assign(:detail, nil)
+        |> assign(:retry_error, nil)
+        |> assign(:retry_notice, nil)
+        |> assign(:retry_chooser, nil)
     end
   end
 
@@ -417,6 +610,8 @@ defmodule PlatformWeb.SocialClipsLibrary do
   defp platform_label(:scheduled), do: "Scheduled"
   defp platform_label(:uploading), do: "Uploading"
   defp platform_label(:queued), do: "Queued"
+  defp platform_label(:draft), do: "Draft"
+  defp platform_label(:in_review), do: "In review"
   defp platform_label(:failed), do: "Failed"
 
   @impl true
@@ -593,6 +788,8 @@ defmodule PlatformWeb.SocialClipsLibrary do
         myself={@myself}
         profile={@library_profile}
         retry_error={@retry_error}
+        retry_notice={@retry_notice}
+        retry_chooser={@retry_chooser}
       />
       <div
         :if={@total == 0}
@@ -691,9 +888,11 @@ defmodule PlatformWeb.SocialClipsLibrary do
                 <span class="font-semibold">{platform_name(row.entry.platform)}</span>
                 <% {icon, badge} =
                   mark(
-                    if row.entry.state == :queued,
-                      do: "Publishing",
-                      else: platform_label(row.entry.state)
+                    cond do
+                      row.entry.state == :queued -> "Publishing"
+                      row.entry.state in [:draft, :in_review] -> "In review"
+                      true -> platform_label(row.entry.state)
+                    end
                   ) %>
                 <span class={["badge badge-sm gap-1", badge]}>
                   <.icon name={icon} class="size-3" />{platform_label(row.entry.state)}
@@ -757,15 +956,72 @@ defmodule PlatformWeb.SocialClipsLibrary do
                     :if={row.can_retry?}
                     type="button"
                     data-role="library-retry"
-                    phx-click="retry"
+                    phx-click={if is_binary(row.job_id), do: "retry_existing", else: "retry_open"}
                     phx-target={@myself}
                     phx-value-clip_id={@detail.clip.id}
                     phx-value-post_id={row.entry.post_id}
-                    class="btn btn-outline btn-xs"
+                    class="btn btn-outline min-h-11"
                   >
-                    Retry
+                    {if is_binary(row.job_id),
+                      do: "Retry existing publish job",
+                      else: "Retry at a new time"}
                   </button>
                 </div>
+                <p
+                  :if={row.can_retry? and is_binary(row.job_id)}
+                  data-role="library-retry-explainer"
+                  class="text-subtle"
+                >
+                  Retries the existing publish job; this does not change its scheduled time.
+                </p>
+                <form
+                  :if={row.can_retry? and is_nil(row.job_id) and @retry_chooser == row.entry.post_id}
+                  id={"library-retry-chooser-#{row.entry.post_id}"}
+                  data-role="library-retry-chooser"
+                  phx-submit="retry"
+                  phx-target={@myself}
+                  class="space-y-2 rounded-box border border-base-300 p-3"
+                >
+                  <input type="hidden" name="clip_id" value={@detail.clip.id} />
+                  <input type="hidden" name="post_id" value={row.entry.post_id} />
+                  <h4 class="font-semibold">Choose when to publish</h4>
+                  <label class="block text-xs" for={"library-retry-at-#{row.entry.post_id}"}>
+                    Publish time ({SocialCalendarClock.label(retry_zone(@profile))})
+                    <input
+                      type="datetime-local"
+                      id={"library-retry-at-#{row.entry.post_id}"}
+                      name="at"
+                      required
+                      class="input input-bordered mt-1 min-h-11 w-full"
+                    />
+                  </label>
+                  <ul
+                    :if={@retry_error}
+                    role="alert"
+                    data-role="library-retry-error"
+                    class="text-error"
+                  >
+                    <li :for={line <- List.wrap(@retry_error)}>{line}</li>
+                  </ul>
+                  <div class="flex gap-2">
+                    <button
+                      type="submit"
+                      data-role="library-retry-submit"
+                      class="btn btn-primary min-h-11"
+                    >
+                      Retry at this time
+                    </button>
+                    <button
+                      type="button"
+                      data-role="library-retry-cancel"
+                      phx-click="retry_cancel"
+                      phx-target={@myself}
+                      class="btn btn-ghost min-h-11"
+                    >
+                      Cancel
+                    </button>
+                  </div>
+                </form>
               </div>
             </article>
             <div
@@ -776,7 +1032,21 @@ defmodule PlatformWeb.SocialClipsLibrary do
               <span>{platform_name(platform)}</span><span class="text-subtle">{if platform in (@detail.clip.platforms || []), do: "Not posted", else: "Not selected"}</span>
             </div>
           </section>
-          <p :if={@retry_error} role="alert" class="text-sm text-error">{@retry_error}</p>
+          <p
+            :if={@retry_notice}
+            role="status"
+            data-role="library-retry-notice"
+            class="text-sm text-success"
+          >
+            {@retry_notice}
+          </p>
+          <ul
+            :if={@retry_error && is_nil(@retry_chooser)}
+            role="alert"
+            class="text-sm text-error"
+          >
+            <li :for={line <- List.wrap(@retry_error)}>{line}</li>
+          </ul>
         </div>
       </aside>
     </div>

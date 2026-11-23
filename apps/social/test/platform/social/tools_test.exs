@@ -28,9 +28,18 @@ defmodule Platform.Social.ToolsTest do
         space_id: channel!(org_a).id
       })
 
-    {:ok, acc1} = Social.create_account(org_a, profile, %{platform: "x", handle: "@htc"})
-    {:ok, acc2} = Social.create_account(org_a, profile, %{platform: "linkedin"})
-    {:ok, post} = Social.create_post(org_a, acc1, %{body: "A's post", status: "needs_approval"})
+    {:ok, acc1} =
+      Social.create_account(org_a, profile, %{platform: "x", handle: "@htc", status: "connected"})
+
+    {:ok, acc2} =
+      Social.create_account(org_a, profile, %{platform: "linkedin", status: "connected"})
+
+    {:ok, post} =
+      Social.create_post(org_a, acc1, %{
+        body: "A's post",
+        status: "needs_approval",
+        scheduled_at: DateTime.add(DateTime.utc_now(), 3600)
+      })
 
     {:ok, clip} =
       Social.create_clip(org_a, profile, %{
@@ -106,7 +115,7 @@ defmodule Platform.Social.ToolsTest do
       now = DateTime.utc_now()
 
       for _ <- 1..10 do
-        approved_post!(ctx.org_a, ctx.acc1)
+        historical_approved_post!(ctx.org_a, ctx.acc1)
         |> Ecto.Changeset.change(
           status: "published",
           published_at: now,
@@ -236,7 +245,9 @@ defmodule Platform.Social.ToolsTest do
                  %{
                    "profile_id" => ctx.profile.id,
                    "account_ids" => [ctx.acc1.id, ctx.acc2.id],
-                   "body" => "Out now"
+                   "body" => "Out now",
+                   "scheduled_at" =>
+                     DateTime.utc_now() |> DateTime.add(3600) |> DateTime.to_iso8601()
                  },
                  ctx.a
                )
@@ -390,8 +401,8 @@ defmodule Platform.Social.ToolsTest do
 
     test "carries the refusal fields and honours refused: true (task 01a165f1)", ctx do
       approver = user!()
-      refused = approved_post!(ctx.org_a, ctx.acc2, %{body: "refused"}, approver)
-      _approved = approved_post!(ctx.org_a, ctx.acc2, %{body: "fine"}, approver)
+      refused = historical_approved_post!(ctx.org_a, ctx.acc2, %{body: "refused"}, approver)
+      _approved = historical_approved_post!(ctx.org_a, ctx.acc2, %{body: "fine"}, approver)
       at = DateTime.utc_now()
       retry_after = DateTime.add(at, 600, :second)
 
@@ -663,6 +674,7 @@ defmodule Platform.Social.ToolsTest do
     test "a draft citing the social task on another profile is task_profile_mismatch",
          %{w: w, seg: seg, g: g} do
       {:ok, %{task_id: task_id}} = call("social_task_request", ask_args(w, seg), g)
+      {:ok, _} = Social.update_account(w.org_id, w.x, %{status: "connected"})
       {:ok, p2} = Social.create_profile(w.org_id, %{name: "P2 #{unique()}", space_id: w.space.id})
       {:ok, a2} = Social.create_account(w.org_id, p2, %{platform: "x"})
       posts = Repo.aggregate(Post, :count)
@@ -674,6 +686,8 @@ defmodule Platform.Social.ToolsTest do
                    "profile_id" => p2.id,
                    "account_ids" => [a2.id],
                    "body" => "hi",
+                   "scheduled_at" =>
+                     DateTime.utc_now() |> DateTime.add(3600) |> DateTime.to_iso8601(),
                    "task_id" => task_id
                  },
                  g
@@ -688,6 +702,8 @@ defmodule Platform.Social.ToolsTest do
                    "profile_id" => w.profile.id,
                    "account_ids" => [w.x.id],
                    "body" => "hi",
+                   "scheduled_at" =>
+                     DateTime.utc_now() |> DateTime.add(3600) |> DateTime.to_iso8601(),
                    "task_id" => task_id
                  },
                  g
@@ -722,6 +738,8 @@ defmodule Platform.Social.ToolsTest do
                    "profile_id" => ctx.profile.id,
                    "account_ids" => [ctx.acc1.id],
                    "body" => "clip",
+                   "scheduled_at" =>
+                     DateTime.utc_now() |> DateTime.add(3600) |> DateTime.to_iso8601(),
                    "media_file_ids" => [ctx.video.id],
                    "cover_file_id" => ctx.png.id
                  },

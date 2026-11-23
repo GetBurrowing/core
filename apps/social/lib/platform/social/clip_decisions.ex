@@ -1,32 +1,47 @@
 defmodule Platform.Social.ClipDecisions do
   @moduledoc """
-  A human's one-step decision on a rendered clip (Clip Studio 2/9, task
-  01a16662): approve publishes it to the chosen accounts, reject sends a note
-  back to the agent, and undo takes either back inside the window.
+  A human's decision on a rendered clip (Clip Studio 2/9, task 01a16662, as
+  changed by the B3 clip integration): choosing a clip for posting makes
+  DRAFT posts that take the normal review path, reject sends a note back to
+  the agent, and undo takes a reject (or a pre-B3 approval still inside its
+  window) back.
 
-  ## One approval publishes
+  ## Choosing a clip makes drafts, never an approval
 
-  `approve_clip/5` IS the approval. In one transaction it marks the clip
-  approved (`Platform.Social.Clip.review_changeset/3`), applies the human's
-  title/caption edits (`Clip.human_edit_changeset/2`), writes one post per
-  selected account (per-platform status is never rolled up), and approves
-  each with `Platform.Social.approve_post/4` as the SAME human. The posts
-  share the clip's ONE idea (Social authoring 2/11:
-  `Platform.Social.Ideas.find_or_create_for_clip!/3`), and each gets a
-  `created` and an `approved` change log entry naming that human. There is no
-  approval card and no `needs_approval` step. Each post's `publish_after` is
-  the decision time plus `Platform.Social.ClipPublish.window_ms/0`, and
-  `ClipPublish` publishes it once the window closes. The window is
-  server-side; there is no client timer.
+  `draft_clip/5` marks the clip chosen (`Platform.Social.Clip.review_changeset/3`
+  with `{:approve, user_id}`: that column records the human's CLIP decision,
+  it is not a post approval and nothing reads it as one), applies the human's
+  title/caption edits (`Clip.human_edit_changeset/2`) and writes one legacy
+  `draft` post per selected account (per-platform status is never rolled up),
+  in one transaction. The posts share the clip's ONE idea (Social authoring
+  2/11: `Platform.Social.Ideas.find_or_create_for_clip!/3`) and each gets a
+  `created` change-log entry. A draft is never `needs_approval` or
+  `approved`: there is no card, no notification, no approver on the post and
+  no `publish_after`. Its body is the caption as the person edited it; the
+  link is `link_url` on its own and is not appended to the body. `scheduled_at`
+  is set only when the person gave a time. A YouTube account's title goes
+  into `platform_options["title"]` through
+  `Platform.Social.set_platform_options/4`, the human path that validates it.
+
+  The draft then goes through the same entries as every legacy draft: sending
+  it for review is `Platform.Social.update_post/3` (or the agent's
+  `Platform.Social.AgentDrafts.update_agent_draft/4`) setting `needs_approval`,
+  which writes the approval card, and only `Platform.Social.approve_post/4`
+  (the card's approve) approves. Any completeness rule applies inside those
+  shared entries, not here.
+
+  `publish_after` is the pre-B3 undo window of a one-click approval. Nothing
+  here writes it. `Platform.Social.ClipPublish` and the undo below remain only
+  for rows written by earlier releases.
 
   ## Humans only
 
   Every entry takes a user id and checks it with
   `Platform.Social.approver_check/3` on the clip's profile before anything
   else: an agent id is `:not_a_human`, a user off the approver list
-  `:not_an_approver`. `approve_post/4` then applies the per-account rule
-  (an owned account needs its owner, `:not_the_owner`), and any refusal
-  rolls the whole decision back. No agent tool reaches this module.
+  `:not_an_approver`. `draft_clip/5` also applies the per-account rule to
+  each account (an owned account needs its owner, `:not_the_owner`), and any
+  refusal rolls the whole decision back. No agent tool reaches this module.
 
   ## Clock
 
@@ -47,8 +62,10 @@ defmodule Platform.Social.ClipDecisions do
     ClipVersions,
     Ideas,
     Links,
+    PlatformOptions,
     Post,
     PostEvents,
+    PublishingCompleteness,
     Profile,
     Publishing
   }
@@ -67,31 +84,36 @@ defmodule Platform.Social.ClipDecisions do
           | :note_too_long
           | :not_reviewer
           | :window_closed
+          | :invalid_schedule
+          | :schedule_in_past
           | :not_a_clip_post
           | :not_failed
           | Social.approver_refusal()
 
-  # ── Approve ──────────────────────────────────────────────────────────
+  # ── Draft ────────────────────────────────────────────────────────────
 
   @doc """
-  Approves a rendered, pending clip as `user_id` and queues it to publish
-  on `attrs["account_ids"]` after the undo window. `attrs` may carry the
-  human's `"title"` and `"caption"` edits. `attrs["render_id"]` is required
-  and binds every post to that playable version; it never defaults to latest.
+  Chooses a rendered, pending clip as `user_id` and writes a legacy `draft`
+  post on each of `attrs["account_ids"]`. `attrs` may carry the human's
+  `"title"` and `"caption"` edits and an explicit `"scheduled_at"` (a
+  `DateTime` or ISO 8601 string in the future; absent means no time).
+  `attrs["render_id"]` is required and binds every post to that playable
+  version; it never defaults to latest.
 
   Refusals, in order, each writing nothing: `:not_found` (missing or another
   org's clip), `:not_pending` (not rendered, or not review pending), the
-  `approver_check/3` refusal, `:no_platforms` (no account ids),
-  `:account_not_in_profile` (an id that is not a live account of the
-  clip's profile, another org's included), `:account_draft_only`. A
-  refusal from `approve_post/4` (e.g. `:not_the_owner`) or a changeset
-  error rolls everything back.
+  `approver_check/3` refusal, `:invalid_schedule` / `:schedule_in_past`,
+  `:no_platforms` (no account ids), `:account_not_in_profile` (an id that is
+  not a live account of the clip's profile, another org's included),
+  `:account_draft_only`. A `post_approver_check/4` refusal (e.g.
+  `:not_the_owner`), `{:invalid_options, errors}` (a YouTube title over its
+  limit) or a changeset error rolls everything back.
 
   Returns `{:ok, %{clip: clip, posts: posts}}`.
   """
-  @spec approve_clip(Ecto.UUID.t(), term(), term(), map(), keyword()) ::
+  @spec draft_clip(Ecto.UUID.t(), term(), term(), map(), keyword()) ::
           {:ok, %{clip: Clip.t(), posts: [Post.t()]}} | {:error, refusal() | Changeset.t()}
-  def approve_clip(org_id, clip_id, user_id, attrs, opts \\ []) do
+  def draft_clip(org_id, clip_id, user_id, attrs, opts \\ []) do
     now = now(opts)
     attrs = if is_map(attrs), do: attrs, else: %{}
 
@@ -100,34 +122,76 @@ defmodule Platform.Social.ClipDecisions do
          :ok <- pending(clip),
          {:ok, profile} <- profile(org_id, clip),
          :ok <- Social.approver_check(org_id, profile, user_id),
+         {:ok, scheduled_at} <- schedule(attrs["scheduled_at"], now),
          {:ok, accounts} <- accounts(profile, attrs["account_ids"]) do
-      publish_after = DateTime.add(now, ClipPublish.window_ms(), :millisecond)
-
       Repo.transaction(fn ->
-        with %Profile{} <- Social.lock_profile(org_id, profile.id, :share) || {:error, :not_found},
+        # The checks above are cheap early refusals. The decision of record is
+        # made again on the rows read under the lock (`Social.lock_account/3`
+        # documents the convention): the locked profile, its approver list and
+        # each account's owner, archive and approval mode as they are now.
+        with %Profile{} = profile <-
+               Social.lock_profile(org_id, profile.id, :share) || {:error, :not_found},
+             :ok <- Social.approver_check(org_id, profile, user_id),
+             {:ok, accounts} <- relock_accounts(profile, accounts),
              {:ok, clip} <- lock_clip(clip),
              :ok <- pending(clip),
              {:ok, render} <- selected_render(org_id, profile, clip, attrs["render_id"]),
              {:ok, clip} <- review(clip, render, user_id, attrs, now),
              version_clip = version_clip(clip, render, attrs),
              {:ok, posts} <-
-               write_posts(org_id, profile, version_clip, accounts, user_id, publish_after) do
+               write_drafts(org_id, profile, version_clip, accounts, user_id, scheduled_at) do
           %{clip: clip, posts: posts}
         else
           {:error, reason} -> Repo.rollback(reason)
         end
       end)
       |> case do
-        {:ok, %{clip: clip, posts: posts} = result} ->
-          ClipPublish.schedule(Enum.map(posts, & &1.id), publish_after, publish_server(opts))
+        {:ok, %{clip: clip}} = result ->
           Social.broadcast_clip(clip)
-          {:ok, result}
+          result
 
         error ->
           error
       end
     end
   end
+
+  # Re-reads each selected account under a `FOR SHARE` row lock, after the
+  # profile lock, and applies the live-account rules to the committed row.
+  defp relock_accounts(%Profile{} = profile, accounts) do
+    accounts
+    |> Enum.reduce_while({:ok, []}, fn %Account{id: id}, {:ok, acc} ->
+      case Social.lock_account(profile, id, :share) do
+        %Account{archived_at: nil, approval_mode: mode} = account when mode != "draft_only" ->
+          {:cont, {:ok, [account | acc]}}
+
+        %Account{archived_at: nil} ->
+          {:halt, {:error, :account_draft_only}}
+
+        _gone_or_archived ->
+          {:halt, {:error, :account_not_in_profile}}
+      end
+    end)
+    |> case do
+      {:ok, locked} -> {:ok, Enum.reverse(locked)}
+      error -> error
+    end
+  end
+
+  defp schedule(nil, _now), do: {:ok, nil}
+  defp schedule("", _now), do: {:ok, nil}
+
+  defp schedule(%DateTime{} = at, now),
+    do: if(DateTime.compare(at, now) == :gt, do: {:ok, at}, else: {:error, :schedule_in_past})
+
+  defp schedule(text, now) when is_binary(text) do
+    case DateTime.from_iso8601(text) do
+      {:ok, at, _offset} -> schedule(at, now)
+      _ -> {:error, :invalid_schedule}
+    end
+  end
+
+  defp schedule(_other, _now), do: {:error, :invalid_schedule}
 
   # Resolve again under the promotion lock: an event carries the version the
   # human actually saw, even if another render completed before the click.
@@ -164,14 +228,13 @@ defmodule Platform.Social.ClipDecisions do
     |> Repo.update()
   end
 
-  defp write_posts(org_id, profile, clip, accounts, user_id, publish_after) do
+  defp write_drafts(org_id, profile, clip, accounts, user_id, scheduled_at) do
     idea = Ideas.find_or_create_for_clip!(clip, profile, user_id)
 
     Enum.reduce_while(accounts, {:ok, []}, fn account, {:ok, acc} ->
-      with {:ok, post} <- insert_post(profile, clip, idea, account, publish_after),
-           _created = PostEvents.record!(post, "created", {:human, user_id}),
-           {:ok, post} <- Social.approve_post(org_id, post, user_id, lock: true) do
-        PostEvents.record!(post, "approved", {:human, user_id})
+      with :ok <- Social.post_approver_check(org_id, profile, account, user_id),
+           {:ok, post} <- insert_draft(profile, clip, idea, account, scheduled_at),
+           _created = PostEvents.record!(post, "created", {:human, user_id}) do
         {:cont, {:ok, [post | acc]}}
       else
         error -> {:halt, error}
@@ -183,23 +246,24 @@ defmodule Platform.Social.ClipDecisions do
     end
   end
 
-  # A draft that is approved in the same transaction: never `needs_approval`,
-  # so no approval card is written. `clip_id`, `idea_id` and `publish_after`
-  # are set on the struct, never cast.
-  defp insert_post(profile, clip, idea, account, publish_after) do
+  # A `draft`: never `needs_approval` or `approved`, so no approval card is
+  # written and no approver is recorded. `clip_id`, `clip_render_id` and
+  # `idea_id` are set on the struct, never cast. The body is the caption as
+  # it stands; the link is its own field. `publish_after` is not written.
+  defp insert_draft(profile, clip, idea, account, scheduled_at) do
     link = Links.effective_link(nil, profile.home_url, clip.source_url, clip.start_s)
 
     %Post{
       account_id: account.id,
       clip_id: clip.id,
       clip_render_id: clip.reviewed_render_id,
-      idea_id: idea.id,
-      publish_after: publish_after
+      idea_id: idea.id
     }
     |> Post.changeset(%{
       status: "draft",
-      body: Links.append_to_body(clip.caption, link),
+      body: clip.caption,
       link_url: link,
+      scheduled_at: scheduled_at,
       media_file_ids: List.wrap(clip.render_file_id),
       generated_by_agent_id: clip.submitted_by_agent_id
     })
@@ -210,7 +274,28 @@ defmodule Platform.Social.ClipDecisions do
         "height" => clip.height
       }
     })
-    |> Repo.insert()
+    |> put_title(account, clip)
+    |> insert_valid()
+  end
+
+  defp insert_valid(%Changeset{errors: [{:title, {message, _}} | _]}),
+    do: {:error, {:invalid_options, %{"title" => message}}}
+
+  defp insert_valid(%Changeset{} = changeset), do: Repo.insert(changeset)
+
+  # A platform that takes a video title (YouTube) gets the reviewed title
+  # through `PublishingCompleteness.put_title/3`, the narrow title input that
+  # validates it and leaves every other platform option alone. Other
+  # platforms take no title option and are untouched.
+  defp put_title(changeset, %Account{platform: platform} = account, clip) do
+    title = clip.title
+
+    if "title" in PlatformOptions.keys(platform) and is_binary(title) and
+         String.trim(title) != "" do
+      PublishingCompleteness.put_title(changeset, %{title: title}, account)
+    else
+      changeset
+    end
   end
 
   # ── Reject ───────────────────────────────────────────────────────────
@@ -334,8 +419,8 @@ defmodule Platform.Social.ClipDecisions do
     end
   end
 
-  # Social Studio: a Studio clip has its own review; the legacy one-click
-  # approve (which approves and arms a publish timer) and its undo never act
+  # Social Studio: a Studio clip has its own review; the legacy clip draft
+  # and the undo of a pre-B3 one-click approval never act
   # on it. The marker is the clip's own column, never the profile toggle, and it
   # is never written after insert, so one check before the lock is enough.
   defp refuse_studio_clip(%Clip{flow: "studio"}), do: {:error, :studio_clip}
@@ -400,26 +485,37 @@ defmodule Platform.Social.ClipDecisions do
       `Platform.Social.Publishing.retry_publish/3`, unchanged, which
       re-checks the approver, honours `{:wait_until, at}` for a rate-limited
       post, and re-runs `publish_post/2`;
-    * `failed` (the vendor refused it, which `retry_publish/3` answers
-      `:not_refused`): the row is locked and re-approved by THIS human with
-      `Post.approval_changeset/2` (so the record names who retried), its
-      error cleared, then `publish_post/2` runs the full guard.
+    * `failed` with an existing vendor job: after current authority and
+      eligibility checks under the post lock, retain the legacy local retry
+      transition and retry that exact job. No new B3 content approval or
+      schedule rewrite occurs; a supplied schedule is refused.
+    * `failed` without a vendor job: require an explicit future schedule
+      and the shared locked completeness/reapproval checks before publishing.
+
+  Both retry paths verify the expected job identity under the relevant post
+  locks. A changed or disappeared job is refused, never switched to creation.
 
   Each vendor call counts in `publish_attempts`.
   """
   @spec retry_post(Ecto.UUID.t(), term(), term()) ::
           {:ok, Post.t()} | {:error, refusal() | term()}
-  def retry_post(org_id, post_id, user_id) do
+  def retry_post(org_id, post_id, user_id, opts \\ []) do
     with {:ok, post} <- fetch_post(org_id, post_id),
          :ok <- clip_post(post),
          {:ok, account, profile} <- account_and_profile(org_id, post),
          :ok <- Social.post_approver_check(org_id, profile, account, user_id) do
       case post do
         %Post{status: "approved", refused_reason: reason} when is_binary(reason) ->
-          Publishing.retry_publish(org_id, post.id, user_id)
+          Publishing.retry_publish(org_id, post.id, user_id, opts)
 
         %Post{status: "failed"} ->
-          retry_failed(org_id, post.id, user_id)
+          retry_failed(
+            org_id,
+            post.id,
+            user_id,
+            opts,
+            Keyword.get(opts, :expected_external_id, Publishing.existing_job_id(post))
+          )
 
         %Post{} ->
           {:error, :not_failed}
@@ -431,21 +527,25 @@ defmodule Platform.Social.ClipDecisions do
 
   # Retain external_id when reapproving: the guarded publishing path uses
   # it to retry the existing vendor post rather than replaying its creation.
-  defp retry_failed(org_id, post_id, user_id) do
+  defp retry_failed(org_id, post_id, user_id, opts, expected_id) do
     Repo.transaction(fn ->
       case Social.lock_post(org_id, post_id) do
         %Post{status: "failed", error: error} = post when error != @cancelled ->
-          post
-          |> Post.approval_changeset(user_id)
-          |> Changeset.change(error: nil)
-          |> Repo.update()
-          |> case do
-            {:ok, approved} ->
-              PostEvents.record!(approved, "approved", {:human, user_id}, note: "retry")
-              approved
+          with :ok <- Social.refuse_studio(post),
+               :ok <- clip_post(post),
+               {:ok, account, profile} <- account_and_profile(org_id, post),
+               :ok <- Social.post_approver_check(org_id, profile, account, user_id),
+               :ok <- Publishing.check_expected_job(post, expected_id),
+               {:ok, approved} <- prepare_retry(org_id, post, user_id, opts, expected_id) do
+            note =
+              if expected_id,
+                do: "Retry existing vendor job; no new content or schedule review",
+                else: "retry"
 
-            {:error, changeset} ->
-              Repo.rollback(changeset)
+            PostEvents.record!(approved, "approved", {:human, user_id}, note: note)
+            approved
+          else
+            {:error, reason} -> Repo.rollback(reason)
           end
 
         _ ->
@@ -453,9 +553,31 @@ defmodule Platform.Social.ClipDecisions do
       end
     end)
     |> case do
-      {:ok, %Post{id: id}} -> Publishing.publish_post(org_id, id)
-      error -> error
+      # Recheck identity again under the publisher's own lock; never select a
+      # different job or creation if it changed after this local transition.
+      {:ok, %Post{id: id}} ->
+        Publishing.publish_post(org_id, id, expected_external_id: expected_id)
+
+      error ->
+        error
     end
+  end
+
+  # Explicit legacy same-job exception: retain the prior local retry state
+  # transition, not a B3 approval of current content. The remote retry takes
+  # only its job id, so an elapsed local schedule is neither changed nor gated.
+  defp prepare_retry(_org_id, post, user_id, opts, expected_id) when is_binary(expected_id) do
+    if Keyword.has_key?(opts, :scheduled_at) do
+      {:error, :existing_job_schedule_not_allowed}
+    else
+      post |> Post.approval_changeset(user_id) |> Changeset.change(error: nil) |> Repo.update()
+    end
+  end
+
+  defp prepare_retry(org_id, post, user_id, opts, nil) do
+    if match?(%DateTime{}, opts[:scheduled_at]),
+      do: Social.reapprove_post(org_id, post.id, user_id, opts),
+      else: {:error, :publish_time_required}
   end
 
   defp fetch_post(org_id, post_id) do
@@ -549,6 +671,4 @@ defmodule Platform.Social.ClipDecisions do
   defp broadcast(error), do: error
 
   defp now(opts), do: Keyword.get_lazy(opts, :now, &DateTime.utc_now/0)
-
-  defp publish_server(opts), do: Keyword.get(opts, :publish_server, ClipPublish)
 end

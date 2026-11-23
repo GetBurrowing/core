@@ -31,7 +31,7 @@ defmodule Platform.Social.WeeklyNoteSweepTest do
   setup do
     c = approval_fixture()
 
-    approved_post!(c.org_id, c.a)
+    historical_approved_post!(c.org_id, c.a)
     |> Ecto.Changeset.change(status: "published", published_at: ~U[2026-10-21 12:00:00.000000Z])
     |> Repo.update!()
 
@@ -164,7 +164,7 @@ defmodule Platform.Social.WeeklyNoteSweepTest do
         a = pinned_agent!(c.org_id)
         p = c.profile |> Ecto.Changeset.change(drafting_agent_id: a.id) |> Repo.update!()
 
-        approved_post!(c.org_id, c.a)
+        historical_approved_post!(c.org_id, c.a)
         |> Ecto.Changeset.change(
           status: "published",
           published_at: ~U[2026-10-21 12:00:00.000000Z]

@@ -40,9 +40,11 @@ defmodule PlatformWeb.SocialZernioConnectAcceptanceTest do
     assert Application.get_env(:social, :publisher) == Zernio
 
     fx = approval_fixture()
+    # The by-hand row is also intentionally never connected in this fixture.
+    {:ok, _} = Social.update_account(fx.org_id, fx.d, %{status: nil})
 
     {:ok, account} =
-      Social.update_account(fx.org_id, fx.a, %{provider_account_ref: "zacct_test_1"})
+      Social.update_account(fx.org_id, fx.a, %{provider_account_ref: "zacct_test_1", status: nil})
 
     {:ok, profile} =
       Social.update_profile(fx.org_id, fx.profile, %{provider_profile_ref: "zprof_test_1"})

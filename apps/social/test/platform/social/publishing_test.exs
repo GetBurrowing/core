@@ -25,7 +25,7 @@ defmodule Platform.Social.PublishingTest do
 
   describe "existing vendor posts" do
     test "retry success persists publication identity and clears refusal state", ctx do
-      post = approved_post!(ctx.org_id, ctx.account)
+      post = historical_approved_post!(ctx.org_id, ctx.account)
 
       {:ok, post} =
         post
@@ -66,7 +66,7 @@ defmodule Platform.Social.PublishingTest do
             {:ok, %{status: :failed, external_id: "existing-failed", error: "platform refused"}},
             {:error, :timeout}
           ] do
-        post = approved_post!(ctx.org_id, ctx.account)
+        post = historical_approved_post!(ctx.org_id, ctx.account)
 
         {:ok, post} =
           post |> Ecto.Changeset.change(external_id: "existing-failed") |> Repo.update()
@@ -85,7 +85,7 @@ defmodule Platform.Social.PublishingTest do
     end
 
     test "scheduled retry awaits later settlement", ctx do
-      post = approved_post!(ctx.org_id, ctx.account)
+      post = historical_approved_post!(ctx.org_id, ctx.account)
 
       {:ok, post} =
         post |> Ecto.Changeset.change(external_id: "existing-scheduled") |> Repo.update()
@@ -110,7 +110,7 @@ defmodule Platform.Social.PublishingTest do
     end
 
     test "guard refusal preserves existing id and sends no vendor request", ctx do
-      post = approved_post!(ctx.org_id, ctx.account)
+      post = historical_approved_post!(ctx.org_id, ctx.account)
 
       {:ok, post} =
         post |> Ecto.Changeset.change(external_id: "existing-guarded") |> Repo.update()
@@ -129,7 +129,7 @@ defmodule Platform.Social.PublishingTest do
     end
 
     test "unsupported retry never falls back to creation or counts an attempt", ctx do
-      post = approved_post!(ctx.org_id, ctx.account)
+      post = historical_approved_post!(ctx.org_id, ctx.account)
 
       {:ok, post} =
         post |> Ecto.Changeset.change(external_id: "existing-unsupported") |> Repo.update()
@@ -149,7 +149,7 @@ defmodule Platform.Social.PublishingTest do
 
     test "blank external id keeps the create idempotency key", ctx do
       for external_id <- [nil, "", "  "] do
-        post = approved_post!(ctx.org_id, ctx.account)
+        post = historical_approved_post!(ctx.org_id, ctx.account)
         {:ok, post} = post |> Ecto.Changeset.change(external_id: external_id) |> Repo.update()
         assert {:ok, _} = Publishing.publish_post(ctx.org_id, post.id)
         assert {:publish, [_, request], _} = List.last(Fake.calls(:publish))
@@ -162,7 +162,7 @@ defmodule Platform.Social.PublishingTest do
 
   describe "happy path" do
     test "approved -> scheduled with external_id -> published with external_url", ctx do
-      post = approved_post!(ctx.org_id, ctx.account, %{body: "launch day"})
+      post = historical_approved_post!(ctx.org_id, ctx.account, %{body: "launch day"})
 
       assert {:ok, %Post{status: "scheduled"} = scheduled} =
                Publishing.publish_post(ctx.org_id, post.id)
@@ -187,7 +187,7 @@ defmodule Platform.Social.PublishingTest do
     end
 
     test "an adapter error moves the post to failed with a readable error", ctx do
-      post = approved_post!(ctx.org_id, ctx.account)
+      post = historical_approved_post!(ctx.org_id, ctx.account)
       Fake.fail_next(:publish, :rate_limited)
 
       assert {:error, {:publish_failed, :rate_limited}} =
@@ -200,12 +200,17 @@ defmodule Platform.Social.PublishingTest do
 
     test "is_aigc and ai_disclosure reach the adapter's request", ctx do
       agent = agent!()
-      post = approved_post!(ctx.org_id, ctx.account, %{generated_by_agent_id: agent.id})
+
+      post =
+        historical_approved_post!(ctx.org_id, ctx.account, %{generated_by_agent_id: agent.id})
 
       labelled =
-        approved_post!(ctx.org_id, ctx.account, %{is_aigc: true, ai_disclosure: "AI voice"})
+        historical_approved_post!(ctx.org_id, ctx.account, %{
+          is_aigc: true,
+          ai_disclosure: "AI voice"
+        })
 
-      plain = approved_post!(ctx.org_id, ctx.account)
+      plain = historical_approved_post!(ctx.org_id, ctx.account)
 
       for p <- [post, labelled, plain], do: {:ok, _} = Publishing.publish_post(ctx.org_id, p.id)
 
@@ -216,13 +221,13 @@ defmodule Platform.Social.PublishingTest do
     end
 
     test "a post in another org is not found and never published", ctx do
-      post = approved_post!(ctx.org_id, ctx.account)
+      post = historical_approved_post!(ctx.org_id, ctx.account)
       assert {:error, :not_found} = Publishing.publish_post(org_id!(), post.id)
       assert Fake.calls() == []
     end
 
     test "an archived account is refused before the adapter", ctx do
-      post = approved_post!(ctx.org_id, ctx.account)
+      post = historical_approved_post!(ctx.org_id, ctx.account)
       {:ok, _} = Social.archive_account(ctx.org_id, ctx.account)
       assert {:error, :account_archived} = Publishing.publish_post(ctx.org_id, post.id)
       assert Repo.get!(Post, post.id).status == "approved"
@@ -230,7 +235,7 @@ defmodule Platform.Social.PublishingTest do
     end
 
     test "no configured publisher refuses without touching the row", ctx do
-      post = approved_post!(ctx.org_id, ctx.account)
+      post = historical_approved_post!(ctx.org_id, ctx.account)
       previous = Application.get_env(:social, :publisher)
       Application.delete_env(:social, :publisher)
       on_exit(fn -> Application.put_env(:social, :publisher, previous) end)
@@ -249,8 +254,9 @@ defmodule Platform.Social.PublishingTest do
     end
 
     test "a needs_approval post is refused and the adapter is never called", ctx do
-      {:ok, post} =
-        Social.create_post(ctx.org_id, ctx.account, %{body: "x", status: "needs_approval"})
+      # Historical incomplete review still cannot pass the publishing guard.
+      {:ok, post} = Social.create_post(ctx.org_id, ctx.account, %{body: "x"})
+      post = Repo.update!(Ecto.Changeset.change(post, status: "needs_approval"))
 
       assert {:error, :not_approved} = Publishing.publish_post(ctx.org_id, post.id)
       assert Repo.get!(Post, post.id).status == "needs_approval"
@@ -259,7 +265,7 @@ defmodule Platform.Social.PublishingTest do
 
     test "an approver whose user row is archived is refused, on the locked re-read", ctx do
       approver = user!()
-      post = approved_post!(ctx.org_id, ctx.account, %{}, approver)
+      post = historical_approved_post!(ctx.org_id, ctx.account, %{}, approver)
 
       approver
       |> Ecto.Changeset.change(archived_at: DateTime.utc_now())
@@ -331,7 +337,7 @@ defmodule Platform.Social.PublishingTest do
         Map.new(files_with_meta, fn {file, meta} -> {file.id, meta} end)
         |> Map.reject(fn {_, m} -> m == nil end)
 
-      approved_post!(ctx.org_id, account, %{media_file_ids: ids, media_meta: meta})
+      historical_approved_post!(ctx.org_id, account, %{media_file_ids: ids, media_meta: meta})
     end
 
     test "a refused post keeps its status and nothing reaches the publisher", ctx do
@@ -399,7 +405,7 @@ defmodule Platform.Social.PublishingTest do
 
     test "a media file from another org is refused", ctx do
       foreign = media_file!(org_id!(), "image/png")
-      post = approved_post!(ctx.org_id, ctx.account, %{media_file_ids: [foreign.id]})
+      post = historical_approved_post!(ctx.org_id, ctx.account, %{media_file_ids: [foreign.id]})
 
       assert {:error, {:media_rejected, ["A media file is missing or not in this org"]}} =
                Publishing.publish_post(ctx.org_id, post.id)
@@ -420,7 +426,7 @@ defmodule Platform.Social.PublishingTest do
       on_exit(fn -> File.rm(path) end)
 
       post =
-        approved_post!(ctx.org_id, tiktok, %{
+        historical_approved_post!(ctx.org_id, tiktok, %{
           media_file_ids: [video.id],
           media_meta: %{video.id => %{"duration_s" => 30}}
         })
@@ -470,7 +476,7 @@ defmodule Platform.Social.PublishingTest do
       {_, account} = social_account!(ctx.org_id, platform)
       video = media_file!(ctx.org_id, "video/mp4")
 
-      approved_post!(
+      historical_approved_post!(
         ctx.org_id,
         account,
         Map.merge(
@@ -617,7 +623,7 @@ defmodule Platform.Social.PublishingTest do
 
     test "the account's 4th publish in a window is refused; another account still passes", ctx do
       {_, other} = social_account!(ctx.org_id, "linkedin")
-      posts = for _ <- 1..4, do: approved_post!(ctx.org_id, ctx.account)
+      posts = for _ <- 1..4, do: historical_approved_post!(ctx.org_id, ctx.account)
       [p1, p2, p3, p4] = posts
 
       for p <- [p1, p2, p3],
@@ -628,7 +634,7 @@ defmodule Platform.Social.PublishingTest do
       assert Repo.get!(Post, p4.id).status == "approved"
       assert length(Fake.calls(:publish)) == 3
 
-      b = approved_post!(ctx.org_id, other)
+      b = historical_approved_post!(ctx.org_id, other)
       assert {:ok, %Post{status: "scheduled"}} = Publishing.publish_post(ctx.org_id, b.id)
     end
   end
@@ -647,7 +653,7 @@ defmodule Platform.Social.PublishingTest do
       {_, insta} = social_account!(ctx.org_id, "instagram", %{platform_account_type: "personal"})
       video = media_file!(ctx.org_id, "video/mp4")
 
-      approved_post!(ctx.org_id, insta, %{
+      historical_approved_post!(ctx.org_id, insta, %{
         media_file_ids: [video.id],
         media_meta: %{video.id => %{"duration_s" => 30}}
       })
@@ -695,7 +701,7 @@ defmodule Platform.Social.PublishingTest do
     end
 
     test "rate_limited: retry_after is the end of the window and the error names it", ctx do
-      post = approved_post!(ctx.org_id, ctx.account)
+      post = historical_approved_post!(ctx.org_id, ctx.account)
       exhaust_rate_limit!(ctx.account)
 
       before_ms = RateLimit.window_ends_at()
@@ -719,7 +725,7 @@ defmodule Platform.Social.PublishingTest do
     end
 
     test "account_archived: the account is disconnected", ctx do
-      post = approved_post!(ctx.org_id, ctx.account)
+      post = historical_approved_post!(ctx.org_id, ctx.account)
       {:ok, _} = Social.archive_account(ctx.org_id, ctx.account)
 
       assert {:error, :account_archived} = Publishing.publish_post(ctx.org_id, post.id)
@@ -729,7 +735,7 @@ defmodule Platform.Social.PublishingTest do
     end
 
     test "publisher_not_configured: publishing isn't set up", ctx do
-      post = approved_post!(ctx.org_id, ctx.account)
+      post = historical_approved_post!(ctx.org_id, ctx.account)
       no_publisher!()
 
       assert {:error, :publisher_not_configured} = Publishing.publish_post(ctx.org_id, post.id)
@@ -752,15 +758,15 @@ defmodule Platform.Social.PublishingTest do
       assert {:error, :not_approved} = Publishing.publish_post(ctx.org_id, draft.id)
       assert Repo.get!(Post, draft.id) == draft
 
-      post = approved_post!(ctx.org_id, ctx.account)
+      post = historical_approved_post!(ctx.org_id, ctx.account)
       post = Repo.get!(Post, post.id)
       assert {:error, :not_found} = Publishing.publish_post(org_id!(), post.id)
       assert Repo.get!(Post, post.id) == post
     end
 
     test "a later successful publish clears all three fields (scheduled and published)", ctx do
-      scheduled = approved_post!(ctx.org_id, ctx.account)
-      published = approved_post!(ctx.org_id, ctx.account)
+      scheduled = historical_approved_post!(ctx.org_id, ctx.account)
+      published = historical_approved_post!(ctx.org_id, ctx.account)
       exhaust_rate_limit!(ctx.account)
 
       for p <- [scheduled, published] do
@@ -792,8 +798,8 @@ defmodule Platform.Social.PublishingTest do
     end
 
     test "apply_outcome on a refused approved post still publishes, and clears", ctx do
-      post = approved_post!(ctx.org_id, ctx.account)
-      failed = approved_post!(ctx.org_id, ctx.account)
+      post = historical_approved_post!(ctx.org_id, ctx.account)
+      failed = historical_approved_post!(ctx.org_id, ctx.account)
       # Each refused attempt still spends a rate-limit slot (check runs first).
       Application.put_env(:social, :rate_limit, per_window: 10, window_ms: 3_600_000)
       no_publisher!()
@@ -818,7 +824,7 @@ defmodule Platform.Social.PublishingTest do
     end
 
     test "agents cannot write the refusal fields through the general changeset", ctx do
-      post = approved_post!(ctx.org_id, ctx.account)
+      post = historical_approved_post!(ctx.org_id, ctx.account)
 
       cs =
         Post.changeset(post, %{
@@ -836,11 +842,16 @@ defmodule Platform.Social.PublishingTest do
   describe "retry_publish/3 (task 01a165f1, stage 2)" do
     # An Instagram "personal" account refuses a Reel at MediaRules.
     defp refused_reel(ctx) do
-      {_, insta} = social_account!(ctx.org_id, "instagram", %{platform_account_type: "personal"})
+      {_, insta} =
+        social_account!(ctx.org_id, "instagram", %{
+          platform_account_type: "personal",
+          status: "connected"
+        })
+
       video = media_file!(ctx.org_id, "video/mp4")
 
       post =
-        approved_post!(ctx.org_id, insta, %{
+        historical_approved_post!(ctx.org_id, insta, %{
           media_file_ids: [video.id],
           media_meta: %{video.id => %{"duration_s" => 30}}
         })
@@ -854,7 +865,9 @@ defmodule Platform.Social.PublishingTest do
       insta |> Ecto.Changeset.change(platform_account_type: "business") |> Repo.update!()
 
       assert {:ok, %Post{status: "scheduled"}} =
-               Publishing.retry_publish(ctx.org_id, post.id, post.approved_by_user_id)
+               Publishing.retry_publish(ctx.org_id, post.id, post.approved_by_user_id,
+                 scheduled_at: DateTime.add(DateTime.utc_now(), 3600)
+               )
 
       assert [{:publish, [_, %{idempotency_key: key}], _}] = Fake.calls(:publish)
       assert key == post.id
@@ -865,18 +878,20 @@ defmodule Platform.Social.PublishingTest do
                {"scheduled", nil, nil, nil, nil}
     end
 
-    test "a retry with the cause unfixed re-refuses through the guard and updates refused_at",
+    test "a new-job retry with invalid media is refused before reapproval and preserves refusal",
          ctx do
       {_insta, post} = refused_reel(ctx)
       earlier = DateTime.add(post.refused_at, -3_600, :second)
       post = post |> Ecto.Changeset.change(refused_at: earlier) |> Repo.update!()
 
-      assert {:error, {:media_rejected, _}} =
-               Publishing.retry_publish(ctx.org_id, post.id, post.approved_by_user_id)
+      assert {:error, {:incomplete_post, ["Instagram Reels need a Business or Creator account"]}} =
+               Publishing.retry_publish(ctx.org_id, post.id, post.approved_by_user_id,
+                 scheduled_at: DateTime.add(DateTime.utc_now(), 3600)
+               )
 
       row = Repo.get!(Post, post.id)
       assert {row.status, row.refused_reason} == {"approved", "media_rejected"}
-      assert DateTime.compare(row.refused_at, earlier) == :gt
+      assert row.refused_at == earlier
       assert Fake.calls(:publish) == []
     end
 
@@ -893,7 +908,7 @@ defmodule Platform.Social.PublishingTest do
     end
 
     test "a post that was not refused is refused with :not_refused", ctx do
-      post = approved_post!(ctx.org_id, ctx.account)
+      post = historical_approved_post!(ctx.org_id, ctx.account)
       post = Repo.get!(Post, post.id)
 
       assert {:error, :not_refused} =
@@ -904,7 +919,7 @@ defmodule Platform.Social.PublishingTest do
     end
 
     test "a rate_limited post before retry_after is refused with :wait_until", ctx do
-      post = approved_post!(ctx.org_id, ctx.account)
+      post = historical_approved_post!(ctx.org_id, ctx.account)
       previous = Application.get_env(:social, :rate_limit)
       Application.put_env(:social, :rate_limit, per_window: 0, window_ms: 3_600_000)
       on_exit(fn -> Application.put_env(:social, :rate_limit, previous) end)
@@ -930,7 +945,7 @@ defmodule Platform.Social.PublishingTest do
 
   describe "cancel, refresh and connect" do
     test "cancel_post deletes at the vendor and only for scheduled posts", ctx do
-      post = approved_post!(ctx.org_id, ctx.account)
+      post = historical_approved_post!(ctx.org_id, ctx.account)
       assert {:error, :not_scheduled} = Publishing.cancel_post(ctx.org_id, post.id)
       {:ok, scheduled} = Publishing.publish_post(ctx.org_id, post.id)
 
@@ -942,7 +957,7 @@ defmodule Platform.Social.PublishingTest do
     end
 
     test "refresh_status applies the vendor's outcome through apply_outcome", ctx do
-      post = approved_post!(ctx.org_id, ctx.account)
+      post = historical_approved_post!(ctx.org_id, ctx.account)
       {:ok, _} = Publishing.publish_post(ctx.org_id, post.id)
 
       assert {:ok, :noop} = Publishing.refresh_status(ctx.org_id, post.id)
@@ -957,7 +972,7 @@ defmodule Platform.Social.PublishingTest do
     end
 
     test "apply_outcome is idempotent and refuses unapproved posts", ctx do
-      post = approved_post!(ctx.org_id, ctx.account)
+      post = historical_approved_post!(ctx.org_id, ctx.account)
       {:ok, scheduled} = Publishing.publish_post(ctx.org_id, post.id)
       outcome = %{kind: :published, external_url: "https://example.test/p/2", error: nil}
 
@@ -1020,9 +1035,9 @@ defmodule Platform.Social.PublishingTest do
 
     test "each vendor call counts one publish attempt", ctx do
       {_, other} = social_account!(ctx.org_id, "linkedin")
-      ok = approved_post!(ctx.org_id, ctx.account)
-      limited = approved_post!(ctx.org_id, ctx.account)
-      failing = approved_post!(ctx.org_id, other)
+      ok = historical_approved_post!(ctx.org_id, ctx.account)
+      limited = historical_approved_post!(ctx.org_id, ctx.account)
+      failing = historical_approved_post!(ctx.org_id, other)
 
       assert Repo.get!(Post, ok.id).publish_attempts == 0
 
@@ -1051,7 +1066,7 @@ defmodule Platform.Social.PublishingTest do
       assert {:error, :not_approved} = Publishing.publish_post(ctx.org_id, draft.id)
       assert Repo.get!(Post, draft.id).publish_attempts == 0
 
-      post = approved_post!(ctx.org_id, ctx.account)
+      post = historical_approved_post!(ctx.org_id, ctx.account)
       {:ok, _} = Social.archive_account(ctx.org_id, ctx.account)
       assert {:error, :account_archived} = Publishing.publish_post(ctx.org_id, post.id)
       assert Repo.get!(Post, post.id).publish_attempts == 0
@@ -1059,7 +1074,7 @@ defmodule Platform.Social.PublishingTest do
     end
 
     test "the adapter's platform_post_id is stored; external_id is unchanged", ctx do
-      post = approved_post!(ctx.org_id, ctx.account)
+      post = historical_approved_post!(ctx.org_id, ctx.account)
       assert {:ok, scheduled} = Publishing.publish_post(ctx.org_id, post.id)
       assert scheduled.external_id == "fake_" <> post.id
       assert scheduled.platform_post_id == "fake_platform_" <> post.id
@@ -1068,7 +1083,7 @@ defmodule Platform.Social.PublishingTest do
 
     test "published_at is written on the move to published", ctx do
       # Through publish: the adapter answers published at once.
-      now_post = approved_post!(ctx.org_id, ctx.account)
+      now_post = historical_approved_post!(ctx.org_id, ctx.account)
 
       Fake.put_next(
         :publish,
@@ -1090,7 +1105,7 @@ defmodule Platform.Social.PublishingTest do
 
       # Through apply_outcome (refresh_status): scheduled first, no published_at.
       {_, other} = social_account!(ctx.org_id, "linkedin")
-      later = approved_post!(ctx.org_id, other)
+      later = historical_approved_post!(ctx.org_id, other)
       {:ok, scheduled} = Publishing.publish_post(ctx.org_id, later.id)
       assert scheduled.published_at == nil
 
@@ -1113,7 +1128,7 @@ defmodule Platform.Social.PublishingTest do
 
       # A move to failed writes no published_at.
       {_, third} = social_account!(ctx.org_id, "linkedin")
-      failing = approved_post!(ctx.org_id, third)
+      failing = historical_approved_post!(ctx.org_id, third)
       {:ok, f} = Publishing.publish_post(ctx.org_id, failing.id)
       {:ok, _} = Publishing.apply_outcome(f, %{kind: :failed, error: "nope"})
       assert %Post{status: "failed", published_at: nil} = Repo.get!(Post, failing.id)
@@ -1121,8 +1136,8 @@ defmodule Platform.Social.PublishingTest do
 
     test "one account publishes and another fails in the same sweep (put_next_for)", ctx do
       {_, other} = social_account!(ctx.org_id, "linkedin")
-      good = approved_post!(ctx.org_id, ctx.account)
-      bad = approved_post!(ctx.org_id, other)
+      good = historical_approved_post!(ctx.org_id, ctx.account)
+      bad = historical_approved_post!(ctx.org_id, other)
       Fake.put_next_for(other.id, :publish, {:error, :token_expired})
 
       results = for p <- [good, bad], do: Publishing.publish_post(ctx.org_id, p.id)

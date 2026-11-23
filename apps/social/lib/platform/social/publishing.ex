@@ -93,12 +93,13 @@ defmodule Platform.Social.Publishing do
   value is the same `{:error, reason}`.
   """
   @spec publish_post(Ecto.UUID.t(), Ecto.UUID.t()) :: {:ok, Post.t()} | {:error, term()}
-  def publish_post(org_id, post_id) do
+  def publish_post(org_id, post_id, opts \\ []) do
     {:ok, result} =
       Repo.transaction(fn ->
         with {:ok, post} <- lock(org_id, post_id),
              :ok <- refuse_studio(post),
-             :ok <- guard(post) do
+             :ok <- guard(post),
+             :ok <- expected_job(post, opts) do
           now_ms = System.system_time(:millisecond)
 
           post
@@ -135,7 +136,7 @@ defmodule Platform.Social.Publishing do
   """
   @spec retry_publish(Ecto.UUID.t(), Ecto.UUID.t(), term()) ::
           {:ok, Post.t()} | {:error, term()}
-  def retry_publish(org_id, post_id, actor_user_id) do
+  def retry_publish(org_id, post_id, actor_user_id, opts \\ []) do
     with %Post{} = post <- Social.get_post(org_id, post_id) || {:error, :not_found},
          :ok <- refuse_studio(post),
          {:ok, account} <- account_any(org_id, post),
@@ -143,9 +144,75 @@ defmodule Platform.Social.Publishing do
            Social.get_profile(org_id, account.profile_id) || {:error, :not_found},
          :ok <- Social.post_approver_check(org_id, profile, account, actor_user_id),
          :ok <- retryable(post, DateTime.utc_now()) do
-      result = publish_post(org_id, post.id)
+      # A rendered expectation is compared only; the adapter always uses the
+      # locked stored id. Non-UI callers may omit it and bind the pre-lock read.
+      expected_id = Keyword.get(opts, :expected_external_id, existing_job_id(post))
+      result = retry_checked(org_id, post.id, actor_user_id, opts, expected_id)
       Platform.Social.Approvals.rerender_latest(post.id)
       result
+    end
+  end
+
+  defp retry_checked(org_id, post_id, actor_user_id, opts, expected_id) do
+    # Hold the post through the eligibility recheck and operation selection.
+    # Missing external id does not prove no remote job exists: the existing
+    # idempotency key/uncertain-outcome behavior is deliberately unchanged.
+    Repo.transaction(fn ->
+      with %Post{} = post <- Social.lock_post(org_id, post_id) || {:error, :not_found},
+           :ok <- refuse_studio(post),
+           {:ok, account} <- account_any(org_id, post),
+           {:ok, profile} <- Social.profile_of_post(post),
+           :ok <- Social.post_approver_check(org_id, profile, account, actor_user_id),
+           :ok <- retryable(post, DateTime.utc_now()),
+           :ok <- check_expected_job(post, expected_id) do
+        existing_job? = is_binary(post.external_id) and String.trim(post.external_id) != ""
+
+        ready =
+          cond do
+            existing_job? and Keyword.has_key?(opts, :scheduled_at) ->
+              {:error, :publish_job_changed}
+
+            existing_job? ->
+              :ok
+
+            not match?(%DateTime{}, opts[:scheduled_at]) ->
+              {:error, :publish_time_required}
+
+            true ->
+              case Social.reapprove_post(org_id, post.id, actor_user_id, opts) do
+                {:ok, _} -> :ok
+                error -> error
+              end
+          end
+
+        case ready do
+          :ok -> publish_post(org_id, post.id, expected_external_id: expected_id)
+          {:error, reason} -> Repo.rollback(reason)
+        end
+      end
+    end)
+    |> case do
+      {:ok, result} -> result
+      error -> error
+    end
+  end
+
+  @doc false
+  def existing_job_id(%Post{external_id: id}) when is_binary(id) do
+    if String.trim(id) == "", do: nil, else: id
+  end
+
+  def existing_job_id(%Post{}), do: nil
+
+  @doc false
+  def check_expected_job(post, expected_id) do
+    if existing_job_id(post) == expected_id, do: :ok, else: {:error, :publish_job_changed}
+  end
+
+  defp expected_job(post, opts) do
+    case Keyword.fetch(opts, :expected_external_id) do
+      :error -> :ok
+      {:ok, expected_id} -> check_expected_job(post, expected_id)
     end
   end
 
@@ -466,11 +533,11 @@ defmodule Platform.Social.Publishing do
     end
   end
 
-  defp disclosure(%Post{is_aigc: true, ai_disclosure: label}) do
+  def disclosure(%Post{is_aigc: true, ai_disclosure: label}) do
     if is_binary(label) and String.trim(label) != "", do: label, else: @default_ai_disclosure
   end
 
-  defp disclosure(%Post{ai_disclosure: label}), do: label
+  def disclosure(%Post{ai_disclosure: label}), do: label
 
   # Every clause is one adapter call's result, so every clause counts one
   # attempt (`counted/2`), success or failure.

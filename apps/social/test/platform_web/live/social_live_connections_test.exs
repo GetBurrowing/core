@@ -21,6 +21,8 @@ defmodule PlatformWeb.SocialLiveConnectionsTest do
     Fake.reset()
     ctx = approval_fixture()
     # a: never connected; d: connected; r: needs reauth.
+    {:ok, a} = Social.update_account(ctx.org_id, ctx.a, %{status: nil})
+    ctx = Map.put(ctx, :a, a)
     {:ok, d} = Social.update_account(ctx.org_id, ctx.d, %{status: "connected"})
 
     {:ok, r} =
@@ -1033,7 +1035,14 @@ defmodule PlatformWeb.SocialLiveConnectionsTest do
         Social.create_post(
           ctx.org_id,
           account,
-          Map.merge(%{body: "Episode 12", status: "needs_approval"}, attrs)
+          Map.merge(
+            %{
+              body: "Episode 12",
+              status: "needs_approval",
+              scheduled_at: DateTime.add(DateTime.utc_now(), 3600)
+            },
+            attrs
+          )
         )
 
       post

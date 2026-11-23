@@ -29,7 +29,7 @@ defmodule Platform.Social.AnalyticsSyncTest do
   end
 
   defp published!(org, account, external_id, platform_id, analytics_id) do
-    approved_post!(org, account)
+    historical_approved_post!(org, account)
     |> Ecto.Changeset.change(
       status: "published",
       external_id: external_id,

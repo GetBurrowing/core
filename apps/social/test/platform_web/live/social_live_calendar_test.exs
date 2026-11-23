@@ -61,7 +61,7 @@ defmodule PlatformWeb.SocialLiveCalendarTest do
       placed!(ctx, ctx.a, "failed", at(Date.add(monday, 4), 15), %{error: "Token expired"})
 
     next_week = placed!(ctx, ctx.a, "scheduled", at(Date.add(monday, 8), 12), %{body: "NEXT"})
-    _draft = placed!(ctx, ctx.a, "draft", at(tue, 11), %{body: "DRAFT-NOT-ON-CAL"})
+    draft = placed!(ctx, ctx.a, "draft", at(tue, 11), %{body: "DRAFT-NOT-ON-CAL"})
 
     {:ok, legacy} =
       Social.create_profile(ctx.org_id, %{
@@ -81,6 +81,7 @@ defmodule PlatformWeb.SocialLiveCalendarTest do
       published: published,
       failed: failed,
       next_week: next_week,
+      draft: draft,
       legacy: legacy
     })
   end
@@ -121,7 +122,11 @@ defmodule PlatformWeb.SocialLiveCalendarTest do
 
     refute has_element?(child, cell(ctx.thu, 10) <> " " <> item(ctx.published))
     refute has_element?(child, grid_item(ctx.next_week))
-    refute render(child) =~ "DRAFT-NOT-ON-CAL"
+    # Inactive Queue panes remain mounted; the new Drafts group legitimately
+    # renders this row there. The Calendar itself must still exclude it.
+    assert has_element?(child, "[data-role='queue-drafts']", "DRAFT-NOT-ON-CAL")
+    refute has_element?(child, "[data-role='social-calendar']", "DRAFT-NOT-ON-CAL")
+    refute has_element?(child, "[data-role='social-calendar'] " <> item(ctx.draft))
 
     for state <- ~w(waiting scheduled published failed) do
       assert has_element?(child, "[data-role='social-calendar-legend'] [data-state='#{state}']")

@@ -47,7 +47,7 @@ defmodule Platform.Social.HealthTest do
     do: Health.account(account, Map.get(Health.facts([account]), account.id))
 
   defp refused!(ctx, account, days_ago) do
-    post = approved_post!(ctx.org_id, account, %{body: "refused one"}, ctx.h1)
+    post = historical_approved_post!(ctx.org_id, account, %{body: "refused one"}, ctx.h1)
 
     {:ok, post} =
       post
@@ -107,7 +107,7 @@ defmodule Platform.Social.HealthTest do
     test "a failure older than 7 days, and a cancelled post, do not count", ctx do
       refused!(ctx, ctx.a, 8)
 
-      post = approved_post!(ctx.org_id, ctx.a, %{body: "cancelled"}, ctx.h1)
+      post = historical_approved_post!(ctx.org_id, ctx.a, %{body: "cancelled"}, ctx.h1)
 
       Repo.update_all(from(p in Post, where: p.id == ^post.id),
         set: [status: "failed", error: "cancelled before publishing"]
@@ -144,8 +144,8 @@ defmodule Platform.Social.HealthTest do
     end
 
     test "last published is the newest published post, with its URL", ctx do
-      old = approved_post!(ctx.org_id, ctx.a, %{body: "old"}, ctx.h1)
-      new = approved_post!(ctx.org_id, ctx.a, %{body: "new"}, ctx.h1)
+      old = historical_approved_post!(ctx.org_id, ctx.a, %{body: "old"}, ctx.h1)
+      new = historical_approved_post!(ctx.org_id, ctx.a, %{body: "new"}, ctx.h1)
       two_days = DateTime.add(DateTime.utc_now(), -2, :day)
       five_days = DateTime.add(DateTime.utc_now(), -5, :day)
 
@@ -171,7 +171,7 @@ defmodule Platform.Social.HealthTest do
   describe "the disconnect alert" do
     test "a Fake auth failure emits exactly one row per approver; a second failure emits none",
          ctx do
-      first = approved_post!(ctx.org_id, ctx.a, %{body: "first"}, ctx.h1)
+      first = historical_approved_post!(ctx.org_id, ctx.a, %{body: "first"}, ctx.h1)
       Fake.fail_next(:publish, :account_disconnected)
 
       assert {:error, {:publish_failed, :account_disconnected}} =
@@ -198,7 +198,7 @@ defmodule Platform.Social.HealthTest do
     end
 
     test "an ordinary publish failure alerts nobody and leaves the account connected", ctx do
-      post = approved_post!(ctx.org_id, ctx.a, %{body: "x"}, ctx.h1)
+      post = historical_approved_post!(ctx.org_id, ctx.a, %{body: "x"}, ctx.h1)
       Fake.fail_next(:publish, "The video is too long")
       assert {:error, {:publish_failed, _}} = Publishing.publish_post(ctx.org_id, post.id)
 
@@ -337,7 +337,7 @@ defmodule Platform.Social.HealthTest do
     end
 
     test "a post failure flagged auth marks the account and alerts once", %{conn: conn} = ctx do
-      post = approved_post!(ctx.org_id, ctx.a, %{body: "scheduled"}, ctx.h1)
+      post = historical_approved_post!(ctx.org_id, ctx.a, %{body: "scheduled"}, ctx.h1)
       {:ok, scheduled} = Publishing.publish_post(ctx.org_id, post.id)
 
       event = %{
