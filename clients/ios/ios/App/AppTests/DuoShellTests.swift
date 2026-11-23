@@ -225,6 +225,89 @@ final class DuoShellTests: XCTestCase {
         window.isHidden = true
     }
 
+    // MARK: A fold, unfold or rotation is not a move (task 01a20618 stage 2)
+
+    /// A transition coordinator that runs every completion at once, so a
+    /// size transition can be driven in a unit test.
+    private final class ImmediateTransitionCoordinator: NSObject, UIViewControllerTransitionCoordinator {
+        let containerView: UIView
+        init(container: UIView) { containerView = container }
+
+        var isAnimated: Bool { false }
+        var presentationStyle: UIModalPresentationStyle { .none }
+        var initiallyInteractive: Bool { false }
+        var isInterruptible: Bool { false }
+        var isInteractive: Bool { false }
+        var isCancelled: Bool { false }
+        var transitionDuration: TimeInterval { 0 }
+        var percentComplete: CGFloat { 1 }
+        var completionVelocity: CGFloat { 1 }
+        var completionCurve: UIView.AnimationCurve { .linear }
+        var targetTransform: CGAffineTransform { .identity }
+        func viewController(forKey key: UITransitionContextViewControllerKey) -> UIViewController? { nil }
+        func view(forKey key: UITransitionContextViewKey) -> UIView? { nil }
+
+        func animate(
+            alongsideTransition animation: ((any UIViewControllerTransitionCoordinatorContext) -> Void)?,
+            completion: ((any UIViewControllerTransitionCoordinatorContext) -> Void)? = nil
+        ) -> Bool {
+            animation?(self)
+            completion?(self)
+            return true
+        }
+
+        func animateAlongsideTransition(
+            in view: UIView?, animation: ((any UIViewControllerTransitionCoordinatorContext) -> Void)?,
+            completion: ((any UIViewControllerTransitionCoordinatorContext) -> Void)? = nil
+        ) -> Bool {
+            animate(alongsideTransition: animation, completion: completion)
+        }
+
+        func notifyWhenInteractionEnds(_ handler: @escaping (any UIViewControllerTransitionCoordinatorContext) -> Void) {}
+        func notifyWhenInteractionChanges(_ handler: @escaping (any UIViewControllerTransitionCoordinatorContext) -> Void) {}
+    }
+
+    /// Unfold, rotate, rotate back and fold with the composer focused: the
+    /// keyboard's owner keeps focus, nothing counts as a move, the content
+    /// stays in its slot, and after each transition the content fills the
+    /// slot between its side safe-area insets, top to bottom.
+    func testAFoldUnfoldOrRotationKeepsFocusSlotAndFrame() throws {
+        let (shell, _, content, field, window, _) = try makeEditingShell()
+        let chatSlot = try XCTUnwrap(shell.selectedSlot)
+        var resigned = 0
+        field.onResign = { resigned += 1 }
+        for size in [innerPortrait, innerLandscape, innerPortrait, outerPortrait] {
+            shell.viewWillTransition(to: size, with: ImmediateTransitionCoordinator(container: window))
+            window.frame = CGRect(origin: .zero, size: size)
+            window.layoutIfNeeded()
+            XCTAssertEqual(shell.editingEndedForMove, 0, "size \(size): a transition is not a move")
+            XCTAssertEqual(resigned, 0, "size \(size): editing never ended")
+            XCTAssertTrue(field.isFirstResponder, "size \(size): the composer keeps focus")
+            XCTAssertTrue(content.parent === chatSlot, "size \(size): the content stays in its slot")
+            XCTAssertTrue(shell.selectedSlot === chatSlot, "size \(size): the selection stays")
+            let slot = chatSlot.view!
+            let frame = content.view.convert(content.view.bounds, to: slot)
+            XCTAssertEqual(frame.minX, slot.safeAreaInsets.left, accuracy: 0.5, "size \(size)")
+            XCTAssertEqual(frame.maxX, slot.bounds.width - slot.safeAreaInsets.right, accuracy: 0.5, "size \(size)")
+            XCTAssertEqual(frame.minY, 0, accuracy: 0.5, "size \(size)")
+            XCTAssertEqual(frame.maxY, slot.bounds.height, accuracy: 0.5, "size \(size)")
+            XCTAssertEqual(slot.bounds.size, size, "size \(size): the slot follows the window")
+        }
+        window.isHidden = true
+    }
+
+    /// The bridge's layout script: height before posture, one script.
+    func testTheLayoutScriptSendsTheHeightBeforeThePosture() throws {
+        let posture = try XCTUnwrap(NativeNavBarDocument.postureScript(isDuo: true, open: true))
+        let height = NativeTabBarDocument.heightUpdate(0)
+        let script = try XCTUnwrap(NativeTabBarDocument.layoutScript(height: height, posture: posture))
+        let heightAt = try XCTUnwrap(script.range(of: NativeTabBarDocument.heightVariable)).lowerBound
+        let postureAt = try XCTUnwrap(script.range(of: NativeNavBarDocument.duoPostureEvent)).lowerBound
+        XCTAssertLessThan(heightAt, postureAt)
+        XCTAssertNil(NativeTabBarDocument.layoutScript(height: nil, posture: nil))
+        XCTAssertEqual(NativeTabBarDocument.layoutScript(height: nil, posture: posture), posture)
+    }
+
     // MARK: Stage 5: the strip never hides with the web's floating bar
 
     /// A conversation with its composer focused, a full-screen viewer, a

@@ -480,7 +480,7 @@ final class BurrowBridgeViewController: CAPBridgeViewController {
         if #available(iOS 27.1, *) {
             (duoShell ?? self).registerForTraitChanges(UITraitCollection.systemTraitsAffectingVerticalBarEdge) {
                 [weak self] (_: UIViewController, _: UITraitCollection) in
-                self?.pushTabBarHeight()
+                self?.syncLayoutToWeb()
             }
         }
         host.onTap = { [weak self] key in self?.tabTapped(key) }
@@ -639,23 +639,33 @@ final class BurrowBridgeViewController: CAPBridgeViewController {
         documentGeneration += 1
         documentSentState = false
         pushedTabBarHeight = nil
-        pushTabBarHeight()
+        if let script = tabBarHeightScript() { webView?.evaluateJavaScript(script) }
         // A new document carries no attribute: set it again, now.
         if let script = NativeNavBarDocument.duoScript(isDuo: DuoDevice.current) { webView?.evaluateJavaScript(script) }
         pushedVerticalBar = nil
         syncNavBar()
         pushedDuoOpen = nil
-        syncDuoPosture()
+        if let script = duoPostureScript() { webView?.evaluateJavaScript(script) }
     }
 
-    /// Pushes the open/closed posture to the web when it changed. A fold or
-    /// unfold changes the window size, so this runs on layout and on size
-    /// transitions. A no-op on every device but the Duo.
-    private func syncDuoPosture() {
-        guard DuoDevice.current else { return }
+    /// The open/closed posture script when the posture changed, nil
+    /// otherwise. A fold or unfold changes the window size, so this runs on
+    /// layout and on size transitions. Nil on every device but the Duo.
+    private func duoPostureScript() -> String? {
+        guard DuoDevice.current else { return nil }
         let open = OrientationPolicy.isOpen(windowSize: view.window?.bounds.size ?? .zero)
-        guard pushedDuoOpen != open, let script = NativeNavBarDocument.postureScript(isDuo: true, open: open) else { return }
+        guard pushedDuoOpen != open, let script = NativeNavBarDocument.postureScript(isDuo: true, open: open) else { return nil }
         pushedDuoOpen = open
+        return script
+    }
+
+    /// Task 01a20618 stage 2: a layout or size transition reaches the web as
+    /// ONE script, `--native-tab-bar-height` first and then the posture
+    /// (whose `burrowNativeDuoPosture` event the keyboard watcher and
+    /// ChatDock re-evaluate on). Two separate evaluations could let the web
+    /// render a frame with only half of the new state.
+    private func syncLayoutToWeb() {
+        guard let script = NativeTabBarDocument.layoutScript(height: tabBarHeightScript(), posture: duoPostureScript()) else { return }
         webView?.evaluateJavaScript(script)
     }
 
@@ -665,7 +675,7 @@ final class BurrowBridgeViewController: CAPBridgeViewController {
             geometryProbe?.willTransition(to: size)
         #endif
         coordinator.animate(alongsideTransition: nil) { [weak self] _ in
-            self?.syncDuoPosture()
+            self?.syncLayoutToWeb()
             #if DEBUG
                 self?.geometryProbe?.didTransition()
             #endif
@@ -706,23 +716,23 @@ final class BurrowBridgeViewController: CAPBridgeViewController {
             barHeight: bar.frame.height, safeAreaBottom: view.safeAreaInsets.bottom, verticalBar: tabBarOffBottom)
     }
 
-    /// Keeps `--native-tab-bar-height` current on layout and rotation. See
+    /// Keeps `--native-tab-bar-height` current on layout and rotation: the
+    /// update script when the value changed, nil otherwise. See
     /// `NativeTabBarDocument.shouldPushHeight` for when a 0 is pushed.
-    private func pushTabBarHeight() {
+    private func tabBarHeightScript() -> String? {
         let height = currentTabBarHeight()
         let laidOut = view.window != nil && !(tabBarHost?.bar.bounds.isEmpty ?? true)
         guard
             NativeTabBarDocument.shouldPushHeight(
                 height, pushed: pushedTabBarHeight, barOffBottom: tabBarOffBottom, barLaidOut: laidOut)
-        else { return }
+        else { return nil }
         pushedTabBarHeight = height
-        webView?.evaluateJavaScript(NativeTabBarDocument.heightUpdate(height))
+        return NativeTabBarDocument.heightUpdate(height)
     }
 
     override func viewDidLayoutSubviews() {
         super.viewDidLayoutSubviews()
-        pushTabBarHeight()
-        syncDuoPosture()
+        syncLayoutToWeb()
         #if DEBUG
             geometryProbe?.layoutPass()
         #endif
@@ -1040,7 +1050,7 @@ enum NativeTabBarDocument {
             """
     }
 
-    /// Whether `pushTabBarHeight` sends `height`. A change is pushed when it
+    /// Whether `tabBarHeightScript` sends `height`. A change is pushed when it
     /// is non-zero, when the bar is off the bottom (the Duo's side strip or
     /// top bar), or when the bar is laid out: a 0 before the bar's first
     /// layout means "not measured yet" and is skipped. Without the laid-out
@@ -1052,6 +1062,14 @@ enum NativeTabBarDocument {
     static func shouldPushHeight(_ height: CGFloat, pushed: CGFloat?, barOffBottom: Bool, barLaidOut: Bool) -> Bool {
         guard height != pushed else { return false }
         return height > 0 || barOffBottom || barLaidOut
+    }
+
+    /// One script for a layout pass: the height update before the posture,
+    /// so a listener of the posture event already reads the new height. Nil
+    /// when neither changed.
+    static func layoutScript(height: String?, posture: String?) -> String? {
+        let parts = [height, posture].compactMap { $0 }
+        return parts.isEmpty ? nil : parts.joined(separator: "\n")
     }
 
     /// Updates the variable on a page that carries the attribute.

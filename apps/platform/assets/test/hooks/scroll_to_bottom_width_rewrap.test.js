@@ -316,6 +316,77 @@ describe("ScrollToBottom — a width change rewraps the conversation", () => {
     expect(scrollEl.distanceFromBottom()).toBe(0);
   });
 
+  // Task 01a20618 stage 2: the iPhone Duo's fold, unfold and rotation are
+  // width changes of the pane (web view 669 wide in portrait, 867 beside
+  // the strip in landscape, measured on the device). A reader scrolled up
+  // into history keeps the MESSAGE they were reading, not the scrollTop
+  // pixel, which after a rewrap points at different text.
+  function geometryHook({ rows = 40, heightAt = (w) => (w >= 800 ? 44 : 60) } = {}) {
+    const SCROLLER_TOP = 116;
+    const scrollEl = fakeScroller({ clientHeight: 553, clientWidth: 669 });
+    const rowHeight = () => heightAt(scrollEl.clientWidth);
+    const total = () => rows * rowHeight();
+    Object.defineProperty(scrollEl, "scrollHeight", {
+      get: total,
+      set() {},
+      configurable: true,
+    });
+    scrollEl.getBoundingClientRect = () => ({ top: SCROLLER_TOP, bottom: SCROLLER_TOP + scrollEl.clientHeight });
+    const rowEls = Array.from({ length: rows }, (_, i) => {
+      const row = fakeRow(`p-${i % 3}`);
+      row.isConnected = true;
+      row.getBoundingClientRect = () => {
+        const top = SCROLLER_TOP + i * rowHeight() - scrollEl.scrollTop;
+        return { top, bottom: top + rowHeight() };
+      };
+      return row;
+    });
+    const el = fakeList(scrollEl, rowEls);
+    const hook = Object.create(ScrollToBottom);
+    hook.el = el;
+    hook.handleEvent = vi.fn();
+    hook.pushEvent = vi.fn();
+    hook.mounted();
+    hook._endInitialPhase("test setup");
+    clearTimeout(hook._iosFallbackTimer);
+    hook._iosFallbackTimer = null;
+    pendingFrames.forEach((id) => clearTimeout(id));
+    pendingFrames.clear();
+    const offsetOf = (i) => rowEls[i].getBoundingClientRect().top - SCROLLER_TOP;
+    return { scrollEl, hook, offsetOf };
+  }
+
+  it("keeps the message a reader is on in place across a Duo width change (portrait -> landscape -> portrait)", () => {
+    const { scrollEl, hook, offsetOf } = geometryHook();
+    // Reading row 20, its top 10px below the scroller's top edge.
+    scrollEl._scrollTop = 20 * 60 - 10;
+    hook._lastScrollHeight = scrollEl.scrollHeight;
+    hook._reportDistance();
+    hook.pushEvent.mockClear(); // that report was the reader leaving the bottom
+    expect(offsetOf(20)).toBe(10);
+
+    scrollEl.clientWidth = 867; // unfolded / turned landscape: bodies rewrap shorter
+    hook._onViewportResize();
+    expect(Math.abs(offsetOf(20) - 10)).toBeLessThanOrEqual(2);
+
+    scrollEl.clientWidth = 669; // back to portrait: taller again
+    hook._onViewportResize();
+    expect(Math.abs(offsetOf(20) - 10)).toBeLessThanOrEqual(2);
+    // Still the same distance band: the resize reports nothing new.
+    expect(hook.pushEvent).not.toHaveBeenCalled();
+  });
+
+  it("still snaps a bottom-parked reader on the Duo width change, not the anchor", () => {
+    const { scrollEl, hook } = geometryHook();
+    scrollEl._scrollTop = scrollEl.scrollHeight - scrollEl.clientHeight;
+    hook._lastScrollHeight = scrollEl.scrollHeight;
+    hook._reportDistance();
+    scrollEl.clientWidth = 867;
+    scrollEl._scrollTop = Math.min(scrollEl._scrollTop, scrollEl.scrollHeight - scrollEl.clientHeight);
+    hook._onViewportResize();
+    expect(scrollEl.distanceFromBottom()).toBe(0);
+  });
+
   it("a height-only change still runs the height path unchanged", () => {
     // Regression guard for the sibling-resize behavior this task must
     // not disturb: a pure clientHeight change (drawer opening) with the

@@ -401,3 +401,98 @@ describe("ScrollToBottom follows a dock resize through its existing pin", () => 
     expect(windowListeners[DOCK_EVENT] || []).toEqual([])
   })
 })
+
+// Task 01a20618 stage 2: a fold, unfold or rotation of the open iPhone Duo
+// reaches the web as the native posture event (or a window resize), and may
+// arrive with NO visualViewport event of its own. The keyboard watcher must
+// put the new state on <html> BEFORE ChatDock measures, because the dock's
+// height follows `data-keyboard-open` (app.css drops its bar clearance while
+// the keyboard is up). Sizes are the open Duo's web view, measured on the
+// device: 669x951 portrait, 867x669 landscape beside the side strip.
+describe("ChatDock re-measures after the keyboard state on a posture change", () => {
+  beforeEach(stubGlobals)
+  afterEach(restoreGlobals)
+
+  const DOCK_UP = 52 // the pill and its 8px gap, keyboard up
+  const DOCK_DOWN = 86 // plus the bar clearance, keyboard down
+  const KEYBOARD = 380
+
+  function mountOnTheOpenDuo() {
+    const vvListeners = {}
+    const attrs = {}
+    const root = document.documentElement
+    root.setAttribute = (k, v) => {
+      attrs[k] = v
+    }
+    root.removeAttribute = (k) => {
+      delete attrs[k]
+    }
+    window.innerWidth = 669
+    window.innerHeight = 951
+    window.visualViewport = {
+      height: 951,
+      offsetTop: 0,
+      addEventListener(type, fn) {
+        ;(vvListeners[type] ||= []).push(fn)
+      },
+      removeEventListener(type, fn) {
+        vvListeners[type] = (vvListeners[type] || []).filter((f) => f !== fn)
+      },
+      fire(type) {
+        for (const fn of vvListeners[type] || []) fn()
+      },
+    }
+    const el = {
+      getBoundingClientRect: () => ({ height: "data-keyboard-open" in attrs ? DOCK_UP : DOCK_DOWN }),
+    }
+    const hook = Object.create(ChatDock)
+    hook.el = el
+    hook.mounted()
+    return { hook, attrs, vv: window.visualViewport }
+  }
+
+  it("a posture event with a width change and the keyboard gone leaves the keyboard-down dock and no inset", () => {
+    const { hook, attrs, vv } = mountOnTheOpenDuo()
+    expect(rootStyle.props[DOCK_VAR]).toBe(`${DOCK_DOWN}px`)
+
+    vv.height = 951 - KEYBOARD
+    vv.fire("resize")
+    expect(attrs["data-keyboard-open"]).toBe("")
+    expect(rootStyle.props[DOCK_VAR]).toBe(`${DOCK_UP}px`)
+
+    const resized = []
+    window.addEventListener(DOCK_EVENT, (e) => resized.push(e.detail.height))
+    // Unfolded to landscape with the keyboard dismissed: native sends the
+    // posture event; visualViewport fires nothing.
+    window.innerWidth = 867
+    window.innerHeight = 669
+    vv.height = 669
+    window.dispatchEvent({ type: "burrowNativeDuoPosture" })
+
+    expect(attrs["data-keyboard-open"]).toBeUndefined()
+    expect(rootStyle.props["--keyboard-inset"]).toBeUndefined()
+    expect(rootStyle.props[DOCK_VAR]).toBe(`${DOCK_DOWN}px`)
+    expect(resized.at(-1)).toBe(DOCK_DOWN)
+    hook.destroyed()
+  })
+
+  it("a window resize alone (a rotation within the open posture) does the same", () => {
+    const { hook, attrs, vv } = mountOnTheOpenDuo()
+    vv.height = 951 - KEYBOARD
+    vv.fire("resize")
+    window.innerWidth = 867
+    window.innerHeight = 669
+    vv.height = 669
+    window.dispatchEvent({ type: "resize" })
+    expect(attrs["data-keyboard-open"]).toBeUndefined()
+    expect(rootStyle.props[DOCK_VAR]).toBe(`${DOCK_DOWN}px`)
+    hook.destroyed()
+  })
+
+  it("detaching stops the posture listener", () => {
+    const { hook } = mountOnTheOpenDuo()
+    hook.destroyed()
+    expect((windowListeners.burrowNativeDuoPosture || []).length).toBe(0)
+    expect((windowListeners.resize || []).length).toBe(0)
+  })
+})
