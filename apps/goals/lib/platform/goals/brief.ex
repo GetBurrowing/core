@@ -1,6 +1,7 @@
 defmodule Platform.Goals.Brief do
   @moduledoc "Reader-scoped daily goal delivery and notebook signals (task 01a1dfc1-abcc)."
   import Ecto.Query
+  require Logger
   alias Platform.Accounts.User
   alias Platform.Goals
   alias Platform.Goals.{Ask, AskAnswer, BriefItem, Clock, Entry, Limits, Visibility, WakeUp}
@@ -642,12 +643,31 @@ defmodule Platform.Goals.Brief do
             details
         end
 
-      Goals.add_entry(user, goal.id, %{
-        kind: "ask",
-        title: text,
-        occurred_at: Clock.now(),
-        details: details
-      })
+      with {:ok, entry} <-
+             Goals.add_entry(user, goal.id, %{
+               kind: "ask",
+               title: text,
+               occurred_at: Clock.now(),
+               details: details
+             }) do
+        # The entry stays the record; the words also go to the goal's
+        # conversation, which wakes the coach now (task 01a20939 stage 2).
+        # A failed post never undoes the recorded question.
+        case Goals.say_in_goal(user, goal.id, text, entry_id: entry.id) do
+          {:ok, _} ->
+            :ok
+
+          {:error, reason} ->
+            # Ids and an atom only: a changeset would carry the text.
+            tag = if is_atom(reason), do: reason, else: :invalid
+
+            Logger.warning(
+              "goals ask_coach reply not posted goal_id=#{goal.id} entry_id=#{entry.id} reason=#{tag}"
+            )
+        end
+
+        {:ok, entry}
+      end
     else
       false -> {:error, :invalid_question}
       error -> error

@@ -958,6 +958,213 @@ defmodule Platform.Goals do
   def refresh_brief(actor, ask_id),
     do: with(:ok <- check_enabled(), do: Platform.Goals.Brief.refresh(actor, ask_id))
 
+  # ── the goal's conversation (task 01a20939 stage 2) ────────────────────────
+
+  @doc """
+  The owner writes `text` in the goal's own conversation, which wakes the
+  coach at once with one `goals.reply` signal carrying ids only
+  (`Platform.Goals.Conversation.say/4`). OWNER ONLY: the space is owner +
+  coach, so anyone else who sees the goal (a granted user, a team member,
+  the coach itself) gets `{:error, :forbidden}`, and anyone who does not
+  see it `{:error, :not_found}`.
+
+  `opts`: `:ask_id` (a check-in reply) or `:entry_id` (a retro note); each
+  must belong to this goal, else `{:error, :not_found}`. Blank text is
+  `{:error, :text_required}` and posts nothing.
+  """
+  @spec say_in_goal(actor(), term(), term(), keyword()) :: {:ok, map()} | {:error, term()}
+  def say_in_goal(actor, goal_id, text, opts \\ []) do
+    with :ok <- check_enabled(),
+         {:ok, goal} <- fetch_visible(actor, goal_id, false),
+         :ok <- check_owner(actor, goal),
+         {:ok, refs} <- reply_refs(actor, goal, opts) do
+      Conversation.say(actor, goal, text, refs)
+    end
+  end
+
+  defp reply_refs(actor, goal, opts) do
+    [ask_id: Platform.Goals.Ask, entry_id: Entry]
+    |> Enum.reduce_while({:ok, []}, fn {key, schema}, {:ok, acc} ->
+      case Keyword.get(opts, key) do
+        nil ->
+          {:cont, {:ok, acc}}
+
+        raw ->
+          with {:ok, id} <- cast_id(raw),
+               true <-
+                 Repo.exists?(from(r in children(actor, schema, goal.id), where: r.id == ^id)) do
+            {:cont, {:ok, [{key, id} | acc]}}
+          else
+            _ -> {:halt, {:error, :not_found}}
+          end
+      end
+    end)
+  end
+
+  @doc """
+  The goal's conversation for its owner or its coach: `{:ok, %{goal_id,
+  space_id, items}}`, items from `Platform.Goals.Conversation.timeline/2`
+  (messages bounded by the reader's `history_visible_from`, merged with the
+  check-in, retro, log and change records). Anyone else who sees the goal
+  gets `{:error, :forbidden}`. `opts`: `:limit` (messages, at most 200).
+  """
+  @spec goal_conversation(actor(), term(), keyword()) :: {:ok, map()} | {:error, term()}
+  def goal_conversation(actor, goal_id, opts \\ []) do
+    with :ok <- check_enabled(),
+         {:ok, goal} <- fetch_visible(actor, goal_id, false),
+         :ok <- check_member(actor, goal) do
+      items = Conversation.timeline(goal, actor: actor, limit: Keyword.get(opts, :limit))
+      {:ok, %{goal_id: goal.id, space_id: goal.conversation_space_id, items: items}}
+    end
+  end
+
+  defp check_member(actor, goal) do
+    if owner?(actor, goal) or coach?(actor, goal), do: :ok, else: {:error, :forbidden}
+  end
+
+  @changeable ~w(rhythm rhythm_weekday target_value stops outreach)
+
+  @doc """
+  The coach proposes a change to the goal's settings; nothing changes until
+  the owner applies it (`apply_change/2`). Only #{Enum.join(@changeable, ", ")}
+  may be proposed, checked with `update_goal/3`'s changeset rules (and
+  `put_stops/3`'s for stops). Stored as a notebook entry of kind "ask" with
+  details `%{"request" => "change", "changes", "status" => "pending"}`.
+  Coach only; anyone else `{:error, :forbidden}`. Unknown keys are
+  `{:error, :change_not_allowed}`; an invalid value a changeset error.
+  """
+  @spec propose_change(actor(), term(), term(), term()) :: {:ok, Entry.t()} | {:error, term()}
+  def propose_change(actor, goal_id, changes, why \\ nil) do
+    with :ok <- check_enabled(),
+         {:ok, goal} <- fetch_visible(actor, goal_id, false),
+         :ok <- check_coach(actor, goal),
+         {:ok, changes} <- validate_changes(goal, changes) do
+      add_entry(actor, goal.id, %{
+        kind: "ask",
+        title: "Proposed change",
+        body: if(is_binary(why), do: String.slice(why, 0, Limits.max_question_chars())),
+        details: %{"request" => "change", "changes" => changes, "status" => "pending"}
+      })
+    end
+  end
+
+  defp validate_changes(goal, changes) when is_map(changes) and map_size(changes) > 0 do
+    changes = Map.new(changes, fn {k, v} -> {to_string(k), v} end)
+
+    with [] <- Map.keys(changes) -- @changeable,
+         settings = Map.delete(changes, "stops"),
+         %Ecto.Changeset{valid?: true} <- Goal.changeset(goal, settings),
+         :ok <- validate_stop_list(goal, changes) do
+      {:ok, changes}
+    else
+      [_ | _] -> {:error, :change_not_allowed}
+      %Ecto.Changeset{} = changeset -> {:error, %{changeset | action: :validate}}
+      error -> error
+    end
+  end
+
+  defp validate_changes(_goal, _changes), do: {:error, :change_not_allowed}
+
+  defp validate_stop_list(goal, %{"stops" => stops}) when is_list(stops) do
+    stops
+    |> Enum.with_index(1)
+    |> Enum.find_value(:ok, fn
+      {attrs, position} when is_map(attrs) ->
+        changeset = Stop.changeset(%Stop{goal_id: goal.id, position: position}, stop_attrs(attrs))
+        if changeset.valid?, do: nil, else: {:error, %{changeset | action: :validate}}
+
+      _ ->
+        {:error, :change_not_allowed}
+    end)
+  end
+
+  defp validate_stop_list(_goal, %{"stops" => _}), do: {:error, :change_not_allowed}
+  defp validate_stop_list(_goal, _changes), do: :ok
+
+  @doc """
+  The OWNER applies a pending change the coach proposed: runs
+  `update_goal/3` (and `put_stops/3` for stops) AS THE OWNER, then marks the
+  proposal "applied", in one transaction. The coach and every other reader
+  get `{:error, :forbidden}`; a decided proposal `{:error, :change_closed}`.
+  Answers `{:ok, %{goal, entry}}`.
+  """
+  @spec apply_change(actor(), term()) :: {:ok, map()} | {:error, term()}
+  def apply_change(actor, entry_id), do: decide_change(actor, entry_id, "applied")
+
+  @doc "The owner declines a pending change (`apply_change/2`'s rules); the goal is unchanged."
+  @spec dismiss_change(actor(), term()) :: {:ok, map()} | {:error, term()}
+  def dismiss_change(actor, entry_id), do: decide_change(actor, entry_id, "declined")
+
+  defp decide_change(actor, entry_id, status) do
+    with :ok <- check_enabled(), {:ok, id} <- cast_id(entry_id) do
+      in_transaction(fn ->
+        with %Entry{} = found <-
+               Repo.one(from(e in visible_rows(actor, Entry), where: e.id == ^id)),
+             {:ok, goal} <- locked_goal(actor, found.goal_id),
+             :ok <- check_owner(actor, goal),
+             %Entry{} = entry <-
+               Repo.one(
+                 from(e in children(actor, Entry, goal.id),
+                   where: e.id == ^id,
+                   lock: "FOR UPDATE OF g0"
+                 )
+               ),
+             {:ok, changes} <- pending_change(entry),
+             :ok <- run_change(status, actor, goal, changes),
+             {:ok, entry} <- close_change(entry, status),
+             {:ok, goal} <- fetch_visible(actor, goal.id, false) do
+          {:ok, %{goal: goal, entry: entry}}
+        else
+          nil -> {:error, :not_found}
+          error -> error
+        end
+      end)
+    end
+  end
+
+  defp pending_change(%Entry{kind: "ask", details: %{"request" => "change"} = details}) do
+    if details["status"] == "pending",
+      do: {:ok, details["changes"] || %{}},
+      else: {:error, :change_closed}
+  end
+
+  defp pending_change(_entry), do: {:error, :not_found}
+
+  defp run_change("declined", _actor, _goal, _changes), do: :ok
+
+  defp run_change("applied", actor, goal, changes) do
+    settings = Map.delete(changes, "stops")
+
+    with {:ok, _} <-
+           if(settings == %{}, do: {:ok, goal}, else: update_goal(actor, goal.id, settings)),
+         {:ok, _} <-
+           if(Map.has_key?(changes, "stops"),
+             do: put_stops(actor, goal.id, changes["stops"]),
+             else: {:ok, []}
+           ) do
+      :ok
+    end
+  end
+
+  defp close_change(entry, status) do
+    details =
+      Map.merge(entry.details, %{
+        "status" => status,
+        "decided_at" => DateTime.to_iso8601(Platform.Goals.Clock.now())
+      })
+
+    entry |> Ecto.Changeset.change(details: details) |> Repo.update()
+  end
+
+  # Rows of `schema` on any goal the actor sees. The source is a call, so
+  # the by-id source guard reads it as scoped.
+  defp visible_rows(actor, schema) do
+    from(row in schema,
+      join: g in subquery(Visibility.visible_goals(actor)),
+      on: g.id == row.goal_id
+    )
+  end
+
   @doc "Lists the core tasks tagged to a visible goal."
   def list_goal_tasks(actor, goal_id, opts \\ []) do
     with :ok <- check_enabled(), {:ok, goal} <- fetch_visible(actor, goal_id, false) do
