@@ -114,9 +114,18 @@ defmodule PlatformWeb.SocialLiveCoverTest do
 
       # The card thumbnail is the chosen cover.
       assert has_element?(child, in_row(uploaded, "video[poster='/files/blob/#{png.id}']"))
-      assert has_element?(child, in_row(framed, "video[src$='#t=7.4']"))
+
+      assert has_element?(
+               child,
+               in_row(framed, "[data-role='social-video'][data-src$='#t=7.4'] video:not([src])")
+             )
+
       refute has_element?(child, in_row(plain, "video[poster]"))
-      assert has_element?(child, in_row(plain, "video[src='/files/blob/#{ctx.video.id}']"))
+
+      assert has_element?(
+               child,
+               in_row(plain, "[data-role='social-video'][data-src='/files/blob/#{ctx.video.id}']")
+             )
     end
 
     test "a non-video post has no Cover control", %{conn: conn} = ctx do
@@ -258,7 +267,11 @@ defmodule PlatformWeb.SocialLiveCoverTest do
                "Cover: frame 0:07"
              )
 
-      assert has_element?(child, in_row(post, "video[src$='#t=7.4']"))
+      assert has_element?(
+               child,
+               in_row(post, "[data-role='social-video'][data-src$='#t=7.4'] video:not([src])")
+             )
+
       refute has_element?(child, in_row(post, "video[poster]"))
     end
 

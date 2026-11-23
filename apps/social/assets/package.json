@@ -4,7 +4,7 @@
   "private": true,
   "description": "Social's LiveView hooks (ADR 0055): vitest for the cover picker.",
   "scripts": {
-    "test": "vitest run && node --test test/social_ticker.node.mjs test/studio_post_focus.node.mjs test/social_ideas.node.mjs test/social_thumbnail.node.mjs"
+    "test": "vitest run && node --test test/social_ticker.node.mjs test/studio_post_focus.node.mjs test/social_ideas.node.mjs test/social_thumbnail.node.mjs test/social_video.node.mjs"
   },
   "devDependencies": {
     "vitest": "^1.6.0"
