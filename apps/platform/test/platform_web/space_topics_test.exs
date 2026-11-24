@@ -279,8 +279,45 @@ defmodule PlatformWeb.SpaceTopicsTest do
              :tasks_exec,
              :meeting,
              :files_browser,
-             :canvas_viewing
+             :canvas_viewing,
+             :voice
            ]
+  end
+
+  # Task 01a20dc5 stage 2: VoiceLive's on-device path holds the user<->agent
+  # DM, which the shell's presence branch may already hold on the same pid.
+  describe ":voice owner" do
+    test "a :voice hold on a DM :presence holds takes no second registration; release_all keeps it delivering",
+         %{alpha: alpha, beta: beta} do
+      s = socket()
+      s = SpaceTopics.hold(s, alpha, :presence)
+      s = SpaceTopics.hold(s, alpha, :voice)
+      s = SpaceTopics.hold(s, beta, :voice)
+
+      assert registrations(alpha) == 1
+      assert registrations(beta) == 1
+
+      s = SpaceTopics.release_all(s, :voice)
+
+      assert registrations(alpha) == 1, "presence still holds alpha"
+      assert registrations(beta) == 0, "voice was beta's only holder"
+      assert SpaceTopics.held_by?(s, alpha, :presence)
+      refute SpaceTopics.held_by?(s, alpha, :voice)
+
+      :ok = Platform.Chat.PubSub.broadcast(alpha, {:space_topics_probe, alpha})
+      assert_receive {:space_topics_probe, ^alpha}, 500
+      assert_received_once_only(alpha)
+    end
+
+    test "the :voice owner is spelled in the type and the prose too" do
+      source = File.read!(Path.expand("../../lib/platform_web/space_topics.ex", __DIR__))
+      assert source =~ ~r/\| :voice\n/
+      assert source =~ "`:voice` is `PlatformWeb.VoiceLive`"
+    end
+  end
+
+  defp assert_received_once_only(space_id) do
+    refute_received {:space_topics_probe, ^space_id}
   end
 
   describe ":meeting owner" do

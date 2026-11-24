@@ -48,6 +48,49 @@ defmodule PlatformWeb.VoiceLive do
       releases the floor if a turn is live and disconnects the old session
       (`voice_disconnect`) before the next press starts a new one.
 
+  ## The on-device path (task 01a20dc5 stage 2)
+
+  On an iPhone whose `BurrowVoice` plugin can transcribe on the device, the
+  hook pushes `voice_native_ready` with `available: true`, and the tab talks
+  without LiveKit: the phone turns speech into text, the text is posted as a
+  plain DM message (`Platform.Meetings.OnDeviceVoice`), and the agent's text
+  reply is pushed back as `voice_native_speak` for the system voice. Nothing
+  here changes for any other client: until `voice_native_ready` arrives with
+  `available: true` the tab renders exactly as before, and an `available:
+  false` only logs its reason code.
+
+    * `voice_native_ready` `%{available, reason, locale, test_build, route}`:
+      sets `:on_device?` ONLY when `available` is true, opens the DM
+      (`OnDeviceVoice.open/2`) and holds it with `SpaceTopics.hold/3` as
+      `:voice`. `test_build` (a debug or TestFlight build) turns on the
+      "On this iPhone" caption (canvas state 17).
+    * `voice_native_turn` `%{text, client_turn_id}` (with a reply): posts the
+      turn and replies `%{ok: true, message_id}` (or `%{ok: false}`); a
+      `client_turn_id` already posted replies with that message and posts
+      nothing. The confirmed turn is inserted with meta
+      "on this iPhone · {clock}", and the agent is thinking until its reply
+      lands or `:voice_native_answer_timeout_ms` (default 60s) passes.
+    * The agent's reply arrives as `{:new_message, msg}` on the held DM
+      topic; `OnDeviceVoice.agent_reply?/2` takes only the agent's message
+      after the turn. It is inserted in full and pushed as
+      `voice_native_speak %{id, text}` with markdown stripped.
+    * `voice_native_speaking` `%{id, state, reason}`: `started` rings
+      #partner-avatar until `finished`; `stopped` adds "Stopped" under the
+      reply, `unheard` adds "Reply shown as text" (canvas states 9 and 10).
+    * `voice_native_mic` `%{state}`: `held` / `toggled` / `idle` drive the mic
+      and the listen line ("Release to send", "Tap to send"); `in_use`
+      disables the mic with "Microphone in use by another app".
+    * `voice_native_permission` `%{mic: "denied"}`: the permission card
+      replaces the mic, with "Type instead" beneath it (canvas state 12).
+    * `voice_native_route` `%{label}`: the test caption's route.
+    * A partner or context change pushes `voice_native_stop` (speech stops,
+      a half-formed turn is discarded; canvas state 10). A partner change
+      also releases the `:voice` hold and opens the new partner's DM.
+
+  The words still forming, "Sending", "Not sent" and Retry are drawn by the
+  hook inside `#voice-native-pending` (`phx-update="ignore"`), so they still
+  show with the socket down; the server renders only confirmed turns.
+
   ## State
 
     * `:partner`: `%{agent, slot, reachable?, description}` or nil. On mount it
@@ -106,13 +149,18 @@ defmodule PlatformWeb.VoiceLive do
 
   alias Platform.Agents.ColorPalette
   alias Platform.Chat
+  alias Platform.Meetings.OnDeviceVoice
   alias Platform.Meetings.VoiceSession
+  alias PlatformWeb.SpaceTopics
 
   @default_slug "meeting-assistant"
   @burrow_greeting "Morning. Anything on your mind? Hold the mic and just talk — I'll keep the thread."
   @back_greeting "Back with you."
   @too_short_ms 400
   @answer_timeout_ms 20_000
+  # A text agent is slower than the voice worker.
+  @native_answer_timeout_ms 60_000
+  @native_reasons ~w(os_too_old unavailable locale_unsupported speech_permission_denied assets_missing)
 
   @impl true
   def mount(_params, _session, socket) do
@@ -147,6 +195,18 @@ defmodule PlatformWeb.VoiceLive do
       |> assign(:answer_ref, nil)
       |> assign(:typing?, false)
       |> assign(:type_form, type_form())
+      |> assign(:on_device?, false)
+      |> assign(:on_device_caption, nil)
+      |> assign(:native_test_build?, false)
+      |> assign(:native_route, nil)
+      |> assign(:mic_permission, nil)
+      |> assign(:native_mic, :ready)
+      |> assign(:speaking_id, nil)
+      |> assign(:native_conn, nil)
+      |> assign(:native_turn_ids, %{})
+      |> assign(:native_replies, %{})
+      |> assign(:native_announce, nil)
+      |> SpaceTopics.ensure_holders()
       |> stream(:turns, [])
 
     {:ok, maybe_greet(socket, partner, @burrow_greeting)}
@@ -164,7 +224,7 @@ defmodule PlatformWeb.VoiceLive do
       >
         <header class="flex h-14 flex-none items-center justify-between gap-2 px-4">
           <div id="partner-anchor" class="relative">
-            <.partner_pill partner={@partner} />
+            <.partner_pill partner={@partner} speaking={@on_device? and not is_nil(@speaking_id)} />
             <.partner_sheet
               variant={:popover}
               open={@sheet == :partner}
@@ -194,7 +254,8 @@ defmodule PlatformWeb.VoiceLive do
             <div id="voice-turns" phx-update="stream" class="flex flex-col gap-2">
               <.turn :for={{id, turn} <- @streams.turns} id={id} turn={turn} />
             </div>
-            <.pending_turn state={@mic_state} partner={@partner} />
+            <.native_pending :if={@on_device?} />
+            <.pending_turn state={pending_state(@on_device?, @mic_state)} partner={@partner} />
           </div>
         </div>
 
@@ -206,6 +267,11 @@ defmodule PlatformWeb.VoiceLive do
           typing?={@typing?}
           type_form={@type_form}
           user_id={@current_user_record && @current_user_record.id}
+          on_device?={@on_device?}
+          native_mic={@native_mic}
+          mic_permission={@mic_permission}
+          caption={@on_device_caption}
+          announce={@native_announce}
         />
       </div>
     </Layouts.app>
@@ -240,9 +306,12 @@ defmodule PlatformWeb.VoiceLive do
         socket =
           socket
           |> end_session()
+          |> stop_native()
+          |> drop_native()
           |> assign(:partner, partner)
           |> assign(:sheet, nil)
           |> stream(:turns, [], reset: true)
+          |> reopen_native()
 
         {:noreply, maybe_greet(socket, partner, greeting)}
     end
@@ -260,6 +329,7 @@ defmodule PlatformWeb.VoiceLive do
 
     {:noreply,
      socket
+     |> stop_native()
      |> assign(:context, context)
      |> assign(:sheet, nil)
      |> insert_turn(%{kind: :day, text: note})
@@ -411,9 +481,86 @@ defmodule PlatformWeb.VoiceLive do
 
   def handle_event("voice_type", _params, socket), do: {:noreply, socket}
 
+  # ── on device (task 01a20dc5 stage 2) ─────────────────────────────────
+
+  def handle_event("voice_native_ready", %{"available" => true} = params, socket) do
+    test_build? = params["test_build"] == true
+
+    socket =
+      socket
+      |> assign(:native_test_build?, test_build?)
+      |> assign(:native_route, route_label(params["route"]))
+      |> assign(:on_device?, true)
+      |> assign_caption()
+
+    {:noreply, if(socket.assigns.native_conn, do: socket, else: open_native(socket))}
+  end
+
+  def handle_event("voice_native_ready", params, socket) do
+    Logger.info("[VoiceLive] on-device voice unavailable: #{native_reason(params)}")
+    {:noreply, socket}
+  end
+
+  def handle_event(
+        "voice_native_turn",
+        %{"text" => text, "client_turn_id" => turn_id} = params,
+        %{assigns: %{on_device?: true}} = socket
+      )
+      when is_binary(text) and is_binary(turn_id) and turn_id != "" do
+    case Map.fetch(socket.assigns.native_turn_ids, turn_id) do
+      {:ok, message_id} ->
+        {:reply, %{ok: true, message_id: message_id}, socket}
+
+      :error ->
+        socket = if socket.assigns.native_conn, do: socket, else: open_native(socket)
+        native_turn(socket, socket.assigns.native_conn, text, turn_id, params["at"])
+    end
+  end
+
+  def handle_event("voice_native_turn", _params, socket), do: {:reply, %{ok: false}, socket}
+
+  def handle_event(
+        "voice_native_speaking",
+        %{"id" => id, "state" => state},
+        %{assigns: %{on_device?: true}} = socket
+      )
+      when is_binary(id) do
+    {:noreply, native_speaking(socket, id, state)}
+  end
+
+  def handle_event("voice_native_speaking", _params, socket), do: {:noreply, socket}
+
+  def handle_event(
+        "voice_native_mic",
+        %{"state" => state},
+        %{assigns: %{on_device?: true}} = socket
+      ) do
+    {:noreply, native_mic(socket, state)}
+  end
+
+  def handle_event("voice_native_mic", _params, socket), do: {:noreply, socket}
+
+  def handle_event(
+        "voice_native_permission",
+        %{"mic" => mic},
+        %{assigns: %{on_device?: true}} = socket
+      ) do
+    permission = if mic == "denied", do: :denied, else: nil
+    {:noreply, assign(socket, :mic_permission, permission)}
+  end
+
+  def handle_event("voice_native_permission", _params, socket), do: {:noreply, socket}
+
+  def handle_event("voice_native_route", params, %{assigns: %{on_device?: true}} = socket) do
+    {:noreply, socket |> assign(:native_route, route_label(params["label"])) |> assign_caption()}
+  end
+
+  def handle_event("voice_native_route", _params, socket), do: {:noreply, socket}
+
   @impl true
   def terminate(_reason, socket) do
     finish_session(socket)
+    _ = SpaceTopics.release_all(socket, :voice)
     :ok
   end
 
@@ -430,6 +577,27 @@ defmodule PlatformWeb.VoiceLive do
 
   def handle_info({:answer_timeout, _stale}, socket), do: {:noreply, socket}
 
+  # The agent's text reply on the held DM (on-device path only). Every other
+  # message, and every message when the path is closed, falls through to the
+  # catch-all below exactly as before.
+  def handle_info(
+        {:new_message, %{} = message},
+        %{assigns: %{on_device?: true, native_conn: %{} = conn}} = socket
+      ) do
+    if OnDeviceVoice.agent_reply?(conn, message) and
+         not Map.has_key?(socket.assigns.native_replies, message.id) do
+      {:noreply,
+       socket
+       |> insert_native_reply(message)
+       |> push_event("voice_native_speak", %{
+         id: message.id,
+         text: OnDeviceVoice.speakable_text(message.content)
+       })}
+    else
+      {:noreply, socket}
+    end
+  end
+
   # The shell subscribes this process to the viewer's chat spaces (unread
   # badges, presence), so their broadcasts arrive here too; the Voice screen
   # has nothing to do with them.
@@ -443,7 +611,10 @@ defmodule PlatformWeb.VoiceLive do
   @doc "Milliseconds a release must reach, with no final caption, to count as a turn."
   def too_short_ms, do: @too_short_ms
 
-  defp answer_timeout_ms,
+  defp answer_timeout_ms(%{assigns: %{on_device?: true}}),
+    do: Application.get_env(:platform, :voice_native_answer_timeout_ms, @native_answer_timeout_ms)
+
+  defp answer_timeout_ms(_socket),
     do: Application.get_env(:platform, :voice_answer_timeout_ms, @answer_timeout_ms)
 
   defp session_reply(session) do
@@ -501,7 +672,7 @@ defmodule PlatformWeb.VoiceLive do
   defp start_answer_timer(socket) do
     socket = cancel_answer_timer(socket)
     ref = make_ref()
-    Process.send_after(self(), {:answer_timeout, ref}, answer_timeout_ms())
+    Process.send_after(self(), {:answer_timeout, ref}, answer_timeout_ms(socket))
     assign(socket, :answer_ref, ref)
   end
 
@@ -653,6 +824,182 @@ defmodule PlatformWeb.VoiceLive do
     |> assign(:turn_seq, seq)
     |> stream_insert(:turns, Map.put(turn, :id, "turn-#{seq}"))
   end
+
+  # ── on-device helpers ─────────────────────────────────────────────────
+
+  defp native_reason(%{"reason" => reason}) when reason in @native_reasons, do: reason
+  defp native_reason(_params), do: "unknown"
+
+  # The route label is generic ("Bluetooth"), never a device's own name.
+  defp route_label(label) when label in ["Bluetooth", "Headphones", "Car"], do: label
+  defp route_label(_label), do: nil
+
+  defp assign_caption(%{assigns: %{native_test_build?: true, native_route: route}} = socket) do
+    caption = if route, do: "On this iPhone · #{route}", else: "On this iPhone"
+    assign(socket, :on_device_caption, caption)
+  end
+
+  defp assign_caption(socket), do: assign(socket, :on_device_caption, nil)
+
+  # Opens the partner's DM and holds its topic as `:voice`.
+  defp open_native(%{assigns: %{partner: %{agent: agent}}} = socket) do
+    user = socket.assigns[:current_user_record]
+
+    case user && OnDeviceVoice.open(user, agent) do
+      {:ok, conn} ->
+        socket
+        |> assign(:native_conn, conn)
+        |> SpaceTopics.hold(conn.space_id, :voice)
+
+      _ ->
+        assign(socket, :native_conn, nil)
+    end
+  end
+
+  defp open_native(socket), do: assign(socket, :native_conn, nil)
+
+  defp reopen_native(%{assigns: %{on_device?: true}} = socket), do: open_native(socket)
+  defp reopen_native(socket), do: socket
+
+  # A partner or context change: the phone stops speaking and drops a
+  # half-formed turn (canvas state 10).
+  defp stop_native(%{assigns: %{on_device?: true}} = socket) do
+    socket
+    |> push_event("voice_native_stop", %{})
+    |> cancel_answer_timer()
+    |> assign(:mic_state, :idle)
+    |> assign(:speaking_id, nil)
+  end
+
+  defp stop_native(socket), do: socket
+
+  # A partner change: the old DM's `:voice` hold is released (the new
+  # partner's DM is opened by `reopen_native/1`).
+  defp drop_native(%{assigns: %{on_device?: true}} = socket) do
+    socket
+    |> SpaceTopics.release_all(:voice)
+    |> assign(:native_conn, nil)
+    |> assign(:native_replies, %{})
+    |> assign(:native_announce, nil)
+  end
+
+  defp drop_native(socket), do: socket
+
+  defp native_turn(socket, nil, _text, _turn_id, _at), do: {:reply, %{ok: false}, socket}
+
+  defp native_turn(socket, conn, text, turn_id, at) do
+    case OnDeviceVoice.find_turn(conn, turn_id) do
+      %{} = posted ->
+        conn = OnDeviceVoice.mark_turn(conn, posted)
+
+        {:reply, %{ok: true, message_id: posted.id},
+         confirm_native_turn(socket, conn, posted, turn_id, at)}
+
+      nil ->
+        case OnDeviceVoice.send_turn(conn, text, turn_id) do
+          {:ok, conn, message} ->
+            {:reply, %{ok: true, message_id: message.id},
+             confirm_native_turn(socket, conn, message, turn_id, at)}
+
+          {:error, _reason} ->
+            {:reply, %{ok: false}, socket}
+        end
+    end
+  end
+
+  defp confirm_native_turn(socket, conn, message, turn_id, at) do
+    socket
+    |> assign(:native_conn, conn)
+    |> update(:native_turn_ids, &Map.put(&1, turn_id, message.id))
+    |> assign(:heard?, true)
+    |> insert_turn(%{kind: :me, text: message.content, meta: "on this iPhone · #{clock(at)}"})
+    |> assign(:mic_state, :thinking)
+    |> start_answer_timer()
+  end
+
+  defp insert_native_reply(%{assigns: %{partner: nil}} = socket, _message), do: socket
+
+  defp insert_native_reply(socket, message) do
+    %{partner: partner} = socket.assigns
+    seq = socket.assigns.turn_seq + 1
+
+    turn = %{
+      id: "turn-#{seq}",
+      kind: :agent,
+      from: partner.agent.name,
+      slot: partner.slot,
+      text: message.content
+    }
+
+    socket
+    |> cancel_answer_timer()
+    |> assign(:mic_state, :idle)
+    |> assign(:turn_seq, seq)
+    |> update(:native_replies, &Map.put(&1, message.id, turn))
+    |> assign(:native_announce, "#{partner.agent.name} replied")
+    |> stream_insert(:turns, turn)
+  end
+
+  defp native_speaking(socket, id, "started"), do: assign(socket, :speaking_id, id)
+
+  defp native_speaking(socket, id, "finished"), do: clear_speaking(socket, id)
+
+  defp native_speaking(socket, id, "stopped"),
+    do: socket |> clear_speaking(id) |> mark_reply(id, "Stopped")
+
+  defp native_speaking(socket, id, "unheard"),
+    do: socket |> clear_speaking(id) |> mark_reply(id, "Reply shown as text")
+
+  defp native_speaking(socket, _id, _state), do: socket
+
+  defp clear_speaking(%{assigns: %{speaking_id: id}} = socket, id),
+    do: assign(socket, :speaking_id, nil)
+
+  defp clear_speaking(socket, _id), do: socket
+
+  defp mark_reply(socket, id, note) do
+    case Map.fetch(socket.assigns.native_replies, id) do
+      {:ok, turn} ->
+        turn = Map.put(turn, :note, note)
+
+        socket
+        |> update(:native_replies, &Map.put(&1, id, turn))
+        |> stream_insert(:turns, turn)
+
+      :error ->
+        socket
+    end
+  end
+
+  defp native_mic(socket, "held") do
+    socket
+    |> cancel_answer_timer()
+    |> assign(:native_mic, :ready)
+    |> assign(:mic_state, :listening)
+  end
+
+  defp native_mic(%{assigns: %{mic_state: :listening}} = socket, "toggled"),
+    do: assign(socket, :mic_state, :toggled)
+
+  defp native_mic(socket, "toggled"), do: socket
+
+  defp native_mic(socket, "in_use"),
+    do: socket |> assign(:native_mic, :in_use) |> assign(:mic_state, :idle)
+
+  defp native_mic(socket, "idle") do
+    state =
+      if socket.assigns.mic_state in [:listening, :toggled],
+        do: :idle,
+        else: socket.assigns.mic_state
+
+    socket |> assign(:native_mic, :ready) |> assign(:mic_state, state)
+  end
+
+  defp native_mic(socket, _state), do: socket
+
+  # The hook draws the forming words itself on the on-device path.
+  defp pending_state(true, state) when state in [:listening, :toggled], do: :idle
+  defp pending_state(_on_device?, state), do: state
 
   defp context_spaces(%{id: user_id}, scope) do
     user_id
