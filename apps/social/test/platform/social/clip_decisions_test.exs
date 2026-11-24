@@ -202,9 +202,11 @@ defmodule Platform.Social.ClipDecisionsTest do
     assert approved.reviewed_render_id == v1_id
     assert post.clip_render_id == v1_id
     assert post.media_file_ids == [v1_file]
-    assert post.body =~ "Agent caption"
-    refute post.body =~ "Second caption"
-    assert Repo.get!(Platform.Social.Idea, post.idea_id).title == "Agent title"
+    # Media is v1's; the copy is the clip's CURRENT working copy, which v2's
+    # arrival replaced ("Second ..."), not v1's snapshot ("Agent caption").
+    assert post.body =~ "Second caption"
+    refute post.body =~ "Agent caption"
+    assert Repo.get!(Platform.Social.Idea, post.idea_id).title == "Second headline"
     assert post.media_meta[v1_file] == %{"duration_s" => 30.0, "width" => 1080, "height" => 1920}
 
     v3_file = stored_file!(ctx.w.project, "v3 bytes", "v3.mp4", "video/mp4")
@@ -234,7 +236,7 @@ defmodule Platform.Social.ClipDecisionsTest do
     assert {:ok, ^v1_file} =
              signed_url |> String.split("/") |> List.last() |> Platform.Files.SignedUrl.verify()
 
-    assert request.body =~ "Agent caption"
+    assert request.body =~ "Second caption"
     assert Repo.get!(Post, post.id).clip_render_id == v1_id
     assert Repo.get!(Clip, ctx.clip.id).reviewed_render_id == nil
     assert Platform.Files.get_file(v1_file)

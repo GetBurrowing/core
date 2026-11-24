@@ -11,7 +11,7 @@ defmodule Platform.Social.ToolDefinitionsTest do
                 social_clip_job_complete social_clip_job_fail)
 
   @expected_names ~w(social_profile_list social_profile_get social_draft_create social_draft_update
-              social_post_list social_results_get social_clip_propose social_clip_submit social_clip_render
+              social_post_list social_results_get social_clip_propose social_clip_submit social_clip_render social_clip_update_copy
               social_clip_list social_task_request) ++
                     @job_tools ++
                     ~w(social_idea_create social_idea_list social_idea_vote social_idea_unvote social_idea_archive social_idea_note_add social_weekly_note_submit social_weekly_note_list social_studio_draft_create)

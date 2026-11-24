@@ -60,6 +60,7 @@ defmodule Platform.Social.ClipDecisions do
     Account,
     Clip,
     ClipPublish,
+    ClipReviewFeed,
     ClipVersions,
     Ideas,
     Links,
@@ -78,6 +79,7 @@ defmodule Platform.Social.ClipDecisions do
           :not_found
           | :render_not_found
           | :not_pending
+          | :stale_copy
           | :not_decided
           | :no_platforms
           | :account_not_in_profile
@@ -102,6 +104,15 @@ defmodule Platform.Social.ClipDecisions do
   `attrs["render_id"]` is required and binds every post to that playable
   version; it never defaults to latest.
 
+  Copy and media come from different places. A new draft takes the clip's
+  CURRENT title and caption (its working copy, as edited in the details rail
+  or by `social_clip_update_copy`, with any explicit `attrs` edit applied
+  first; a cleared caption stays cleared) together with the CHOSEN version's
+  media, measurements and identity. Existing posts and version snapshots are
+  unchanged, and the words burned into the video (the render's headline and
+  captions) are NOT edited. Removing a current version can still restore
+  snapshot copy (`Platform.Social.ClipRemoval`); that is unchanged.
+
   Refusals, in order, each writing nothing: `:not_found` (missing or another
   org's clip), `:not_pending` (not rendered, or not review pending), the
   `preparer_check/3` refusal, `:invalid_schedule` / `:schedule_in_past`,
@@ -110,6 +121,20 @@ defmodule Platform.Social.ClipDecisions do
   `:account_draft_only`. A `post_preparer_check/4` refusal (e.g.
   `:not_the_owner`), `{:invalid_options, errors}` (a YouTube title over its
   limit) or a changeset error rolls everything back.
+
+  `:stale_copy` is decided on the locked clip, after the clip is confirmed
+  pending: when `attrs` carries `"copy_rev"` (the `ClipReviewFeed.copy_rev/1`
+  of the clip as the reviewer's page rendered it) and the clip's title or
+  caption has changed since, nothing is written. The key is MANDATORY: a call
+  without it, or with a nil, blank or wrong value, is refused with
+  `{:error, :stale_copy}` and creates no posts. This context never fetches a
+  token for the caller: only the reviewer's page, or a caller that has read
+  the copy itself, can say which copy was seen.
+
+  A clip with no working title stays titleless: no title is taken from the
+  video's headline. A YouTube draft from it carries no title, so it is NOT a
+  complete post (`PublishingCompleteness` flags it "Add a video title") and
+  sending it for review is refused until a title is added.
 
   Returns `{:ok, %{clip: clip, posts: posts}}`.
   """
@@ -137,6 +162,7 @@ defmodule Platform.Social.ClipDecisions do
              {:ok, accounts} <- relock_accounts(profile, accounts),
              {:ok, clip} <- lock_clip(clip),
              :ok <- pending(clip),
+             :ok <- copy_seen(clip, attrs),
              {:ok, render} <- selected_render(org_id, profile, clip, attrs["render_id"]),
              {:ok, clip} <- review(clip, render, user_id, attrs, now),
              version_clip = version_clip(clip, render, attrs),
@@ -155,6 +181,23 @@ defmodule Platform.Social.ClipDecisions do
         error ->
           error
       end
+    end
+  end
+
+  # The reviewer decided on the copy they saw. When the caller names it
+  # (`attrs["copy_rev"]`, the `ClipReviewFeed.copy_rev/1` of the clip as
+  # rendered), it must still be the LOCKED clip's, or nothing is written and
+  # the click is refused: an agent's `social_clip_update_copy` or another
+  # save landed after the page rendered. The key is mandatory: absent, nil,
+  # blank or wrong are all refused, so no caller can draft without having
+  # observed a copy.
+  defp copy_seen(clip, attrs) do
+    case Map.get(attrs, "copy_rev") do
+      rev when is_binary(rev) and rev != "" ->
+        if ClipReviewFeed.copy_rev(clip) == rev, do: :ok, else: {:error, :stale_copy}
+
+      _ ->
+        {:error, :stale_copy}
     end
   end
 
@@ -207,12 +250,21 @@ defmodule Platform.Social.ClipDecisions do
     end
   end
 
-  defp version_clip(clip, render, attrs) do
+  # The clip here is the LOCKED clip `review/5` just returned, so it already
+  # carries the human's explicit `attrs` edits (an absent key leaves the
+  # working copy; a present nil clears it). New drafts therefore take the
+  # clip's CURRENT working title and caption exactly as they stand, nil and ""
+  # included (a nil title stays nil; it is not replaced by the headline and a
+  # YouTube draft without one is incomplete, see `put_title/3`), with NO fallback to the version's snapshot: a cleared caption
+  # must not bring the old text back. Only the media and its measurements
+  # come from the chosen version. Posts already written and the version
+  # snapshots are never rewritten, and the words burned into the video (the
+  # render's headline and captions) are not edited. (Removing a current
+  # version can still restore snapshot copy: `ClipRemoval.fallback!`, clip_removal.ex:165.)
+  defp version_clip(clip, render, _attrs) do
     %{
       clip
       | render_file_id: render.file_id,
-        title: Map.get(attrs, "title", render.headline),
-        caption: Map.get(attrs, "caption", render.caption),
         start_s: render.actual_start_s,
         end_s: render.actual_end_s,
         duration_s: render.duration_s,

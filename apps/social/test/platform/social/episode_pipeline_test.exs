@@ -194,12 +194,14 @@ defmodule Platform.Social.EpisodePipelineTest do
       assert {:error, _} =
                Platform.Social.draft_clip(c.w.org_id, clip.id, c.w.outsider.id, %{
                  "render_id" => render.id,
+                 "copy_rev" => clip_copy_rev!(clip),
                  "account_ids" => [c.w.tiktok.id]
                })
 
       assert {:ok, _} =
                Platform.Social.draft_clip(c.w.org_id, clip.id, c.w.approver.id, %{
                  "render_id" => render.id,
+                 "copy_rev" => clip_copy_rev!(clip),
                  "account_ids" => [c.w.tiktok.id]
                })
     end

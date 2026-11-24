@@ -39,6 +39,7 @@ defmodule Platform.Social.Tools do
     Clip,
     ClipJob,
     ClipJobs,
+    ClipReviewFeed,
     Idea,
     IdeaNote,
     IdeaNotes,
@@ -62,7 +63,8 @@ defmodule Platform.Social.Tools do
 
   # Social authoring 2/11: the tools that need the calling agent (the idea
   # creator, and the change log's actor on a draft write).
-  @agent_tools ~w(social_draft_create social_draft_update social_weekly_note_submit social_studio_draft_create)
+  @agent_tools ~w(social_draft_create social_draft_update social_weekly_note_submit social_studio_draft_create
+                  social_clip_update_copy)
 
   @spec execute(String.t(), map(), map()) :: {:ok, map()} | {:error, map()}
   def execute(tool, args, context) do
@@ -409,6 +411,35 @@ defmodule Platform.Social.Tools do
 
       error ->
         {:error, studio_draft_error(error)}
+    end
+  end
+
+  # Only the clip's title and caption. The keys come from the arguments; the
+  # CALLER is the context's agent, who must be the profile's drafting agent
+  # (decided under the lock in `AgentDrafts`), and `expected_copy_rev` is the
+  # token from the caller's own read.
+  defp agent_tool("social_clip_update_copy", args, scope, agent) do
+    case AgentDrafts.update_clip_copy(
+           scope,
+           args["clip_id"],
+           Map.take(args, ~w(title caption)),
+           agent_id: agent.id,
+           expected_copy_rev: args["expected_copy_rev"]
+         ) do
+      {:ok, clip} ->
+        {:ok,
+         %{
+           clip: %{
+             id: clip.id,
+             title: clip.title,
+             caption: clip.caption,
+             copy_rev: ClipReviewFeed.copy_rev(clip),
+             updated_at: DateTime.to_iso8601(clip.updated_at)
+           }
+         }}
+
+      error ->
+        {:error, error_envelope(error)}
     end
   end
 
@@ -1182,6 +1213,62 @@ defmodule Platform.Social.Tools do
     )
   end
 
+  defp error_envelope({:error, :clip_not_editable}) do
+    err(
+      :clip_not_editable,
+      "this clip's copy can only be changed while it waits in review (rendered, review pending); nothing was changed. " <>
+        @human,
+      false,
+      "Leave it to the reviewer, or submit a new clip with social_clip_submit."
+    )
+  end
+
+  defp error_envelope({:error, :not_drafting_agent}) do
+    err(
+      :not_drafting_agent,
+      "only this profile's configured drafting agent may change a clip's copy; nothing was changed. " <>
+        @human,
+      false,
+      "Ask a profile approver to set you as the drafting agent in Settings, or leave the copy to the reviewer."
+    )
+  end
+
+  defp error_envelope({:error, :stale_copy}) do
+    err(
+      :stale_copy,
+      "the clip's title or caption changed since you read it (a person or another agent edited it); nothing was changed",
+      true,
+      "Read the clip again with social_clip_list, look at its current copy, and send its copy_rev if your edit still applies."
+    )
+  end
+
+  defp error_envelope({:error, :copy_rev_required}) do
+    err(
+      :invalid_argument,
+      "expected_copy_rev is required: the copy_rev of the clip as you last read it; nothing was changed",
+      true,
+      "Read the clip with social_clip_list and pass its copy_rev as expected_copy_rev."
+    )
+  end
+
+  defp error_envelope({:error, :nothing_to_update}) do
+    err(
+      :invalid_argument,
+      "pass title, caption or both; nothing was changed",
+      true,
+      "Pass the field you want to change."
+    )
+  end
+
+  defp error_envelope({:error, {:invalid, field}}) do
+    err(
+      :invalid_argument,
+      "#{field} must be text (a caption may also be null to clear it); nothing was changed",
+      true,
+      "Pass #{field} as a string."
+    )
+  end
+
   defp error_envelope({:error, :invalid_review_status}) do
     err(
       :invalid_review_status,
@@ -1647,6 +1734,7 @@ defmodule Platform.Social.Tools do
         :rendered_at
       ])
       |> Map.put(:next_rev, Platform.Social.ClipVersions.next_rev(c))
+      |> Map.put(:copy_rev, ClipReviewFeed.copy_rev(c))
 
   defp job_json(%ClipJob{} = j),
     do:
