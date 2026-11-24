@@ -1867,6 +1867,13 @@ defmodule Platform.RepoLookupBoundaryTest do
     # applies. Nil-tolerant on purpose: "not seeded yet" is the expected state
     # whenever `MEETINGS_ENABLED` is unset.
     "platform/meetings/sender_seed.ex" => 1,
+    # Task 01a20dc5 stage 2 — `OnDeviceVoice.find_turn/2`. Triaged by hand:
+    # the `where:` pins `m.space_id` and `m.participant_id` to the conn's own
+    # ids, which `open/2` read back from the DM and participant rows (never a
+    # boundary value), and compares the hook's `client_turn_id` as TEXT
+    # through `metadata->>'client_turn_id'`, which casts nothing. No
+    # `Ecto.Query.CastError` is reachable, so no guard applies.
+    "platform/meetings/on_device_voice.ex" => 1,
     # Task 01a10db7 stage 2 — `Ringing.get_ring_for_user/2`. Triaged by hand:
     # the `where:` pins `r.id == ^ring_id` (a URL path segment) and
     # `r.user_id == ^user_id` (the bearer's own loaded `%User{}`), and the

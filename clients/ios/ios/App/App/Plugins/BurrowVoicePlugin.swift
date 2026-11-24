@@ -143,8 +143,9 @@ final class SystemVoiceTranscriber: VoiceTranscribing {
 /// `BurrowVoice` (task 01a20dc5 stage 1): the Voice tab on an iPhone that can
 /// transcribe on the device. The mic's words are transcribed here and the
 /// page sends them as text; the reply is read by the system voice. No
-/// LiveKit and no voice worker on this path. Registered beside `SuiteNative`
-/// and `SuiteMeetings` in `BurrowBridgeViewController.capacitorDidLoad`.
+/// LiveKit and no voice worker on this path. Registered beside
+/// `BurrowNativePlugin` and `BurrowMeetingsPlugin` in
+/// `BurrowBridgeViewController.capacitorDidLoad`.
 ///
 /// Methods: `capabilities`, `prepare`, `start`, `stop`, `cancel`, `speak`,
 /// `stopSpeaking`, `openSettings`. Events: `partial {text}`, `final {text}`,

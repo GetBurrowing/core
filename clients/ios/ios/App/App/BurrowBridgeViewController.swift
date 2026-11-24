@@ -128,7 +128,7 @@ final class BurrowBridgeViewController: CAPBridgeViewController {
         // Native meetings (task 01a10db7 stage 3), beside `SuiteNative`.
         meetingsPlugin.shell = self
         bridge?.registerPluginInstance(meetingsPlugin)
-        // On-device Voice (task 01a20dc5 stage 1), beside `SuiteMeetings`.
+        // On-device Voice (task 01a20dc5 stage 1), beside the meetings plugin.
         bridge?.registerPluginInstance(voicePlugin)
         // CapacitorBridge.init makes its own CAPNotificationRouter the
         // notification delegate unless `ios.handleApplicationNotifications`
