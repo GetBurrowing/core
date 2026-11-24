@@ -24,13 +24,10 @@ defmodule Platform.Meetings.OnDeviceVoice do
   context set.
   """
 
-  import Ecto.Query, only: [from: 2]
-
   alias Platform.Agents.Agent
   alias Platform.Chat
   alias Platform.Chat.Message
   alias Platform.Chat.SpaceAccess
-  alias Platform.Repo
 
   @type conn :: %{
           space_id: binary(),
@@ -97,15 +94,10 @@ defmodule Platform.Meetings.OnDeviceVoice do
   """
   @spec find_turn(conn(), String.t()) :: Message.t() | nil
   def find_turn(conn, client_turn_id) when is_binary(client_turn_id) do
-    from(m in Message,
-      where:
-        m.space_id == ^conn.space_id and m.participant_id == ^conn.user_participant_id and
-          fragment("?->>'client_turn_id' = ?", m.metadata, ^client_turn_id) and
-          fragment("?->>'input' = 'on_device'", m.metadata),
-      order_by: [asc: m.inserted_at],
-      limit: 1
-    )
-    |> Repo.one()
+    Chat.find_message_by_metadata(conn.space_id, conn.user_participant_id, %{
+      "input" => "on_device",
+      "client_turn_id" => client_turn_id
+    })
   end
 
   @doc """
