@@ -439,6 +439,10 @@ defmodule PlatformWeb.SocialConnectionsTab do
   defp retry_copy({:error, :publish_job_changed}),
     do: "The publish job changed, so nothing was retried."
 
+  defp retry_copy({:error, :quality_review_required}),
+    do:
+      "This older post has no valid quality pass. Its publishing outcome needs separate investigation before a new job can be started."
+
   defp retry_copy({:error, :not_refused}), do: "That post is no longer waiting for a retry."
 
   defp retry_copy({:error, {:incomplete_post, lines}}) when is_list(lines),

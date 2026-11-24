@@ -170,6 +170,20 @@ defmodule Platform.Social.Extension do
   def inbox_kinds do
     [
       %{
+        kind: "social_post_revision",
+        source_type: "social_post",
+        label: "Changes requested",
+        icon: "hero-pencil-square",
+        stays_listed_on_open: false
+      },
+      %{
+        kind: "social_quality_review",
+        source_type: "social_post",
+        label: "Post needs quality review",
+        icon: "hero-check-badge",
+        stays_listed_on_open: true
+      },
+      %{
         kind: "social_post_approval",
         source_type: "social_post",
         label: "Post needs approval",

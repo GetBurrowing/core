@@ -154,14 +154,14 @@ defmodule Platform.Social.Publishing do
   end
 
   defp retry_checked(org_id, post_id, actor_user_id, opts, expected_id) do
-    # Hold the post through the eligibility recheck and operation selection.
+    # Lock profile -> account -> post, then hold them through the eligibility
+    # recheck and operation selection, including nested new-job reapproval.
     # Missing external id does not prove no remote job exists: the existing
     # idempotency key/uncertain-outcome behavior is deliberately unchanged.
     Repo.transaction(fn ->
-      with %Post{} = post <- Social.lock_post(org_id, post_id) || {:error, :not_found},
+      with {:ok, {post, account, profile}} <-
+             Platform.Social.QualityReview.lock_context(org_id, post_id),
            :ok <- refuse_studio(post),
-           {:ok, account} <- account_any(org_id, post),
-           {:ok, profile} <- Social.profile_of_post(post),
            :ok <- Social.post_approver_check(org_id, profile, account, actor_user_id),
            :ok <- retryable(post, DateTime.utc_now()),
            :ok <- check_expected_job(post, expected_id) do

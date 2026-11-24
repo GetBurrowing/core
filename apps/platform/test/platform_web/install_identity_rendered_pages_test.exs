@@ -22,6 +22,7 @@ defmodule PlatformWeb.InstallIdentityRenderedPagesTest do
 
   alias Platform.Accounts.User
   alias Platform.Regression.InstallIdentityScanner, as: Scanner
+  alias Platform.Regression.InstallIdentityShapeDiagnostic, as: ShapeDiagnostic
   alias Platform.Repo
   alias Platform.Tenancy
   alias Platform.Tenancy.OrgMembership
@@ -77,9 +78,14 @@ defmodule PlatformWeb.InstallIdentityRenderedPagesTest do
         assert html =~ ~s(id="mode-toggle"), "#{label} render has no shell"
         assert html =~ ~s(data-theme-chip), "#{label} render has no theme picker chips"
 
-        assert Scanner.hits(html) == [],
+        hits = Scanner.hits(html)
+
+        shape = ShapeDiagnostic.when_hits(html, hits, &ShapeDiagnostic.describe/2)
+        diagnostic = if shape == "", do: "", else: " (" <> shape <> ")"
+
+        assert hits == [],
                "#{unquote(path)} #{label} render carries install identity at " <>
-                 inspect(Scanner.hits(html))
+                 inspect(hits) <> diagnostic
 
         # POSITIVE CONTROL on the same HTML
         org = Scanner.published_org_token()

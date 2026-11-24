@@ -63,6 +63,9 @@ defmodule PlatformWeb.SocialCardComponent do
   alias Platform.Social.{Approvals, Publishing}
 
   @refusals %{
+    quality_review_required: "This needs a quality review before it can be approved.",
+    not_a_quality_reviewer: "You are not a quality reviewer for this brand.",
+    not_in_quality_review: "This post is no longer in quality review.",
     slot_passed: "This post's time has passed, so it was not approved. Choose a new time first.",
     already_decided: "Someone already decided this post.",
     card_changed: "This card changed since it was posted; reload.",
@@ -144,6 +147,25 @@ defmodule PlatformWeb.SocialCardComponent do
   defp handle_current_event("social_card_approve", params, socket) do
     with_clicker(socket, fn user ->
       Approvals.decide_approve(params["canvas-id"], user, params["fingerprint"])
+    end)
+  end
+
+  defp handle_current_event("social_card_return_quality", _params, socket) do
+    with_clicker(socket, fn user ->
+      view = socket.assigns.view
+
+      if :return_to_quality_review in Map.get(view, :actions, []) do
+        case Platform.Social.return_to_quality_review(view.org_id, view.post_id, user.id) do
+          {:ok, post} = result ->
+            send(self(), {PlatformWeb.SocialDraftCard, :quality_sent, post.id})
+            result
+
+          error ->
+            error
+        end
+      else
+        {:error, :not_an_approver}
+      end
     end)
   end
 
@@ -264,15 +286,35 @@ defmodule PlatformWeb.SocialCardComponent do
   defp retry_result(socket, result) do
     notice =
       case result do
-        {:ok, %{status: "scheduled"}} -> "Scheduled."
-        {:ok, %{status: "published"}} -> "Published."
-        {:ok, _post} -> "Retry completed."
-        {:error, :invalid_retry_time} -> "Choose a future publish time."
-        {:error, :publish_job_changed} -> "The publish job changed, so nothing was retried."
-        {:error, {:media_rejected, _}} -> nil
-        {:error, {:publish_failed, _}} -> nil
-        {:error, reason} when reason in @refused_again -> nil
-        {:error, reason} -> refusal_copy(reason, socket.assigns.view)
+        {:ok, %{status: "scheduled"}} ->
+          "Scheduled."
+
+        {:ok, %{status: "published"}} ->
+          "Published."
+
+        {:ok, _post} ->
+          "Retry completed."
+
+        {:error, :invalid_retry_time} ->
+          "Choose a future publish time."
+
+        {:error, :publish_job_changed} ->
+          "The publish job changed, so nothing was retried."
+
+        {:error, :quality_review_required} ->
+          "This older post has no valid quality pass. Its publishing outcome needs separate investigation before a new job can be started."
+
+        {:error, {:media_rejected, _}} ->
+          nil
+
+        {:error, {:publish_failed, _}} ->
+          nil
+
+        {:error, reason} when reason in @refused_again ->
+          nil
+
+        {:error, reason} ->
+          refusal_copy(reason, socket.assigns.view)
       end
 
     {:noreply,
@@ -293,6 +335,14 @@ defmodule PlatformWeb.SocialCardComponent do
       end
 
     result = if user, do: decide.(user), else: {:error, :not_an_approver}
+
+    case result do
+      {:ok, %{post: %{status: "quality_review", id: id}}} ->
+        send(self(), {PlatformWeb.SocialDraftCard, :quality_sent, id})
+
+      _ ->
+        :ok
+    end
 
     socket =
       case result do
@@ -316,6 +366,29 @@ defmodule PlatformWeb.SocialCardComponent do
       class="w-full max-w-xl space-y-3 rounded-xl border border-edge bg-base-100 p-3 text-sm text-base-content sm:p-4"
     >
       <.status_header view={@view} />
+      <p
+        :if={@view[:quality_required?]}
+        data-role="quality-required"
+        class="text-sm text-base-content"
+      >
+        This needs a quality review before it can be approved.
+      </p>
+      <p :if={@view[:quality_pass]} data-role="quality-pass-badge" class="text-sm text-base-content">
+        Quality review: {@view.quality_pass.name},
+        <time datetime={DateTime.to_iso8601(@view.quality_pass.at)}>
+          {Calendar.strftime(@view.quality_pass.at, "%a %d %b, %H:%M UTC")}
+        </time>
+      </p>
+      <button
+        :if={:return_to_quality_review in (@view[:actions] || [])}
+        type="button"
+        phx-click="social_card_return_quality"
+        phx-target={@myself}
+        data-role="social-card-return-quality"
+        class="btn btn-primary min-h-11"
+      >
+        Send to quality review
+      </button>
 
       <div
         :if={@view[:title]}

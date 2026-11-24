@@ -36,12 +36,13 @@ defmodule Platform.Social.ClipDecisions do
 
   ## Humans only
 
-  Every entry takes a user id and checks it with
-  `Platform.Social.approver_check/3` on the clip's profile before anything
-  else: an agent id is `:not_a_human`, a user off the approver list
-  `:not_an_approver`. `draft_clip/5` also applies the per-account rule to
-  each account (an owned account needs its owner, `:not_the_owner`), and any
-  refusal rolls the whole decision back. No agent tool reaches this module.
+  Preparation (draft and reject) takes a live human who passes
+  `Platform.Social.preparer_check/3`: a profile approver or quality reviewer.
+  Draft creation also checks `post_preparer_check/4` for each account, so
+  its final approver or a quality reviewer can prepare it. Authority is
+  rechecked on the locked profile. Undo and publishing retry retain their
+  existing approver checks. Any refusal rolls the whole decision back. No
+  agent tool reaches this module.
 
   ## Clock
 
@@ -67,7 +68,8 @@ defmodule Platform.Social.ClipDecisions do
     PostEvents,
     PublishingCompleteness,
     Profile,
-    Publishing
+    Publishing,
+    QualityReview
   }
 
   @max_note 2_000
@@ -102,10 +104,10 @@ defmodule Platform.Social.ClipDecisions do
 
   Refusals, in order, each writing nothing: `:not_found` (missing or another
   org's clip), `:not_pending` (not rendered, or not review pending), the
-  `approver_check/3` refusal, `:invalid_schedule` / `:schedule_in_past`,
+  `preparer_check/3` refusal, `:invalid_schedule` / `:schedule_in_past`,
   `:no_platforms` (no account ids), `:account_not_in_profile` (an id that is
   not a live account of the clip's profile, another org's included),
-  `:account_draft_only`. A `post_approver_check/4` refusal (e.g.
+  `:account_draft_only`. A `post_preparer_check/4` refusal (e.g.
   `:not_the_owner`), `{:invalid_options, errors}` (a YouTube title over its
   limit) or a changeset error rolls everything back.
 
@@ -121,17 +123,17 @@ defmodule Platform.Social.ClipDecisions do
          :ok <- refuse_studio_clip(clip),
          :ok <- pending(clip),
          {:ok, profile} <- profile(org_id, clip),
-         :ok <- Social.approver_check(org_id, profile, user_id),
+         :ok <- Social.preparer_check(org_id, profile, user_id),
          {:ok, scheduled_at} <- schedule(attrs["scheduled_at"], now),
          {:ok, accounts} <- accounts(profile, attrs["account_ids"]) do
       Repo.transaction(fn ->
         # The checks above are cheap early refusals. The decision of record is
         # made again on the rows read under the lock (`Social.lock_account/3`
-        # documents the convention): the locked profile, its approver list and
+        # documents the convention): the locked profile, its preparation lists and
         # each account's owner, archive and approval mode as they are now.
         with %Profile{} = profile <-
                Social.lock_profile(org_id, profile.id, :share) || {:error, :not_found},
-             :ok <- Social.approver_check(org_id, profile, user_id),
+             :ok <- Social.preparer_check(org_id, profile, user_id),
              {:ok, accounts} <- relock_accounts(profile, accounts),
              {:ok, clip} <- lock_clip(clip),
              :ok <- pending(clip),
@@ -232,7 +234,7 @@ defmodule Platform.Social.ClipDecisions do
     idea = Ideas.find_or_create_for_clip!(clip, profile, user_id)
 
     Enum.reduce_while(accounts, {:ok, []}, fn account, {:ok, acc} ->
-      with :ok <- Social.post_approver_check(org_id, profile, account, user_id),
+      with :ok <- Social.post_preparer_check(org_id, profile, account, user_id),
            {:ok, post} <- insert_draft(profile, clip, idea, account, scheduled_at),
            _created = PostEvents.record!(post, "created", {:human, user_id}) do
         {:cont, {:ok, [post | acc]}}
@@ -315,10 +317,14 @@ defmodule Platform.Social.ClipDecisions do
          :ok <- refuse_studio_clip(clip),
          :ok <- pending(clip),
          {:ok, profile} <- profile(org_id, clip),
-         :ok <- Social.approver_check(org_id, profile, user_id),
+         :ok <- Social.preparer_check(org_id, profile, user_id),
          {:ok, note} <- note(note) do
       Repo.transaction(fn ->
-        with {:ok, clip} <- lock_clip(clip),
+        with %Profile{} = profile <-
+               Social.lock_profile(org_id, profile.id, :share) || {:error, :not_found},
+             :ok <- Social.preparer_check(org_id, profile, user_id),
+             {:ok, clip} <- lock_clip(clip),
+             true <- clip.profile_id == profile.id || {:error, :not_found},
              :ok <- pending(clip),
              {:ok, clip} <-
                clip |> Clip.review_changeset({:reject, user_id, note}, now) |> Repo.update() do
@@ -529,11 +535,13 @@ defmodule Platform.Social.ClipDecisions do
   # it to retry the existing vendor post rather than replaying its creation.
   defp retry_failed(org_id, post_id, user_id, opts, expected_id) do
     Repo.transaction(fn ->
-      case Social.lock_post(org_id, post_id) do
-        %Post{status: "failed", error: error} = post when error != @cancelled ->
+      # Establish the shared profile -> account -> post lock order before
+      # reapproval can lock them again in this transaction.
+      case QualityReview.lock_context(org_id, post_id) do
+        {:ok, {%Post{status: "failed", error: error} = post, account, profile}}
+        when error != @cancelled ->
           with :ok <- Social.refuse_studio(post),
                :ok <- clip_post(post),
-               {:ok, account, profile} <- account_and_profile(org_id, post),
                :ok <- Social.post_approver_check(org_id, profile, account, user_id),
                :ok <- Publishing.check_expected_job(post, expected_id),
                {:ok, approved} <- prepare_retry(org_id, post, user_id, opts, expected_id) do
@@ -548,7 +556,10 @@ defmodule Platform.Social.ClipDecisions do
             {:error, reason} -> Repo.rollback(reason)
           end
 
-        _ ->
+        {:error, reason} ->
+          Repo.rollback(reason)
+
+        {:ok, _} ->
           Repo.rollback(:not_failed)
       end
     end)

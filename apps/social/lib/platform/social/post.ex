@@ -19,7 +19,7 @@ defmodule Platform.Social.Post do
   @foreign_key_type :binary_id
   @timestamps_opts [type: :utc_datetime_usec]
 
-  @statuses ~w(draft needs_approval approved scheduled published failed)
+  @statuses ~w(draft quality_review needs_approval approved scheduled published failed)
   @approved_statuses ~w(approved scheduled published)
 
   # Social Studio (slice A). A post is `legacy` (every pre-Studio row and every
@@ -49,6 +49,12 @@ defmodule Platform.Social.Post do
 
     belongs_to(:approved_by_user, Platform.Accounts.User)
     field(:approved_at, :utc_datetime_usec)
+
+    # The quality pass is written by Social's quality-review transition only.
+    # These fields are never cast from general editor, publisher or agent attrs.
+    belongs_to(:quality_passed_by_user, Platform.Accounts.User)
+    field(:quality_passed_at, :utc_datetime_usec)
+    field(:quality_pass_fingerprint, :string)
 
     field(:external_url, :string)
     field(:external_id, :string)
@@ -428,6 +434,7 @@ defmodule Platform.Social.Post do
     )
     |> foreign_key_constraint(:account_id)
     |> foreign_key_constraint(:approved_by_user_id)
+    |> foreign_key_constraint(:quality_passed_by_user_id)
     |> foreign_key_constraint(:task_id)
     |> foreign_key_constraint(:meeting_id)
     |> foreign_key_constraint(:generated_by_agent_id)
