@@ -327,6 +327,14 @@ defmodule Platform.Audit.TelemetryHandler do
     # handle_event clause) so tests can assert the audit row immediately
     # after `sweep/1` returns.
     [:platform, :files, :file_purged],
+    # Social clip copy edits by the profile's drafting agent. Emitted by
+    # `Platform.Social.AgentDrafts.update_clip_copy/4` after the write
+    # commits. Metadata carries actor_id (the agent), actor_type "agent",
+    # resource_type "social_clip", resource_id, org_id, profile_id and
+    # `fields` (the column NAMES changed, never the text). Sync (default
+    # handle_event clause). Registration here is load-bearing: an unregistered
+    # emit fails silently.
+    [:platform, :social, :clip_copy_updated],
     # Task 019f921d Gap 3 — commencement-gate anomaly alerting. Emitted by
     # `Platform.Tasks.Stacks.CommencementGate.open?/1` on EVERY gate check
     # (high volume). The handler clause below persists an audit row + warns

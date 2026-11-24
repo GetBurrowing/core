@@ -34,7 +34,7 @@ defmodule Platform.Social.TransportParityTest do
   # 7/11's idea tools, and Studio's social_studio_draft_create. Sorted.
   @social_tools ~w(social_clip_job_claim social_clip_job_complete social_clip_job_fail
               social_clip_job_list social_clip_job_progress social_clip_job_source social_clip_list
-              social_clip_propose social_clip_render social_clip_submit social_draft_create
+              social_clip_propose social_clip_render social_clip_submit social_clip_update_copy social_draft_create
               social_draft_update social_idea_archive social_idea_create social_idea_list social_idea_note_add social_idea_unvote social_idea_vote
               social_post_list social_profile_get social_profile_list social_results_get social_studio_draft_create social_task_request social_weekly_note_list social_weekly_note_submit)
 
@@ -1235,8 +1235,8 @@ defmodule Platform.Social.TransportParityTest do
       (Map.keys(http_tools_by_name(token)) ++ ws_tool_names(capabilities))
       |> Enum.filter(&social?/1)
 
-    # Twenty-six names, once per transport
-    assert length(names) == 52
+    # Twenty-seven names, once per transport
+    assert length(names) == 54
     assert Enum.filter(names, &(&1 =~ "publish" or &1 =~ "approve")) == []
   end
 
@@ -1250,7 +1250,7 @@ defmodule Platform.Social.TransportParityTest do
       (Map.keys(http_tools_by_name(token)) ++ ws_tool_names(capabilities))
       |> Enum.filter(&social?/1)
 
-    assert length(names) == 52
+    assert length(names) == 54
 
     forbidden =
       ~r/approv|plan|cancel|revok|revoke|retarget|accept|resubmit|request_changes|schedule/

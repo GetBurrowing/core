@@ -7,6 +7,15 @@ defmodule Platform.SocialFixtures do
 
   alias Platform.Repo
 
+  @doc """
+  The `copy_rev` of the clip's title and caption as they are committed right
+  now, for a test that has just read or set up the copy it is drafting from.
+  Production code never does this: Create drafts needs the token its reviewer
+  saw (`Platform.Social.ClipDecisions.draft_clip/5`).
+  """
+  def clip_copy_rev!(%{id: id}),
+    do: Platform.Social.ClipReviewFeed.copy_rev(Repo.get!(Platform.Social.Clip, id))
+
   def render_id!(clip) do
     import Ecto.Query
 

@@ -2800,6 +2800,9 @@ defmodule Platform.Social do
   # A human's clip decision (task 01a16662; choosing a clip makes drafts, B3): see
   # `Platform.Social.ClipDecisions`. Each takes opts with an injectable `:now`.
 
+  # `attrs["copy_rev"]` is mandatory (`ClipDecisions.draft_clip/5`): the caller
+  # passes the token of the copy its reviewer saw. This wrapper never fetches
+  # one, so a caller with no observation is refused.
   defdelegate draft_clip(org_id, clip_id, user_id, attrs, opts \\ []),
     to: Platform.Social.ClipDecisions
 

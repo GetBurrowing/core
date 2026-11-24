@@ -69,6 +69,7 @@ defmodule Platform.Social.AgentDrafts do
     Clip,
     ClipLook,
     ClipMedia,
+    ClipReviewFeed,
     ClipVersions,
     Cover,
     Idea,
@@ -102,6 +103,13 @@ defmodule Platform.Social.AgentDrafts do
           | {:error, :task_profile_mismatch}
           | {:error, :idea_profile_mismatch | :idea_archived}
           | {:error, :file_not_in_project | :not_a_video | :invalid_title}
+          | {:error,
+             :clip_not_editable
+             | :nothing_to_update
+             | :not_drafting_agent
+             | :stale_copy
+             | :copy_rev_required
+             | {:invalid, :title | :caption}}
           | {:error, :field_not_allowed, [String.t()]}
           | {:error, :banned_phrase, String.t()}
           | {:error, Ecto.Changeset.t()}
@@ -556,6 +564,183 @@ defmodule Platform.Social.AgentDrafts do
       end
     end
   end
+
+  @copy_keys ~w(title caption)
+
+  @doc """
+  Updates ONLY the `title` and/or `caption` of an existing clip that is
+  still waiting in review (`status` rendered, `review_status` pending, the
+  legacy flow: the clips the Review bay's details rail can edit, minus any
+  that is re-rendering). Omitted keys are kept. The editor's own rules apply
+  (`ClipReviewFeed.copy_changeset/2`): a title is trimmed, never blank or
+  null, at most 200; a caption null clears it, at most 2200.
+
+  ## Options (both required)
+
+    * `:agent_id`: the CALLING agent. Only the profile's configured drafting
+      agent (`profile.drafting_agent_id`, the same binding
+      `Platform.Social.WeeklyNotes` and the Ideas drafting path use) may edit,
+      and it must be active. Org visibility alone is not authority: another
+      agent of the same org, a profile with no drafting agent, or no caller
+      at all is `{:error, :not_drafting_agent}`. There is no fallback to
+      org-wide access.
+    * `:expected_copy_rev`: the `ClipReviewFeed.copy_rev/1` of the clip as the
+      caller last read it. If the title or caption changed since (a human's
+      save, another agent, a new version), the edit is `{:error, :stale_copy}`
+      and nothing is written. A missing or blank token is
+      `{:error, :copy_rev_required}`.
+
+  Any other attrs key is `{:error, :field_not_allowed, keys}`; neither key is
+  `{:error, :nothing_to_update}`. A clip outside `scope` or removed is
+  `{:error, :not_found}`, like a missing id.
+
+  Lock order is the profile's (`FOR SHARE`, `Social.lock_profile/3`) then the
+  clip's (`FOR UPDATE`), as `ClipDecisions.draft_clip/5`. The scope, the
+  caller's authority (read from the locked profile), the clip's profile, its
+  removal, its editable state and the copy token are all decided again on the
+  locked rows, so a decision, removal, re-render, profile change or
+  intervening edit that lands first refuses and nothing is written. Order of
+  refusal: `:not_drafting_agent`, `:not_found`, `:clip_not_editable`,
+  `:stale_copy`.
+
+  It writes the clip's `title`/`caption` columns and nothing else: no review
+  field, render, media, `rev`, ClipRender snapshot or post. Posts copied the
+  caption when they were drafted. On success it broadcasts the clip on the
+  profile's clips topic, exactly as the details rail's save does, and (when a
+  column changed) emits the audit event `[:platform, :social, :clip_copy_updated]`
+  naming the agent, the clip and the fields changed, never the text.
+  """
+  @spec update_clip_copy(Social.scope(), term(), map(), keyword()) ::
+          {:ok, Clip.t()} | error()
+  def update_clip_copy(scope, clip_id, attrs, opts) when is_list(opts) do
+    attrs = normalize(attrs)
+    agent_id = Keyword.get(opts, :agent_id)
+    expected = Keyword.get(opts, :expected_copy_rev)
+
+    with :ok <- refuse_non_copy(attrs),
+         :ok <- require_copy(attrs),
+         :ok <- require_copy_rev(expected),
+         %Clip{profile_id: profile_id} <- Social.get_clip(scope, clip_id) || {:error, :not_found} do
+      Repo.transaction(fn ->
+        with %Profile{} = profile <-
+               Social.lock_profile(scope, profile_id, :share) || {:error, :not_found},
+             :ok <- drafting_agent(profile, agent_id),
+             %Clip{} = clip <- lock_copy_clip(profile, clip_id),
+             :ok <- copy_editable(clip),
+             :ok <- copy_fresh(clip, expected),
+             {:ok, changeset} <- ClipReviewFeed.copy_changeset(clip, attrs),
+             {:ok, updated} <- Repo.update(changeset) do
+          {updated, profile,
+           changeset.changes |> Map.keys() |> Enum.map(&to_string/1) |> Enum.sort()}
+        else
+          nil -> Repo.rollback(:not_found)
+          {:error, reason} -> Repo.rollback(reason)
+        end
+      end)
+      |> case do
+        {:ok, {clip, profile, fields}} ->
+          Social.broadcast_clip(clip)
+          audit_copy_update(agent_id, profile, clip, fields)
+          {:ok, clip}
+
+        error ->
+          error
+      end
+    end
+  end
+
+  # The profile's configured drafting agent, read on the locked profile. The
+  # caller must be exactly that agent and active; nothing else is authority.
+  defp drafting_agent(%Profile{drafting_agent_id: id}, agent_id)
+       when is_binary(id) and id == agent_id do
+    case Repo.get(Platform.Agents.Agent, id) do
+      %Platform.Agents.Agent{status: "active"} = agent -> explicit_org_resolves(agent)
+      _ -> {:error, :not_drafting_agent}
+    end
+  end
+
+  defp drafting_agent(_profile, _agent_id), do: {:error, :not_drafting_agent}
+
+  # Core's `home_org/1` reads an unresolvable `metadata["org_id"]` as `:root`,
+  # which would hand this mutation install-wide scope. Here (only) an agent
+  # that names an org must name one that exists. No org_id (nil, absent,
+  # blank) or the root org itself stays root-homed, as core intends.
+  defp explicit_org_resolves(%Platform.Agents.Agent{metadata: metadata}) when is_map(metadata) do
+    case Map.get(metadata, "org_id") || Map.get(metadata, :org_id) do
+      org_id when is_binary(org_id) and org_id != "" ->
+        if Platform.UUID.valid?(org_id) and Repo.get(Platform.Tenancy.Org, org_id),
+          do: :ok,
+          else: {:error, :not_drafting_agent}
+
+      _ ->
+        :ok
+    end
+  end
+
+  defp explicit_org_resolves(_agent), do: :ok
+
+  defp require_copy_rev(rev) when is_binary(rev) and rev != "", do: :ok
+  defp require_copy_rev(_), do: {:error, :copy_rev_required}
+
+  defp copy_fresh(%Clip{} = clip, expected),
+    do: if(ClipReviewFeed.copy_rev(clip) == expected, do: :ok, else: {:error, :stale_copy})
+
+  # After the commit, like Files' audit emits: the row is the durable record
+  # of which agent changed which clip's copy. Registered in
+  # `Platform.Audit.TelemetryHandler` (an unregistered event is dropped
+  # silently). Only the field NAMES are recorded.
+  defp audit_copy_update(_agent_id, _profile, _clip, []), do: :ok
+
+  defp audit_copy_update(agent_id, %Profile{} = profile, %Clip{} = clip, fields) do
+    :telemetry.execute(
+      [:platform, :social, :clip_copy_updated],
+      %{system_time: System.system_time()},
+      %{
+        actor_id: agent_id,
+        actor_type: "agent",
+        action: "copy_updated",
+        resource_type: "social_clip",
+        resource_id: clip.id,
+        org_id: profile.org_id,
+        profile_id: profile.id,
+        fields: fields
+      }
+    )
+
+    :ok
+  end
+
+  defp refuse_non_copy(attrs) do
+    case Map.keys(attrs) -- @copy_keys do
+      [] -> :ok
+      keys -> {:error, :field_not_allowed, Enum.sort(keys)}
+    end
+  end
+
+  defp require_copy(attrs),
+    do:
+      if(Enum.any?(@copy_keys, &Map.has_key?(attrs, &1)),
+        do: :ok,
+        else: {:error, :nothing_to_update}
+      )
+
+  defp lock_copy_clip(%Profile{id: profile_id}, clip_id) do
+    case Ecto.UUID.cast(clip_id) do
+      {:ok, id} ->
+        Repo.one(
+          from(c in Clip,
+            where: c.id == ^id and c.profile_id == ^profile_id and is_nil(c.removed_at),
+            lock: "FOR UPDATE"
+          )
+        )
+
+      :error ->
+        nil
+    end
+  end
+
+  defp copy_editable(%Clip{flow: "legacy", status: "rendered", review_status: "pending"}), do: :ok
+  defp copy_editable(%Clip{}), do: {:error, :clip_not_editable}
 
   defp validate_title(attrs) do
     case Map.fetch(attrs, "title") do

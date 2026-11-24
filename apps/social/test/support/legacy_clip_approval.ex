@@ -29,6 +29,15 @@ defmodule Platform.Social.LegacyClipApproval do
     publish_after = DateTime.add(now, ClipPublish.window_ms(), :millisecond)
     server = Keyword.get(opts, :publish_server, ClipPublish)
 
+    # TEST SUPPORT: the tests using this stand for rows written before the
+    # token existed, so the helper reads the committed copy itself. A caller
+    # that passes its own "copy_rev" (even nil) keeps it; production wrappers
+    # never do this.
+    attrs =
+      Map.put_new_lazy(attrs, "copy_rev", fn ->
+        Platform.Social.ClipReviewFeed.copy_rev(Repo.get!(Platform.Social.Clip, clip_id))
+      end)
+
     Repo.transaction(fn ->
       with {:ok, %{clip: clip, posts: posts}} <-
              ClipDecisions.draft_clip(org_id, clip_id, user_id, attrs, opts),

@@ -59,6 +59,7 @@ defmodule PlatformWeb.SocialClipsReviewActions do
         class="btn btn-primary btn-lg h-[46px] flex-1 rounded-full text-base"
         disabled={@ticked == [] or @appearance_dirty}
         phx-click="draft"
+        phx-value-copy_rev={Platform.Social.ClipReviewFeed.copy_rev(@clip)}
         phx-value-render_id={@render_id}
         phx-value-id={@clip.id}
         phx-target={@myself}
@@ -104,6 +105,7 @@ defmodule PlatformWeb.SocialClipsReviewActions do
           class="btn btn-primary flex-1 rounded-full"
           disabled={@ticked == [] or @appearance_dirty}
           phx-click="draft"
+          phx-value-copy_rev={Platform.Social.ClipReviewFeed.copy_rev(@clip)}
           phx-value-render_id={@render_id}
           phx-value-id={@clip.id}
           phx-target={@myself}
