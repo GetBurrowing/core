@@ -4,10 +4,12 @@ defmodule Platform.Social.AgentDrafts do
   what the `social` MCP tools call. A human approves in Burrow and the
   platform publishes; nothing here approves or publishes.
 
-  ## The ceiling is needs_approval
+  ## Review submission, without approval
 
-  An agent may create a post as `draft` or `needs_approval` (the default)
-  and nothing else: `approved`, `scheduled`, `published`, `failed` or any
+  An agent may save `draft` or request review with `needs_approval` (the
+  default). On brands with quality reviewers, every submission enters
+  `quality_review`, which an agent may also request explicitly. It cannot pass
+  quality review or write final approval: `approved`, `scheduled`, `published`, `failed` or any
   other value is `{:error, :status_not_allowed}`. Nothing here calls
   `Platform.Social.approve_post/3`. The fields only a human or the publisher
   writes (`approved_by_user_id`, `approved_at`, `external_url`,
@@ -17,8 +19,8 @@ defmodule Platform.Social.AgentDrafts do
   `update_agent_draft/3` locks the row (`SELECT ... FOR UPDATE`) and re-checks
   its status inside the transaction, so a human approval that lands between
   the read and the write is never overwritten: anything past
-  `needs_approval` is `{:error, :post_locked}` with the row untouched. A post
-  may go `draft -> needs_approval`, never back. Once an unapproved scheduled
+  `needs_approval` or `quality_review` is `{:error, :post_locked}` with the row untouched. A post
+  may leave draft for review, never move back to draft. Once an unapproved scheduled
   time has passed, an agent may still edit copy but cannot change or clear
   that time (`:human_retime_required`); only a person can choose a new time.
 
@@ -69,6 +71,7 @@ defmodule Platform.Social.AgentDrafts do
     Clip,
     ClipLook,
     ClipMedia,
+    ClipReviewFeed,
     ClipVersions,
     Cover,
     Idea,
@@ -77,17 +80,19 @@ defmodule Platform.Social.AgentDrafts do
     OrgFiles,
     Post,
     PostEvents,
-    Profile
+    Profile,
+    QualityReview
   }
 
   @castable ~w(body media_file_ids link_url scheduled_at status task_id meeting_id
                segment_ids episode_url start_s end_s cover_file_id cover_offset_ms
                schedule_reason)a
   @forbidden ~w(platform_options approved_by_user_id approved_at external_url external_id error
-                rejection_reason rejected_at cover_error)
-  @agent_statuses ~w(draft needs_approval)
+                rejection_reason rejected_at cover_error quality_passed_by_user_id
+                quality_passed_at quality_pass_fingerprint)
+  @agent_statuses ~w(draft quality_review needs_approval)
   @default_status "needs_approval"
-  @editable_statuses ~w(draft needs_approval)
+  @editable_statuses ~w(draft quality_review needs_approval)
 
   @type error ::
           {:error,
@@ -102,6 +107,13 @@ defmodule Platform.Social.AgentDrafts do
           | {:error, :task_profile_mismatch}
           | {:error, :idea_profile_mismatch | :idea_archived}
           | {:error, :file_not_in_project | :not_a_video | :invalid_title}
+          | {:error,
+             :clip_not_editable
+             | :nothing_to_update
+             | :not_drafting_agent
+             | :stale_copy
+             | :copy_rev_required
+             | {:invalid, :title | :caption}}
           | {:error, :field_not_allowed, [String.t()]}
           | {:error, :banned_phrase, String.t()}
           | {:error, Ecto.Changeset.t()}
@@ -133,16 +145,27 @@ defmodule Platform.Social.AgentDrafts do
          {:ok, account_ids} <- account_ids(attrs),
          {:ok, profile} <- fetch_profile(scope, profile_id),
          :ok <- refuse_banned(attrs, profile),
-         :ok <- check_task_profile(attrs, profile),
-         {:ok, accounts} <- fetch_accounts(scope, profile, account_ids),
-         :ok <- require_channels(status, profile, accounts) do
+         :ok <- check_task_profile(attrs, profile) do
       attrs = Map.put(attrs, "status", status)
 
       Repo.transaction(fn ->
-        profile =
-          if is_nil(attrs["idea_id"]),
-            do: profile,
-            else: Social.lock_profile(scope, profile.id, :share) || Repo.rollback(:not_found)
+        profile = Social.lock_profile(scope, profile.id, :share) || Repo.rollback(:not_found)
+
+        case refuse_quality_status(attrs, profile) do
+          :ok -> :ok
+          {:error, reason} -> Repo.rollback(reason)
+        end
+
+        case refuse_banned(attrs, profile) do
+          :ok -> :ok
+          {:error, :banned_phrase, phrase} -> Repo.rollback({:banned_phrase, phrase})
+        end
+
+        accounts =
+          case fetch_accounts(scope, profile, account_ids) do
+            {:ok, accounts} -> accounts
+            {:error, reason} -> Repo.rollback(reason)
+          end
 
         idea_id =
           case check_idea(scope, attrs["idea_id"], profile) do
@@ -155,13 +178,19 @@ defmodule Platform.Social.AgentDrafts do
             %Post{account_id: account.id, idea_id: idea_id}
             |> agent_changeset(attrs, profile)
             |> Platform.Social.PublishingCompleteness.put_title(attrs, account)
+            |> QualityReview.route_submission(profile)
 
+          # Final review checks the authored caption before an automatic link
+          # can supply body text. Quality requests keep completeness at Pass.
           case Social.require_channel(changeset, profile, account) do
             :ok -> :ok
             {:error, reason} -> Repo.rollback(reason)
           end
 
-          changeset = put_effective_link(changeset, profile)
+          changeset =
+            changeset
+            |> put_effective_link(profile)
+            |> QualityReview.route_submission(profile)
 
           case Social.require_channel(changeset, profile, account) do
             :ok -> :ok
@@ -171,7 +200,10 @@ defmodule Platform.Social.AgentDrafts do
           case Repo.insert(changeset) do
             {:ok, post} ->
               PostEvents.record!(post, "created", actor)
-              if post.status == "needs_approval", do: PostEvents.record!(post, "submitted", actor)
+
+              if post.status in ~w(quality_review needs_approval),
+                do: PostEvents.record!(post, "submitted", actor)
+
               post
 
             {:error, changeset} ->
@@ -179,6 +211,7 @@ defmodule Platform.Social.AgentDrafts do
           end
         end)
       end)
+      |> unwrap_banned()
       |> after_commit()
     end
   end
@@ -215,17 +248,6 @@ defmodule Platform.Social.AgentDrafts do
 
   defp after_commit(other), do: other
 
-  # Task 01a14ce1 stage 3: each account's card has somewhere to go (an owned
-  # account's owner DM, or the profile's channel).
-  defp require_channels(status, profile, accounts) do
-    Enum.find_value(accounts, :ok, fn account ->
-      case Social.require_channel(status, profile, account) do
-        :ok -> nil
-        error -> error
-      end
-    end)
-  end
-
   defp task_hook(%Post{id: id}), do: Platform.Social.TaskBridge.post_changed(id)
 
   defp create_status(attrs) do
@@ -241,9 +263,9 @@ defmodule Platform.Social.AgentDrafts do
 
   defp account_ids(_), do: {:error, :no_accounts}
 
-  defp fetch_accounts(scope, profile, ids) do
+  defp fetch_accounts(_scope, profile, ids) do
     Enum.reduce_while(ids, {:ok, []}, fn id, {:ok, acc} ->
-      case Social.get_account(scope, id) do
+      case Social.lock_account(profile, id, :share) do
         %Account{profile_id: profile_id, archived_at: nil} = account
         when profile_id == profile.id ->
           {:cont, {:ok, [account | acc]}}
@@ -261,7 +283,7 @@ defmodule Platform.Social.AgentDrafts do
     end
   end
 
-  defp put_effective_link(changeset, %Profile{home_url: home_url}) do
+  defp put_effective_link(changeset, %Profile{home_url: home_url} = profile) do
     link =
       Links.effective_link(
         Changeset.get_field(changeset, :link_url),
@@ -271,12 +293,17 @@ defmodule Platform.Social.AgentDrafts do
       )
 
     if link do
+      body = Changeset.get_field(changeset, :body)
+      # A preparatory quality request may omit copy. Keep that omission visible
+      # to Pass rather than turning an automatic home link into its caption.
+      body =
+        if QualityReview.enabled?(profile) and String.trim(body || "") == "",
+          do: body,
+          else: Links.append_to_body(body, link)
+
       changeset
       |> Changeset.put_change(:link_url, link)
-      |> Changeset.put_change(
-        :body,
-        Links.append_to_body(Changeset.get_field(changeset, :body), link)
-      )
+      |> Changeset.put_change(:body, body)
     else
       changeset
     end
@@ -285,7 +312,7 @@ defmodule Platform.Social.AgentDrafts do
   # ── Update ───────────────────────────────────────────────────────────
 
   @doc """
-  Updates an agent-editable post (draft or needs_approval). The row is locked
+  Updates an agent-editable post (draft, quality_review or needs_approval). The row is locked
   and its status re-checked in the transaction; past needs_approval it is
   `{:error, :post_locked}`, untouched. A needs_approval post cannot go back
   to draft. Rejection fields are never touched.
@@ -301,7 +328,7 @@ defmodule Platform.Social.AgentDrafts do
          {:ok, post} <- fetch_post(scope, post_id) do
       if Post.studio?(post),
         do: update_studio_draft(post, attrs, actor),
-        else: update_legacy_draft(post, attrs, actor)
+        else: update_legacy_draft(scope, post, attrs, actor)
     end
   end
 
@@ -355,25 +382,39 @@ defmodule Platform.Social.AgentDrafts do
     if changeset.valid?, do: :ok, else: {:error, changeset}
   end
 
-  defp update_legacy_draft(%Post{} = post, attrs, actor) do
+  defp update_legacy_draft(scope, %Post{} = post, attrs, actor) do
+    case Social.get_account(scope, post.account_id) do
+      %Account{profile_id: profile_id} ->
+        update_locked_legacy_draft(scope, post, attrs, actor, profile_id)
+
+      _ ->
+        {:error, :not_found}
+    end
+  end
+
+  defp update_locked_legacy_draft(scope, post, attrs, actor, profile_id) do
     Repo.transaction(fn ->
+      profile = Social.lock_profile(scope, profile_id, :share) || Repo.rollback(:not_found)
       locked = Repo.one(from(p in Post, where: p.id == ^post.id, lock: "FOR UPDATE"))
 
-      with %Post{} <- locked || {:error, :not_found},
+      with %Post{account_id: account_id} <- locked || {:error, :not_found},
+           true <- account_id == post.account_id || {:error, :not_found},
+           %Account{profile_id: ^profile_id} = account <- Repo.get(Account, account_id),
            :ok <- refuse_studio(locked),
            :ok <- refuse_locked(locked),
            :ok <- refuse_transition(locked, attrs),
-           profile = profile_of(locked),
+           :ok <- refuse_quality_status(attrs, profile),
            :ok <- refuse_banned(attrs, profile),
            :ok <- check_task_profile(attrs, profile),
            changeset =
              agent_changeset(locked, attrs, profile)
              |> Platform.Social.PublishingCompleteness.put_title(
                attrs,
-               Repo.get!(Account, locked.account_id)
-             ),
+               account
+             )
+             |> QualityReview.route_submission(profile),
            :ok <-
-             Social.require_channel(changeset, profile, Repo.get(Account, locked.account_id)),
+             Social.require_channel(changeset, profile, account),
            :ok <- Platform.Social.ApprovalDeadline.check_agent_edit(locked, changeset),
            {:ok, updated} <- Repo.update(changeset) do
         log_update(locked, updated, changeset, actor)
@@ -381,6 +422,7 @@ defmodule Platform.Social.AgentDrafts do
       else
         {:error, :banned_phrase, phrase} -> Repo.rollback({:banned_phrase, phrase})
         {:error, reason} -> Repo.rollback(reason)
+        _ -> Repo.rollback(:not_found)
       end
     end)
     |> unwrap_banned()
@@ -397,7 +439,7 @@ defmodule Platform.Social.AgentDrafts do
       )
     end
 
-    if before.status == "draft" and updated.status == "needs_approval",
+    if before.status == "draft" and updated.status in ~w(quality_review needs_approval),
       do: PostEvents.record!(updated, "submitted", actor)
   end
 
@@ -416,6 +458,14 @@ defmodule Platform.Social.AgentDrafts do
   defp unwrap_banned({:error, {:banned_phrase, phrase}}), do: {:error, :banned_phrase, phrase}
   defp unwrap_banned(other), do: other
 
+  defp refuse_quality_status(%{"status" => "quality_review"}, profile) do
+    if (profile.quality_reviewer_user_ids || []) == [],
+      do: {:error, :status_not_allowed},
+      else: :ok
+  end
+
+  defp refuse_quality_status(_attrs, _profile), do: :ok
+
   defp refuse_status_value(%{"status" => status}) when status not in @agent_statuses,
     do: {:error, :status_not_allowed}
 
@@ -430,8 +480,9 @@ defmodule Platform.Social.AgentDrafts do
   defp refuse_locked(%Post{}), do: {:error, :post_locked}
 
   # needs_approval is a one-way step for an agent: never back to draft.
-  defp refuse_transition(%Post{status: "needs_approval"}, %{"status" => "draft"}),
-    do: {:error, :status_not_allowed}
+  defp refuse_transition(%Post{status: status}, %{"status" => "draft"})
+       when status in ~w(quality_review needs_approval),
+       do: {:error, :status_not_allowed}
 
   defp refuse_transition(_post, _attrs), do: :ok
 
@@ -556,6 +607,183 @@ defmodule Platform.Social.AgentDrafts do
       end
     end
   end
+
+  @copy_keys ~w(title caption)
+
+  @doc """
+  Updates ONLY the `title` and/or `caption` of an existing clip that is
+  still waiting in review (`status` rendered, `review_status` pending, the
+  legacy flow: the clips the Review bay's details rail can edit, minus any
+  that is re-rendering). Omitted keys are kept. The editor's own rules apply
+  (`ClipReviewFeed.copy_changeset/2`): a title is trimmed, never blank or
+  null, at most 200; a caption null clears it, at most 2200.
+
+  ## Options (both required)
+
+    * `:agent_id`: the CALLING agent. Only the profile's configured drafting
+      agent (`profile.drafting_agent_id`, the same binding
+      `Platform.Social.WeeklyNotes` and the Ideas drafting path use) may edit,
+      and it must be active. Org visibility alone is not authority: another
+      agent of the same org, a profile with no drafting agent, or no caller
+      at all is `{:error, :not_drafting_agent}`. There is no fallback to
+      org-wide access.
+    * `:expected_copy_rev`: the `ClipReviewFeed.copy_rev/1` of the clip as the
+      caller last read it. If the title or caption changed since (a human's
+      save, another agent, a new version), the edit is `{:error, :stale_copy}`
+      and nothing is written. A missing or blank token is
+      `{:error, :copy_rev_required}`.
+
+  Any other attrs key is `{:error, :field_not_allowed, keys}`; neither key is
+  `{:error, :nothing_to_update}`. A clip outside `scope` or removed is
+  `{:error, :not_found}`, like a missing id.
+
+  Lock order is the profile's (`FOR SHARE`, `Social.lock_profile/3`) then the
+  clip's (`FOR UPDATE`), as `ClipDecisions.draft_clip/5`. The scope, the
+  caller's authority (read from the locked profile), the clip's profile, its
+  removal, its editable state and the copy token are all decided again on the
+  locked rows, so a decision, removal, re-render, profile change or
+  intervening edit that lands first refuses and nothing is written. Order of
+  refusal: `:not_drafting_agent`, `:not_found`, `:clip_not_editable`,
+  `:stale_copy`.
+
+  It writes the clip's `title`/`caption` columns and nothing else: no review
+  field, render, media, `rev`, ClipRender snapshot or post. Posts copied the
+  caption when they were drafted. On success it broadcasts the clip on the
+  profile's clips topic, exactly as the details rail's save does, and (when a
+  column changed) emits the audit event `[:platform, :social, :clip_copy_updated]`
+  naming the agent, the clip and the fields changed, never the text.
+  """
+  @spec update_clip_copy(Social.scope(), term(), map(), keyword()) ::
+          {:ok, Clip.t()} | error()
+  def update_clip_copy(scope, clip_id, attrs, opts) when is_list(opts) do
+    attrs = normalize(attrs)
+    agent_id = Keyword.get(opts, :agent_id)
+    expected = Keyword.get(opts, :expected_copy_rev)
+
+    with :ok <- refuse_non_copy(attrs),
+         :ok <- require_copy(attrs),
+         :ok <- require_copy_rev(expected),
+         %Clip{profile_id: profile_id} <- Social.get_clip(scope, clip_id) || {:error, :not_found} do
+      Repo.transaction(fn ->
+        with %Profile{} = profile <-
+               Social.lock_profile(scope, profile_id, :share) || {:error, :not_found},
+             :ok <- drafting_agent(profile, agent_id),
+             %Clip{} = clip <- lock_copy_clip(profile, clip_id),
+             :ok <- copy_editable(clip),
+             :ok <- copy_fresh(clip, expected),
+             {:ok, changeset} <- ClipReviewFeed.copy_changeset(clip, attrs),
+             {:ok, updated} <- Repo.update(changeset) do
+          {updated, profile,
+           changeset.changes |> Map.keys() |> Enum.map(&to_string/1) |> Enum.sort()}
+        else
+          nil -> Repo.rollback(:not_found)
+          {:error, reason} -> Repo.rollback(reason)
+        end
+      end)
+      |> case do
+        {:ok, {clip, profile, fields}} ->
+          Social.broadcast_clip(clip)
+          audit_copy_update(agent_id, profile, clip, fields)
+          {:ok, clip}
+
+        error ->
+          error
+      end
+    end
+  end
+
+  # The profile's configured drafting agent, read on the locked profile. The
+  # caller must be exactly that agent and active; nothing else is authority.
+  defp drafting_agent(%Profile{drafting_agent_id: id}, agent_id)
+       when is_binary(id) and id == agent_id do
+    case Repo.get(Platform.Agents.Agent, id) do
+      %Platform.Agents.Agent{status: "active"} = agent -> explicit_org_resolves(agent)
+      _ -> {:error, :not_drafting_agent}
+    end
+  end
+
+  defp drafting_agent(_profile, _agent_id), do: {:error, :not_drafting_agent}
+
+  # Core's `home_org/1` reads an unresolvable `metadata["org_id"]` as `:root`,
+  # which would hand this mutation install-wide scope. Here (only) an agent
+  # that names an org must name one that exists. No org_id (nil, absent,
+  # blank) or the root org itself stays root-homed, as core intends.
+  defp explicit_org_resolves(%Platform.Agents.Agent{metadata: metadata}) when is_map(metadata) do
+    case Map.get(metadata, "org_id") || Map.get(metadata, :org_id) do
+      org_id when is_binary(org_id) and org_id != "" ->
+        if Platform.UUID.valid?(org_id) and Repo.get(Platform.Tenancy.Org, org_id),
+          do: :ok,
+          else: {:error, :not_drafting_agent}
+
+      _ ->
+        :ok
+    end
+  end
+
+  defp explicit_org_resolves(_agent), do: :ok
+
+  defp require_copy_rev(rev) when is_binary(rev) and rev != "", do: :ok
+  defp require_copy_rev(_), do: {:error, :copy_rev_required}
+
+  defp copy_fresh(%Clip{} = clip, expected),
+    do: if(ClipReviewFeed.copy_rev(clip) == expected, do: :ok, else: {:error, :stale_copy})
+
+  # After the commit, like Files' audit emits: the row is the durable record
+  # of which agent changed which clip's copy. Registered in
+  # `Platform.Audit.TelemetryHandler` (an unregistered event is dropped
+  # silently). Only the field NAMES are recorded.
+  defp audit_copy_update(_agent_id, _profile, _clip, []), do: :ok
+
+  defp audit_copy_update(agent_id, %Profile{} = profile, %Clip{} = clip, fields) do
+    :telemetry.execute(
+      [:platform, :social, :clip_copy_updated],
+      %{system_time: System.system_time()},
+      %{
+        actor_id: agent_id,
+        actor_type: "agent",
+        action: "copy_updated",
+        resource_type: "social_clip",
+        resource_id: clip.id,
+        org_id: profile.org_id,
+        profile_id: profile.id,
+        fields: fields
+      }
+    )
+
+    :ok
+  end
+
+  defp refuse_non_copy(attrs) do
+    case Map.keys(attrs) -- @copy_keys do
+      [] -> :ok
+      keys -> {:error, :field_not_allowed, Enum.sort(keys)}
+    end
+  end
+
+  defp require_copy(attrs),
+    do:
+      if(Enum.any?(@copy_keys, &Map.has_key?(attrs, &1)),
+        do: :ok,
+        else: {:error, :nothing_to_update}
+      )
+
+  defp lock_copy_clip(%Profile{id: profile_id}, clip_id) do
+    case Ecto.UUID.cast(clip_id) do
+      {:ok, id} ->
+        Repo.one(
+          from(c in Clip,
+            where: c.id == ^id and c.profile_id == ^profile_id and is_nil(c.removed_at),
+            lock: "FOR UPDATE"
+          )
+        )
+
+      :error ->
+        nil
+    end
+  end
+
+  defp copy_editable(%Clip{flow: "legacy", status: "rendered", review_status: "pending"}), do: :ok
+  defp copy_editable(%Clip{}), do: {:error, :clip_not_editable}
 
   defp validate_title(attrs) do
     case Map.fetch(attrs, "title") do

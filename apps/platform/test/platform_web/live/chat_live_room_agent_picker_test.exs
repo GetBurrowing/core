@@ -52,6 +52,17 @@ defmodule PlatformWeb.ChatLiveRoomAgentPickerTest do
     view
   end
 
+  defp mount_room_by_id(conn, user, room) do
+    {:ok, view, _} =
+      conn |> init_test_session(current_user_id: user.id) |> live(~p"/chat/#{room.id}")
+
+    view
+  end
+
+  defp participants(room) do
+    Repo.all(from(p in Participant, where: p.space_id == ^room.id, order_by: p.id))
+  end
+
   defp rows(room, agent),
     do:
       Repo.all(
@@ -268,6 +279,46 @@ defmodule PlatformWeb.ChatLiveRoomAgentPickerTest do
     assert failing_line =~ "assert [row] = rows(room, agent)"
   end
 
+  test "UUID picks only the addressed room when another org has the same slug", %{conn: conn} do
+    actor = user!()
+    room = room!(user!())
+    target_org = Platform.Tenancy.get_org_by_slug!("initech")
+    root_org = Platform.Tenancy.get_root_org()
+    room = room |> Ecto.Changeset.change(org_id: target_org.id) |> Repo.update!()
+
+    {:ok, other_room} =
+      Chat.create_channel(%{
+        name: "Same slug in root",
+        slug: room.slug,
+        org_id: root_org.id,
+        created_by: user!().id
+      })
+
+    for {org_id, role} <- [{target_org.id, "member"}, {root_org.id, "admin"}] do
+      %Platform.Tenancy.OrgMembership{}
+      |> Platform.Tenancy.OrgMembership.changeset(%{
+        user_id: actor.id,
+        org_id: org_id,
+        role: role,
+        external: false
+      })
+      |> Repo.insert!()
+    end
+
+    assert Platform.Tenancy.root_admin?(%{id: actor.id})
+    agent = agent!("Same-slug control")
+    other_before = participants(other_room)
+    view = mount_room_by_id(conn, actor, room)
+    assert :sys.get_state(view.pid).socket.assigns.active_space.id == room.id
+    open(view)
+    assert has_element?(view, option(agent))
+    view |> element(option(agent)) |> render_click()
+    assert [%{history_visible_from: history}] = rows(room, agent)
+    assert history != nil
+    assert rows(other_room, agent) == []
+    assert participants(other_room) == other_before
+  end
+
   for authority <- [:org_admin, :root_admin] do
     test "#{authority} picks without promotion and rechecks revoked authority", %{conn: conn} do
       actor = user!()
@@ -305,7 +356,15 @@ defmodule PlatformWeb.ChatLiveRoomAgentPickerTest do
         |> Repo.insert!()
 
       agent = agent!("Admin helper")
-      view = mount_room(conn, actor, room)
+
+      # The root-admin case tests authority on this room, rather than the
+      # unordered membership choice used to resolve an ambiguous slug.
+      view =
+        if unquote(authority) == :root_admin,
+          do: mount_room_by_id(conn, actor, room),
+          else: mount_room(conn, actor, room)
+
+      assert :sys.get_state(view.pid).socket.assigns.active_space.id == room.id
       open(view)
       assert has_element?(view, option(agent))
       view |> element(option(agent)) |> render_click()

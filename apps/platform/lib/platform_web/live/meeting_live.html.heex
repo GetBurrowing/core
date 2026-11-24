@@ -426,6 +426,7 @@
       <div
         id="meeting-client"
         phx-hook="MeetingClient"
+        phx-mounted={JS.ignore_attributes(["data-room-state"])}
         class="hidden"
         data-camera-enabled={to_string(@camera_enabled)}
         data-mic-enabled={to_string(@mic_enabled)}

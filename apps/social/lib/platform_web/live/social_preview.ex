@@ -137,7 +137,7 @@ defmodule PlatformWeb.SocialPreview do
         <.folded id={@id} platform="linkedin" body={@body} clickable?={true} />
       </div>
 
-      <.linkedin_media :if={@media != []} media={@media} cover={@cover} />
+      <.linkedin_media :if={@media != []} media={@media} cover={@cover} id={@id} />
 
       <a
         :if={@media == [] and present?(@link_url)}
@@ -179,11 +179,17 @@ defmodule PlatformWeb.SocialPreview do
     <div data-role="preview-media" class="mt-3 w-full">
       <%= case @media do %>
         <% [one] -> %>
-          <.media_el item={one} cover={@cover} class="block max-h-[640px] w-full object-cover" />
+          <.media_el
+            id={@id}
+            item={one}
+            cover={@cover}
+            class="block max-h-[640px] w-full object-cover"
+          />
         <% many -> %>
           <div class="grid grid-cols-2 gap-0.5">
             <.media_el
               :for={m <- Enum.take(many, 4)}
+              id={@id}
               item={m}
               cover={@cover}
               class="block aspect-square w-full object-cover"
@@ -229,7 +235,7 @@ defmodule PlatformWeb.SocialPreview do
           <p class="break-words text-[15px] leading-5">
             <.segments text={post.text} clickable?={true} />
           </p>
-          <.x_media :if={post.index == 1 and @media != []} media={@media} cover={@cover} />
+          <.x_media :if={post.index == 1 and @media != []} media={@media} cover={@cover} id={@id} />
           <a
             :if={post.index == 1 and @media == [] and present?(@link_url)}
             data-role="link-card"
@@ -278,11 +284,17 @@ defmodule PlatformWeb.SocialPreview do
     <div data-role="preview-media" class="mt-3 overflow-hidden rounded-2xl border border-edge">
       <%= case @media do %>
         <% [one] -> %>
-          <.media_el item={one} cover={@cover} class="block aspect-video w-full object-cover" />
+          <.media_el
+            id={@id}
+            item={one}
+            cover={@cover}
+            class="block aspect-video w-full object-cover"
+          />
         <% many -> %>
           <div class="grid aspect-video grid-cols-2 gap-0.5">
             <.media_el
               :for={m <- Enum.take(many, 4)}
+              id={@id}
               item={m}
               cover={@cover}
               class="block h-full min-h-0 w-full object-cover"
@@ -321,6 +333,7 @@ defmodule PlatformWeb.SocialPreview do
       >
         <.media_el
           :if={@first}
+          id={@id}
           item={@first}
           cover={@cover}
           class="absolute inset-0 size-full object-cover"
@@ -382,6 +395,7 @@ defmodule PlatformWeb.SocialPreview do
       >
         <.media_el
           :if={@video}
+          id={@id}
           item={@video}
           cover={@cover}
           class="absolute inset-0 size-full object-cover"
@@ -392,14 +406,14 @@ defmodule PlatformWeb.SocialPreview do
           <.glyph platform="youtube" class="size-5" /> Shorts
         </span>
 
-        <div class="absolute bottom-24 right-2 flex flex-col items-center gap-4 text-xs font-medium drop-shadow">
+        <div class="pointer-events-none absolute bottom-24 right-2 flex flex-col items-center gap-4 text-xs font-medium drop-shadow">
           <.rail icon="hero-hand-thumb-up-solid" label="Like" />
           <.rail icon="hero-hand-thumb-down-solid" label="Dislike" />
           <.rail icon="hero-chat-bubble-oval-left-ellipsis-solid" label="0" />
           <.rail icon="hero-share-solid" label="Share" />
         </div>
 
-        <div class="absolute inset-x-0 bottom-0 bg-gradient-to-t from-black/80 to-transparent p-3 pr-16 pt-10">
+        <div class="pointer-events-none absolute inset-x-0 bottom-0 bg-gradient-to-t from-black/80 to-transparent p-3 pr-16 pt-10">
           <div class="flex items-center gap-2">
             <.avatar account={@account} class="size-8 text-sm" />
             <span class="min-w-0 truncate text-sm font-semibold">@{field(@account, :handle)}</span>
@@ -440,18 +454,19 @@ defmodule PlatformWeb.SocialPreview do
       >
         <.media_el
           :if={@first}
+          id={@id}
           item={@first}
           cover={@cover}
           class="absolute inset-0 size-full object-cover"
         />
         <.no_video :if={!@first} text="TikTok needs a video or images" />
 
-        <div class="absolute inset-x-0 top-3 flex justify-center gap-4 text-sm font-semibold drop-shadow">
+        <div class="pointer-events-none absolute inset-x-0 top-3 flex justify-center gap-4 text-sm font-semibold drop-shadow">
           <span class="text-white/80">Following</span>
           <span class="border-b-2 border-white pb-0.5">For You</span>
         </div>
 
-        <div class="absolute bottom-20 right-2 flex flex-col items-center gap-4 text-xs font-semibold drop-shadow">
+        <div class="pointer-events-none absolute bottom-20 right-2 flex flex-col items-center gap-4 text-xs font-semibold drop-shadow">
           <span class="relative mb-2">
             <.avatar account={@account} class="size-11 text-base ring-2 ring-white" />
             <span class="absolute -bottom-2 left-1/2 flex size-5 -translate-x-1/2 items-center justify-center rounded-full bg-white text-black">
@@ -466,7 +481,7 @@ defmodule PlatformWeb.SocialPreview do
 
         <div
           data-role="caption-overlay"
-          class="absolute inset-x-0 bottom-0 bg-gradient-to-t from-black/80 to-transparent p-3 pr-16 pt-10 text-sm leading-5"
+          class="pointer-events-none absolute inset-x-0 bottom-0 bg-gradient-to-t from-black/80 to-transparent p-3 pr-16 pt-10 text-sm leading-5"
         >
           <p class="font-semibold">@{field(@account, :handle)}</p>
           <div class="mt-1">
@@ -517,7 +532,7 @@ defmodule PlatformWeb.SocialPreview do
           data-role="fold-more"
           phx-click={JS.hide(to: "##{@short_id}") |> JS.show(to: "##{@full_id}", display: "inline")}
           class={[
-            "cursor-pointer whitespace-nowrap font-semibold hover:underline",
+            "pointer-events-auto cursor-pointer whitespace-nowrap font-semibold hover:underline",
             if(@on_media?, do: "text-white", else: "text-base-content")
           ]}
         >
@@ -545,6 +560,7 @@ defmodule PlatformWeb.SocialPreview do
     """
   end
 
+  attr :id, :string, required: true
   attr :item, :map, required: true
   attr :cover, :string, default: nil
   attr :class, :any, default: nil
@@ -558,17 +574,15 @@ defmodule PlatformWeb.SocialPreview do
       )
 
     ~H"""
-    <video
+    <PlatformWeb.SocialVideo.player
       :if={@video?}
+      id={"#{@id}-video-#{:erlang.phash2(field(@item, :src))}"}
       src={field(@item, :src)}
       poster={@poster}
-      aria-label={@alt}
-      muted
-      playsinline
-      preload="metadata"
-      class={["max-w-full bg-black", @class]}
-    >
-    </video>
+      alt={if @alt == "", do: "Video preview", else: @alt}
+      muted={true}
+      class={@class}
+    />
     <img :if={!@video?} src={field(@item, :src)} alt={@alt} class={["max-w-full", @class]} />
     """
   end

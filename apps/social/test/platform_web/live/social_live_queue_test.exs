@@ -461,6 +461,141 @@ defmodule PlatformWeb.SocialLiveQueueTest do
   defp v(post), do: "#queue-#{post.id}"
   defp in_v(post, sel), do: "#{v(post)} #{sel}"
 
+  # Pinned LiveView 1.1.27 internals: update-stop assigns_sockets metadata,
+  # then the public render's proxy-ping/diff ordering. Stop alone is not DOM
+  # completion. Keep this file synchronous: telemetry handlers are VM-wide.
+  defp watch_queue_component(view, component_id) do
+    owner = self()
+    tag = make_ref()
+    handler = {__MODULE__, tag}
+    supervisor_id = {__MODULE__, :render, tag}
+    supervisor = start_supervised!({Task.Supervisor, []}, id: supervisor_id)
+
+    :ok =
+      :telemetry.attach(
+        handler,
+        [:phoenix, :live_component, :update, :stop],
+        fn _event, _measurements, metadata, _config ->
+          # Filter the emitting instance/module before inspecting metadata.
+          if self() == view.pid and metadata[:component] == PlatformWeb.SocialIdeaCard do
+            case metadata[:assigns_sockets] do
+              entries when is_list(entries) ->
+                Enum.each(entries, fn
+                  {%{id: id} = assigns, _socket} when is_binary(id) ->
+                    target? = id == component_id
+                    revision = Map.get(assigns, :rev)
+
+                    cond do
+                      not target? and not is_integer(revision) ->
+                        send(owner, {tag, :ignored_without_revision, id})
+
+                      is_integer(revision) ->
+                        send(owner, {tag, :updated, id, revision})
+
+                      true ->
+                        send(owner, {tag, :metadata_error, :missing_revision})
+                    end
+
+                  _ ->
+                    send(owner, {tag, :metadata_error, :missing_component_identity})
+                end)
+
+              _ ->
+                send(owner, {tag, :metadata_error, :missing_assigns_sockets})
+            end
+          end
+        end,
+        nil
+      )
+
+    %{
+      tag: tag,
+      component_id: component_id,
+      handler: handler,
+      view: view,
+      supervisor: supervisor,
+      supervisor_id: supervisor_id,
+      release: fn -> :ok end,
+      extra_handlers: []
+    }
+  end
+
+  defp queue_canvas_revision(canvas_id) do
+    assert {:ok, %{document: %{"root" => %{"props" => %{"rev" => revision}}}}} =
+             Platform.Chat.Canvas.Server.describe(canvas_id)
+
+    assert is_integer(revision)
+    revision
+  end
+
+  defp remaining_queue_budget(deadline),
+    do: max(deadline - System.monotonic_time(:millisecond), 0)
+
+  defp await_queue_component(observer, revision, deadline) do
+    discarded = await_queue_stop(observer, revision, deadline, [])
+
+    # LiveViewTest.render and Channel.ping have infinite internal timeouts.
+    # The supervised task is bounded by the SAME deadline as the stop wait.
+    task = Task.Supervisor.async_nolink(observer.supervisor, fn -> render(observer.view) end)
+
+    case Task.yield(task, remaining_queue_budget(deadline)) do
+      {:ok, html} when is_binary(html) ->
+        discarded
+
+      _ ->
+        cleanup_queue_observer(observer, true)
+        flunk("Queue component completion deadline expired or failed during render")
+    end
+  end
+
+  defp await_queue_stop(observer, expected, deadline, discarded) do
+    tag = observer.tag
+    component_id = observer.component_id
+
+    receive do
+      {^tag, :updated, ^component_id, ^expected} ->
+        Enum.reverse(discarded)
+
+      {^tag, :updated, other_id, other_revision} ->
+        await_queue_stop(observer, expected, deadline, [{other_id, other_revision} | discarded])
+
+      {^tag, :ignored_without_revision, other_id} ->
+        await_queue_stop(observer, expected, deadline, [{other_id, :no_revision} | discarded])
+
+      {^tag, :metadata_error, reason} ->
+        cleanup_queue_observer(observer, true)
+        flunk("Pinned LiveView update metadata changed: #{reason}")
+    after
+      remaining_queue_budget(deadline) ->
+        cleanup_queue_observer(observer, true)
+        flunk("Queue component completion deadline expired before matching update stop")
+    end
+  end
+
+  defp cleanup_queue_observer(observer, failed? \\ false) do
+    # A private scheduling gate must be released BEFORE detaching telemetry
+    # or terminating probes. Killing a render task does not unblock its proxy.
+    observer.release.()
+    for handler <- [observer.handler | observer.extra_handlers], do: :telemetry.detach(handler)
+
+    if Process.alive?(observer.supervisor) do
+      for pid <- Task.Supervisor.children(observer.supervisor), do: stop_queue_probe(pid)
+      stop_supervised(observer.supervisor_id)
+    end
+
+    if failed? do
+      {_ref, _topic, proxy} = observer.view.proxy
+      for pid <- [observer.view.pid, proxy], do: stop_queue_probe(pid)
+    end
+  end
+
+  defp stop_queue_probe(pid) do
+    reference = Process.monitor(pid)
+    Process.unlink(pid)
+    Process.exit(pid, :kill)
+    assert_receive {:DOWN, ^reference, :process, ^pid, _reason}, 1_000
+  end
+
   defp human_approved_events(post_id) do
     Repo.all(
       from(e in PostEvent,
@@ -792,6 +927,147 @@ defmodule PlatformWeb.SocialLiveQueueTest do
     assert Fake.calls(:publish) == []
   end
 
+  # ── Why a card has no buttons (copy and display only) ─────────────────
+
+  describe "why a card has no Approve or Reject" do
+    @only_approvers "Only this brand's approvers can approve or reject this."
+
+    test "an approver sees the actions and no explanation", %{conn: conn} = ctx do
+      {_idea, posts} = three!(ctx)
+      child = open(conn, ctx.h1)
+
+      for post <- posts do
+        assert has_element?(child, in_v(post, "[data-role='queue-approve']"))
+        refute has_element?(child, in_v(post, "[data-role='queue-no-actions']"))
+      end
+
+      refute render(child) =~ "Only this brand's approvers"
+    end
+
+    test "a read-only viewer sees why, names the approvers the Connections tab already names, and no buttons",
+         %{conn: conn} = ctx do
+      {idea, posts} = three!(ctx)
+      child = open(conn, ctx.n)
+
+      for post <- posts do
+        assert has_element?(child, "#{v(post)}[data-version-role='viewer']")
+        assert has_element?(child, in_v(post, "[data-role='queue-no-actions']"), @only_approvers)
+
+        assert has_element?(
+                 child,
+                 in_v(post, "[data-role='queue-no-actions']"),
+                 "Approvers: Hana One, Hugo Two"
+               )
+
+        refute has_element?(child, in_v(post, "[data-role='queue-approve']"))
+        refute has_element?(child, in_v(post, "[data-role='queue-reject']"))
+      end
+
+      refute has_element?(child, "#{card(idea.id)} button")
+
+      # Display only: nothing implies a title or a time would unlock buttons.
+      html = render(child)
+      refute html =~ ~r/add a title|set a time|change the time/i
+    end
+
+    test "with no approver left who can act, the line still explains without naming anyone",
+         %{conn: conn} = ctx do
+      {:ok, _} = Social.update_profile(ctx.org_id, ctx.profile, %{approver_user_ids: []})
+      {_idea, [li | _]} = three!(ctx)
+      child = open(conn, ctx.n)
+
+      assert has_element?(child, in_v(li, "[data-role='queue-no-actions']"), @only_approvers)
+      refute has_element?(child, in_v(li, "[data-role='queue-no-actions']"), "Approvers:")
+    end
+
+    test "an owned account says it is the owner's call, not the brand approvers'",
+         %{conn: conn} = ctx do
+      {:ok, _} = Social.set_account_owner(ctx.org_id, ctx.x, ctx.h2.id)
+      {_idea, [_li, x, _ig]} = three!(ctx)
+      child = open(conn, ctx.n)
+
+      assert has_element?(
+               child,
+               in_v(x, "[data-role='queue-no-actions']"),
+               "Only Hugo can approve or reject this."
+             )
+
+      refute has_element?(child, in_v(x, "[data-role='queue-no-actions']"), "brand's approvers")
+      refute has_element?(child, in_v(x, "[data-role='queue-no-actions']"), "Approvers:")
+    end
+
+    test "an owned account whose owner is archived says the owner is unavailable and approvers can only reject",
+         %{conn: conn} = ctx do
+      {:ok, _} = Social.set_account_owner(ctx.org_id, ctx.x, ctx.h2.id)
+      {_idea, [_li, x, _ig]} = three!(ctx)
+      {:ok, _} = Platform.Accounts.archive_user(Platform.Accounts.get_user(ctx.h2.id))
+      card = Approvals.live_card(x.id)
+
+      unavailable = "This account's owner is unavailable. A brand approver can reject this post."
+
+      assert %{role: :viewer, no_actions_note: ^unavailable} =
+               Approvals.card_view(card.id, {:user, ctx.n.id})
+
+      # The approver keeps exactly the existing Reject-only action.
+      assert %{role: :approver, actions: [:reject]} =
+               Approvals.card_view(card.id, {:user, ctx.h1.id})
+
+      child = open(conn, ctx.n)
+      assert has_element?(child, in_v(x, "[data-role='queue-no-actions']"), unavailable)
+      refute has_element?(child, in_v(x, "[data-role='queue-no-actions']"), "Only Hugo")
+      refute has_element?(child, in_v(x, "[data-role='queue-no-actions']"), "approve or reject")
+    end
+
+    test "a post already decided gets no 'approvers' line from card_view, and leaves the Queue",
+         %{conn: conn} = ctx do
+      {_idea, [li, x, _ig]} = three!(ctx)
+      card = Approvals.live_card(x.id)
+
+      assert %{role: :viewer, no_actions_note: @only_approvers <> _} =
+               Approvals.card_view(card.id, {:user, ctx.n.id})
+
+      assert {:ok, _} =
+               Approvals.decide_reject(
+                 card.canvas_id,
+                 ctx.h1,
+                 "Off brand",
+                 Approvals.fingerprint(x)
+               )
+
+      assert %{role: :viewer, no_actions_note: nil} =
+               Approvals.card_view(card.id, {:user, ctx.n.id})
+
+      child = open(conn, ctx.n)
+      refute has_element?(child, v(x))
+      refute render(child) =~ "Rejected by"
+      # The sibling still waiting does get the line.
+      assert has_element?(child, in_v(li, "[data-role='queue-no-actions']"), @only_approvers)
+    end
+
+    test "a missed post keeps its missed line and also says who can act, for the reader only",
+         %{conn: conn} = ctx do
+      {post, _card} = pending_post!(ctx, ctx.a)
+
+      post
+      |> Ecto.Changeset.change(scheduled_at: DateTime.add(DateTime.utc_now(), -3600))
+      |> Repo.update!()
+
+      child = open(conn, ctx.n)
+
+      assert has_element?(child, in_v(post, "[data-role='approval-missed']"))
+      assert has_element?(child, in_v(post, "[data-role='queue-no-actions']"), @only_approvers)
+      refute has_element?(child, in_v(post, "[data-role='queue-approve-new-time']"))
+      # Nothing suggests the old time can still be approved.
+      refute has_element?(child, in_v(post, "[data-role='queue-no-actions']"), "old time")
+
+      # The approver's existing actions on the same missed card are unchanged.
+      approver = open(conn, ctx.h1)
+      assert has_element?(approver, in_v(post, "[data-role='queue-approve-new-time']"))
+      assert has_element?(approver, in_v(post, "[data-role='queue-reject']"))
+      refute has_element?(approver, in_v(post, "[data-role='queue-no-actions']"))
+    end
+  end
+
   # ── Done means 5 and 8: the stale fingerprint ─────────────────────────
 
   describe "a stale fingerprint" do
@@ -913,17 +1189,26 @@ defmodule PlatformWeb.SocialLiveQueueTest do
   # ── Live sync with chat ──────────────────────────────────────────────
 
   test "a decision made in chat updates the card and the counts", %{conn: conn} = ctx do
-    {_idea, [li | _]} = three!(ctx)
+    {idea, [li | _]} = three!(ctx)
     child = open(conn, ctx.h1)
     assert has_element?(child, "[data-role='social-tab-button'][data-tab='queue']", "Queue (3)")
 
     h2 = Platform.Accounts.get_user(ctx.h2.id)
     card = Approvals.live_card(li.id)
-    assert {:ok, _} = Approvals.decide_approve(card.canvas_id, h2, Approvals.fingerprint(li))
+    observer = watch_queue_component(child, "queue-card-idea-#{idea.id}")
 
-    assert has_element?(child, in_v(li, "[data-role='queue-status']"), "Approved by Hugo Two")
-    refute has_element?(child, in_v(li, "[data-role='queue-approve']"))
-    assert has_element?(child, "[data-role='social-tab-button'][data-tab='queue']", "Queue (2)")
+    try do
+      assert {:ok, _} = Approvals.decide_approve(card.canvas_id, h2, Approvals.fingerprint(li))
+      revision = queue_canvas_revision(card.canvas_id)
+      deadline = System.monotonic_time(:millisecond) + 2_000
+      await_queue_component(observer, revision, deadline)
+
+      assert has_element?(child, in_v(li, "[data-role='queue-status']"), "Approved by Hugo Two")
+      refute has_element?(child, in_v(li, "[data-role='queue-approve']"))
+      assert has_element?(child, "[data-role='social-tab-button'][data-tab='queue']", "Queue (2)")
+    after
+      cleanup_queue_observer(observer)
+    end
   end
 
   # ── Scope ────────────────────────────────────────────────────────────
@@ -1172,6 +1457,26 @@ defmodule PlatformWeb.SocialLiveQueueTest do
     end
 
     defp action(post), do: in_v(post, "[data-role='social-card-refusal-action']")
+
+    test "a refused legacy retry points to investigation without a quality reroute",
+         %{conn: conn} = ctx do
+      {post, _} = refused!(ctx, "media_rejected")
+      Repo.update!(Ecto.Changeset.change(ctx.profile, quality_reviewer_user_ids: [ctx.n.id]))
+      child = open(conn, ctx.h1)
+      child |> element(action(post)) |> render_click()
+      at = DateTime.utc_now() |> DateTime.add(1, :day) |> Calendar.strftime("%Y-%m-%dT%H:%M:%S")
+      child |> form(in_v(post, "[data-role='retry-schedule']"), %{at: at}) |> render_submit()
+
+      assert has_element?(
+               child,
+               in_v(post, "[data-role='social-card-notice']"),
+               "This older post has no valid quality pass. Its publishing outcome needs separate investigation before a new job can be started."
+             )
+
+      refute has_element?(child, in_v(post, "[data-role='social-card-return-quality']"))
+      assert Repo.get!(Post, post.id) == post
+      assert Fake.calls() == []
+    end
 
     test "each refusal is listed with its reason and its one action", %{conn: conn} = ctx do
       {media, _} = refused!(ctx, "media_rejected")

@@ -115,12 +115,22 @@ defmodule PlatformWeb.SocialClipsReviewPhoneTest do
     assert has_element?(child, "[data-role='clips-pbar-reject']:not([disabled]):not([title])")
     assert has_element?(child, "[data-role='clip-reject']:not([disabled])")
 
-    # No platform: "Pick a platform", disabled, on both.
+    # No platform: still "Create drafts", disabled, on both.
     for p <- ~w(instagram youtube),
         do: bay(child) |> render_click("toggle_platform", %{"platform" => p})
 
-    assert has_element?(child, "[data-role='clips-pbar-draft'][disabled]", "Pick a platform")
-    assert has_element?(child, "[data-role='clip-draft'][disabled]", "Pick a platform")
+    assert has_element?(child, "[data-role='clips-pbar-draft'][disabled]", "Create drafts")
+    assert has_element?(child, "[data-role='clip-draft'][disabled]", "Create drafts")
+
+    # The phone bar says what to do first (the switches are the chips under
+    # the title) and why Reject is only waiting for a note.
+    assert has_element?(
+             child,
+             "[data-role='clips-pbar'] [data-role='clips-pbar-why']",
+             "First switch on where this should post, using the buttons under the title."
+           )
+
+    refute has_element?(child, "[data-role='clips-pbar-reject-why']")
 
     # The bar fires the same draft event as the desktop button.
     bay(child) |> render_click("toggle_platform", %{"platform" => "youtube"})
@@ -129,6 +139,25 @@ defmodule PlatformWeb.SocialClipsReviewPhoneTest do
     assert %{review_status: "approved"} = Repo.reload!(clip)
     assert has_element?(child, "[data-role='clip-toast'][data-kind='drafted']")
     refute has_element?(child, "[data-role='clips-pbar']")
+  end
+
+  test "the bottom bar says to write a note while Reject is greyed", %{conn: conn, w: w} do
+    clip!(w, "Phone note hint")
+    child = open(conn, w.approver)
+
+    assert has_element?(
+             child,
+             "[data-role='clips-pbar'] [data-role='clips-pbar-reject-why']",
+             "To reject, write a note first."
+           )
+
+    refute has_element?(child, "[data-role='clips-pbar-why']")
+
+    child
+    |> form("[data-role='clips-details'] form[phx-change='note']")
+    |> render_change(%{"note" => "too long"})
+
+    refute has_element?(child, "[data-role='clips-pbar-reject-why']")
   end
 
   test "the bottom bar's Reject fires the desktop reject", %{conn: conn, w: w} do

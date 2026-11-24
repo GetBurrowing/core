@@ -216,6 +216,11 @@ defmodule Platform.Social.StudioBIndependentReviewTest do
     assert wait_blocked_by?(replay_backend, "social_posts"),
            "the retarget is not waiting on the replay's lock on the post"
 
+    # Neither another relation nor a different backend is this row wait.
+    refute wait_blocked_by?(replay_backend, "social_profiles", 0)
+    %{rows: [[observer_backend]]} = Repo.query!("SELECT pg_backend_pid()")
+    refute wait_blocked_by?(observer_backend, "social_posts", 0)
+
     send(replay_pid, :resume_replay)
 
     # The replay returns the post it authorised (on B), never the retarget's C.
@@ -230,13 +235,16 @@ defmodule Platform.Social.StudioBIndependentReviewTest do
 
   # True once some backend other than `holder` is waiting on a lock that
   # `holder` holds AND its current statement reads `table`. Bound to the
-  # holder's pid, not to "any backend waiting on any lock".
+  # holder's pid, not to "any backend waiting on any lock". Use the actual
+  # tuple relation: pg_stat_activity.query can truncate before FROM when
+  # Ecto selects a post with many columns.
   defp wait_blocked_by?(holder, table, tries \\ 100) do
     %{rows: rows} =
       Repo.query!(
-        "SELECT pid FROM pg_stat_activity WHERE datname = current_database() " <>
-          "AND wait_event_type = 'Lock' AND $1 = ANY(pg_blocking_pids(pid)) " <>
-          "AND query LIKE '%' || $2 || '%'",
+        "SELECT a.pid FROM pg_stat_activity a WHERE a.datname = current_database() " <>
+          "AND a.wait_event_type = 'Lock' AND $1 = ANY(pg_blocking_pids(a.pid)) " <>
+          "AND EXISTS (SELECT 1 FROM pg_locks l WHERE l.pid = a.pid " <>
+          "AND l.locktype = 'tuple' AND l.granted AND l.relation = to_regclass($2))",
         [holder, table]
       )
 

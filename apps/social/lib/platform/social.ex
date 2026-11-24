@@ -59,6 +59,7 @@ defmodule Platform.Social do
     Post,
     Profile,
     Publisher,
+    QualityReview,
     RenderQueue
   }
 
@@ -321,6 +322,7 @@ defmodule Platform.Social do
     |> validate_project_in_org(org_id)
     |> validate_space_in_org(org_id)
     |> validate_approvers()
+    |> validate_quality_reviewers()
     |> validate_notify_subset()
     |> validate_drafting_agent(org_id)
   end
@@ -441,6 +443,14 @@ defmodule Platform.Social do
     if Enum.all?(ids, &human_user?/1),
       do: changeset,
       else: Changeset.add_error(changeset, :approver_user_ids, @not_a_user)
+  end
+
+  defp validate_quality_reviewers(changeset) do
+    ids = Changeset.get_field(changeset, :quality_reviewer_user_ids) || []
+
+    if Enum.all?(ids, &human_user?/1),
+      do: changeset,
+      else: Changeset.add_error(changeset, :quality_reviewer_user_ids, @not_a_user)
   end
 
   # Through core's context, never a Repo query on core's users table. An
@@ -1926,23 +1936,27 @@ defmodule Platform.Social do
   @spec create_post(Ecto.UUID.t(), Account.t() | Ecto.UUID.t(), map(), keyword()) ::
           {:ok, Post.t()} | {:error, term()}
   def create_post(org_id, account, attrs, opts \\ []) do
-    with {:ok, account} <- fetch(Account, org_id, account),
-         :ok <- refuse_archived(account) do
-      idea_id = Keyword.get(opts, :idea_id)
-
+    with {:ok, account} <- fetch(Account, org_id, account) do
       result =
-        if is_nil(idea_id) do
-          insert_post_for_idea(org_id, account, attrs, nil)
-        else
-          Repo.transaction(fn ->
-            lock_profile(org_id, account.profile_id, :share) || Repo.rollback(:not_found)
-
-            case insert_post_for_idea(org_id, account, attrs, idea_id) do
-              {:ok, post} -> post
-              {:error, reason} -> Repo.rollback(reason)
-            end
-          end)
-        end
+        Repo.transaction(fn ->
+          with %Profile{} = profile <-
+                 lock_profile(org_id, account.profile_id, :share) || {:error, :not_found},
+               %Account{} = account <-
+                 lock_account(profile, account.id, :share) || {:error, :not_found},
+               :ok <- refuse_archived(account),
+               {:ok, post} <-
+                 insert_post_for_idea(
+                   org_id,
+                   account,
+                   attrs,
+                   Keyword.get(opts, :idea_id),
+                   profile
+                 ) do
+            post
+          else
+            {:error, reason} -> Repo.rollback(reason)
+          end
+        end)
 
       case result do
         {:ok, post} -> {:ok, needs_approval_written(post)}
@@ -1951,11 +1965,12 @@ defmodule Platform.Social do
     end
   end
 
-  defp insert_post_for_idea(org_id, account, attrs, idea_id) do
+  defp insert_post_for_idea(org_id, account, attrs, idea_id, profile) do
     with {:ok, idea_id} <- post_idea(org_id, account, idea_id) do
-      changeset = prepare_post_changeset(account, attrs, idea_id)
+      changeset = prepare_post_changeset(account, attrs, idea_id, profile)
 
-      with :ok <- require_channel(changeset, account.profile_id, account),
+      with :ok <- require_valid_quality_advance(changeset, profile),
+           :ok <- require_channel(changeset, profile, account),
            do: Repo.insert(changeset)
     end
   end
@@ -1963,11 +1978,12 @@ defmodule Platform.Social do
   @doc false
   # Shared candidate preparation only: callers still perform their own scope,
   # authority and channel checks; the writer always revalidates before insert.
-  def prepare_post_changeset(account, attrs, idea_id \\ nil) do
+  def prepare_post_changeset(account, attrs, idea_id \\ nil, profile \\ nil) do
     %Post{account_id: account.id, idea_id: idea_id}
     |> Post.changeset(attrs)
     |> Platform.Social.PublishingCompleteness.put_title(attrs, account)
     |> ClipMedia.put_media_meta(account.profile_id)
+    |> QualityReview.route_submission(profile || Repo.get!(Profile, account.profile_id))
   end
 
   defp post_idea(_org_id, _account, nil), do: {:ok, nil}
@@ -1988,24 +2004,44 @@ defmodule Platform.Social do
   @spec update_post(Ecto.UUID.t(), Post.t() | Ecto.UUID.t(), map()) ::
           {:ok, Post.t()} | {:error, term()}
   def update_post(org_id, post, attrs) do
-    with {:ok, post} <- fetch(Post, org_id, post),
-         :ok <- refuse_studio(post) do
-      changeset =
-        post
-        |> Post.changeset(attrs)
-        |> Platform.Social.PublishingCompleteness.put_title(
-          attrs,
-          Repo.get!(Account, post.account_id)
-        )
-        |> ClipMedia.put_media_meta(profile_id_of_account(post.account_id))
+    Repo.transaction(fn ->
+      with {:ok, {post, account, profile}} <- QualityReview.lock_context(org_id, post),
+           :ok <- refuse_studio(post) do
+        changeset =
+          post
+          |> Post.changeset(attrs)
+          |> Platform.Social.PublishingCompleteness.put_title(attrs, account)
+          |> ClipMedia.put_media_meta(profile.id)
+          |> QualityReview.route_submission(profile)
 
-      with :ok <- refuse_scheduling_on_archived(org_id, post, changeset),
-           :ok <-
-             require_channel(changeset, profile_id_of(post), Repo.get(Account, post.account_id)),
-           {:ok, updated} <- Repo.update(changeset) do
-        {:ok, needs_approval_written(updated)}
+        with :ok <- refuse_scheduling_on_archived(org_id, post, changeset),
+             :ok <- require_valid_quality_advance(changeset, profile),
+             :ok <- require_channel(changeset, profile, account),
+             {:ok, updated} <- Repo.update(changeset) do
+          updated
+        else
+          {:error, reason} -> Repo.rollback(reason)
+        end
+      else
+        {:error, reason} -> Repo.rollback(reason)
       end
+    end)
+    |> case do
+      {:ok, updated} -> {:ok, needs_approval_written(updated)}
+      error -> error
     end
+  end
+
+  # Generic attrs cannot advance an unpassed gated post past final review.
+  # Ordinary approval alone supplies authority; this is a second boundary for
+  # existing generic writers, which still cannot cast either approval record.
+  defp require_valid_quality_advance(changeset, profile) do
+    post = Changeset.apply_changes(changeset)
+
+    if post.status in ~w(approved scheduled published) and
+         (is_nil(changeset.data.id) or Map.has_key?(changeset.changes, :status)),
+       do: QualityReview.check_approval(profile, post),
+       else: :ok
   end
 
   @doc """
@@ -2017,8 +2053,8 @@ defmodule Platform.Social do
   alone; a title for any other platform is refused here); other keys are ignored.
   Everything happens in ONE transaction on the row locked `FOR UPDATE`: a
   legacy `draft` is required (`:studio_post` / `:not_a_draft`), and the actor
-  passes `post_approver_check/4`, the rule `set_cover/4` and
-  `set_platform_options/4` apply to the same row.
+  passes `post_preparer_check/4` on the current profile and account.
+  Final approval keeps its separate approver check.
 
   `submit: false` (default) saves the edits, even if incomplete, but through
   the ordinary field validators. `submit: true` also moves the draft to
@@ -2043,13 +2079,12 @@ defmodule Platform.Social do
     submit? = Keyword.get(opts, :submit, false) == true
 
     Repo.transaction(fn ->
-      with %Post{} = locked <- lock_post(org_id, post_id) || {:error, :not_found},
+      with {:ok, {locked, account, profile}} <- QualityReview.lock_context(org_id, post_id),
            :ok <- refuse_studio(locked),
            :ok <- require_legacy_draft(locked),
-           {:ok, profile} <- profile_of_post(locked),
-           account = Repo.get!(Account, locked.account_id),
-           :ok <- post_approver_check(profile.org_id, profile, account, actor_user_id),
+           :ok <- post_preparer_check(profile.org_id, profile, account, actor_user_id),
            changeset = draft_edit_changeset(locked, attrs, account, submit?),
+           changeset = QualityReview.route_submission(changeset, profile),
            :ok <- draft_changeset_valid(changeset),
            :ok <- refuse_scheduling_on_archived(org_id, locked, changeset),
            :ok <- require_channel(changeset, profile, account),
@@ -2109,9 +2144,9 @@ defmodule Platform.Social do
       browser's `<video>.duration`, stored only when no duration is known);
     * `:clear` (or `%{clear: true}`): no cover.
 
-  The actor is checked exactly as for the approval card's edit
-  (`post_approver_check/4`, the rule `Approvals.decide_edit/4` applies),
-  on the row locked `FOR UPDATE`; a post past `needs_approval` is
+  Draft edits require preparation authority; quality-stage edits require a
+  quality reviewer; edits in final review require the final approver. The profile, account and post are
+  locked in that order; a post past `needs_approval` is
   `{:error, :post_locked}`. The cover goes through the one cover rule
   (`Platform.Social.Cover`), so a refusal is `{:error, changeset}`. A
   cover change changes `Approvals.fingerprint/1`, so a card shown before
@@ -2122,29 +2157,24 @@ defmodule Platform.Social do
   def set_cover(org_id, actor_user_id, post_id, attrs) do
     attrs = cover_attrs(attrs)
 
-    with {:ok, post} <- fetch(Post, org_id, post_id) do
-      Repo.transaction(fn ->
-        locked = Repo.one(from(p in Post, where: p.id == ^post.id, lock: "FOR UPDATE"))
-
-        with %Post{} <- locked || {:error, :not_found},
-             :ok <- refuse_studio(locked),
-             :ok <- refuse_cover_locked(locked),
-             {:ok, profile} <- profile_of_post(locked),
-             account = Repo.get!(Account, locked.account_id),
-             :ok <- post_approver_check(profile.org_id, profile, account, actor_user_id),
-             ctx = %{org_id: profile.org_id, profile_id: profile.id},
-             changeset = Post.cover_changeset(locked, attrs, ctx),
-             :ok <- require_channel(changeset, profile, account),
-             {:ok, updated} <- Repo.update(changeset) do
-          updated
-        else
-          {:error, reason} -> Repo.rollback(reason)
-        end
-      end)
-      |> case do
-        {:ok, updated} -> {:ok, needs_approval_written(updated)}
-        error -> error
+    Repo.transaction(fn ->
+      with {:ok, {locked, account, profile}} <- QualityReview.lock_context(org_id, post_id),
+           :ok <- refuse_studio(locked),
+           :ok <- refuse_cover_locked(locked),
+           :ok <- post_content_editor_check(locked, profile, account, actor_user_id),
+           ctx = %{org_id: profile.org_id, profile_id: profile.id},
+           changeset = Post.cover_changeset(locked, attrs, ctx),
+           changeset = QualityReview.route_submission(changeset, profile),
+           :ok <- require_channel(changeset, profile, account),
+           {:ok, updated} <- Repo.update(changeset) do
+        updated
+      else
+        {:error, reason} -> Repo.rollback(reason)
       end
+    end)
+    |> case do
+      {:ok, updated} -> {:ok, needs_approval_written(updated)}
+      error -> error
     end
   end
 
@@ -2163,17 +2193,27 @@ defmodule Platform.Social do
 
   defp cover_attrs(_), do: %{}
 
-  defp refuse_cover_locked(%Post{status: status}) when status in ~w(draft needs_approval),
-    do: :ok
+  defp refuse_cover_locked(%Post{status: status})
+       when status in ~w(draft quality_review needs_approval),
+       do: :ok
 
   defp refuse_cover_locked(%Post{}), do: {:error, :post_locked}
+
+  defp post_content_editor_check(%Post{status: "draft"}, profile, account, user_id),
+    do: post_preparer_check(profile.org_id, profile, account, user_id)
+
+  defp post_content_editor_check(%Post{status: "quality_review"}, profile, _account, user_id),
+    do: quality_reviewer_check(profile.org_id, profile, user_id)
+
+  defp post_content_editor_check(%Post{}, profile, account, user_id),
+    do: post_approver_check(profile.org_id, profile, account, user_id)
 
   @doc """
   A human sets a version's platform options (Social authoring 7/11):
   `attrs` (string keys) cleaned by `Platform.Social.PlatformOptions.validate/2`
   for the account's platform, so a key that platform does not take is
-  dropped. The actor is checked as for the cover (`post_approver_check/4`
-  on the row locked `FOR UPDATE`); a post past `needs_approval` is
+  dropped. Authority and lock order match the cover edit: preparation for
+  drafts, quality reviewer for quality review, final approver for final review. A post past final review is
   `{:error, :post_locked}`; an over-long value is
   `{:error, {:invalid_options, %{key => message}}}`. A change is logged as
   a human `edited` event whose note names the options.
@@ -2181,33 +2221,33 @@ defmodule Platform.Social do
   @spec set_platform_options(Ecto.UUID.t(), term(), Ecto.UUID.t(), map()) ::
           {:ok, Post.t()} | {:error, term()}
   def set_platform_options(org_id, actor_user_id, post_id, attrs) when is_map(attrs) do
-    with {:ok, post} <- fetch(Post, org_id, post_id) do
-      Repo.transaction(fn ->
-        locked = Repo.one(from(p in Post, where: p.id == ^post.id, lock: "FOR UPDATE"))
-
-        with %Post{} <- locked || {:error, :not_found},
-             :ok <- refuse_studio(locked),
-             :ok <- refuse_cover_locked(locked),
-             {:ok, profile} <- profile_of_post(locked),
-             account = Repo.get!(Account, locked.account_id),
-             :ok <- post_approver_check(profile.org_id, profile, account, actor_user_id),
-             {:ok, options} <- options_for(account.platform, attrs),
-             :ok <- require_channel(Post.options_changeset(locked, options), profile, account) do
-          if options == (locked.platform_options || %{}) do
-            locked
-          else
-            updated = locked |> Post.options_changeset(options) |> Repo.update!()
-
-            Platform.Social.PostEvents.record!(updated, "edited", {:human, actor_user_id},
-              note: "Platform options: " <> options_note(account.platform, options)
-            )
-
-            updated
-          end
+    Repo.transaction(fn ->
+      with {:ok, {locked, account, profile}} <- QualityReview.lock_context(org_id, post_id),
+           :ok <- refuse_studio(locked),
+           :ok <- refuse_cover_locked(locked),
+           :ok <- post_content_editor_check(locked, profile, account, actor_user_id),
+           {:ok, options} <- options_for(account.platform, attrs),
+           changeset = Post.options_changeset(locked, options),
+           changeset = QualityReview.route_submission(changeset, profile),
+           :ok <- require_channel(changeset, profile, account) do
+        if changeset.changes == %{} do
+          locked
         else
-          {:error, reason} -> Repo.rollback(reason)
+          updated = Repo.update!(changeset)
+
+          Platform.Social.PostEvents.record!(updated, "edited", {:human, actor_user_id},
+            note: "Platform options: " <> options_note(account.platform, options)
+          )
+
+          updated
         end
-      end)
+      else
+        {:error, reason} -> Repo.rollback(reason)
+      end
+    end)
+    |> case do
+      {:ok, updated} -> {:ok, needs_approval_written(updated)}
+      error -> error
     end
   end
 
@@ -2276,8 +2316,9 @@ defmodule Platform.Social do
   def require_channel(_status, _profile, _account), do: :ok
 
   @doc """
-  The ONE hook every write path calls after a post is committed: when the
-  post is `needs_approval`, `Platform.Social.Approvals.request_approval/1`
+  The ONE hook every write path calls after a post is committed. A quality
+  post retires final cards and notifies reviewers. When the post is
+  `needs_approval`, `Platform.Social.Approvals.request_approval/1`
   posts its approval card and inbox rows, or re-renders the live card when
   one exists (an agent re-edit). Returns the post unchanged. A fan-out
   failure is logged, never raised: the post is already saved.
@@ -2286,7 +2327,14 @@ defmodule Platform.Social do
   # A Studio post never gets an approval card: Studio approval is its own flow.
   def needs_approval_written(%Post{flow: "studio"} = post), do: post
 
+  def needs_approval_written(%Post{status: "quality_review"} = post) do
+    QualityReview.after_write(post)
+    post
+  end
+
   def needs_approval_written(%Post{status: "needs_approval"} = post) do
+    QualityReview.dismiss_quality(post)
+
     case Platform.Social.Approvals.request_approval(post) do
       {:ok, _} ->
         post
@@ -2298,10 +2346,6 @@ defmodule Platform.Social do
   end
 
   def needs_approval_written(%Post{} = post), do: post
-
-  defp profile_id_of(%Post{account_id: account_id}) do
-    Repo.one(from(a in Account, where: a.id == ^account_id, select: a.profile_id))
-  end
 
   @spec delete_post(Ecto.UUID.t(), Post.t() | Ecto.UUID.t()) ::
           {:ok, Post.t()} | {:error, term()}
@@ -2345,11 +2389,11 @@ defmodule Platform.Social do
   end
 
   defp approve_locked(org_id, post, approver_user_id, opts) do
-    with {:ok, post} <- fetch_for_approval(org_id, post, opts),
+    with {:ok, {post, account, profile}} <- QualityReview.lock_context(org_id, post),
          :ok <- refuse_studio(post),
-         :ok <- refuse_approved_again(post),
-         {:ok, profile} <- profile_of_post(post),
-         {:ok, account} <- account_of_post(post) do
+         :ok <- approval_actor_check(profile, account, post, approver_user_id),
+         :ok <- QualityReview.check_approval(profile, post),
+         :ok <- refuse_approved_again(post) do
       write_checked_approval(post, profile, account, approver_user_id, opts)
     end
   end
@@ -2359,11 +2403,11 @@ defmodule Platform.Social do
   # on the locked row and shares authority/completeness with ordinary approval.
   def reapprove_post(org_id, post_id, approver_user_id, opts \\ []) do
     Repo.transaction(fn ->
-      with {:ok, post} <- fetch_for_approval(org_id, post_id, lock: true),
+      with {:ok, {post, account, profile}} <- QualityReview.lock_context(org_id, post_id),
            :ok <- refuse_studio(post),
            :ok <- retry_approval_status(post),
-           {:ok, profile} <- profile_of_post(post),
-           {:ok, account} <- account_of_post(post),
+           :ok <- approval_actor_check(profile, account, post, approver_user_id),
+           :ok <- QualityReview.check_approval(profile, post),
            {:ok, updated} <-
              write_checked_approval(
                post,
@@ -2386,6 +2430,19 @@ defmodule Platform.Social do
        when is_binary(reason), do: :ok
 
   defp retry_approval_status(_), do: {:error, :not_failed}
+
+  defp approval_actor_check(profile, account, post, approver_user_id) do
+    case post_approver_check(profile.org_id, profile, account, approver_user_id) do
+      {:error, :not_a_human} ->
+        {:error,
+         post
+         |> Post.approval_changeset(approver_user_id)
+         |> Changeset.add_error(:approved_by_user_id, @not_a_user, reason: :not_a_human)}
+
+      result ->
+        result
+    end
+  end
 
   defp write_checked_approval(post, profile, account, approver_user_id, opts) do
     at = Keyword.get(opts, :scheduled_at, post.scheduled_at)
@@ -2424,27 +2481,6 @@ defmodule Platform.Social do
   @spec refuse_studio(Post.t()) :: :ok | {:error, :studio_post}
   def refuse_studio(%Post{flow: "studio"}), do: {:error, :studio_post}
   def refuse_studio(%Post{}), do: :ok
-
-  defp fetch_for_approval(org_id, post, opts) do
-    if Keyword.get(opts, :lock, false) do
-      case lock_post(org_id, post_id(post)) do
-        nil -> {:error, :not_found}
-        post -> {:ok, post}
-      end
-    else
-      fetch(Post, org_id, post)
-    end
-  end
-
-  defp account_of_post(%Post{account_id: account_id}) do
-    case Repo.get(Account, account_id) do
-      nil -> {:error, :not_found}
-      account -> {:ok, account}
-    end
-  end
-
-  defp post_id(%Post{id: id}), do: id
-  defp post_id(id), do: id
 
   @doc false
   # The profile a post belongs to (through its account), unscoped: callers
@@ -2497,6 +2533,57 @@ defmodule Platform.Social do
         else: {:error, :approver_no_access}
     end
   end
+
+  @doc "Whether a live human may perform this brand's quality review."
+  def quality_reviewer_check(org_id, %Profile{} = profile, user_id) do
+    with {:ok, user} <- live_user(user_id),
+         :ok <- not_archived(user) do
+      cond do
+        user.id not in (profile.quality_reviewer_user_ids || []) ->
+          {:error, :not_a_quality_reviewer}
+
+        org_id != profile.org_id or not approver_access?(user, profile) ->
+          {:error, :approver_no_access}
+
+        true ->
+          :ok
+      end
+    end
+  end
+
+  @doc "Profile preparation authority: approver or quality reviewer, without final approval authority."
+  def preparer_check(org_id, %Profile{} = profile, user_id) do
+    case approver_check(org_id, profile, user_id) do
+      :ok ->
+        :ok
+
+      {:error, _} = refused ->
+        if quality_reviewer_check(org_id, profile, user_id) == :ok, do: :ok, else: refused
+    end
+  end
+
+  @doc "Post preparation authority, preserving the final approver's account-owner rule."
+  def post_preparer_check(org_id, %Profile{} = profile, %Account{} = account, user_id) do
+    case post_approver_check(org_id, profile, account, user_id) do
+      :ok ->
+        :ok
+
+      {:error, _} = refused ->
+        if quality_reviewer_check(org_id, profile, user_id) == :ok, do: :ok, else: refused
+    end
+  end
+
+  def pass_quality_review(org_id, post_id, user_id, opts \\ []),
+    do: QualityReview.pass(org_id, post_id, user_id, opts)
+
+  def edit_quality_review(org_id, post_id, user_id, attrs),
+    do: QualityReview.edit(org_id, post_id, user_id, attrs)
+
+  def send_back_quality_review(org_id, post_id, user_id, note),
+    do: QualityReview.send_back(org_id, post_id, user_id, note)
+
+  def return_to_quality_review(org_id, post_id, user_id),
+    do: QualityReview.return_to_review(org_id, post_id, user_id)
 
   @doc """
   Whether `user_id` may approve or edit posts on `account` RIGHT NOW
@@ -2556,9 +2643,15 @@ defmodule Platform.Social do
     if owner_id == user_id, do: :ok, else: {:error, :not_the_owner}
   end
 
-  defp owner_gone?(%Account{owner_user_id: nil}), do: false
+  @doc """
+  Whether `account` has an owner who can no longer act (archived or gone).
+  `post_rejecter_check/4` then lets the brand's approvers reject (never
+  approve); the Queue card's no-actions line reads the same answer.
+  """
+  @spec owner_gone?(Account.t()) :: boolean()
+  def owner_gone?(%Account{owner_user_id: nil}), do: false
 
-  defp owner_gone?(%Account{owner_user_id: owner_id}) do
+  def owner_gone?(%Account{owner_user_id: owner_id}) do
     case live_user(owner_id) do
       {:ok, owner} -> not_archived(owner) != :ok
       {:error, _} -> true
@@ -2713,6 +2806,26 @@ defmodule Platform.Social do
     Map.new(profile_ids, &{&1, Map.get(counts, &1, 0)})
   end
 
+  @doc "Quality-review counts for profile ids already read through the caller's scope."
+  @spec quality_review_counts([Ecto.UUID.t()]) :: %{Ecto.UUID.t() => non_neg_integer()}
+  def quality_review_counts([]), do: %{}
+
+  def quality_review_counts(profile_ids) when is_list(profile_ids) do
+    counts =
+      from(po in Post,
+        join: a in Account,
+        on: a.id == po.account_id,
+        where:
+          a.profile_id in ^profile_ids and po.status == "quality_review" and po.flow == "legacy",
+        group_by: a.profile_id,
+        select: {a.profile_id, count(po.id)}
+      )
+      |> Repo.all()
+      |> Map.new()
+
+    Map.new(profile_ids, &{&1, Map.get(counts, &1, 0)})
+  end
+
   # Approval moves a draft (or a post awaiting approval) to approved; it never
   # rewinds a post that is already approved, scheduled, published or failed.
   defp refuse_approved_again(%Post{status: status}) when status in ~w(draft needs_approval),
@@ -2723,7 +2836,8 @@ defmodule Platform.Social do
   defp refuse_archived(%Account{archived_at: nil}), do: :ok
   defp refuse_archived(%Account{}), do: {:error, :account_archived}
 
-  defp refuse_scheduling_on_archived(org_id, post, changeset) do
+  @doc false
+  def refuse_scheduling_on_archived(org_id, post, changeset) do
     scheduling? =
       Changeset.get_change(changeset, :scheduled_at) != nil or
         Changeset.get_change(changeset, :status) == "scheduled"
@@ -2794,6 +2908,9 @@ defmodule Platform.Social do
   # A human's clip decision (task 01a16662; choosing a clip makes drafts, B3): see
   # `Platform.Social.ClipDecisions`. Each takes opts with an injectable `:now`.
 
+  # `attrs["copy_rev"]` is mandatory (`ClipDecisions.draft_clip/5`): the caller
+  # passes the token of the copy its reviewer saw. This wrapper never fetches
+  # one, so a caller with no observation is refused.
   defdelegate draft_clip(org_id, clip_id, user_id, attrs, opts \\ []),
     to: Platform.Social.ClipDecisions
 
@@ -2931,9 +3048,5 @@ defmodule Platform.Social do
       {1, [clip]} -> {:ok, clip}
       _ -> {:error, :already_rendering}
     end
-  end
-
-  defp profile_id_of_account(account_id) do
-    Repo.one(from(a in Account, where: a.id == ^account_id, select: a.profile_id))
   end
 end

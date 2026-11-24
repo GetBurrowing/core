@@ -11,8 +11,8 @@ defmodule PlatformWeb.SocialClipsLibraryTest do
     {:ok, ig} =
       Social.create_account(w.org_id, w.profile, %{platform: "instagram", handle: "@ig"})
 
-    {:ok, _} = Social.create_account(w.org_id, w.profile, %{platform: "youtube", handle: "@yt"})
-    %{w: Map.put(w, :ig, ig)}
+    {:ok, yt} = Social.create_account(w.org_id, w.profile, %{platform: "youtube", handle: "@yt"})
+    %{w: w |> Map.put(:ig, ig) |> Map.put(:yt, yt)}
   end
 
   defp clip!(w, title, attrs \\ %{}, fields \\ []) do
@@ -253,6 +253,78 @@ defmodule PlatformWeb.SocialClipsLibraryTest do
     assert has_element?(view, "#library-clip-#{clip.id} [data-role=library-platform]", "TTFailed")
   end
 
+  test "tiles say when a clip was added and date only what the stored fields prove", %{
+    conn: conn,
+    w: w
+  } do
+    clip = clip!(w, "Dated tile", %{}, review_status: "approved")
+    added = ~U[2026-11-01 08:05:00.000000Z]
+    clip |> Ecto.Changeset.change(inserted_at: added) |> Repo.update!()
+
+    sched_at = DateTime.add(DateTime.utc_now(), 86_400 * 3)
+    pub_at = ~U[2026-11-10 09:02:00.000000Z]
+
+    {:ok, sched} = Social.create_post(w.org_id, w.ig, %{body: "S", clip_id: clip.id})
+
+    sched
+    |> Ecto.Changeset.change(
+      status: "scheduled",
+      scheduled_at: sched_at,
+      clip_id: clip.id,
+      approved_by_user_id: w.approver.id,
+      approved_at: DateTime.utc_now()
+    )
+    |> Repo.update!()
+
+    # Published with a stored published_at AND an unrelated scheduled_at: the
+    # date shown is published_at, never the schedule or the import time.
+    {:ok, pub} = Social.create_post(w.org_id, w.tiktok, %{body: "P", clip_id: clip.id})
+
+    pub
+    |> Ecto.Changeset.change(
+      status: "published",
+      scheduled_at: ~U[2026-11-09 00:00:00.000000Z],
+      published_at: pub_at,
+      clip_id: clip.id,
+      approved_by_user_id: w.approver.id,
+      approved_at: DateTime.utc_now()
+    )
+    |> Repo.update!()
+
+    # Published but no stored published_at (an older row): status, no date.
+    {:ok, old} = Social.create_post(w.org_id, w.yt, %{body: "O", clip_id: clip.id})
+
+    old
+    |> Ecto.Changeset.change(
+      status: "published",
+      clip_id: clip.id,
+      approved_by_user_id: w.approver.id,
+      approved_at: DateTime.utc_now()
+    )
+    |> Repo.update!()
+
+    view = open(conn, w.approver, w.profile)
+    tile = "#library-clip-#{clip.id}"
+
+    assert has_element?(view, "#{tile} [data-role=library-added]", "Added 1 Nov 2026, 08:05 UTC")
+
+    assert has_element?(
+             view,
+             "#{tile} [data-role=library-platform]",
+             "IGScheduled #{Calendar.strftime(sched_at, "%-d %b %Y, %H:%M")} UTC"
+           )
+
+    assert has_element?(
+             view,
+             "#{tile} [data-role=library-platform]",
+             "TTPublished 10 Nov 2026, 09:02 UTC"
+           )
+
+    html = view |> element(tile) |> render()
+    refute html =~ "9 Nov 2026"
+    assert html =~ ~r/YT<\/span><span class="text-subtle">Published<\/span>/
+  end
+
   test "Show uses parent's authorized switch path, preserves other filters and removes stale cards",
        %{
          conn: conn,
@@ -487,6 +559,38 @@ defmodule PlatformWeb.SocialClipsLibraryTest do
     assert retried.approved_by_user_id == w.approver.id
     assert DateTime.compare(retried.scheduled_at, at) == :eq
     refute has_element?(view, "[data-role=library-retry]")
+  end
+
+  for status <- ["failed", "approved"] do
+    test "a legacy #{status} no-job retry explains separate investigation", %{conn: conn, w: w} do
+      alias Platform.Social.Publisher.Fake
+      Fake.reset()
+      Platform.Social.RateLimit.reset()
+      clip = clip!(w, "Older post outcome", %{}, review_status: "approved")
+      connect!(w.tiktok)
+
+      fields =
+        if unquote(status) == "approved",
+          do: [refused_reason: "media_rejected", refused_at: DateTime.utc_now()],
+          else: []
+
+      post = post!(w, clip, w.tiktok, unquote(status), fields)
+      Repo.update!(Ecto.Changeset.change(w.profile, quality_reviewer_user_ids: [w.approver.id]))
+      view = open(conn, w.approver, w.profile)
+      detail(view, clip)
+      view |> element("[data-post-id='#{post.id}'] [data-role=library-retry]") |> render_click()
+      submit_retry(view, post, future())
+
+      assert has_element?(
+               view,
+               "#library-detail",
+               "This older post has no valid quality pass. Its publishing outcome needs separate investigation before a new job can be started."
+             )
+
+      assert Repo.get!(Platform.Social.Post, post.id) == post
+      assert Fake.calls() == []
+      refute has_element?(view, "[data-role='social-card-return-quality']")
+    end
   end
 
   defp connect!(account),

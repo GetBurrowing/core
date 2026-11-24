@@ -82,6 +82,9 @@ defmodule PlatformWeb.SocialClipsReviewDecisionsTest do
 
   defp state(clip), do: clip |> Repo.reload!() |> ClipLibrary.clip_state()
 
+  # What the page rendered on the Create drafts button, as the browser sends it.
+  defp rev(clip), do: clip |> Repo.reload!() |> Platform.Social.ClipReviewFeed.copy_rev()
+
   test "draft controls carry the displayed render and forged missing/foreign versions write nothing",
        %{conn: conn, w: w} do
     [first, second | _] = three!(w)
@@ -127,7 +130,12 @@ defmodule PlatformWeb.SocialClipsReviewDecisionsTest do
     only = clip!(w, "Only one")
     child = open(conn, w.approver)
 
-    bay(child) |> render_click("draft", %{"id" => only.id, "render_id" => render_id!(only)})
+    bay(child)
+    |> render_click("draft", %{
+      "id" => only.id,
+      "render_id" => render_id!(only),
+      "copy_rev" => rev(only)
+    })
 
     assert has_element?(child, "[data-role='clips-empty']", "All caught up")
     assert has_element?(child, "[data-role='clips-count'] b", "0 to review")
@@ -160,6 +168,50 @@ defmodule PlatformWeb.SocialClipsReviewDecisionsTest do
     # Nothing was approved or armed: no card, no approver, no publish_after.
     assert [_, _] = posts(first)
     assert Enum.all?(posts(first), &(&1.status == "draft" and is_nil(&1.publish_after)))
+  end
+
+  test "the drafts confirmation lasts long enough to follow its link", %{conn: conn, w: w} do
+    three!(w)
+    child = open(conn, w.approver)
+
+    child |> element("[data-role='clip-draft']") |> render_click()
+
+    [until] =
+      child
+      |> render()
+      |> LazyHTML.from_fragment()
+      |> LazyHTML.query("[data-role='clip-toast'][data-kind='drafted']")
+      |> LazyHTML.attribute("data-until")
+
+    left = String.to_integer(until) - System.system_time(:millisecond)
+    assert left > 9_000 and left <= 10_000
+
+    # Past the old 3.2 s lifetime (+ grace) the toast and its link are still there.
+    Process.sleep(3_700)
+    assert has_element?(child, "[data-role='clip-toast'][data-kind='drafted']")
+    assert has_element?(child, "[data-role='clip-toast-drafts-link']", "Open drafts")
+
+    # The link is a 44 px touch target (min-h-11 / min-w-11), phone included.
+    assert has_element?(child, "[data-role='clip-toast-drafts-link'].min-h-11.min-w-11")
+  end
+
+  test "a refused draft toast keeps its short lifetime", %{conn: conn, w: w} do
+    three!(w)
+    child = open(conn, w.approver)
+    owner = member!(user!(), w.org_id)
+    {:ok, _} = Social.set_account_owner(w.org_id, w.yt, owner.id)
+
+    child |> element("[data-role='clip-draft']") |> render_click()
+
+    [until] =
+      child
+      |> render()
+      |> LazyHTML.from_fragment()
+      |> LazyHTML.query("[data-role='clip-toast'][data-kind='info']")
+      |> LazyHTML.attribute("data-until")
+
+    left = String.to_integer(until) - System.system_time(:millisecond)
+    assert left > 0 and left <= 3_200
   end
 
   test "no control in the bay says approve or publish", %{conn: conn, w: w} do
@@ -333,6 +385,7 @@ defmodule PlatformWeb.SocialClipsReviewDecisionsTest do
     |> render_click("draft", %{
       "id" => first.id,
       "render_id" => render_id!(first),
+      "copy_rev" => rev(first),
       "account_ids" => [foreign_ig.id]
     })
 
@@ -351,7 +404,12 @@ defmodule PlatformWeb.SocialClipsReviewDecisionsTest do
       |> Ecto.Changeset.change(approver_user_ids: [])
       |> Repo.update()
 
-    bay(child) |> render_click("draft", %{"id" => first.id, "render_id" => render_id!(first)})
+    bay(child)
+    |> render_click("draft", %{
+      "id" => first.id,
+      "render_id" => render_id!(first),
+      "copy_rev" => rev(first)
+    })
 
     assert posts(first) == []
     assert %Clip{review_status: "pending"} = Repo.reload!(first)
@@ -441,6 +499,248 @@ defmodule PlatformWeb.SocialClipsReviewDecisionsTest do
                SocialClipsReview.drafted_toast([:p1], w.profile.id)
 
       assert SocialClipsReview.drafted_toast([], w.profile.id) == nil
+    end
+  end
+
+  describe "Create drafts is bound to the copy the reviewer saw" do
+    defp agent_edit(w, clip, args) do
+      Platform.Federation.ToolArguments.dispatch(
+        "social_clip_update_copy",
+        Map.merge(%{"clip_id" => clip.id, "expected_copy_rev" => rev(clip)}, args),
+        %{agent_id: w.agent.id}
+      )
+    end
+
+    setup %{w: w} do
+      w.profile
+      |> Ecto.Changeset.change(drafting_agent_id: w.agent.id)
+      |> Repo.update!()
+
+      :ok
+    end
+
+    test "both Create drafts buttons carry the copy token of the rendered clip", %{
+      conn: conn,
+      w: w
+    } do
+      [first | _] = three!(w)
+      child = open(conn, w.approver)
+      token = rev(first)
+      assert has_element?(child, "[data-role='clip-draft'][phx-value-copy_rev='#{token}']")
+      assert has_element?(child, "[data-role='clips-pbar-draft'][phx-value-copy_rev='#{token}']")
+    end
+
+    test "a click carrying the token from before an agent edit is refused: message, 0 posts, copy kept",
+         %{conn: conn, w: w} do
+      [first | _] = three!(w)
+      child = open(conn, w.approver)
+      old = rev(first)
+
+      assert {:ok, _} = agent_edit(w, first, %{"caption" => "Agent rewrote it"})
+      after_edit = Repo.reload!(first)
+
+      html =
+        bay(child)
+        |> render_click("draft", %{
+          "id" => first.id,
+          "render_id" => render_id!(first),
+          "copy_rev" => old
+        })
+
+      assert posts(first) == []
+      assert Repo.reload!(first) == after_edit
+      assert after_edit.review_status == "pending"
+      assert has_element?(child, "[data-role='clip-toast']")
+      assert html =~ "changed after you opened"
+      assert has_element?(child, "[data-role='clips-count'] b", "3 to review")
+    end
+
+    test "the same after a human save through the details rail", %{conn: conn, w: w} do
+      [first | _] = three!(w)
+      child = open(conn, w.approver)
+      old = rev(first)
+
+      {:ok, _} =
+        Platform.Social.ClipReviewFeed.save_details(
+          w.org_id,
+          w.profile.id,
+          first.id,
+          w.approver.id,
+          %{"title" => "Changed in the rail"}
+        )
+
+      bay(child)
+      |> render_click("draft", %{
+        "id" => first.id,
+        "render_id" => render_id!(first),
+        "copy_rev" => old
+      })
+
+      assert posts(first) == []
+    end
+
+    test "a click with no token is refused, never treated as unbound", %{conn: conn, w: w} do
+      [first | _] = three!(w)
+      child = open(conn, w.approver)
+
+      html =
+        bay(child)
+        |> render_click("draft", %{"id" => first.id, "render_id" => render_id!(first)})
+
+      assert posts(first) == []
+      assert html =~ "changed after you opened"
+    end
+
+    test "after the edit lands the page shows the new token and the real click drafts it",
+         %{conn: conn, w: w} do
+      [first | _] = three!(w)
+      child = open(conn, w.approver)
+
+      assert {:ok, _} = agent_edit(w, first, %{"caption" => "Agent rewrote it"})
+      sync(child)
+      new = rev(first)
+      assert has_element?(child, "[data-role='clip-draft'][phx-value-copy_rev='#{new}']")
+
+      child |> element("[data-role='clip-draft']") |> render_click()
+
+      assert [_, _] = posts(first)
+      assert Enum.all?(posts(first), &(&1.body == "Agent rewrote it"))
+    end
+  end
+
+  describe "the page shows the copy that Create drafts will use, for every version" do
+    alias Platform.Social.{ClipReviewFeed, ClipVersions}
+
+    setup %{w: w} do
+      w.profile
+      |> Ecto.Changeset.change(drafting_agent_id: w.agent.id)
+      |> Repo.update!()
+
+      :ok
+    end
+
+    defp two_versions!(w) do
+      clip = clip!(w, "Burned in v1")
+      {:ok, old} = ClipVersions.get(w.org_id, w.profile.id, clip.id, render_id!(clip))
+      file2 = stored_file!(w.project, "clip bytes v2 #{unique()}", "clip2.mp4", "video/mp4")
+
+      {:ok, _} =
+        Repo.transaction(fn ->
+          ClipVersions.append!(clip.id, file2, %{}, %{
+            headline: "Burned in v2",
+            caption: "Snapshot caption v2",
+            source: %{"origin" => "external"},
+            provenance: %{"kind" => "test"},
+            completion_key: "test:" <> Ecto.UUID.generate()
+          })
+        end)
+
+      {:ok, _} =
+        Platform.Federation.ToolArguments.dispatch(
+          "social_clip_update_copy",
+          %{
+            "clip_id" => clip.id,
+            "expected_copy_rev" => rev(clip),
+            "title" => "Working title",
+            "caption" => "Working caption"
+          },
+          %{agent_id: w.agent.id}
+        )
+
+      {Repo.reload!(clip), old}
+    end
+
+    test "an older version shows the working copy, labelled, with the video headline apart",
+         %{conn: conn, w: w} do
+      {clip, old} = two_versions!(w)
+      child = open(conn, w.approver)
+      bay(child) |> render_click("pick_version", %{"render_id" => old.id})
+
+      assert has_element?(child, "[data-role='clips-selected-title']", "Working title")
+      assert has_element?(child, "[data-role='clip-caption']", "Working caption")
+      assert has_element?(child, "[data-role='clip-copy-label']", "Copy that will be posted")
+
+      assert has_element?(
+               child,
+               "[data-role='clip-video-headline']",
+               "On the video: Burned in v1"
+             )
+
+      refute render(child) =~ "Snapshot caption v2"
+      refute has_element?(child, "[data-role='clips-selected-title']", "Burned in v1")
+
+      assert has_element?(
+               child,
+               "[data-role='clip-copy-label'][data-copy-rev='#{ClipReviewFeed.copy_rev(clip)}']"
+             )
+    end
+
+    test "the token on both buttons is the token of the copy on screen; the draft is that copy; an old token is refused",
+         %{conn: conn, w: w} do
+      {clip, old} = two_versions!(w)
+      child = open(conn, w.approver)
+      bay(child) |> render_click("pick_version", %{"render_id" => old.id})
+      bay(child) |> render_click("pick_version", %{"render_id" => render_id!(clip)})
+
+      shown = ClipReviewFeed.copy_rev(%Clip{title: "Working title", caption: "Working caption"})
+      assert has_element?(child, "[data-role='clip-copy-label'][data-copy-rev='#{shown}']")
+      assert has_element?(child, "[data-role='clip-draft'][phx-value-copy_rev='#{shown}']")
+      assert has_element?(child, "[data-role='clips-pbar-draft'][phx-value-copy_rev='#{shown}']")
+
+      # The copy moves after the page rendered; the page's old token is refused.
+      {:ok, _} =
+        ClipReviewFeed.save_details(w.org_id, w.profile.id, clip.id, w.approver.id, %{
+          "title" => "Changed elsewhere"
+        })
+
+      bay(child)
+      |> render_click("draft", %{
+        "id" => clip.id,
+        "render_id" => render_id!(clip),
+        "copy_rev" => shown
+      })
+
+      assert posts(clip) == []
+
+      sync(child)
+      new = rev(clip)
+      refute new == shown
+      assert has_element?(child, "[data-role='clip-copy-label'][data-copy-rev='#{new}']")
+      child |> element("[data-role='clip-draft']") |> render_click()
+
+      assert [_, _] = posts = posts(clip)
+      assert Enum.all?(posts, &(&1.body == "Working caption"))
+      assert Enum.any?(posts, &(&1.platform_options == %{"title" => "Changed elsewhere"}))
+    end
+
+    test "an older version offers no Create drafts and a forged click writes nothing",
+         %{conn: conn, w: w} do
+      {clip, old} = two_versions!(w)
+      child = open(conn, w.approver)
+      bay(child) |> render_click("pick_version", %{"render_id" => old.id})
+      refute has_element?(child, "[data-role='clip-draft']")
+      refute has_element?(child, "[data-role='clips-pbar-draft']")
+
+      bay(child)
+      |> render_click("draft", %{"id" => clip.id, "render_id" => old.id, "copy_rev" => rev(clip)})
+
+      assert posts(clip) == []
+    end
+
+    test "a clip with no working title shows it as missing, never the video headline",
+         %{conn: conn, w: w} do
+      clip = clip!(w, "Burned headline")
+      Repo.update_all(from(c in Clip, where: c.id == ^clip.id), set: [title: nil])
+      child = open(conn, w.approver)
+
+      assert has_element?(child, "[data-role='clip-title-missing']", "No title")
+      refute has_element?(child, "[data-role='clips-selected-title']", "Burned headline")
+
+      assert has_element?(
+               child,
+               "[data-role='clip-video-headline']",
+               "On the video: Burned headline"
+             )
     end
   end
 end

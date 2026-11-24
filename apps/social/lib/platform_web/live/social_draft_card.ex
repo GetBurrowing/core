@@ -27,7 +27,9 @@ defmodule PlatformWeb.SocialDraftCard do
 
   @impl true
   def update(assigns, socket) do
-    socket = socket |> assign(assigns) |> refresh_access()
+    socket =
+      socket |> assign_new(:clip_title, fn -> nil end) |> assign(assigns) |> refresh_access()
+
     %{post: post, tz: tz} = socket.assigns
     stamp = {post.id, post.updated_at}
 
@@ -65,9 +67,10 @@ defmodule PlatformWeb.SocialDraftCard do
 
       with {:ok, attrs} <- attrs_from(form, post, account, tz),
            {:ok, saved} <-
-             Social.edit_draft(profile.org_id, post.id, user.id, attrs, submit: submit?) do
+             save_post(profile.org_id, post, user.id, attrs, submit?) do
         if submit? do
-          send(self(), {__MODULE__, :sent, saved.id})
+          event = if saved.status == "quality_review", do: :quality_sent, else: :sent
+          send(self(), {__MODULE__, event, saved.id})
           {:noreply, assign(socket, lines: [])}
         else
           {:noreply,
@@ -76,7 +79,10 @@ defmodule PlatformWeb.SocialDraftCard do
            |> assign(:stamp, {saved.id, saved.updated_at})
            |> assign(:form, form_from(saved, tz))
            |> assign(:lines, [])
-           |> assign(:notice, "Draft saved.")}
+           |> assign(
+             :notice,
+             if(saved.status == "quality_review", do: "Changes saved.", else: "Draft saved.")
+           )}
         end
       else
         {:error, reason} -> {:noreply, assign(socket, :lines, refusal_lines(reason))}
@@ -86,7 +92,58 @@ defmodule PlatformWeb.SocialDraftCard do
     end
   end
 
+  def handle_event("quality_pass", _params, socket) do
+    socket = refresh_access(socket)
+    %{post: post, profile: profile, user: user, tz: tz} = socket.assigns
+
+    cond do
+      not socket.assigns.can_edit? or not socket.assigns.quality_stage? ->
+        {:noreply, assign(socket, :lines, ["You can't pass this post."])}
+
+      socket.assigns.form != form_from(post, tz) ->
+        {:noreply, assign(socket, :lines, ["Save changes before passing."])}
+
+      true ->
+        quality_result(
+          socket,
+          Social.pass_quality_review(profile.org_id, post.id, user.id,
+            expected_fingerprint: Approvals.content_fingerprint(post)
+          ),
+          :quality_passed
+        )
+    end
+  end
+
+  def handle_event("quality_send_back", params, socket) do
+    socket = refresh_access(socket)
+    %{post: post, profile: profile, user: user} = socket.assigns
+
+    if socket.assigns.can_send_back? and socket.assigns.quality_stage? do
+      result = Social.send_back_quality_review(profile.org_id, post.id, user.id, params["note"])
+      quality_result(socket, result, :quality_returned)
+    else
+      {:noreply, assign(socket, :lines, ["You can't send back this post."])}
+    end
+  end
+
   def handle_event(_event, _params, socket), do: {:noreply, refresh_access(socket)}
+
+  defp quality_result(socket, {:ok, saved}, event) do
+    send(self(), {__MODULE__, event, saved.id})
+    {:noreply, assign(socket, :lines, [])}
+  end
+
+  defp quality_result(socket, {:error, :note_required}, _event),
+    do: {:noreply, assign(socket, :lines, ["To send this back, write a note first."])}
+
+  defp quality_result(socket, {:error, reason}, _event),
+    do: {:noreply, assign(socket, :lines, refusal_lines(reason))}
+
+  defp save_post(org_id, %{status: "quality_review"} = post, user_id, attrs, _submit?),
+    do: Social.edit_quality_review(org_id, post.id, user_id, attrs)
+
+  defp save_post(org_id, post, user_id, attrs, submit?),
+    do: Social.edit_draft(org_id, post.id, user_id, attrs, submit: submit?)
 
   # Everything this card shows that depends on who is looking (edit authority,
   # the PostPresentation boundary, `files.read` on each file) is read afresh on
@@ -101,7 +158,37 @@ defmodule PlatformWeb.SocialDraftCard do
 
     case current_rows(held_post, held_account, held_profile) do
       {:ok, post, account, profile} ->
-        can_edit? = Social.post_approver_check(profile.org_id, profile, account, user.id) == :ok
+        quality? = post.status == "quality_review"
+
+        can_edit? =
+          case post.status do
+            "quality_review" ->
+              Social.quality_reviewer_check(profile.org_id, profile, user.id) == :ok
+
+            "draft" ->
+              Social.post_preparer_check(profile.org_id, profile, account, user.id) == :ok
+
+            _ ->
+              false
+          end
+
+        can_send_back? =
+          quality? and
+            (Social.quality_reviewer_check(profile.org_id, profile, user.id) == :ok or
+               Social.post_approver_check(profile.org_id, profile, account, user.id) == :ok)
+
+        reviewers =
+          Enum.flat_map(profile.quality_reviewer_user_ids || [], fn id ->
+            case Platform.Accounts.get_user(id) do
+              nil -> []
+              reviewer -> [reviewer.name || "a quality reviewer"]
+            end
+          end)
+
+        waiting =
+          if reviewers == [],
+            do: "Waiting for quality review.",
+            else: "Waiting for quality review by #{Enum.join(reviewers, ", ")}."
 
         context =
           Platform.Social.PostPresentation.authorize({:user, user.id}, [profile.id])
@@ -109,8 +196,14 @@ defmodule PlatformWeb.SocialDraftCard do
         tz = SocialCalendarClock.profile_zone(profile)
 
         socket
+        |> assign(:quality_stage?, quality?)
+        |> assign(:quality_enabled?, Social.QualityReview.enabled?(profile))
+        |> assign(:waiting_line, waiting)
+        |> assign(:profile, profile)
+        |> assign(:account, account)
         |> assign(:tz, tz)
         |> assign(:can_edit?, can_edit?)
+        |> assign(:can_send_back?, can_send_back?)
         |> read_only_form(can_edit?, post, tz)
         |> assign(
           :presentation,
@@ -123,7 +216,11 @@ defmodule PlatformWeb.SocialDraftCard do
         # no form and nothing from the stale rows.
         socket
         |> assign(:tz, SocialCalendarClock.profile_zone(held_profile))
+        |> assign(:quality_stage?, false)
+        |> assign(:quality_enabled?, false)
+        |> assign(:waiting_line, "This post is unavailable.")
         |> assign(:can_edit?, false)
+        |> assign(:can_send_back?, false)
         |> assign(:presentation, nil)
         |> assign(:media, [])
         |> assign(:media_hidden, 0)
@@ -272,6 +369,8 @@ defmodule PlatformWeb.SocialDraftCard do
 
   @impl true
   def render(assigns) do
+    assigns = assign(assigns, :dirty?, assigns.form != form_from(assigns.post, assigns.tz))
+
     ~H"""
     <article
       id={"queue-draft-card-#{@post.id}"}
@@ -285,8 +384,21 @@ defmodule PlatformWeb.SocialDraftCard do
         <span :if={@show_brand?} data-role="draft-brand" class="text-base-content">
           · {@profile.name}
         </span>
+        <span :if={@clip_title} data-role="draft-from-clip" class="text-base-content">
+          · From clip: {@clip_title}
+        </span>
       </header>
 
+      <p
+        :if={
+          @post.rejection_reason && not Social.QueueFeed.final_rejection?(@post) &&
+            (@can_edit? or @can_send_back? or not is_nil(@presentation))
+        }
+        data-role="quality-return-note"
+        class="text-sm text-base-content"
+      >
+        {if @post.rejected_at, do: "Last rejection note:", else: "Last send-back note:"} {@post.rejection_reason}
+      </p>
       <%= if @can_edit? do %>
         <form
           id={"queue-draft-form-#{@post.id}"}
@@ -350,24 +462,47 @@ defmodule PlatformWeb.SocialDraftCard do
               data-role="draft-save"
               class="btn btn-ghost min-h-11"
             >
-              Save draft
+              {if @quality_stage?, do: "Save changes", else: "Save draft"}
             </button>
             <button
+              :if={not @quality_stage?}
               type="submit"
               name="intent"
               value="submit"
               data-role="draft-send"
               class="btn btn-primary min-h-11"
             >
-              Send for review
+              {if @quality_enabled?, do: "Send for quality review", else: "Send for review"}
             </button>
           </div>
         </form>
+        <div :if={@quality_stage?} class="space-y-3">
+          <p :if={@dirty?} data-role="quality-save-first" class="text-sm">
+            Save changes before passing
+          </p>
+          <button
+            type="button"
+            phx-click="quality_pass"
+            phx-target={@myself}
+            data-role="quality-pass"
+            disabled={@dirty?}
+            class="btn btn-primary min-h-11"
+          >
+            Pass to final review
+          </button>
+        </div>
       <% else %>
         <div :if={is_nil(@presentation)} class="space-y-3 text-sm">
-          <p data-role="draft-status">Draft</p>
+          <p data-role="draft-status">{if @quality_stage?, do: "In quality review", else: "Draft"}</p>
           <p data-role="draft-read-only" class="text-subtle">
-            Only an approver for this account can edit or send this draft.
+            {if @quality_stage?,
+              do: @waiting_line,
+              else:
+                if(@quality_enabled?,
+                  do:
+                    "Only an approver or quality reviewer for this account can edit or send this draft.",
+                  else: "Only an approver for this account can edit or send this draft."
+                )}
           </p>
         </div>
         <div :if={@presentation} class="space-y-3 text-sm">
@@ -386,10 +521,34 @@ defmodule PlatformWeb.SocialDraftCard do
               else: "#{@form["at"]} (#{SocialCalendarClock.label(@tz)})"}
           </p>
           <p data-role="draft-read-only" class="text-subtle">
-            Only an approver for this account can edit or send this draft.
+            {if @quality_stage?,
+              do: @waiting_line,
+              else:
+                if(@quality_enabled?,
+                  do:
+                    "Only an approver or quality reviewer for this account can edit or send this draft.",
+                  else: "Only an approver for this account can edit or send this draft."
+                )}
           </p>
         </div>
       <% end %>
+      <.draft_messages :if={@can_send_back? and not @can_edit?} lines={@lines} notice={@notice} />
+      <form
+        :if={@quality_stage? and @can_send_back?}
+        id={"quality-send-back-#{@post.id}"}
+        phx-submit="quality_send_back"
+        phx-target={@myself}
+        data-role="quality-send-back-form"
+        class="space-y-2"
+      >
+        <label class="block text-sm" for={"quality-note-#{@post.id}"}>Note for the author</label>
+        <textarea
+          id={"quality-note-#{@post.id}"}
+          name="note"
+          class="textarea textarea-bordered w-full"
+        ></textarea>
+        <button type="submit" class="btn btn-outline min-h-11">Send back</button>
+      </form>
     </article>
     """
   end

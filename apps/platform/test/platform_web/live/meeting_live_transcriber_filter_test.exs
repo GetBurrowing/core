@@ -538,6 +538,32 @@ defmodule PlatformWeb.MeetingLiveTranscriberFilterTest do
       {view, html}
     end
 
+    # Task 01a20b3e stage 4: `data-room-state` is written by MeetingClient,
+    # not the server, so every patch of the server-owned element wiped it
+    # (a reconnect re-stamped "connected" and the next patch removed it
+    # again). Both surfaces keep it the way #meeting-top-bar keeps its
+    # data-state: `phx-mounted={JS.ignore_attributes(...)}`.
+    defp client_mounted(html) do
+      assert [raw] =
+               html
+               |> query("#meeting-client[phx-hook=MeetingClient]")
+               |> LazyHTML.attribute("phx-mounted")
+
+      raw
+    end
+
+    test "/meetings and /chat keep the hook-owned data-room-state across patches",
+         %{conn: conn} do
+      %{meeting: meeting, space: space} = seed_room()
+      conn = authenticated_conn(conn)
+
+      for html <- [meetings_html(conn, meeting), chat_html(conn, space)] do
+        mounted = client_mounted(html)
+        assert mounted =~ "ignore_attrs"
+        assert mounted =~ "data-room-state"
+      end
+    end
+
     for {surface, mount_fun} <- [{"/chat", :live_chat}, {"/meetings", :live_meetings}] do
       test "#{surface}: a put_env on a live view reaches the attribute on the next event",
            %{conn: conn} do

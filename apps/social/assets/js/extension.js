@@ -14,7 +14,8 @@ import StudioPostFocus from "./hooks/studio_post_focus.js"
 import SocialIdeas from "./hooks/social_ideas.js"
 import SocialTicker from "./hooks/social_ticker.js"
 import SocialThumbnail from "./hooks/social_thumbnail.js"
+import SocialVideo from "./hooks/social_video.js"
 
 const ClosingVideoPreview = lazyClipHook("ClosingVideoPreview")
 
-export default { ClosingVideoPreview, CoverPicker, ClipReview, SocialCalendarZone, QueueSwipe, StudioPostFocus, SocialIdeas, SocialTicker, SocialThumbnail }
+export default { ClosingVideoPreview, CoverPicker, ClipReview, SocialCalendarZone, QueueSwipe, StudioPostFocus, SocialIdeas, SocialTicker, SocialThumbnail, SocialVideo }

@@ -50,7 +50,32 @@ defmodule Platform.Social.QueueFeed do
   editing goes through `Platform.Social.edit_draft/5`.
   """
   @spec drafts(term(), scope()) :: [Post.t()]
-  def drafts(user, scope), do: posts(user, scope, status: "draft")
+  def drafts(user, scope),
+    do: user |> posts(scope, status: "draft") |> Enum.reject(&final_rejection?/1)
+
+  @doc """
+  Drafts a human rejected, in `scope`, oldest first: the Queue's "Rejected"
+  group. They are separate from `drafts/2` so they never read as unfinished
+  work. Read only; the post keeps its stored state and the same edit and
+  resubmit paths.
+  """
+  @spec rejected(term(), scope()) :: [Post.t()]
+  def rejected(user, scope),
+    do: user |> posts(scope, status: "draft") |> Enum.filter(&final_rejection?/1)
+
+  @doc """
+  Whether `post` carries a human's final rejection (`Post.rejected?/1`: a
+  `draft` with `rejected_at` set). The ONE predicate the Queue uses to put a
+  draft in "Rejected" instead of "Drafts". Anything that sends a draft back
+  for changes without a final rejection must leave `rejected_at` unset (a
+  quality-stage send-back is not a rejection).
+  """
+  @spec final_rejection?(Post.t()) :: boolean()
+  def final_rejection?(%Post{} = post), do: Post.rejected?(post)
+
+  @doc "Legacy posts awaiting quality review, oldest first."
+  @spec quality_review(term(), scope()) :: [Post.t()]
+  def quality_review(user, scope), do: posts(user, scope, status: "quality_review")
 
   @doc """
   Approved or scheduled posts going out in the next #{@scheduled_days} days
@@ -100,6 +125,22 @@ defmodule Platform.Social.QueueFeed do
   @spec published_at(Post.t()) :: DateTime.t()
   def published_at(%Post{published_at: %DateTime{} = at}), do: at
   def published_at(%Post{updated_at: at}), do: at
+
+  @doc """
+  `%{post_id => clip title}` for the drafts that came from a clip. A title is
+  read only through `ClipReviewFeed.fetch_clip/3` for the draft's own visible
+  brand, so a clip of another org or brand is never named.
+  """
+  @spec clip_titles([Post.t()], %{Ecto.UUID.t() => Account.t()}, %{Ecto.UUID.t() => Profile.t()}) ::
+          %{Ecto.UUID.t() => String.t()}
+  def clip_titles(drafts, accounts, profiles) do
+    for %Post{clip_id: clip_id} = post when not is_nil(clip_id) <- drafts,
+        %Account{profile_id: profile_id} <- [accounts[post.account_id]],
+        %Profile{} = profile <- [profiles[profile_id]],
+        {:ok, clip} <- [ClipReviewFeed.fetch_clip(profile.org_id, profile.id, clip_id)],
+        into: %{},
+        do: {post.id, clip.title || "Untitled clip"}
+  end
 
   @doc """
   Rendered clips waiting for review in `scope` (`ClipReviewFeed.pending_count/2`,
