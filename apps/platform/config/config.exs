@@ -452,6 +452,19 @@ config :esbuild,
     cd: Path.expand("../assets", __DIR__)
   ]
 
+# The Voice tab's on-device half (task 01a20dc5 stage 3): the BurrowVoice
+# bridge and its capability seam, built SEPARATELY from js/app.js and fetched
+# by js/hooks/voice_tab.js only inside the iOS app with the plugin present.
+# Same reasoning as the islands above: without --splitting a dynamic import()
+# would be inlined into app.js. test/no_excalidraw_in_app_bundle_test.mjs
+# asserts on the built bytes.
+config :esbuild,
+  voice_native: [
+    args:
+      ~w(js/voice_native_island.js --bundle --target=es2022 --outdir=../priv/static/assets/js),
+    cd: Path.expand("../assets", __DIR__)
+  ]
+
 # Fourth entry point: the remote terminal (task 01a17b17 stage 3). xterm.js and
 # its fit addon, plus the WebCrypto session, built SEPARATELY from js/app.js and
 # fetched on demand by js/lib/load_terminal.js when the terminal page mounts.

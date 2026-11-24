@@ -59,6 +59,40 @@
 // `segment_id` is the LiveKit segment id (null when the caption has none); the
 // server posts each turn into the DM and dedupes a re-delivered segment id. The seam is deliberate,
 // so a browser test can inject captions without a worker.
+//
+// ## On the device (task 01a20dc5 stage 3)
+//
+// In the iOS app, on an iPhone whose `BurrowVoice` plugin can transcribe on
+// the device (`onDeviceVoiceCapability()`, lib/on_device_voice.js), mounted()
+// pushes `voice_native_ready` and sets `this._native`. From then on a press
+// NEVER calls getUserMedia, `voice_start` or a LiveKit Room:
+//
+//   * press -> `plugin.start()` (which stops any reply first). `{started:
+//     true}` pushes `voice_native_mic {state: "held"}` (and "toggled" for a
+//     tap); a refusal pushes `voice_native_mic {state: "in_use"}`,
+//     `voice_native_permission {mic: "denied"}` or `voice_mic_failed`.
+//   * `partial` events write the words still forming into
+//     #voice-native-pending with textContent (never innerHTML).
+//   * release -> `plugin.stop()` -> "Sending" -> `voice_native_turn {text,
+//     client_turn_id}` with a reply, under MIC_TIMEOUT_MS. ok: the pending
+//     words go (the server's confirmed turn takes their place). Not ok, a
+//     timeout or the socket down: "Not sent" with Retry, which resends the
+//     SAME client_turn_id (the server posts it once). No words: "No words
+//     heard" for NO_WORDS_MS, nothing pushed.
+//   * The pointer leaving the mic, or a vertical drag from it, while held
+//     cancels the turn (`plugin.cancel()`); nothing is sent.
+//   * A turn is capped at TURN_CAP_MS: "10 seconds left" at TURN_WARN_MS,
+//     then it sends as if released.
+//   * `voice_native_speak` -> `plugin.speak`; `voice_native_stop` -> cancel
+//     and `stopSpeaking`; the plugin's `speech` and `route` events are pushed
+//     back as `voice_native_speaking` and `voice_native_route`.
+//
+// Mic release (the core #289 rule): `_disconnect()` (destroyed(), a
+// `voice_disconnect`) also cancels the native turn and stops speaking, a
+// `start()` that resolves after `_connGen` moved is cancelled at once, and
+// the page going hidden (visibilitychange, pagehide) does the same. Nothing
+// here touches the meetings plugin. Transcript and reply text are never
+// logged.
 
 import { Room, RoomEvent, Track } from "livekit-client"
 import { paintBars } from "./lib/ptt_waveform"
@@ -71,37 +105,45 @@ import {
   seedInUse,
   unregisterRoom,
 } from "../lib/media_devices"
+import {
+  CAPTION_EVENT,
+  HOLD_MS,
+  MIC_TIMEOUT_MS,
+  NO_WORDS_MS,
+  TIMED_OUT,
+  TURN_CAP_MS,
+  TURN_WARN_MS,
+  localClock,
+  now,
+  withTimeout,
+} from "./voice_tab_shared"
 
-export const HOLD_MS = 280
-export const CAPTION_EVENT = "voice:caption"
-export const MIC_TIMEOUT_MS = 10000
-const TIMED_OUT = Symbol("timed out")
+export { CAPTION_EVENT, HOLD_MS, MIC_TIMEOUT_MS, NO_WORDS_MS, TURN_CAP_MS, TURN_WARN_MS }
+
+export const VOICE_NATIVE_ISLAND = "/assets/js/voice_native_island.js"
+
+// Loads the voice_native island (its script sets window.__burrowVoiceNative),
+// only inside the native app with the BurrowVoice plugin registered; the real
+// question (can this phone transcribe?) is onDeviceVoiceCapability() there.
+// Off the app it resolves null; any throw or a failed load is "not available".
+function loadVoiceNative() {
+  return new Promise((resolve, reject) => {
+    const cap = window.Capacitor
+    if (!(cap && cap.isNativePlatform && cap.isNativePlatform() === true && cap.Plugins && cap.Plugins.BurrowVoice))
+      return resolve(null)
+    const ready = () => window.__burrowVoiceNative && resolve(window.__burrowVoiceNative)
+    if (ready()) return
+    const script = document.createElement("script")
+    script.src = VOICE_NATIVE_ISLAND
+    script.onload = () => ready() || reject()
+    script.onerror = reject
+    document.head.appendChild(script)
+  })
+}
+
 const LEFT = Symbol("left during connect")
 const METER_MS = 90
 const SILENCE = 128
-
-function now() {
-  return typeof performance !== "undefined" && performance.now ? performance.now() : Date.now()
-}
-
-function localClock() {
-  try {
-    return new Date()
-      .toLocaleTimeString([], { hour: "numeric", minute: "2-digit" })
-      .replace(/\s+/gu, " ")
-  } catch (_e) {
-    return null
-  }
-}
-
-// Settles with the promise, or with TIMED_OUT after `ms`, whichever is first.
-function withTimeout(promise, ms) {
-  let timer
-  const timeout = new Promise((resolve) => {
-    timer = setTimeout(() => resolve(TIMED_OUT), ms)
-  })
-  return Promise.race([promise, timeout]).finally(() => clearTimeout(timer))
-}
 
 function stopTracks(stream) {
   if (stream && typeof stream.getTracks === "function") {
@@ -134,6 +176,7 @@ const VoiceTab = {
     this._connGen = 0
     this._meterTimer = null
     this._analyser = null
+    this._downAt = null
 
     this._onPointerDown = (e) => this._pointerDown(e)
     this._onPointerUp = (e) => this._pointerUp(e)
@@ -157,6 +200,7 @@ const VoiceTab = {
     })
 
     this._pinTranscript()
+    this._probe = this._probeNative()
   },
 
   destroyed() {
@@ -167,7 +211,9 @@ const VoiceTab = {
     this.el.removeEventListener("keyup", this._onKeyUp)
     document.removeEventListener(CAPTION_EVENT, this._onCaption)
     if (this._observer) this._observer.disconnect()
+    this._destroyed = true
     this._disconnect()
+    if (this._native) this._unlistenNative()
   },
 
   // ── state ─────────────────────────────────────────────────────────────
@@ -200,6 +246,7 @@ const VoiceTab = {
       return
     }
     this._pressAt = now()
+    this._downAt = { x: e.clientX, y: e.clientY }
     if (this.inTurn()) {
       // A press during a toggled turn: its release ends the turn.
       this._downInTurn = true
@@ -212,6 +259,7 @@ const VoiceTab = {
 
   _pointerUp(e) {
     const mic = micOf(e)
+    this._downAt = null
     if (!mic) return
     try {
       if (e.pointerId != null && typeof mic.releasePointerCapture === "function") {
@@ -233,9 +281,11 @@ const VoiceTab = {
 
   _pointerCancel(e) {
     if (!micOf(e)) return
+    this._downAt = null
     this._downInTurn = false
     this._toggled = false
-    this._end()
+    if (this._native) this._nativeCancel()
+    else this._end()
   },
 
   // ── keyboard (on #mic only) ───────────────────────────────────────────
@@ -529,6 +579,21 @@ const VoiceTab = {
     const audio = this.el.querySelector ? this.el.querySelector("#voice-audio") : null
     if (!audio) return
     audio.appendChild(track.attach())
+  },
+
+  // ── on the device (task 01a20dc5 stage 3): the voice_native island ────
+
+  // Only inside the iOS app with a BurrowVoice plugin is the island fetched;
+  // a browser, Android or an older app build never downloads it and keeps
+  // today's path. Any failure to load it is the same as "not available".
+  _probeNative() {
+    return loadVoiceNative()
+      .then((runtime) => {
+        if (!runtime || this._destroyed) return
+        Object.assign(this, runtime)
+        return this._probeOnDevice()
+      })
+      .catch(() => {})
   },
 
   // ── captions ──────────────────────────────────────────────────────────

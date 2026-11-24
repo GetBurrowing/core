@@ -85,7 +85,8 @@ defmodule PlatformWeb.SpaceTopics do
     :tasks_exec,
     :meeting,
     :files_browser,
-    :canvas_viewing
+    :canvas_viewing,
+    :voice
   ]
 
   # ── The second topic family: `space_agents:<id>` (task 01a0691d stage 3) ──
@@ -136,6 +137,12 @@ defmodule PlatformWeb.SpaceTopics do
   `:files_browser` holds displayed canvas/game invalidations and card presence.
   `:canvas_viewing` holds the connected fullscreen canvas lifecycle. Both share
   the shell pid and must release only their own subscription ownership.
+
+  `:voice` is `PlatformWeb.VoiceLive`'s on-device path (task 01a20dc5 stage
+  2): it holds the user<->agent DM so the agent's text reply reaches the
+  Voice tab, which speaks it. Held only while the on-device path is open, and
+  released on a partner change and on terminate, so the LiveKit path never
+  holds it.
   """
   @type owner ::
           :presence
@@ -145,6 +152,7 @@ defmodule PlatformWeb.SpaceTopics do
           | :meeting
           | :files_browser
           | :canvas_viewing
+          | :voice
 
   @typedoc """
   Closed set of surfaces permitted to hold a `space_agents:<id>` subscription.
