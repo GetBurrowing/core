@@ -38,6 +38,7 @@
 		194B12F0E50C53EE2FFA72D2 /* DonationPolicy.swift in Sources */ = {isa = PBXBuildFile; fileRef = F2CB880C6D4F67075F9EED68 /* DonationPolicy.swift */; };
 		19A3C80DCCEF7246668ECEF9 /* BurrowShortcuts.swift in Sources */ = {isa = PBXBuildFile; fileRef = 3E28F3CFC25B7856E87ACF6E /* BurrowShortcuts.swift */; };
 		1A1FCDB57FC95DFB58F1E0D9 /* MeetingSession.swift in Sources */ = {isa = PBXBuildFile; fileRef = FF52D5F82907F1E4DDEA6E85 /* MeetingSession.swift */; };
+		1A9A664C07AB3D55DDFD63B5 /* BurrowVoicePluginTests.swift in Sources */ = {isa = PBXBuildFile; fileRef = 5A223C84769936A42214CF86 /* BurrowVoicePluginTests.swift */; };
 		1CA998C627766237F2232BEB /* CapApp-SPM in Frameworks */ = {isa = PBXBuildFile; productRef = FD127B870EFB46EFAC91834E /* CapApp-SPM */; };
 		1CAF4CFF81848F9FC6BBEAA8 /* BurrowAPIClientTests.swift in Sources */ = {isa = PBXBuildFile; fileRef = EA815E3BEDBE2F7BC3127D78 /* BurrowAPIClientTests.swift */; };
 		1D29C7FC8AD7A1EA4D32EEBE /* IntentSupport.swift in Sources */ = {isa = PBXBuildFile; fileRef = AEA2B3BC253F91FAD530FA0A /* IntentSupport.swift */; };
@@ -58,6 +59,7 @@
 		26DF438390017B770692B510 /* MessagesDomainSystemTests.swift in Sources */ = {isa = PBXBuildFile; fileRef = DA67FF4273339C4D4D25F62F /* MessagesDomainSystemTests.swift */; };
 		26E51AC20D9FE4119F144870 /* public in Resources */ = {isa = PBXBuildFile; fileRef = 7E5BBB12596EE01767A6151A /* public */; };
 		2C8D7313F19E24C8DA15D617 /* InstallUnreadStore.swift in Sources */ = {isa = PBXBuildFile; fileRef = 1510D02E40E90C314AC0E673 /* InstallUnreadStore.swift */; };
+		2ECE93607259D3499F13D382 /* ReplySpeaker.swift in Sources */ = {isa = PBXBuildFile; fileRef = FEC44957C483DDE5854EA3E6 /* ReplySpeaker.swift */; };
 		2F49C1B6D44EDA758AA6506D /* AvatarNotificationDelivery.swift in Sources */ = {isa = PBXBuildFile; fileRef = 618BCA2EB96F819023727101 /* AvatarNotificationDelivery.swift */; };
 		2FC830F10025DBCED864D1B8 /* CommunicationNotification.swift in Sources */ = {isa = PBXBuildFile; fileRef = F43FE5292006537839BFC123 /* CommunicationNotification.swift */; };
 		30AA780AE48AF90960390DA8 /* DebugPersonalContext.swift in Sources */ = {isa = PBXBuildFile; fileRef = C814CAF236371C316B1D8201 /* DebugPersonalContext.swift */; };
@@ -78,6 +80,7 @@
 		3DF6FC35FB9D33D19022D9AB /* IntentSnippets.swift in Sources */ = {isa = PBXBuildFile; fileRef = 32798D99CA9F9644F3696A57 /* IntentSnippets.swift */; };
 		3DF90257ED051F8697141699 /* MeetingAPI.swift in Sources */ = {isa = PBXBuildFile; fileRef = DE9308F39A982153402CF2CC /* MeetingAPI.swift */; };
 		3E41454B803EF5CE69F0C518 /* BackgroundUploader.swift in Sources */ = {isa = PBXBuildFile; fileRef = A996D53743DDB9A1F8129771 /* BackgroundUploader.swift */; };
+		3EB2CCF2F2FFDCD428486A52 /* OnDeviceTranscriber.swift in Sources */ = {isa = PBXBuildFile; fileRef = E65E6C40EF58532EF91E0E90 /* OnDeviceTranscriber.swift */; };
 		3EDF9E8869059EFA42347341 /* IntentSourceScanTests.swift in Sources */ = {isa = PBXBuildFile; fileRef = A9DC08ECFA84095D28184D7E /* IntentSourceScanTests.swift */; };
 		3F4E1D034E498577194F5C97 /* CountsCache.swift in Sources */ = {isa = PBXBuildFile; fileRef = 9D27347C121D5A67129627D1 /* CountsCache.swift */; };
 		3FB3C8C0634A765EE81D042E /* Assets.xcassets in Resources */ = {isa = PBXBuildFile; fileRef = 76989E05CECAD7B8B3C424A7 /* Assets.xcassets */; };
@@ -139,6 +142,7 @@
 		7BB531099707DB4CF0FCC4F1 /* Entities.swift in Sources */ = {isa = PBXBuildFile; fileRef = 0FD909F861CBD9239A49DB52 /* Entities.swift */; };
 		7BBF2B7DE3F3FD53A2FA29AE /* TaskReminderTrial.swift in Sources */ = {isa = PBXBuildFile; fileRef = 9CAD421181524C41F26D5056 /* TaskReminderTrial.swift */; };
 		7D233016C71DBB15B8D18CFD /* IntentActions.swift in Sources */ = {isa = PBXBuildFile; fileRef = 50E3C6960995294AC8D0D25F /* IntentActions.swift */; };
+		7DA31A31867F911F4F76145F /* BurrowVoicePlugin.swift in Sources */ = {isa = PBXBuildFile; fileRef = 549738BBABD458F3A8D4823A /* BurrowVoicePlugin.swift */; };
 		7DA97E079D00BCA359B1675F /* LargeUpload.swift in Sources */ = {isa = PBXBuildFile; fileRef = 1B82BD29922E39E43FDDB8AA /* LargeUpload.swift */; };
 		7E3065BDEF8AF61D3DD306B7 /* VoIPHandlingTests.swift in Sources */ = {isa = PBXBuildFile; fileRef = 8238860C98E6B71B908E7B98 /* VoIPHandlingTests.swift */; };
 		7E7081A3201BC84F210CAC32 /* BurrowAPIClient.swift in Sources */ = {isa = PBXBuildFile; fileRef = 093FAFBFF4FD069367820CB6 /* BurrowAPIClient.swift */; };
@@ -261,6 +265,7 @@
 		DFE48C6B0ACC825A009AECC4 /* DebugPushKeySeam.swift in Sources */ = {isa = PBXBuildFile; fileRef = 62AAE05CE5E511E314C55BA7 /* DebugPushKeySeam.swift */; };
 		E06A3A001D6B5BA9967414CC /* PKCETests.swift in Sources */ = {isa = PBXBuildFile; fileRef = E146E1C002664F63C25DB344 /* PKCETests.swift */; };
 		E148CAEBE85295927118EFE4 /* PrivacyUsageDescriptionTests.swift in Sources */ = {isa = PBXBuildFile; fileRef = 886FF05F9CF153F76DC13237 /* PrivacyUsageDescriptionTests.swift */; };
+		E1BCDAFC7EFCB97EA205555C /* BurrowVoiceContractTests.swift in Sources */ = {isa = PBXBuildFile; fileRef = 545206A9AA012E33A1746CDE /* BurrowVoiceContractTests.swift */; };
 		E34A91D774083A754D0871D2 /* InstallStoreTests.swift in Sources */ = {isa = PBXBuildFile; fileRef = 06E3B6079D4C49F493B272A2 /* InstallStoreTests.swift */; };
 		E49B7615178FD174A1D68FC8 /* WebLoadTrace.swift in Sources */ = {isa = PBXBuildFile; fileRef = F0FC73A7579DE895A5E44986 /* WebLoadTrace.swift */; };
 		E519972A9641E5EE21957D64 /* PushSeal.swift in Sources */ = {isa = PBXBuildFile; fileRef = BAF90B5FD6EA88A0B9F3A8CC /* PushSeal.swift */; };
@@ -293,6 +298,7 @@
 		F8211A6039D9991C73204E10 /* CallController.swift in Sources */ = {isa = PBXBuildFile; fileRef = E1A2D68E8DFAEDB9B459BFA3 /* CallController.swift */; };
 		F877863E202DECB42ADDDF7C /* SlabState.swift in Sources */ = {isa = PBXBuildFile; fileRef = FCEC8A0CD2D3DB02BB85718E /* SlabState.swift */; };
 		F94D63D4DF140526381BF998 /* Theme.swift in Sources */ = {isa = PBXBuildFile; fileRef = 48421D60D2C81BD6F37E64D2 /* Theme.swift */; };
+		FB0BF19DE22C9A0EE7D79DB7 /* VoiceAudioSession.swift in Sources */ = {isa = PBXBuildFile; fileRef = 1FAE8925EE4B4D296E4E3CFB /* VoiceAudioSession.swift */; };
 		FB5EE48EC224C03107858CDD /* InCallModelTests.swift in Sources */ = {isa = PBXBuildFile; fileRef = 6A754CB8A1AEAAA985633885 /* InCallModelTests.swift */; };
 		FB779E09832D779F881D7769 /* IntentCopy.swift in Sources */ = {isa = PBXBuildFile; fileRef = 061669E0BB04D24A1853F001 /* IntentCopy.swift */; };
 		FBACA29AB5F22CCA7EB41071 /* ShortcutParameterRefresh.swift in Sources */ = {isa = PBXBuildFile; fileRef = EE185BEDD232F08332626453 /* ShortcutParameterRefresh.swift */; };
@@ -400,6 +406,7 @@
 		1BCA4F7949BCEADF89CA73DD /* TestSupport.swift */ = {isa = PBXFileReference; lastKnownFileType = sourcecode.swift; path = TestSupport.swift; sourceTree = "<group>"; };
 		1C4AA74020F1E1EC630A56D4 /* WidgetApprovalTests.swift */ = {isa = PBXFileReference; lastKnownFileType = sourcecode.swift; path = WidgetApprovalTests.swift; sourceTree = "<group>"; };
 		1E5D30A69D079570C9396C13 /* BurrowWidgets.swift */ = {isa = PBXFileReference; lastKnownFileType = sourcecode.swift; path = BurrowWidgets.swift; sourceTree = "<group>"; };
+		1FAE8925EE4B4D296E4E3CFB /* VoiceAudioSession.swift */ = {isa = PBXFileReference; lastKnownFileType = sourcecode.swift; path = VoiceAudioSession.swift; sourceTree = "<group>"; };
 		2D522D8BBB8EE946DF7386D2 /* BurrowMeetingsPluginTests.swift */ = {isa = PBXFileReference; lastKnownFileType = sourcecode.swift; path = BurrowMeetingsPluginTests.swift; sourceTree = "<group>"; };
 		3105A037DC16B7EB85FA7C98 /* IntentAppHooks.swift */ = {isa = PBXFileReference; lastKnownFileType = sourcecode.swift; path = IntentAppHooks.swift; sourceTree = "<group>"; };
 		32798D99CA9F9644F3696A57 /* IntentSnippets.swift */ = {isa = PBXFileReference; lastKnownFileType = sourcecode.swift; path = IntentSnippets.swift; sourceTree = "<group>"; };
@@ -422,6 +429,9 @@
 		50E3C6960995294AC8D0D25F /* IntentActions.swift */ = {isa = PBXFileReference; lastKnownFileType = sourcecode.swift; path = IntentActions.swift; sourceTree = "<group>"; };
 		53A302BFBC4A79FDF762850D /* InCallModel.swift */ = {isa = PBXFileReference; lastKnownFileType = sourcecode.swift; path = InCallModel.swift; sourceTree = "<group>"; };
 		541750DF0C17D71DDC570A00 /* MeetingSourceScanTests.swift */ = {isa = PBXFileReference; lastKnownFileType = sourcecode.swift; path = MeetingSourceScanTests.swift; sourceTree = "<group>"; };
+		545206A9AA012E33A1746CDE /* BurrowVoiceContractTests.swift */ = {isa = PBXFileReference; lastKnownFileType = sourcecode.swift; path = BurrowVoiceContractTests.swift; sourceTree = "<group>"; };
+		549738BBABD458F3A8D4823A /* BurrowVoicePlugin.swift */ = {isa = PBXFileReference; lastKnownFileType = sourcecode.swift; path = BurrowVoicePlugin.swift; sourceTree = "<group>"; };
+		5A223C84769936A42214CF86 /* BurrowVoicePluginTests.swift */ = {isa = PBXFileReference; lastKnownFileType = sourcecode.swift; path = BurrowVoicePluginTests.swift; sourceTree = "<group>"; };
 		5A2F52023B4B74556B971305 /* RingBanner.swift */ = {isa = PBXFileReference; lastKnownFileType = sourcecode.swift; path = RingBanner.swift; sourceTree = "<group>"; };
 		5AB72D587D4F0F2BF4D98D9D /* DeepLinkTests.swift */ = {isa = PBXFileReference; lastKnownFileType = sourcecode.swift; path = DeepLinkTests.swift; sourceTree = "<group>"; };
 		5C18B7DC97ECB9A9F3B6291D /* RecentCalls.swift */ = {isa = PBXFileReference; lastKnownFileType = sourcecode.swift; path = RecentCalls.swift; sourceTree = "<group>"; };
@@ -504,6 +514,7 @@
 		E26507FF9131EAF4510A3148 /* WebMediaCaptureTraceTests.swift */ = {isa = PBXFileReference; lastKnownFileType = sourcecode.swift; path = WebMediaCaptureTraceTests.swift; sourceTree = "<group>"; };
 		E2ED0BC0639B56B26AFCBE4D /* CallAndMeetingTests.swift */ = {isa = PBXFileReference; lastKnownFileType = sourcecode.swift; path = CallAndMeetingTests.swift; sourceTree = "<group>"; };
 		E403DEF8CD6D9A80946DB96B /* InstallSessionTests.swift */ = {isa = PBXFileReference; lastKnownFileType = sourcecode.swift; path = InstallSessionTests.swift; sourceTree = "<group>"; };
+		E65E6C40EF58532EF91E0E90 /* OnDeviceTranscriber.swift */ = {isa = PBXFileReference; lastKnownFileType = sourcecode.swift; path = OnDeviceTranscriber.swift; sourceTree = "<group>"; };
 		EA815E3BEDBE2F7BC3127D78 /* BurrowAPIClientTests.swift */ = {isa = PBXFileReference; lastKnownFileType = sourcecode.swift; path = BurrowAPIClientTests.swift; sourceTree = "<group>"; };
 		ECDEC69FD14BE511398815DF /* LargeUploadTests.swift */ = {isa = PBXFileReference; lastKnownFileType = sourcecode.swift; path = LargeUploadTests.swift; sourceTree = "<group>"; };
 		ED2016878D44EAA9692D059F /* SceneDelegate.swift */ = {isa = PBXFileReference; lastKnownFileType = sourcecode.swift; path = SceneDelegate.swift; sourceTree = "<group>"; };
@@ -524,6 +535,7 @@
 		FC25CB5128DF42592877E61F /* CountsProvider.swift */ = {isa = PBXFileReference; lastKnownFileType = sourcecode.swift; path = CountsProvider.swift; sourceTree = "<group>"; };
 		FCEC8A0CD2D3DB02BB85718E /* SlabState.swift */ = {isa = PBXFileReference; lastKnownFileType = sourcecode.swift; path = SlabState.swift; sourceTree = "<group>"; };
 		FE3041ACCDD071543A1F8A76 /* PushKeyStore.swift */ = {isa = PBXFileReference; lastKnownFileType = sourcecode.swift; path = PushKeyStore.swift; sourceTree = "<group>"; };
+		FEC44957C483DDE5854EA3E6 /* ReplySpeaker.swift */ = {isa = PBXFileReference; lastKnownFileType = sourcecode.swift; path = ReplySpeaker.swift; sourceTree = "<group>"; };
 		FF52D5F82907F1E4DDEA6E85 /* MeetingSession.swift */ = {isa = PBXFileReference; lastKnownFileType = sourcecode.swift; path = MeetingSession.swift; sourceTree = "<group>"; };
 /* End PBXFileReference section */
 
@@ -571,6 +583,8 @@
 				686656E2CA99067F1845E714 /* AvatarTests.swift */,
 				EA815E3BEDBE2F7BC3127D78 /* BurrowAPIClientTests.swift */,
 				2D522D8BBB8EE946DF7386D2 /* BurrowMeetingsPluginTests.swift */,
+				545206A9AA012E33A1746CDE /* BurrowVoiceContractTests.swift */,
+				5A223C84769936A42214CF86 /* BurrowVoicePluginTests.swift */,
 				E2ED0BC0639B56B26AFCBE4D /* CallAndMeetingTests.swift */,
 				D8B65AA253F5FA2E5F97CB45 /* CallStateReducerTests.swift */,
 				37544544D5D59A37BECF16A3 /* CompanionIdentityTests.swift */,
@@ -664,6 +678,7 @@
 				23F8D68E28D07D16EB72E4AA /* LaunchScreen.storyboard */,
 				A095CA38C96DBED59DCB37E7 /* Meetings */,
 				77DC4614F7D5E4C3289AA3F8 /* Plugins */,
+				BAF45EB7B77FB3F578A8354E /* Voice */,
 			);
 			path = App;
 			sourceTree = "<group>";
@@ -701,6 +716,7 @@
 			children = (
 				36E9CECA9F521A8C8911D665 /* BurrowMeetingsPlugin.swift */,
 				11304C4A8D70FFE733DA4E06 /* BurrowNativePlugin.swift */,
+				549738BBABD458F3A8D4823A /* BurrowVoicePlugin.swift */,
 			);
 			path = Plugins;
 			sourceTree = "<group>";
@@ -754,6 +770,16 @@
 				6B04ADF7B81E144C4949AE51 /* CapApp-SPM */,
 			);
 			name = Packages;
+			sourceTree = "<group>";
+		};
+		BAF45EB7B77FB3F578A8354E /* Voice */ = {
+			isa = PBXGroup;
+			children = (
+				E65E6C40EF58532EF91E0E90 /* OnDeviceTranscriber.swift */,
+				FEC44957C483DDE5854EA3E6 /* ReplySpeaker.swift */,
+				1FAE8925EE4B4D296E4E3CFB /* VoiceAudioSession.swift */,
+			);
+			path = Voice;
 			sourceTree = "<group>";
 		};
 		BDD1182E50DC622819F25364 /* Frameworks */ = {
@@ -1427,6 +1453,7 @@
 				1E9ECFB3D247396457779FEB /* BurrowMeetingsPlugin.swift in Sources */,
 				0CCBBCE01E05A431CF48728C /* BurrowNativePlugin.swift in Sources */,
 				19A3C80DCCEF7246668ECEF9 /* BurrowShortcuts.swift in Sources */,
+				7DA31A31867F911F4F76145F /* BurrowVoicePlugin.swift in Sources */,
 				F8211A6039D9991C73204E10 /* CallController.swift in Sources */,
 				A1323563688D4C9F271926D1 /* CallState.swift in Sources */,
 				4158976107878748A217FD70 /* ChatGeometryProbe.swift in Sources */,
@@ -1462,12 +1489,14 @@
 				707C8B72E67C85DB94D99BF2 /* MessagingIntents.swift in Sources */,
 				BE77ADAF5562EBAD2C628AED /* NativeTabBar.swift in Sources */,
 				1263CD52F9690E5CAA14A00F /* NavigationPolicy.swift in Sources */,
+				3EB2CCF2F2FFDCD428486A52 /* OnDeviceTranscriber.swift in Sources */,
 				F37A06BC602C57A38F2821AD /* PersonResolver.swift in Sources */,
 				731ED95C0F636C7947E4DB4C /* PersonalIndex.swift in Sources */,
 				122F95274D5C367FD4177E9C /* PushContentPreparer.swift in Sources */,
 				ECB092752AB315536FF9CE1D /* PushKeyStore.swift in Sources */,
 				E9DDCC35D92EB83A7FC4B25D /* PushSeal.swift in Sources */,
 				14674C0B74C66D26C36A8714 /* RecentCalls.swift in Sources */,
+				2ECE93607259D3499F13D382 /* ReplySpeaker.swift in Sources */,
 				05F82264DE2C47C780F86D98 /* RingBanner.swift in Sources */,
 				86ACBC15F996EA87643DCCF8 /* RingBannerView.swift in Sources */,
 				5BC8E5BE4F396FCF39865240 /* RingCenter.swift in Sources */,
@@ -1482,6 +1511,7 @@
 				1596045A38506257AE1037AB /* Theme.swift in Sources */,
 				943A7553FC3C38D9F9B9CE8A /* UnreadReconciler.swift in Sources */,
 				DB85697BEEEACA5831087520 /* VoIPRegistrar.swift in Sources */,
+				FB0BF19DE22C9A0EE7D79DB7 /* VoiceAudioSession.swift in Sources */,
 				89F75410C256DDEB74D32277 /* WaitingSummary.swift in Sources */,
 				5EC8BDB64E56CE383869D28A /* WebLoadRecovery.swift in Sources */,
 				E49B7615178FD174A1D68FC8 /* WebLoadTrace.swift in Sources */,
@@ -1499,6 +1529,8 @@
 				997351360346835A850A0EDB /* AvatarTests.swift in Sources */,
 				1CAF4CFF81848F9FC6BBEAA8 /* BurrowAPIClientTests.swift in Sources */,
 				BC88F74B23C798E493F973E9 /* BurrowMeetingsPluginTests.swift in Sources */,
+				E1BCDAFC7EFCB97EA205555C /* BurrowVoiceContractTests.swift in Sources */,
+				1A9A664C07AB3D55DDFD63B5 /* BurrowVoicePluginTests.swift in Sources */,
 				D7E19C30BC549C9294ABC389 /* CallAndMeetingTests.swift in Sources */,
 				10B73BA6108F3CEBF5D945D8 /* CallStateReducerTests.swift in Sources */,
 				D0874852BF63924FD5E1967B /* CompanionIdentityTests.swift in Sources */,

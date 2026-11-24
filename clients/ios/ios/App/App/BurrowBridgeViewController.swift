@@ -20,6 +20,7 @@ final class BurrowBridgeViewController: CAPBridgeViewController {
     private let store = InstallStore.shared
     private let plugin = BurrowNativePlugin()
     private let meetingsPlugin = BurrowMeetingsPlugin()
+    private let voicePlugin = BurrowVoicePlugin()
     private var callScreen: UIViewController?
     private var callObservation: AnyCancellable?
     private var activeObservation: NSObjectProtocol?
@@ -127,6 +128,8 @@ final class BurrowBridgeViewController: CAPBridgeViewController {
         // Native meetings (task 01a10db7 stage 3), beside `SuiteNative`.
         meetingsPlugin.shell = self
         bridge?.registerPluginInstance(meetingsPlugin)
+        // On-device Voice (task 01a20dc5 stage 1), beside `SuiteMeetings`.
+        bridge?.registerPluginInstance(voicePlugin)
         // CapacitorBridge.init makes its own CAPNotificationRouter the
         // notification delegate unless `ios.handleApplicationNotifications`
         // is false. That config line is the first guard; this is the second,
