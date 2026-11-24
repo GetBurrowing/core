@@ -64,7 +64,7 @@ describe("VoiceContext", () => {
     expect(pushed).toEqual([])
   })
 
-  // The bug Ryan hit on the device: a reconnect mounts a fresh VoiceLive on
+  // The device report: a reconnect mounts a fresh VoiceLive on
   // Burrow, and LiveView calls reconnected(), not mounted(), on the hook.
   it("pushes them again on reconnect, so the server puts the partner back", () => {
     const { hook, pushed, handlers } = mountHook()
