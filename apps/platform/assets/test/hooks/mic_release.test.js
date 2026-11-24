@@ -16,7 +16,9 @@ import { describe, it, expect, beforeEach, afterEach, vi } from "vitest"
  *   * Room.disconnect() unpublishes every local track and stops it
  *     (`stopLocalTrackOnUnpublish` defaults to true).
  *
- * Cases that pass on main are regression pins.
+ * The voice tab cases for idle between presses and for a leave that lands
+ * while the room is still connecting failed on main 2e67fa9e (stage 1); the
+ * rest were already regression pins there.
  */
 
 // ── fake capture ─────────────────────────────────────────────────────────
@@ -274,6 +276,93 @@ describe("(c) voice_tab.js", () => {
     t.handlers.voice_disconnect()
     await settleMany()
     expect(published.readyState).toBe("ended")
+  })
+
+  it("between presses: the mic track is ended once a release has muted it", async () => {
+    const t = mountVoice()
+    t.down(0)
+    await settleMany()
+    t.up(1_000)
+    await settleMany()
+    const pub = lk.rooms[0].pub
+    expect(pub.isMuted).toBe(true)
+    expect(pub.track.mediaStreamTrack.readyState).toBe("ended")
+    expect(liveTracks()).toEqual([])
+  })
+
+  it("the next press re-acquires a live track and is still a turn", async () => {
+    const t = mountVoice()
+    t.down(0)
+    await settleMany()
+    t.up(1_000)
+    await settleMany()
+    t.down(2_000)
+    await settleMany()
+    expect(t.pushed.filter((e) => e === "voice_press")).toHaveLength(2)
+    expect(lk.rooms[0].pub.track.mediaStreamTrack.readyState).toBe("live")
+    t.up(3_000)
+    await settleMany()
+    expect(liveTracks()).toEqual([])
+  })
+
+  it("leaving (destroyed) while room.connect is in flight never leaves a live mic", async () => {
+    lk.gate = { connect: deferred() }
+    const t = mountVoice()
+    t.down(0)
+    await settleMany()
+    expect(lk.rooms).toHaveLength(1)
+    t.hook.destroyed()
+    lk.gate.connect.resolve()
+    await settleMany(12)
+    // Only the permission probe was ever captured: a room that connects
+    // after the leave never opens the mic at all.
+    expect(captured.tracks).toHaveLength(1)
+    expect(liveTracks()).toEqual([])
+    expect(lk.rooms[0].state).toBe("disconnected")
+    expect(t.hook._room).toBeNull()
+  })
+
+  it("leaving (destroyed) while setMicrophoneEnabled is in flight never leaves a live mic", async () => {
+    lk.gate = { mic: deferred() }
+    const t = mountVoice()
+    t.down(0)
+    await settleMany()
+    t.hook.destroyed()
+    lk.gate.mic.resolve()
+    await settleMany(12)
+    expect(captured.tracks.length).toBeGreaterThan(1)
+    expect(liveTracks()).toEqual([])
+    expect(lk.rooms[0].state).toBe("disconnected")
+    expect(t.hook._room).toBeNull()
+  })
+
+  it("a server voice_disconnect while room.connect is in flight never leaves a live mic", async () => {
+    lk.gate = { connect: deferred() }
+    const t = mountVoice()
+    t.down(0)
+    await settleMany()
+    t.handlers.voice_disconnect()
+    lk.gate.connect.resolve()
+    await settleMany(12)
+    expect(liveTracks()).toEqual([])
+    expect(t.hook._room).toBeNull()
+    expect(t.pushed).not.toContain("voice_connect_failed")
+  })
+
+  it("leaving before the voice_start reply builds no room at all", async () => {
+    let reply
+    const t = mountVoice()
+    t.hook.pushEvent = (event, _p, cb) => {
+      t.pushed.push(event)
+      if (event === "voice_start") reply = cb
+    }
+    t.down(0)
+    await settleMany()
+    t.hook.destroyed()
+    reply({ ok: true, token: "tok", url: "ws://lk.test", room: "r" })
+    await settleMany(12)
+    expect(lk.rooms).toHaveLength(0)
+    expect(liveTracks()).toEqual([])
   })
 
   it("LiveKit dropping the room ends the track and the next press starts a fresh room", async () => {

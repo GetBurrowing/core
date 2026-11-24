@@ -76,6 +76,7 @@ export const HOLD_MS = 280
 export const CAPTION_EVENT = "voice:caption"
 export const MIC_TIMEOUT_MS = 10000
 const TIMED_OUT = Symbol("timed out")
+const LEFT = Symbol("left during connect")
 const METER_MS = 90
 const SILENCE = 128
 
@@ -128,6 +129,9 @@ const VoiceTab = {
     this._permission = null
     this._room = null
     this._pub = null
+    // Bumped by every _disconnect(): a _connect still awaiting the server or
+    // LiveKit when the user leaves sees it changed and releases its room.
+    this._connGen = 0
     this._meterTimer = null
     this._analyser = null
 
@@ -408,16 +412,31 @@ const VoiceTab = {
   },
 
   // true | false | "reply_timeout"
+  //
+  // A leave (destroyed() or voice_disconnect, both through _disconnect)
+  // can land while this awaits voice_start, room.connect or
+  // setMicrophoneEnabled. `_disconnect` then finds no room to release, so
+  // this checks `_connGen` after each await and, once superseded, disconnects
+  // the room it built (which stops the mic track) instead of adopting it.
   async _connect() {
+    const gen = this._connGen
+    const left = () => gen !== this._connGen
     const reply = await this._start()
+    if (left()) return false
     if (reply === TIMED_OUT) return "reply_timeout"
     if (!reply || reply.ok !== true || !reply.token || !reply.url) return false
 
     // No camera here: the Voice tab never publishes video.
+    //
+    // stopMicTrackOnMute: a release mutes, and without it livekit-client
+    // only disables the MediaStreamTrack, so the capture (and the browser's
+    // mic-in-use indicator) stays on between turns. With it the track is
+    // stopped on mute and re-acquired by the next unmute.
     const room = new Room({
       adaptiveStream: true,
       dynacast: true,
       ...roomDefaults({ video: false }),
+      publishDefaults: { stopMicTrackOnMute: true },
     })
     room.on(RoomEvent.TranscriptionReceived, (segments, participant) =>
       this._transcription(segments, participant),
@@ -440,7 +459,9 @@ const VoiceTab = {
 
     try {
       await room.connect(reply.url, reply.token)
+      if (left()) throw LEFT
       await room.localParticipant.setMicrophoneEnabled(true)
+      if (left()) throw LEFT
       const pub = room.localParticipant.getTrackPublication(Track.Source.Microphone)
       if (!pub) throw new Error("no microphone publication")
       this._room = room
@@ -451,12 +472,13 @@ const VoiceTab = {
       await seedInUse(room, { kinds: ["audioinput", "audiooutput"] }).catch(() => {})
       await this._mute()
       return true
-    } catch (_err) {
+    } catch (err) {
       try {
         await room.disconnect()
       } catch (_e) {
         // already gone
       }
+      if (err === LEFT) return false
       this.pushEvent("voice_connect_failed", {})
       return false
     }
@@ -485,6 +507,7 @@ const VoiceTab = {
   },
 
   _disconnect() {
+    this._connGen++
     this._abandon()
     const room = this._room
     this._room = null
