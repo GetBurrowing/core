@@ -97,7 +97,11 @@ defmodule PlatformWeb.VoiceLive do
   ## State
 
     * `:partner`: `%{agent, slot, reachable?, description}` or nil. On mount it
-      is `VoiceSession.default_partner/1` (Burrow); with no Burrow visible the
+      is `VoiceSession.default_partner/1` (Burrow) until the device says
+      otherwise: the last pick is remembered per user on the device by the
+      `VoiceContext` hook and pushed back on mount AND on every reconnect (a
+      reconnect mounts this LiveView afresh, which used to drop the user back
+      on Burrow mid-conversation). With no Burrow visible the
       pill reads "No voice partner" and the mic is disabled. A partner that
       is not `voice_reachable?` keeps the pill but disables the mic, and the
       listen line reads "{partner} can't talk right now.".
@@ -105,7 +109,8 @@ defmodule PlatformWeb.VoiceLive do
       channel the viewer participates in (projects and tasks are out of
       scope). The last pick is remembered on the device by the
       `VoiceContext` hook (`assets/js/hooks/voice_context.js`), which pushes
-      it back once on connect.
+      it back on mount and on reconnect (`voice_restore`, keys from
+      `data-keys`; `voice_saved` stores a pick or clears a stale id).
     * The transcript is the `:turns` STREAM. Picking a partner resets it and
       inserts that partner's greeting; picking a context appends a day note.
 
@@ -157,12 +162,17 @@ defmodule PlatformWeb.VoiceLive do
   alias PlatformWeb.SpaceTopics
 
   @default_slug "meeting-assistant"
+  # VoiceContext's device keys (ClientState namespace "voice").
+  @ctx_key "burrow-voice-ctx"
+  @partner_key "burrow-voice-partner"
   @burrow_greeting "Morning. Anything on your mind? Hold the mic and just talk — I'll keep the thread."
   @back_greeting "Back with you."
   @too_short_ms 400
   @answer_timeout_ms 20_000
   # A text agent is slower than the voice worker.
   @native_answer_timeout_ms 60_000
+  @max_voices 40
+  @voice_qualities ~w(premium enhanced default)
   @native_reasons ~w(os_too_old unavailable locale_unsupported speech_permission_denied assets_missing)
 
   @impl true
@@ -186,6 +196,8 @@ defmodule PlatformWeb.VoiceLive do
       |> assign(:spaces, spaces)
       |> assign(:context, nil)
       |> assign(:context_restored?, false)
+      |> assign(:partner_restored?, false)
+      |> assign(:ctx_key, @ctx_key)
       |> assign(:sheet, nil)
       |> assign(:query, "")
       |> assign(:ctx_form, to_form(%{"q" => ""}, as: :ctx))
@@ -209,6 +221,9 @@ defmodule PlatformWeb.VoiceLive do
       |> assign(:native_turn_ids, %{})
       |> assign(:native_replies, %{})
       |> assign(:native_announce, nil)
+      |> assign(:native_voices, [])
+      |> assign(:native_voice, nil)
+      |> assign(:native_voice_missing?, false)
       |> SpaceTopics.ensure_holders()
       |> stream(:turns, [])
 
@@ -223,7 +238,7 @@ defmodule PlatformWeb.VoiceLive do
         id="voice-screen"
         class="clears-tab-bar flex h-full min-h-0 flex-col bg-base-200"
         phx-hook="VoiceContext"
-        data-context-id={@context && @context.id}
+        data-keys={"#{@ctx_key} #{partner_key(@current_user_record)}"}
       >
         <header class="flex h-14 flex-none items-center justify-between gap-2 px-4">
           <div id="partner-anchor" class="relative">
@@ -275,6 +290,9 @@ defmodule PlatformWeb.VoiceLive do
           mic_permission={@mic_permission}
           caption={@on_device_caption}
           announce={@native_announce}
+          voices={@native_voices}
+          voice={@native_voice}
+          voice_missing?={@native_voice_missing?}
         />
       </div>
     </Layouts.app>
@@ -301,22 +319,12 @@ defmodule PlatformWeb.VoiceLive do
         {:noreply, assign(socket, :sheet, nil)}
 
       partner ->
-        greeting =
-          if partner.agent.slug == @default_slug,
-            do: @back_greeting,
-            else: other_greeting(partner)
-
-        socket =
-          socket
-          |> end_session()
-          |> stop_native()
-          |> drop_native()
-          |> assign(:partner, partner)
-          |> assign(:sheet, nil)
-          |> stream(:turns, [], reset: true)
-          |> reopen_native()
-
-        {:noreply, maybe_greet(socket, partner, greeting)}
+        {:noreply,
+         socket
+         |> end_session()
+         |> stop_native()
+         |> switch_partner(partner)
+         |> push_event("voice_saved", %{key: partner_key(socket), id: partner.agent.id})}
     end
   end
 
@@ -336,7 +344,7 @@ defmodule PlatformWeb.VoiceLive do
      |> assign(:context, context)
      |> assign(:sheet, nil)
      |> insert_turn(%{kind: :day, text: note})
-     |> push_event("voice_ctx_saved", %{id: context && context.id})}
+     |> push_event("voice_saved", %{key: @ctx_key, id: context && context.id})}
   end
 
   def handle_event("ctx_search", %{"ctx" => %{"q" => q}}, socket) do
@@ -356,17 +364,17 @@ defmodule PlatformWeb.VoiceLive do
 
   # The device's remembered context, pushed once by the VoiceContext hook. A
   # stale id (left the space, archived) is cleared on the device, silently.
-  def handle_event("voice_restore_context", %{"id" => id}, socket) do
-    if socket.assigns.context_restored? do
-      {:noreply, socket}
-    else
-      socket = assign(socket, :context_restored?, true)
+  def handle_event("voice_restore_context", %{"id" => id}, socket),
+    do: {:noreply, restore_context(socket, id)}
 
-      case find_context(socket.assigns.spaces, id) do
-        nil -> {:noreply, push_event(socket, "voice_ctx_saved", %{id: nil})}
-        context -> {:noreply, assign(socket, :context, context)}
-      end
-    end
+  # What the device remembers (VoiceContext, on mount and on reconnect): the
+  # last partner for this user, then the last context. Each is applied once
+  # per mount; a stale id is cleared on the device, silently.
+  def handle_event("voice_restore", params, socket) when is_map(params) do
+    {:noreply,
+     socket
+     |> restore_partner(params[partner_key(socket)])
+     |> restore_context(params[@ctx_key])}
   end
 
   # ── talking (the VoiceTab hook) ───────────────────────────────────────
@@ -510,6 +518,9 @@ defmodule PlatformWeb.VoiceLive do
      |> assign(:native_mic, :ready)
      |> assign(:mic_permission, nil)
      |> assign(:native_test_build?, false)
+     |> assign(:native_voices, [])
+     |> assign(:native_voice, nil)
+     |> assign(:native_voice_missing?, false)
      |> assign_caption()}
   end
 
@@ -573,6 +584,45 @@ defmodule PlatformWeb.VoiceLive do
   end
 
   def handle_event("voice_native_route", _params, socket), do: {:noreply, socket}
+
+  # The phone's on-device reply voices (best first) and the one in use; a
+  # remembered voice that is gone reads `missing` (the default reads instead).
+  def handle_event(
+        "voice_native_voices",
+        %{"voices" => voices} = params,
+        %{assigns: %{on_device?: true}} = socket
+      )
+      when is_list(voices) do
+    voices = voices |> Enum.flat_map(&voice_entry/1) |> Enum.take(@max_voices)
+    selected = params["selected"]
+    voice = if Enum.any?(voices, &(&1.id == selected)), do: selected, else: first_id(voices)
+
+    {:noreply,
+     socket
+     |> assign(:native_voices, voices)
+     |> assign(:native_voice, voice)
+     |> assign(:native_voice_missing?, params["missing"] == true)}
+  end
+
+  def handle_event("voice_native_voices", _params, socket), do: {:noreply, socket}
+
+  def handle_event(
+        "voice_native_pick_voice",
+        %{"voice" => id},
+        %{assigns: %{on_device?: true}} = socket
+      ) do
+    if Enum.any?(socket.assigns.native_voices, &(&1.id == id)) do
+      {:noreply,
+       socket
+       |> assign(:native_voice, id)
+       |> assign(:native_voice_missing?, false)
+       |> push_event("voice_native_voice", %{id: id})}
+    else
+      {:noreply, socket}
+    end
+  end
+
+  def handle_event("voice_native_pick_voice", _params, socket), do: {:noreply, socket}
 
   @impl true
   def terminate(_reason, socket) do
@@ -1020,6 +1070,70 @@ defmodule PlatformWeb.VoiceLive do
   # The hook draws the forming words itself on the on-device path.
   defp pending_state(true, state) when state in [:listening, :toggled], do: :idle
   defp pending_state(_on_device?, state), do: state
+
+  defp voice_entry(%{"id" => id, "name" => name} = v)
+       when is_binary(id) and is_binary(name) and id != "" and byte_size(id) <= 200 do
+    quality = if v["quality"] in @voice_qualities, do: v["quality"], else: "default"
+    [%{id: id, name: String.slice(name, 0, 60), quality: quality}]
+  end
+
+  defp voice_entry(_voice), do: []
+
+  defp first_id([%{id: id} | _]), do: id
+  defp first_id([]), do: nil
+
+  defp partner_key(%Phoenix.LiveView.Socket{} = socket),
+    do: partner_key(socket.assigns[:current_user_record])
+
+  defp partner_key(%{id: user_id}), do: "#{@partner_key}:#{user_id}"
+  defp partner_key(_user), do: @partner_key
+
+  # A partner pick (or a restored one): a fresh transcript with that
+  # partner's greeting, and on the device the partner's DM is held instead.
+  defp switch_partner(socket, partner) do
+    greeting =
+      if partner.agent.slug == @default_slug,
+        do: @back_greeting,
+        else: other_greeting(partner)
+
+    socket
+    |> drop_native()
+    |> assign(:partner, partner)
+    |> assign(:sheet, nil)
+    |> stream(:turns, [], reset: true)
+    |> reopen_native()
+    |> maybe_greet(partner, greeting)
+  end
+
+  defp restore_partner(%{assigns: %{partner_restored?: true}} = socket, _id), do: socket
+  defp restore_partner(socket, id) when not is_binary(id), do: socket
+
+  defp restore_partner(socket, id) do
+    socket = assign(socket, :partner_restored?, true)
+
+    case Enum.find(socket.assigns.partners, &(&1.agent.id == id)) do
+      nil ->
+        push_event(socket, "voice_saved", %{key: partner_key(socket), id: nil})
+
+      %{agent: %{id: ^id}} when socket.assigns.partner.agent.id == id ->
+        socket
+
+      partner ->
+        switch_partner(socket, partner)
+    end
+  end
+
+  defp restore_context(%{assigns: %{context_restored?: true}} = socket, _id), do: socket
+  defp restore_context(socket, id) when not is_binary(id), do: socket
+
+  defp restore_context(socket, id) do
+    socket = assign(socket, :context_restored?, true)
+
+    case find_context(socket.assigns.spaces, id) do
+      nil -> push_event(socket, "voice_saved", %{key: @ctx_key, id: nil})
+      context -> assign(socket, :context, context)
+    end
+  end
 
   defp context_spaces(%{id: user_id}, scope) do
     user_id

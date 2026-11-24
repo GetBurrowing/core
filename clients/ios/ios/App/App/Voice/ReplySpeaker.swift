@@ -24,15 +24,15 @@ protocol VoiceSpeaking: AnyObject {
     /// True from `speak` until the utterance finishes or stops.
     var isSpeaking: Bool { get }
     /// Stops any utterance in flight (`stopped`, reason `replaced`), then
-    /// speaks `text`.
-    func speak(id: String, text: String)
+    /// speaks `text` in the voice `voiceID` (nil: the language's system voice).
+    func speak(id: String, text: String, voiceID: String?)
     /// Stops the utterance in flight, if any, sending `stopped` with `reason`.
     func stop(reason: String)
 }
 
-/// The agent's reply, read by the system voice for the current language
-/// (task 01a20dc5 stage 1). No bundled voice, no network. The text is never
-/// logged.
+/// The agent's reply, read by an on-device system voice for the current
+/// language (task 01a20dc5): the one the page picked, else the best installed
+/// (ReplyVoicePicker). No bundled voice, no network. The text is never logged.
 @MainActor
 final class ReplySpeaker: NSObject, VoiceSpeaking {
     var onEvent: ((ReplySpeechEvent) -> Void)?
@@ -47,10 +47,12 @@ final class ReplySpeaker: NSObject, VoiceSpeaking {
 
     var isSpeaking: Bool { current != nil }
 
-    func speak(id: String, text: String) {
+    func speak(id: String, text: String, voiceID: String?) {
         stop(reason: "replaced")
         let utterance = AVSpeechUtterance(string: text)
-        utterance.voice = AVSpeechSynthesisVoice(language: AVSpeechSynthesisVoice.currentLanguageCode())
+        utterance.voice =
+            voiceID.flatMap(AVSpeechSynthesisVoice.init(identifier:))
+            ?? AVSpeechSynthesisVoice(language: AVSpeechSynthesisVoice.currentLanguageCode())
         current = (utterance, id)
         synthesizer.speak(utterance)
     }

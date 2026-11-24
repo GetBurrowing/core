@@ -67,6 +67,7 @@
 		3264E6145086C032A8C51A47 /* Controls.swift in Sources */ = {isa = PBXBuildFile; fileRef = D4964016B262558D0C51AE13 /* Controls.swift */; };
 		33F23E4022EB01FB989AE46D /* AvatarNotificationDelivery.swift in Sources */ = {isa = PBXBuildFile; fileRef = 618BCA2EB96F819023727101 /* AvatarNotificationDelivery.swift */; };
 		35DB3FCB2E7B341A34F47A45 /* WaitingSummary.swift in Sources */ = {isa = PBXBuildFile; fileRef = F002A7B532553DD366E09F0F /* WaitingSummary.swift */; };
+		36646A01FE4F12BCA6189CED /* ReplyVoices.swift in Sources */ = {isa = PBXBuildFile; fileRef = 9A4B8EDB38BE775365E4E31B /* ReplyVoices.swift */; };
 		36E0F2F01D16AA7C0B49F07A /* OFL.txt in Resources */ = {isa = PBXBuildFile; fileRef = 3739EAA3595CCC14CACD4183 /* OFL.txt */; };
 		36EA4763F4D5755A4DBADE53 /* Theme.swift in Sources */ = {isa = PBXBuildFile; fileRef = 48421D60D2C81BD6F37E64D2 /* Theme.swift */; };
 		371977FA18AFD70ED5348318 /* MessagingEntities.swift in Sources */ = {isa = PBXBuildFile; fileRef = B9944C7EE764DE0881EC97B3 /* MessagingEntities.swift */; };
@@ -471,6 +472,7 @@
 		95476033D891E158ED21FA8F /* Intents.swift */ = {isa = PBXFileReference; lastKnownFileType = sourcecode.swift; path = Intents.swift; sourceTree = "<group>"; };
 		9669AD9F71FCE04B78DFBD03 /* TabBarUITests.xctest */ = {isa = PBXFileReference; includeInIndex = 0; lastKnownFileType = wrapper.cfbundle; path = TabBarUITests.xctest; sourceTree = BUILT_PRODUCTS_DIR; };
 		99D777995D613E8F37752203 /* ExtensionRenderTests.xctest */ = {isa = PBXFileReference; includeInIndex = 0; lastKnownFileType = wrapper.cfbundle; path = ExtensionRenderTests.xctest; sourceTree = BUILT_PRODUCTS_DIR; };
+		9A4B8EDB38BE775365E4E31B /* ReplyVoices.swift */ = {isa = PBXFileReference; lastKnownFileType = sourcecode.swift; path = ReplyVoices.swift; sourceTree = "<group>"; };
 		9AB8408BA3210EBFAA88D427 /* AvatarFetcher.swift */ = {isa = PBXFileReference; lastKnownFileType = sourcecode.swift; path = AvatarFetcher.swift; sourceTree = "<group>"; };
 		9CAD421181524C41F26D5056 /* TaskReminderTrial.swift */ = {isa = PBXFileReference; lastKnownFileType = sourcecode.swift; path = TaskReminderTrial.swift; sourceTree = "<group>"; };
 		9D27347C121D5A67129627D1 /* CountsCache.swift */ = {isa = PBXFileReference; lastKnownFileType = sourcecode.swift; path = CountsCache.swift; sourceTree = "<group>"; };
@@ -777,6 +779,7 @@
 			children = (
 				E65E6C40EF58532EF91E0E90 /* OnDeviceTranscriber.swift */,
 				FEC44957C483DDE5854EA3E6 /* ReplySpeaker.swift */,
+				9A4B8EDB38BE775365E4E31B /* ReplyVoices.swift */,
 				1FAE8925EE4B4D296E4E3CFB /* VoiceAudioSession.swift */,
 			);
 			path = Voice;
@@ -1497,6 +1500,7 @@
 				E9DDCC35D92EB83A7FC4B25D /* PushSeal.swift in Sources */,
 				14674C0B74C66D26C36A8714 /* RecentCalls.swift in Sources */,
 				2ECE93607259D3499F13D382 /* ReplySpeaker.swift in Sources */,
+				36646A01FE4F12BCA6189CED /* ReplyVoices.swift in Sources */,
 				05F82264DE2C47C780F86D98 /* RingBanner.swift in Sources */,
 				86ACBC15F996EA87643DCCF8 /* RingBannerView.swift in Sources */,
 				5BC8E5BE4F396FCF39865240 /* RingCenter.swift in Sources */,

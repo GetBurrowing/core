@@ -30,7 +30,9 @@ final class BurrowVoiceContractTests: XCTestCase {
         }
     }
 
-    private static let methods = ["capabilities", "prepare", "start", "stop", "cancel", "speak", "stopSpeaking", "openSettings"]
+    private static let methods = [
+        "capabilities", "prepare", "start", "stop", "cancel", "speak", "stopSpeaking", "openSettings", "voices",
+    ]
 
     /// The native half, always on: what the hook may call is registered, and
     /// each name is an Objective-C method Capacitor can dispatch to.

@@ -47,7 +47,7 @@ describe("on-device voice contract: BurrowVoicePlugin.swift vs the web", () => {
   })
 
   it("the scan found the calls it is meant to check", () => {
-    for (const m of ["capabilities", "prepare", "start", "stop", "cancel", "speak", "stopSpeaking", "openSettings"]) {
+    for (const m of ["capabilities", "prepare", "start", "stop", "cancel", "speak", "stopSpeaking", "openSettings", "voices"]) {
       expect(usedMethods, m).toContain(m)
     }
     for (const e of ["partial", "ended", "speech", "route"]) expect(usedEvents, e).toContain(e)

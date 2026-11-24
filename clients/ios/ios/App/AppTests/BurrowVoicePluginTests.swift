@@ -80,14 +80,16 @@ private final class FakeSpeaker: VoiceSpeaking {
     let log: CallLog
     var onEvent: ((ReplySpeechEvent) -> Void)?
     private(set) var speakingID: String?
+    private(set) var voiceIDs: [String?] = []
 
     init(_ log: CallLog) { self.log = log }
 
     var isSpeaking: Bool { speakingID != nil }
 
-    func speak(id: String, text: String) {
+    func speak(id: String, text: String, voiceID: String?) {
         stop(reason: "replaced")
         log.entries.append("speaker.speak")
+        voiceIDs.append(voiceID)
         speakingID = id
         onEvent?(ReplySpeechEvent(id: id, state: .started))
     }
@@ -105,6 +107,19 @@ private final class FakeSpeaker: VoiceSpeaking {
         onEvent?(ReplySpeechEvent(id: id, state: .finished))
     }
 }
+
+private struct FakeVoices: ReplyVoiceCatalog {
+    var voices: [ReplyVoice]
+    func installedVoices() -> [ReplyVoice] { voices }
+}
+
+private let installedVoices = [
+    ReplyVoice(id: "en-default", name: "Samantha", quality: .default, language: "en-US"),
+    ReplyVoice(id: "en-gb-premium", name: "Jamie", quality: .premium, language: "en-GB"),
+    ReplyVoice(id: "en-enhanced", name: "Ava", quality: .enhanced, language: "en-US"),
+    ReplyVoice(id: "en-premium", name: "Zoe", quality: .premium, language: "en-US"),
+    ReplyVoice(id: "fr-premium", name: "Amelie", quality: .premium, language: "fr-FR"),
+]
 
 @MainActor
 private final class FakeCall: VoiceCallState {
@@ -141,6 +156,8 @@ final class BurrowVoicePluginTests: XCTestCase {
         let plugin = BurrowVoicePlugin()
         plugin.transcriber = transcriber
         plugin.speaker = speaker
+        plugin.voiceCatalog = FakeVoices(voices: installedVoices)
+        plugin.languageCode = { "en-US" }
         plugin.session = VoiceAudioSession(backend: backend)
         let call = callState!
         plugin.callState = { call }
@@ -449,12 +466,71 @@ final class BurrowVoicePluginTests: XCTestCase {
         let real = ReplySpeaker()
         var seen: [ReplySpeechEvent] = []
         real.onEvent = { seen.append($0) }
-        real.speak(id: "a", text: "one")
-        real.speak(id: "b", text: "two")
+        real.speak(id: "a", text: "one", voiceID: nil)
+        real.speak(id: "b", text: "two", voiceID: "not-a-voice-on-this-phone")
         XCTAssertEqual(seen.first, ReplySpeechEvent(id: "a", state: .stopped, reason: "replaced"))
         real.stop(reason: "stopped")
         XCTAssertFalse(real.isSpeaking)
         XCTAssertEqual(seen.filter { $0.state == .stopped }.map(\.id), ["a", "b"])
+    }
+
+    // MARK: Reply voices
+
+    /// The current language's voices, best first: premium, enhanced, default;
+    /// within a quality the exact region first. Other languages are left out.
+    func testVoicesListsTheLanguagesVoicesBestFirst() {
+        let list = makePlugin().voiceList()
+        let ids = (list["voices"] as? [[String: Any]])?.compactMap { $0["id"] as? String }
+        XCTAssertEqual(ids, ["en-premium", "en-gb-premium", "en-enhanced", "en-default"])
+        XCTAssertEqual(list["default"] as? String, "en-premium")
+        let first = (list["voices"] as? [[String: Any]])?.first
+        XCTAssertEqual(first?["quality"] as? String, "premium")
+        XCTAssertEqual(first?["name"] as? String, "Zoe")
+    }
+
+    func testTheDefaultFallsFromPremiumToEnhancedToDefault() {
+        let enhanced = installedVoices.filter { $0.quality != .premium }
+        XCTAssertEqual(ReplyVoicePicker.best(for: "en-US", in: enhanced)?.id, "en-enhanced")
+        let plain = installedVoices.filter { $0.quality == .default }
+        XCTAssertEqual(ReplyVoicePicker.best(for: "en-US", in: plain)?.id, "en-default")
+        XCTAssertNil(ReplyVoicePicker.best(for: "de-DE", in: installedVoices))
+    }
+
+    func testVoicesWithNoneInstalledHasNoDefault() {
+        let plugin = makePlugin()
+        plugin.voiceCatalog = FakeVoices(voices: [])
+        let list = plugin.voiceList()
+        XCTAssertEqual((list["voices"] as? [[String: Any]])?.count, 0)
+        XCTAssertTrue(list["default"] is NSNull)
+    }
+
+    func testSpeakUsesTheChosenVoice() {
+        let plugin = makePlugin()
+        let result = plugin.speakReply(id: "r1", text: "reply", voice: "en-enhanced")
+        XCTAssertEqual(speaker.voiceIDs, ["en-enhanced"])
+        XCTAssertEqual(result["voice"] as? String, "en-enhanced")
+        XCTAssertEqual(result["fellBack"] as? Bool, false)
+    }
+
+    func testSpeakWithoutAChoiceUsesTheBestInstalledVoice() {
+        let result = makePlugin().speakReply(id: "r1", text: "reply")
+        XCTAssertEqual(speaker.voiceIDs, ["en-premium"])
+        XCTAssertEqual(result["fellBack"] as? Bool, false)
+    }
+
+    /// A voice the user picked that is no longer on the phone (deleted in
+    /// Settings): the default reads the reply, and the page is told.
+    func testAChosenVoiceThatIsNotInstalledFallsBackToTheDefaultAndSaysSo() {
+        let result = makePlugin().speakReply(id: "r1", text: "reply", voice: "removed-voice")
+        XCTAssertEqual(speaker.voiceIDs, ["en-premium"])
+        XCTAssertEqual(result["voice"] as? String, "en-premium")
+        XCTAssertEqual(result["fellBack"] as? Bool, true)
+    }
+
+    func testTheSystemCatalogMapsAVQuality() {
+        XCTAssertEqual(SystemReplyVoiceCatalog.quality(.premium), .premium)
+        XCTAssertEqual(SystemReplyVoiceCatalog.quality(.enhanced), .enhanced)
+        XCTAssertEqual(SystemReplyVoiceCatalog.quality(.default), .default)
     }
 
     // MARK: Session and route

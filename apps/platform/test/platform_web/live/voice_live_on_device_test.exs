@@ -70,6 +70,120 @@ defmodule PlatformWeb.VoiceLiveOnDeviceTest do
     end
   end
 
+  # ── a reconnect keeps the conversation (task 01a20dc5, device report) ──
+
+  # On a real iPhone a dropped socket remounted VoiceLive on its default,
+  # Burrow, mid-conversation with another agent. The device now remembers the
+  # partner per user (VoiceContext, data-keys) and pushes it back after every
+  # mount and reconnect.
+  test "a reconnect puts the remembered partner back instead of the default",
+       %{conn: conn, viewer: viewer} do
+    other = agent!("helper-#{System.unique_integer([:positive])}", "Helper")
+    key = "burrow-voice-partner:#{viewer.id}"
+
+    {:ok, view, _html} = live(conn, ~p"/voice")
+    assert attr_of(view, "#voice-screen", "data-keys") =~ key
+    view |> element("#partner-opt-#{other.id}") |> render_click()
+    assert_push_event(view, "voice_saved", %{key: ^key, id: picked})
+    assert picked == other.id
+
+    # The socket drops and comes back: LiveView mounts a fresh view, which
+    # starts on the default until the device speaks.
+    {:ok, again, _html} = live(conn, ~p"/voice")
+    assert assigns(again).partner.agent.slug == "meeting-assistant"
+    again |> element("#voice-screen") |> render_hook("voice_restore", %{key => other.id})
+
+    assert assigns(again).partner.agent.id == other.id
+    assert text(doc(again), "#partner-name") == "Helper"
+  end
+
+  test "on the device the restored partner's DM is the one held", %{conn: conn, viewer: viewer} do
+    other = agent!("helper-#{System.unique_integer([:positive])}", "Helper")
+    view = ready!(conn)
+    burrow_dm = assigns(view).native_conn.space_id
+
+    view
+    |> element("#voice-screen")
+    |> render_hook("voice_restore", %{"burrow-voice-partner:#{viewer.id}" => other.id})
+
+    refute SpaceTopics.held_by?(socket(view), burrow_dm, :voice)
+    assert assigns(view).native_conn.agent_id == other.id
+    assert SpaceTopics.held_by?(socket(view), assigns(view).native_conn.space_id, :voice)
+  end
+
+  test "meeting-assistant stays the default when nothing is remembered; a stale id is cleared",
+       %{conn: conn, viewer: viewer} do
+    key = "burrow-voice-partner:#{viewer.id}"
+    {:ok, view, _html} = live(conn, ~p"/voice")
+    assert assigns(view).partner.agent.slug == "meeting-assistant"
+
+    view |> element("#voice-screen") |> render_hook("voice_restore", %{})
+    assert assigns(view).partner.agent.slug == "meeting-assistant"
+
+    view
+    |> element("#voice-screen")
+    |> render_hook("voice_restore", %{key => Ecto.UUID.generate()})
+
+    assert_push_event(view, "voice_saved", %{key: ^key, id: nil})
+    assert assigns(view).partner.agent.slug == "meeting-assistant"
+  end
+
+  # ── reply voices (on the device only) ────────────────────────────────
+
+  @voices [
+    %{"id" => "v-premium", "name" => "Zoe", "quality" => "premium"},
+    %{"id" => "v-enhanced", "name" => "Ava", "quality" => "enhanced"},
+    %{"id" => "v-default", "name" => "Samantha", "quality" => "default"}
+  ]
+
+  test "the reply-voice picker lists the phone's voices and a pick is sent to the phone",
+       %{conn: conn} do
+    {:ok, today, _html} = live(conn, ~p"/voice")
+    hook(today, "voice_native_voices", %{"voices" => @voices, "selected" => "v-premium"})
+    refute has_element?(today, "#voice-native-voice")
+
+    view = ready!(conn)
+    refute has_element?(view, "#voice-native-voice")
+
+    hook(view, "voice_native_voices", %{
+      "voices" => @voices,
+      "selected" => "v-premium",
+      "missing" => false
+    })
+
+    d = doc(view)
+    assert text(d, "#voice-native-voice label > span") == "Reply voice"
+
+    assert q(d, "#voice-native-voice-select option")
+           |> Enum.map(&LazyHTML.text/1)
+           |> Enum.map(&String.trim/1) ==
+             ["Zoe · Premium", "Ava · Enhanced", "Samantha · Default"]
+
+    assert has_element?(view, ~s|#voice-native-voice-select option[value="v-premium"][selected]|)
+    refute has_element?(view, "#voice-native-voice-missing")
+
+    view |> form("#voice-native-voice", %{"voice" => "v-enhanced"}) |> render_change()
+    assert_push_event(view, "voice_native_voice", %{id: "v-enhanced"})
+    assert has_element?(view, ~s|#voice-native-voice-select option[value="v-enhanced"][selected]|)
+  end
+
+  test "a remembered voice that is gone: the default is selected and the tab says so",
+       %{conn: conn} do
+    view = ready!(conn)
+
+    hook(view, "voice_native_voices", %{
+      "voices" => @voices,
+      "selected" => "v-premium",
+      "missing" => true
+    })
+
+    assert text(doc(view), "#voice-native-voice-missing") ==
+             "Your chosen voice isn't on this iPhone. Using Zoe instead."
+
+    view |> form("#voice-native-voice", %{"voice" => "v-default"}) |> render_change()
+    refute has_element?(view, "#voice-native-voice-missing")
+  end
+
   # ── the on-device turn ────────────────────────────────────────────────
 
   test "a turn posts one plain DM message; the agent's reply is spoken without markdown",
@@ -320,6 +434,9 @@ defmodule PlatformWeb.VoiceLiveOnDeviceTest do
     assert assigns(view).on_device?
     view
   end
+
+  defp attr_of(view, sel, name),
+    do: view |> doc() |> q(sel) |> LazyHTML.attribute(name) |> List.first()
 
   defp hook(view, event, params), do: view |> element("#voice-area") |> render_hook(event, params)
 

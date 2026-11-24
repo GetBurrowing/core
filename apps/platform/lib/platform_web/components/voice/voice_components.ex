@@ -43,7 +43,9 @@ defmodule PlatformWeb.Components.Voice do
   reply's "Stopped" / "Reply shown as text" note, the on-device listen line
   ("Release to send", "Tap to send", "Microphone in use by another app"),
   the permission card (#voice-permission) with "Type instead" beneath it,
-  and the test caption (#voice-native-caption). With `@on_device?` false
+  the test caption (#voice-native-caption) and the reply-voice picker
+  (#voice-native-voice, the phone's on-device voices, with a note when the
+  remembered voice is no longer installed). With `@on_device?` false
   every component renders exactly what it rendered before.
 
   No `hover:` classes: these are phone surfaces. The one exception is
@@ -302,6 +304,9 @@ defmodule PlatformWeb.Components.Voice do
   attr :mic_permission, :atom, default: nil, doc: "on-device: :denied after a refusal"
   attr :caption, :string, default: nil, doc: "on-device test caption, test builds only"
   attr :announce, :string, default: nil, doc: "on-device live region, \"{partner} replied\""
+  attr :voices, :list, default: [], doc: "on-device reply voices, best first"
+  attr :voice, :string, default: nil, doc: "on-device: the reply voice in use"
+  attr :voice_missing?, :boolean, default: false
 
   def voice_area(assigns) do
     assigns = assign(assigns, :card?, assigns.on_device? and assigns.mic_permission == :denied)
@@ -429,6 +434,7 @@ defmodule PlatformWeb.Components.Voice do
       >
         {@caption}
       </p>
+      <.native_voice_picker voices={@voices} voice={@voice} missing?={@voice_missing?} />
       <div id="voice-audio" class="hidden" phx-update="ignore"></div>
     </div>
     """
@@ -851,6 +857,45 @@ defmodule PlatformWeb.Components.Voice do
   def listen_text(_partner, _state), do: @idle_line
 
   defp cant_talk(agent), do: "#{agent.name} can't talk right now."
+
+  attr :voices, :list, required: true
+  attr :voice, :string, default: nil
+  attr :missing?, :boolean, default: false
+
+  # The reply voice (on the device only): the phone's installed voices for its
+  # language, best first. The choice is remembered on the device.
+  defp native_voice_picker(assigns) do
+    assigns = assign(assigns, :current, Enum.find(assigns.voices, &(&1.id == assigns.voice)))
+
+    ~H"""
+    <form
+      :if={@voices != []}
+      id="voice-native-voice"
+      phx-change="voice_native_pick_voice"
+      class="flex flex-col items-center gap-1"
+    >
+      <label class="flex items-center gap-2 text-xs text-secondary">
+        <span>Reply voice</span>
+        <select
+          id="voice-native-voice-select"
+          name="voice"
+          class="select select-xs min-h-8 max-w-[14rem] bg-base-100 text-base-content"
+        >
+          <option :for={v <- @voices} value={v.id} selected={v.id == @voice}>
+            {v.name} · {voice_quality(v.quality)}
+          </option>
+        </select>
+      </label>
+      <p :if={@missing? and @current} id="voice-native-voice-missing" class="text-xs text-secondary">
+        Your chosen voice isn't on this iPhone. Using {@current.name} instead.
+      </p>
+    </form>
+    """
+  end
+
+  defp voice_quality("premium"), do: "Premium"
+  defp voice_quality("enhanced"), do: "Enhanced"
+  defp voice_quality(_quality), do: "Default"
 
   @doc """
   The on-device listen line. The partner needs no voice worker here (the

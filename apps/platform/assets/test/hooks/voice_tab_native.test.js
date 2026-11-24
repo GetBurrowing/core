@@ -64,6 +64,8 @@ import VoiceTab, {
 import { onDeviceVoiceCapability } from "../../js/lib/on_device_voice.js"
 import VoiceTabNative from "../../js/hooks/voice_tab_native_runtime.js"
 import { DRAG_CANCEL_PX } from "../../js/hooks/voice_tab_shared.js"
+import { REPLY_VOICE_KEY, VOICE_NAMESPACE } from "../../js/hooks/voice_tab_native_runtime.js"
+import { __resetForTests as resetClientState } from "../../js/client_state.js"
 
 const REASONS = ["os_too_old", "unavailable", "locale_unsupported", "speech_permission_denied", "assets_missing"]
 
@@ -170,7 +172,16 @@ function fakeDocument(pending) {
 
 // ── the plugin ────────────────────────────────────────────────────────────
 
-function fakePlugin({ caps, start, stopText = "what is left on the list", prepare } = {}) {
+const VOICES = {
+  voices: [
+    { id: "v-premium", name: "Zoe", quality: "premium", language: "en-US" },
+    { id: "v-enhanced", name: "Ava", quality: "enhanced", language: "en-US" },
+    { id: "v-default", name: "Samantha", quality: "default", language: "en-US" },
+  ],
+  default: "v-premium",
+}
+
+function fakePlugin({ caps, start, stopText = "what is left on the list", prepare, voices, speak } = {}) {
   const listeners = {}
   const plugin = {
     listeners,
@@ -185,7 +196,8 @@ function fakePlugin({ caps, start, stopText = "what is left on the list", prepar
     start: vi.fn(start || (() => Promise.resolve({ started: true, route: null }))),
     stop: vi.fn(() => Promise.resolve({ text: stopText })),
     cancel: vi.fn(() => Promise.resolve()),
-    speak: vi.fn(() => Promise.resolve({ spoken: true })),
+    speak: vi.fn(speak || (() => Promise.resolve({ spoken: true }))),
+    voices: vi.fn(() => Promise.resolve(voices || VOICES)),
     stopSpeaking: vi.fn(() => Promise.resolve()),
     openSettings: vi.fn(() => Promise.resolve({ opened: true })),
     addListener: vi.fn((event, fn) => {
@@ -737,6 +749,94 @@ describe("the voice_native island loads only inside the app", () => {
     await settle()
     expect(plugin.start).toHaveBeenCalledTimes(1)
     expect(t.gum).not.toHaveBeenCalled()
+  })
+})
+
+describe("reply voices on the device", () => {
+  let store
+  const key = `suite:${VOICE_NAMESPACE}:${REPLY_VOICE_KEY}:u1`
+  beforeEach(() => {
+    store = new Map()
+    vi.stubGlobal("localStorage", {
+      getItem: (k) => (store.has(k) ? store.get(k) : null),
+      setItem: (k, v) => store.set(k, String(v)),
+      removeItem: (k) => store.delete(k),
+      key: (i) => Array.from(store.keys())[i] ?? null,
+      get length() {
+        return store.size
+      },
+    })
+    resetClientState()
+  })
+
+  it("lists the phone's voices best first; with no choice the best installed reads", async () => {
+    const plugin = fakePlugin()
+    install({ plugin })
+    const t = await mount()
+    await settle()
+    expect(t.sent("voice_native_voices")).toEqual([
+      {
+        voices: [
+          { id: "v-premium", name: "Zoe", quality: "premium" },
+          { id: "v-enhanced", name: "Ava", quality: "enhanced" },
+          { id: "v-default", name: "Samantha", quality: "default" },
+        ],
+        selected: "v-premium",
+        missing: false,
+      },
+    ])
+    t.handlers.voice_native_speak({ id: "r1", text: "hello" })
+    expect(plugin.speak).toHaveBeenCalledWith({ id: "r1", text: "hello" })
+  })
+
+  it("a pick is remembered on the device and every reply is read in it", async () => {
+    const plugin = fakePlugin()
+    install({ plugin })
+    const t = await mount()
+    await settle()
+    t.handlers.voice_native_voice({ id: "v-enhanced" })
+    expect(JSON.parse(store.get(key))).toBe("v-enhanced")
+    t.handlers.voice_native_speak({ id: "r1", text: "hello" })
+    expect(plugin.speak).toHaveBeenLastCalledWith({ id: "r1", text: "hello", voice: "v-enhanced" })
+
+    // Next launch: the remembered voice is selected again.
+    const again = await mount()
+    await settle()
+    expect(again.sent("voice_native_voices").at(-1)).toMatchObject({ selected: "v-enhanced", missing: false })
+  })
+
+  it("a remembered voice that is gone falls back to the default and says so", async () => {
+    store.set(key, JSON.stringify("v-removed"))
+    const plugin = fakePlugin()
+    install({ plugin })
+    const t = await mount()
+    await settle()
+    expect(t.sent("voice_native_voices").at(-1)).toMatchObject({ selected: "v-premium", missing: true })
+    t.handlers.voice_native_speak({ id: "r1", text: "hello" })
+    expect(plugin.speak).toHaveBeenLastCalledWith({ id: "r1", text: "hello" })
+  })
+
+  it("a reply the phone read in the default instead (voice deleted since) re-lists with missing", async () => {
+    const plugin = fakePlugin({ speak: () => Promise.resolve({ spoken: true, voice: "v-premium", fellBack: true }) })
+    install({ plugin })
+    const t = await mount()
+    await settle()
+    t.handlers.voice_native_voice({ id: "v-enhanced" })
+    t.handlers.voice_native_speak({ id: "r1", text: "hello" })
+    await settle()
+    expect(plugin.voices).toHaveBeenCalledTimes(2)
+    expect(t.sent("voice_native_voices").at(-1)).toMatchObject({ missing: true })
+  })
+
+  it("an older app build without voices() shows no picker and still speaks", async () => {
+    const plugin = fakePlugin()
+    delete plugin.voices
+    install({ plugin })
+    const t = await mount()
+    await settle()
+    expect(t.events()).not.toContain("voice_native_voices")
+    t.handlers.voice_native_speak({ id: "r1", text: "hello" })
+    expect(plugin.speak).toHaveBeenCalledWith({ id: "r1", text: "hello" })
   })
 })
 

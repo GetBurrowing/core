@@ -6,6 +6,7 @@
 // `_probeOnDevice()`. The capability seam (lib/on_device_voice.js) ships
 // here too. See voice_tab.js's header for the behaviour.
 
+import ClientState from "../client_state.js"
 import { onDeviceVoiceCapability } from "../lib/on_device_voice"
 import {
   DRAG_CANCEL_PX,
@@ -21,6 +22,12 @@ import {
   now,
   withTimeout,
 } from "./voice_tab_shared"
+
+// The reply voice picked on this device, per user (ClientState namespace
+// "voice", like the partner and context VoiceContext remembers).
+export const VOICE_NAMESPACE = "voice"
+export const REPLY_VOICE_KEY = "burrow-voice-reply-voice"
+const QUALITIES = ["premium", "enhanced", "default"]
 
 const VoiceTabNative = {
   // On the device only: while held, the pointer leaving the mic or a
@@ -118,6 +125,8 @@ const VoiceTabNative = {
     }
     this.handleEvent("voice_native_speak", (p) => this._nativeSpeak(p))
     this.handleEvent("voice_native_stop", () => this._nativeStop())
+    this.handleEvent("voice_native_voice", (p) => this._pickVoice(p && p.id))
+    this._loadVoices()
     this._listenNative(plugin)
     this.el.addEventListener("pointermove", this._onPointerMove)
     // On the document: Retry sits in #voice-native-pending, outside this
@@ -324,7 +333,55 @@ const VoiceTabNative = {
 
   _nativeSpeak(p) {
     if (!this._native || !p || typeof p.id !== "string" || typeof p.text !== "string") return
-    this._nativeCall("speak", { id: p.id, text: p.text })
+    const args = { id: p.id, text: p.text }
+    if (this._voice) args.voice = this._voice
+    try {
+      Promise.resolve(this._native.speak(args))
+        .then((r) => r && r.fellBack === true && this._loadVoices(true))
+        .catch(() => {})
+    } catch (_e) {
+      // the plugin refused; nothing to undo
+    }
+  },
+
+  // ── reply voices ──────────────────────────────────────────────────────
+
+  _voiceKey() {
+    return `${REPLY_VOICE_KEY}:${this.el.dataset.userId}`
+  },
+
+  // The phone's on-device voices for its language, best first, pushed as
+  // `voice_native_voices {voices, selected, missing}` for the picker. The
+  // device's remembered choice is used when it is still installed; else the
+  // plugin's default (the best installed) reads, and `missing` says so.
+  async _loadVoices(fellBack = false) {
+    const plugin = this._native
+    if (!plugin || typeof plugin.voices !== "function") return
+    let r
+    try {
+      r = await plugin.voices()
+    } catch (_e) {
+      return
+    }
+    if (this._destroyed || !r) return
+    const voices = (Array.isArray(r.voices) ? r.voices : [])
+      .filter((v) => v && typeof v.id === "string" && typeof v.name === "string")
+      .map((v) => ({ id: v.id, name: v.name, quality: QUALITIES.includes(v.quality) ? v.quality : "default" }))
+    const stored = ClientState.get(VOICE_NAMESPACE, this._voiceKey(), null)
+    const installed = voices.some((v) => v.id === stored)
+    this._voice = installed ? stored : null
+    const fallback = typeof r.default === "string" ? r.default : voices[0] ? voices[0].id : null
+    this.pushEvent("voice_native_voices", {
+      voices,
+      selected: this._voice || fallback,
+      missing: fellBack || (!!stored && !installed),
+    })
+  },
+
+  _pickVoice(id) {
+    if (typeof id !== "string" || !id) return
+    this._voice = id
+    ClientState.set(VOICE_NAMESPACE, this._voiceKey(), id)
   },
 
   _nativeCall(method, args) {

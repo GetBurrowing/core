@@ -122,22 +122,20 @@ export { CAPTION_EVENT, HOLD_MS, MIC_TIMEOUT_MS, NO_WORDS_MS, TURN_CAP_MS, TURN_
 
 export const VOICE_NATIVE_ISLAND = "/assets/js/voice_native_island.js"
 
-// Synchronous and tiny on purpose: true only inside the native app with the
-// BurrowVoice plugin registered. The real question (can this phone
-// transcribe?) is onDeviceVoiceCapability() in the island.
-function nativeVoicePresent() {
-  const cap = window.Capacitor
-  return !!(cap && cap.isNativePlatform && cap.isNativePlatform() === true && cap.Plugins && cap.Plugins.BurrowVoice)
-}
-
-// Loads the island once; its script sets window.__burrowVoiceNative.
+// Loads the voice_native island (its script sets window.__burrowVoiceNative),
+// only inside the native app with the BurrowVoice plugin registered; the real
+// question (can this phone transcribe?) is onDeviceVoiceCapability() there.
+// Off the app it resolves null; any throw or a failed load is "not available".
 function loadVoiceNative() {
-  const ready = () => window.__burrowVoiceNative
-  if (ready()) return Promise.resolve(ready())
   return new Promise((resolve, reject) => {
+    const cap = window.Capacitor
+    if (!(cap && cap.isNativePlatform && cap.isNativePlatform() === true && cap.Plugins && cap.Plugins.BurrowVoice))
+      return resolve(null)
+    const ready = () => window.__burrowVoiceNative && resolve(window.__burrowVoiceNative)
+    if (ready()) return
     const script = document.createElement("script")
     script.src = VOICE_NATIVE_ISLAND
-    script.onload = () => (ready() ? resolve(ready()) : reject())
+    script.onload = () => ready() || reject()
     script.onerror = reject
     document.head.appendChild(script)
   })
@@ -589,8 +587,7 @@ const VoiceTab = {
   // a browser, Android or an older app build never downloads it and keeps
   // today's path. Any failure to load it is the same as "not available".
   _probeNative() {
-    return Promise.resolve()
-      .then(() => nativeVoicePresent() && loadVoiceNative())
+    return loadVoiceNative()
       .then((runtime) => {
         if (!runtime || this._destroyed) return
         Object.assign(this, runtime)

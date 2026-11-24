@@ -148,7 +148,7 @@ final class SystemVoiceTranscriber: VoiceTranscribing {
 /// `BurrowBridgeViewController.capacitorDidLoad`.
 ///
 /// Methods: `capabilities`, `prepare`, `start`, `stop`, `cancel`, `speak`,
-/// `stopSpeaking`, `openSettings`. Events: `partial {text}`, `final {text}`,
+/// `stopSpeaking`, `openSettings`, `voices`. Events: `partial {text}`, `final {text}`,
 /// `ended {reason}`, `speech {id, state, reason}`, `route {label}`.
 ///
 /// Never logs what was said, the reply, or a device name.
@@ -164,6 +164,7 @@ public class BurrowVoicePlugin: CAPPlugin, CAPBridgedPlugin {
         CAPPluginMethod(name: "speak", returnType: CAPPluginReturnPromise),
         CAPPluginMethod(name: "stopSpeaking", returnType: CAPPluginReturnPromise),
         CAPPluginMethod(name: "openSettings", returnType: CAPPluginReturnPromise),
+        CAPPluginMethod(name: "voices", returnType: CAPPluginReturnPromise),
     ]
 
     static let events = ["partial", "final", "ended", "speech", "route"]
@@ -172,6 +173,8 @@ public class BurrowVoicePlugin: CAPPlugin, CAPBridgedPlugin {
     lazy var transcriber: any VoiceTranscribing = MainActor.assumeIsolated { SystemVoiceTranscriber() }
     lazy var speaker: any VoiceSpeaking = MainActor.assumeIsolated { ReplySpeaker() }
     lazy var session: any VoiceAudioSessionControl = MainActor.assumeIsolated { VoiceAudioSession() }
+    var voiceCatalog: any ReplyVoiceCatalog = SystemReplyVoiceCatalog()
+    var languageCode: () -> String = { AVSpeechSynthesisVoice.currentLanguageCode() }
     var callState: @MainActor () -> any VoiceCallState = { CallController.shared }
     /// Asks for the microphone if iOS has not yet; true when granted.
     var micPermission: @MainActor () async -> Bool = { await AVAudioApplication.requestRecordPermission() }
@@ -399,16 +402,33 @@ public class BurrowVoicePlugin: CAPPlugin, CAPBridgedPlugin {
     /// `speech {id, state: "unheard", reason}` event. Stops any reply in
     /// flight first. Refused while the mic is open (`listening`) and during
     /// a meeting call (`mic_in_use`).
+    /// `{id, text, voice?}`: reads the reply in `voice` (an id from `voices`)
+    /// or, without one, the best installed voice. Resolves `{spoken, voice,
+    /// fellBack}`; `fellBack` is true when the requested voice is not on the
+    /// phone and the default read it instead.
     @objc func speak(_ call: CAPPluginCall) {
         guard let id = call.getString("id"), !id.isEmpty, let text = call.getString("text") else {
             call.reject("id and text are required")
             return
         }
-        Task { @MainActor in call.resolve(self.speakReply(id: id, text: text)) }
+        let voice = call.getString("voice")
+        Task { @MainActor in call.resolve(self.speakReply(id: id, text: text, voice: voice)) }
+    }
+
+    /// `{voices: [{id, name, quality, language}], default}`: the on-device
+    /// voices for the current language, best first (premium, enhanced,
+    /// default); `default` is the first, or null when there is none.
+    @objc func voices(_ call: CAPPluginCall) {
+        call.resolve(voiceList())
+    }
+
+    func voiceList() -> [String: Any] {
+        let voices = ReplyVoicePicker.voices(for: languageCode(), in: voiceCatalog.installedVoices())
+        return ["voices": voices.map(\.data), "default": voices.first?.id ?? NSNull()]
     }
 
     @MainActor
-    func speakReply(id: String, text: String) -> [String: Any] {
+    func speakReply(id: String, text: String, voice requested: String? = nil) -> [String: Any] {
         if turn != .idle { return ["spoken": false, "reason": "listening"] }
         if callState().hasCall { return unheard(id, "mic_in_use") }
         do {
@@ -425,8 +445,10 @@ public class BurrowVoicePlugin: CAPPlugin, CAPBridgedPlugin {
             self.emit("speech", event.data)
             if event.state == .finished || event.state == .stopped { self.releaseSessionIfIdle() }
         }
-        speaker.speak(id: id, text: text)
-        return ["spoken": true]
+        let (voice, fellBack) = ReplyVoicePicker.resolve(
+            requested: requested, language: languageCode(), in: voiceCatalog.installedVoices())
+        speaker.speak(id: id, text: text, voiceID: voice?.id)
+        return ["spoken": true, "voice": voice?.id ?? NSNull(), "fellBack": fellBack]
     }
 
     @MainActor
