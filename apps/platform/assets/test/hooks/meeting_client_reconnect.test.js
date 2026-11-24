@@ -199,6 +199,41 @@ describe("MeetingClient reconnect state machine", () => {
     expect(hook.el.dataset.roomState).toBe("connected")
   })
 
+  // Task 01a20b3e stage 4. A LiveView 1006 remount is destroyed() then
+  // mounted() on a server-patched #meeting-client that carries no
+  // data-room-state. The Room and its mic must survive it untouched, and the
+  // new instance must stamp "connected" back. (The attribute surviving a
+  // plain patch with no remount is `phx-mounted={JS.ignore_attributes(...)}`
+  // on the element, pinned in meeting_live_transcriber_filter_test.exs.)
+  it("a 1006 remount keeps the Room, its live mic track, and data-room-state connected", async () => {
+    const hook = buildHook()
+    hook.handleEvent = () => {}
+    await hook._join(PAYLOAD)
+    const room = fake.created[0]
+    const mic = { readyState: "live", stop() { this.readyState = "ended" } }
+    room.localParticipant.trackPublications.set("mic", {
+      kind: "audio",
+      source: "microphone",
+      track: { mediaStreamTrack: mic },
+    })
+    expect(window.__livekit_room).toBe(room)
+    expect(hook.el.dataset.roomState).toBe("connected")
+
+    hook.destroyed()
+    const next = buildHook()
+    next.handleEvent = () => {}
+    next.el = { dataset: {}, querySelector: () => null, querySelectorAll: () => [] }
+    next.mounted()
+
+    expect(room.disconnectCalls).toBe(0)
+    expect(room.state).toBe("connected")
+    expect(mic.readyState).toBe("live")
+    expect(next._room).toBe(room)
+    expect(next.el.dataset.roomState).toBe("connected")
+    expect(fake.created.length).toBe(1)
+    expect(left(next)).toBe(0)
+  })
+
   it("(b) CLIENT_INITIATED pushes meeting_left as before, no rejoin", async () => {
     const hook = buildHook()
     await hook._join(PAYLOAD)
