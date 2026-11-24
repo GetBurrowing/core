@@ -4,6 +4,22 @@ The top `## v<version>` section is sent as the build's "What to Test" by
 `scripts/set_testflight_notes.py`. It must match project.yml's
 MARKETING_VERSION, and it is capped at 4000 characters.
 
+## v1.3: talk to an agent on this iPhone
+New in this build:
+- On an iPhone that supports on-device speech, the Voice tab now listens on the phone itself. Your words appear as you speak, are sent to the agent as an ordinary message when you let go, and the agent's answer is read aloud in the phone's own voice.
+- Other phones, older iOS versions and the web keep the Voice tab you already know. Nothing is hidden.
+- This only works once your install has the matching web update. Until then the Voice tab behaves as before.
+
+Please try:
+1. Hold the mic, speak, and let go. Watch the words grow while you speak, then "Sending", then your message settles and the agent answers out loud.
+2. Tap the mic once, speak, and tap again to send.
+3. Hold the mic and slide your finger off it. Nothing should be sent.
+4. While the agent is speaking, press the mic. The speech should stop at once.
+5. Turn on airplane mode, hold the mic and speak. The words should still appear; sending should show "Not sent" with Retry. Turn airplane mode off and tap Retry: the message is sent once.
+6. With AirPods in, take them out while the agent is speaking. Speech should pause, not move to the loudspeaker.
+7. Leave the Voice tab, lock the phone, or switch apps while holding the mic or while the agent speaks. The orange microphone dot at the top of the screen should go away each time.
+Tell us your iPhone model and iOS version, and whether iOS asked for speech recognition permission.
+
 ## v1.2: Siri Ask and the "which one?" check
 New in this build:
 - Siri Ask now reaches the agent. Say "Ask Burrow" or "Ask Dalton in Burrow", then say your question when Siri asks for it. Siri reads back a short spoken reply instead of a long text answer.

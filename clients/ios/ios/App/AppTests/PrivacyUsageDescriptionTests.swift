@@ -17,4 +17,13 @@ final class PrivacyUsageDescriptionTests: XCTestCase {
             XCTAssertFalse(text.isEmpty, "Info.plist has no \(key); iOS terminates the app when that capture is requested")
         }
     }
+
+    /// The Voice tab (task 01a20dc5): the microphone text covers it, and the
+    /// speech-recognition key is there in case the on-device transcriber asks.
+    func testVoiceTabUsageDescriptions() {
+        let mic = info["NSMicrophoneUsageDescription"] as? String ?? ""
+        XCTAssertTrue(mic.contains("meeting") && mic.contains("Voice"), "the microphone text names meetings and the Voice tab")
+        let speech = (info["NSSpeechRecognitionUsageDescription"] as? String)?.trimmingCharacters(in: .whitespacesAndNewlines) ?? ""
+        XCTAssertFalse(speech.isEmpty, "Info.plist has no NSSpeechRecognitionUsageDescription; a speech request would terminate the app")
+    }
 }

@@ -48,7 +48,9 @@
 	<key>NSCameraUsageDescription</key>
 	<string>Burrow uses the camera when you take a photo to attach to a message or turn on video in a meeting.</string>
 	<key>NSMicrophoneUsageDescription</key>
-	<string>Burrow uses the microphone when you join a meeting.</string>
+	<string>Burrow uses the microphone when you join a meeting or talk to an agent on the Voice tab.</string>
+	<key>NSSpeechRecognitionUsageDescription</key>
+	<string>Burrow turns what you say on the Voice tab into text on this iPhone, to send to the agent.</string>
 	<key>NSPhotoLibraryUsageDescription</key>
 	<string>Burrow opens your photo library when you choose a photo to attach to a message.</string>
 	<key>BurrowKeychainAccessGroup</key>
