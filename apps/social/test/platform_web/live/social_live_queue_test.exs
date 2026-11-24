@@ -461,6 +461,141 @@ defmodule PlatformWeb.SocialLiveQueueTest do
   defp v(post), do: "#queue-#{post.id}"
   defp in_v(post, sel), do: "#{v(post)} #{sel}"
 
+  # Pinned LiveView 1.1.27 internals: update-stop assigns_sockets metadata,
+  # then the public render's proxy-ping/diff ordering. Stop alone is not DOM
+  # completion. Keep this file synchronous: telemetry handlers are VM-wide.
+  defp watch_queue_component(view, component_id) do
+    owner = self()
+    tag = make_ref()
+    handler = {__MODULE__, tag}
+    supervisor_id = {__MODULE__, :render, tag}
+    supervisor = start_supervised!({Task.Supervisor, []}, id: supervisor_id)
+
+    :ok =
+      :telemetry.attach(
+        handler,
+        [:phoenix, :live_component, :update, :stop],
+        fn _event, _measurements, metadata, _config ->
+          # Filter the emitting instance/module before inspecting metadata.
+          if self() == view.pid and metadata[:component] == PlatformWeb.SocialIdeaCard do
+            case metadata[:assigns_sockets] do
+              entries when is_list(entries) ->
+                Enum.each(entries, fn
+                  {%{id: id} = assigns, _socket} when is_binary(id) ->
+                    target? = id == component_id
+                    revision = Map.get(assigns, :rev)
+
+                    cond do
+                      not target? and not is_integer(revision) ->
+                        send(owner, {tag, :ignored_without_revision, id})
+
+                      is_integer(revision) ->
+                        send(owner, {tag, :updated, id, revision})
+
+                      true ->
+                        send(owner, {tag, :metadata_error, :missing_revision})
+                    end
+
+                  _ ->
+                    send(owner, {tag, :metadata_error, :missing_component_identity})
+                end)
+
+              _ ->
+                send(owner, {tag, :metadata_error, :missing_assigns_sockets})
+            end
+          end
+        end,
+        nil
+      )
+
+    %{
+      tag: tag,
+      component_id: component_id,
+      handler: handler,
+      view: view,
+      supervisor: supervisor,
+      supervisor_id: supervisor_id,
+      release: fn -> :ok end,
+      extra_handlers: []
+    }
+  end
+
+  defp queue_canvas_revision(canvas_id) do
+    assert {:ok, %{document: %{"root" => %{"props" => %{"rev" => revision}}}}} =
+             Platform.Chat.Canvas.Server.describe(canvas_id)
+
+    assert is_integer(revision)
+    revision
+  end
+
+  defp remaining_queue_budget(deadline),
+    do: max(deadline - System.monotonic_time(:millisecond), 0)
+
+  defp await_queue_component(observer, revision, deadline) do
+    discarded = await_queue_stop(observer, revision, deadline, [])
+
+    # LiveViewTest.render and Channel.ping have infinite internal timeouts.
+    # The supervised task is bounded by the SAME deadline as the stop wait.
+    task = Task.Supervisor.async_nolink(observer.supervisor, fn -> render(observer.view) end)
+
+    case Task.yield(task, remaining_queue_budget(deadline)) do
+      {:ok, html} when is_binary(html) ->
+        discarded
+
+      _ ->
+        cleanup_queue_observer(observer, true)
+        flunk("Queue component completion deadline expired or failed during render")
+    end
+  end
+
+  defp await_queue_stop(observer, expected, deadline, discarded) do
+    tag = observer.tag
+    component_id = observer.component_id
+
+    receive do
+      {^tag, :updated, ^component_id, ^expected} ->
+        Enum.reverse(discarded)
+
+      {^tag, :updated, other_id, other_revision} ->
+        await_queue_stop(observer, expected, deadline, [{other_id, other_revision} | discarded])
+
+      {^tag, :ignored_without_revision, other_id} ->
+        await_queue_stop(observer, expected, deadline, [{other_id, :no_revision} | discarded])
+
+      {^tag, :metadata_error, reason} ->
+        cleanup_queue_observer(observer, true)
+        flunk("Pinned LiveView update metadata changed: #{reason}")
+    after
+      remaining_queue_budget(deadline) ->
+        cleanup_queue_observer(observer, true)
+        flunk("Queue component completion deadline expired before matching update stop")
+    end
+  end
+
+  defp cleanup_queue_observer(observer, failed? \\ false) do
+    # A private scheduling gate must be released BEFORE detaching telemetry
+    # or terminating probes. Killing a render task does not unblock its proxy.
+    observer.release.()
+    for handler <- [observer.handler | observer.extra_handlers], do: :telemetry.detach(handler)
+
+    if Process.alive?(observer.supervisor) do
+      for pid <- Task.Supervisor.children(observer.supervisor), do: stop_queue_probe(pid)
+      stop_supervised(observer.supervisor_id)
+    end
+
+    if failed? do
+      {_ref, _topic, proxy} = observer.view.proxy
+      for pid <- [observer.view.pid, proxy], do: stop_queue_probe(pid)
+    end
+  end
+
+  defp stop_queue_probe(pid) do
+    reference = Process.monitor(pid)
+    Process.unlink(pid)
+    Process.exit(pid, :kill)
+    assert_receive {:DOWN, ^reference, :process, ^pid, _reason}, 1_000
+  end
+
   defp human_approved_events(post_id) do
     Repo.all(
       from(e in PostEvent,
@@ -1054,17 +1189,26 @@ defmodule PlatformWeb.SocialLiveQueueTest do
   # ── Live sync with chat ──────────────────────────────────────────────
 
   test "a decision made in chat updates the card and the counts", %{conn: conn} = ctx do
-    {_idea, [li | _]} = three!(ctx)
+    {idea, [li | _]} = three!(ctx)
     child = open(conn, ctx.h1)
     assert has_element?(child, "[data-role='social-tab-button'][data-tab='queue']", "Queue (3)")
 
     h2 = Platform.Accounts.get_user(ctx.h2.id)
     card = Approvals.live_card(li.id)
-    assert {:ok, _} = Approvals.decide_approve(card.canvas_id, h2, Approvals.fingerprint(li))
+    observer = watch_queue_component(child, "queue-card-idea-#{idea.id}")
 
-    assert has_element?(child, in_v(li, "[data-role='queue-status']"), "Approved by Hugo Two")
-    refute has_element?(child, in_v(li, "[data-role='queue-approve']"))
-    assert has_element?(child, "[data-role='social-tab-button'][data-tab='queue']", "Queue (2)")
+    try do
+      assert {:ok, _} = Approvals.decide_approve(card.canvas_id, h2, Approvals.fingerprint(li))
+      revision = queue_canvas_revision(card.canvas_id)
+      deadline = System.monotonic_time(:millisecond) + 2_000
+      await_queue_component(observer, revision, deadline)
+
+      assert has_element?(child, in_v(li, "[data-role='queue-status']"), "Approved by Hugo Two")
+      refute has_element?(child, in_v(li, "[data-role='queue-approve']"))
+      assert has_element?(child, "[data-role='social-tab-button'][data-tab='queue']", "Queue (2)")
+    after
+      cleanup_queue_observer(observer)
+    end
   end
 
   # ── Scope ────────────────────────────────────────────────────────────

@@ -1,0 +1,16 @@
+import test from "node:test"
+import assert from "node:assert/strict"
+import Hooks from "../js/extension.js"
+function mount() {
+ const Hook=Hooks.SocialVideo;assert.equal(typeof Hook?.mounted,"function","SocialVideo hook is registered")
+ const attrs=new Map();const video=Object.assign(new EventTarget(),{playCalls:0,loadCalls:0,pauseCalls:0,error:null,setAttribute(k,v){attrs.set(k,v)},getAttribute(k){return attrs.get(k)||null},removeAttribute(k){attrs.delete(k)},load(){this.loadCalls++},pause(){this.pauseCalls++},play(){this.playCalls++;return this.nextPlay||Promise.resolve()}})
+ const button=Object.assign(new EventTarget(),{hidden:false,disabled:false,textContent:"Play video"});const status={hidden:true,textContent:""}
+ const el={style:{},dataset:{src:"/files/blob/local#t=1"},querySelector(s){return s==="video"?video:s.includes("video-play")?button:status}}
+ const hook={...Hook,el};hook.mounted();return {hook,el,video,button,status,attrs}
+}
+test("mount does not assign or load a video source",()=>{const {video,attrs}=mount();assert.equal(attrs.has("src"),false);assert.equal(video.loadCalls,0);assert.equal(video.playCalls,0)})
+test("Play loads only this video's source and shows loading until playing",()=>{const {el,video,button,status,attrs}=mount();button.dispatchEvent(new Event("click"));assert.equal(attrs.get("src"),"/files/blob/local#t=1");assert.equal(video.playCalls,1);assert.equal(el.style.zIndex,"10");assert.match(status.textContent,/Loading/);assert.equal(status.hidden,false);video.dispatchEvent(new Event("playing"));assert.equal(status.hidden,true);assert.equal(button.hidden,true);video.dispatchEvent(new Event("waiting"));assert.equal(status.hidden,false)})
+test("a real media error offers a retry without claiming playback",()=>{const {video,button,status}=mount();button.dispatchEvent(new Event("click"));video.dispatchEvent(new Event("error"));assert.match(status.textContent,/couldn.t load/);assert.equal(button.hidden,false);assert.equal(button.disabled,false);assert.match(button.textContent,/Try/);button.dispatchEvent(new Event("click"));assert.equal(video.playCalls,2)})
+test("a rejected play promise is visible and retryable",async()=>{const {video,button,status}=mount();video.nextPlay=Promise.reject(new Error("blocked"));button.dispatchEvent(new Event("click"));await Promise.resolve();assert.equal(button.hidden,false);assert.equal(button.disabled,false);assert.match(status.textContent,/couldn.t/);assert.doesNotMatch(status.textContent,/blocked/)})
+test("a source update discards the old player without preloading its replacement",()=>{const {hook,el,video,attrs,button}=mount();button.dispatchEvent(new Event("click"));el.dataset.src="/files/blob/replacement";hook.updated();assert.equal(attrs.has("src"),false);assert.equal(button.hidden,false);assert.equal(video.pauseCalls,1);assert.equal(video.playCalls,1)})
+test("destroy detaches listeners and releases a selected media source",()=>{const {hook,button,video,attrs}=mount();button.dispatchEvent(new Event("click"));assert.equal(attrs.has("src"),true);hook.destroyed();assert.equal(attrs.has("src"),false);assert.equal(video.loadCalls,1);button.dispatchEvent(new Event("click"));assert.equal(video.playCalls,1);assert.equal(video.pauseCalls,1)})
