@@ -66,7 +66,8 @@ defmodule Platform.Goals.BriefingTest do
     end
 
     assert Briefing.wire_prompt(wake) ==
-             "A goal you coach is due for a check-in. Wake-up id: #{wake.id}. Read it with goal_wake_up_get, then close it with exactly one of goal_do, goal_ask or goal_wait before 2025-01-01T18:00:00.000000Z."
+             "A goal you coach is due for a check-in. Wake-up id: #{wake.id}. Read it with goal_wake_up_get, then close it with exactly one of goal_do, goal_ask or goal_wait before 2025-01-01T18:00:00.000000Z. " <>
+               Briefing.read_conversation_prompt()
   end
 
   test "comparison uses the earlier reading timestamp and current population", c do

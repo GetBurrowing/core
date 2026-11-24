@@ -17,6 +17,10 @@ defmodule Platform.Goals.Limits do
   def max_addressed, do: value(:max_addressed, 20)
   def briefing_entries, do: value(:briefing_entries, 20)
 
+  # Task 01a20de3: the goal conversation a check-in or retro briefing carries.
+  def briefing_messages, do: value(:briefing_messages, 20)
+  def briefing_message_chars, do: value(:briefing_message_chars, 1000)
+
   @doc "Overrides accept a map keyed by rhythm string under :respond_within_hours."
   def respond_within_hours(rhythm) when rhythm in ~w(daily weekdays weekly biweekly) do
     defaults = %{"daily" => 12, "weekdays" => 12, "weekly" => 48, "biweekly" => 48}
