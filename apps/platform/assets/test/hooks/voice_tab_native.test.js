@@ -92,7 +92,11 @@ function element(tag) {
     set innerHTML(_v) {
       throw new Error("innerHTML is never used")
     },
+    get parentNode() {
+      return this.parent
+    },
     appendChild(c) {
+      if (c.parent) c.remove()
       c.parent = this
       this.children.push(c)
       return c
@@ -455,6 +459,27 @@ describe("on the device", () => {
     expect(second.sent("voice_native_turn")).toEqual([
       expect.objectContaining({ client_turn_id: sent.client_turn_id, text: sent.text }),
     ])
+  })
+
+  it("a reconnect re-announces the device path and puts Not sent turns back", async () => {
+    const plugin = fakePlugin()
+    install({ plugin })
+    const t = await mount({ turnReply: { ok: false } })
+    plugin.emit("route", { label: "Bluetooth" })
+    t.down(0)
+    await settle()
+    t.up(600)
+    await settle()
+    const node = turnNode()
+    // The fresh server render drops the pending area, then draws it again.
+    pending.children = []
+    node.parent = null
+    t.hook.reconnected()
+    expect(t.sent("voice_native_ready").length).toBe(2)
+    expect(t.sent("voice_native_ready")[1].route).toBe("Bluetooth")
+    await new Promise((r) => setTimeout(r, 150))
+    expect(turnNode()).toBe(node)
+    expect(node.textContent).toContain("Not sent")
   })
 
   it("no reply in MIC_TIMEOUT_MS (socket down) is Not sent", async () => {

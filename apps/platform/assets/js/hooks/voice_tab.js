@@ -121,6 +121,7 @@ export const NO_WORDS_MS = 2000
 export const DRAG_CANCEL_PX = 24
 // stop() finalises the transcript; give it longer than a start.
 const STOP_TIMEOUT_MS = 15000
+const RESTORE_MS = 3000
 const SILENCE = 128
 
 function now() {
@@ -229,6 +230,17 @@ const VoiceTab = {
 
     this._pinTranscript()
     this._probe = this._probeNative()
+  },
+
+  // The socket came back (airplane mode off, a network change). The server
+  // mounted a fresh VoiceLive that knows nothing of the device path, so it
+  // is told again, and the "Not sent" turns this hook still holds are put
+  // back into #voice-native-pending once the server has drawn it, so Retry
+  // still resends the same client_turn_id.
+  reconnected() {
+    if (!this._native) return
+    this._announceNative()
+    this._restorePending()
   },
 
   destroyed() {
@@ -671,14 +683,35 @@ const VoiceTab = {
     if (typeof window !== "undefined" && typeof window.addEventListener === "function") {
       window.addEventListener("pagehide", this._onPageHide)
     }
+    this._nativeCap = cap
+    this._announceNative()
+  },
+
+  _announceNative() {
+    const cap = this._nativeCap || {}
     this.pushEvent("voice_native_ready", {
       available: true,
       reason: null,
       locale: cap.locale || null,
       test_build: cap.testBuild === true,
-      route: null,
+      route: this._nativeRoute || null,
     })
     if (cap.micPermission === "denied") this.pushEvent("voice_native_permission", { mic: "denied" })
+  },
+
+  // Re-attach the held turns' nodes once #voice-native-pending exists again
+  // (polled for up to RESTORE_MS; the server draws it after voice_native_ready).
+  _restorePending(waited = 0) {
+    const turns = Array.from(this._nativeTurns.values()).filter((t) => t.node && t !== this._nativeTurn)
+    if (turns.length === 0) return
+    const root = this._pendingEl()
+    if (!root) {
+      if (waited < RESTORE_MS) setTimeout(() => this._restorePending(waited + 100), 100)
+      return
+    }
+    for (const turn of turns) {
+      if (turn.node.parentNode !== root) root.appendChild(turn.node)
+    }
   },
 
   _listenNative(plugin) {
@@ -697,7 +730,10 @@ const VoiceTab = {
       if (!d || typeof d.id !== "string" || typeof d.state !== "string") return
       this.pushEvent("voice_native_speaking", { id: d.id, state: d.state, reason: d.reason || null })
     })
-    on("route", (d) => this.pushEvent("voice_native_route", { label: (d && d.label) || null }))
+    on("route", (d) => {
+      this._nativeRoute = (d && d.label) || null
+      this.pushEvent("voice_native_route", { label: this._nativeRoute })
+    })
   },
 
   _unlistenNative() {
