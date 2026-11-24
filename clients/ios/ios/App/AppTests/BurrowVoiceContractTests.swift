@@ -39,21 +39,43 @@ final class BurrowVoiceContractTests: XCTestCase {
         XCTAssertTrue(try hook.contains("export"), "voice_tab.js is where the contract says")
     }
 
-    /// The hook half: stage 3 adds the BurrowVoice bridge to voice_tab.js and
-    /// removes this skip.
+    private var lib: String {
+        get throws {
+            try String(contentsOf: Self.root.appendingPathComponent("apps/platform/assets/js/lib/on_device_voice.js"), encoding: .utf8)
+        }
+    }
+
+    private static func matches(_ pattern: String, in source: String) -> Set<String> {
+        guard let regex = try? NSRegularExpression(pattern: pattern) else { return [] }
+        let range = NSRange(source.startIndex..., in: source)
+        return Set(
+            regex.matches(in: source, range: range).compactMap { match in
+                Range(match.range(at: 1), in: source).map { String(source[$0]) }
+            })
+    }
+
+    /// The hook half (task 01a20dc5 stage 3): the web reaches the plugin by
+    /// its jsName, and every method it calls and every event it listens for
+    /// is one this plugin declares.
     func testTheHookUsesOnlyNamesThePluginDefines() throws {
-        try XCTSkipIf(true, "task 01a20dc5 stage 3 adds the BurrowVoice bridge to voice_tab.js")
-        let source = try hook
-        XCTAssertTrue(source.contains("BurrowVoice"), "the hook reaches the plugin by its jsName")
+        let hookSource = try hook
+        let libSource = try lib
+        XCTAssertTrue(libSource.contains("cap.Plugins && cap.Plugins.BurrowVoice"), "the web reaches the plugin by its jsName")
+
+        let used = Self.matches(#"\bplugin\.(\w+)\("#, in: hookSource + libSource)
+            .union(Self.matches(#"this\._native\.(\w+)\("#, in: hookSource))
+            .union(Self.matches(#"_nativeCall\("(\w+)""#, in: hookSource))
+            .subtracting(["addListener"])
         let registered = Set(BurrowVoicePlugin().pluginMethods.map(\.name))
-        for method in Self.methods where source.contains(".\(method)(") {
-            XCTAssertTrue(registered.contains(method), method)
+        XCTAssertTrue(used.isSuperset(of: Set(Self.methods)), "the scan found every method: \(used.sorted())")
+        for method in used {
+            XCTAssertTrue(registered.contains(method), "the hook calls \(method), which the plugin does not register")
         }
-        for method in ["capabilities", "start", "stop", "cancel", "speak", "stopSpeaking"] {
-            XCTAssertTrue(source.contains(".\(method)("), "the hook calls \(method)")
-        }
-        for event in BurrowVoicePlugin.events {
-            XCTAssertTrue(source.contains("\"\(event)\""), "the hook listens for \(event)")
+
+        let events = Self.matches(#"\bon\("(\w+)""#, in: hookSource)
+        XCTAssertTrue(events.isSuperset(of: ["partial", "ended", "speech", "route"]), "\(events.sorted())")
+        for event in events {
+            XCTAssertTrue(BurrowVoicePlugin.events.contains(event), "the hook listens for \(event), which the plugin never sends")
         }
     }
 }
