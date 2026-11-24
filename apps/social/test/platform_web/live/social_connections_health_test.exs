@@ -263,6 +263,26 @@ defmodule PlatformWeb.SocialConnectionsHealthTest do
     assert render(child) =~ "Published."
   end
 
+  test "a quality-blocked no-job retry requires investigation rather than another retry",
+       %{conn: conn} = ctx do
+    Repo.update!(Ecto.Changeset.change(ctx.profile, quality_reviewer_user_ids: [ctx.n.id]))
+    before = Repo.get!(Post, ctx.refused.id)
+    child = open(conn, ctx.h1)
+    child |> element(row(ctx.warn) <> " [data-fix='retry']") |> render_click()
+    at = DateTime.utc_now() |> DateTime.add(1, :day) |> Calendar.strftime("%Y-%m-%dT%H:%M:%S")
+    child |> form("[data-role='retry-schedule']", %{at: at}) |> render_submit()
+
+    assert has_element?(
+             child,
+             "[data-role='social-notice']",
+             "This older post has no valid quality pass. Its publishing outcome needs separate investigation before a new job can be started."
+           )
+
+    assert Repo.get!(Post, ctx.refused.id) == before
+    assert Fake.calls() == []
+    refute has_element?(child, "[data-role='social-card-return-quality']")
+  end
+
   test "an incomplete retry shows each missing publishing field", %{conn: conn} = ctx do
     Repo.update_all(from(a in Social.Account, where: a.id == ^ctx.warn.id),
       set: [platform: "youtube"]

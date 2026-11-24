@@ -882,7 +882,7 @@ defmodule PlatformWeb.SocialClipsReview do
   defp approver?(%Profile{org_id: org_id, id: id}, user_id) do
     with %{} <- user_id && Platform.Accounts.get_user(user_id),
          %Profile{} = profile <- Social.get_profile(org_id, id) do
-      Social.approver_check(org_id, profile, user_id) == :ok
+      Social.preparer_check(org_id, profile, user_id) == :ok
     else
       _ -> false
     end

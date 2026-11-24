@@ -329,7 +329,9 @@ defmodule PlatformWeb.SocialCalendarTab do
         reason: Cal.reason(post),
         notice: nil,
         show_body?: post.status == "published" or approver?,
-        can_approve?: waiting? and approver? and account.approval_mode != "draft_only",
+        can_approve?:
+          waiting? and approver? and account.approval_mode != "draft_only" and
+            Social.QualityReview.check_approval(profile, post) == :ok,
         fingerprint: if(waiting? and approver?, do: Approvals.fingerprint(post))
       }
     else

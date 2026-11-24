@@ -10,6 +10,10 @@ defmodule Platform.Social.Profile do
   may approve its posts; `Platform.Social` checks every id is a user (never
   an agent) when it is written. Whether the approver of a given post is in
   this list is Social 3/7's rule, not this schema's.
+
+  `quality_reviewer_user_ids` is a separate human list for the quality stage;
+  membership grants no final approval authority. Social validates its users
+  and checks authority when a review action is performed.
   """
   use Ecto.Schema
   import Ecto.Changeset
@@ -29,6 +33,7 @@ defmodule Platform.Social.Profile do
     field(:voice_notes, :string)
     field(:default_hashtags, {:array, :string}, default: [])
     field(:approver_user_ids, {:array, :binary_id}, default: [])
+    field(:quality_reviewer_user_ids, {:array, :binary_id}, default: [])
     # Social 2/7: the vendor's profile or workspace id (not a secret).
     field(:provider_profile_ref, :string)
     # Social 5/7: caption and end-card values over `Platform.Social.Brand`'s
@@ -63,7 +68,7 @@ defmodule Platform.Social.Profile do
     timestamps()
   end
 
-  @editable ~w(project_id name home_url voice_notes default_hashtags approver_user_ids brand space_id
+  @editable ~w(project_id name home_url voice_notes default_hashtags approver_user_ids quality_reviewer_user_ids brand space_id
                timezone notify_user_ids drafting_agent_id)a
 
   @doc """

@@ -473,7 +473,7 @@ defmodule Platform.Social.Ideas do
 
     cond do
       Enum.all?(statuses, &(&1 == "draft")) -> "drafting"
-      "needs_approval" in statuses -> "in_review"
+      Enum.any?(statuses, &(&1 in ~w(quality_review needs_approval))) -> "in_review"
       Enum.any?(statuses, &(&1 in ~w(approved scheduled))) -> "scheduled"
       "published" in statuses -> "live"
       Enum.all?(statuses, &(&1 == "failed")) -> "failed"

@@ -29,3 +29,7 @@
 
 # Old binaries ignore discard markers and may expose discarded drafts.
 20261122120000
+
+# Old binaries cannot handle quality_review and do not enforce the quality
+# pass before final approval. Fix forward after crossing this migration.
+20261123120000
