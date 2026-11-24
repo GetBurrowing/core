@@ -273,8 +273,13 @@ defmodule PlatformWeb.SocialLiveConnectionsTest do
       assert has_element?(
                child,
                "#social-approvers",
-               "Approvers can approve posts on this profile's accounts."
+               "Approvers give final approval on this profile's accounts."
              )
+
+      # The owned-account rule (Social.post_approver_check/4): the hint must
+      # not claim approvers can approve an owned account's posts.
+      assert has_element?(child, "#social-approvers", "account need its owner's approval.")
+      refute has_element?(child, "#social-approvers", "can approve posts")
 
       for user <- [ctx.h1, ctx.h2, ctx.n] do
         assert has_element?(child, approver_box(user) <> "[type='checkbox']")

@@ -563,7 +563,8 @@ defmodule PlatformWeb.SocialSettingsTab do
     <fieldset class="fieldset py-0" id="social-approvers" data-role="social-approvers">
       <legend class="label mb-1 font-medium whitespace-normal">Approvers (people only)</legend>
       <p class="text-xs text-subtle">
-        Approvers can approve posts on this profile's accounts.
+        Approvers give final approval on this profile's accounts. Posts on an owned
+        account need its owner's approval.
       </p>
       <input type="hidden" name={@field.name <> "[]"} value="" />
       <label
