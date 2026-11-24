@@ -195,7 +195,7 @@ defmodule PlatformWeb.SocialLiveConnectionsTest do
     options =
       html
       |> LazyHTML.from_fragment()
-      |> LazyHTML.query("select[name='profile[approver_user_ids][]'] option")
+      |> LazyHTML.query("input[type='checkbox'][name='profile[approver_user_ids][]']")
       |> Enum.map(&LazyHTML.attribute(&1, "value"))
       |> List.flatten()
 
@@ -207,7 +207,7 @@ defmodule PlatformWeb.SocialLiveConnectionsTest do
     approver_html =
       html
       |> LazyHTML.from_fragment()
-      |> LazyHTML.query("select[name='profile[approver_user_ids][]']")
+      |> LazyHTML.query("#social-approvers")
       |> LazyHTML.to_html()
 
     refute approver_html =~ ctx.g.name
@@ -253,6 +253,148 @@ defmodule PlatformWeb.SocialLiveConnectionsTest do
     p = Repo.get!(Profile, ctx.profile.id)
     assert p.approver_user_ids == [ctx.h1.id]
     assert p.space_id == ctx.space.id
+  end
+
+  describe "approver checkboxes" do
+    defp approver_box(user), do: "#social-approver-#{user.id}[data-role='social-approver-option']"
+
+    defp submit_approvers(child, ids) do
+      child
+      |> form("#social-settings-form", %{profile: %{approver_user_ids: ids}})
+      |> render_submit()
+    end
+
+    test "each internal member is a checkbox; current approvers are checked",
+         %{conn: conn} = ctx do
+      child = open(conn, ctx.h1, "settings")
+
+      assert has_element?(child, "fieldset#social-approvers legend", "Approvers (people only)")
+
+      assert has_element?(
+               child,
+               "#social-approvers",
+               "Approvers give final approval on this profile's accounts."
+             )
+
+      # The owned-account rule (Social.post_approver_check/4): the hint must
+      # not claim approvers can approve an owned account's posts.
+      assert has_element?(child, "#social-approvers", "account need its owner's approval.")
+      refute has_element?(child, "#social-approvers", "can approve posts")
+
+      for user <- [ctx.h1, ctx.h2, ctx.n] do
+        assert has_element?(child, approver_box(user) <> "[type='checkbox']")
+        assert has_element?(child, "label[for='social-approver-#{user.id}']", user.name)
+      end
+
+      assert has_element?(child, approver_box(ctx.h1) <> "[checked]")
+      assert has_element?(child, approver_box(ctx.h2) <> "[checked]")
+      refute has_element?(child, approver_box(ctx.n) <> "[checked]")
+      refute has_element?(child, "#social-approver-#{ctx.g.id}")
+    end
+
+    test "checking another person adds them", %{conn: conn} = ctx do
+      child = open(conn, ctx.h1, "settings")
+      submit_approvers(child, [ctx.h1.id, ctx.h2.id, ctx.n.id])
+
+      p = Repo.get!(Profile, ctx.profile.id)
+      assert Enum.sort(p.approver_user_ids) == Enum.sort([ctx.h1.id, ctx.h2.id, ctx.n.id])
+      assert has_element?(child, approver_box(ctx.n) <> "[checked]")
+      assert has_element?(child, "[data-role='social-notice']", "Settings saved.")
+    end
+
+    test "unchecking a person removes them", %{conn: conn} = ctx do
+      child = open(conn, ctx.h1, "settings")
+      submit_approvers(child, [ctx.h1.id])
+
+      assert Repo.get!(Profile, ctx.profile.id).approver_user_ids == [ctx.h1.id]
+      assert has_element?(child, approver_box(ctx.h1) <> "[checked]")
+      refute has_element?(child, approver_box(ctx.h2) <> "[checked]")
+    end
+
+    test "an id the picker did not offer is ignored, and the blank sentinel is dropped",
+         %{conn: conn} = ctx do
+      outsider = named_user!("Olly Outsider")
+      child = open(conn, ctx.h1, "settings")
+
+      render_hook(child, "save_settings", %{
+        "profile" => %{"approver_user_ids" => ["", ctx.h1.id, outsider.id, ctx.g.id]}
+      })
+
+      assert Repo.get!(Profile, ctx.profile.id).approver_user_ids == [ctx.h1.id]
+      refute has_element?(child, "#social-approver-#{outsider.id}")
+    end
+
+    test "unchecking everyone submits the key and clears the list", %{conn: conn} = ctx do
+      child = open(conn, ctx.h1, "settings")
+
+      render_hook(child, "save_settings", %{"profile" => %{"approver_user_ids" => [""]}})
+
+      assert Repo.get!(Profile, ctx.profile.id).approver_user_ids == []
+    end
+  end
+
+  # The approver checkboxes (#282) share one form with the separate
+  # quality-reviewer multi-select (#286). Submitting through `form/3` sends
+  # the select's selected options as a browser would, so a reviewer list the
+  # approver picker clobbered shows up here, read back from the database.
+  describe "approver checkboxes leave the quality-reviewer list alone" do
+    setup ctx do
+      reviewers = [ctx.h2.id, ctx.n.id]
+
+      Repo.update!(Ecto.Changeset.change(ctx.profile, quality_reviewer_user_ids: reviewers))
+
+      Map.put(ctx, :reviewers, reviewers)
+    end
+
+    defp submit_approver_boxes(child, ids) do
+      child
+      |> form("#social-settings-form", %{profile: %{approver_user_ids: ids}})
+      |> render_submit()
+    end
+
+    defp saved_profile(ctx), do: Repo.get!(Profile, ctx.profile.id)
+
+    test "adding a final approver", %{conn: conn} = ctx do
+      child = open(conn, ctx.h1, "settings")
+      submit_approver_boxes(child, ["", ctx.h1.id, ctx.h2.id, ctx.n.id])
+
+      p = saved_profile(ctx)
+      assert Enum.sort(p.approver_user_ids) == Enum.sort([ctx.h1.id, ctx.h2.id, ctx.n.id])
+      assert p.quality_reviewer_user_ids == ctx.reviewers
+      assert has_element?(child, "[data-role='social-notice']", "Settings saved.")
+    end
+
+    test "removing a final approver", %{conn: conn} = ctx do
+      child = open(conn, ctx.h1, "settings")
+      submit_approver_boxes(child, ["", ctx.h1.id])
+
+      p = saved_profile(ctx)
+      assert p.approver_user_ids == [ctx.h1.id]
+      assert p.quality_reviewer_user_ids == ctx.reviewers
+    end
+
+    test "clearing every final approver (the blank sentinel alone)", %{conn: conn} = ctx do
+      child = open(conn, ctx.h1, "settings")
+      submit_approver_boxes(child, [""])
+
+      p = saved_profile(ctx)
+      assert p.approver_user_ids == []
+      assert p.quality_reviewer_user_ids == ctx.reviewers
+    end
+
+    test "authority revoked between mount and save is refused on save", %{conn: conn} = ctx do
+      child = open(conn, ctx.h1, "settings")
+      assert has_element?(child, "#social-settings-form")
+
+      Repo.update!(Ecto.Changeset.change(saved_profile(ctx), approver_user_ids: [ctx.h2.id]))
+
+      submit_approver_boxes(child, ["", ctx.h1.id, ctx.n.id])
+
+      p = saved_profile(ctx)
+      assert p.approver_user_ids == [ctx.h2.id]
+      assert p.quality_reviewer_user_ids == ctx.reviewers
+      assert has_element?(child, "[data-role='social-notice']", "Only an approver")
+    end
   end
 
   test "a non-approver sees settings read-only", %{conn: conn} = ctx do
