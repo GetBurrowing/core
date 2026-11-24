@@ -5,7 +5,9 @@ import {
   handleDevicesChanged,
   kindOfPublication,
   seedInUse,
+  unregisterRoom,
 } from "../lib/media_devices"
+import { disconnectLiveKitRoom } from "../meeting_presence.js"
 
 /**
  * MeetingBar hook — bridges the in-call top bar controls to the LiveKit Room instance.
@@ -333,13 +335,14 @@ const MeetingBar = {
     this._micHandler = () => toggle("mic")
     this._cameraHandler = () => toggle("camera")
 
+    // The one non-hook leave (task 01a20b3e stage 4): it disconnects (which
+    // stops the local tracks) and nulls BOTH window pointers, so no later
+    // mount finds the dead Room on window.__livekit_room.
     this._leaveHandler = () => {
-      const room = window.__livekitRoom
-      if (room) {
-        room.disconnect().catch(() => {})
-        window.__livekitRoom = null
-        window.dispatchEvent(new CustomEvent("livekit:room-disconnected"))
-      }
+      const room = window.__livekit_room || window.__livekitRoom
+      if (!room) return
+      disconnectLiveKitRoom(window)
+      unregisterRoom(room)
     }
 
     const el = this.el

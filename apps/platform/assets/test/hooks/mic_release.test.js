@@ -149,7 +149,8 @@ afterEach(() => {
 // ── (c) the Voice tab ────────────────────────────────────────────────────
 
 const { default: VoiceTab, MIC_TIMEOUT_MS } = await import("../../js/hooks/voice_tab.js")
-const { __resetForTests: resetMediaDevices } = await import("../../js/lib/media_devices.js")
+const mediaDevices = await import("../../js/lib/media_devices.js")
+const { __resetForTests: resetMediaDevices } = mediaDevices
 
 let clock = 0
 
@@ -426,9 +427,15 @@ describe("(a) the meeting's window Room (meeting_presence.js disconnectLiveKitRo
 const { default: MeetingBar } = await import("../../js/hooks/meeting_bar.js")
 
 describe("(b) meeting_bar.js Leave", () => {
-  it("ends the call's mic track", async () => {
+  const { registerRoom, activeRoom } = mediaDevices
+
+  function leaveWith(pointers) {
     const room = connectedRoomWithMic()
-    vi.stubGlobal("window", Object.assign(new EventTarget(), { __livekitRoom: room, __livekit_room: room }))
+    const win = Object.assign(new EventTarget(), pointers(room))
+    const fired = []
+    win.addEventListener("livekit:room-disconnected", () => fired.push("room-disconnected"))
+    vi.stubGlobal("window", win)
+    registerRoom(room, "meeting")
     const hook = Object.create(MeetingBar)
     // Only the Leave handler is under test; build it the way mounted() does
     // without the rest of the bar's DOM.
@@ -444,8 +451,27 @@ describe("(b) meeting_bar.js Leave", () => {
     }
     expect(typeof hook._leaveHandler).toBe("function")
     hook._leaveHandler()
+    return { room, win, fired }
+  }
+
+  beforeEach(() => resetMediaDevices())
+
+  it("ends the call's mic track and clears BOTH window pointers", async () => {
+    const { room, win, fired } = leaveWith((r) => ({ __livekitRoom: r, __livekit_room: r }))
+    await settle()
+    expect(room.disconnect).toHaveBeenCalledTimes(1)
+    expect(room.track.readyState).toBe("ended")
+    expect(win.__livekitRoom).toBeNull()
+    expect(win.__livekit_room).toBeNull()
+    expect(fired).toEqual(["room-disconnected"])
+    expect(activeRoom("meeting")).toBeNull()
+  })
+
+  it("also leaves when only the snake-case pointer holds the Room", async () => {
+    const { room, win } = leaveWith((r) => ({ __livekit_room: r }))
     await settle()
     expect(room.track.readyState).toBe("ended")
+    expect(win.__livekit_room).toBeNull()
   })
 })
 
