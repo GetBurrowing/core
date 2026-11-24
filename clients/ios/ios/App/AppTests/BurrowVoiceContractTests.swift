@@ -3,7 +3,8 @@ import XCTest
 @testable import App
 
 /// CONTRACT SOURCE SCAN, native side (task 01a20dc5). Reads the Voice tab's
-/// web hook (apps/platform/assets/js/hooks/voice_tab.js) from the checkout
+/// web hook (apps/platform/assets/js/hooks/voice_tab.js and
+/// voice_tab_native_runtime.js) from the checkout
 /// and asserts every plugin name, method and event it uses exists here, so a
 /// rename on either side fails CI. Runs on a simulator, which reads the
 /// host's files.
@@ -15,9 +16,17 @@ final class BurrowVoiceContractTests: XCTestCase {
         return url
     }()
 
+    /// The hook is two files: voice_tab.js (in the web app bundle) and its
+    /// on-device half, voice_tab_native_runtime.js (a separately loaded
+    /// bundle). The scan reads both.
     private var hook: String {
         get throws {
-            try String(contentsOf: Self.root.appendingPathComponent("apps/platform/assets/js/hooks/voice_tab.js"), encoding: .utf8)
+            try ["voice_tab.js", "voice_tab_native_runtime.js"]
+                .map {
+                    try String(
+                        contentsOf: Self.root.appendingPathComponent("apps/platform/assets/js/hooks/\($0)"), encoding: .utf8)
+                }
+                .joined(separator: "\n")
         }
     }
 

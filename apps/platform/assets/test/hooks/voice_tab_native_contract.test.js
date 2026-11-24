@@ -17,7 +17,10 @@ const root = path.resolve(path.dirname(fileURLToPath(import.meta.url)), "../../.
 const read = (rel) => fs.readFileSync(path.join(root, rel), "utf8")
 
 const pluginSwift = read("clients/ios/ios/App/App/Plugins/BurrowVoicePlugin.swift")
-const hookJs = read("apps/platform/assets/js/hooks/voice_tab.js")
+// The hook is two files: voice_tab.js (in app.js) and its on-device half,
+// voice_tab_native_runtime.js (the voice_native island).
+const hookJs =
+  read("apps/platform/assets/js/hooks/voice_tab.js") + read("apps/platform/assets/js/hooks/voice_tab_native_runtime.js")
 const libJs = read("apps/platform/assets/js/lib/on_device_voice.js")
 
 const all = (src, re) => Array.from(src.matchAll(re), (m) => m[1])

@@ -56,12 +56,14 @@ vi.mock("livekit-client", async (importOriginal) => {
 })
 
 import VoiceTab, {
-  DRAG_CANCEL_PX,
   NO_WORDS_MS,
   TURN_CAP_MS,
   TURN_WARN_MS,
+  VOICE_NATIVE_ISLAND,
 } from "../../js/hooks/voice_tab.js"
 import { onDeviceVoiceCapability } from "../../js/lib/on_device_voice.js"
+import VoiceTabNative from "../../js/hooks/voice_tab_native_runtime.js"
+import { DRAG_CANCEL_PX } from "../../js/hooks/voice_tab_shared.js"
 
 const REASONS = ["os_too_old", "unavailable", "locale_unsupported", "speech_permission_denied", "assets_missing"]
 
@@ -146,6 +148,12 @@ function fakeDocument(pending) {
     visibilityState: "visible",
     getElementById: (id) => (id === "voice-native-pending" ? pending : null),
     createElement: (tag) => element(tag),
+    head: {
+      appended: [],
+      appendChild(node) {
+        this.appended.push(node)
+      },
+    },
   })
   const add = target.addEventListener.bind(target)
   const remove = target.removeEventListener.bind(target)
@@ -197,12 +205,15 @@ let clock = 0
 let pending
 let windowListeners
 
-function install({ plugin, native = true, meetings } = {}) {
+// `island: false` leaves the voice_native island unloaded, so the hook has to
+// fetch it; by default it is already on the page, as after its script ran.
+function install({ plugin, native = true, meetings, island = true } = {}) {
   windowListeners = {}
   const Plugins = {}
   if (plugin) Plugins.BurrowVoice = plugin
   if (meetings) Plugins.BurrowMeetings = meetings
   const win = {
+    __burrowVoiceNative: island ? VoiceTabNative : undefined,
     Capacitor: { isNativePlatform: () => native, Plugins },
     addEventListener: (t, fn) => (windowListeners[t] = fn),
     removeEventListener: (t) => delete windowListeners[t],
@@ -642,6 +653,55 @@ describe("on the device", () => {
 
 // ── mic release (the core #289 rule) ───────────────────────────────────────
 
+describe("the voice_native island loads only inside the app", () => {
+  it("a browser, Android and an older app build never fetch it", async () => {
+    const setups = [
+      () => vi.stubGlobal("window", {}),
+      () => install({ plugin: fakePlugin(), native: false, island: false }),
+      () => install({ island: false }),
+    ]
+    for (const setup of setups) {
+      vi.stubGlobal("document", fakeDocument(pending))
+      setup()
+      await mount()
+      expect(document.head.appended).toEqual([])
+    }
+  })
+
+  it("an island that fails to load leaves today's path", async () => {
+    const plugin = fakePlugin()
+    install({ plugin, island: false })
+    const mounting = mount()
+    await settle()
+    expect(document.head.appended.length).toBe(1)
+    document.head.appended[0].onerror(new Error("offline"))
+    const t = await mounting
+    expect(t.events()).not.toContain("voice_native_ready")
+    t.down(0)
+    await settle()
+    expect(t.gum).toHaveBeenCalledTimes(1)
+    expect(plugin.start).not.toHaveBeenCalled()
+  })
+
+  it("inside the app it fetches the island, then takes the device path", async () => {
+    const plugin = fakePlugin()
+    const win = install({ plugin, island: false })
+    const mounting = mount()
+    await settle()
+    const [script] = document.head.appended
+    expect(script.src).toBe(VOICE_NATIVE_ISLAND)
+    expect(script.src).toBe("/assets/js/voice_native_island.js")
+    win.__burrowVoiceNative = VoiceTabNative
+    script.onload()
+    const t = await mounting
+    expect(t.events()).toContain("voice_native_ready")
+    t.down(0)
+    await settle()
+    expect(plugin.start).toHaveBeenCalledTimes(1)
+    expect(t.gum).not.toHaveBeenCalled()
+  })
+})
+
 describe("leaving releases the mic", () => {
   it("destroyed() mid-start: the late start() is cancelled at once; speech stops; meetings untouched", async () => {
     let resolveStart
@@ -702,10 +762,15 @@ describe("leaving releases the mic", () => {
 })
 
 describe("source hygiene", () => {
-  const src = fs.readFileSync(
-    path.join(path.dirname(fileURLToPath(import.meta.url)), "../../js/hooks/voice_tab.js"),
-    "utf8",
-  )
+  // Every file of the hook: the app.js half, the island half and what they share.
+  const src = ["voice_tab.js", "voice_tab_native_runtime.js", "voice_tab_shared.js", "../lib/on_device_voice.js"]
+    .map((f) => fs.readFileSync(path.join(path.dirname(fileURLToPath(import.meta.url)), "../../js/hooks", f), "utf8"))
+    .join("\n")
+
+  it("reads every file of the hook", () => {
+    expect(src).toContain("_nativeBegin")
+    expect(src).toContain("onDeviceVoiceCapability")
+  })
 
   it("never uses innerHTML and never logs", () => {
     expect(src).not.toMatch(/\.innerHTML\s*=|insertAdjacentHTML/)
