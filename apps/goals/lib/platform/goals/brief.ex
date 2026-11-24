@@ -4,7 +4,19 @@ defmodule Platform.Goals.Brief do
   require Logger
   alias Platform.Accounts.User
   alias Platform.Goals
-  alias Platform.Goals.{Ask, AskAnswer, BriefItem, Clock, Entry, Limits, Visibility, WakeUp}
+
+  alias Platform.Goals.{
+    Ask,
+    AskAnswer,
+    BriefItem,
+    Clock,
+    Conversation,
+    Entry,
+    Limits,
+    Visibility,
+    WakeUp
+  }
+
   alias Platform.Repo
 
   defp children(actor, schema) do
@@ -121,8 +133,12 @@ defmodule Platform.Goals.Brief do
 
       old = answer_for(user, item.ask_id)
 
+      # Task 01a20de3: words in the goal's conversation answer the ask, so a
+      # reply linked to it (message metadata "ask_id") is not "ignored".
+      replied = not is_nil(ask) and not is_nil(Conversation.ask_reply(goal, user.id, ask.id))
+
       written =
-        not is_nil(ask) and is_nil(old) and
+        not is_nil(ask) and is_nil(old) and not replied and
           match?({:ok, _}, Goals.answer_ask(user, item.ask_id, "ignored"))
 
       if goal, do: item |> Ecto.Changeset.change(ignored_at: now) |> Repo.update!()

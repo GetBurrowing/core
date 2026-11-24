@@ -16,7 +16,7 @@ defmodule Platform.Goals.BriefingConversationTest do
   alias Platform.Chat
   alias Platform.Chat.Message
   alias Platform.Goals
-  alias Platform.Goals.{Clock, Conversation, Goal, Limits, WakeUp}
+  alias Platform.Goals.{Ask, AskAnswer, Clock, Conversation, Goal, GoalClock, Limits, WakeUp}
   alias Platform.Goals.WakeUps.Briefing
 
   @no_number {:cannot_measure, %{reason: :no_source}}
@@ -24,7 +24,12 @@ defmodule Platform.Goals.BriefingConversationTest do
   setup do
     enable_goals!()
 
-    old = Map.new([:wake_up_dispatcher, :limits], &{&1, Application.fetch_env(:goals, &1)})
+    old =
+      Map.new(
+        [:wake_up_dispatcher, :limits, :clock_now],
+        &{&1, Application.fetch_env(:goals, &1)}
+      )
+
     Application.put_env(:goals, :wake_up_dispatcher, fn _signal -> :ok end)
 
     on_exit(fn ->
@@ -276,6 +281,143 @@ defmodule Platform.Goals.BriefingConversationTest do
         do: refute(since_last =~ message["text"])
 
     refute since_last =~ "SINCE-TOKEN"
+  end
+
+  # ── asks answered in words (stage 2) ──────────────────────────────────────
+
+  defp open_ask!(c) do
+    # The first ask of a test starts the fake clock; later ones follow it.
+    if is_nil(Repo.one(from(g in GoalClock, where: g.goal_id == ^c.goal.id))),
+      do: put_now(~U[2026-02-04 07:00:00Z])
+
+    wake = fire(c.goal)
+    {:ok, %{ask: ask}} = Goals.close_wake_up(c.coach, wake.id, "ask", ask_attrs())
+    ask
+  end
+
+  defp later!(c, coach \\ nil), do: wake!(c, DateTime.add(Clock.now(), 3600), "check_in", coach)
+
+  defp listed?(rows, key, id), do: Enum.any?(rows, &(&1[key] == id))
+
+  defp expire!(ask) do
+    put_now(DateTime.add(ask.expires_at, 1))
+    :ok = Clock.tick(Clock.now())
+    assert Repo.get!(Ask, ask.id).status == "expired"
+  end
+
+  test "an ask with a worded reply is reported replied, not open", c do
+    ask = open_ask!(c)
+    reply = say!(c, "REPLY-TOKEN-1", ask_id: ask.id)
+    since_last = snapshot(c, later!(c))["since_last"]
+
+    assert [replied] = since_last["replied_asks"]
+
+    assert replied == %{
+             "ask_id" => ask.id,
+             "title" => ask.title,
+             "kind" => ask.kind,
+             "status" => "open",
+             "reply_message_ids" => [reply.id]
+           }
+
+    refute listed?(since_last["open_asks"], "id", ask.id)
+    refute listed?(since_last["answers"], "ask_id", ask.id)
+  end
+
+  test "an expired ask with a worded reply is reported replied, not expired", c do
+    ask = open_ask!(c)
+    reply = say!(c, "REPLY-TOKEN-1", ask_id: ask.id)
+    expire!(ask)
+    since_last = snapshot(c, later!(c))["since_last"]
+
+    assert [%{"ask_id" => id, "status" => "expired", "reply_message_ids" => [rid]}] =
+             since_last["replied_asks"]
+
+    assert {id, rid} == {ask.id, reply.id}
+    refute listed?(since_last["expired_asks"], "id", ask.id)
+    refute listed?(since_last["open_asks"], "id", ask.id)
+  end
+
+  test "an ask the brief marked ignored before the fix but which has a reply is reported replied",
+       c do
+    ask = open_ask!(c)
+    reply = say!(c, "REPLY-TOKEN-1", ask_id: ask.id)
+    {:ok, _} = Goals.answer_ask(c.owner, ask.id, "ignored")
+
+    assert [%AskAnswer{answer: "ignored"}] =
+             Repo.all(from(a in AskAnswer, where: a.ask_id == ^ask.id))
+
+    since_last = snapshot(c, later!(c))["since_last"]
+
+    assert [%{"ask_id" => id, "status" => "closed", "reply_message_ids" => [rid]}] =
+             since_last["replied_asks"]
+
+    assert {id, rid} == {ask.id, reply.id}
+    refute listed?(since_last["answers"], "ask_id", ask.id)
+  end
+
+  test "a used answer with a reply keeps its row and gains reply_message_ids", c do
+    ask = open_ask!(c)
+    {:ok, _} = Goals.answer_ask(c.owner, ask.id, "used")
+    reply = say!(c, "REPLY-TOKEN-1", ask_id: ask.id)
+    since_last = snapshot(c, later!(c))["since_last"]
+
+    assert [row] = Enum.filter(since_last["answers"], &(&1["ask_id"] == ask.id))
+    assert row["answer"] == "used"
+    assert row["reply_message_ids"] == [reply.id]
+    assert listed?(since_last["replied_asks"], "ask_id", ask.id)
+  end
+
+  test "an ask with no reply is still open, then expired", c do
+    ask = open_ask!(c)
+    _unlinked = say!(c, "REPLY-TOKEN-1")
+    since_last = snapshot(c, later!(c))["since_last"]
+    assert listed?(since_last["open_asks"], "id", ask.id)
+    assert since_last["replied_asks"] == []
+
+    expire!(ask)
+    since_last = snapshot(c, later!(c))["since_last"]
+    assert listed?(since_last["expired_asks"], "id", ask.id)
+    refute listed?(since_last["open_asks"], "id", ask.id)
+    assert since_last["replied_asks"] == []
+  end
+
+  test "a reply to ANOTHER ask does not mark this one", c do
+    first = open_ask!(c)
+    second = open_ask!(c)
+    reply = say!(c, "REPLY-TOKEN-1", ask_id: first.id)
+    since_last = snapshot(c, later!(c))["since_last"]
+
+    assert [%{"ask_id" => id, "reply_message_ids" => [rid]}] = since_last["replied_asks"]
+    assert {id, rid} == {first.id, reply.id}
+    assert listed?(since_last["open_asks"], "id", second.id)
+    refute listed?(since_last["open_asks"], "id", first.id)
+  end
+
+  test "replied_asks carries no owner text", c do
+    ask = open_ask!(c)
+    say!(c, "REPLY-TOKEN-1 Tuesdays work", ask_id: ask.id)
+    snap = snapshot(c, later!(c))
+
+    assert [_] = snap["since_last"]["replied_asks"]
+    since_last = inspect(snap["since_last"], limit: :infinity, printable_limit: :infinity)
+    refute since_last =~ "REPLY-TOKEN-1"
+    refute since_last =~ "Tuesdays"
+    refute Briefing.text(snap) =~ "REPLY-TOKEN-1"
+  end
+
+  test "a reply written before the current coach joined is not reported replied", c do
+    ask = open_ask!(c)
+    say!(c, "REPLY-TOKEN-1", ask_id: ask.id)
+    new_coach = coach_agent!(c.owner)
+    {:ok, _} = Goals.update_goal(c.owner, c.goal.id, %{coach_agent_id: new_coach.id})
+
+    since_last = snapshot(c, later!(c, new_coach), new_coach)["since_last"]
+    assert since_last["replied_asks"] == []
+    assert listed?(since_last["open_asks"], "id", ask.id)
+
+    # Positive control: the reply is linked; the owner's own read finds it.
+    assert Conversation.ask_reply(reload(c.goal), c.owner.id, ask.id) == "REPLY-TOKEN-1"
   end
 
   # ── nothing to read ───────────────────────────────────────────────────────

@@ -3,6 +3,21 @@ defmodule Platform.Goals.WakeUps.Briefing do
   Private coach snapshots and content-free runtime signals.
   Task 01a1dfc1-abcc adds answer details and readable practice results and
   suggestion choices so the coach can react to briefing signals.
+
+  Task 01a20de3 adds the goal conversation (top-level `"conversation"`,
+  sanitized) and `since_last["replied_asks"]`. An ask the owner answered in
+  words (a conversation message whose metadata `"ask_id"` names it, read
+  with `Platform.Goals.Conversation.ask_replies/3`) is reported there with
+  its reply message ids and left out of `"open_asks"` and `"expired_asks"`;
+  its `"ignored"` answer rows are dropped from `"answers"`, and its used or
+  declined rows gain `"reply_message_ids"`. `replied_asks` carries ids and
+  the coach's own ask title only, never the owner's words: `text/1` renders
+  `since_last` with `inspect/1`.
+
+  The read respects the coach's `history_visible_from`, so a reply written
+  before the current coach joined the conversation is NOT reported as
+  replied: that coach cannot read it, and the ask stays listed as it would
+  be without the reply.
   """
   import Ecto.Query
   alias Platform.Goals
@@ -40,6 +55,7 @@ defmodule Platform.Goals.WakeUps.Briefing do
       if previous, do: previous.fired_at, else: (clock && clock.inserted_at) || goal.inserted_at
 
     {:ok, entries} = Goals.list_entries(actor, goal.id, limit: Limits.briefing_entries())
+    asks = ask_state(actor, goal, since, wake_up.fired_at)
 
     snapshot = %{
       "pace" => %{
@@ -59,9 +75,10 @@ defmodule Platform.Goals.WakeUps.Briefing do
         "previous" => if(previous, do: fields(previous, [:status, :outcome]), else: nil),
         "finished_tasks" => finished_tasks(actor, goal, wake_up),
         "open_tasks" => open_tasks(actor, goal),
-        "answers" => answers(actor, goal, since, wake_up.fired_at),
-        "open_asks" => asks(actor, goal, "open", nil, wake_up.fired_at),
-        "expired_asks" => asks(actor, goal, "expired", since, wake_up.fired_at),
+        "answers" => asks.answers,
+        "open_asks" => asks.open,
+        "expired_asks" => asks.expired,
+        "replied_asks" => asks.replied,
         "entries" =>
           entries
           |> Enum.filter(
@@ -262,6 +279,63 @@ defmodule Platform.Goals.WakeUps.Briefing do
     }
   end
 
+  # Task 01a20de3 stage 2: asks the owner answered in words, by the
+  # message metadata "ask_id" link, as the coach can read it.
+  defp ask_state(actor, goal, since, until) do
+    answers = answers(actor, goal, since, until)
+    open = asks(actor, goal, "open", nil, until)
+    expired = asks(actor, goal, "expired", since, until)
+
+    candidates =
+      Enum.map(open, &Map.take(&1, ["id", "title", "kind", "status"])) ++
+        Enum.map(expired, &Map.take(&1, ["id", "title", "kind", "status"])) ++
+        Enum.map(
+          answers,
+          &%{
+            "id" => &1["ask_id"],
+            "title" => &1["title"],
+            "kind" => &1.kind,
+            "status" => &1.status
+          }
+        )
+
+    ids = candidates |> Enum.map(& &1["id"]) |> Enum.uniq()
+    replies = Goals.Conversation.ask_replies(goal, actor, ids)
+    replied? = &Map.has_key?(replies, &1)
+
+    %{
+      open: open |> Enum.reject(&replied?.(&1["id"])) |> Enum.map(&Map.drop(&1, ["status"])),
+      expired:
+        expired |> Enum.reject(&replied?.(&1["id"])) |> Enum.map(&Map.drop(&1, ["status"])),
+      answers:
+        answers
+        |> Enum.reject(&(replied?.(&1["ask_id"]) and &1["answer"] == "ignored"))
+        |> Enum.map(&answer_row(&1, replies)),
+      replied:
+        candidates
+        |> Enum.uniq_by(& &1["id"])
+        |> Enum.filter(&replied?.(&1["id"]))
+        |> Enum.map(fn ask ->
+          %{
+            "ask_id" => ask["id"],
+            "title" => ask["title"],
+            "kind" => ask["kind"],
+            "status" => ask["status"],
+            "reply_message_ids" => Map.fetch!(replies, ask["id"])
+          }
+        end)
+    }
+  end
+
+  defp answer_row(row, replies) do
+    base = Map.drop(row, [:kind, :status])
+
+    case Map.fetch(replies, row["ask_id"]) do
+      {:ok, ids} -> Map.put(base, "reply_message_ids", ids)
+      :error -> base
+    end
+  end
+
   defp answers(actor, goal, since, until) do
     Repo.all(
       from(a in visible(actor, Ask, goal.id),
@@ -274,11 +348,17 @@ defmodule Platform.Goals.WakeUps.Briefing do
           answer: ans.answer,
           user_id: ans.user_id,
           details: ans.details,
-          payload: a.payload
+          payload: a.payload,
+          kind: a.kind,
+          status: a.status
         }
       )
     )
-    |> Enum.map(&fields(&1, [:ask_id, :title, :answer, :user_id, :details, :payload]))
+    |> Enum.map(
+      &(&1
+        |> fields([:ask_id, :title, :answer, :user_id, :details, :payload])
+        |> Map.merge(%{kind: &1.kind, status: &1.status}))
+    )
   end
 
   defp asks(actor, goal, status, since, until) do
@@ -289,7 +369,7 @@ defmodule Platform.Goals.WakeUps.Briefing do
 
     Repo.all(q)
     |> Enum.map(
-      &fields(&1, [:id, :kind, :title, :body, :payload, :addressed_user_ids, :expires_at])
+      &fields(&1, [:id, :kind, :title, :body, :payload, :addressed_user_ids, :expires_at, :status])
     )
   end
 
