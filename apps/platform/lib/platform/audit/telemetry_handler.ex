@@ -328,7 +328,7 @@ defmodule Platform.Audit.TelemetryHandler do
     # after `sweep/1` returns.
     [:platform, :files, :file_purged],
     # Social clip copy edits by the profile's drafting agent. Emitted by
-    # `Platform.Social.AgentDrafts.update_clip_copy/4` after the write
+    # the Social extension's clip copy-edit agent tool after the write
     # commits. Metadata carries actor_id (the agent), actor_type "agent",
     # resource_type "social_clip", resource_id, org_id, profile_id and
     # `fields` (the column NAMES changed, never the text). Sync (default
