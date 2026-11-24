@@ -333,6 +333,70 @@ defmodule PlatformWeb.SocialLiveConnectionsTest do
     end
   end
 
+  # The approver checkboxes (#282) share one form with the separate
+  # quality-reviewer multi-select (#286). Submitting through `form/3` sends
+  # the select's selected options as a browser would, so a reviewer list the
+  # approver picker clobbered shows up here, read back from the database.
+  describe "approver checkboxes leave the quality-reviewer list alone" do
+    setup ctx do
+      reviewers = [ctx.h2.id, ctx.n.id]
+
+      Repo.update!(Ecto.Changeset.change(ctx.profile, quality_reviewer_user_ids: reviewers))
+
+      Map.put(ctx, :reviewers, reviewers)
+    end
+
+    defp submit_approver_boxes(child, ids) do
+      child
+      |> form("#social-settings-form", %{profile: %{approver_user_ids: ids}})
+      |> render_submit()
+    end
+
+    defp saved_profile(ctx), do: Repo.get!(Profile, ctx.profile.id)
+
+    test "adding a final approver", %{conn: conn} = ctx do
+      child = open(conn, ctx.h1, "settings")
+      submit_approver_boxes(child, ["", ctx.h1.id, ctx.h2.id, ctx.n.id])
+
+      p = saved_profile(ctx)
+      assert Enum.sort(p.approver_user_ids) == Enum.sort([ctx.h1.id, ctx.h2.id, ctx.n.id])
+      assert p.quality_reviewer_user_ids == ctx.reviewers
+      assert has_element?(child, "[data-role='social-notice']", "Settings saved.")
+    end
+
+    test "removing a final approver", %{conn: conn} = ctx do
+      child = open(conn, ctx.h1, "settings")
+      submit_approver_boxes(child, ["", ctx.h1.id])
+
+      p = saved_profile(ctx)
+      assert p.approver_user_ids == [ctx.h1.id]
+      assert p.quality_reviewer_user_ids == ctx.reviewers
+    end
+
+    test "clearing every final approver (the blank sentinel alone)", %{conn: conn} = ctx do
+      child = open(conn, ctx.h1, "settings")
+      submit_approver_boxes(child, [""])
+
+      p = saved_profile(ctx)
+      assert p.approver_user_ids == []
+      assert p.quality_reviewer_user_ids == ctx.reviewers
+    end
+
+    test "authority revoked between mount and save is refused on save", %{conn: conn} = ctx do
+      child = open(conn, ctx.h1, "settings")
+      assert has_element?(child, "#social-settings-form")
+
+      Repo.update!(Ecto.Changeset.change(saved_profile(ctx), approver_user_ids: [ctx.h2.id]))
+
+      submit_approver_boxes(child, ["", ctx.h1.id, ctx.n.id])
+
+      p = saved_profile(ctx)
+      assert p.approver_user_ids == [ctx.h2.id]
+      assert p.quality_reviewer_user_ids == ctx.reviewers
+      assert has_element?(child, "[data-role='social-notice']", "Only an approver")
+    end
+  end
+
   test "a non-approver sees settings read-only", %{conn: conn} = ctx do
     child = open(conn, ctx.n, "settings")
     assert has_element?(child, "[data-role='social-settings-readonly']")
