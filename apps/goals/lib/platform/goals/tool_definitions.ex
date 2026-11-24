@@ -195,6 +195,7 @@ defmodule Platform.Goals.ToolDefinitions do
         description:
           "Close a wake-up by queueing a question, offer or practice for a person's next brief. " <>
             "The person can also reply to a question in their own words: the reply lands in the goal's conversation and wakes you with a goals.reply signal; read it with goal_conversation_get and answer in that conversation. " <>
+            "Before asking, check the briefing's conversation section and do not repeat a question already answered there. " <>
             @one_outcome,
         parameters:
           Map.merge(@prediction, %{
