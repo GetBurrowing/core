@@ -190,7 +190,8 @@ defmodule Platform.Social.StudioSchemaTest do
       assert {:error, %Ecto.Changeset{}} =
                Social.update_post(w.org_id, post, %{status: "planned"})
 
-      assert Post.statuses() == ~w(draft needs_approval approved scheduled published failed)
+      assert Post.statuses() ==
+               ~w(draft quality_review needs_approval approved scheduled published failed)
     end
   end
 

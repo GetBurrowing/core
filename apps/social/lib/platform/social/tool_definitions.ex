@@ -81,7 +81,7 @@ defmodule Platform.Social.ToolDefinitions do
       type: "string",
       required: false,
       description:
-        "draft or needs_approval (default needs_approval). Any other status is refused."
+        "draft, needs_approval (default), or quality_review on a brand with quality reviewers. Submissions on those brands enter quality_review; agents cannot pass the review. Any other status is refused."
     },
     task_id: %{
       type: "string",
@@ -180,7 +180,7 @@ defmodule Platform.Social.ToolDefinitions do
       %{
         name: "social_draft_create",
         description:
-          "Draft a post for one or more of a profile's accounts (one post per account, all or none). It lands in needs_approval (or draft). " <>
+          "Draft a post for one or more of a profile's accounts (one post per account, all or none). It lands in quality_review when the brand has quality reviewers, otherwise needs_approval (or draft when explicitly saved). " <>
             @human_approves,
         parameters:
           Map.merge(@post_fields, %{
@@ -250,7 +250,7 @@ defmodule Platform.Social.ToolDefinitions do
       %{
         name: "social_draft_update",
         description:
-          "Edit a post you drafted while it is still draft or needs_approval; draft may move to needs_approval, never back. A person-discarded draft must not be recreated without direction. " <>
+          "Edit a post you drafted while it is still draft, quality_review or needs_approval; a submission enters quality_review on a brand with quality reviewers. A submitted post cannot move back to draft. A person-discarded draft must not be recreated without direction. " <>
             @human_approves,
         parameters:
           Map.merge(@post_fields, %{
@@ -258,7 +258,7 @@ defmodule Platform.Social.ToolDefinitions do
           }),
         returns: "%{post: #{@post_row}}",
         limitations:
-          "A post past needs_approval (approved, scheduled, published, failed) is refused with post_locked and left unchanged. Rejection fields cannot be written. A body containing one of the profile's voice.banned phrases is refused with banned_phrase.",
+          "An approved, scheduled, published or failed post is refused with post_locked and left unchanged. Rejection fields cannot be written. A body containing one of the profile's voice.banned phrases is refused with banned_phrase.",
         when_to_use: "To revise a draft, for example after a human rejected it with a reason."
       },
       %{
@@ -271,7 +271,8 @@ defmodule Platform.Social.ToolDefinitions do
           status: %{
             type: "string",
             required: false,
-            description: "One of draft, needs_approval, approved, scheduled, published, failed."
+            description:
+              "One of draft, quality_review, needs_approval, approved, scheduled, published, failed."
           },
           refused: %{
             type: "boolean",

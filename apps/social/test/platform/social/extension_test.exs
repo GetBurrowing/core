@@ -24,6 +24,20 @@ defmodule Platform.Social.ExtensionTest do
   test "declares the social_post_approval inbox kind, kept listed on open (Social 3/7)" do
     assert [
              %{
+               kind: "social_post_revision",
+               source_type: "social_post",
+               label: "Changes requested",
+               icon: "hero-pencil-square",
+               stays_listed_on_open: false
+             },
+             %{
+               kind: "social_quality_review",
+               source_type: "social_post",
+               label: "Post needs quality review",
+               icon: "hero-check-badge",
+               stays_listed_on_open: true
+             },
+             %{
                kind: "social_post_approval",
                source_type: "social_post",
                label: "Post needs approval",
@@ -38,6 +52,16 @@ defmodule Platform.Social.ExtensionTest do
                stays_listed_on_open: false
              }
            ] = Extension.inbox_kinds()
+
+    # Quality requests stay actionable; revision notices acknowledge on open.
+    assert "social_quality_review" in Platform.Inbox.action_kinds()
+    refute "social_post_revision" in Platform.Inbox.action_kinds()
+
+    for kind <- ~w(social_quality_review social_post_revision) do
+      assert kind in Platform.Inbox.Item.kinds()
+      refute kind in Platform.Inbox.push_kinds()
+      refute kind in Platform.Mobile.AppEntities.approval_kinds()
+    end
 
     # Social authoring 9/11: the disconnect alert is acknowledged on open.
     assert "social_account_disconnected" in Platform.Inbox.Item.kinds()

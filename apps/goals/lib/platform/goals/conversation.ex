@@ -503,6 +503,77 @@ defmodule Platform.Goals.Conversation do
     end)
   end
 
+  # ── the check-in briefing (task 01a20de3 stage 1) ─────────────────────────
+
+  @doc """
+  The conversation `opts[:actor]` (the coach, or the owner) can see between
+  `opts[:from]` and `opts[:until]`, both inclusive, for a check-in or retro
+  briefing. Read like `timeline/2`'s messages: through the actor's own
+  participant row with `as_participant`, so `history_visible_from` bounds
+  it; an actor with no row, or a goal with no space, reads nothing.
+
+  Answers `%{messages: [item], omitted: n}`: the newest
+  `Limits.briefing_messages/0` top-level said messages of the window, oldest
+  first, and `omitted`, how many older ones in the window the cap dropped.
+  The window is read from the newest #{@timeline_limit} messages, so
+  `omitted` is a lower bound past that. Items: `%{id, at, from: "person" |
+  "coach" | "agent", ask_id, text, truncated}`; `text` is cut to
+  `Limits.briefing_message_chars/0` characters (`truncated: true` when it
+  was) and is returned as written: the caller sanitizes it.
+  """
+  @spec since(Goal.t(), keyword()) :: %{messages: [map()], omitted: non_neg_integer()}
+  def since(%Goal{} = goal, opts) do
+    actor = Keyword.fetch!(opts, :actor)
+    lower = Keyword.fetch!(opts, :from)
+    upper = Keyword.fetch!(opts, :until)
+    cap = max(Limits.briefing_messages(), 0)
+    chars = max(Limits.briefing_message_chars(), 0)
+
+    window =
+      goal
+      |> messages(actor, @timeline_limit)
+      |> Enum.filter(
+        &(DateTime.compare(&1.at, lower) != :lt and DateTime.compare(&1.at, upper) != :gt)
+      )
+
+    omitted = max(length(window) - cap, 0)
+
+    %{
+      messages: window |> Enum.drop(omitted) |> Enum.map(&briefing_item(&1, chars)),
+      omitted: omitted
+    }
+  end
+
+  defp briefing_item(item, chars) do
+    truncated = String.length(item.text) > chars
+
+    %{
+      id: item.id,
+      at: item.at,
+      from: item.from,
+      ask_id: item.metadata["ask_id"],
+      text: if(truncated, do: String.slice(item.text, 0, chars), else: item.text),
+      truncated: truncated
+    }
+  end
+
+  @doc """
+  For each of `ask_ids`, the ids of the owner's messages that answer it in
+  words (metadata `"ask_id"`, set by `say/4`), oldest first:
+  `%{ask_id => [message_id]}`. Read as `actor` from the newest
+  #{@timeline_limit} messages with `as_participant`, so the actor's
+  `history_visible_from` applies; an ask with no worded reply is absent.
+  """
+  @spec ask_replies(Goal.t(), term(), [binary()]) :: %{binary() => [binary()]}
+  def ask_replies(%Goal{} = goal, actor, ask_ids) when is_list(ask_ids) do
+    wanted = MapSet.new(ask_ids)
+
+    goal
+    |> messages(actor, @timeline_limit)
+    |> Enum.filter(&(&1.from == "person" and MapSet.member?(wanted, &1.metadata["ask_id"])))
+    |> Enum.group_by(& &1.metadata["ask_id"], & &1.id)
+  end
+
   defp owner_row(space_id, owner_id) do
     space_id
     |> Chat.list_participants(participant_type: "user")

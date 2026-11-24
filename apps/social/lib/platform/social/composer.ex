@@ -448,8 +448,14 @@ defmodule Platform.Social.Composer do
 
   @doc "Whether `user` may compose on `profile` (a live human who can read its org)."
   @spec can_compose?(Profile.t(), term()) :: boolean()
-  def can_compose?(%Profile{} = profile, %Platform.Accounts.User{archived_at: nil} = user),
-    do: Social.approver_access?(user, profile)
+  def can_compose?(%Profile{} = profile, %Platform.Accounts.User{archived_at: nil} = user) do
+    Social.approver_access?(user, profile) and
+      (not quality_review?(profile) or
+         Enum.any?(Social.list_accounts(profile.org_id, profile_id: profile.id), fn account ->
+           is_nil(account.archived_at) and
+             Social.post_preparer_check(profile.org_id, profile, account, user.id) == :ok
+         end))
+  end
 
   def can_compose?(_profile, _user), do: false
 
@@ -463,6 +469,7 @@ defmodule Platform.Social.Composer do
   def approvable_account_ids(%Profile{} = profile, accounts, user_id) do
     for %Account{approval_mode: mode, archived_at: nil} = account <- accounts,
         mode != "draft_only",
+        not quality_review?(profile),
         Social.post_approver_check(profile.org_id, profile, account, user_id) == :ok,
         do: account.id
   end
@@ -480,7 +487,7 @@ defmodule Platform.Social.Composer do
   `opts`: `approve: true` is "Send and approve".
 
   Returns `{:ok, %{idea, posts, approved, waiting_owner, by_hand,
-  not_approved}}` (each a list of posts but `idea`; `waiting_owner` is
+  not_approved, quality_review}}` (each a list of posts but `idea`; `waiting_owner` is
   `[{post, owner}]`). With nothing written: `{:error, reason}` for
   `:not_a_human`, `:approver_no_access`, `:not_found`, `:no_drafts`,
   `{:invalid_draft, account_id}`, `{:no_account, account_id}`,
@@ -500,10 +507,11 @@ defmodule Platform.Social.Composer do
          {:ok, user} <- live_user(user_id),
          :ok <- may_compose(profile, user),
          {:ok, plan} <- plan_writes(profile, drafts),
+         :ok <- preparation_access(profile, plan, user),
          :ok <- require_channels(profile, plan),
          {:ok, approvable} <- approvable(profile, plan, user, approve?),
          :ok <- draft_media_access(profile, user, plan),
-         :ok <- review_completeness(plan),
+         :ok <- review_completeness(profile, plan),
          {:ok, idea} <- idea_for(profile, user, Map.get(compose, :idea)) do
       with {:ok, posts} <- write(profile.org_id, idea, plan, user) do
         {:ok, Map.put(after_send(posts, plan, approvable, user, approve?), :idea, idea)}
@@ -531,6 +539,7 @@ defmodule Platform.Social.Composer do
          {:ok, user} <- live_user(user_id),
          :ok <- may_compose(profile, user),
          {:ok, plan} <- plan_writes(profile, drafts, :draft),
+         :ok <- preparation_access(profile, plan, user),
          :ok <- draft_media_access(profile, user, plan) do
       result =
         Repo.transaction(fn ->
@@ -664,7 +673,9 @@ defmodule Platform.Social.Composer do
 
   defp require_channels(profile, plan) do
     Enum.reduce_while(plan, :ok, fn {account, _draft}, :ok ->
-      case Social.require_channel("needs_approval", profile, account) do
+      status = if quality_review?(profile), do: "quality_review", else: "needs_approval"
+
+      case Social.require_channel(status, profile, account) do
         :ok -> {:cont, :ok}
         error -> {:halt, error}
       end
@@ -674,9 +685,13 @@ defmodule Platform.Social.Composer do
   defp approvable(_profile, _plan, _user, false), do: {:ok, []}
 
   defp approvable(profile, plan, user, true) do
-    case approvable_account_ids(profile, Enum.map(plan, &elem(&1, 0)), user.id) do
-      [] -> {:error, :not_an_approver}
-      ids -> {:ok, ids}
+    if quality_review?(profile) do
+      {:ok, []}
+    else
+      case approvable_account_ids(profile, Enum.map(plan, &elem(&1, 0)), user.id) do
+        [] -> {:error, :not_an_approver}
+        ids -> {:ok, ids}
+      end
     end
   end
 
@@ -704,7 +719,7 @@ defmodule Platform.Social.Composer do
     |> Enum.reduce_while({:ok, []}, fn {%Account{} = account, draft}, {:ok, written} ->
       attrs = post_attrs(account, draft, status)
 
-      case Social.create_post(org_id, account, attrs, idea_id: idea.id) do
+      case write_version(org_id, account, attrs, idea, user) do
         {:ok, post} ->
           PostEvents.record!(post, "created", {:human, user.id})
 
@@ -726,9 +741,50 @@ defmodule Platform.Social.Composer do
     end
   end
 
+  # Recheck preparation authority under the same profile-first lock as the
+  # writer. A composer opened before a reviewer is removed conveys no authority.
+  defp write_version(org_id, account, attrs, idea, user) do
+    Repo.transaction(fn ->
+      profile =
+        Social.lock_profile(org_id, account.profile_id, :share) || Repo.rollback(:not_found)
+
+      current = Social.lock_account(profile, account.id, :share)
+
+      with %Account{profile_id: profile_id, archived_at: nil} <- current,
+           true <- profile_id == profile.id,
+           :ok <- may_compose(profile, user),
+           :ok <- preparation_access(profile, [{current, attrs}], user),
+           {:ok, post} <- Social.create_post(org_id, current, attrs, idea_id: idea.id) do
+        post
+      else
+        {:error, reason} -> Repo.rollback(reason)
+        _ -> Repo.rollback(:not_found)
+      end
+    end)
+  end
+
+  defp quality_review?(profile), do: (profile.quality_reviewer_user_ids || []) != []
+
+  defp preparation_access(profile, plan, user) do
+    if quality_review?(profile) do
+      Enum.reduce_while(plan, :ok, fn {account, _draft}, :ok ->
+        case Social.post_preparer_check(profile.org_id, profile, account, user.id) do
+          :ok -> {:cont, :ok}
+          error -> {:halt, error}
+        end
+      end)
+    else
+      :ok
+    end
+  end
+
   # Overlapping pre-pass: avoid ordinary partial writes, using exactly the
   # writer's candidate/media preparation. Current state can change afterwards;
   # create_post and locked approval retain the authoritative checks.
+  defp review_completeness(profile, plan) do
+    if quality_review?(profile), do: :ok, else: review_completeness(plan)
+  end
+
   defp review_completeness(plan) do
     errors =
       Enum.flat_map(plan, fn {account, draft} ->
@@ -790,13 +846,24 @@ defmodule Platform.Social.Composer do
   # decision path as that user. Everything else stays needs_approval.
   defp after_send(posts, plan, approvable, user, approve?) do
     accounts = Map.new(plan, fn {account, _} -> {account.id, account} end)
-    empty = %{posts: posts, approved: [], waiting_owner: [], by_hand: [], not_approved: []}
+
+    empty = %{
+      posts: posts,
+      approved: [],
+      waiting_owner: [],
+      by_hand: [],
+      not_approved: [],
+      quality_review: Enum.filter(posts, &(&1.status == "quality_review"))
+    }
 
     if approve? do
       Enum.reduce(posts, empty, fn post, acc ->
         account = Map.fetch!(accounts, post.account_id)
 
         cond do
+          post.status == "quality_review" ->
+            acc
+
           account.approval_mode == "draft_only" ->
             Map.update!(acc, :by_hand, &(&1 ++ [post]))
 

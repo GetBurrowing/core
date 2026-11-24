@@ -44,7 +44,10 @@ defmodule Platform.Social.PostPresentation do
           title: title(post, account),
           post_url: Approvals.queue_url(post, profile) <> "&post=" <> post.id,
           post_link_label:
-            if(post.status == "needs_approval", do: "Open in Queue", else: "View post details")
+            if(post.status in ~w(quality_review needs_approval),
+              do: "Open in Queue",
+              else: "View post details"
+            )
         }
 
       _ ->

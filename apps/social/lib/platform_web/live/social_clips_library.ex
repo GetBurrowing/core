@@ -246,6 +246,14 @@ defmodule PlatformWeb.SocialClipsLibrary do
          |> assign(:retry_chooser, nil)
          |> assign(:retry_error, retry_refusal(:publish_job_changed))
 
+  defp retry_outcome({:error, :quality_review_required}, socket, _zone) do
+    socket
+    |> assign(:retry_chooser, nil)
+    |> assign(:retry_error, [
+      "This older post has no valid quality pass. Its publishing outcome needs separate investigation before a new job can be started."
+    ])
+  end
+
   defp retry_outcome({:error, :publish_time_required}, socket, _zone),
     do: assign(socket, :retry_error, ["Choose a date and time to publish."])
 

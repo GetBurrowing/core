@@ -50,7 +50,32 @@ defmodule Platform.Social.QueueFeed do
   editing goes through `Platform.Social.edit_draft/5`.
   """
   @spec drafts(term(), scope()) :: [Post.t()]
-  def drafts(user, scope), do: posts(user, scope, status: "draft")
+  def drafts(user, scope),
+    do: user |> posts(scope, status: "draft") |> Enum.reject(&final_rejection?/1)
+
+  @doc """
+  Drafts a human rejected, in `scope`, oldest first: the Queue's "Rejected"
+  group. They are separate from `drafts/2` so they never read as unfinished
+  work. Read only; the post keeps its stored state and the same edit and
+  resubmit paths.
+  """
+  @spec rejected(term(), scope()) :: [Post.t()]
+  def rejected(user, scope),
+    do: user |> posts(scope, status: "draft") |> Enum.filter(&final_rejection?/1)
+
+  @doc """
+  Whether `post` carries a human's final rejection (`Post.rejected?/1`: a
+  `draft` with `rejected_at` set). The ONE predicate the Queue uses to put a
+  draft in "Rejected" instead of "Drafts". Anything that sends a draft back
+  for changes without a final rejection must leave `rejected_at` unset (a
+  quality-stage send-back is not a rejection).
+  """
+  @spec final_rejection?(Post.t()) :: boolean()
+  def final_rejection?(%Post{} = post), do: Post.rejected?(post)
+
+  @doc "Legacy posts awaiting quality review, oldest first."
+  @spec quality_review(term(), scope()) :: [Post.t()]
+  def quality_review(user, scope), do: posts(user, scope, status: "quality_review")
 
   @doc """
   Approved or scheduled posts going out in the next #{@scheduled_days} days
