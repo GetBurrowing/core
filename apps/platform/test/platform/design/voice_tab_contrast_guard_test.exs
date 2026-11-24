@@ -32,6 +32,8 @@ defmodule Platform.Design.VoiceTabContrastGuardTest do
   | on-device forming words: secondary on base-100 (01a20dc5) | 4.5 |
   | reply note "Stopped": secondary on the --ag tint, every slot (01a20dc5) | 4.5 |
   | mic in use glyph: secondary on base-100 (01a20dc5)       | 3     |
+  | preparing mic outline: secondary on base-200, its ground (01a20dc5) | 3 |
+  | preparing mic outline: secondary on base-100, its fill (01a20dc5) | 3 |
   | speaking outline: primary on base-100 (01a20dc5)         | 3     |
   | "Not sent": error on base-100 (01a20dc5)                 | 4.5   |
   | "Not sent": error on base-200 (01a20dc5)                 | 4.5   |
@@ -129,6 +131,7 @@ defmodule Platform.Design.VoiceTabContrastGuardTest do
                         {[], ".voice-meter i"},
                         {[], ".voice-area[data-live] .voice-meter i"},
                         {[], ".voice-mic.on"},
+                        {[], ".voice-mic.preparing"},
                         {[], ".voice-bubble-live"},
                         {[], ".voice-caret"},
                         {[], ".voice-dots i"},
@@ -254,6 +257,10 @@ defmodule Platform.Design.VoiceTabContrastGuardTest do
        on_tint_worst(b, fn _ -> "--color-secondary" end), @aa_text},
       {"mic in use glyph (secondary) / base-100",
        ratio(b, "--color-secondary", "--color-base-100"), @non_text},
+      {"preparing mic outline (secondary) / base-200",
+       ratio(b, "--color-secondary", "--color-base-200"), @non_text},
+      {"preparing mic outline (secondary) / base-100",
+       ratio(b, "--color-secondary", "--color-base-100"), @non_text},
       {"speaking outline (primary) / base-100", ratio(b, "--color-primary", "--color-base-100"),
        @non_text},
       {"Not sent (error) / base-100", ratio(b, "--color-error", "--color-base-100"), @aa_text},
@@ -372,6 +379,10 @@ defmodule Platform.Design.VoiceTabContrastGuardTest do
     assert avatar =~ ~r/color:\s*var\(--color-base-content\);/
 
     assert body.(".voice-mic") =~ ~r/border:\s*1px solid var\(--color-subtle\);/
+
+    # "Preparing speech on this iPhone" (canvas state 13): the outline is
+    # secondary, what the two preparing pairs above measure.
+    assert body.(".voice-mic.preparing") =~ ~r/border-color:\s*var\(--color-secondary\);/
 
     # Stage 3: the ring is opaque primary (painted at 100%, what the pair
     # above measures), the live bubble's edge is dashed primary, and the

@@ -44,21 +44,35 @@ const VoiceTabNative = {
   async _probeOnDevice() {
     const cap = await onDeviceVoiceCapability()
     if (this._destroyed) return
-    if (cap.available) {
-      this._goNative(cap)
-    } else if (cap.reason === "assets_missing" && cap.plugin && typeof cap.plugin.prepare === "function") {
-      // "Preparing": iOS downloads its speech files; until they are in, the
-      // tab stays today's (deviation D8). Adopt the device path only if no
-      // LiveKit turn or room started meanwhile.
-      try {
-        const caps = await cap.plugin.prepare()
-        if (this._destroyed || this._room || this.inTurn()) return
-        if (caps && caps.onDeviceSpeech === true) {
-          this._goNative({ ...cap, available: true, testBuild: caps.testBuild === true, micPermission: caps.micPermission })
-        }
-      } catch (_e) {
-        // stays on today's path
-      }
+    if (cap.available) return this._goNative(cap)
+    if (cap.reason !== "assets_missing" || !cap.plugin || typeof cap.plugin.prepare !== "function") return
+    // "Preparing speech on this iPhone" (canvas state 13): iOS is fetching
+    // its speech files. The server draws the on-device mic disabled with that
+    // line; a press does nothing until the files are in. If they never come,
+    // the tab goes back to today's.
+    const begin = this._begin
+    this._begin = () => {}
+    this._nativeCap = cap
+    this._announceNative()
+    this._nativeMicState("preparing")
+    this._prepared = this._prepareOnDevice(cap, begin)
+  },
+
+  async _prepareOnDevice(cap, begin) {
+    let caps = null
+    try {
+      caps = await cap.plugin.prepare()
+    } catch (_e) {
+      caps = null
+    }
+    this._begin = begin
+    if (this._destroyed) return
+    if (caps && caps.onDeviceSpeech === true) {
+      this._goNative({ ...cap, available: true, reason: null, testBuild: caps.testBuild === true, micPermission: caps.micPermission })
+      this._nativeMicState("idle")
+    } else {
+      this._nativeCap = null
+      this.pushEvent("voice_native_ready", { available: false, reason: (caps && caps.reason) || "assets_missing" })
     }
   },
 

@@ -298,7 +298,7 @@ defmodule PlatformWeb.Components.Voice do
   attr :type_form, :any, default: nil
   attr :user_id, :string, default: nil
   attr :on_device?, :boolean, default: false
-  attr :native_mic, :atom, default: :ready, doc: "on-device: :ready or :in_use"
+  attr :native_mic, :atom, default: :ready, doc: "on-device: :ready, :in_use or :preparing"
   attr :mic_permission, :atom, default: nil, doc: "on-device: :denied after a refusal"
   attr :caption, :string, default: nil, doc: "on-device test caption, test builds only"
   attr :announce, :string, default: nil, doc: "on-device live region, \"{partner} replied\""
@@ -411,12 +411,13 @@ defmodule PlatformWeb.Components.Voice do
             cond do
               live?(@state) -> "on scale-[1.06] bg-primary text-primary-content"
               @native_mic == :in_use -> "bg-base-100 text-secondary"
+              @native_mic == :preparing -> "preparing bg-base-100 text-secondary"
               true -> "bg-base-100 text-base-content"
             end
           ]}
           aria-pressed={if live?(@state), do: "true", else: "false"}
           aria-label={mic_aria(@partner)}
-          disabled={is_nil(@partner) or @native_mic == :in_use}
+          disabled={is_nil(@partner) or @native_mic in [:in_use, :preparing]}
         >
           <.icon name="hero-microphone" class="size-10" />
         </button>
@@ -857,12 +858,13 @@ defmodule PlatformWeb.Components.Voice do
   """
   def native_listen_text(nil, _state, _mic), do: "No voice partner"
   def native_listen_text(_partner, _state, :in_use), do: "Microphone in use by another app"
+  def native_listen_text(_partner, _state, :preparing), do: "Preparing speech on this iPhone"
   def native_listen_text(_partner, :listening, _mic), do: "Release to send"
   def native_listen_text(_partner, :toggled, _mic), do: "Tap to send"
   def native_listen_text(%{agent: agent}, :thinking, _mic), do: "#{agent.name} is thinking…"
   def native_listen_text(_partner, _state, _mic), do: @idle_line
 
-  defp native_listen_class(:in_use), do: "text-secondary"
+  defp native_listen_class(mic) when mic in [:in_use, :preparing], do: "text-secondary"
   defp native_listen_class(_mic), do: nil
 
   defp listen_class(%{reachable?: false}, _state), do: "text-error"

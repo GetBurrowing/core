@@ -57,7 +57,8 @@ defmodule PlatformWeb.VoiceLive do
   reply is pushed back as `voice_native_speak` for the system voice. Nothing
   here changes for any other client: until `voice_native_ready` arrives with
   `available: true` the tab renders exactly as before, and an `available:
-  false` only logs its reason code.
+  false` only logs its reason code (and, after a "preparing" that never
+  finished, puts today's tab back).
 
     * `voice_native_ready` `%{available, reason, locale, test_build, route}`:
       sets `:on_device?` ONLY when `available` is true, opens the DM
@@ -79,7 +80,9 @@ defmodule PlatformWeb.VoiceLive do
       reply, `unheard` adds "Reply shown as text" (canvas states 9 and 10).
     * `voice_native_mic` `%{state}`: `held` / `toggled` / `idle` drive the mic
       and the listen line ("Release to send", "Tap to send"); `in_use`
-      disables the mic with "Microphone in use by another app".
+      disables the mic with "Microphone in use by another app"; `preparing`
+      disables it with "Preparing speech on this iPhone" while iOS fetches
+      its speech files (canvas state 13).
     * `voice_native_permission` `%{mic: "denied"}`: the permission card
       replaces the mic, with "Type instead" beneath it (canvas state 12).
     * `voice_native_route` `%{label}`: the test caption's route.
@@ -494,6 +497,20 @@ defmodule PlatformWeb.VoiceLive do
       |> assign_caption()
 
     {:noreply, if(socket.assigns.native_conn, do: socket, else: open_native(socket))}
+  end
+
+  # The speech files never arrived after "preparing": back to today's tab.
+  def handle_event("voice_native_ready", params, %{assigns: %{on_device?: true}} = socket) do
+    Logger.info("[VoiceLive] on-device voice unavailable: #{native_reason(params)}")
+
+    {:noreply,
+     socket
+     |> drop_native()
+     |> assign(:on_device?, false)
+     |> assign(:native_mic, :ready)
+     |> assign(:mic_permission, nil)
+     |> assign(:native_test_build?, false)
+     |> assign_caption()}
   end
 
   def handle_event("voice_native_ready", params, socket) do
@@ -985,6 +1002,9 @@ defmodule PlatformWeb.VoiceLive do
 
   defp native_mic(socket, "in_use"),
     do: socket |> assign(:native_mic, :in_use) |> assign(:mic_state, :idle)
+
+  defp native_mic(socket, "preparing"),
+    do: socket |> assign(:native_mic, :preparing) |> assign(:mic_state, :idle)
 
   defp native_mic(socket, "idle") do
     state =

@@ -333,7 +333,8 @@ describe("without the on-device path a press is today's LiveKit press", () => {
     await expectToday(await mount(), plugin)
   })
 
-  for (const reason of REASONS) {
+  // assets_missing is not a "no": it is "Preparing" (see the tests below).
+  for (const reason of REASONS.filter((r) => r !== "assets_missing")) {
     it(`when the phone says no: ${reason}`, async () => {
       const plugin = fakePlugin({ caps: { onDeviceSpeech: false, reason, testBuild: true, micPermission: "granted" } })
       install({ plugin })
@@ -353,18 +354,55 @@ describe("without the on-device path a press is today's LiveKit press", () => {
     expect(await onDeviceVoiceCapability(yes)).toMatchObject({ available: true, reason: null, testBuild: true })
   })
 
-  it("assets_missing prepares, then adopts the device path", async () => {
+  it("assets_missing shows Preparing with the mic held, then adopts the device path", async () => {
+    let filesIn
     const plugin = fakePlugin({
       caps: { onDeviceSpeech: false, reason: "assets_missing", micPermission: "granted" },
-      prepare: () => Promise.resolve({ onDeviceSpeech: true, reason: null, testBuild: false, micPermission: "granted" }),
+      prepare: () => new Promise((resolve) => (filesIn = resolve)),
     })
     install({ plugin })
     const t = await mount()
     await settle()
+
+    // While iOS fetches its speech files: the server is told to draw the
+    // on-device mic in "preparing", and a press reaches neither path.
     expect(plugin.prepare).toHaveBeenCalledTimes(1)
     expect(t.sent("voice_native_ready")).toEqual([
       { available: true, reason: null, locale: null, test_build: false, route: null },
     ])
+    expect(t.sent("voice_native_mic")).toEqual([{ state: "preparing" }])
+    t.down(0)
+    await settle()
+    t.up(500)
+    await settle()
+    expect(t.gum).not.toHaveBeenCalled()
+    expect(plugin.start).not.toHaveBeenCalled()
+    expect(t.events()).not.toContain("voice_start")
+    expect(lk.rooms.length).toBe(0)
+
+    filesIn({ onDeviceSpeech: true, reason: null, testBuild: false, micPermission: "granted" })
+    await settle()
+    expect(t.sent("voice_native_mic")).toEqual([{ state: "preparing" }, { state: "idle" }])
+    t.down(1000)
+    await settle()
+    expect(plugin.start).toHaveBeenCalledTimes(1)
+    expect(t.gum).not.toHaveBeenCalled()
+  })
+
+  it("assets_missing whose files never arrive goes back to today's LiveKit press", async () => {
+    const plugin = fakePlugin({
+      caps: { onDeviceSpeech: false, reason: "assets_missing", micPermission: "granted" },
+    })
+    install({ plugin })
+    const t = await mount()
+    await settle()
+    expect(t.sent("voice_native_mic")).toEqual([{ state: "preparing" }])
+    expect(t.sent("voice_native_ready").at(-1)).toEqual({ available: false, reason: "assets_missing" })
+    t.down(2000)
+    await settle()
+    expect(t.gum).toHaveBeenCalledTimes(1)
+    expect(t.events()).toContain("voice_start")
+    expect(plugin.start).not.toHaveBeenCalled()
   })
 })
 

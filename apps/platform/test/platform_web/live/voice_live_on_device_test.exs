@@ -204,6 +204,46 @@ defmodule PlatformWeb.VoiceLiveOnDeviceTest do
     assert text(doc(view), "#listen-text") == Voice.idle_line()
   end
 
+  test "preparing disables the mic with \"Preparing speech on this iPhone\" until the files are in",
+       %{conn: conn} do
+    view = ready!(conn)
+    hook(view, "voice_native_mic", %{"state" => "preparing"})
+
+    assert text(doc(view), "#listen-text") == "Preparing speech on this iPhone"
+    assert has_element?(view, "#listen-text.text-secondary")
+    assert has_element?(view, "#mic[disabled].preparing.text-secondary")
+
+    hook(view, "voice_native_mic", %{"state" => "idle"})
+    assert text(doc(view), "#listen-text") == Voice.idle_line()
+    refute has_element?(view, "#mic[disabled]")
+    refute has_element?(view, "#mic.preparing")
+  end
+
+  test "preparing that never finishes puts today's tab back and releases the :voice hold",
+       %{conn: conn} do
+    {:ok, view, _html} = live(conn, ~p"/voice")
+
+    hook(view, "voice_native_ready", %{"available" => true, "test_build" => true})
+    assert assigns(view).on_device?
+    dm = assigns(view).native_conn.space_id
+    hook(view, "voice_native_mic", %{"state" => "preparing"})
+    hook(view, "voice_native_ready", %{"available" => false, "reason" => "assets_missing"})
+
+    refute assigns(view).on_device?
+    assert assigns(view).native_conn == nil
+    refute SpaceTopics.held_by?(socket(view), dm, :voice)
+
+    # Today's tab, as in the first test of this file.
+    d = doc(view)
+    assert text(d, "#listen-text") == Voice.idle_line()
+    assert q(d, "#voice-native-pending") |> Enum.count() == 0
+    assert q(d, "#voice-native-caption") |> Enum.count() == 0
+    assert q(d, "#voice-permission") |> Enum.count() == 0
+    assert q(d, "[data-on-device]") |> Enum.count() == 0
+    assert q(d, "#mic") |> Enum.count() == 1
+    assert q(d, "#mic[disabled]") |> Enum.count() == 0
+  end
+
   test "speaking rings #partner-avatar until finished; stopped notes the reply", %{conn: conn} do
     view = ready!(conn)
     hook(view, "voice_native_turn", %{"text" => "go", "client_turn_id" => "ct-s"})
