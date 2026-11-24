@@ -71,11 +71,20 @@ defmodule Platform.Goals.BriefingConversationTest do
     msg
   end
 
+  # Stored closed: a goal holds one open wake-up per kind, and the snapshot
+  # reads only fired_at and kind.
   defp wake!(c, time, kind \\ "check_in", coach \\ nil) do
     coach = coach || c.coach
 
     %WakeUp{goal_id: c.goal.id, coach_agent_id: coach.id, kind: kind}
-    |> WakeUp.changeset(%{due_at: time, fired_at: time, respond_by: DateTime.add(time, 43_200)})
+    |> WakeUp.changeset(%{
+      due_at: time,
+      fired_at: time,
+      respond_by: DateTime.add(time, 43_200),
+      status: "closed",
+      outcome: if(kind == "retro", do: "retro", else: "wait"),
+      closed_at: time
+    })
     |> Repo.insert!()
   end
 
@@ -252,6 +261,7 @@ defmodule Platform.Goals.BriefingConversationTest do
 
   test "conversation is not under since_last", c do
     base = ~U[2026-06-01 06:00:00.000000Z]
+    _ = wake!(c, base)
     wake = wake!(c, DateTime.add(base, 3600))
     c |> say!("SINCE-TOKEN-1") |> at!(DateTime.add(base, 1))
     c.goal |> coach_say!(c.coach, "SINCE-TOKEN-2") |> at!(DateTime.add(base, 2))
