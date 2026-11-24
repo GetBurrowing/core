@@ -54,7 +54,8 @@ defmodule Platform.Social.QualityReviewClipRetryTest do
     assert {:ok, %{posts: [post]}} =
              ClipDecisions.draft_clip(c.w.org_id, c.clip.id, c.reviewer.id, %{
                "render_id" => render_id!(c.clip),
-               "account_ids" => [c.w.tiktok.id]
+               "account_ids" => [c.w.tiktok.id],
+               "copy_rev" => clip_copy_rev!(c.clip)
              })
 
     assert post.status == "draft"

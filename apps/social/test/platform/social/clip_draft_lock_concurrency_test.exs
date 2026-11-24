@@ -60,6 +60,7 @@ defmodule Platform.Social.ClipDraftLockConcurrencyTest do
   defp draft(ctx, account_ids) do
     ClipDecisions.draft_clip(ctx.w.org_id, ctx.clip.id, ctx.w.approver.id, %{
       "render_id" => render_id!(ctx.clip),
+      "copy_rev" => clip_copy_rev!(ctx.clip),
       "account_ids" => account_ids
     })
   end

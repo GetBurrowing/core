@@ -337,7 +337,7 @@ defmodule PlatformWeb.SocialClipsReview do
   # ClipDecisions.draft_clip/5. An empty selection writes nothing. The result
   # is DRAFT posts: nothing is approved or scheduled here, so the toast has no
   # undo window and no publish time.
-  def handle_event("draft", %{"id" => id, "render_id" => render_id}, socket) do
+  def handle_event("draft", %{"id" => id, "render_id" => render_id} = params, socket) do
     socket = authorize(socket)
 
     with true <- socket.assigns.can_decide? and not socket.assigns.appearance_dirty,
@@ -346,7 +346,11 @@ defmodule PlatformWeb.SocialClipsReview do
          [_ | _] = accounts <- ticked_accounts(profile, clip) do
       case ClipDecisions.draft_clip(profile.org_id, clip.id, user_id, %{
              "account_ids" => Enum.map(accounts, & &1.id),
-             "render_id" => render_id
+             "render_id" => render_id,
+             # The copy the button was rendered with. The key is ALWAYS sent
+             # (nil when the event carries none), so a click that did not see
+             # the copy is refused as stale, never treated as unbound.
+             "copy_rev" => params["copy_rev"]
            }) do
         {:ok, %{clip: drafted, posts: posts}} ->
           toast =
@@ -525,6 +529,11 @@ defmodule PlatformWeb.SocialClipsReview do
   # A refusal writes nothing; say so in plain words.
   defp draft_refusal({:invalid_options, %{"title" => message}}), do: "Title: " <> message
   defp draft_refusal(:not_the_owner), do: "Only the account's owner can draft to it"
+
+  defp draft_refusal(:stale_copy),
+    do:
+      "The title or caption changed after you opened this clip. Nothing was drafted. Check the new copy and try again"
+
   defp draft_refusal(_reason), do: "Couldn't create the draft. Nothing was changed"
 
   defp now_ms, do: System.system_time(:millisecond)
@@ -1521,19 +1530,26 @@ defmodule PlatformWeb.SocialClipsReview do
     assigns =
       assigns
       |> assign(:agent, assigns.byline.agent_name)
+      # The copy Create drafts will use is the clip's CURRENT working title
+      # and caption, whichever media version is selected (`ClipDecisions.
+      # draft_clip/5` takes copy from the clip and media from the version).
+      # The selected version's burned-in headline is shown apart, never as the
+      # title. `copy_rev` is computed from these very values.
+      |> assign(:caption, assigns.clip.caption || "")
+      |> assign(:display_title, assigns.clip.title)
       |> assign(
-        :caption,
-        if(assigns.selected_render && assigns.selected_render.rev != assigns.clip.rev,
-          do: assigns.selected_render.caption || "",
-          else: assigns.clip.caption || ""
-        )
+        :copy_rev,
+        Platform.Social.ClipReviewFeed.copy_rev(%Clip{
+          title: assigns.clip.title,
+          caption: assigns.clip.caption
+        })
       )
       |> assign(
-        :display_title,
-        if(assigns.selected_render && assigns.selected_render.rev != assigns.clip.rev,
-          do: assigns.selected_render.headline,
-          else: assigns.clip.title
-        )
+        :video_headline,
+        case assigns.selected_render && assigns.selected_render.headline do
+          h when is_binary(h) and h != "" and h != assigns.clip.title -> h
+          _ -> nil
+        end
       )
       |> assign(
         :current_version?,
@@ -1589,6 +1605,13 @@ defmodule PlatformWeb.SocialClipsReview do
               data-role="clip-title-input"
             />
           </form>
+          <p
+            class="mb-1 text-xs font-semibold text-base-content"
+            data-role="clip-copy-label"
+            data-copy-rev={@copy_rev}
+          >
+            Copy that will be posted
+          </p>
           <button
             :if={!@editing_title?}
             type="button"
@@ -1598,8 +1621,15 @@ defmodule PlatformWeb.SocialClipsReview do
             disabled={!@can_decide?}
             data-role="clip-title"
           >
-            <span class="flex-1" data-role="clips-selected-title">
-              {@display_title || "Untitled clip"}
+            <span :if={@display_title} class="flex-1" data-role="clips-selected-title">
+              {@display_title}
+            </span>
+            <span
+              :if={!@display_title}
+              class="flex-1 font-normal italic text-subtle"
+              data-role="clip-title-missing"
+            >
+              No title
             </span>
             <.icon
               :if={@can_decide?}
@@ -1607,6 +1637,13 @@ defmodule PlatformWeb.SocialClipsReview do
               class="mt-0.5 size-4 shrink-0 text-subtle"
             />
           </button>
+          <p
+            :if={@video_headline}
+            class="mt-1 text-xs text-subtle"
+            data-role="clip-video-headline"
+          >
+            On the video: {@video_headline}
+          </p>
           <p class="mt-2 font-mono text-xs text-subtle" data-role="clip-meta">
             {join_dot([
               @clip.episode_code,

@@ -104,7 +104,11 @@ defmodule Platform.Social.StudioClipBoundaryTest do
                  w.org_id,
                  clip.id,
                  w.approver.id,
-                 %{"render_id" => render_id!(clip), "account_ids" => [w.tiktok.id]},
+                 %{
+                   "render_id" => render_id!(clip),
+                   "copy_rev" => clip_copy_rev!(clip),
+                   "account_ids" => [w.tiktok.id]
+                 },
                  now: t0
                )
     end

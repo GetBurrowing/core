@@ -49,7 +49,11 @@ defmodule Platform.Social.ClipDraftTest do
       ctx.clip.id,
       user_id,
       Map.merge(
-        %{"render_id" => render_id!(ctx.clip), "account_ids" => account_ids},
+        %{
+          "render_id" => render_id!(ctx.clip),
+          "account_ids" => account_ids,
+          "copy_rev" => clip_copy_rev!(ctx.clip)
+        },
         extra
       ),
       Keyword.merge([now: ctx.t0], opts)
@@ -146,6 +150,7 @@ defmodule Platform.Social.ClipDraftTest do
                  c2.id,
                  ctx.w.approver.id,
                  %{
+                   "copy_rev" => clip_copy_rev!(c2),
                    "render_id" => render_id!(c2),
                    "account_ids" => [ctx.w.tiktok.id, yt.id],
                    "title" => String.duplicate("t", 101)
@@ -234,6 +239,7 @@ defmodule Platform.Social.ClipDraftTest do
     test "an unchosen render and a decided clip are refused", ctx do
       assert {:error, :render_not_found} =
                ClipDecisions.draft_clip(ctx.w.org_id, ctx.clip.id, ctx.w.approver.id, %{
+                 "copy_rev" => clip_copy_rev!(ctx.clip),
                  "render_id" => Ecto.UUID.generate(),
                  "account_ids" => both(ctx)
                })

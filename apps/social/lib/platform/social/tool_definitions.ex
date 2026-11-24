@@ -15,7 +15,7 @@ defmodule Platform.Social.ToolDefinitions do
   and six tools a clip runner uses to work Clip Studio's
   job list (list, claim, source download, progress, complete, fail), and (Social authoring
   2/11) create and list ideas, the record one post per account hangs off.
-  Twenty-six in all, including weekly-note submission and listing. No tool
+  Twenty-seven in all, including weekly-note submission and listing. No tool
   creates a job (humans enqueue through `Platform.Social.ClipJobs`) and no
   tool writes a review field. Every description
   carries `human_approves/0` verbatim. A human approves in Burrow and the
@@ -33,7 +33,7 @@ defmodule Platform.Social.ToolDefinitions do
   @names ~w(social_profile_list social_profile_get social_draft_create social_studio_draft_create
             social_draft_update
             social_post_list social_results_get social_clip_propose social_clip_submit social_clip_render
-            social_clip_list social_task_request social_clip_job_list social_clip_job_claim
+            social_clip_update_copy social_clip_list social_task_request social_clip_job_list social_clip_job_claim
             social_clip_job_source social_clip_job_progress social_clip_job_complete social_clip_job_fail
             social_idea_create social_idea_list social_idea_vote social_idea_unvote social_idea_archive social_idea_note_add social_weekly_note_submit social_weekly_note_list)
 
@@ -125,7 +125,7 @@ defmodule Platform.Social.ToolDefinitions do
     }
   }
 
-  @clip_row "%{id, profile_id, status, error, source_url, source_file_id, transcript_file_id, requested_start_s, requested_end_s, start_s, end_s, title, caption, speaker, episode_code, origin, source_label, review_status, review_note, reviewed_at, rev, look, trim_in_s, trim_out_s, crop_x, platforms, render_file_id, duration_s, width, height, byte_size, attempts, rendered_at}"
+  @clip_row "%{id, profile_id, status, error, source_url, source_file_id, transcript_file_id, requested_start_s, requested_end_s, start_s, end_s, title, caption, speaker, episode_code, origin, source_label, review_status, review_note, reviewed_at, rev, look, trim_in_s, trim_out_s, crop_x, platforms, render_file_id, duration_s, width, height, byte_size, attempts, rendered_at, copy_rev}"
 
   @review_only "The clip lands as review pending. Only a human approver approves or rejects it; review_status, review_note, reviewed_by_user_id, reviewed_at and rev are never taken from an agent."
 
@@ -474,6 +474,38 @@ defmodule Platform.Social.ToolDefinitions do
         limitations:
           "Only a candidate or failed clip renders (rendered needs force; rendering is refused with already_rendering). not_found for a clip outside your org. profile_needs_project when the profile has no project in its org. Failures (no ffmpeg, a range past the source, a platform's length limit, YouTube refusing this node) end the clip as failed with a readable error.",
         when_to_use: "After social_clip_propose, when the clip should be cut and captioned."
+      },
+      %{
+        name: "social_clip_update_copy",
+        description:
+          "Change ONLY the title and/or caption of an existing clip that is still waiting in review (rendered, review pending), as the Review bay's details rail does. Only the profile's configured drafting agent may do this, and only from a fresh read: send the clip's copy_rev as expected_copy_rev. Omit a field to keep it. It changes no review state, render, media, version or post: posts already drafted from the clip keep the caption they were created with, and a title or caption you change here is not burned into the video or into the clip's saved versions (the render's headline and captions are NOT edited). New drafts made from this clip afterwards (Create drafts) take its current title and caption with the chosen version's media; a cleared caption stays cleared. Removing a current version can still restore that version's saved copy. " <>
+            @human_approves,
+        parameters: %{
+          clip_id: %{type: "string", required: true, description: "The clip id."},
+          expected_copy_rev: %{
+            type: "string",
+            required: true,
+            description:
+              "The clip's copy_rev as you last read it (social_clip_list, or the result of your own previous edit). It is a fingerprint of the current title and caption, not an edit counter: if the copy was changed and then changed back to what you read, the token is the same and the edit goes through. If a person or another agent changed the title or caption since, the edit is refused with stale_copy."
+          },
+          title: %{
+            type: "string",
+            required: false,
+            description:
+              "The new title: trimmed, not blank, at most 200 characters. It cannot be cleared. Omit to keep it."
+          },
+          caption: %{
+            type: "string",
+            required: false,
+            description:
+              "The new caption, at most 2200 characters, kept as you send it. Send null to clear it. Omit to keep it."
+          }
+        },
+        returns: "%{clip: %{id, title, caption, copy_rev, updated_at}}",
+        limitations:
+          "Pass title, caption or both, with expected_copy_rev. not_drafting_agent unless you are the profile's configured drafting agent (org visibility is not enough; with none configured nobody may). stale_copy when the title or caption changed since your read: read the clip again and retry. not_found for a clip outside your org or a removed clip, exactly as for a missing id. clip_not_editable unless the clip is rendered, review pending and in the legacy flow (an approved, rejected, candidate, rendering, failed or Studio clip is refused). invalid_argument for a missing expected_copy_rev, a blank, null or over-long title, an over-long caption, or text that is not a string. Nothing is written on any refusal.",
+        when_to_use:
+          "When a clip waiting in review needs a better title or caption before a human chooses it."
       },
       %{
         name: "social_clip_list",

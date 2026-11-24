@@ -654,7 +654,11 @@ defmodule Platform.Social.IdeaPermissionConcurrencyTest do
       ctx.org.id,
       clip.id,
       ctx.owner.id,
-      %{"render_id" => render.id, "account_ids" => [ctx.account.id]},
+      %{
+        "render_id" => render.id,
+        "copy_rev" => Platform.SocialFixtures.clip_copy_rev!(clip),
+        "account_ids" => [ctx.account.id]
+      },
       now: DateTime.utc_now(),
       publish_server: test_process
     )
