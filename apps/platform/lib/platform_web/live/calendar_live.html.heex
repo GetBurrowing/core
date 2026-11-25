@@ -49,16 +49,87 @@
     aria-live="polite"
   >
     <.cal_header view={@view} cursor={@cursor} sel_day={@sel_day} zone={@zone} />
-    <.section_tabs section={:calendar} />
-    <.quick_plan plan={@plan} />
+    <%!-- Below lg (canvas 01a2111c): two rows of controls, the month pushed
+         open under them, then the agenda or the Day view. --%>
+    <Mobile.controls
+      view={@m_view}
+      focus={@m_focus}
+      sel_day={@sel_day}
+      today={@today}
+      show_today={m_show_today?(assigns)}
+      shown_count={Enum.count(@calendars, &shown?(@calendars_shown, &1.key))}
+      month_open={@m_month_open}
+      busy={@m_busy}
+    />
+    <%!-- Static slots around everything that comes and goes: morphdom
+         re-inserting a sibling would detach #m-agenda and drop its scroll. --%>
+    <div id="m-month-slot" class="contents">
+      <Mobile.month
+        :if={@m_month_open}
+        month={@m_month}
+        today={@today}
+        selected={if @m_view == "day", do: @sel_day, else: @m_focus}
+        busy={@m_month_busy}
+      />
+    </div>
+    <%!-- One quick-plan box: in place at lg, and below it inside the [+]
+         sheet, above New event (canvas 01a2111c; UX review). --%>
+    <div
+      class={[
+        "lg:contents",
+        !@m_create && "max-lg:hidden",
+        @m_create &&
+          "max-lg:fixed max-lg:inset-0 max-lg:z-[61] max-lg:flex max-lg:flex-col max-lg:justify-end"
+      ]}
+      data-role="m-create"
+      data-open={to_string(@m_create)}
+      data-covers-tab-bar={@m_create}
+      role={@m_create && "dialog"}
+      aria-label={@m_create && "New event"}
+    >
+      <div
+        class="absolute inset-0 bg-[var(--scrim)] lg:hidden"
+        phx-click="m_create_close"
+        aria-hidden="true"
+      >
+      </div>
+      <div class="lg:contents max-lg:relative max-lg:max-h-[85dvh] max-lg:overflow-y-auto max-lg:rounded-t-box max-lg:bg-base-100 max-lg:pb-[env(safe-area-inset-bottom)]">
+        <div class="flex items-center gap-2 px-3 pt-3 lg:hidden">
+          <h2 class="flex-1 text-base font-semibold">New</h2>
+          <button
+            type="button"
+            phx-click="m_create_close"
+            aria-label="Close"
+            class="inline-flex size-9 items-center justify-center rounded-full text-subtle hover:bg-base-200"
+          >
+            <.icon name="hero-x-mark" class="size-5" />
+          </button>
+        </div>
+        <.quick_plan plan={@plan} />
+        <div class="px-3 pb-4 pt-3 lg:hidden">
+          <button
+            type="button"
+            phx-click="new"
+            phx-value-date={Date.to_iso8601(m_new_day(assigns))}
+            data-role="m-new-event"
+            class="inline-flex h-11 w-full items-center justify-center gap-1.5 rounded-full border border-subtle text-sm font-semibold hover:bg-base-200"
+          >
+            <.icon name="hero-calendar" class="size-4" /> New event
+          </button>
+        </div>
+      </div>
+    </div>
     <div
       id="calendar-body"
       phx-hook="CalendarScroll"
       data-view={@view}
-      class="clears-tab-bar relative min-h-0 flex-1 overflow-y-auto"
+      class="clears-tab-bar relative min-h-0 flex-1 overflow-y-auto max-lg:hidden"
     >
       <.legend meetings_on={@meetings_on} />
-      <.calendar_day_list :if={@calendar_day_selected} selected={@calendar_day_selected} />
+      <.calendar_day_list
+        :if={@calendar_day_selected && !phone_placement?(@calendar_day_selected)}
+        selected={@calendar_day_selected}
+      />
       <%= if @view == "month" do %>
         <.month_grid
           cursor={@cursor}
@@ -66,14 +137,6 @@
           entries={@visible_entries}
           zone={@zone}
           day_entries={@calendar_day_entries}
-        />
-        <.month_grid
-          cursor={@cursor}
-          today={@today}
-          entries={@visible_entries}
-          zone={@zone}
-          day_entries={@calendar_day_entries}
-          phone
         />
       <% else %>
         <.week_grid
@@ -84,25 +147,79 @@
           selected_id={@selected && Map.get(@selected, :id)}
           day_entries={@calendar_day_entries}
         />
-        <div class="lg:hidden" data-role="calendar-phone-week">
-          <.day_strip
-            sel_day={@sel_day}
-            today={@today}
-            entries={@visible_entries}
-            zone={@zone}
-            day_entries={@calendar_day_entries}
-          />
-          <.phone_day
-            day={@sel_day}
-            entries={@visible_entries}
-            zone={@zone}
-            today={@today}
-            selected_id={@selected && Map.get(@selected, :id)}
-          />
-        </div>
       <% end %>
     </div>
+    <div id="m-extension-slot" class="contents">
+      <div
+        :if={@calendar_day_selected && phone_placement?(@calendar_day_selected)}
+        class="shrink-0 p-2 lg:hidden"
+      >
+        <.calendar_day_list selected={@calendar_day_selected} />
+      </div>
+    </div>
+    <%!-- Kept in the DOM under Day view so its scroll and rows survive. --%>
+    <div
+      id="m-agenda"
+      phx-hook="CalendarAgenda"
+      data-today={Date.to_iso8601(@today)}
+      data-role="m-agenda"
+      aria-live="off"
+      class={[
+        "clears-tab-bar relative min-h-0 flex-1 overflow-y-auto overscroll-contain bg-base-100 [overflow-anchor:none] lg:hidden",
+        @m_view != "agenda" && "hidden"
+      ]}
+    >
+      <%!-- Quiet base-200 lines while earlier days load (canvas: no spinner).
+           `ignore`: the hook sizes the tail. --%>
+      <div
+        id="m-agenda-earlier"
+        phx-update="ignore"
+        data-role="m-agenda-earlier"
+        aria-hidden="true"
+        class="flex flex-col gap-2 px-4 py-3"
+      >
+        <span class="h-3 w-24 rounded bg-base-200"></span>
+        <span class="h-3 w-48 rounded bg-base-200"></span>
+        <span class="h-3 w-36 rounded bg-base-200"></span>
+      </div>
+      <div id="m-agenda-rows" phx-update="stream">
+        <Mobile.agenda_row
+          :for={{id, row} <- @streams.m_agenda}
+          id={id}
+          row={row}
+          day_entries={@m_day_entries}
+        />
+      </div>
+      <div
+        id="m-agenda-later"
+        phx-update="ignore"
+        data-role="m-agenda-later"
+        aria-hidden="true"
+        class="flex flex-col gap-2 px-4 py-3"
+      >
+        <span class="h-3 w-24 rounded bg-base-200"></span>
+        <span class="h-3 w-40 rounded bg-base-200"></span>
+      </div>
+    </div>
+    <div id="m-day-slot" class="contents">
+      <Mobile.day_view
+        :if={@m_view == "day"}
+        day={@sel_day}
+        today={@today}
+        entries={@m_entries}
+        zone={@zone}
+        selected_id={@selected && Map.get(@selected, :id)}
+        day_entries={@m_day_entries}
+      />
+    </div>
   </section>
+
+  <Mobile.calendars_sheet
+    :if={@live_action != :settings}
+    open={@m_sheet}
+    calendars={@calendars}
+    calendars_shown={@calendars_shown}
+  />
 
   <.details_panel
     :if={@selected && @live_action != :settings}

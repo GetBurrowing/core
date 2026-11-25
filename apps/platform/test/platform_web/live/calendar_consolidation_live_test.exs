@@ -515,7 +515,7 @@ defmodule PlatformWeb.CalendarConsolidationLiveTest do
   end
 
   describe "Past events" do
-    test "is reachable from the list pane and the phone header", ctx do
+    test "is reachable from the list pane and the phone calendar sheet", ctx do
       view = calendar(ctx.owner)
 
       assert has_element?(
@@ -526,7 +526,7 @@ defmodule PlatformWeb.CalendarConsolidationLiveTest do
 
       assert has_element?(
                view,
-               "[data-role=calendar-phone-header] a[data-past-events]",
+               "#m-calendars-sheet [data-sheet-section=pages] a[data-past-events]",
                "Past events"
              )
 
@@ -789,43 +789,33 @@ defmodule PlatformWeb.CalendarConsolidationLiveTest do
       end
     end
 
-    # v7 at 375: section tabs are exactly Calendar | Booking links |
-    # Settings, and Past events sits in the second header row after the
-    # range ("Today | <month> | Past events").
-    test "at phone width Past events is in the header row, not a section tab", ctx do
+    # Phone (canvas 01a2111c, UX review): the section chips no longer take
+    # a row on the calendar. Booking links, Settings and Past events are in
+    # the calendar sheet the "N▾" button opens, at zero extra height.
+    test "at phone width the calendar pages are in the calendar sheet, not a chip row", ctx do
       view = calendar(ctx.owner)
+      refute has_element?(view, "[data-role=calendar-section-tabs]")
+      refute has_element?(view, "[data-role=calendar-phone-header]")
 
-      tabs =
+      view |> element("[data-role=m-calendars-button]") |> render_click()
+      assert has_element?(view, "#m-calendars-sheet.sheet-open")
+
+      labels =
         view
-        |> element("[data-role=calendar-section-tabs]")
+        |> element("#m-calendars-sheet [data-sheet-section=pages]")
         |> render()
         |> Floki.parse_fragment!()
         |> Floki.find("a")
         |> Enum.map(&(&1 |> Floki.text() |> String.trim()))
 
-      assert tabs == ["Calendar", "Booking links", "Settings"]
-      refute has_element?(view, "[data-role=calendar-section-tabs] [data-past-events]")
-
-      row =
-        view
-        |> element("[data-role=calendar-phone-header] [data-role=calendar-phone-nav]")
-        |> render()
-        |> Floki.parse_fragment!()
-
-      labels =
-        row
-        |> Floki.find("button, a, span[data-role=calendar-phone-range]")
-        |> Enum.map(&(&1 |> Floki.text() |> String.trim()))
-        |> Enum.reject(&(&1 == ""))
-
-      assert ["Today", _range, "Past events"] = labels
-      assert [_] = Floki.find(row, "a[data-past-events]")
+      assert labels == ["Booking links", "Calendar settings", "Past events"]
 
       view
-      |> element("[data-role=calendar-phone-nav] a[data-past-events]")
+      |> element("#m-calendars-sheet a[data-past-events]")
       |> render_click()
 
       assert has_element?(view, "[data-role=past-events]")
+      refute has_element?(view, "#m-calendars-sheet.sheet-open")
     end
 
     test "the owner's call details keep the same row (control)", ctx do

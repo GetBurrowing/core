@@ -10,8 +10,8 @@ defmodule PlatformWeb.CalendarLive.Components do
   in the `/* calendar v4 */` block of `app.css`.
 
   The desktop parts (`list_pane/1`, the desktop `cal_header/1`, `week_grid/1`)
-  show at `lg`; the phone parts (`section_tabs/1`, `day_strip/1`, the
-  single-day column) below it. The prototype switches at 899px; main's shell
+  show at `lg`; below it the page is `PlatformWeb.CalendarLive.Mobile` (the
+  agenda, Day view and week strip) and `section_tabs/1` on the settings page. The prototype switches at 899px; main's shell
   switches at Tailwind `lg` (1024px, `icon_rail.ex` `bottom-nav lg:hidden`).
   """
   use Phoenix.Component
@@ -149,7 +149,7 @@ defmodule PlatformWeb.CalendarLive.Components do
   attr(:cal, :map, required: true)
   attr(:shown, :boolean, required: true)
 
-  defp legend_toggle(assigns) do
+  def legend_toggle(assigns) do
     ~H"""
     <button
       type="button"
@@ -315,7 +315,15 @@ defmodule PlatformWeb.CalendarLive.Components do
           </label>
           <button
             type="submit"
-            class={[primary_btn(), "h-[38px] px-4 disabled:opacity-50"]}
+            class={
+              [
+                primary_btn(),
+                "h-[38px] px-4 disabled:opacity-50",
+                # Below lg this sits in the [+] sheet, and [+] is the phone's
+                # only orange (canvas 01a2111c palette).
+                "max-lg:bg-base-content max-lg:text-base-100"
+              ]
+            }
             disabled={@plan.agents == [] or @busy?}
             data-role="quick-plan-submit"
           >
@@ -483,7 +491,7 @@ defmodule PlatformWeb.CalendarLive.Components do
   attr(:sel_day, Date, required: true)
   attr(:zone, :string, required: true)
 
-  @doc "The main pane header: one desktop row, two phone rows."
+  @doc "The main pane header at `lg`; below it the phone controls are `CalendarLive.Mobile.controls/1`."
   def cal_header(assigns) do
     ~H"""
     <div
@@ -511,41 +519,6 @@ defmodule PlatformWeb.CalendarLive.Components do
       >
         <.icon name="hero-archive-box" class="size-3.5" /> Past events
       </.link>
-    </div>
-    <div class="shrink-0 lg:hidden" data-role="calendar-phone-header">
-      <div class="flex min-h-[52px] items-center gap-1.5 border-b border-edge px-3 py-1.5">
-        <h1 class="m-0 whitespace-nowrap text-[17px] font-[650]">Calendar</h1>
-        <span class="flex-1"></span>
-        <.view_switch view={@view} />
-        <button
-          type="button"
-          class={icon_btn()}
-          phx-click="new"
-          phx-value-date={Date.to_iso8601(@sel_day)}
-          aria-label="New event"
-        >
-          <.icon name="hero-plus" class="size-[18px]" />
-        </button>
-      </div>
-      <div
-        class="flex min-h-11 items-center gap-1.5 border-b border-edge px-3 py-1.5"
-        data-role="calendar-phone-nav"
-      >
-        <.date_nav step="day" />
-        <span class="whitespace-nowrap text-[13px] font-semibold" data-role="calendar-phone-range">
-          {Cal.phone_range_label(@view, @cursor, @sel_day)}
-        </span>
-        <span class="flex-1"></span>
-        <%!-- v7 phone header row 2: "Today | <month> | Past events" (stage 5
-             review, fourth pass); the section tabs no longer carry it. --%>
-        <.link
-          patch={~p"/calendar?#{%{view: @view, past: 1}}"}
-          class={ghost_btn()}
-          data-past-events="open"
-        >
-          Past events
-        </.link>
-      </div>
     </div>
     """
   end
@@ -904,81 +877,6 @@ defmodule PlatformWeb.CalendarLive.Components do
       name="hero-arrow-path"
       class="size-3 shrink-0"
     />{@range}
-    """
-  end
-
-  # ── phone: day strip + single-day column (app.js `renderWeek` on mob) ──
-
-  attr(:sel_day, Date, required: true)
-  attr(:today, Date, required: true)
-  attr(:entries, :list, required: true)
-  attr(:zone, :string, required: true)
-  attr(:day_entries, :list, default: [])
-
-  def day_strip(assigns) do
-    assigns = assign(assigns, :days, Cal.week_days(assigns.sel_day))
-
-    ~H"""
-    <div
-      class="sticky top-0 z-[5] border-b border-edge bg-base-200 px-1 pb-1 pt-2"
-      data-role="calendar-day-strip"
-    >
-      <div class="flex" role="tablist" aria-label="Days of the week">
-        <button
-          :for={day <- @days}
-          type="button"
-          role="tab"
-          phx-click="select_day"
-          phx-value-date={Date.to_iso8601(day)}
-          aria-selected={to_string(day == @sel_day)}
-          aria-label={"#{Cal.day_label(day)}, #{length(Cal.entries_on(@entries, day, @zone))} items"}
-          class="flex min-h-11 min-w-0 flex-1 flex-col items-center gap-0.5 py-0.5 text-xs uppercase tracking-[.06em] text-subtle"
-        >
-          {String.first(Calendar.strftime(day, "%a"))}
-          <b class={[
-            "inline-flex size-8 items-center justify-center rounded-full text-[13px] font-semibold tracking-normal",
-            day == @sel_day && "bg-primary text-primary-content",
-            day != @sel_day && day == @today && "text-interactive",
-            day != @sel_day && day != @today && "text-base-content"
-          ]}>
-            {day.day}
-          </b>
-        </button>
-      </div>
-      <div :if={@day_entries != []} class="flex">
-        <div :for={day <- @days} class="flex min-w-0 flex-1 justify-center">
-          <.calendar_day_chips day={day} day_entries={@day_entries} placement="week-phone" compact />
-        </div>
-      </div>
-    </div>
-    """
-  end
-
-  attr(:day, Date, required: true)
-  attr(:entries, :list, required: true)
-  attr(:zone, :string, required: true)
-  attr(:today, Date, required: true)
-  attr(:selected_id, :any, default: nil)
-
-  @doc "The phone's single-day column: a 44px gutter and full-width chips."
-  def phone_day(assigns) do
-    ~H"""
-    <div
-      id="calendar-phone-day"
-      class="grid grid-cols-[44px_minmax(0,1fr)]"
-      data-role="calendar-phone-day"
-      phx-hook="CalendarSelection"
-    >
-      <.gutter class="w-11 pr-2" />
-      <.day_column
-        day={@day}
-        entries={@entries}
-        zone={@zone}
-        today={@today}
-        selected_id={@selected_id}
-        id_prefix="day"
-      />
-    </div>
     """
   end
 

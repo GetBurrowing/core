@@ -758,15 +758,24 @@ defmodule PlatformWeb.CalendarLiveTest do
     assert has_element?(view, ".cal-ev[data-kind=native]", "Own block")
     assert has_element?(view, ".cal-ev[data-kind=external]", "Candidate screen")
 
-    view |> element("button[data-calendar-key=native]") |> render_click()
+    view
+    |> element("[data-role=calendar-list-pane] button[data-calendar-key=native]")
+    |> render_click()
+
     assert has_element?(view, "button[data-calendar-key=native][aria-checked=false]")
     refute has_element?(view, ".cal-ev[data-kind=native]")
     assert has_element?(view, ".cal-ev[data-kind=external]")
 
-    view |> element("button[data-calendar-key='ext:#{sub.id}']") |> render_click()
+    view
+    |> element("[data-role=calendar-list-pane] button[data-calendar-key='ext:#{sub.id}']")
+    |> render_click()
+
     refute has_element?(view, ".cal-ev[data-kind=external]")
 
-    view |> element("button[data-calendar-key=native]") |> render_click()
+    view
+    |> element("[data-role=calendar-list-pane] button[data-calendar-key=native]")
+    |> render_click()
+
     assert has_element?(view, ".cal-ev[data-kind=native]", "Own block")
   end
 
@@ -803,52 +812,26 @@ defmodule PlatformWeb.CalendarLiveTest do
     assert has_element?(view, "[data-role=calendar-legend]", "Your events")
   end
 
-  test "the phone day strip selects a day and the single-day column follows", %{conn: conn} do
+  # The phone week strip and single-day column were replaced by the agenda
+  # and Day view (canvas 01a2111c); calendar_mobile_live_test.exs covers them.
+  test "the phone Day view follows a strip tap and steps one day", %{conn: conn} do
     {:ok, view, _} = live(zoned(conn, "Etc/UTC"), "/calendar")
     today = local_today("Etc/UTC")
-    days = PlatformWeb.CalendarLive.week_days(today)
-    other = Enum.find(days, &(&1 != today))
+    other = today |> PlatformWeb.CalendarLive.week_days() |> Enum.find(&(&1 != today))
 
-    assert has_element?(view, ".lg\\:hidden [data-role=calendar-day-strip]")
+    view |> element("[data-role=m-view-switch] button[data-view=day]") |> render_click()
+    assert has_element?(view, "#m-day[data-day='#{today}']")
 
-    assert has_element?(
-             view,
-             "[data-role=calendar-day-strip] button[aria-selected=true][phx-value-date='#{today}']"
-           )
+    view |> element("[data-role=m-strip] button[data-date='#{other}']") |> render_click()
+    assert has_element?(view, "#m-day[data-day='#{other}']")
 
     assert has_element?(
              view,
-             "[data-role=calendar-phone-day] [data-role=calendar-day-column][data-date='#{today}']"
+             "[data-role=m-strip] button[aria-pressed=true][data-date='#{other}']"
            )
 
-    view
-    |> element("[data-role=calendar-day-strip] button[phx-value-date='#{other}']")
-    |> render_click()
-
-    assert has_element?(
-             view,
-             "[data-role=calendar-day-strip] button[aria-selected=true][phx-value-date='#{other}']"
-           )
-
-    assert has_element?(
-             view,
-             "[data-role=calendar-phone-day] [data-role=calendar-day-column][data-date='#{other}']"
-           )
-
-    refute has_element?(
-             view,
-             "[data-role=calendar-phone-day] [data-role=calendar-day-column][data-date='#{today}']"
-           )
-
-    # The phone's prev/next step one day.
-    view
-    |> element("[data-role=calendar-phone-header] button[aria-label=Next]")
-    |> render_click()
-
-    assert has_element?(
-             view,
-             "[data-role=calendar-phone-day] [data-role=calendar-day-column][data-date='#{Date.add(other, 1)}']"
-           )
+    view |> element("[data-role=m-row1] button[aria-label='Next day']") |> render_click()
+    assert has_element?(view, "#m-day[data-day='#{Date.add(other, 1)}']")
   end
 
   # ── Calendar v4 details + editor (task 01a18d9f stage 2) ────────────────
