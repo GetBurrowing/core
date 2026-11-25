@@ -445,6 +445,16 @@ config :esbuild,
     env: %{"NODE_PATH" => [Path.expand("../deps", __DIR__), Mix.Project.build_path()]}
   ]
 
+# The phone calendar's hooks (canvas 01a2111c): built only as a separate
+# entry, loaded by js/lib/load_calendar_mobile.js when a calendar hook mounts,
+# so the agenda, Day view and week strip code is not in every page's app.js.
+config :esbuild,
+  calendar_mobile: [
+    args:
+      ~w(js/calendar_mobile_island.js --bundle --target=es2022 --outdir=../priv/static/assets/js),
+    cd: Path.expand("../assets", __DIR__)
+  ]
+
 # Built only as a separate entry; the meeting hook loads it when a voice tile mounts.
 config :esbuild,
   cohost_face: [

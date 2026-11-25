@@ -5,10 +5,17 @@ defmodule PlatformWeb.CalendarLive do
 
   alias Platform.Calendar, as: Events
   alias Platform.Calendar.{Authoring, Draft}
-  alias PlatformWeb.CalendarLive.Editor
+  alias PlatformWeb.CalendarLive.{Agenda, Editor, Mobile}
   alias PlatformWeb.MeetingLive.CalendarWindow
   alias PlatformWeb.MeetingLive.LiveInvites
   alias PlatformWeb.TimeEntry
+
+  # The phone window (canvas 01a2111c): two weeks back, six ahead, then
+  # four weeks at a time as the agenda scrolls.
+  @m_chunk 28
+  @m_before 14
+  @m_after 42
+  @m_horizon 730
 
   @impl true
   def mount(_params, _session, socket) do
@@ -40,6 +47,11 @@ defmodule PlatformWeb.CalendarLive do
        Platform.Access.module_access?(socket.assigns.access_scope, :meetings)
      )
      |> assign(:view, "week")
+     |> assign(
+       :m_week_start,
+       Agenda.week_start((get_connect_params(socket) || %{})["week_start"])
+     )
+     |> seed_mobile(today)
      |> assign(:selected, nil)
      |> assign(:calendar_day_selected, nil)
      |> assign(:calendar_day_open_seq, 0)
@@ -60,10 +72,17 @@ defmodule PlatformWeb.CalendarLive do
   def handle_params(params, _url, socket) do
     view = if params["view"] in ~w(week month), do: params["view"], else: "week"
 
+    # `?date=` also puts the phone agenda (and its strip) on that day.
     socket =
       case Date.from_iso8601(params["date"] || "") do
-        {:ok, date} -> put_day(socket, date)
-        _ -> socket
+        {:ok, date} ->
+          socket
+          |> put_day(date)
+          |> assign(m_focus: date, m_today_visible: date == socket.assigns.today)
+          |> m_ensure(date)
+
+        _ ->
+          socket
       end
 
     # Week and Month share one cursor: Month starts at the selected day's
@@ -75,7 +94,12 @@ defmodule PlatformWeb.CalendarLive do
         true -> put_cursor(socket, socket.assigns.sel_day)
       end
 
-    socket = socket |> assign(:view, view) |> reload()
+    socket =
+      socket
+      |> assign(:view, view)
+      |> assign(m_sheet: false, m_create: false)
+      |> m_menu(false)
+      |> reload()
 
     # `?select=<id>` opens that entry's details (the Inbox consent card's
     # "See it on the calendar" lands here with the hold's id).
@@ -167,11 +191,11 @@ defmodule PlatformWeb.CalendarLive do
         %{"key" => key, "date" => date, "placement" => placement},
         socket
       )
-      when placement in ~w(week-desktop week-phone month-desktop month-phone) do
+      when placement in ~w(week-desktop week-phone month-desktop month-phone agenda-phone day-phone) do
     socket = reload(socket)
 
     selected =
-      Enum.find(socket.assigns.calendar_day_entries, fn entry ->
+      Enum.find(all_day_entries(socket.assigns), fn entry ->
         entry.key == key and Date.to_iso8601(entry.day) == date
       end)
 
@@ -182,6 +206,7 @@ defmodule PlatformWeb.CalendarLive do
         selected
         |> Map.put(:trigger_id, day_chip_id(placement, selected.key, selected.day))
         |> Map.put(:open_seq, seq)
+        |> Map.put(:placement, placement)
       end
 
     {:noreply, assign(socket, calendar_day_selected: selected, calendar_day_open_seq: seq)}
@@ -215,6 +240,123 @@ defmodule PlatformWeb.CalendarLive do
     end
   end
 
+  # ── phone: agenda, Day view, week strip, month, sheets (canvas 01a2111c) ─
+
+  def handle_event("m_view", %{"view" => view}, socket) when view in ~w(agenda day) do
+    socket = m_menu(socket, false)
+
+    %{m_view: was, m_today_visible: today_visible, m_focus: focus, today: today} =
+      socket.assigns
+
+    cond do
+      view == was ->
+        {:noreply, socket}
+
+      # Day opens on today while today is on screen, else on the day the
+      # agenda was reading.
+      view == "day" ->
+        day = if today_visible, do: today, else: focus
+
+        {:noreply, socket |> assign(:m_view, "day") |> put_day(day) |> m_ensure(day) |> reload()}
+
+      true ->
+        day = socket.assigns.sel_day
+
+        {:noreply,
+         socket
+         |> assign(m_view: "agenda", m_focus: day, m_today_visible: day == today)
+         |> m_ensure(day)
+         |> reload()
+         |> push_event("m-agenda-scroll", %{date: Date.to_iso8601(day)})}
+    end
+  end
+
+  # A strip day, a month cell: the agenda jumps there; Day view shows it.
+  def handle_event("m_pick", %{"date" => value}, socket) do
+    case Date.from_iso8601(value) do
+      {:ok, date} -> {:noreply, socket |> assign(:m_month_open, false) |> m_go(date)}
+      _ -> {:noreply, socket}
+    end
+  end
+
+  def handle_event("m_today", _, socket) do
+    today = today(socket.assigns.zone)
+    {:noreply, socket |> assign(:today, today) |> m_go(today)}
+  end
+
+  # Day view's ‹ › and its sideways swipe.
+  def handle_event("m_step", %{"direction" => direction}, socket) do
+    sign = if direction == "previous", do: -1, else: 1
+    {:noreply, m_go(socket, Date.add(socket.assigns.sel_day, sign))}
+  end
+
+  # A swipe on the week strip moves a week, in either view.
+  def handle_event("m_strip_step", %{"direction" => direction}, socket) do
+    sign = if direction == "previous", do: -7, else: 7
+
+    anchor =
+      if socket.assigns.m_view == "day",
+        do: socket.assigns.sel_day,
+        else: Agenda.week_first(socket.assigns.m_focus, socket.assigns.m_week_start)
+
+    {:noreply, m_go(socket, Date.add(anchor, sign))}
+  end
+
+  # The agenda hook: the day at the top of the list and whether today is
+  # on screen. The strip follows the first; the Today button the second.
+  def handle_event("m_agenda_focus", %{"date" => value} = params, socket) do
+    case Date.from_iso8601(to_string(value)) do
+      {:ok, date} ->
+        {:noreply,
+         socket
+         |> assign(m_focus: date, m_today_visible: params["today_visible"] == true)
+         |> m_assign_busy()}
+
+      _ ->
+        {:noreply, socket}
+    end
+  end
+
+  # Scrolled near either end: at least four more weeks that way, and on
+  # through any empty stretch to the next event (up to two years), so the
+  # list always grows and the agenda never dead-ends on an empty run.
+  def handle_event("m_agenda_more", %{"direction" => direction}, socket)
+      when direction in ~w(earlier later) do
+    {:reply, %{}, socket |> m_extend(direction) |> m_load()}
+  end
+
+  def handle_event("m_month_toggle", _, socket) do
+    %{m_month_open: open, m_view: view, sel_day: sel_day, m_focus: focus} = socket.assigns
+    anchor = if view == "day", do: sel_day, else: focus
+
+    {:noreply,
+     socket
+     |> assign(m_month_open: !open, m_month: Date.beginning_of_month(anchor))
+     |> m_assign_month_busy()}
+  end
+
+  def handle_event("m_month_nav", %{"direction" => direction}, socket) do
+    sign = if direction == "previous", do: -1, else: 1
+
+    {:noreply,
+     socket
+     |> assign(:m_month, shift_month(socket.assigns.m_month, sign))
+     |> m_assign_month_busy()}
+  end
+
+  # The "Calendar ▾" title menu in the phone top bar: the calendar pages
+  # (Booking links, Settings, Past events) and, when row 1 has no room for
+  # it, Agenda | Day.
+  def handle_event("m_menu_toggle", _, socket),
+    do: {:noreply, m_menu(socket, !socket.assigns.m_menu)}
+
+  def handle_event("m_menu_close", _, socket), do: {:noreply, m_menu(socket, false)}
+
+  def handle_event("m_sheet_open", _, socket), do: {:noreply, assign(socket, :m_sheet, true)}
+  def handle_event("m_sheet_close", _, socket), do: {:noreply, assign(socket, :m_sheet, false)}
+  def handle_event("m_create_open", _, socket), do: {:noreply, assign(socket, :m_create, true)}
+  def handle_event("m_create_close", _, socket), do: {:noreply, assign(socket, :m_create, false)}
+
   def handle_event("mini_month", %{"direction" => direction}, socket) do
     sign = if direction == "previous", do: -1, else: 1
     {:noreply, assign(socket, :mini_month, shift_month(socket.assigns.mini_month, sign))}
@@ -224,7 +366,10 @@ defmodule PlatformWeb.CalendarLive do
     shown = socket.assigns.calendars_shown
 
     {:noreply,
-     socket |> assign(:calendars_shown, Map.put(shown, key, not shown?(shown, key))) |> reload()}
+     socket
+     |> assign(:calendars_shown, Map.put(shown, key, not shown?(shown, key)))
+     |> m_reopen_ends()
+     |> reload()}
   end
 
   def handle_event("new_at", %{"date" => date, "minute" => minute}, socket) do
@@ -407,7 +552,7 @@ defmodule PlatformWeb.CalendarLive do
         _ -> socket.assigns.today
       end
 
-    {:noreply, new_event_at(socket, day, 14 * 60)}
+    {:noreply, socket |> assign(:m_create, false) |> new_event_at(day, 14 * 60)}
   end
 
   def handle_event("new_event", _, socket),
@@ -454,6 +599,19 @@ defmodule PlatformWeb.CalendarLive do
   # is the ONE Escape binding: the editor's X, Cancel and backdrop push
   # `close_editor`, and nothing else listens for Escape, so a keypress
   # closes exactly one layer.
+  # The phone sheets and menu close first: they sit over everything else.
+  def handle_event("escape", _, %{assigns: %{m_menu: true}} = socket),
+    do: {:noreply, m_menu(socket, false)}
+
+  def handle_event("escape", _, %{assigns: %{m_month_open: true}} = socket),
+    do: {:noreply, assign(socket, :m_month_open, false)}
+
+  def handle_event("escape", _, %{assigns: %{m_sheet: true}} = socket),
+    do: {:noreply, assign(socket, :m_sheet, false)}
+
+  def handle_event("escape", _, %{assigns: %{m_create: true}} = socket),
+    do: {:noreply, assign(socket, :m_create, false)}
+
   def handle_event("escape", _, %{assigns: %{calendar_day_selected: selected}} = socket)
       when not is_nil(selected),
       do: {:noreply, assign(socket, :calendar_day_selected, nil)}
@@ -869,7 +1027,8 @@ defmodule PlatformWeb.CalendarLive do
     {:noreply, reload(socket)}
   end
 
-  def handle_info(_, socket), do: {:noreply, reload(socket)}
+  # Calendar data changed: the agenda's ends may hold something now.
+  def handle_info(_, socket), do: {:noreply, socket |> m_reopen_ends() |> reload()}
 
   @impl true
   # A deleted meeting leaves the window, so the details close with it; the
@@ -950,15 +1109,6 @@ defmodule PlatformWeb.CalendarLive do
       end
 
     day_entries = Platform.Extensions.calendar_day_entries(user_id, from, to, zone)
-    selected = socket.assigns.calendar_day_selected
-
-    selected =
-      if selected do
-        case Enum.find(day_entries, &(&1.key == selected.key and &1.day == selected.day)) do
-          nil -> nil
-          entry -> Map.merge(entry, Map.take(selected, [:trigger_id, :open_seq]))
-        end
-      end
 
     # `:keep`: a cancelled meeting stays on the grid in its slot, struck
     # through (task 01a19e7f stage 4). Only this caller asks for it.
@@ -974,17 +1124,36 @@ defmodule PlatformWeb.CalendarLive do
     socket
     |> assign(
       today: today(zone),
+      m_subscriptions?: subscriptions != [],
       external_subscriptions: subscriptions,
       booking_link_count: length(Platform.Calendar.BookingLinks.list(scope)),
       entries: entries,
       visible_entries: visible,
       calendar_day_entries: day_entries,
-      calendar_day_selected: selected,
       calendars: calendar_rows(socket.assigns, subscriptions),
       spaces: Platform.Calendar.list_spaces(scope),
       projects: Platform.Tasks.list_projects_for_user(socket.assigns.current_user_record)
     )
+    |> m_load()
+    |> refresh_day_selected()
     |> refresh_selected()
+  end
+
+  # An open dated list follows the freshly read extension entries (desktop
+  # and phone), so a lost permission closes it.
+  defp refresh_day_selected(%{assigns: %{calendar_day_selected: nil}} = socket), do: socket
+
+  defp refresh_day_selected(%{assigns: %{calendar_day_selected: selected}} = socket) do
+    entry =
+      Enum.find(
+        all_day_entries(socket.assigns),
+        &(&1.key == selected.key and &1.day == selected.day)
+      )
+
+    selected =
+      entry && Map.merge(entry, Map.take(selected, [:trigger_id, :open_seq, :placement]))
+
+    assign(socket, :calendar_day_selected, selected)
   end
 
   # The open details follow the data: a PubSub change or a tick rebuilds
@@ -1063,6 +1232,7 @@ defmodule PlatformWeb.CalendarLive do
           preset: event.preset,
           notes: event.description,
           recurrence: recurrence_label(event),
+          zone_note: zone_note(entry, zone),
           calendar: if(owner?, do: (user && user.name) || "You"),
           agent: entry[:agent] || "an agent",
           # The owner's own native event for a call (task 01a1b8a5 stage 4):
@@ -1087,6 +1257,26 @@ defmodule PlatformWeb.CalendarLive do
           calendar: entry.subscription || "External calendar",
           stale: entry[:stale]
         })
+    end
+  end
+
+  # The event's own zone when it differs from the viewer's (canvas 01a2111c):
+  # "Set in America/New_York (EST)" and its times there.
+  defp zone_note(entry, zone) do
+    case Agenda.zone_tag(entry, zone) do
+      nil ->
+        nil
+
+      abbr ->
+        tz = entry.event.time_zone
+        from = DateTime.shift_zone!(entry.starts_at, tz)
+        to = DateTime.shift_zone!(entry.ends_at || DateTime.add(entry.starts_at, 1800), tz)
+
+        %{
+          text: "Set in #{tz} (#{abbr})",
+          sub:
+            "#{Calendar.strftime(from, "%H:%M")}–#{Calendar.strftime(to, "%H:%M")} there · times above are yours"
+        }
     end
   end
 
@@ -1412,6 +1602,263 @@ defmodule PlatformWeb.CalendarLive do
 
   defp draft_refusal(:saved), do: "This draft was already saved."
   defp draft_refusal(_), do: "This draft link isn't available to you."
+
+  # ── phone state (canvas 01a2111c) ───────────────────────────────────────
+  #
+  # The phone reads one window of entries, `m_from..m_to`, for the agenda,
+  # the week strip's dots and the Day view; it starts two weeks back and
+  # six weeks ahead of today and grows four weeks at a time as the agenda
+  # scrolls. A jump outside it re-centres it on the target day.
+
+  defp seed_mobile(socket, today) do
+    socket
+    |> assign(
+      m_view: "agenda",
+      m_focus: today,
+      m_today_visible: true,
+      m_month_open: false,
+      m_month: Date.beginning_of_month(today),
+      m_month_busy: %{},
+      m_month_ext: [],
+      m_month_ext_counts: %{},
+      m_week_ext: nil,
+      m_ext_counts: %{},
+      m_sheet: false,
+      m_create: false,
+      m_menu: false,
+      title_menu: %{event: "m_menu_toggle", open: false, controls: "m-title-menu"},
+      m_entries: [],
+      m_day_entries: [],
+      m_busy: %{},
+      m_subscriptions?: false
+    )
+    |> m_window(today)
+    |> assign(:m_row_ids, [])
+    |> stream(:m_agenda, [])
+  end
+
+  # The agenda is patched, never reset: a reset empties the list for a
+  # moment, the browser clamps the scroll to 0 and the reader lands at the
+  # top. Rows that left are deleted, rows that stay update in place, and new
+  # rows go in at their index (deletes apply before inserts on the client).
+  defp m_stream_rows(socket, rows) do
+    old = socket.assigns.m_row_ids
+    new_ids = Enum.map(rows, & &1.id)
+    kept = MapSet.new(old)
+    gone = old -- new_ids
+
+    socket =
+      Enum.reduce(gone, socket, &stream_delete_by_dom_id(&2, :m_agenda, "m_agenda-" <> &1))
+
+    rows
+    |> Enum.with_index()
+    |> Enum.reduce(socket, fn {row, index}, socket ->
+      if MapSet.member?(kept, row.id),
+        do: stream_insert(socket, :m_agenda, row),
+        else: stream_insert(socket, :m_agenda, row, at: index)
+    end)
+    |> assign(:m_row_ids, new_ids)
+  end
+
+  defp m_window(socket, date) do
+    first = Agenda.week_first(date, socket.assigns.m_week_start)
+
+    socket
+    |> assign(m_from: Date.add(first, -@m_before), m_to: Date.add(first, @m_after))
+    |> m_reopen_ends()
+  end
+
+  defp m_reopen_ends(socket), do: assign(socket, m_end_earlier: false, m_end_later: false)
+
+  defp m_menu(socket, open) do
+    assign(socket,
+      m_menu: open,
+      title_menu: %{event: "m_menu_toggle", open: open, controls: "m-title-menu"}
+    )
+  end
+
+  # Grow the window `direction` by a chunk, or further: up to the week after
+  # the next event that way (two years at most), so a load always adds a
+  # row a reader can scroll to. Empty days still collapse into one row.
+  defp m_extend(socket, direction) do
+    %{access_scope: scope, zone: zone, m_from: from, m_to: to} = socket.assigns
+
+    {edge, sign} = if direction == "later", do: {to, 1}, else: {from, -1}
+    chunk = Date.add(edge, sign * @m_chunk)
+    horizon = Date.add(edge, sign * @m_horizon)
+
+    {first, last} =
+      if sign == 1, do: {Date.add(edge, 1), horizon}, else: {horizon, Date.add(edge, -1)}
+
+    {range_from, _} = CalendarWindow.day_bounds(first, zone)
+    {_, range_to} = CalendarWindow.day_bounds(last, zone)
+
+    dates =
+      scope
+      |> Events.list_entries(range_from, range_to, time_zone: zone)
+      |> filter_visible(socket.assigns)
+      |> Enum.map(&(&1.starts_at |> DateTime.shift_zone!(zone) |> DateTime.to_date()))
+
+    target =
+      case {sign, dates} do
+        {_, []} -> horizon
+        {1, dates} -> Enum.min(dates, Date) |> Date.add(6) |> then(&Enum.max([&1, chunk], Date))
+        {-1, dates} -> Enum.max(dates, Date) |> Date.add(-6) |> then(&Enum.min([&1, chunk], Date))
+      end
+
+    # Two years that way hold nothing: that end of the agenda is reached.
+    ended = dates == []
+
+    if sign == 1,
+      do: assign(socket, m_to: target, m_end_later: ended),
+      else: assign(socket, m_from: target, m_end_earlier: ended)
+  end
+
+  # The window always holds `date`'s whole week, so the strip has its dots.
+  defp m_ensure(socket, date) do
+    %{m_from: from, m_to: to} = socket.assigns
+    monday = Agenda.week_first(date, socket.assigns.m_week_start)
+
+    if Date.compare(monday, from) != :lt and Date.compare(Date.add(monday, 6), to) != :gt,
+      do: socket,
+      else: m_window(socket, date)
+  end
+
+  defp m_go(socket, date) do
+    if socket.assigns.m_view == "day" do
+      socket |> put_day(date) |> m_ensure(date) |> reload()
+    else
+      moved = m_ensure(socket, date)
+
+      # Always a fresh load: the rows' extension chips are re-read (and so
+      # re-checked against the viewer's access) whenever a date is picked.
+      moved
+      |> assign(m_focus: date, m_today_visible: date == socket.assigns.today)
+      |> m_load()
+      |> push_event("m-agenda-scroll", %{date: Date.to_iso8601(date)})
+    end
+  end
+
+  # Entries for the phone window, under the same filters as the grid.
+  defp m_load(socket) do
+    %{access_scope: scope, zone: zone, m_from: first, m_to: last, today: today} = socket.assigns
+    {from, _} = CalendarWindow.day_bounds(first, zone)
+    {_, to} = CalendarWindow.day_bounds(last, zone)
+
+    entries =
+      scope
+      |> Events.list_entries(from, to, time_zone: zone, cancelled_meetings: :keep)
+      |> filter_visible(socket.assigns)
+
+    day_entries = m_extension_entries(socket, from, to)
+
+    ext_days =
+      for e <- day_entries, e.items != [], into: MapSet.new(), do: e.day
+
+    rows =
+      Agenda.rows(entries, first, last, zone, today,
+        connect?: not socket.assigns.m_subscriptions? and entries == [] and day_entries == [],
+        ending?: socket.assigns.m_end_later,
+        extension_days: ext_days
+      )
+
+    socket
+    |> assign(m_entries: entries, m_day_entries: day_entries, m_week_ext: nil)
+    |> m_stream_rows(rows)
+    |> m_assign_busy()
+    |> m_assign_month_busy()
+  end
+
+  defp filter_visible(entries, assigns) do
+    entries
+    |> Enum.filter(&shown?(assigns.calendars_shown, calendar_key(&1)))
+    |> Enum.reject(&(&1.kind == :meeting and not assigns.meetings_on))
+  end
+
+  # Extension entries (Social and the like) for a range, through the same
+  # read the desktop chips use, so the same access rules decide every count.
+  defp m_extension_entries(socket, from, to) do
+    user_id =
+      case socket.assigns.current_user_record do
+        %{id: id} -> id
+        _ -> nil
+      end
+
+    Platform.Extensions.calendar_day_entries(user_id, from, to, socket.assigns.zone)
+  end
+
+  # The strip's dots and markers for the week it SHOWS, which need not be
+  # inside the agenda window: the extension read is per week, kept until the
+  # week changes or the window reloads.
+  defp m_assign_busy(socket) do
+    %{m_view: view, sel_day: sel_day, m_focus: focus, m_entries: entries, zone: zone} =
+      socket.assigns
+
+    anchor = if view == "day", do: sel_day, else: focus
+    days = Agenda.week_days(anchor, socket.assigns.m_week_start)
+
+    week_ext =
+      case socket.assigns[:m_week_ext] do
+        {first, list} when first == hd(days) ->
+          {first, list}
+
+        _ ->
+          {from, _} = CalendarWindow.day_bounds(hd(days), zone)
+          {_, to} = CalendarWindow.day_bounds(List.last(days), zone)
+          {hd(days), m_extension_entries(socket, from, to)}
+      end
+
+    assign(socket,
+      m_busy: Agenda.day_counts(entries, days, zone),
+      m_week_ext: week_ext,
+      m_ext_counts: Agenda.extension_counts(elem(week_ext, 1))
+    )
+  end
+
+  # The month's dots need the whole month, which can sit outside the window.
+  defp m_assign_month_busy(%{assigns: %{m_month_open: false}} = socket),
+    do: assign(socket, m_month_ext: [], m_month_ext_counts: %{})
+
+  defp m_assign_month_busy(socket) do
+    %{access_scope: scope, zone: zone, m_month: month} = socket.assigns
+    days = Agenda.month_days(month, socket.assigns.m_week_start)
+    {from, _} = CalendarWindow.day_bounds(List.first(days), zone)
+    {_, to} = CalendarWindow.day_bounds(List.last(days), zone)
+
+    entries =
+      scope
+      |> Events.list_entries(from, to, time_zone: zone, cancelled_meetings: :keep)
+      |> filter_visible(socket.assigns)
+
+    month_ext = m_extension_entries(socket, from, to)
+
+    assign(socket,
+      m_month_busy: Agenda.day_counts(entries, days, zone),
+      m_month_ext: month_ext,
+      m_month_ext_counts: Agenda.extension_counts(month_ext)
+    )
+  end
+
+  # Every extension entry the page holds: the desktop window's, the phone
+  # agenda window's and the month picker's.
+  defp all_day_entries(assigns) do
+    assigns.calendar_day_entries ++ assigns.m_day_entries ++ Map.get(assigns, :m_month_ext, [])
+  end
+
+  @doc false
+  # Today shows in row 1 only while today is off screen (canvas 01a2111c).
+  def m_show_today?(%{m_view: "day", sel_day: day, today: today}), do: day != today
+  def m_show_today?(%{m_today_visible: visible}), do: not visible
+
+  @doc false
+  def m_new_day(%{m_view: "day", sel_day: day}), do: day
+  def m_new_day(%{today: today}), do: today
+
+  @doc false
+  def phone_placement?(%{placement: placement}),
+    do: placement in ~w(week-phone month-phone agenda-phone day-phone)
+
+  def phone_placement?(_), do: false
 
   defp put_cursor(socket, date),
     do: assign(socket, cursor: date, mini_month: Date.beginning_of_month(date))
