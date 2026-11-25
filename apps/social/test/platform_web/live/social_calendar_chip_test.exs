@@ -85,14 +85,152 @@ defmodule PlatformWeb.SocialCalendarChipTest do
            )
   end
 
-  test "phone chip is inside the sticky day strip and Escape closes the dated list",
+  # Phone (canvas 01a2111c): the week strip cell carries the count as a
+  # marker in its accessible name, with no tap target of its own; picking the
+  # date brings the agenda day up, and that day's header chip opens the list.
+  test "phone strip cell shows the count; the agenda day header chip opens the dated list",
        %{conn: conn} = ctx do
     view = open(conn, ctx.h1, ctx.day)
+    cell = "[data-role='calendar-day-strip'] button[data-date='#{ctx.day}']"
 
-    chip =
-      "[data-role='calendar-day-strip'] [data-role='calendar-extension-chip'][data-date='#{ctx.day}']"
+    assert has_element?(
+             view,
+             "#{cell} [data-role='calendar-extension-count'][data-date='#{ctx.day}']",
+             "1"
+           )
 
-    assert has_element?(view, chip, "1")
+    assert has_element?(view, "#{cell}[aria-label*='1 Social item']")
+
+    refute has_element?(
+             view,
+             "[data-role='calendar-day-strip'] [data-role='calendar-extension-chip']"
+           )
+
+    view |> element(cell) |> render_click()
+    assert_push_event(view, "m-agenda-scroll", %{date: date})
+    assert date == Date.to_iso8601(ctx.day)
+    assert_phone_header_list(view, ctx)
+  end
+
+  test "the phone month picker shows the count and picking the date opens its day",
+       %{conn: conn} = ctx do
+    view = open(conn, ctx.h1, ctx.day)
+    view |> element("[data-role='m-month-button']") |> render_click()
+    cell = "[data-role='m-month'] button[data-date='#{ctx.day}']"
+
+    assert has_element?(
+             view,
+             "#{cell} [data-role='calendar-extension-count'][data-date='#{ctx.day}']",
+             "1"
+           )
+
+    assert has_element?(view, "#{cell}[aria-label*='1 Social item']")
+
+    view |> element(cell) |> render_click()
+    refute has_element?(view, "[data-role='m-month']")
+    assert_push_event(view, "m-agenda-scroll", %{date: date})
+    assert date == Date.to_iso8601(ctx.day)
+    assert_phone_header_list(view, ctx)
+  end
+
+  test "phone: permission revoked after render shows no Social items on pick or chip",
+       %{conn: conn} = ctx do
+    view = open(conn, ctx.h1, ctx.day)
+    header_chip = phone_header_chip(ctx)
+    assert has_element?(view, header_chip)
+
+    {:ok, _} =
+      Platform.Access.Grants.deny(%{
+        principal: {:user, ctx.h1.id},
+        permission: "social.use",
+        resource: {:project, ctx.profile.project_id}
+      })
+
+    view |> element(header_chip) |> render_click()
+    refute has_element?(view, "[data-role='calendar-extension-list']")
+    refute has_element?(view, "[data-role='calendar-extension-chip']")
+    refute has_element?(view, "[data-role='calendar-extension-count']")
+
+    view
+    |> element("[data-role='calendar-day-strip'] button[data-date='#{ctx.day}']")
+    |> render_click()
+
+    refute has_element?(view, "[data-role='calendar-extension-chip']")
+    refute has_element?(view, "[data-role='calendar-extension-count']")
+    refute has_element?(view, "[data-role='calendar-extension-list']")
+  end
+
+  for {name, offset} <- [same: 0, other: 1] do
+    test "phone: an open dated list is re-read under current access when a strip date is picked (#{name} date)",
+         %{conn: conn} = ctx do
+      view = open(conn, ctx.h1, ctx.day)
+      view |> element(phone_header_chip(ctx)) |> render_click()
+      queue_link = "[data-role='calendar-extension-list'] a[href*='post=#{ctx.post.id}']"
+      assert has_element?(view, queue_link)
+
+      {:ok, _} =
+        Platform.Access.Grants.deny(%{
+          principal: {:user, ctx.h1.id},
+          permission: "social.use",
+          resource: {:project, ctx.profile.project_id}
+        })
+
+      pick = Date.add(ctx.day, unquote(offset))
+      render_click(view, "m_pick", %{"date" => Date.to_iso8601(pick)})
+
+      refute has_element?(view, queue_link)
+      refute has_element?(view, "[data-role='calendar-extension-list']")
+    end
+  end
+
+  # Twelve posts on one day: the phone region keeps its title and Close
+  # outside the scrolling body, and every Queue link, the last one included,
+  # sits inside that body (the island caps it; a browser check measures it).
+  test "phone: a long dated list scrolls inside a bounded region", %{conn: conn} = ctx do
+    others =
+      for i <- 1..11 do
+        {post, _} = pending_post!(ctx, ctx.a, %{body: "Overflow #{i}", scheduled_at: ctx.at})
+        post
+      end
+
+    view = open(conn, ctx.h1, ctx.day)
+    assert has_element?(view, phone_header_chip(ctx), "Social · 12")
+    view |> element(phone_header_chip(ctx)) |> render_click()
+
+    region = "[data-role='calendar-extension-list'][data-phone]"
+    assert has_element?(view, "#{region} > div > h2", "Social · ")
+    assert has_element?(view, "#{region} > div > h2", Calendar.strftime(ctx.day, "%a %-d %b"))
+    assert has_element?(view, "#{region} > div > button[phx-click='calendar_day_close']", "Close")
+
+    body = "#{region} ul[data-role='m-ext-body'].overflow-y-auto.overscroll-contain"
+    assert has_element?(view, body)
+    refute has_element?(view, "#{body} h2")
+
+    for post <- [ctx.post | others] do
+      assert has_element?(view, "#{body} li a[href*='post=#{post.id}']", "Open in Queue")
+    end
+
+    links =
+      view
+      |> render()
+      |> LazyHTML.from_fragment()
+      |> LazyHTML.query("#{body} li a")
+      |> Enum.to_list()
+
+    assert length(links) == 12
+    assert has_element?(view, "#{region} [data-role='m-ext-fade'][aria-hidden='true']")
+  end
+
+  defp phone_header_chip(ctx),
+    do:
+      "#m-agenda [data-role='m-agenda-day-header'] " <>
+        "[data-role='calendar-extension-chip'][data-date='#{ctx.day}']"
+
+  # The day header chip on the agenda opens the dated list with the post's
+  # exact Queue link, and Escape closes it.
+  defp assert_phone_header_list(view, ctx) do
+    chip = phone_header_chip(ctx)
+    assert has_element?(view, chip, "Social · 1")
     view |> element(chip) |> render_click()
 
     assert has_element?(
@@ -101,15 +239,13 @@ defmodule PlatformWeb.SocialCalendarChipTest do
              Calendar.strftime(ctx.day, "%a %-d %b")
            )
 
+    assert has_element?(
+             view,
+             "[data-role='calendar-extension-list'] a[href*='post=#{ctx.post.id}']"
+           )
+
     render_keydown(view, "escape", %{"key" => "Escape"})
     refute has_element?(view, "[data-role='calendar-extension-list']")
-  end
-
-  test "the phone Month tab patches to the month grid", %{conn: conn} = ctx do
-    view = open(conn, ctx.h1, ctx.day)
-    view |> element("[data-role='calendar-phone-header'] [role='tab']", "Month") |> render_click()
-    assert_patch(view, "/calendar?view=month")
-    assert has_element?(view, "[data-role='calendar-month-phone']")
   end
 
   test "posts on the same day share a count and retain separate links", %{conn: conn} = ctx do
