@@ -87,7 +87,7 @@ enum ReplyVoicePicker {
     }
 
     /// Picking Pocket TTS (task 01a20fdd stage 2): it reads the reply only
-    /// when its model is `ready`. Otherwise the best system voice reads it,
+    /// when its model, and the picked voice, are `ready`. Otherwise the best system voice reads it,
     /// with `fellBack: true` and `reason` `model_not_ready` (downloading,
     /// compiling, failed or absent) or `unsupported` (the gate said no). Any
     /// other request resolves as `resolve(requested:language:in:)`.
@@ -98,8 +98,13 @@ enum ReplyVoicePicker {
             let (voice, fellBack) = resolve(requested: requested, language: language, in: all)
             return (voice, fellBack, nil)
         }
+        // A Pocket id that is not a listed voice (an excluded one included)
+        // is never spoken: the default reads, as for a missing system voice.
+        guard let entry = PocketVoice.voice(for: requested).flatMap({ PocketVoice.entry(for: $0.name) }) else {
+            return (best(for: language, in: all), true, "unknown_voice")
+        }
         switch pocket {
-        case .ready: return (PocketVoice.entry, false, nil)
+        case .ready: return (entry, false, nil)
         case .notReady: return (best(for: language, in: all), true, "model_not_ready")
         case .unsupported: return (best(for: language, in: all), true, "unsupported")
         }
@@ -110,18 +115,36 @@ enum ReplyVoicePicker {
     }
 }
 
-/// The Pocket TTS row in the voice list (task 01a20fdd stage 2): one built-in
-/// English voice, listed only where `PocketTTSSupport` says supported.
+/// The Pocket TTS rows in the voice list: one per built-in voice in
+/// `PocketTTSManifest.voices` (task 01a20fdd stages 2 and 4), English only,
+/// listed only where `PocketTTSSupport` says supported.
 enum PocketVoice {
     enum Availability: Equatable {
         case unsupported, notReady, ready
     }
 
     static let prefix = "pocket-tts:"
+    /// The default voice's id, downloaded with the model.
     static let id = prefix + PocketTTSManifest.voice
-    static let entry = ReplyVoice(id: id, name: "Pocket TTS (\(PocketTTSManifest.voice.capitalized))", quality: .neural, language: "en")
+    static let entry = entry(for: PocketTTSManifest.voice)!
+
+    /// Every listed voice, the default first.
+    static var entries: [ReplyVoice] { PocketTTSManifest.voices.compactMap { entry(for: $0.name) } }
 
     static func isPocket(_ id: String) -> Bool { id.hasPrefix(prefix) }
+
+    /// The listed voice an id names; nil for anything not in the manifest
+    /// (an excluded voice included).
+    static func voice(for id: String) -> PocketTTSVoice? {
+        guard isPocket(id) else { return nil }
+        return PocketTTSManifest.voice(named: String(id.dropFirst(prefix.count)))
+    }
+
+    /// "Pocket TTS (<Voice>)".
+    static func entry(for name: String) -> ReplyVoice? {
+        guard let voice = PocketTTSManifest.voice(named: name) else { return nil }
+        return ReplyVoice(id: prefix + voice.name, name: "Pocket TTS (\(voice.displayName))", quality: .neural, language: "en")
+    }
 
     /// English only: the pinned checkpoint is `languages/english`.
     static func speaks(_ language: String) -> Bool { ReplyVoicePicker.languagePart(language) == "en" }

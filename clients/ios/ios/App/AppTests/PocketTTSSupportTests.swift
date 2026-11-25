@@ -122,8 +122,8 @@ final class PocketTTSSupportTests: XCTestCase {
         XCTAssertEqual(Set(keys).count, keys.count)
     }
 
-    /// Exactly one voice embedding, the pinned one: a second voice could be a
-    /// non-commercial (expresso or ears) one.
+    /// The first-use download carries exactly one voice embedding, the
+    /// default; every other voice is fetched only when picked.
     func testOnlyThePinnedVoiceIsDownloaded() {
         let voices = PocketTTSManifest.files.filter { $0.path.hasPrefix("languages/english/embeddings/") }
         XCTAssertEqual(voices.map(\.path), ["languages/english/embeddings/\(PocketTTSManifest.voice).safetensors"])
@@ -140,5 +140,98 @@ final class PocketTTSSupportTests: XCTestCase {
             PocketTTSManifest.url(for: weight)?.absoluteString,
             "https://huggingface.co/kyutai/pocket-tts-without-voice-cloning/resolve/e041936c75475d350b405bc870bcf7c22da4e9e6/"
                 + "languages/english/embeddings/marius.safetensors")
+    }
+
+    // MARK: - Voices (task 01a20fdd stage 4)
+
+    /// Every built-in voice of the pinned weights, as the HF tree API lists
+    /// `languages/english/embeddings/` at e041936c (26 files).
+    private static let pinnedVoiceNames: Set<String> = [
+        "alba", "anna", "azelma", "bill_boerst", "caro_davy", "charles", "cosette", "eponine", "estelle", "eve", "fantine",
+        "george", "giovanni", "jane", "javert", "jean", "juergen", "lola", "marius", "mary", "michael", "paul",
+        "peter_yearsley", "rafael", "stuart_bell", "vera",
+    ]
+
+    func testTheManifestListsTheTwentyLicensedVoicesTheDefaultFirst() {
+        let names = PocketTTSManifest.voices.map(\.name)
+        XCTAssertEqual(
+            names,
+            [
+                "marius", "javert", "bill_boerst", "caro_davy", "peter_yearsley", "stuart_bell", "estelle", "alba", "anna", "vera",
+                "fantine", "charles", "paul", "eponine", "azelma", "george", "mary", "jane", "michael", "eve",
+            ])
+        XCTAssertEqual(Set(names).count, names.count)
+        for voice in PocketTTSManifest.voices {
+            XCTAssertEqual(voice.sha256.count, 64, voice.name)
+            XCTAssertTrue(voice.sha256.allSatisfy { "0123456789abcdef".contains($0) }, voice.name)
+            XCTAssertEqual(voice.file.repo, .weights)
+            XCTAssertEqual(voice.file.path, "languages/english/embeddings/\(voice.name).safetensors")
+            XCTAssertTrue((3_000_000...9_000_000).contains(voice.size), voice.name)
+        }
+        let marius = PocketTTSManifest.files.first { $0.path.hasSuffix("/marius.safetensors") }
+        XCTAssertEqual(PocketTTSManifest.voices.first?.file, marius, "the default is the one the model download carries")
+        XCTAssertEqual(PocketTTSManifest.voices.reduce(0) { $0 + $1.size }, 130_622_296)
+        let alba = PocketTTSManifest.voice(named: "alba")
+        XCTAssertEqual(alba?.size, 6_194_424)
+        XCTAssertEqual(alba?.sha256, "69c32db63ca56843d994f81f343f62e0bf2d73f7e4c9bc73e44bb1110b1d8845")
+        XCTAssertEqual(
+            alba.flatMap { PocketTTSManifest.url(for: $0.file) }?.absoluteString,
+            "https://huggingface.co/kyutai/pocket-tts-without-voice-cloning/resolve/e041936c75475d350b405bc870bcf7c22da4e9e6/"
+                + "languages/english/embeddings/alba.safetensors")
+    }
+
+    /// Each source folder and the licence kyutai/tts-voices states for it.
+    func testEveryListedVoiceComesFromACC0OrCCBYFolderOfTTSVoices() {
+        let licences: [String: PocketTTSVoice.Licence] = [
+            "voice-donations": .cc0, "voice-zero": .cc0, "unmute-prod-website": .cc0, "alba-mackenna": .ccBy4, "vctk": .ccBy4,
+        ]
+        for voice in PocketTTSManifest.voices {
+            let folder = String(voice.source.split(separator: "/").first ?? "")
+            XCTAssertEqual(licences[folder], voice.licence, "\(voice.name): \(voice.source)")
+        }
+    }
+
+    /// cosette (expresso) and jean (ears) are CC BY-NC; giovanni, lola,
+    /// juergen and rafael have no proven licence. None is ever listed or
+    /// resolvable, and listed plus excluded is the whole pinned catalogue.
+    func testNoNonCommercialOrUnprovenVoiceIsEverListed() {
+        let excluded = Set(PocketTTSManifest.excludedVoices.keys)
+        XCTAssertEqual(excluded, ["cosette", "jean", "giovanni", "lola", "juergen", "rafael"])
+        let listed = Set(PocketTTSManifest.voices.map(\.name))
+        XCTAssertTrue(listed.isDisjoint(with: excluded))
+        XCTAssertEqual(listed.union(excluded), Self.pinnedVoiceNames)
+        for name in excluded {
+            XCTAssertNil(PocketTTSManifest.voice(named: name), name)
+            XCTAssertNil(PocketVoice.entry(for: name), name)
+            XCTAssertNil(PocketVoice.voice(for: PocketVoice.prefix + name), name)
+        }
+        XCTAssertFalse(PocketTTSManifest.voices.contains { $0.source.hasPrefix("expresso/") || $0.source.hasPrefix("ears/") })
+        XCTAssertFalse(PocketVoice.entries.contains { $0.id.hasSuffix(":cosette") || $0.id.hasSuffix(":jean") })
+    }
+
+    func testPickerRowsReadPocketTTSAndTheVoice() {
+        XCTAssertEqual(PocketVoice.entries.count, 20)
+        XCTAssertEqual(PocketVoice.entry.name, "Pocket TTS (Marius)")
+        XCTAssertEqual(PocketVoice.entry(for: "bill_boerst")?.name, "Pocket TTS (Bill Boerst)")
+        XCTAssertEqual(PocketVoice.entry(for: "bill_boerst")?.id, "pocket-tts:bill_boerst")
+        XCTAssertTrue(PocketVoice.entries.allSatisfy { $0.quality == .neural && $0.language == "en" && $0.name.hasPrefix("Pocket TTS (") })
+    }
+
+    /// The vendored VoiceGain covers eight voices (two of them excluded);
+    /// every other listed one carries a measured RMS and is levelled to 0.10.
+    func testVoicesOutsideTheVendoredGainAreLevelledWithAPeakClamp() {
+        let vendored: Set<String> = ["alba", "azelma", "cosette", "eponine", "fantine", "javert", "jean", "marius"]
+        for voice in PocketTTSManifest.voices {
+            XCTAssertEqual(voice.measuredRMS == nil, vendored.contains(voice.name), voice.name)
+        }
+        XCTAssertEqual(PocketLoudness.gain(for: "peter_yearsley"), 0.10 / 0.026, accuracy: 1e-9)
+        XCTAssertEqual(PocketLoudness.gain(for: "marius"), 1)
+        let quiet: [Float] = [0.01, -0.02, 0.026]
+        let up = PocketLoudness.level(quiet, voice: "peter_yearsley", vendoredGain: false)
+        XCTAssertEqual(up[2], 0.1, accuracy: 1e-6)
+        let loud: [Float] = [0.5, -0.4]
+        let clamped = PocketLoudness.level(loud, voice: "stuart_bell", vendoredGain: false)
+        XCTAssertEqual(clamped.map(abs).max() ?? 0, 0.99, accuracy: 1e-6, "the peak is clamped")
+        XCTAssertEqual(PocketLoudness.level(quiet, voice: "peter_yearsley", vendoredGain: true), quiet, "never gained twice")
     }
 }

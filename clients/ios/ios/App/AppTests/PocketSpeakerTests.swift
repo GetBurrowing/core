@@ -29,6 +29,8 @@ private final class OpenBackend: VoiceAudioSessionBackend {
 @MainActor
 private final class FakeEngine: PocketEngine {
     private(set) var texts: [String] = []
+    /// The voice each sentence was synthesized in.
+    private(set) var voices: [String] = []
     private(set) var loads = 0
     private(set) var releases = 0
     var hold: Set<String> = []
@@ -40,8 +42,9 @@ private final class FakeEngine: PocketEngine {
         if failLoad { throw PocketEngineError.unavailable }
     }
 
-    func synthesize(_ text: String) async throws -> PocketPCM {
+    func synthesize(_ text: String, voice: String) async throws -> PocketPCM {
         texts.append(text)
+        voices.append(voice)
         if hold.contains(text) {
             await withCheckedContinuation { waiting[text] = $0 }
         }
@@ -175,9 +178,16 @@ final class PocketSpeakerTests: XCTestCase {
         return PocketModelStore(root: root, files: files, fetcher: fetcher, engine: engine, urlFor: { url($0) })
     }
 
+    private let voiceBody = Data("another voice's embedding".utf8)
+    /// Every voice store the plugin made, by voice name.
+    private var voiceStores: [String: PocketModelStore] = [:]
+
     /// A plugin with Pocket TTS supported. `store` nil: an empty manifest,
-    /// so the model is `ready` from the start.
-    private func makePlugin(supported: Bool = true, store: PocketModelStore? = nil) -> (BurrowVoicePlugin, ReplySpeakerSpy) {
+    /// so the model is `ready` from the start. A voice other than the default
+    /// is fetched by `voiceFetcher` (a stand-in body in place of its 6 MB).
+    private func makePlugin(supported: Bool = true, store: PocketModelStore? = nil, voiceFetcher: FakeFetcher = FakeFetcher()) -> (
+        BurrowVoicePlugin, ReplySpeakerSpy
+    ) {
         let plugin = BurrowVoicePlugin()
         let system = ReplySpeakerSpy()
         plugin.speaker = system
@@ -199,6 +209,16 @@ final class PocketSpeakerTests: XCTestCase {
         plugin.makePocketSpeaker = { PocketSpeaker(engine: $0, output: output) }
         let made = store ?? makeStore([], FakeFetcher())
         plugin.makePocketStore = { _ in made }
+        let root = root!
+        let body = voiceBody
+        plugin.makePocketVoiceStore = { [unowned self] file in
+            let stand = PocketTTSFile(repo: file.repo, path: file.path, size: body.count, sha256: sha(body))
+            if voiceFetcher.bodies[url(stand)] == nil { voiceFetcher.bodies[url(stand)] = body }
+            let voiceStore = PocketModelStore(
+                root: root, files: [stand], fetcher: voiceFetcher, engine: PocketVoiceFileLoader(), urlFor: { url($0) })
+            self.voiceStores[(file.path as NSString).lastPathComponent.replacingOccurrences(of: ".safetensors", with: "")] = voiceStore
+            return voiceStore
+        }
         plugin.load()
         return (plugin, system)
     }
@@ -218,6 +238,7 @@ final class PocketSpeakerTests: XCTestCase {
         XCTAssertEqual(output.scheduled, 1, "seq 0 is scheduled without waiting for final")
         XCTAssertEqual(states("r1"), ["started"])
         XCTAssertEqual(engine.texts, ["First sentence."])
+        XCTAssertEqual(engine.voices, ["marius"])
     }
 
     func testSentenceOnePlaysWhileSentenceTwoSynthesizes() async {
@@ -433,6 +454,110 @@ final class PocketSpeakerTests: XCTestCase {
         XCTAssertEqual(model?["state"] as? String, "absent")
         XCTAssertEqual(model?["total"] as? Int64, Int64(bodyA.count + bodyB.count))
         XCTAssertEqual(list["default"] as? String, "en-best")
+    }
+
+    // MARK: More voices (task 01a20fdd stage 4)
+
+    private func ids(_ list: [String: Any]) -> [String] {
+        (list["voices"] as? [[String: Any]])?.compactMap { $0["id"] as? String } ?? []
+    }
+
+    func testTheListCarriesEveryLicensedVoiceTheDefaultFirstAndEachItsOwnModel() {
+        let (plugin, _) = makePlugin()
+        let rows = plugin.voiceList()["voices"] as? [[String: Any]] ?? []
+        let pocket = rows.filter { ($0["id"] as? String).map(PocketVoice.isPocket) == true }
+        XCTAssertEqual(pocket.count, 20)
+        XCTAssertEqual(pocket.first?["id"] as? String, "pocket-tts:marius")
+        let names = pocket.compactMap { $0["name"] as? String }
+        XCTAssertEqual(Array(names.dropFirst()), Array(names.dropFirst()).sorted(), "the others by name")
+        XCTAssertTrue(names.contains("Pocket TTS (Peter Yearsley)"))
+        XCTAssertEqual(rows.last?["id"] as? String, "en-best", "the system voices follow")
+        let model = { (id: String) in pocket.first { $0["id"] as? String == id }?["model"] as? [String: Any] }
+        XCTAssertEqual(model("pocket-tts:marius")?["state"] as? String, "ready", "comes with the model")
+        XCTAssertEqual(model("pocket-tts:alba")?["state"] as? String, "absent", "not fetched until picked")
+        XCTAssertEqual(model("pocket-tts:alba")?["total"] as? Int64, Int64(voiceBody.count))
+        XCTAssertTrue(voiceStores.values.allSatisfy { $0.state == .absent }, "listing fetches nothing")
+    }
+
+    /// Picking a voice that is not on the phone fetches it; a reply meanwhile
+    /// is read by the system voice; once it is in place Pocket reads in it.
+    func testPickingAnUndownloadedVoiceFetchesItAndTheSystemVoiceReadsMeanwhile() async {
+        let fetcher = FakeFetcher()
+        let (plugin, system) = makePlugin(voiceFetcher: fetcher)
+        let albaURL = url(PocketTTSFile(repo: .weights, path: "languages/english/embeddings/alba.safetensors", size: 0, sha256: ""))
+        fetcher.blocked = [albaURL]
+        let picked = plugin.prepareModel(voice: "pocket-tts:alba")
+        await settle()
+        XCTAssertEqual(picked["total"] as? Int64, Int64(voiceBody.count), "the voice's own bytes, not the model's")
+        XCTAssertEqual(voiceStores["alba"]?.state.name, "downloading")
+        XCTAssertEqual(fetcher.offsets[albaURL], [0])
+        let meanwhile = plugin.speakReply(id: "r1", text: "Hello.", voice: "pocket-tts:alba")
+        XCTAssertEqual(meanwhile["voice"] as? String, "en-best")
+        XCTAssertEqual(meanwhile["fellBack"] as? Bool, true)
+        XCTAssertEqual(meanwhile["reason"] as? String, "model_not_ready")
+        XCTAssertEqual(system.spoken, ["r1"], "the system voice reads it")
+        XCTAssertTrue(engine.texts.isEmpty)
+        XCTAssertNil(voiceStores["javert"], "no other voice is touched")
+        withExtendedLifetime(plugin) {}
+    }
+
+    func testAPickedVoiceOnceFetchedReadsTheReplyInThatVoice() async {
+        let fetcher = FakeFetcher()
+        let (plugin, _) = makePlugin(voiceFetcher: fetcher)
+        _ = plugin.prepareModel(voice: "pocket-tts:alba")
+        await voiceStores["alba"]?.waitForJob()
+        XCTAssertEqual(voiceStores["alba"]?.state, .ready)
+        let models = events.filter { $0.name == "model" }.map(\.data)
+        XCTAssertEqual(models.last?["state"] as? String, "ready", "the picker hears the voice is ready")
+        XCTAssertEqual(models.last?["total"] as? Int64, Int64(voiceBody.count))
+        let result = plugin.speakReply(id: "r1", text: "Hello there.", voice: "pocket-tts:alba")
+        XCTAssertEqual(result["voice"] as? String, "pocket-tts:alba")
+        XCTAssertEqual(result["fellBack"] as? Bool, false)
+        await settle()
+        XCTAssertEqual(engine.voices, ["alba"])
+        XCTAssertEqual(output.scheduled, 1)
+    }
+
+    /// The page may not name the voice when it is picked: the first reply in
+    /// it then starts the fetch, and the system voice reads that reply.
+    func testAReplyInAnUnfetchedVoiceStartsItsFetch() async {
+        let fetcher = FakeFetcher()
+        let (plugin, system) = makePlugin(voiceFetcher: fetcher)
+        let part = plugin.speakPart(id: "r1", seq: 0, text: "Hi.", final: true, voice: "pocket-tts:george")
+        XCTAssertEqual(part["reason"] as? String, "model_not_ready")
+        XCTAssertEqual(system.begun, ["r1"])
+        await voiceStores["george"]?.waitForJob()
+        XCTAssertEqual(voiceStores["george"]?.state, .ready)
+    }
+
+    func testAnExcludedVoiceIsNeverListedFetchedOrSpoken() async {
+        let fetcher = FakeFetcher()
+        let (plugin, system) = makePlugin(voiceFetcher: fetcher)
+        let listed = ids(plugin.voiceList())
+        for name in ["cosette", "jean", "giovanni", "lola", "juergen", "rafael"] {
+            XCTAssertFalse(listed.contains(PocketVoice.prefix + name), name)
+        }
+        _ = plugin.prepareModel(voice: "pocket-tts:cosette")
+        let result = plugin.speakReply(id: "r1", text: "Hello.", voice: "pocket-tts:cosette")
+        await settle()
+        XCTAssertEqual(result["voice"] as? String, "en-best")
+        XCTAssertEqual(result["reason"] as? String, "unknown_voice")
+        XCTAssertEqual(system.spoken, ["r1"])
+        XCTAssertNil(voiceStores["cosette"])
+        XCTAssertFalse(fetcher.offsets.keys.contains { $0.path.contains("cosette") })
+        XCTAssertTrue(engine.texts.isEmpty)
+    }
+
+    /// Until the model itself is ready every Pocket row shows its progress.
+    func testBeforeTheModelIsReadyEveryRowShowsTheModelsProgress() {
+        let (plugin, _) = makePlugin(store: makeStore(files(), FakeFetcher()))
+        let rows = (plugin.voiceList()["voices"] as? [[String: Any]] ?? []).filter { ($0["id"] as? String).map(PocketVoice.isPocket) == true }
+        XCTAssertEqual(rows.count, 20)
+        for row in rows {
+            let model = row["model"] as? [String: Any]
+            XCTAssertEqual(model?["state"] as? String, "absent")
+            XCTAssertEqual(model?["total"] as? Int64, Int64(bodyA.count + bodyB.count), row["id"] as? String ?? "")
+        }
     }
 
     func testPocketIsNotListedForANonEnglishLanguage() {

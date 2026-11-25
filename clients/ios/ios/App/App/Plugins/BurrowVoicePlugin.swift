@@ -191,6 +191,11 @@ public class BurrowVoicePlugin: CAPPlugin, CAPBridgedPlugin {
     var makePocketStore: @MainActor (any PocketEngine) -> PocketModelStore = { engine in
         PocketModelStore(root: PocketModelStore.defaultRoot(), fetcher: HTTPRangeFetcher(), engine: engine)
     }
+    /// One more built-in voice (task 01a20fdd stage 4): its one embedding
+    /// file, fetched into the model's directory when the voice is picked.
+    var makePocketVoiceStore: @MainActor (PocketTTSFile) -> PocketModelStore = { file in
+        PocketModelStore(root: PocketModelStore.defaultRoot(), files: [file], fetcher: HTTPRangeFetcher(), engine: PocketVoiceFileLoader())
+    }
     lazy var session: any VoiceAudioSessionControl = MainActor.assumeIsolated { VoiceAudioSession() }
     var voiceCatalog: any ReplyVoiceCatalog = SystemReplyVoiceCatalog()
     var languageCode: () -> String = { AVSpeechSynthesisVoice.currentLanguageCode() }
@@ -219,6 +224,8 @@ public class BurrowVoicePlugin: CAPPlugin, CAPBridgedPlugin {
     private var observers: [NSObjectProtocol] = []
     private var pocketInstance: (any VoiceSpeaking)?
     private var storeInstance: PocketModelStore?
+    /// The voices other than the default, by name, built when first needed.
+    private var voiceStores: [String: PocketModelStore] = [:]
     /// The streamed reply in flight (`speakPart`) and the speaker reading it.
     private var stream: (id: String, speaker: any VoiceSpeaking)?
     /// The last streamed reply that was stopped: its later parts are dropped,
@@ -329,10 +336,47 @@ public class BurrowVoicePlugin: CAPPlugin, CAPBridgedPlugin {
         return store
     }
 
+    /// The store of a voice other than the default (which comes with the
+    /// model); nil for the default, an unlisted name, or where the gate says no.
     @MainActor
-    private func pocketAvailability() -> PocketVoice.Availability {
+    private func pocketVoiceStore(_ voice: PocketTTSVoice) -> PocketModelStore? {
+        guard voice.name != PocketTTSManifest.voice, pocketStore() != nil else { return nil }
+        if let made = voiceStores[voice.name] { return made }
+        let store = makePocketVoiceStore(voice.file)
+        store.onChange = { [weak self, weak store] state in
+            guard let self, let store else { return }
+            if case .downloading = state {} else { VoiceTrace.log("voice name=\(voice.name) state=\(state.name)") }
+            // While the model itself is not ready its progress is what the
+            // picker shows; the voice's few MB only once it is.
+            if self.storeInstance?.state == .ready { self.emit("model", store.data) }
+        }
+        voiceStores[voice.name] = store
+        return store
+    }
+
+    /// Pocket TTS reads in `requested` only once the model and that voice's
+    /// file are both ready.
+    @MainActor
+    private func pocketAvailability(_ requested: String) -> PocketVoice.Availability {
         guard let store = pocketStore() else { return .unsupported }
-        return store.state == .ready ? .ready : .notReady
+        guard store.state == .ready else { return .notReady }
+        guard let voice = PocketVoice.voice(for: requested), let voiceStore = pocketVoiceStore(voice) else { return .ready }
+        return voiceStore.state == .ready ? .ready : .notReady
+    }
+
+    /// Starts whatever `requested` still needs: the model, its voice, or both.
+    @MainActor
+    private func preparePocket(_ requested: String?) {
+        pocketStore()?.prepare()
+        if let requested, let voice = PocketVoice.voice(for: requested) { pocketVoiceStore(voice)?.prepare() }
+    }
+
+    /// A Pocket row's `model`: the model's own progress until it is ready,
+    /// then the voice's (the default voice comes with the model).
+    @MainActor
+    private func pocketModel(for voice: PocketTTSVoice, core: PocketModelStore) -> [String: Any] {
+        let data = core.state == .ready ? (pocketVoiceStore(voice) ?? core).data : core.data
+        return ["state": data["state"] as Any, "received": data["received"] as Any, "total": data["total"] as Any]
     }
 
     /// The voice for a reply and the speaker that reads it. Picking Pocket
@@ -340,10 +384,10 @@ public class BurrowVoicePlugin: CAPPlugin, CAPBridgedPlugin {
     /// voice reads this reply meanwhile.
     @MainActor
     private func choose(_ requested: String?) -> (speaker: any VoiceSpeaking, voice: ReplyVoice?, fellBack: Bool, reason: String?) {
-        let pocket = requested.map(PocketVoice.isPocket) == true ? pocketAvailability() : .unsupported
+        let pocket = requested.flatMap { PocketVoice.isPocket($0) ? pocketAvailability($0) : nil } ?? .unsupported
         let resolved = ReplyVoicePicker.resolve(
             requested: requested, language: languageCode(), in: voiceCatalog.installedVoices(), pocket: pocket)
-        if resolved.reason == "model_not_ready" { pocketStore()?.prepare() }
+        if resolved.reason == "model_not_ready" { preparePocket(requested) }
         let pocketReads = resolved.voice.map { PocketVoice.isPocket($0.id) } == true
         return (pocketReads ? pocketSpeaker() : speaker, resolved.voice, resolved.fellBack, resolved.reason)
     }
@@ -551,18 +595,22 @@ public class BurrowVoicePlugin: CAPPlugin, CAPBridgedPlugin {
         Task { @MainActor in call.resolve(self.voiceList()) }
     }
 
-    /// The Pocket TTS row, first, only where the gate allows it and the
-    /// language is English, with `model {state, received, total}`. `default`
-    /// stays the best SYSTEM voice: picking Pocket starts a 437 MB download.
+    /// The Pocket TTS rows, first (the default voice, then the others by
+    /// name), only where the gate allows it and the language is English, each
+    /// with `model {state, received, total}`. `default` stays the best SYSTEM
+    /// voice: picking Pocket starts a 437 MB download.
     @MainActor
     func voiceList() -> [String: Any] {
         let voices = ReplyVoicePicker.voices(for: languageCode(), in: voiceCatalog.installedVoices())
         var rows = voices.map(\.data)
         if PocketVoice.speaks(languageCode()), let store = pocketStore() {
-            var row = PocketVoice.entry.data
-            let model = store.data
-            row["model"] = ["state": model["state"] as Any, "received": model["received"] as Any, "total": model["total"] as Any]
-            rows.insert(row, at: 0)
+            let others = PocketTTSManifest.voices.dropFirst().sorted { $0.displayName < $1.displayName }
+            let pocket = ([PocketTTSManifest.voices[0]] + others).compactMap { voice -> [String: Any]? in
+                guard var row = PocketVoice.entry(for: voice.name)?.data else { return nil }
+                row["model"] = pocketModel(for: voice, core: store)
+                return row
+            }
+            rows.insert(contentsOf: pocket, at: 0)
         }
         return ["voices": rows, "default": voices.first?.id ?? NSNull()]
     }
@@ -606,17 +654,23 @@ public class BurrowVoicePlugin: CAPPlugin, CAPBridgedPlugin {
 
     /// Starts the Pocket TTS download (and load). Resolves the `model` data;
     /// `{state: "absent", reason}` where the gate says no.
+    /// `{voice?}`: the picked Pocket voice, whose file is fetched too
+    /// (task 01a20fdd stage 4). Without it, the model and the default voice;
+    /// another voice is then fetched by its first reply, which a system voice
+    /// reads meanwhile.
     @objc func prepareModel(_ call: CAPPluginCall) {
-        Task { @MainActor in call.resolve(self.prepareModel()) }
+        let voice = call.getString("voice")
+        Task { @MainActor in call.resolve(self.prepareModel(voice: voice)) }
     }
 
     @MainActor
-    func prepareModel() -> [String: Any] {
+    func prepareModel(voice requested: String? = nil) -> [String: Any] {
         guard let store = pocketStore() else {
             return ["state": "absent", "received": 0, "total": 0, "reason": pocketGate().reason ?? NSNull()]
         }
-        store.prepare()
-        return store.data
+        preparePocket(requested)
+        guard store.state == .ready, let voice = requested.flatMap(PocketVoice.voice(for:)) else { return store.data }
+        return (pocketVoiceStore(voice) ?? store).data
     }
 
     /// The refusals shared by `speak` and `speakPart`; nil when the reply may play.

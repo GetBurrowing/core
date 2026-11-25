@@ -16,9 +16,10 @@ enum PocketEngineError: Error {
 /// real one; tests inject a fake.
 @MainActor
 protocol PocketEngine: PocketEngineLoading {
-    /// One whole sentence in, its PCM out. Loads the model first if it is not
-    /// loaded (lazily, and again after `release`).
-    func synthesize(_ text: String) async throws -> PocketPCM
+    /// One whole sentence in, its PCM out, in the built-in voice `voice`
+    /// (a `PocketTTSManifest.voices` name whose file is in place). Loads the
+    /// model first if it is not loaded (lazily, and again after `release`).
+    func synthesize(_ text: String, voice: String) async throws -> PocketPCM
     /// Drops the loaded model (memory warning). The files stay.
     func release()
 }
@@ -48,12 +49,12 @@ final class SystemPocketEngine: PocketEngine {
         throw PocketEngineError.unavailable
     }
 
-    func synthesize(_ text: String) async throws -> PocketPCM {
+    func synthesize(_ text: String, voice: String) async throws -> PocketPCM {
         #if canImport(CoreAI)
             if #available(iOS 27, *) {
                 try await load()
                 guard let engine = impl as? VendoredPocketEngine else { throw PocketEngineError.unavailable }
-                return try await engine.synthesize(text)
+                return try await engine.synthesize(text, voice: voice)
             }
         #endif
         throw PocketEngineError.unavailable
@@ -64,11 +65,12 @@ final class SystemPocketEngine: PocketEngine {
 
 #if canImport(CoreAI)
     /// The vendored pipeline on its own actor, so synthesis never runs on the
-    /// main thread. Voice: PocketTTSManifest.voice, fixed seed, fp16 on the GPU.
+    /// main thread. Fixed seed, fp16 on the GPU. Voices are loaded from their
+    /// embedding when first used and kept (each is a few MB).
     @available(iOS 27, *)
     actor VendoredPocketEngine {
         private var pipeline: TTSPipeline?
-        private var voice: VoiceState?
+        private var voices: [String: VoiceState] = [:]
 
         func load(bundles: URL, weights: URL) async throws {
             if pipeline != nil { return }
@@ -82,17 +84,52 @@ final class SystemPocketEngine: PocketEngine {
             // The first synthesis specializes the graphs (about 3.6 s on the
             // stage 1 iPhone); pay it here, in `compiling`, not on a reply.
             _ = try await loaded.synthesize(text: "Ready.", voice: voice, seed: 0, applyGain: true)
-            self.voice = voice
+            voices[PocketTTSManifest.voice] = voice
             pipeline = loaded
         }
 
-        func synthesize(_ text: String) async throws -> PocketPCM {
-            guard let pipeline, let voice else { throw PocketEngineError.unavailable }
+        func synthesize(_ text: String, voice name: String) async throws -> PocketPCM {
+            guard let pipeline, PocketTTSManifest.voice(named: name) != nil else { throw PocketEngineError.unavailable }
+            let voice: VoiceState
+            if let loaded = voices[name] {
+                voice = loaded
+            } else {
+                voice = try pipeline.voice(name)
+                voices[name] = voice
+            }
             let result = try await pipeline.synthesize(text: text, voice: voice, seed: 0, applyGain: true)
-            return PocketPCM(samples: result.samples, sampleRate: Model.sampleRate)
+            // The vendored gain covers eight voices; the rest are levelled here.
+            let samples = PocketLoudness.level(result.samples, voice: name, vendoredGain: VoiceGain.sweepMedianRMS[name] != nil)
+            return PocketPCM(samples: samples, sampleRate: Model.sampleRate)
         }
     }
 #endif
+
+/// Levels a voice the vendored `VoiceGain` does not cover (task 01a20fdd
+/// stage 4) the way it does: to an RMS of 0.10 from the voice's measured RMS,
+/// then clamped so the peak stays at or below 0.99. Without it the quietest
+/// voices (stuart_bell 0.021, peter_yearsley 0.026) play about four times
+/// quieter than the rest.
+enum PocketLoudness {
+    static let targetRMS = 0.10
+    static let peakLimit: Float = 0.99
+
+    static func gain(for voice: String) -> Double {
+        guard let rms = PocketTTSManifest.voice(named: voice)?.measuredRMS, rms > 0 else { return 1 }
+        return targetRMS / rms
+    }
+
+    /// `vendoredGain`: the vendored pipeline already applied its own gain, so
+    /// nothing more is done.
+    static func level(_ samples: [Float], voice: String, vendoredGain: Bool) -> [Float] {
+        guard !vendoredGain else { return samples }
+        var gain = Float(gain(for: voice))
+        guard gain != 1 else { return samples }
+        let peak = samples.reduce(Float(0)) { max($0, abs($1)) }
+        if peak > 0, peak * gain > peakLimit { gain = peakLimit / peak }
+        return samples.map { $0 * gain }
+    }
+}
 
 /// Where the PCM plays. `AVPocketAudioOutput` is the real one.
 @MainActor
@@ -173,6 +210,8 @@ final class PocketSpeaker: VoiceSpeaking {
 
     private struct Reply {
         let id: String
+        /// The built-in voice that reads every sentence of this reply.
+        let voice: String
         var parts = ReplyPartQueue()
         var texts: [String] = []
         var final = false
@@ -203,7 +242,7 @@ final class PocketSpeaker: VoiceSpeaking {
     func begin(id: String, voiceID: String?) {
         stop(reason: "replaced")
         generation += 1
-        current = Reply(id: id)
+        current = Reply(id: id, voice: voiceID.flatMap(PocketVoice.voice(for:))?.name ?? PocketTTSManifest.voice)
     }
 
     func append(id: String, seq: Int, text: String) {
@@ -243,11 +282,12 @@ final class PocketSpeaker: VoiceSpeaking {
         current = reply
         let mine = generation
         let engine = engine
+        let voice = reply.voice
         task = Task { [weak self] in
             let result: Result<PocketPCM, Error>
             let started = Date()
             do {
-                result = .success(try await engine.synthesize(text))
+                result = .success(try await engine.synthesize(text, voice: voice))
             } catch {
                 result = .failure(error)
             }

@@ -243,6 +243,14 @@ final class PocketModelStore {
     }
 }
 
+/// The loader for a voice's store (task 01a20fdd stage 4): a voice is one
+/// embedding file, which the engine reads when the voice is first used, so
+/// once the file is checked and in place there is nothing to load.
+@MainActor
+final class PocketVoiceFileLoader: PocketEngineLoading {
+    func load() async throws {}
+}
+
 enum PocketFetchError: Error {
     case http(Int)
     case noResponse
