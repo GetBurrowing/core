@@ -204,9 +204,8 @@ defmodule PlatformWeb.VoiceLiveOnDeviceTest do
     [turn] = dm_rows(viewer, agent)
     assert turn.id == message_id
 
-    assert turn.content ==
-             "what is left on the launch checklist\n\n" <>
-               Platform.Meetings.OnDeviceVoice.instruction()
+    # Stored as the words said, never with the agent-only instruction.
+    assert turn.content == "what is left on the launch checklist"
 
     # The transcript shows only the words said (task 01a20fdd stage 3).
     refute Enum.any?(turn_texts(view), &(&1 =~ "burrow_reply_chunk"))

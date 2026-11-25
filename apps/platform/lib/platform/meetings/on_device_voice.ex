@@ -29,11 +29,14 @@ defmodule Platform.Meetings.OnDeviceVoice do
   with `reply_chunk`. Core broadcasts `{:agent_reply_chunk, _}` solely from
   `PlatformWeb.RuntimeChannel`'s `reply_chunk`, and the channel plugins tell
   agents to stream only long replies, so a short spoken answer usually
-  arrives as one posted message. Every on-device turn therefore carries
-  `instruction/0` after a blank line, as `Platform.Meetings.VoiceAsk` does.
-  The agent and the DM see it; the Voice transcript shows only the words the
-  person said (`user_text/1`). `speakable_sentences/3` cuts the cumulative
-  chunk text into the sentences the phone may speak.
+  arrives as one posted message. So the agent is asked to stream: for a
+  message with `metadata.input = "on_device"`, `agent_content/1` adds
+  `instruction/0` after a blank line to the body the agent is HANDED
+  (`Platform.Chat.AgentResponder`'s `user_message`, which both the built-in
+  and the runtime dispatch read). The stored message keeps only the words
+  the person said, so the DM, search, memory and exports never carry the
+  instruction. `speakable_sentences/3` cuts the cumulative chunk text into
+  the sentences the phone may speak.
   """
 
   alias Platform.Agents.Agent
@@ -95,7 +98,7 @@ defmodule Platform.Meetings.OnDeviceVoice do
           space_id: conn.space_id,
           participant_id: conn.user_participant_id,
           content_type: "text",
-          content: content <> "\n\n" <> @instruction,
+          content: content,
           metadata: %{"input" => "on_device", "client_turn_id" => client_turn_id}
         }
 
@@ -110,19 +113,23 @@ defmodule Platform.Meetings.OnDeviceVoice do
   def instruction, do: @instruction
 
   @doc """
-  The words the person said in a posted on-device turn: its content without
-  the trailing `instruction/0`.
+  The body an agent is handed for `message`: an on-device turn
+  (`metadata.input = "on_device"`) gets `instruction/0` after a blank line;
+  every other message is its content, unchanged. Never stored.
 
       iex> alias Platform.Meetings.OnDeviceVoice
-      iex> OnDeviceVoice.user_text("Hi there " <> OnDeviceVoice.instruction())
-      "Hi there"
+      iex> body = OnDeviceVoice.agent_content(%{content: "Hi", metadata: %{"input" => "on_device"}})
+      iex> {String.starts_with?(body, "Hi"), String.ends_with?(body, OnDeviceVoice.instruction())}
+      {true, true}
+      iex> OnDeviceVoice.agent_content(%{content: "Hi", metadata: %{"input" => "typed"}})
+      "Hi"
   """
-  @spec user_text(String.t() | nil) :: String.t()
-  def user_text(nil), do: ""
+  @spec agent_content(map()) :: String.t() | nil
+  def agent_content(%{content: content, metadata: %{"input" => "on_device"}})
+      when is_binary(content) and content != "",
+      do: content <> "\n\n" <> @instruction
 
-  def user_text(content) when is_binary(content) do
-    content |> String.replace_suffix(@instruction, "") |> String.trim()
-  end
+  def agent_content(%{content: content}), do: content
 
   @doc """
   The user's turn already posted with `client_turn_id` in the conn's DM, or

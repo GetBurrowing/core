@@ -1055,7 +1055,7 @@ defmodule PlatformWeb.VoiceLive do
     |> retire_stream()
     |> insert_turn(%{
       kind: :me,
-      text: OnDeviceVoice.user_text(message.content),
+      text: message.content,
       meta: "on this iPhone · #{clock(at)}"
     })
     |> assign(:mic_state, :thinking)

@@ -79,14 +79,19 @@ defmodule Platform.Meetings.OnDeviceVoiceTest do
     assert_receive %Phoenix.Socket.Broadcast{
                      topic: ^topic,
                      event: "attention",
-                     payload: %{signal: %{message_id: ^mid}}
+                     payload: %{signal: %{message_id: ^mid}} = payload
                    },
                    2_000
 
-    # Routing first (above), then the row itself.
-    # The words said, then the streaming instruction (task 01a20fdd stage 3).
-    assert message.content == "what is left on the list\n\n" <> OnDeviceVoice.instruction()
-    assert OnDeviceVoice.user_text(message.content) == "what is left on the list"
+    # The agent is handed the words AND the streaming instruction (task
+    # 01a20fdd stage 4), in the dispatched message body...
+    assert %{message: %{content: handed}} = payload
+    assert handed == "what is left on the list\n\n" <> OnDeviceVoice.instruction()
+
+    # ...but the stored row is exactly the words said: the DM, search, memory
+    # and exports never carry the instruction.
+    assert Repo.get!(Message, mid).content == "what is left on the list"
+    assert message.content == "what is left on the list"
     assert message.content_type == "text"
     assert message.space_id == voice.space_id
     assert message.participant_id == voice.user_participant_id
