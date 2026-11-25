@@ -78,6 +78,9 @@ targets:
           - "capacitor.config.json"
           - "config.xml"
           - "App.entitlements"
+          # Vendored Pocket TTS licence and notes: kept in the tree, not the bundle.
+          - "Voice/PocketTTS/LICENSE"
+          - "Voice/PocketTTS/THIRD_PARTY.md"
       - path: App/public
         type: folder
         buildPhase: resources
@@ -118,6 +121,13 @@ targets:
         # more than one bundle makes Siri refuse it (task 01a111bb).
         SWIFT_ACTIVE_COMPILATION_CONDITIONS: "$(inherited) BURROW_APP"
         CODE_SIGN_ENTITLEMENTS: App/App.entitlements
+        # Pocket TTS (task 01a20fdd): the vendored host in App/Voice/PocketTTS
+        # imports CoreAI, an iOS 27 framework. Weak, so the app still launches
+        # on iOS 17-26 (every use is behind @available(iOS 27, *)). Device SDK
+        # only: the simulator SDK has no CoreAI, and those sources compile out
+        # there (#if canImport(CoreAI)). App target ONLY, never ../Intents or
+        # an extension.
+        OTHER_LDFLAGS[sdk=iphoneos*]: "$(inherited) -weak_framework CoreAI"
         ASSETCATALOG_COMPILER_APPICON_NAME: AppIcon
         ASSETCATALOG_COMPILER_GLOBAL_ACCENT_COLOR_NAME: primary
       configs:

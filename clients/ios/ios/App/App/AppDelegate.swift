@@ -18,6 +18,7 @@ class AppDelegate: UIResponder, UIApplicationDelegate {
         #if DEBUG
             SchemeTraceHooks.install()
             LaunchHeartbeat.shared.start()
+            PocketTTSProbeLauncher.startIfRequested()
         #endif
         // Set before launch finishes so a notification that launched the app
         // is delivered to the router.
