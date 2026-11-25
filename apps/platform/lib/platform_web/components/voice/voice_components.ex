@@ -922,7 +922,7 @@ defmodule PlatformWeb.Components.Voice do
         Pocket TTS unavailable on this iPhone
       </p>
       <p :if={@pocket.credit} id="voice-native-pocket-credit" class="text-xs text-secondary">
-        Pocket TTS by Kyutai · CC BY 4.0
+        {@pocket.credit}
       </p>
     </form>
     """
@@ -945,15 +945,54 @@ defmodule PlatformWeb.Components.Voice do
         if(model.state == "downloading", do: "Downloading Pocket TTS · #{percent(model)}%"),
       meanwhile: if(waiting? and system, do: "Speaking with #{system.name} until it finishes"),
       unavailable: model.state == "failed",
-      credit: true
+      credit: pocket_credit(pocket.id)
     }
   end
 
   def pocket_status(_current, _system, true),
-    do: %{progress: nil, meanwhile: nil, unavailable: true, credit: false}
+    do: %{progress: nil, meanwhile: nil, unavailable: true, credit: nil}
 
   def pocket_status(_current, _system, _missing?),
-    do: %{progress: nil, meanwhile: nil, unavailable: false, credit: false}
+    do: %{progress: nil, meanwhile: nil, unavailable: false, credit: nil}
+
+  # The Pocket TTS voices whose source clip is CC BY 4.0 and so must be
+  # credited too (task 01a20fdd stage 4; clients/ios/.../PocketTTS/THIRD_PARTY.md).
+  # The CC0 voices need only the model's credit.
+  @vctk "VCTK corpus, CSTR, University of Edinburgh"
+  @pocket_voice_credits %{
+    "alba" => "Alba MacKenna",
+    "anna" => @vctk,
+    "vera" => @vctk,
+    "fantine" => @vctk,
+    "charles" => @vctk,
+    "paul" => @vctk,
+    "eponine" => @vctk,
+    "azelma" => @vctk,
+    "george" => @vctk,
+    "mary" => @vctk,
+    "jane" => @vctk,
+    "michael" => @vctk,
+    "eve" => @vctk
+  }
+
+  @doc """
+  The attribution line for a chosen Pocket TTS voice: Kyutai's model, then
+  the voice's source when that clip is CC BY 4.0.
+
+      iex> PlatformWeb.Components.Voice.pocket_credit("pocket-tts:marius")
+      "Pocket TTS by Kyutai · CC BY 4.0"
+
+      iex> PlatformWeb.Components.Voice.pocket_credit("pocket-tts:alba")
+      "Pocket TTS by Kyutai · CC BY 4.0 · voice: Alba MacKenna"
+  """
+  def pocket_credit("pocket-tts:" <> name) do
+    case Map.fetch(@pocket_voice_credits, name) do
+      {:ok, source} -> "Pocket TTS by Kyutai · CC BY 4.0 · voice: " <> source
+      :error -> "Pocket TTS by Kyutai · CC BY 4.0"
+    end
+  end
+
+  def pocket_credit(_id), do: "Pocket TTS by Kyutai · CC BY 4.0"
 
   defp percent(%{received: got, total: total}) when total > 0, do: min(div(got * 100, total), 100)
   defp percent(_model), do: 0

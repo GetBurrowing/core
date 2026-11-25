@@ -926,7 +926,11 @@ describe("Pocket TTS and streamed replies on the device (task 01a20fdd stage 3)"
     expect(plugin.prepareModel).not.toHaveBeenCalled()
     t.handlers.voice_native_voice({ id: "pocket-tts:marius" })
     expect(plugin.prepareModel).toHaveBeenCalledTimes(1)
+    expect(plugin.prepareModel).toHaveBeenCalledWith({ voice: "pocket-tts:marius" })
     expect(JSON.parse(store.get(key))).toBe("pocket-tts:marius")
+    // Another voice: the page names it, so the phone fetches it on the pick.
+    t.handlers.voice_native_voice({ id: "pocket-tts:alba" })
+    expect(plugin.prepareModel).toHaveBeenLastCalledWith({ voice: "pocket-tts:alba" })
   })
 
   it("model events reach the server only on a state change or a new whole percent", async () => {

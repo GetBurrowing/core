@@ -194,7 +194,11 @@ defmodule PlatformWeb.VoiceLive do
   @answer_timeout_ms 20_000
   # A text agent is slower than the voice worker.
   @native_answer_timeout_ms 60_000
-  @max_voices 40
+  # Reply voices kept from the device: the system voices and, separately,
+  # the Pocket TTS rows (20 on the iPhone as of task 01a20fdd stage 4), so
+  # Pocket rows never push a system voice out. 72 rows at most.
+  @max_system_voices 40
+  @max_pocket_voices 32
   @voice_qualities ~w(neural premium enhanced default)
   @model_states ~w(absent downloading compiling ready failed)
   @max_retired 8
@@ -622,7 +626,10 @@ defmodule PlatformWeb.VoiceLive do
         %{assigns: %{on_device?: true}} = socket
       )
       when is_list(voices) do
-    voices = voices |> Enum.flat_map(&voice_entry/1) |> Enum.take(@max_voices)
+    {pocket, system} =
+      voices |> Enum.flat_map(&voice_entry/1) |> Enum.split_with(&(&1.quality == "neural"))
+
+    voices = Enum.take(pocket, @max_pocket_voices) ++ Enum.take(system, @max_system_voices)
     selected = params["selected"]
     voice = if Enum.any?(voices, &(&1.id == selected)), do: selected, else: first_id(voices)
 

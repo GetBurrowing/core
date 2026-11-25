@@ -18,6 +18,8 @@ defmodule PlatformWeb.VoiceLiveOnDeviceTest do
 
   use PlatformWeb.ConnCase, async: false
 
+  doctest PlatformWeb.Components.Voice, only: [pocket_credit: 1]
+
   import Ecto.Query
   import Phoenix.LiveViewTest
 
@@ -647,10 +649,10 @@ defmodule PlatformWeb.VoiceLiveOnDeviceTest do
 
   # ── Pocket TTS in the picker ─────────────────────────────────────────
 
-  defp pocket(state, received \\ 0, total \\ 1000) do
+  defp pocket(state, received \\ 0, total \\ 1000, name \\ "marius") do
     %{
-      "id" => "pocket-tts:marius",
-      "name" => "Pocket TTS (Marius)",
+      "id" => "pocket-tts:" <> name,
+      "name" => "Pocket TTS (#{String.capitalize(name)})",
       "quality" => "neural",
       "model" => %{"state" => state, "received" => received, "total" => total}
     }
@@ -708,6 +710,76 @@ defmodule PlatformWeb.VoiceLiveOnDeviceTest do
     refute has_element?(view, "#voice-native-pocket-progress")
     refute has_element?(view, "#voice-native-pocket-meanwhile")
     assert text(doc(view), "#voice-native-pocket-credit") == "Pocket TTS by Kyutai · CC BY 4.0"
+  end
+
+  test "a CC BY voice credits its source too; a CC0 one only the model (task 01a20fdd stage 4)",
+       %{conn: conn} do
+    view = ready!(conn)
+
+    hook(view, "voice_native_voices", %{
+      "voices" =>
+        [pocket("ready"), pocket("ready", 0, 1000, "alba"), pocket("ready", 0, 1000, "george")] ++
+          [pocket("ready", 0, 1000, "bill_boerst") | @voices],
+      "selected" => "pocket-tts:alba"
+    })
+
+    credit = fn -> text(doc(view), "#voice-native-pocket-credit") end
+    assert credit.() == "Pocket TTS by Kyutai · CC BY 4.0 · voice: Alba MacKenna"
+
+    view |> form("#voice-native-voice", %{"voice" => "pocket-tts:george"}) |> render_change()
+
+    assert credit.() ==
+             "Pocket TTS by Kyutai · CC BY 4.0 · voice: VCTK corpus, CSTR, University of Edinburgh"
+
+    view |> form("#voice-native-voice", %{"voice" => "pocket-tts:bill_boerst"}) |> render_change()
+    assert credit.() == "Pocket TTS by Kyutai · CC BY 4.0"
+
+    view |> form("#voice-native-voice", %{"voice" => "v-premium"}) |> render_change()
+    refute has_element?(view, "#voice-native-pocket-credit")
+  end
+
+  test "every CC BY 4.0 voice the phone lists is credited (THIRD_PARTY.md)" do
+    vctk = ~w(anna vera fantine charles paul eponine azelma george mary jane michael eve)
+    cc0 = ~w(marius javert bill_boerst caro_davy peter_yearsley stuart_bell estelle)
+
+    for name <- vctk do
+      assert Voice.pocket_credit("pocket-tts:" <> name) =~
+               "· voice: VCTK corpus, CSTR, University of Edinburgh"
+    end
+
+    assert Voice.pocket_credit("pocket-tts:alba") =~ "· voice: Alba MacKenna"
+
+    for name <- cc0,
+        do:
+          assert(Voice.pocket_credit("pocket-tts:" <> name) == "Pocket TTS by Kyutai · CC BY 4.0")
+  end
+
+  test "Pocket rows never push a system voice out of the picker", %{conn: conn} do
+    view = ready!(conn)
+    pockets = for i <- 1..20, do: pocket("ready", 0, 1000, "voice#{i}")
+
+    systems =
+      for i <- 1..40, do: %{"id" => "sys-#{i}", "name" => "System #{i}", "quality" => "default"}
+
+    hook(view, "voice_native_voices", %{"voices" => pockets ++ systems, "selected" => "sys-40"})
+
+    voices = assigns(view).native_voices
+    assert length(voices) == 60
+    assert Enum.count(voices, &(&1.quality == "neural")) == 20
+    assert List.last(voices).id == "sys-40"
+    assert assigns(view).native_voice == "sys-40", "the last system voice is still selectable"
+
+    flood = for i <- 1..50, do: pocket("ready", 0, 1000, "flood#{i}")
+
+    hook(view, "voice_native_voices", %{
+      "voices" =>
+        flood ++ systems ++ [%{"id" => "sys-41", "name" => "Extra", "quality" => "default"}],
+      "selected" => "sys-1"
+    })
+
+    voices = assigns(view).native_voices
+    assert Enum.count(voices, &(&1.quality == "neural")) == 32
+    assert Enum.count(voices, &(&1.quality != "neural")) == 40
   end
 
   test "a failed model, or a remembered Pocket voice the phone no longer offers, reads unavailable",

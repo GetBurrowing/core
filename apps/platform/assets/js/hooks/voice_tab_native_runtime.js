@@ -452,8 +452,9 @@ const VoiceTabNative = {
     if (typeof id !== "string" || !id) return
     this._voice = id
     ClientState.set(VOICE_NAMESPACE, this._voiceKey(), id)
-    // Picking Pocket TTS starts its download; a system voice reads meanwhile.
-    if (isPocket(id)) this._nativeCall("prepareModel")
+    // Picking Pocket TTS starts its download (the model, and this voice if
+    // it is not on the phone); a system voice reads meanwhile.
+    if (isPocket(id)) this._nativeCall("prepareModel", { voice: id })
   },
 
   _nativeCall(method, args) {
