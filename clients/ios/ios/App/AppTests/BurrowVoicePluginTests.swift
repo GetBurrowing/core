@@ -432,15 +432,19 @@ final class BurrowVoicePluginTests: XCTestCase {
     // MARK: Another app's audio (task 01a20fdd stage 4)
 
     /// A podcast is playing: what iOS does when that app takes its audio back
-    /// from a NON-mixable session is modelled by posting the interruption
-    /// began it would send.
+    /// from a NON-mixable session is modelled by posting, just after the
+    /// activation, the interruption began it would send.
     private func podcastPlaying() {
         backend.isOtherAudioPlaying = true
         let center = center!
+        // Asynchronously, as on a device: the other app reacts after this
+        // session is already active (the mic open, or the reply playing).
         backend.onNonMixableActivation = {
-            center.post(
-                name: AVAudioSession.interruptionNotification, object: nil,
-                userInfo: [AVAudioSessionInterruptionTypeKey: AVAudioSession.InterruptionType.began.rawValue])
+            DispatchQueue.main.async {
+                center.post(
+                    name: AVAudioSession.interruptionNotification, object: nil,
+                    userInfo: [AVAudioSessionInterruptionTypeKey: AVAudioSession.InterruptionType.began.rawValue])
+            }
         }
     }
 
@@ -449,8 +453,7 @@ final class BurrowVoicePluginTests: XCTestCase {
         let plugin = makePlugin()
         let result = await plugin.startTurn()
         XCTAssertEqual(result["started"] as? Bool, true)
-        await Task.yield()
-        await Task.yield()
+        try? await Task.sleep(nanoseconds: 200_000_000)
         XCTAssertFalse(log.entries.contains("transcriber.cancel"), "the toggled turn stays open: \(log.entries)")
         XCTAssertFalse(eventNames.contains("ended"), "no ended(interrupted) right after the tap: \(eventNames)")
         transcriber.finalText = "still listening"
@@ -462,10 +465,12 @@ final class BurrowVoicePluginTests: XCTestCase {
         podcastPlaying()
         let plugin = makePlugin()
         let result = plugin.speakReply(id: "r1", text: "reply")
-        await Task.yield()
-        await Task.yield()
+        // Let the main queue deliver what the podcast app's grab would post.
+        try? await Task.sleep(nanoseconds: 200_000_000)
         XCTAssertEqual(result["spoken"] as? Bool, true)
         XCTAssertTrue(speaker.isSpeaking, "not stopped by the podcast taking its audio back")
+        XCTAssertFalse(deactivated, "the session is still held while the reply plays: \(log.entries)")
+        XCTAssertFalse(eventNames.contains("ended"))
         XCTAssertFalse(events.contains { $0.data["state"] as? String == "stopped" }, "\(events.map(\.data))")
         speaker.finish()
         XCTAssertTrue(deactivated, "deactivated with notifyOthers, so the podcast resumes")
