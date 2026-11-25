@@ -4,6 +4,22 @@ The top `## v<version>` section is sent as the build's "What to Test" by
 `scripts/set_testflight_notes.py`. It must match project.yml's
 MARKETING_VERSION, and it is capped at 4000 characters.
 
+## v1.4: Pocket TTS reads replies on this iPhone
+New in this build:
+- Reply voice can now be Pocket TTS, a natural-sounding voice that runs entirely on this iPhone. It is offered on iPhones with iOS 27 and enough memory; on others the list is unchanged.
+- The first time you pick it, the iPhone downloads about 437 MB, once, with the progress shown under Reply voice ("Downloading Pocket TTS · N%"). Wi-Fi is best. Until it finishes, your usual system voice reads the replies, so nothing goes quiet.
+- Speech can start before the agent has finished writing: the reply is read sentence by sentence as it arrives.
+- Pressing the mic stops the reply at once, and taking your AirPods out pauses it instead of moving it to the loudspeaker, just as before.
+- Pocket TTS by Kyutai · CC BY 4.0
+
+Please try:
+1. Open the Voice tab, pick Pocket TTS under Reply voice, and ask the agent something straight away. The reply should be read by your system voice while the percentage rises.
+2. When the download finishes, ask again. The reply should now be read by Pocket TTS, without picking it again, and still after you close and reopen the app.
+3. Ask for a longer answer (four to six sentences). Speech should begin before the full reply appears.
+4. While Pocket TTS is speaking, press the mic and start talking. Speech should stop at once and not continue later.
+5. With AirPods in, take them out while it speaks. It should pause, not move to the loudspeaker.
+Tell us your iPhone model, your iOS version, and how Pocket TTS sounds next to the system voice.
+
 ## v1.3: talk to an agent on this iPhone
 New in this build:
 - On an iPhone that supports on-device speech, the Voice tab now listens on the phone itself. Your words appear as you speak, are sent to the agent as an ordinary message when you let go, and the agent's answer is read aloud in the phone's own voice.
