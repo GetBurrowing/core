@@ -906,7 +906,7 @@ defmodule PlatformWeb.Components.Voice do
         </select>
       </label>
       <p
-        :if={@missing? and @current and not @pocket_missing?}
+        :if={@missing? and not is_nil(@current) and not @pocket_missing?}
         id="voice-native-voice-missing"
         class="text-xs text-secondary"
       >

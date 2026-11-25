@@ -757,6 +757,8 @@ defmodule PlatformWeb.VoiceLiveOnDeviceTest do
 
   test "ttfs is logged on a test build only, with no reply text", %{conn: conn} do
     import ExUnit.CaptureLog
+    Logger.put_module_level(PlatformWeb.VoiceLive, :info)
+    on_exit(fn -> Logger.delete_module_level(PlatformWeb.VoiceLive) end)
     test_view = ready!(conn, %{"test_build" => true})
 
     log =

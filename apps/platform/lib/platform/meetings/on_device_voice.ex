@@ -113,7 +113,8 @@ defmodule Platform.Meetings.OnDeviceVoice do
   The words the person said in a posted on-device turn: its content without
   the trailing `instruction/0`.
 
-      iex> Platform.Meetings.OnDeviceVoice.user_text("Hi there\n\n" <> Platform.Meetings.OnDeviceVoice.instruction())
+      iex> alias Platform.Meetings.OnDeviceVoice
+      iex> OnDeviceVoice.user_text("Hi there " <> OnDeviceVoice.instruction())
       "Hi there"
   """
   @spec user_text(String.t() | nil) :: String.t()
