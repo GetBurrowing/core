@@ -5,6 +5,7 @@ import {
   EDGE_PX,
   anchorRow,
   anchorShift,
+  endReached,
   lineCount,
   lowSpace,
   monthAsSheet,
@@ -303,5 +304,25 @@ describe("phone layout rules (review A, B, C)", () => {
     expect(nearEdge("earlier", { top: -200, bottom: -50 }, view)).toBe(true)
     expect(nearEdge("earlier", { top: -500, bottom: -100 }, view)).toBe(false)
     expect(nearEdge("later", null, view)).toBe(false)
+  })
+})
+
+describe("the agenda's ends (review 3)", () => {
+  it("endReached reads the server's data-end-* marks", () => {
+    expect(endReached({ endLater: "true", endEarlier: "false" }, "later")).toBe(true)
+    expect(endReached({ endLater: "true", endEarlier: "false" }, "earlier")).toBe(false)
+    expect(endReached({}, "later")).toBe(false)
+  })
+
+  it("loadMore pushes nothing past a reached end", () => {
+    const pushed = []
+    const h = Object.create(CalendarAgenda)
+    h.el = { offsetParent: {}, dataset: { endLater: "true", endEarlier: "false" } }
+    h.ready = true
+    h.loading = false
+    h.pushEvent = (e, p) => pushed.push([e, p])
+    h.loadMore("later")
+    expect(pushed).toEqual([])
+    expect(h.loading).toBe(false)
   })
 })

@@ -21,6 +21,7 @@ defmodule PlatformWeb.CalendarLive.Agenda do
   """
   def rows(entries, %Date{} = from, %Date{} = to, zone, %Date{} = today, opts \\ []) do
     connect? = Keyword.get(opts, :connect?, false)
+    ending? = Keyword.get(opts, :ending?, false)
 
     Date.range(from, to)
     |> Enum.map(&day(entries, &1, zone, today))
@@ -43,6 +44,7 @@ defmodule PlatformWeb.CalendarLive.Agenda do
         acc -> {:cont, Enum.reverse(acc), []}
       end
     )
+    |> mark_ending(ending?)
     |> Enum.flat_map(fn
       [%{empty?: true, today?: false} = first | _] = run ->
         last = List.last(run)
@@ -52,7 +54,8 @@ defmodule PlatformWeb.CalendarLive.Agenda do
             id: "m-agenda-empty-#{first.date}",
             type: :empty,
             from: first.date,
-            to: last.date
+            to: last.date,
+            ending?: Map.get(last, :ending?, false)
           }
         ]
 
@@ -62,6 +65,20 @@ defmodule PlatformWeb.CalendarLive.Agenda do
       [day] ->
         [day]
     end)
+  end
+
+  # With nothing in the two years after it (`ending?`), the final empty run
+  # is the agenda's end: it reads "After <day> · No events".
+  defp mark_ending(groups, false), do: groups
+
+  defp mark_ending(groups, true) do
+    case List.last(groups) do
+      [%{empty?: true, today?: false} | _] = run ->
+        List.replace_at(groups, -1, List.update_at(run, -1, &Map.put(&1, :ending?, true)))
+
+      _ ->
+        groups
+    end
   end
 
   defp day(entries, date, zone, today) do

@@ -71,6 +71,11 @@ export function nearEdge(direction, rect, view, margin = 240) {
   return direction === "later" ? rect.top < view.bottom + margin : rect.bottom > view.top - margin
 }
 
+/** Whether the server marked that end of the agenda reached (`data-end-*`). */
+export function endReached(dataset, direction) {
+  return (direction === "later" ? dataset.endLater : dataset.endEarlier) === "true"
+}
+
 /** The tail's min height: one list height less a day header. */
 export function tailPx(listHeight, headerPx) {
   return Math.max(0, Math.round(listHeight - headerPx))
@@ -224,6 +229,8 @@ export const CalendarAgenda = {
   // Earlier days land above: keep the first visible row where it was.
   loadMore(direction) {
     if (!this.ready || this.loading || this.el.offsetParent === null) return
+    // The server found nothing in two years that way: the agenda ends there.
+    if (endReached(this.el.dataset || {}, direction)) return
     this.loading = true
     const view = this.el.getBoundingClientRect()
     const anchor = direction === "earlier" ? anchorRow(this.rows(), view.top) : null

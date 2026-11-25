@@ -322,9 +322,14 @@ defmodule PlatformWeb.CalendarLive.Mobile do
       data-from={Date.to_iso8601(@row.from)}
       data-to={Date.to_iso8601(@row.to)}
     >
-      <p class="flex flex-wrap gap-x-1.5 border-b border-edge px-4 py-2.5 text-sm text-subtle">
+      <p
+        class="flex flex-wrap gap-x-1.5 border-b border-edge px-4 py-2.5 text-sm text-subtle"
+        data-ending={@row[:ending?] && "true"}
+      >
         <span class="font-semibold text-base-content">
-          {Agenda.range_label(@row.from, @row.to)}
+          {if @row[:ending?],
+            do: "After " <> Calendar.strftime(Date.add(@row.from, -1), "%a %-d %b"),
+            else: Agenda.range_label(@row.from, @row.to)}
         </span>
         <span>· No events</span>
       </p>

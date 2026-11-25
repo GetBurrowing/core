@@ -34,10 +34,53 @@ defmodule PlatformWeb.CalendarMobileLiveTest do
       |> init_test_session(current_user_id: user.id)
       |> put_connect_params(%{"timezone" => @zone})
 
-    %{conn: conn, scope: Scope.for_user(user), today: today()}
+    %{conn: conn, scope: Scope.for_user(user), user: user, today: today()}
   end
 
   defp today, do: DateTime.utc_now() |> DateTime.to_date()
+
+  defp text(html),
+    do: html |> LazyHTML.from_fragment() |> LazyHTML.text() |> String.split() |> Enum.join(" ")
+
+  # The [+] sheet's phone blocks, in document order.
+  defp create_sheet_order(view) do
+    view
+    |> element("[data-role=m-create]")
+    |> render()
+    |> LazyHTML.from_fragment()
+    |> LazyHTML.query("[data-role=m-new-event], [data-role=m-create-no-agent], #quick-plan")
+    |> Enum.map(fn node ->
+      case LazyHTML.attribute(node, "id") do
+        ["quick-plan"] -> "quick-plan"
+        _ -> node |> LazyHTML.attribute("data-role") |> hd()
+      end
+    end)
+  end
+
+  # An agent the user granted `create`, as calendar_agent_draft_test sets up.
+  defp draft_agent!(user, scope) do
+    n = System.unique_integer([:positive])
+    agent = Repo.insert!(%Platform.Agents.Agent{name: "Scheduler #{n}", slug: "cal-mobile-#{n}"})
+
+    runtime =
+      Repo.insert!(%Platform.Agents.AgentRuntime{
+        runtime_id: "cal-mobile-#{n}",
+        owner_user_id: user.id,
+        agent_id: agent.id,
+        status: "active",
+        display_name: "Scheduler"
+      })
+
+    Repo.insert!(%Platform.Access.RuntimeProfile{
+      runtime_id: runtime.id,
+      tool_profile: ["context_read"],
+      restricted_permissions:
+        Platform.Access.RuntimeProfiles.translated_permissions(["context_read"])
+    })
+
+    {:ok, _} = Platform.Calendar.AgentAccess.grant(scope, agent.id, %{read: true, create: true})
+    agent
+  end
 
   defp at(date, hour, minute \\ 0), do: DateTime.new!(date, Time.new!(hour, minute, 0), @zone)
 
@@ -402,25 +445,48 @@ defmodule PlatformWeb.CalendarMobileLiveTest do
       refute has_element?(view, "#m-calendars-sheet.sheet-open")
     end
 
-    test "[+] opens one sheet: the quick-plan box above New event", %{conn: conn, today: today} do
+    test "[+] with no agent: New event leads, quick-plan is one line to Settings",
+         %{conn: conn, today: today} do
       {:ok, view, _} = live(conn, "/calendar")
-      assert has_element?(view, "[data-role=m-create][data-open=false] #quick-plan")
-
       view |> element("[data-role=m-new]") |> render_click()
+      assert has_element?(view, "[data-role=m-create][data-open=true][data-covers-tab-bar]")
+
+      # New event first; the full quick-plan box after it is lg-only.
+      assert create_sheet_order(view) == ["m-new-event", "m-create-no-agent", "quick-plan"]
 
       assert has_element?(
                view,
-               "[data-role=m-create][data-open=true][data-covers-tab-bar] #quick-plan"
+               "[data-role=m-new-event][data-primary][phx-value-date='#{today}']"
              )
 
       assert has_element?(
                view,
-               "[data-role=m-create] [data-role=m-new-event][phx-value-date='#{today}']"
+               "[data-role=m-create-no-agent] a[href='/calendar/settings']",
+               "Calendar settings"
              )
+
+      assert view |> element("[data-role=m-create-no-agent]") |> render() |> text() =~
+               "No agent can draft events for you yet. Give one access in Calendar settings"
+
+      # The full box stays for lg (one DOM copy), hidden below it.
+      assert has_element?(view, "[data-role=m-create] .max-lg\\:hidden #quick-plan")
 
       view |> element("[data-role=m-new-event]") |> render_click()
       assert has_element?(view, "[data-role=m-create][data-open=false]")
       assert has_element?(view, "[data-role=calendar-editor]")
+    end
+
+    test "[+] with an agent that can draft: quick-plan on top, New event below",
+         %{conn: conn, scope: scope, user: user} do
+      draft_agent!(user, scope)
+      {:ok, view, _} = live(conn, "/calendar")
+      view |> element("[data-role=m-new]") |> render_click()
+
+      assert create_sheet_order(view) == ["quick-plan", "m-new-event"]
+      refute has_element?(view, "[data-role=m-create-no-agent]")
+      refute has_element?(view, "[data-role=m-new-event][data-primary]")
+      refute has_element?(view, "[data-role=m-create] .max-lg\\:hidden #quick-plan")
+      assert has_element?(view, "#quick-plan input[data-role=quick-plan-text]:not([disabled])")
     end
   end
 
@@ -611,6 +677,51 @@ defmodule PlatformWeb.CalendarMobileLiveTest do
       {:ok, inbox, _} = live(conn, "/inbox")
       refute has_element?(inbox, "#phone-top-bar-title-menu")
       assert has_element?(inbox, "span[data-role=phone-top-bar-title]")
+    end
+  end
+
+  describe "the agenda's end (review 3)" do
+    test "two empty years ahead: no loading lines, the last row reads After <day>",
+         %{conn: conn, scope: scope, today: today} do
+      last = Date.add(today, 3)
+      event!(scope, last, 9, 30, "Last thing")
+      {:ok, view, _} = live(conn, "/calendar")
+
+      assert has_element?(
+               view,
+               "#m-agenda[data-end-later=false] [data-role=m-agenda-later-lines]"
+             )
+
+      render_hook(view, "m_agenda_more", %{"direction" => "later"})
+
+      refute has_element?(view, "[data-role=m-agenda-later-lines]")
+      assert has_element?(view, "#m-agenda[data-end-later=true]")
+
+      label = "After " <> Elixir.Calendar.strftime(last, "%a %-d %b")
+
+      assert has_element?(
+               view,
+               "#m_agenda-m-agenda-empty-#{Date.add(last, 1)} p[data-ending=true]"
+             )
+
+      assert view
+             |> element("#m_agenda-m-agenda-empty-#{Date.add(last, 1)}")
+             |> render()
+             |> text() == label <> " · No events"
+
+      # Data changing reopens the end: something could be out there now.
+      event!(scope, Date.add(today, 400), 9, 30, "Next year")
+      send(view.pid, {:event_changed, %{}})
+      assert has_element?(view, "[data-role=m-agenda-later-lines]")
+      assert has_element?(view, "#m-agenda[data-end-later=false]")
+    end
+
+    test "the earlier end drops its loading lines too", %{conn: conn} do
+      {:ok, view, _} = live(conn, "/calendar")
+      refute has_element?(view, "#m-agenda-earlier.hidden")
+      render_hook(view, "m_agenda_more", %{"direction" => "earlier"})
+      assert has_element?(view, "#m-agenda-earlier.hidden")
+      assert has_element?(view, "#m-agenda[data-end-earlier=true]")
     end
   end
 

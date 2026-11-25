@@ -359,7 +359,10 @@ defmodule PlatformWeb.CalendarLive do
     shown = socket.assigns.calendars_shown
 
     {:noreply,
-     socket |> assign(:calendars_shown, Map.put(shown, key, not shown?(shown, key))) |> reload()}
+     socket
+     |> assign(:calendars_shown, Map.put(shown, key, not shown?(shown, key)))
+     |> m_reopen_ends()
+     |> reload()}
   end
 
   def handle_event("new_at", %{"date" => date, "minute" => minute}, socket) do
@@ -1017,7 +1020,8 @@ defmodule PlatformWeb.CalendarLive do
     {:noreply, reload(socket)}
   end
 
-  def handle_info(_, socket), do: {:noreply, reload(socket)}
+  # Calendar data changed: the agenda's ends may hold something now.
+  def handle_info(_, socket), do: {:noreply, socket |> m_reopen_ends() |> reload()}
 
   @impl true
   # A deleted meeting leaves the window, so the details close with it; the
@@ -1642,8 +1646,13 @@ defmodule PlatformWeb.CalendarLive do
 
   defp m_window(socket, date) do
     first = Agenda.week_first(date, socket.assigns.m_week_start)
-    assign(socket, m_from: Date.add(first, -@m_before), m_to: Date.add(first, @m_after))
+
+    socket
+    |> assign(m_from: Date.add(first, -@m_before), m_to: Date.add(first, @m_after))
+    |> m_reopen_ends()
   end
+
+  defp m_reopen_ends(socket), do: assign(socket, m_end_earlier: false, m_end_later: false)
 
   defp m_menu(socket, open) do
     assign(socket,
@@ -1681,7 +1690,12 @@ defmodule PlatformWeb.CalendarLive do
         {-1, dates} -> Enum.max(dates, Date) |> Date.add(-6) |> then(&Enum.min([&1, chunk], Date))
       end
 
-    if sign == 1, do: assign(socket, :m_to, target), else: assign(socket, :m_from, target)
+    # Two years that way hold nothing: that end of the agenda is reached.
+    ended = dates == []
+
+    if sign == 1,
+      do: assign(socket, m_to: target, m_end_later: ended),
+      else: assign(socket, m_from: target, m_end_earlier: ended)
   end
 
   # The window always holds `date`'s whole week, so the strip has its dots.
@@ -1732,7 +1746,8 @@ defmodule PlatformWeb.CalendarLive do
 
     rows =
       Agenda.rows(entries, first, last, zone, today,
-        connect?: not socket.assigns.m_subscriptions? and entries == []
+        connect?: not socket.assigns.m_subscriptions? and entries == [],
+        ending?: socket.assigns.m_end_later
       )
 
     socket

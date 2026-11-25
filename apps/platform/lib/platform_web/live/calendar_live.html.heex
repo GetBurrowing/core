@@ -80,7 +80,7 @@
       />
     </div>
     <%!-- One quick-plan box: in place at lg, and below it inside the [+]
-         sheet, above New event (canvas 01a2111c; UX review). --%>
+         sheet (canvas 01a2111c; UX review). --%>
     <div
       class={[
         "lg:contents",
@@ -112,8 +112,29 @@
             <.icon name="hero-x-mark" class="size-5" />
           </button>
         </div>
-        <.quick_plan plan={@plan} />
-        <div class="px-3 pb-4 pt-3 lg:hidden">
+        <%!-- No agent can draft yet: New event leads, as the primary action,
+             and the quick-plan box is one line pointing at Settings. With
+             an agent: quick-plan on top, New event below (UX review). --%>
+        <div :if={@plan.agents == []} class="px-3 pb-2 pt-3 lg:hidden">
+          <button
+            type="button"
+            phx-click="new"
+            phx-value-date={Date.to_iso8601(m_new_day(assigns))}
+            data-role="m-new-event"
+            data-primary
+            class="inline-flex h-11 w-full items-center justify-center gap-1.5 rounded-full bg-base-content text-sm font-semibold text-base-100 hover:brightness-110"
+          >
+            <.icon name="hero-calendar" class="size-4" /> New event
+          </button>
+          <p class="mt-3 pb-2 text-sm text-subtle" data-role="m-create-no-agent">
+            No agent can draft events for you yet. Give one access in
+            <.link patch={~p"/calendar/settings"} class="underline">Calendar settings</.link>
+          </p>
+        </div>
+        <div class={["lg:contents", @plan.agents == [] && "max-lg:hidden"]}>
+          <.quick_plan plan={@plan} />
+        </div>
+        <div :if={@plan.agents != []} class="px-3 pb-4 pt-3 lg:hidden">
           <button
             type="button"
             phx-click="new"
@@ -170,6 +191,8 @@
       phx-hook="CalendarAgenda"
       data-today={Date.to_iso8601(@today)}
       data-role="m-agenda"
+      data-end-earlier={to_string(@m_end_earlier)}
+      data-end-later={to_string(@m_end_later)}
       aria-live="off"
       class={[
         "clears-tab-bar relative min-h-0 flex-1 overflow-y-auto overscroll-contain bg-base-100 [overflow-anchor:none] lg:hidden",
@@ -180,10 +203,9 @@
            `ignore`: the hook sizes the tail. --%>
       <div
         id="m-agenda-earlier"
-        phx-update="ignore"
         data-role="m-agenda-earlier"
         aria-hidden="true"
-        class="flex flex-col gap-2 px-4 py-3"
+        class={["flex flex-col gap-2 px-4 py-3", @m_end_earlier && "hidden"]}
       >
         <span class="h-3 w-24 rounded bg-base-200"></span>
         <span class="h-3 w-48 rounded bg-base-200"></span>
@@ -197,15 +219,20 @@
           day_entries={@m_day_entries}
         />
       </div>
+      <%!-- Loading lines, until two years ahead hold nothing more (the
+           last row then reads "After <day> · No events", an ending). --%>
       <div
-        id="m-agenda-later"
-        phx-update="ignore"
-        data-role="m-agenda-later"
+        :if={!@m_end_later}
         aria-hidden="true"
         class="flex flex-col gap-2 px-4 py-3"
+        data-role="m-agenda-later-lines"
       >
         <span class="h-3 w-24 rounded bg-base-200"></span>
         <span class="h-3 w-40 rounded bg-base-200"></span>
+      </div>
+      <%!-- The tail: the later sentinel, and a screen of room so any day can
+           reach the top. `ignore`: the hook sizes it. --%>
+      <div id="m-agenda-later" phx-update="ignore" data-role="m-agenda-later" aria-hidden="true">
       </div>
     </div>
     <div id="m-day-slot" class="contents">
