@@ -13,7 +13,16 @@
     enum PocketTTSProbeLauncher {
         static let argument = "-BurrowPocketTTSProbe"
 
+        /// Stage 2 smoke (task 01a20fdd): the real store (HTTP Range fetch,
+        /// sha256, compile) into Application Support/PocketTTS, then a
+        /// three-sentence reply through PocketSpeaker and AVAudioEngine.
+        static let speakArgument = "-BurrowPocketTTSSpeakProbe"
+
         static func startIfRequested() {
+            if ProcessInfo.processInfo.arguments.contains(speakArgument) {
+                Task { @MainActor in await PocketSpeakProbe.run() }
+                return
+            }
             guard ProcessInfo.processInfo.arguments.contains(argument) else { return }
             #if canImport(CoreAI)
                 if #available(iOS 27, *) {
@@ -44,6 +53,59 @@
             } else {
                 try? data.write(to: url)
             }
+        }
+    }
+
+    @MainActor
+    enum PocketSpeakProbe {
+        static let reply = "Here is the short version. The release went out this morning. I will send the details after lunch."
+
+        static func run() async {
+            let log = PocketTTSProbeLog.append
+            let gate = PocketTTSSupport.current()
+            log("speak-probe start gate_supported=\(gate.supported) gate_reason=\(gate.reason ?? "nil")")
+            guard gate.supported else { return }
+            let engine = SystemPocketEngine()
+            let store = PocketModelStore(root: PocketModelStore.defaultRoot(), fetcher: HTTPRangeFetcher(), engine: engine)
+            let t0 = Date()
+            func ms(_ since: Date) -> Int { Int(Date().timeIntervalSince(since) * 1000) }
+            log("speak-probe store initial=\(store.state.name) total=\(store.total)")
+            var lastTenth: Int64 = -1
+            store.onChange = { state in
+                if case .downloading(let got, let total) = state {
+                    let tenth = total > 0 ? got * 10 / total : 0
+                    guard tenth > lastTenth else { return }
+                    lastTenth = tenth
+                    log("speak-probe model downloading received=\(got) total=\(total) t_ms=\(ms(t0))")
+                } else {
+                    log("speak-probe model state=\(state.name) data_reason=\(store.data["reason"] ?? "nil") t_ms=\(ms(t0))")
+                }
+            }
+            store.prepare()
+            await store.waitForJob()
+            guard store.state == .ready else {
+                log("speak-probe stop store_state=\(store.state.name)")
+                return
+            }
+            let session = VoiceAudioSession()
+            do {
+                try session.activate()
+            } catch {
+                log("speak-probe stop session_failed")
+                return
+            }
+            let speaker = PocketSpeaker(engine: engine, output: AVPocketAudioOutput())
+            var done = false
+            let tSpeak = Date()
+            speaker.onEvent = { event in
+                log("speak-probe speech state=\(event.state.rawValue) reason=\(event.reason ?? "nil") t_ms=\(ms(tSpeak))")
+                if event.state == .finished || event.state == .stopped { done = true }
+            }
+            speaker.speak(id: "probe", text: reply, voiceID: nil)
+            let deadline = Date().addingTimeInterval(60)
+            while !done, Date() < deadline { try? await Task.sleep(nanoseconds: 50_000_000) }
+            session.deactivate()
+            log("speak-probe done finished=\(done) sentences=\(PocketSpeaker.sentences(reply).count)")
         }
     }
 
