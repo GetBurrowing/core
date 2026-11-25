@@ -38,6 +38,7 @@
 		1641FE189E93F013FCF76941 /* LargeUploadTests.swift in Sources */ = {isa = PBXBuildFile; fileRef = ECDEC69FD14BE511398815DF /* LargeUploadTests.swift */; };
 		194B12F0E50C53EE2FFA72D2 /* DonationPolicy.swift in Sources */ = {isa = PBXBuildFile; fileRef = F2CB880C6D4F67075F9EED68 /* DonationPolicy.swift */; };
 		19A3C80DCCEF7246668ECEF9 /* BurrowShortcuts.swift in Sources */ = {isa = PBXBuildFile; fileRef = 3E28F3CFC25B7856E87ACF6E /* BurrowShortcuts.swift */; };
+		19BF7B598C93771A67A80D0B /* VoiceTrace.swift in Sources */ = {isa = PBXBuildFile; fileRef = 5651178A9C099BB8F95671C1 /* VoiceTrace.swift */; };
 		1A1FCDB57FC95DFB58F1E0D9 /* MeetingSession.swift in Sources */ = {isa = PBXBuildFile; fileRef = FF52D5F82907F1E4DDEA6E85 /* MeetingSession.swift */; };
 		1A9A664C07AB3D55DDFD63B5 /* BurrowVoicePluginTests.swift in Sources */ = {isa = PBXBuildFile; fileRef = 5A223C84769936A42214CF86 /* BurrowVoicePluginTests.swift */; };
 		1CA998C627766237F2232BEB /* CapApp-SPM in Frameworks */ = {isa = PBXBuildFile; productRef = FD127B870EFB46EFAC91834E /* CapApp-SPM */; };
@@ -453,6 +454,7 @@
 		541750DF0C17D71DDC570A00 /* MeetingSourceScanTests.swift */ = {isa = PBXFileReference; lastKnownFileType = sourcecode.swift; path = MeetingSourceScanTests.swift; sourceTree = "<group>"; };
 		545206A9AA012E33A1746CDE /* BurrowVoiceContractTests.swift */ = {isa = PBXFileReference; lastKnownFileType = sourcecode.swift; path = BurrowVoiceContractTests.swift; sourceTree = "<group>"; };
 		549738BBABD458F3A8D4823A /* BurrowVoicePlugin.swift */ = {isa = PBXFileReference; lastKnownFileType = sourcecode.swift; path = BurrowVoicePlugin.swift; sourceTree = "<group>"; };
+		5651178A9C099BB8F95671C1 /* VoiceTrace.swift */ = {isa = PBXFileReference; lastKnownFileType = sourcecode.swift; path = VoiceTrace.swift; sourceTree = "<group>"; };
 		58A692265B6AB74DAC6E5767 /* Weights.swift */ = {isa = PBXFileReference; lastKnownFileType = sourcecode.swift; path = Weights.swift; sourceTree = "<group>"; };
 		5A223C84769936A42214CF86 /* BurrowVoicePluginTests.swift */ = {isa = PBXFileReference; lastKnownFileType = sourcecode.swift; path = BurrowVoicePluginTests.swift; sourceTree = "<group>"; };
 		5A2F52023B4B74556B971305 /* RingBanner.swift */ = {isa = PBXFileReference; lastKnownFileType = sourcecode.swift; path = RingBanner.swift; sourceTree = "<group>"; };
@@ -836,6 +838,7 @@
 				FEC44957C483DDE5854EA3E6 /* ReplySpeaker.swift */,
 				9A4B8EDB38BE775365E4E31B /* ReplyVoices.swift */,
 				1FAE8925EE4B4D296E4E3CFB /* VoiceAudioSession.swift */,
+				5651178A9C099BB8F95671C1 /* VoiceTrace.swift */,
 				6DCFEAA78D214BE8F2BFC544 /* PocketTTS */,
 			);
 			path = Voice;
@@ -1584,6 +1587,7 @@
 				943A7553FC3C38D9F9B9CE8A /* UnreadReconciler.swift in Sources */,
 				DB85697BEEEACA5831087520 /* VoIPRegistrar.swift in Sources */,
 				FB0BF19DE22C9A0EE7D79DB7 /* VoiceAudioSession.swift in Sources */,
+				19BF7B598C93771A67A80D0B /* VoiceTrace.swift in Sources */,
 				7636EEC6CB448FD6FD817985 /* WAV.swift in Sources */,
 				89F75410C256DDEB74D32277 /* WaitingSummary.swift in Sources */,
 				5EC8BDB64E56CE383869D28A /* WebLoadRecovery.swift in Sources */,

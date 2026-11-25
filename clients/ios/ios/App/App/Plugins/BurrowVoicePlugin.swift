@@ -224,6 +224,8 @@ public class BurrowVoicePlugin: CAPPlugin, CAPBridgedPlugin {
     /// The last streamed reply that was stopped: its later parts are dropped,
     /// never restarted from the middle.
     private var droppedID: String?
+    /// The last whole percent traced while the model downloads.
+    private var lastTracedPercent: Int64?
 
     override public func load() {
         observeSystem()
@@ -305,8 +307,16 @@ public class BurrowVoicePlugin: CAPPlugin, CAPBridgedPlugin {
         if let storeInstance { return storeInstance }
         guard pocketGate().supported else { return nil }
         let store = makePocketStore(pocketEngine)
-        store.onChange = { [weak self, weak store] _ in
+        store.onChange = { [weak self, weak store] state in
             guard let self, let store else { return }
+            if case .downloading(let got, let total) = state {
+                if total > 0, got * 100 / total != (self.lastTracedPercent ?? -1) {
+                    self.lastTracedPercent = got * 100 / total
+                    VoiceTrace.log("model downloading received=\(got) total=\(total)")
+                }
+            } else {
+                VoiceTrace.log("model state=\(state.name) footprint_mb=\(VoiceTrace.footprintMB())")
+            }
             self.emit("model", store.data)
         }
         storeInstance = store
@@ -335,8 +345,11 @@ public class BurrowVoicePlugin: CAPPlugin, CAPBridgedPlugin {
     /// Routes a speaker's events to the page and keeps the stream in step.
     @MainActor
     private func wire(_ reader: any VoiceSpeaking) {
+        let engineName = reader === speaker ? "system" : "pocket"
         reader.onEvent = { [weak self] event in
             guard let self else { return }
+            VoiceTrace.log(
+                "speech id=\(event.id) state=\(event.state.rawValue) reason=\(event.reason ?? "-") speaker=\(engineName) footprint_mb=\(VoiceTrace.footprintMB())")
             self.emit("speech", event.data)
             guard event.state == .finished || event.state == .stopped else { return }
             if self.stream?.id == event.id {
@@ -559,6 +572,7 @@ public class BurrowVoicePlugin: CAPPlugin, CAPBridgedPlugin {
 
     @MainActor
     func speakPart(id: String, seq: Int, text: String, final: Bool, voice requested: String? = nil) -> [String: Any] {
+        VoiceTrace.log("part id=\(id) seq=\(seq) final=\(final) chars=\(text.count)")
         if let stream, stream.id == id {
             stream.speaker.append(id: id, seq: seq, text: text)
             if final { stream.speaker.finish(id: id) }
@@ -567,6 +581,7 @@ public class BurrowVoicePlugin: CAPPlugin, CAPBridgedPlugin {
         if droppedID == id { return ["spoken": false, "reason": "stopped"] }
         if let refused = refuseReply(id) { return refused }
         let chosen = choose(requested)
+        VoiceTrace.log("choose id=\(id) voice=\(chosen.voice?.id ?? "-") fellBack=\(chosen.fellBack) reason=\(chosen.reason ?? "-")")
         activate(chosen.speaker)
         stream = (id, chosen.speaker)
         chosen.speaker.begin(id: id, voiceID: chosen.voice?.id)
@@ -609,8 +624,10 @@ public class BurrowVoicePlugin: CAPPlugin, CAPBridgedPlugin {
 
     @MainActor
     func speakReply(id: String, text: String, voice requested: String? = nil) -> [String: Any] {
+        VoiceTrace.log("speak id=\(id) chars=\(text.count)")
         if let refused = refuseReply(id) { return refused }
         let chosen = choose(requested)
+        VoiceTrace.log("choose id=\(id) voice=\(chosen.voice?.id ?? "-") fellBack=\(chosen.fellBack) reason=\(chosen.reason ?? "-")")
         activate(chosen.speaker)
         stream = nil
         chosen.speaker.speak(id: id, text: text, voiceID: chosen.voice?.id)

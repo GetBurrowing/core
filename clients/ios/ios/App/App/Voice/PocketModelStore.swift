@@ -151,6 +151,9 @@ final class PocketModelStore {
         var done: Int64 = 0
         reported = -1
         report(0)
+        let begun = Date()
+        let missing = files.filter { size(of: localURL($0)) != Int64($0.size) }.reduce(Int64(0)) { $0 + Int64($1.size) }
+        VoiceTrace.log("model download start missing_bytes=\(missing) total=\(total)")
         for file in files {
             let local = localURL(file)
             if size(of: local) == Int64(file.size) {
@@ -209,9 +212,12 @@ final class PocketModelStore {
             done += Int64(file.size)
             report(done)
         }
+        VoiceTrace.log("model download done ms=\(Int(Date().timeIntervalSince(begun) * 1000))")
         state = .compiling
+        let compiling = Date()
         do {
             try await engine.load()
+            VoiceTrace.log("model load ms=\(Int(Date().timeIntervalSince(compiling) * 1000)) footprint_mb=\(VoiceTrace.footprintMB())")
             state = .ready
         } catch {
             state = .failed("load")

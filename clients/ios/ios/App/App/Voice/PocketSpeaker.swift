@@ -245,10 +245,20 @@ final class PocketSpeaker: VoiceSpeaking {
         let engine = engine
         task = Task { [weak self] in
             let result: Result<PocketPCM, Error>
+            let started = Date()
             do {
                 result = .success(try await engine.synthesize(text))
             } catch {
                 result = .failure(error)
+            }
+            if case .success(let pcm) = result {
+                let ms = Int(Date().timeIntervalSince(started) * 1000)
+                let audio = Double(pcm.samples.count) / Double(max(pcm.sampleRate, 1))
+                VoiceTrace.log(
+                    "synth chars=\(text.count) ms=\(ms) audio_s=\(String(format: "%.2f", audio)) rtf=\(String(format: "%.3f", audio > 0 ? Double(ms) / 1000 / audio : 0)) footprint_mb=\(VoiceTrace.footprintMB())"
+                )
+            } else {
+                VoiceTrace.log("synth failed chars=\(text.count)")
             }
             guard let self, self.generation == mine, self.current != nil else { return }
             self.current?.synthesizing = false
