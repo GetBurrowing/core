@@ -28,6 +28,8 @@ defmodule Platform.Social.Renderer.Ffmpeg do
 
   @behaviour Platform.Social.Renderer
 
+  require Logger
+
   alias Platform.Social.{Brand, Captions, Renderer, Toolchain}
 
   @fps 30
@@ -107,6 +109,326 @@ defmodule Platform.Social.Renderer.Ffmpeg do
              audio_codec:
                Enum.find_value(streams, &(&1["codec_type"] == "audio" && &1["codec_name"]))
            }}
+      end
+    end
+  end
+
+  @doc """
+  Probe an explicitly caller-owned input copy. The caller owns its input and
+  must retain it if child exit is unconfirmed. On lifecycle failure the private
+  details identify whether input was used, child exit was confirmed, and an
+  output directory needs operator cleanup. Error reasons and lifecycle details
+  are internal: callers must map failures to fixed outward text. Older probes
+  use merged stdout and retain its warning-contamination limitation.
+  """
+  @spec probe_owned(String.t()) :: {:ok, map()} | {:error, term()}
+  def probe_owned(path), do: probe_owned(path, 60_000)
+
+  @doc false
+  def probe_owned(path, timeout_ms) do
+    with {:ok, ffprobe} <- Toolchain.fetch(:ffprobe),
+         true <- File.regular?(path) || {:error, "the video file is missing"},
+         args =
+           ~w(-v error -show_entries format=duration,format_name:stream=codec_type,codec_name,width,height -of json),
+         {:ok, json} <- probe_json(ffprobe, args, path, timeout_ms),
+         :ok <- valid_probe_document(json),
+         {:ok, decoded} <- decode(json) do
+      streams = decoded["streams"] || []
+      video = Enum.find(streams, &(&1["codec_type"] == "video"))
+
+      case {video, parse_float(get_in(decoded, ["format", "duration"]))} do
+        {nil, _} ->
+          {:error, "the file has no video stream"}
+
+        {_, nil} ->
+          {:error, "ffprobe could not read the video's duration"}
+
+        {v, duration} ->
+          {:ok,
+           %{
+             format_name: get_in(decoded, ["format", "format_name"]),
+             duration_s: duration,
+             width: v["width"],
+             height: v["height"],
+             video_codec: v["codec_name"],
+             audio?: Enum.any?(streams, &(&1["codec_type"] == "audio")),
+             audio_codec:
+               Enum.find_value(streams, &(&1["codec_type"] == "audio" && &1["codec_name"]))
+           }}
+      end
+    end
+  end
+
+  # A help call is deliberately uncached. Unknown/older probes retain the
+  # previous merged-output path, including its warning-contamination limit.
+  defp output_option?(ffprobe) do
+    case run_probe_reaped(ffprobe, ["-h"], 5_000, 262_144) do
+      {:terminal, {:ok, help}} ->
+        {:ok, Regex.match?(~r/(?m)^-o[ \t]+<output_file>(?:[ \t]|$)/, help)}
+
+      {:terminal, _} ->
+        {:ok, false}
+
+      {:unreaped, _} ->
+        {:error,
+         {:probe_lifecycle, %{child_exit: :unconfirmed, input_used?: false, output_dir: nil}}}
+    end
+  end
+
+  defp probe_json(ffprobe, args, path, timeout_ms) do
+    case output_option?(ffprobe) do
+      {:ok, true} ->
+        with {:ok, dir} <- private_probe_dir() do
+          output = Path.join(dir, "result.json")
+
+          case run_probe_reaped(ffprobe, args ++ ["-o", output, path], timeout_ms) do
+            {:terminal, result} ->
+              result = probe_file_result(result, output)
+
+              case File.rm_rf(dir) do
+                {:ok, _} ->
+                  result
+
+                {:error, _, _} ->
+                  {:error,
+                   {:probe_lifecycle,
+                    %{child_exit: :confirmed, input_used?: true, output_dir: dir}}}
+              end
+
+            {:unreaped, _reason} ->
+              {:error,
+               {:probe_lifecycle, %{child_exit: :unconfirmed, input_used?: true, output_dir: dir}}}
+          end
+        end
+
+      {:ok, false} ->
+        case run_probe_reaped(ffprobe, args ++ [path], timeout_ms) do
+          {:terminal, result} ->
+            result
+
+          {:unreaped, _} ->
+            {:error,
+             {:probe_lifecycle, %{child_exit: :unconfirmed, input_used?: true, output_dir: nil}}}
+        end
+
+      {:error, reason} ->
+        {:error, reason}
+    end
+  end
+
+  defp probe_file_result(result, output) do
+    try do
+      with {:ok, diagnostics} <- result,
+           :ok <- log_probe_diagnostics(diagnostics),
+           {:ok, json} <- File.read(output),
+           :ok <- valid_probe_document(json) do
+        {:ok, json}
+      else
+        {:error, reason} when is_atom(reason) -> {:error, "ffprobe output could not be read"}
+        error -> error
+      end
+    rescue
+      _ -> {:error, "ffprobe output processing failed"}
+    catch
+      _, _ -> {:error, "ffprobe output processing failed"}
+    end
+  end
+
+  defp valid_probe_document(json) do
+    case Jason.decode(json) do
+      {:ok, %{} = doc} ->
+        streams = Map.get(doc, "streams", [])
+        format = Map.get(doc, "format", %{})
+
+        if is_list(streams) and Enum.all?(streams, &is_map/1) and is_map(format),
+          do: :ok,
+          else: {:error, "ffprobe returned unreadable output"}
+
+      _ ->
+        {:error, "ffprobe returned unreadable output"}
+    end
+  end
+
+  defp log_probe_diagnostics(""), do: :ok
+
+  defp log_probe_diagnostics(_diagnostics) do
+    Logger.warning("ffprobe emitted diagnostics")
+    :ok
+  end
+
+  # mkdir -m creates the directory exclusively with private permissions; a
+  # random name avoids process-local counter collisions across BEAMs.
+  defp private_probe_dir do
+    base = Application.get_env(:social, :render_tmp_dir) || System.tmp_dir!()
+    name = "ffprobe-" <> Base.url_encode64(:crypto.strong_rand_bytes(16), padding: false)
+    dir = Path.join(base, name)
+
+    with mkdir when is_binary(mkdir) <- System.find_executable("mkdir"),
+         {_output, 0} <- System.cmd(mkdir, ["-m", "700", dir], stderr_to_stdout: true) do
+      private? =
+        case File.lstat(dir) do
+          {:ok, %{type: :directory, mode: mode}} -> Bitwise.band(mode, 0o777) == 0o700
+          _ -> false
+        end
+
+      if private? do
+        {:ok, dir}
+      else
+        case File.rm_rf(dir) do
+          {:ok, _} ->
+            {:error, "ffprobe temporary directory unavailable"}
+
+          {:error, _, _} ->
+            {:error,
+             {:probe_lifecycle, %{child_exit: :not_started, input_used?: false, output_dir: dir}}}
+        end
+      end
+    else
+      _ ->
+        case File.lstat(dir) do
+          {:error, reason} when reason in [:enoent, :enotdir] ->
+            {:error, "ffprobe temporary directory unavailable"}
+
+          _ ->
+            {:error,
+             {:probe_lifecycle, %{child_exit: :not_started, input_used?: false, output_dir: dir}}}
+        end
+    end
+  rescue
+    _ -> {:error, "ffprobe temporary directory unavailable"}
+  end
+
+  # Probe-only runner: on timeout, retain the Port until its exit_status
+  # confirms the OS process has stopped; never delete its directory first.
+  # run/3 and its ffmpeg/downloader behavior remain unchanged.
+  defp run_probe_reaped(cmd, args, timeout_ms, limit \\ :infinity) do
+    {exe, argv} =
+      case System.find_executable("nice") do
+        nil -> {cmd, args}
+        nice -> {nice, ["-n", "10", cmd | args]}
+      end
+
+    result =
+      try do
+        {:ok,
+         Port.open({:spawn_executable, exe}, [
+           :binary,
+           :exit_status,
+           :stderr_to_stdout,
+           :hide,
+           args: argv
+         ])}
+      rescue
+        e -> {:error, "ffprobe could not start: #{Exception.message(e)}"}
+      end
+
+    case result do
+      {:ok, port} ->
+        deadline = System.monotonic_time(:millisecond) + timeout_ms
+
+        try do
+          collect_probe(port, [], 0, false, limit, deadline, timeout_ms)
+        rescue
+          _ -> {:unreaped, "ffprobe process monitoring failed"}
+        catch
+          _, _ -> {:unreaped, "ffprobe process monitoring failed"}
+        end
+
+      {:error, reason} ->
+        {:terminal, {:error, reason}}
+    end
+  end
+
+  defp collect_probe(port, acc, bytes, overflow?, limit, deadline, timeout_ms) do
+    left = max(deadline - System.monotonic_time(:millisecond), 0)
+
+    if left == 0 do
+      terminate_probe(port, timeout_ms)
+    else
+      receive do
+        {^port, {:data, data}} ->
+          bytes = bytes + byte_size(data)
+          overflow? = overflow? or (limit != :infinity and bytes > limit)
+          acc = if overflow?, do: [], else: [data | acc]
+          collect_probe(port, acc, bytes, overflow?, limit, deadline, timeout_ms)
+
+        {^port, {:exit_status, 0}} when overflow? ->
+          {:terminal, {:error, "ffprobe capability output exceeded its limit"}}
+
+        {^port, {:exit_status, 0}} ->
+          {:terminal, {:ok, acc |> Enum.reverse() |> IO.iodata_to_binary()}}
+
+        {^port, {:exit_status, status}} ->
+          out = acc |> Enum.reverse() |> IO.iodata_to_binary()
+          {:terminal, {:error, "ffprobe failed (exit #{status}): #{tail(out)}"}}
+      after
+        left -> terminate_probe(port, timeout_ms)
+      end
+    end
+  end
+
+  defp terminate_probe(port, timeout_ms) do
+    reason = "ffprobe timed out after #{div(timeout_ms, 1000)}s"
+
+    case Port.info(port, :os_pid) do
+      {:os_pid, pid} ->
+        kill_probe(pid)
+
+      _ ->
+        :error
+    end
+
+    await_probe_exit(port, reason, System.monotonic_time(:millisecond) + 2_000)
+  end
+
+  # A stuck kill helper must not turn the probe deadline into an unbounded wait.
+  defp kill_probe(pid) do
+    case System.find_executable("kill") do
+      nil ->
+        :error
+
+      exe ->
+        port =
+          Port.open({:spawn_executable, exe}, [
+            :binary,
+            :exit_status,
+            :stderr_to_stdout,
+            :hide,
+            args: ["-9", Integer.to_string(pid)]
+          ])
+
+        await_kill_helper(port, System.monotonic_time(:millisecond) + 1_000)
+    end
+  rescue
+    _ -> :error
+  end
+
+  defp await_kill_helper(port, deadline) do
+    remaining = max(deadline - System.monotonic_time(:millisecond), 0)
+
+    receive do
+      {^port, {:exit_status, _}} -> :ok
+      {^port, {:data, _}} -> await_kill_helper(port, deadline)
+    after
+      remaining -> Port.close(port)
+    end
+  end
+
+  defp await_probe_exit(port, reason, deadline) do
+    left = max(deadline - System.monotonic_time(:millisecond), 0)
+
+    if left == 0 do
+      receive do
+        {^port, {:exit_status, _}} -> {:terminal, {:error, reason <> " and was stopped"}}
+      after
+        0 -> {:unreaped, reason}
+      end
+    else
+      receive do
+        {^port, {:exit_status, _}} -> {:terminal, {:error, reason <> " and was stopped"}}
+        {^port, {:data, _}} -> await_probe_exit(port, reason, deadline)
+      after
+        left -> {:unreaped, reason}
       end
     end
   end

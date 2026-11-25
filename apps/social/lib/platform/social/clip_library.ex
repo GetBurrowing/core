@@ -76,7 +76,15 @@ defmodule Platform.Social.ClipLibrary do
   @filter_keys ~w(show episode date platform status q)
   @menu_keys ~w(show episode date platform status)
   @dates ~w(today this_week older)
-  @clip_states ["In review", "Rejected", "Failed", "Scheduled", "Publishing", "Published"]
+  @clip_states [
+    "In review",
+    "Awaiting edit",
+    "Rejected",
+    "Failed",
+    "Scheduled",
+    "Publishing",
+    "Published"
+  ]
 
   @type state :: :draft | :in_review | :queued | :uploading | :scheduled | :published | :failed
 
@@ -169,7 +177,13 @@ defmodule Platform.Social.ClipLibrary do
   @spec clip_state(Clip.t(), [entry() | Post.t()] | nil) :: String.t()
   def clip_state(clip, entries \\ nil)
 
-  def clip_state(%Clip{review_status: "rejected"}, _entries), do: "Rejected"
+  def clip_state(%Clip{id: nil, review_status: "rejected"}, _entries), do: "Rejected"
+
+  def clip_state(%Clip{review_status: "rejected"} = clip, _entries) do
+    if Social.ClipRevisions.awaiting?(clip, Social.ClipRevisions.latest(clip.id)),
+      do: "Awaiting edit",
+      else: "Rejected"
+  end
 
   def clip_state(%Clip{review_status: "approved"} = clip, entries) do
     states = clip |> entries(entries) |> Enum.map(& &1.state)

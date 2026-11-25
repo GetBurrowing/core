@@ -1054,7 +1054,7 @@ defmodule PlatformWeb.SocialClipsLibraryTest do
 
     view = open(conn, w.approver, w.profile)
     detail(view, clip)
-    assert has_element?(view, "[data-role=library-renderer]", "rendered by Octavius")
+    assert has_element?(view, "[data-role=library-renderer]", "originally submitted by Octavius")
     assert has_element?(view, "[data-role=library-decision]", "Rejected by #{w.approver.name}")
     refute has_element?(view, "[data-role=library-decision]", "in chat")
     assert has_element?(view, "[data-role=library-rejection]", "“Crop the intro”")
@@ -1364,6 +1364,7 @@ defmodule PlatformWeb.SocialClipsLibraryTest do
                ["In review", "Rejected", "Published", "Scheduled", "Publishing", "Failed"],
                &{&1, 1}
              )
+             |> Map.put("Awaiting edit", 0)
 
     assert option_counts(view, "date") == %{"today" => 2, "this_week" => 2, "older" => 2}
     search(view, "beacon")
@@ -1377,6 +1378,7 @@ defmodule PlatformWeb.SocialClipsLibraryTest do
 
     assert option_counts(view, "status") == %{
              "In review" => 0,
+             "Awaiting edit" => 0,
              "Rejected" => 0,
              "Published" => 0,
              "Scheduled" => 1,

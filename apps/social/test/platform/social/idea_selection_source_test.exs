@@ -192,7 +192,7 @@ defmodule Platform.Social.IdeaSelectionSourceTest do
       assert Platform.Social.ToolDefinitions.names() ==
                ~w(social_profile_list social_profile_get social_draft_create social_studio_draft_create
                   social_draft_update social_post_list social_results_get social_clip_propose
-                  social_clip_submit social_clip_render social_clip_update_copy social_clip_list social_task_request
+                  social_clip_submit social_clip_edit_request_list social_clip_edit_request_get social_clip_version_append social_clip_render social_clip_update_copy social_clip_list social_task_request
                   social_clip_job_list social_clip_job_claim social_clip_job_source
                   social_clip_job_progress social_clip_job_complete social_clip_job_fail
                   social_idea_create social_idea_list social_idea_vote social_idea_unvote

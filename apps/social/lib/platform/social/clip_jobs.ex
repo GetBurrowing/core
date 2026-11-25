@@ -389,7 +389,10 @@ defmodule Platform.Social.ClipJobs do
                  (base && base.actual_end_s) || clip.trim_out_s || clip.requested_end_s
                ),
              :ok <- check_optional_range(in_s, out_s) do
-          note = if clip.review_status == "rejected", do: clip.review_note
+          note =
+            if clip.review_status == "rejected" and
+                 not Platform.Social.ClipRevisions.editing_note?(clip),
+               do: clip.review_note
 
           payload =
             payload(
