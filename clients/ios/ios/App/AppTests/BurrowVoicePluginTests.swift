@@ -703,7 +703,7 @@ final class MicTapTests: XCTestCase {
         let target = analyzerFormat
         do {
             _ = try await MicTap.open(
-                input,
+                { input }, pause: {},
                 prepare: { _ in
                     input.shape = (0, 0)
                     return target
@@ -722,7 +722,7 @@ final class MicTapTests: XCTestCase {
         var prepared = false
         do {
             _ = try await MicTap.open(
-                input,
+                { input }, pause: {},
                 prepare: { _ in
                     prepared = true
                     return target
@@ -742,7 +742,7 @@ final class MicTapTests: XCTestCase {
         let input = FakeMicInput()
         let target = analyzerFormat
         let opened = try await MicTap.open(
-            input,
+            { input }, pause: {},
             prepare: { _ in
                 input.note("prepare")
                 input.shape = (24_000, 1)
@@ -750,6 +750,49 @@ final class MicTapTests: XCTestCase {
             }, tap: { _, _ in })
         XCTAssertEqual(opened, target)
         XCTAssertEqual(input.calls, ["prepare", "remove", "install"])
+    }
+
+    /// The podcast case: right after the session activates over other audio
+    /// the input reads 0 Hz / 0 channels. It is waited out, each read on a
+    /// FRESH input, and the tap goes on the first one that is usable.
+    func testAnInputThatIsEmptyWhileTheSessionSettlesIsWaitedOutOnAFreshInput() async throws {
+        var made: [FakeMicInput] = []
+        var pauses = 0
+        let target = analyzerFormat
+        _ = try await MicTap.open(
+            {
+                let input = FakeMicInput()
+                input.shape = made.count < 3 ? (0, 0) : (48_000, 1)
+                made.append(input)
+                return input
+            }, pause: { pauses += 1 },
+            prepare: { _ in target }, tap: { _, _ in })
+        XCTAssertEqual(made.count, 4, "a fresh input for every read")
+        XCTAssertEqual(pauses, 3)
+        XCTAssertEqual(made.last?.calls, ["remove", "install"])
+        XCTAssertTrue(made.dropLast().allSatisfy { $0.calls.isEmpty }, "no tap on an empty input")
+    }
+
+    /// An input that never settles is refused after the bound, with no tap.
+    func testAnInputThatNeverSettlesIsRefusedAfterTheBoundWithNoTap() async {
+        var made: [FakeMicInput] = []
+        var pauses = 0
+        let target = analyzerFormat
+        do {
+            _ = try await MicTap.open(
+                {
+                    let input = FakeMicInput()
+                    input.shape = (0, 0)
+                    made.append(input)
+                    return input
+                }, pause: { pauses += 1 },
+                prepare: { _ in target }, tap: { _, _ in })
+            XCTFail("refused")
+        } catch {
+            XCTAssertEqual(error as? MicTapError, .noInputFormat)
+        }
+        XCTAssertEqual(pauses, MicTap.settleAttempts)
+        XCTAssertTrue(made.allSatisfy { !$0.calls.contains("install") })
     }
 
     /// Buffers are converted from the format they arrive in, which can

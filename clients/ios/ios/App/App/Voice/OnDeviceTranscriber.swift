@@ -16,7 +16,10 @@ import AVFoundation
     @available(iOS 26, *)
     @MainActor
     final class OnDeviceTranscriber {
-        private let engine = AVAudioEngine()
+        /// Made afresh for every turn, and again while the input settles
+        /// (MicTap.settled): a long-lived engine kept reporting an empty
+        /// input format after the session activated over a podcast.
+        private var engine = AVAudioEngine()
         private var analyzer: SpeechAnalyzer?
         private var input: AsyncStream<AnalyzerInput>.Continuation?
         private var results: Task<Void, Never>?
@@ -86,7 +89,10 @@ import AVFoundation
             // and a tap installed with a stale or empty format raises an
             // Objective-C exception that ends the app (task 01a20fdd stage 4).
             _ = try await MicTap.open(
-                engine.inputNode,
+                { [unowned self] in
+                    self.engine = AVAudioEngine()
+                    return self.engine.inputNode
+                },
                 prepare: { natural in
                     guard let format = await SpeechAnalyzer.bestAvailableAudioFormat(compatibleWith: [module], considering: natural)
                     else { throw VoiceTranscriberError.noAudioFormat }
@@ -244,30 +250,69 @@ enum MicTapError: Error, Equatable {
 /// Objective-C exception (`_AVAE_CheckAndReturnErr` from `CreateRecordingTap`),
 /// which Swift cannot catch, so the app ended: it happened on a mic tap while
 /// a podcast was being paused. Here the format is read AFTER `prepare`'s
-/// awaits, an empty one is refused with a Swift error before any tap exists,
-/// any earlier tap is removed first, and the tap takes the bus's own format.
+/// awaits, an empty one is never tapped, any earlier tap is removed first,
+/// and the tap takes the bus's own format.
+///
+/// An empty format is waited out first (`settled`): with a podcast playing,
+/// activating the session took 830 ms on the iPhone and the input then read
+/// 0 Hz / 0 channels; the same long-lived engine still read 0/0 on the next
+/// turn. So each read comes from a FRESH input (`makeInput` builds a new
+/// engine), every 50 ms for up to 1.5 s, and only then is the turn refused.
 @MainActor
 enum MicTap {
     static let bufferSize: AVAudioFrameCount = 4096
+    /// Reads of an empty input before giving up, `pauseNanoseconds` apart.
+    static let settleAttempts = 30
+    static let pauseNanoseconds: UInt64 = 50_000_000
 
-    /// `prepare` gets the format as it was before preparing (the analyzer
-    /// picks its format from it) and returns the analyzer's format; the tap
-    /// block gets each buffer with that format. Returns the analyzer format.
+    /// `makeInput` gives a fresh input each call. `prepare` gets the format as
+    /// it was before preparing (the analyzer picks its format from it) and
+    /// returns the analyzer's format; the tap block gets each buffer with that
+    /// format. Returns the analyzer format. `pause` is injected by tests.
     static func open(
-        _ input: any MicTapInput, prepare: (AVAudioFormat) async throws -> AVAudioFormat,
+        _ makeInput: () -> any MicTapInput, pause: () async -> Void = { try? await Task.sleep(nanoseconds: pauseNanoseconds) },
+        prepare: (AVAudioFormat) async throws -> AVAudioFormat,
         tap: @escaping @Sendable (AVAudioPCMBuffer, AVAudioFormat) -> Void
     ) async throws -> AVAudioFormat {
+        var input = try await settled(makeInput(), makeInput, pause: pause)
         let early = input.currentShape
-        try check(early)
         let target = try await prepare(input.currentFormat)
+        input = try await settled(input, makeInput, pause: pause)
         let now = input.currentShape
-        try check(now)
         VoiceTrace.log(
             "mic tap format rate=\(Int(now.sampleRate)) channels=\(now.channels) changed=\(now.sampleRate != early.sampleRate || now.channels != early.channels)"
         )
         input.removeMicTap()
         input.installMicTap(bufferSize: bufferSize) { buffer in tap(buffer, target) }
         return target
+    }
+
+    /// `input` once its format is usable, else a fresh input once one is,
+    /// within `settleAttempts`; then `noInputFormat`.
+    static func settled(
+        _ first: any MicTapInput, _ makeInput: () -> any MicTapInput, pause: () async -> Void
+    ) async throws -> any MicTapInput {
+        var input = first
+        var waited = 0
+        while !usable(input.currentShape), waited < settleAttempts {
+            waited += 1
+            await pause()
+            input = makeInput()
+        }
+        if waited > 0 || !usable(input.currentShape) {
+            let session = AVAudioSession.sharedInstance()
+            VoiceTrace.log(
+                "mic input session_rate=\(Int(session.sampleRate)) input_available=\(session.isInputAvailable) input_channels=\(session.inputNumberOfChannels)"
+            )
+            VoiceTrace.log(
+                "mic input settled waited=\(waited) rate=\(Int(input.currentShape.sampleRate)) channels=\(input.currentShape.channels)")
+        }
+        try check(input.currentShape)
+        return input
+    }
+
+    static func usable(_ shape: (sampleRate: Double, channels: AVAudioChannelCount)) -> Bool {
+        shape.sampleRate > 0 && shape.channels > 0
     }
 
     static func check(_ shape: (sampleRate: Double, channels: AVAudioChannelCount)) throws {
