@@ -8,6 +8,8 @@ import {
   endReached,
   lineCount,
   lowSpace,
+  extRegionMax,
+  moreBelow,
   monthAsSheet,
   nearEdge,
   stripHiddenAfter,
@@ -307,11 +309,68 @@ describe("phone layout rules (review A, B, C)", () => {
   })
 })
 
+describe("the phone dated list region", () => {
+  it("extRegionMax: half the space, but the agenda keeps 120px and wins", () => {
+    // 375x667 portrait: 516px between the controls and the tab bar.
+    expect(extRegionMax(516, 16)).toBe(258)
+    // 844x390 landscape, strip tucked: 225px; 225 - 16 - 120 = 89 < 112.
+    expect(extRegionMax(225, 16)).toBe(89)
+    // Too little for both: the region gets nothing, never negative.
+    expect(extRegionMax(100, 16)).toBe(0)
+  })
+
+  it("moreBelow: content past the fold shows the fade", () => {
+    expect(moreBelow({ scrollTop: 0, clientHeight: 200, scrollHeight: 900 })).toBe(true)
+    expect(moreBelow({ scrollTop: 700, clientHeight: 200, scrollHeight: 900 })).toBe(false)
+    expect(moreBelow({ scrollTop: 0, clientHeight: 200, scrollHeight: 200 })).toBe(false)
+  })
+})
+
 describe("the agenda's ends (review 3)", () => {
   it("endReached reads the server's data-end-* marks", () => {
     expect(endReached({ endLater: "true", endEarlier: "false" }, "later")).toBe(true)
     expect(endReached({ endLater: "true", endEarlier: "false" }, "earlier")).toBe(false)
     expect(endReached({}, "later")).toBe(false)
+  })
+
+  it("loadMore holds the anchor against the list's top while the list itself moves", () => {
+    // First open in low space: the strip tucks (the list rises 22px) while
+    // the earlier load is in flight, and an empty run lands above today.
+    const today = { id: "m-row-2026-11-24", dataset: { type: "day", from: "2026-11-24", to: "2026-11-24" }, top: 151 }
+    const el = {
+      offsetParent: {},
+      dataset: { endEarlier: "false" },
+      scrollTop: 117,
+      scrollHeight: 1000,
+      top: 151,
+      getBoundingClientRect() {
+        return { top: this.top, bottom: this.top + 239 }
+      },
+      querySelectorAll: () => [
+        { ...today, getBoundingClientRect: () => ({ top: today.top, bottom: today.top + 73 }) },
+      ],
+    }
+    const h = Object.create(CalendarAgenda)
+    Object.assign(h, { el, ready: true, loading: false, report() {} })
+    let reply
+    h.pushEvent = (_e, _p, cb) => (reply = cb)
+    const realDoc = globalThis.document
+    const realRaf = globalThis.requestAnimationFrame
+    globalThis.document = { getElementById: () => ({ getBoundingClientRect: () => ({ top: today.top }) }) }
+    globalThis.requestAnimationFrame = () => 0
+    try {
+      h.loadMore("earlier")
+      // The patch: the list moved up 22px; today's row now sits 40px below
+      // the list top (the 76px loading lines went, a 116px run arrived).
+      el.top = 129
+      today.top = 129 + 40
+      reply()
+      // Today goes back to the list's top: 117 + 40, not 117 + (169 - 151).
+      expect(el.scrollTop).toBe(157)
+    } finally {
+      globalThis.document = realDoc
+      globalThis.requestAnimationFrame = realRaf
+    }
   })
 
   it("loadMore pushes nothing past a reached end", () => {

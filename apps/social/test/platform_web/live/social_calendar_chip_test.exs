@@ -183,6 +183,44 @@ defmodule PlatformWeb.SocialCalendarChipTest do
     end
   end
 
+  # Twelve posts on one day: the phone region keeps its title and Close
+  # outside the scrolling body, and every Queue link, the last one included,
+  # sits inside that body (the island caps it; a browser check measures it).
+  test "phone: a long dated list scrolls inside a bounded region", %{conn: conn} = ctx do
+    others =
+      for i <- 1..11 do
+        {post, _} = pending_post!(ctx, ctx.a, %{body: "Overflow #{i}", scheduled_at: ctx.at})
+        post
+      end
+
+    view = open(conn, ctx.h1, ctx.day)
+    assert has_element?(view, phone_header_chip(ctx), "Social · 12")
+    view |> element(phone_header_chip(ctx)) |> render_click()
+
+    region = "[data-role='calendar-extension-list'][data-phone]"
+    assert has_element?(view, "#{region} > div > h2", "Social · ")
+    assert has_element?(view, "#{region} > div > h2", Calendar.strftime(ctx.day, "%a %-d %b"))
+    assert has_element?(view, "#{region} > div > button[phx-click='calendar_day_close']", "Close")
+
+    body = "#{region} ul[data-role='m-ext-body'].overflow-y-auto.overscroll-contain"
+    assert has_element?(view, body)
+    refute has_element?(view, "#{body} h2")
+
+    for post <- [ctx.post | others] do
+      assert has_element?(view, "#{body} li a[href*='post=#{post.id}']", "Open in Queue")
+    end
+
+    links =
+      view
+      |> render()
+      |> LazyHTML.from_fragment()
+      |> LazyHTML.query("#{body} li a")
+      |> Enum.to_list()
+
+    assert length(links) == 12
+    assert has_element?(view, "#{region} [data-role='m-ext-fade'][aria-hidden='true']")
+  end
+
   defp phone_header_chip(ctx),
     do:
       "#m-agenda [data-role='m-agenda-day-header'] " <>

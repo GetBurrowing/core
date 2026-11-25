@@ -241,13 +241,20 @@ export const CalendarAgenda = {
     const view = this.el.getBoundingClientRect()
     const anchor = direction === "earlier" ? anchorRow(this.rows(), view.top) : null
     const anchorId = anchor && anchor.el.id
-    const before = anchor && anchor.top
+    // Held relative to the list's own top, not the viewport: in low space the
+    // strip tucks away (a margin transition) while this load is in flight, so
+    // the list itself moves. A viewport delta counted that move as the
+    // anchor's and left a sliver of the row above showing, which became the
+    // reported top row: an empty run starting two years back set the month
+    // to Nov 2024 on first open in landscape and at 200% text.
+    const before = anchor && anchor.top - view.top
 
     const height = this.el.scrollHeight
 
     this.pushEvent("m_agenda_more", { direction }, () => {
       const el = anchorId && document.getElementById(anchorId)
-      if (el) programmaticScroll(this.el, this.el.scrollTop + anchorShift(before, el.getBoundingClientRect().top))
+      const after = el && el.getBoundingClientRect().top - this.el.getBoundingClientRect().top
+      if (el) programmaticScroll(this.el, this.el.scrollTop + anchorShift(before, after))
       this.loading = false
       // The list grew and its end is still near: keep going. It stops when
       // a load adds nothing (no event within two years that way).
@@ -365,13 +372,37 @@ export function stripHiddenAfter(hidden, dy, low, threshold = 4) {
   return hidden
 }
 
+/**
+ * The phone dated list's height cap: at most half the height between the
+ * controls and the tab bar, and never so tall that the agenda keeps less
+ * than `agendaMin` px beneath it; the agenda wins when both cannot fit.
+ * `pad` is the region's wrapper padding, which neither side gets.
+ */
+export function extRegionMax(space, pad = 0, agendaMin = 120) {
+  return Math.max(0, Math.floor(Math.min(space / 2, space - pad - agendaMin)))
+}
+
+/** Whether a scroller has content below its fold (the fade's cue). */
+export function moreBelow({ scrollTop, clientHeight, scrollHeight }) {
+  return scrollHeight - clientHeight - scrollTop > 1
+}
+
 export const CalendarPhoneLayout = {
   mounted() {
     this.stripHidden = false
     this.lastTop = new WeakMap()
     this.onResize = () => this.measure()
     this.onScroll = (e) => this.follow(e.target)
+    // The strip's slide moves the controls' bottom: refit the dated list.
+    this.onSlid = () => this.fitExt()
     window.addEventListener("resize", this.onResize)
+    this.el.addEventListener("transitionend", this.onSlid)
+    const slot = this.el.querySelector("#m-extension-slot")
+    if (slot && typeof MutationObserver !== "undefined") {
+      this.mo = new MutationObserver(() => this.fitExt())
+      // A patch drops what the island set on the region: set it again.
+      this.mo.observe(slot, { childList: true, subtree: true, attributes: true, attributeFilter: ["style", "data-more"] })
+    }
     this.el.addEventListener("scroll", this.onScroll, { capture: true, passive: true })
     if (typeof ResizeObserver !== "undefined") {
       this.ro = new ResizeObserver(() => this.measureRow1())
@@ -385,12 +416,15 @@ export const CalendarPhoneLayout = {
     if (!this.phone()) return
     this.measureRow1()
     this.measureSpace()
+    this.fitExt()
   },
 
   destroyed() {
     window.removeEventListener("resize", this.onResize)
     this.el.removeEventListener("scroll", this.onScroll, { capture: true })
+    this.el.removeEventListener("transitionend", this.onSlid)
     if (this.ro) this.ro.disconnect()
+    if (this.mo) this.mo.disconnect()
   },
 
   rootPx() {
@@ -409,6 +443,32 @@ export const CalendarPhoneLayout = {
     else this.js().removeAttribute(this.el, "data-month-sheet")
     this.measureRow1()
     this.measureSpace()
+    this.fitExt()
+  },
+
+  // The phone dated list: cap its height (extRegionMax) and show the fade
+  // while items are hidden below the fold.
+  fitExt() {
+    const region = this.el.querySelector('[data-role="calendar-extension-list"][data-phone]')
+    const controls = this.el.querySelector('[data-role="m-controls"]')
+    if (!region || !controls || region.offsetParent === null) return (this.extId = null)
+    // In low space a newly opened list tucks the strip away (it comes back
+    // on scroll-up, as ever): the strip's height goes to the list.
+    if (this.low && region.id !== this.extId) this.setStrip(true)
+    this.extId = region.id
+    const nav = document.getElementById("bottom-nav")
+    const navShown = nav && getComputedStyle(nav).display !== "none"
+    const bottom = navShown ? nav.getBoundingClientRect().top : window.innerHeight
+    const slot = region.parentElement
+    const max = extRegionMax(bottom - controls.getBoundingClientRect().bottom, slot.offsetHeight - region.offsetHeight)
+    if (region.style.getPropertyValue("--m-ext-max") !== `${max}px`) region.style.setProperty("--m-ext-max", `${max}px`)
+    this.fade(region.querySelector('[data-role="m-ext-body"]'))
+  },
+
+  fade(body) {
+    if (!body) return
+    const more = moreBelow(body)
+    if (more !== body.hasAttribute("data-more")) body.toggleAttribute("data-more", more)
   },
 
   // Row 1 may wrap to two lines; if it would need three, Agenda | Day goes
@@ -464,6 +524,7 @@ export const CalendarPhoneLayout = {
   },
 
   follow(target) {
+    if (target && target.dataset && target.dataset.role === "m-ext-body") return this.fade(target)
     if (!target || (target.id !== "m-agenda" && target.id !== "m-day")) return
     const last = this.lastTop.get(target)
     this.lastTop.set(target, target.scrollTop)

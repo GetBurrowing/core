@@ -1024,6 +1024,63 @@ defmodule PlatformWeb.CalendarLive.Components do
 
   attr(:selected, :map, required: true)
 
+  attr(:phone, :boolean,
+    default: false,
+    doc:
+      "Below lg: a bounded region whose title row and Close stay put while the items scroll inside it. The calendar island caps its height (`--m-ext-max`) and shows the fade."
+  )
+
+  def calendar_day_list(%{phone: true} = assigns) do
+    ~H"""
+    <section
+      id={"calendar-day-list-#{@selected.open_seq}"}
+      data-role="calendar-extension-list"
+      data-phone
+      tabindex="-1"
+      phx-mounted={JS.focus()}
+      phx-remove={JS.focus(to: "##{@selected.trigger_id}")}
+      aria-labelledby={"calendar-day-list-#{@selected.open_seq}-title"}
+      class="flex max-h-[var(--m-ext-max,40dvh)] min-h-0 flex-col overflow-hidden rounded-box border border-edge bg-base-100 text-sm"
+    >
+      <div class="flex shrink-0 items-center justify-between gap-3 border-b border-edge pl-3 pr-1">
+        <h2
+          id={"calendar-day-list-#{@selected.open_seq}-title"}
+          class="min-w-0 break-words py-2 font-semibold"
+        >
+          {@selected.label} · {Calendar.strftime(@selected.day, "%a %-d %b")}
+        </h2>
+        <button
+          type="button"
+          phx-click="calendar_day_close"
+          aria-label="Close list"
+          class="btn btn-ghost btn-sm min-h-11 shrink-0"
+        >
+          Close
+        </button>
+      </div>
+      <div class="relative flex min-h-0 flex-1 flex-col">
+        <ul
+          data-role="m-ext-body"
+          class="peer min-h-0 flex-1 overflow-y-auto overscroll-contain px-3"
+        >
+          <li :for={item <- @selected.items} class="border-b border-edge py-2 last:border-b-0">
+            <p class="break-words">{item.text}</p>
+            <a href={item.href} class="inline-flex min-h-11 items-center underline underline-offset-2">
+              {item.link_label}
+            </a>
+          </li>
+        </ul>
+        <div
+          aria-hidden="true"
+          data-role="m-ext-fade"
+          class="pointer-events-none absolute inset-x-0 bottom-0 h-4 bg-gradient-to-t from-base-100 to-transparent opacity-0 peer-data-[more]:opacity-100"
+        >
+        </div>
+      </div>
+    </section>
+    """
+  end
+
   def calendar_day_list(assigns) do
     ~H"""
     <section

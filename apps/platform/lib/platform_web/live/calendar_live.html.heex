@@ -182,9 +182,10 @@
     <div id="m-extension-slot" class="contents">
       <div
         :if={@calendar_day_selected && phone_placement?(@calendar_day_selected)}
-        class="shrink-0 p-2 lg:hidden"
+        data-role="m-ext-slot"
+        class="flex min-h-0 shrink-0 flex-col p-2 lg:hidden"
       >
-        <.calendar_day_list selected={@calendar_day_selected} />
+        <.calendar_day_list selected={@calendar_day_selected} phone />
       </div>
     </div>
     <%!-- Kept in the DOM under Day view so its scroll and rows survive. --%>
