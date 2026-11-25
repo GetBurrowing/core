@@ -278,7 +278,7 @@ final class PocketSpeaker: VoiceSpeaking {
             return stop(reason: "audio_unavailable")
         }
         current?.scheduled += 1
-        output.schedule(pcm.samples) { [weak self] in
+        output.schedule(Self.shaped(pcm.samples, sampleRate: pcm.sampleRate)) { [weak self] in
             Task { @MainActor in
                 guard let self, self.generation == mine else { return }
                 self.current?.played += 1
@@ -297,6 +297,34 @@ final class PocketSpeaker: VoiceSpeaking {
         generation += 1
         output.stop()
         onEvent?(ReplySpeechEvent(id: reply.id, state: .finished))
+    }
+
+    /// The decoder's start-up frame, dropped from every sentence: 80 ms
+    /// (one Mimi frame, 1,920 samples at 24 kHz).
+    static let startupMs = 80
+    static let fadeInMs = 10
+    static let fadeOutMs = 5
+
+    /// A sentence's PCM as it is played (task 01a20fdd stage 4). Each sentence
+    /// is a fresh `synthesize` run, and the Mimi decoder starts from zeroed
+    /// state every time, so EVERY sentence begins with the same start-up
+    /// transient: a burst peaking at 0.09 to 0.17 in its first 5 to 20 ms,
+    /// decayed to about 0.0002 by 80 to 130 ms, whatever the text (measured
+    /// on rock with the vendored host, marius, fp16: the first samples were
+    /// identical across three different sentences). Played at the start of
+    /// each sentence it is heard as a click. The first decoder frame is
+    /// dropped (speech began no earlier than about 145 ms in the samples
+    /// measured), then a short linear fade-in and fade-out, so no buffer
+    /// starts or ends on a step.
+    static func shaped(_ samples: [Float], sampleRate: Int) -> [Float] {
+        let trim = sampleRate * startupMs / 1000
+        guard samples.count > trim else { return [] }
+        var out = Array(samples[trim...])
+        let fadeIn = min(sampleRate * fadeInMs / 1000, out.count)
+        for i in 0..<fadeIn { out[i] *= Float(i) / Float(fadeIn) }
+        let fadeOut = min(sampleRate * fadeOutMs / 1000, out.count)
+        for i in 0..<fadeOut { out[out.count - 1 - i] *= Float(i) / Float(fadeOut) }
+        return out
     }
 
     /// The sentences of a one-shot reply, in order.

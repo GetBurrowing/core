@@ -12,6 +12,7 @@ private final class OpenBackend: VoiceAudioSessionBackend {
     var categoryOptions: AVAudioSession.CategoryOptions = []
     var routePortTypes: [AVAudioSession.Port] = [.builtInMic, .builtInSpeaker]
     var hasOutputRoute = true
+    var isOtherAudioPlaying = false
     private(set) var activations: [Bool] = []
 
     func setCategory(_ category: AVAudioSession.Category, mode: AVAudioSession.Mode, options: AVAudioSession.CategoryOptions) throws {
@@ -44,8 +45,15 @@ private final class FakeEngine: PocketEngine {
         if hold.contains(text) {
             await withCheckedContinuation { waiting[text] = $0 }
         }
-        return PocketPCM(samples: [Float](repeating: 0.1, count: 2_400), sampleRate: 24_000)
+        return PocketPCM(samples: Self.sentencePCM, sampleRate: 24_000)
     }
+
+    /// What the decoder gives for every sentence: the start-up burst in the
+    /// first 80 ms (1,920 samples, peaking at 0.15 like the measured one),
+    /// near silence, then 100 ms of speech-level signal.
+    static let sentencePCM: [Float] =
+        (0..<1_920).map { i in i % 2 == 0 ? 0.15 : -0.15 } + [Float](repeating: 0.0002, count: 1_680)
+        + (0..<2_400).map { i in Float(sin(Double(i) * 0.2)) * 0.5 }
 
     func release(_ text: String) {
         hold.remove(text)
@@ -62,12 +70,15 @@ private final class FakeOutput: PocketAudioOutput {
     private(set) var scheduled = 0
     private(set) var starts = 0
     private(set) var stops = 0
+    /// Every buffer handed to the player, in order.
+    private(set) var buffers: [[Float]] = []
     private var pending: [@Sendable () -> Void] = []
 
     func start(sampleRate: Int) throws { starts += 1 }
 
     func schedule(_ samples: [Float], played: @escaping @Sendable () -> Void) {
         scheduled += 1
+        buffers.append(samples)
         pending.append(played)
     }
 
@@ -295,6 +306,38 @@ final class PocketSpeakerTests: XCTestCase {
         output.playOne()
         await settle()
         XCTAssertEqual(got.filter { $0.id == "r2" }.map(\.state), [.started, .finished])
+    }
+
+    /// The click at the start of every sentence (task 01a20fdd stage 4): every
+    /// buffer the player gets, a sentence in the MIDDLE of a reply included,
+    /// starts without the decoder's start-up frame and fades in from silence.
+    func testEverySentenceIsScheduledWithoutTheStartupBurstAndFadesIn() async {
+        let speaker = PocketSpeaker(engine: engine, output: output)
+        speaker.begin(id: "r1", voiceID: nil)
+        speaker.append(id: "r1", seq: 0, text: "One.")
+        speaker.append(id: "r1", seq: 1, text: "Two.")
+        speaker.append(id: "r1", seq: 2, text: "Three.")
+        speaker.finish(id: "r1")
+        await settle()
+        XCTAssertEqual(output.buffers.count, 3)
+        let raw = FakeEngine.sentencePCM
+        for (n, buffer) in output.buffers.enumerated() {
+            XCTAssertEqual(buffer.count, raw.count - 1_920, "sentence \(n): the start-up frame is dropped")
+            XCTAssertEqual(buffer.first, 0, "sentence \(n) starts from silence")
+            let firstMs = buffer.prefix(24).map(abs).max() ?? 1
+            XCTAssertLessThan(firstMs, 0.001, "sentence \(n): no burst in the first millisecond")
+            let ramp = buffer.prefix(240).map(abs)
+            XCTAssertLessThan(ramp.max() ?? 1, 0.15, "sentence \(n): nothing as loud as the burst while it fades in")
+            XCTAssertEqual(buffer.last ?? 1, 0, accuracy: 1e-6, "sentence \(n) ends on silence")
+        }
+    }
+
+    func testShapingAShortBufferYieldsNothingAndKeepsTheRest() {
+        XCTAssertEqual(PocketSpeaker.shaped([Float](repeating: 0.5, count: 1_000), sampleRate: 24_000), [])
+        let out = PocketSpeaker.shaped([Float](repeating: 0.5, count: 1_920 + 1_000), sampleRate: 24_000)
+        XCTAssertEqual(out.count, 1_000)
+        XCTAssertEqual(out[0], 0)
+        XCTAssertEqual(out[500], 0.5, "the middle is untouched")
     }
 
     /// Plan test 3: AirPods out stops Pocket TTS (reason as today).
