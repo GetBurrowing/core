@@ -515,7 +515,7 @@ defmodule PlatformWeb.CalendarConsolidationLiveTest do
   end
 
   describe "Past events" do
-    test "is reachable from the list pane and the phone calendar sheet", ctx do
+    test "is reachable from the list pane and the phone title menu", ctx do
       view = calendar(ctx.owner)
 
       assert has_element?(
@@ -524,9 +524,11 @@ defmodule PlatformWeb.CalendarConsolidationLiveTest do
                "Past events"
              )
 
+      view |> element("#phone-top-bar-title-menu") |> render_click()
+
       assert has_element?(
                view,
-               "#m-calendars-sheet [data-sheet-section=pages] a[data-past-events]",
+               "#m-title-menu a[data-past-events]",
                "Past events"
              )
 
@@ -789,33 +791,42 @@ defmodule PlatformWeb.CalendarConsolidationLiveTest do
       end
     end
 
-    # Phone (canvas 01a2111c, UX review): the section chips no longer take
-    # a row on the calendar. Booking links, Settings and Past events are in
-    # the calendar sheet the "N▾" button opens, at zero extra height.
-    test "at phone width the calendar pages are in the calendar sheet, not a chip row", ctx do
+    # Phone (canvas 01a2111c, UX review H): the section chips no longer take
+    # a row. Booking links, Calendar settings and Past events are in the
+    # "Calendar ▾" title menu in the top bar, at zero extra height; the
+    # calendar sheet holds only the visibility toggles.
+    test "at phone width the calendar pages are in the title menu, not a chip row", ctx do
       view = calendar(ctx.owner)
       refute has_element?(view, "[data-role=calendar-section-tabs]")
       refute has_element?(view, "[data-role=calendar-phone-header]")
+      refute has_element?(view, "#m-calendars-sheet a[data-past-events]")
+      refute has_element?(view, "#m-title-menu")
 
-      view |> element("[data-role=m-calendars-button]") |> render_click()
-      assert has_element?(view, "#m-calendars-sheet.sheet-open")
+      assert has_element?(
+               view,
+               "#phone-top-bar-title-menu[aria-expanded=false][aria-controls=m-title-menu]",
+               "Calendar"
+             )
+
+      view |> element("#phone-top-bar-title-menu") |> render_click()
+      assert has_element?(view, "#phone-top-bar-title-menu[aria-expanded=true]")
 
       labels =
         view
-        |> element("#m-calendars-sheet [data-sheet-section=pages]")
+        |> element("#m-title-menu")
         |> render()
         |> Floki.parse_fragment!()
         |> Floki.find("a")
         |> Enum.map(&(&1 |> Floki.text() |> String.trim()))
 
-      assert labels == ["Booking links", "Calendar settings", "Past events"]
+      assert labels == ["Calendar", "Booking links", "Calendar settings", "Past events"]
 
       view
-      |> element("#m-calendars-sheet a[data-past-events]")
+      |> element("#m-title-menu a[data-past-events]")
       |> render_click()
 
       assert has_element?(view, "[data-role=past-events]")
-      refute has_element?(view, "#m-calendars-sheet.sheet-open")
+      refute has_element?(view, "#m-title-menu")
     end
 
     test "the owner's call details keep the same row (control)", ctx do

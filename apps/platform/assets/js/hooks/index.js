@@ -9,7 +9,7 @@ import AttachSheet from "./attach_sheet"
 import { AttachFailedPreview } from "../attach_stage"
 import ButtonLoading from "./button_loading"
 import CalendarScroll from "./calendar_scroll"
-import {CalendarAgenda, CalendarDay, CalendarSwipe} from "./calendar_mobile"
+import {CalendarAgenda, CalendarDay, CalendarPhoneLayout, CalendarSwipe} from "./calendar_mobile"
 import CalendarSelection, {CalendarEditorFocus} from "./calendar_selection"
 import CandidateClock, { SheetHandleClock } from "./candidate_clock"
 import CanvasRoomBridge from "./canvas_room_bridge"
@@ -109,6 +109,7 @@ export default {
   CalendarScroll,
   CalendarAgenda,
   CalendarDay,
+  CalendarPhoneLayout,
   CalendarSwipe,
   CalendarSelection,
   CalendarEditorFocus,

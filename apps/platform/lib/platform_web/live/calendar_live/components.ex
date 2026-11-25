@@ -788,6 +788,8 @@ defmodule PlatformWeb.CalendarLive.Components do
   attr(:chip, :map, required: true)
   attr(:selected, :boolean, default: false)
   attr(:id_prefix, :string, default: "chip")
+  attr(:style, :string, default: nil, doc: "replaces the px placement (the phone Day view)")
+  attr(:label, :string, default: nil, doc: "replaces the aria-label")
 
   @doc "A positioned chip of one of the four kinds (cal.css `.ev`, `.k-*`)."
   def event_chip(assigns) do
@@ -802,9 +804,10 @@ defmodule PlatformWeb.CalendarLive.Components do
         live: Cal.live?(entry),
         range: "#{Cal.hm(chip.s)}–#{Cal.hm(min(chip.e, 1439))}",
         style:
-          "top: #{chip.top}px; height: #{chip.height}px; " <>
-            "left: calc(#{chip.lane * width}% + 3px); width: calc(#{width}% - 6px);",
-        label: Cal.chip_label(entry, chip.date, chip.s, min(chip.e, 1439)),
+          assigns.style ||
+            "top: #{chip.top}px; height: #{chip.height}px; " <>
+              "left: calc(#{chip.lane * width}% + 3px); width: calc(#{width}% - 6px);",
+        label: assigns.label || Cal.chip_label(entry, chip.date, chip.s, min(chip.e, 1439)),
         cancelled: Cal.cancelled?(entry),
         # The chip drops on a short (compact) block and on a block that
         # shares time with another (its lane is genuinely narrow); there the
@@ -1295,6 +1298,15 @@ defmodule PlatformWeb.CalendarLive.Components do
       text={"#{length(@detail.call.invitees)} invited"}
       sub={Enum.join(@detail.call.invitees, ", ")}
       data-role="calendar-detail-people"
+    />
+    <%!-- An event set in another zone (canvas 01a2111c "Timezone"): the
+         times above are the viewer's; this row names the event's own. --%>
+    <.detail_row
+      :if={@detail[:zone_note]}
+      icon="hero-globe-alt"
+      text={@detail.zone_note.text}
+      sub={@detail.zone_note.sub}
+      data-role="calendar-detail-zone"
     />
     <.detail_row
       icon="hero-eye-slash"

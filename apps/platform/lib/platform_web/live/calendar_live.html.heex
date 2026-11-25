@@ -1,4 +1,9 @@
+<%!-- `CalendarPhoneLayout` measures the phone layout and marks this root
+     (`data-strip-auto`, `data-row1-compact`, `data-month-sheet`); app.css
+     reads the marks below lg. --%>
 <div
+  id="calendar-page"
+  phx-hook="CalendarPhoneLayout"
   class="flex h-full min-h-0 bg-base-200 text-base-content"
   data-page="calendar"
   phx-window-keydown="escape"
@@ -60,6 +65,7 @@
       shown_count={Enum.count(@calendars, &shown?(@calendars_shown, &1.key))}
       month_open={@m_month_open}
       busy={@m_busy}
+      week_start={@m_week_start}
     />
     <%!-- Static slots around everything that comes and goes: morphdom
          re-inserting a sibling would detach #m-agenda and drop its scroll. --%>
@@ -70,6 +76,7 @@
         today={@today}
         selected={if @m_view == "day", do: @sel_day, else: @m_focus}
         busy={@m_month_busy}
+        week_start={@m_week_start}
       />
     </div>
     <%!-- One quick-plan box: in place at lg, and below it inside the [+]
@@ -213,6 +220,12 @@
       />
     </div>
   </section>
+
+  <Mobile.title_menu
+    open={@m_menu}
+    view={@m_view}
+    section={if @live_action == :settings, do: :settings, else: :calendar}
+  />
 
   <Mobile.calendars_sheet
     :if={@live_action != :settings}

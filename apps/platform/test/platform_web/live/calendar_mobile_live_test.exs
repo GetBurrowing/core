@@ -142,9 +142,9 @@ defmodule PlatformWeb.CalendarMobileLiveTest do
   describe "agenda" do
     test "opens on today: its header, all-day and timed rows, and the timezone tag",
          %{conn: conn, scope: scope, today: today} do
-      all_day!(scope, today, 1, "Ryan out")
+      all_day!(scope, today, 1, "Alex out")
       all_day!(scope, Date.add(today, -1), 3, "Offsite")
-      event!(scope, today, 14, 60, "Ryan / Jordan sync", minute: 30)
+      event!(scope, today, 14, 60, "Design sync", minute: 30)
       event!(scope, today, 9, 30, "Standup")
 
       {:ok, _} =
@@ -164,7 +164,7 @@ defmodule PlatformWeb.CalendarMobileLiveTest do
                "Today"
              )
 
-      assert has_element?(view, "#{row} [data-role=m-agenda-pinned]", "Ryan out")
+      assert has_element?(view, "#{row} [data-role=m-agenda-pinned]", "Alex out")
       assert has_element?(view, "#{row} [data-role=m-agenda-pinned]", "Day 2 of 3")
 
       times =
@@ -212,15 +212,19 @@ defmodule PlatformWeb.CalendarMobileLiveTest do
       assert has_element?(view, "#m_agenda-m-agenda-day-#{today()} [data-role=m-agenda-none]")
     end
 
-    test "scrolling near the top loads four more weeks above", %{conn: conn, today: today} do
+    test "scrolling near the top loads back to the previous event, at least four weeks",
+         %{conn: conn, scope: scope, today: today} do
+      past = Date.add(today, -50)
+      event!(scope, past, 9, 60, "Old review")
       {:ok, view, _} = live(conn, "/calendar")
       first = Date.add(Date.beginning_of_week(today), -14)
       assert has_element?(view, "#m_agenda-m-agenda-empty-#{first}")
+      refute has_element?(view, "[data-role=m-agenda-item]", "Old review")
 
       render_hook(view, "m_agenda_more", %{"direction" => "earlier"})
-      earlier = Date.add(first, -28)
-      assert has_element?(view, "#m_agenda-m-agenda-empty-#{earlier}")
-      # The run that started the list merged into the new one, not doubled.
+      assert has_element?(view, "#m_agenda-m-agenda-day-#{past}", "Old review")
+      assert has_element?(view, "#m_agenda-m-agenda-empty-#{Date.add(past, -6)}")
+      # The run that started the list merged into a longer one, not doubled.
       refute has_element?(view, "#m_agenda-m-agenda-empty-#{first}")
     end
   end
@@ -325,7 +329,12 @@ defmodule PlatformWeb.CalendarMobileLiveTest do
       assert has_element?(view, "#m-day [data-role=m-day-more]", "+1")
       assert has_element?(view, "#m-day [data-role=m-day-more-list]", "Hiring sync")
       # 02:00 is outside the desktop's 07–21 grid; the Day view places it.
-      assert has_element?(view, "#m-day .cal-ev[style*='top: 96.0px']", "Night ops")
+      # Placed in hour units: 02:00 is two `--m-hour` rows down.
+      assert has_element?(
+               view,
+               "#m-day .cal-ev[style*='top: calc(var(--m-hour) * 2.0)']",
+               "Night ops"
+             )
     end
 
     test "a sideways swipe steps one day either way", %{conn: conn, today: today} do
@@ -376,7 +385,9 @@ defmodule PlatformWeb.CalendarMobileLiveTest do
 
       view |> element("[data-role=m-calendars-button]") |> render_click()
       assert has_element?(view, "#m-calendars-sheet.sheet-open [data-sheet-section=calendars]")
-      assert has_element?(view, "#m-calendars-sheet [data-sheet-section=pages]")
+      # Filters only (review H): the pages are in the title menu.
+      refute has_element?(view, "#m-calendars-sheet a")
+      assert has_element?(view, "#m-calendars-sheet [data-sheet-seam=people]")
 
       assert has_element?(view, "[data-role=m-agenda-item]", "Standup")
 
@@ -434,6 +445,197 @@ defmodule PlatformWeb.CalendarMobileLiveTest do
       assert Enum.map(days, &hd(&1.pinned).span) == ["Day 1 of 3", "Day 2 of 3", "Day 3 of 3"]
       assert [%{type: :empty, from: from}] = Enum.filter(rows, &(&1.type == :empty))
       assert from == Date.add(monday, 3)
+    end
+  end
+
+  describe "review 2 (build 377b2da1)" do
+    test "E: the strip and month start on the locale's first weekday", %{conn: conn, today: today} do
+      conn = put_connect_params(conn, %{"timezone" => @zone, "week_start" => "7"})
+      {:ok, view, _} = live(conn, "/calendar")
+      sunday = Date.beginning_of_week(today, :sunday)
+      assert has_element?(view, "[data-role=m-strip][data-week='#{sunday}']")
+
+      view |> element("[data-role=m-month-button]") |> render_click()
+
+      letters =
+        view
+        |> element("#m-month")
+        |> render()
+        |> LazyHTML.from_fragment()
+        |> LazyHTML.query("[role=grid] > span")
+        |> Enum.map(&LazyHTML.text/1)
+        |> Enum.map(&String.trim/1)
+
+      assert letters == ~w(S M T W T F S)
+    end
+
+    test "E: a missing or bad week_start is Monday", %{conn: conn, today: today} do
+      conn = put_connect_params(conn, %{"timezone" => @zone, "week_start" => "9"})
+      {:ok, view, _} = live(conn, "/calendar")
+
+      assert has_element?(
+               view,
+               "[data-role=m-strip][data-week='#{Date.beginning_of_week(today)}']"
+             )
+    end
+
+    test "G: loading later runs on through an empty stretch to the next event",
+         %{conn: conn, scope: scope, today: today} do
+      far = Date.add(today, 200)
+      event!(scope, far, 10, 60, "Far future")
+      {:ok, view, _} = live(conn, "/calendar")
+      refute has_element?(view, "[data-role=m-agenda-item]", "Far future")
+
+      render_hook(view, "m_agenda_more", %{"direction" => "later"})
+      assert has_element?(view, "#m_agenda-m-agenda-day-#{far}", "Far future")
+
+      # Everything between is ONE collapsed row, not four-week pieces.
+      runs =
+        view
+        |> render()
+        |> LazyHTML.from_fragment()
+        |> LazyHTML.query("#m-agenda [data-role=m-agenda-row][data-type=empty]")
+        |> Enum.filter(
+          &(LazyHTML.attribute(&1, "data-to") == [Date.to_iso8601(Date.add(far, -1))])
+        )
+
+      assert [run] = runs
+      assert LazyHTML.text(run) =~ "No events"
+    end
+
+    test "G: with nothing ahead a load still moves the window forward",
+         %{conn: conn, today: today} do
+      {:ok, view, _} = live(conn, "/calendar")
+      render_hook(view, "m_agenda_more", %{"direction" => "later"})
+      render_hook(view, "m_agenda_more", %{"direction" => "later"})
+
+      last =
+        view
+        |> render()
+        |> LazyHTML.from_fragment()
+        |> LazyHTML.query("#m-agenda [data-role=m-agenda-row]")
+        |> Enum.to_list()
+        |> List.last()
+        |> LazyHTML.attribute("data-to")
+        |> hd()
+        |> Date.from_iso8601!()
+
+      assert Date.diff(last, today) > 2 * 365
+    end
+
+    test "D: a Day view block names its zone in its label, not on the block",
+         %{conn: conn, scope: scope, today: today} do
+      {:ok, _} =
+        Calendar.create_event(scope, %{
+          title: "NY partner call",
+          starts_at: at(today, 15),
+          ends_at: at(today, 16),
+          time_zone: "America/New_York"
+        })
+
+      {:ok, view, _} = live(conn, "/calendar")
+      view |> element("[data-role=m-view-switch] button[data-view=day]") |> render_click()
+
+      assert has_element?(
+               view,
+               "#m-day .cal-ev[aria-label$='times in your zone, event set in EST']",
+               "NY partner call"
+             )
+
+      refute has_element?(view, "#m-day [data-role=m-tz]")
+
+      view |> element("#m-day .cal-ev", "NY partner call") |> render_click()
+
+      assert has_element?(
+               view,
+               "[data-role=calendar-details] [data-role=calendar-detail-zone]",
+               "Set in America/New_York (EST)"
+             )
+
+      assert has_element?(view, "[data-role=calendar-detail-zone]", "10:00–11:00 there")
+    end
+
+    test "D: an event in the viewer's own zone has no zone row", %{
+      conn: conn,
+      scope: scope,
+      today: today
+    } do
+      event!(scope, today, 9, 30, "Standup")
+      {:ok, view, _} = live(conn, "/calendar")
+      view |> element("[data-role=m-view-switch] button[data-view=day]") |> render_click()
+      view |> element("#m-day .cal-ev", "Standup") |> render_click()
+      assert has_element?(view, "[data-role=calendar-details]")
+      refute has_element?(view, "[data-role=calendar-detail-zone]")
+    end
+
+    test "B: the title menu carries Agenda | Day for a compact row 1", %{conn: conn} do
+      {:ok, view, _} = live(conn, "/calendar")
+      view |> element("#phone-top-bar-title-menu") |> render_click()
+      # Shown by app.css only under `data-row1-compact`.
+      assert has_element?(
+               view,
+               "#m-title-menu .m-menu-views button[data-view=agenda][aria-pressed=true]"
+             )
+
+      view |> element("#m-title-menu button[data-view=day]") |> render_click()
+      assert has_element?(view, "#m-day")
+      refute has_element?(view, "#m-title-menu")
+    end
+
+    test "C: the month has a scrim for its sheet form; picking a date closes it",
+         %{conn: conn, today: today} do
+      {:ok, view, _} = live(conn, "/calendar")
+      view |> element("[data-role=m-month-button]") |> render_click()
+      assert has_element?(view, "#m-month-slot .m-month-scrim[phx-click=m_month_toggle]")
+      refute has_element?(view, "#m-month[class*='max-h']")
+
+      render_click(view, "m_pick", %{"date" => Date.to_iso8601(Date.add(today, 3))})
+      refute has_element?(view, "#m-month")
+      refute has_element?(view, ".m-month-scrim")
+    end
+
+    test "F: the date button is filled like the other row 1 controls", %{conn: conn} do
+      {:ok, view, _} = live(conn, "/calendar")
+
+      assert has_element?(
+               view,
+               "[data-role=m-month-button][class*='bg-base-200'][class*='rounded-[var(--radius-field)]']"
+             )
+    end
+
+    test "the title menu is the calendar's alone; other pages keep the plain title",
+         %{conn: conn} do
+      {:ok, view, _} = live(conn, "/calendar")
+      assert has_element?(view, "button#phone-top-bar-title-menu[data-role=phone-top-bar-title]")
+
+      {:ok, inbox, _} = live(conn, "/inbox")
+      refute has_element?(inbox, "#phone-top-bar-title-menu")
+      assert has_element?(inbox, "span[data-role=phone-top-bar-title]")
+    end
+  end
+
+  describe "Agenda week helpers" do
+    test "week_first/week_days/weekday_letters follow the week start" do
+      wed = ~D[2026-11-25]
+      assert Agenda.week_first(wed) == ~D[2026-11-23]
+      assert Agenda.week_first(wed, 7) == ~D[2026-11-22]
+      assert Agenda.week_first(wed, 6) == ~D[2026-11-21]
+      assert hd(Agenda.week_days(wed, 7)) == ~D[2026-11-22]
+      assert Agenda.weekday_letters(7) == ~w(S M T W T F S)
+      assert Agenda.weekday_letters(1) == ~w(M T W T F S S)
+      assert Agenda.week_start("7") == 7
+      assert Agenda.week_start(nil) == 1
+      assert Agenda.week_start("0") == 1
+      assert hd(Agenda.month_days(~D[2026-11-01], 7)) == ~D[2026-11-01]
+    end
+
+    test "range_label names the months, and the years on a long run" do
+      assert Agenda.range_label(~D[2026-11-26], ~D[2026-11-28]) == "Thu 26 – Sat 28 Nov"
+      assert Agenda.range_label(~D[2026-12-15], ~D[2027-01-11]) == "Tue 15 Dec – Mon 11 Jan"
+      assert Agenda.range_label(~D[2026-11-26], ~D[2026-11-26]) == "Thu 26 Nov"
+
+      assert Agenda.range_label(~D[2026-12-10], ~D[2028-12-09]) ==
+               "Thu 10 Dec 2026 – Sat 9 Dec 2028"
     end
   end
 end

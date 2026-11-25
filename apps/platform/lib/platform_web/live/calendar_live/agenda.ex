@@ -13,9 +13,6 @@ defmodule PlatformWeb.CalendarLive.Agenda do
   @hour_px 48
   @max_lanes 2
 
-  def hour_px, do: @hour_px
-  def day_px, do: 24 * @hour_px
-
   @doc """
   The agenda rows for `from..to`, in order. A day with entries is a `:day`
   row; a run of empty days collapses into one `:empty` row. Today is always
@@ -141,11 +138,25 @@ defmodule PlatformWeb.CalendarLive.Agenda do
 
   def zone_tag(_, _), do: nil
 
-  @doc "`Thu 26 – Sat 28` or `Thu 26 Nov` for one day."
+  @doc """
+  `Thu 26 Nov` for one day, `Thu 26 – Sat 28 Nov` within a month,
+  `Mon 15 Dec – Sun 11 Jan` across months, and with years once a run is
+  long enough (half a year) that the year is no longer obvious.
+  """
   def range_label(from, to) when from == to, do: Calendar.strftime(from, "%a %-d %b")
 
-  def range_label(from, to),
-    do: Calendar.strftime(from, "%a %-d") <> " – " <> Calendar.strftime(to, "%a %-d %b")
+  def range_label(from, to) do
+    cond do
+      Date.diff(to, from) > 183 ->
+        Calendar.strftime(from, "%a %-d %b %Y") <> " – " <> Calendar.strftime(to, "%a %-d %b %Y")
+
+      from.month == to.month and from.year == to.year ->
+        Calendar.strftime(from, "%a %-d") <> " – " <> Calendar.strftime(to, "%a %-d %b")
+
+      true ->
+        Calendar.strftime(from, "%a %-d %b") <> " – " <> Calendar.strftime(to, "%a %-d %b")
+    end
+  end
 
   @doc """
   The Day view's 24-hour layout for `date`: timed chips with px offsets at
@@ -187,6 +198,7 @@ defmodule PlatformWeb.CalendarLive.Agenda do
             %{
               id: "m-day-more-#{date}-#{hd(cluster).s}",
               top: hd(cluster).s / 60 * @hour_px,
+              hour: hd(cluster).s / 60,
               entries: Enum.map(hidden, & &1.entry)
             }
           ]
@@ -223,10 +235,10 @@ defmodule PlatformWeb.CalendarLive.Agenda do
     {laned, length(columns)}
   end
 
-  @doc "The now line's px offset on a 24-hour Day view."
-  def now_px(zone) do
+  @doc "Now as hours since midnight in `zone` (the Day view's now line)."
+  def now_hours(zone) do
     local = DateTime.utc_now() |> DateTime.shift_zone!(zone)
-    (local.hour * 60 + local.minute) / 60 * @hour_px
+    (local.hour * 60 + local.minute) / 60
   end
 
   @doc "The set of dates in `days` that have at least one entry."
@@ -236,6 +248,48 @@ defmodule PlatformWeb.CalendarLive.Agenda do
     |> MapSet.new()
   end
 
-  @doc "A 6-week month grid starting on the Monday on or before the 1st."
-  def month_days(month), do: Cal.mini_days(month)
+  # ── week start (ISO 1 = Monday … 7 = Sunday, from the browser locale) ──
+
+  @week_atoms %{
+    1 => :monday,
+    2 => :tuesday,
+    3 => :wednesday,
+    4 => :thursday,
+    5 => :friday,
+    6 => :saturday,
+    7 => :sunday
+  }
+
+  @doc "The connect param `week_start` as 1..7; anything else is Monday."
+  def week_start(value) when is_integer(value) and value in 1..7, do: value
+
+  def week_start(value) when is_binary(value) do
+    case Integer.parse(value) do
+      {n, ""} -> week_start(n)
+      _ -> 1
+    end
+  end
+
+  def week_start(_), do: 1
+
+  @doc "The first day of `date`'s week when weeks start on `ws`."
+  def week_first(date, ws \\ 1), do: Date.beginning_of_week(date, Map.fetch!(@week_atoms, ws))
+
+  @doc "The seven days of `date`'s week."
+  def week_days(date, ws \\ 1) do
+    first = week_first(date, ws)
+    Enum.map(0..6, &Date.add(first, &1))
+  end
+
+  @doc "The weekday initials in week order, `M T W T F S S` from Monday."
+  def weekday_letters(ws \\ 1) do
+    letters = ~w(M T W T F S S)
+    Enum.map(0..6, &Enum.at(letters, rem(ws - 1 + &1, 7)))
+  end
+
+  @doc "A 6-week month grid starting on the week start on or before the 1st."
+  def month_days(month, ws \\ 1) do
+    first = month |> Date.beginning_of_month() |> week_first(ws)
+    Enum.map(0..41, &Date.add(first, &1))
+  end
 end

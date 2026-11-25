@@ -10144,6 +10144,71 @@ body.screen-share-fullscreen-active {
   border: 0;
   border-left: 2px dashed var(--color-primary);
 }
+/* Phone Day view (canvas 01a2111c review B): an hour row is 48px and grows
+   with the text size (3rem) to a 96px cap. Blocks, slots and the now line
+   are placed in `--m-hour` units, so they move with it. */
+.m-day {
+  --m-hour: clamp(48px, 3rem, 96px);
+}
+.m-day-col {
+  border-left: 1px solid var(--edge);
+  background-image: repeating-linear-gradient(
+    to bottom,
+    transparent 0 calc(var(--m-hour) - 1px),
+    color-mix(in srgb, var(--edge) 70%, transparent) calc(var(--m-hour) - 1px) var(--m-hour)
+  );
+}
+/* Phone layout marks (`CalendarPhoneLayout` on #calendar-page), below lg.
+   Row 1 at large text: Agenda | Day moves into the "Calendar ▾" menu when
+   it would take row 1 to a third line (review B). `width < 64rem` is the
+   lg breakpoint as Tailwind's `max-lg:` writes it. */
+.m-menu-views {
+  display: none;
+}
+@media (width < 64rem) {
+  [data-row1-compact] [data-role="m-view-switch"] {
+    display: none;
+  }
+  [data-row1-compact] .m-menu-views {
+    display: block;
+  }
+  /* Month: inline (pushed open, uncapped) by default; a bottom sheet in
+     landscape or at 150%+ text (review C). */
+  .m-month-scrim {
+    display: none;
+  }
+  [data-month-sheet] .m-month-scrim {
+    display: block;
+    position: fixed;
+    inset: 0;
+    z-index: 60;
+    background: var(--scrim);
+  }
+  [data-month-sheet] .m-month {
+    position: fixed;
+    left: 0;
+    right: 0;
+    bottom: 0;
+    z-index: 61;
+    max-height: 85dvh;
+    overflow-y: auto;
+    overscroll-behavior: contain;
+    border-top: 1px solid var(--edge);
+    border-radius: var(--radius-box) var(--radius-box) 0 0;
+    padding-bottom: calc(0.75rem + env(safe-area-inset-bottom, 0px));
+    box-shadow: 0 -8px 24px rgb(0 0 0 / 0.18);
+  }
+  /* Landscape: two columns of nothing are wasted; keep the sheet's grid
+     a phone's width, centred. */
+  @media (orientation: landscape) {
+    [data-month-sheet] .m-month {
+      left: 50%;
+      right: auto;
+      width: min(26rem, 100vw);
+      transform: translateX(-50%);
+    }
+  }
+}
 @media (hover: hover) and (min-width: 1024px) {
   .cal-ev:hover {
     box-shadow: 0 0 0 1.5px var(--color-base-content);

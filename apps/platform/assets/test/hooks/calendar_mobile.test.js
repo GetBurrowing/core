@@ -5,6 +5,12 @@ import {
   EDGE_PX,
   anchorRow,
   anchorShift,
+  lineCount,
+  lowSpace,
+  monthAsSheet,
+  nearEdge,
+  stripHiddenAfter,
+  weekStart,
   rowAt,
   rowForDate,
   rowVisible,
@@ -221,5 +227,81 @@ describe("CalendarSwipe", () => {
     swipe(8, 250)
     swipe(W - 5, 100)
     expect(pushed).toEqual([])
+  })
+})
+
+describe("weekStart (review E)", () => {
+  class WithMethod {
+    constructor(tag) {
+      this.tag = tag
+    }
+    getWeekInfo() {
+      return { firstDay: this.tag === "en-US" ? 7 : 1 }
+    }
+  }
+  class WithProperty {
+    constructor(tag) {
+      this.weekInfo = { firstDay: tag === "ar-EG" ? 6 : 1 }
+    }
+  }
+
+  it("reads getWeekInfo().firstDay", () => {
+    expect(weekStart("en-US", WithMethod)).toBe(7)
+    expect(weekStart("en-GB", WithMethod)).toBe(1)
+  })
+
+  it("reads the older weekInfo property", () => {
+    expect(weekStart("ar-EG", WithProperty)).toBe(6)
+    expect(weekStart("de-DE", WithProperty)).toBe(1)
+  })
+
+  it("falls back to Monday without either, on a bad value, or when the locale throws", () => {
+    expect(weekStart("en-US", class {})).toBe(1)
+    expect(weekStart("en-US", class { getWeekInfo() { return { firstDay: 0 } } })).toBe(1)
+    expect(weekStart("en-US", class { constructor() { throw new RangeError("bad tag") } })).toBe(1)
+    expect(weekStart("en-US", null)).toBe(1)
+    expect(weekStart("", WithMethod)).toBe(1)
+  })
+})
+
+describe("phone layout rules (review A, B, C)", () => {
+  it("lineCount groups wrapped flex items by top", () => {
+    expect(lineCount([48, 47, 50, 48])).toBe(1)
+    expect(lineCount([92, 172, 177, 172])).toBe(2)
+    expect(lineCount([92, 172, 254, 258])).toBe(3)
+    expect(lineCount([])).toBe(0)
+  })
+
+  it("monthAsSheet: landscape or 150%+ text; portrait at default text is inline", () => {
+    expect(monthAsSheet({ width: 390, height: 844, rootPx: 16 })).toBe(false)
+    expect(monthAsSheet({ width: 844, height: 390, rootPx: 16 })).toBe(true)
+    expect(monthAsSheet({ width: 390, height: 844, rootPx: 23 })).toBe(false)
+    expect(monthAsSheet({ width: 390, height: 844, rootPx: 24 })).toBe(true)
+  })
+
+  it("lowSpace: the list with the strip, less the day header, under 40% of the viewport", () => {
+    // 844x390 landscape: 163px list, 33px header → 130 < 156.
+    expect(lowSpace({ listPx: 163, stripPx: 62, stripHidden: false, headerPx: 33, viewportPx: 390 })).toBe(true)
+    // Measured with the strip already tucked away: the same answer.
+    expect(lowSpace({ listPx: 225, stripPx: 62, stripHidden: true, headerPx: 33, viewportPx: 390 })).toBe(true)
+    // 390x844 portrait: 617px list.
+    expect(lowSpace({ listPx: 617, stripPx: 62, stripHidden: false, headerPx: 37, viewportPx: 844 })).toBe(false)
+  })
+
+  it("stripHiddenAfter: down hides, up shows, jitter keeps; never hidden with room", () => {
+    expect(stripHiddenAfter(false, 30, true)).toBe(true)
+    expect(stripHiddenAfter(true, -30, true)).toBe(false)
+    expect(stripHiddenAfter(true, 2, true)).toBe(true)
+    expect(stripHiddenAfter(false, -2, true)).toBe(false)
+    expect(stripHiddenAfter(true, 30, false)).toBe(false)
+  })
+
+  it("nearEdge: the sentinel within the margin of its end of the list", () => {
+    const view = { top: 151, bottom: 768 }
+    expect(nearEdge("later", { top: 900, bottom: 1500 }, view)).toBe(true)
+    expect(nearEdge("later", { top: 1100, bottom: 1500 }, view)).toBe(false)
+    expect(nearEdge("earlier", { top: -200, bottom: -50 }, view)).toBe(true)
+    expect(nearEdge("earlier", { top: -500, bottom: -100 }, view)).toBe(false)
+    expect(nearEdge("later", null, view)).toBe(false)
   })
 })

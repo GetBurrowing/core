@@ -62,6 +62,15 @@ export function scrollTarget({ targetTop, containerTop, scrollTop, offset = 0, c
   return Math.max(0, Math.round(targetTop - containerTop + scrollTop - offset - context))
 }
 
+/**
+ * Whether a sentinel (viewport rect) is within `margin` px of the list
+ * (viewport rect `view`) at its end of the list.
+ */
+export function nearEdge(direction, rect, view, margin = 240) {
+  if (!rect || !view) return false
+  return direction === "later" ? rect.top < view.bottom + margin : rect.bottom > view.top - margin
+}
+
 /** The tail's min height: one list height less a day header. */
 export function tailPx(listHeight, headerPx) {
   return Math.max(0, Math.round(listHeight - headerPx))
@@ -70,6 +79,14 @@ export function tailPx(listHeight, headerPx) {
 /** The scroll change that puts an anchor back where it was after a patch. */
 export function anchorShift(before, after) {
   return typeof before === "number" && typeof after === "number" ? after - before : 0
+}
+
+// A scroll the code made (a jump, an anchor kept after a load) is not the
+// reader's: the strip must not hide or come back for it.
+function programmaticScroll(el, top) {
+  if (Math.round(el.scrollTop) === Math.round(top)) return
+  el._mProgrammatic = true
+  el.scrollTop = top
 }
 
 function attachSwipe(hook, el) {
@@ -112,6 +129,7 @@ export const CalendarAgenda = {
       this.raf = requestAnimationFrame(() => {
         this.raf = null
         this.report()
+        this.checkEdges()
       })
     }
     this.el.addEventListener("scroll", this.onScroll, { passive: true })
@@ -177,12 +195,30 @@ export const CalendarAgenda = {
   scrollToDate(iso) {
     const row = rowForDate(this.rows(), iso)
     if (!row) return
-    this.el.scrollTop = scrollTarget({
-      targetTop: row.top,
-      containerTop: this.el.getBoundingClientRect().top,
-      scrollTop: this.el.scrollTop,
-    })
+    programmaticScroll(
+      this.el,
+      scrollTarget({
+        targetTop: row.top,
+        containerTop: this.el.getBoundingClientRect().top,
+        scrollTop: this.el.scrollTop,
+      }),
+    )
     this.report(true)
+  },
+
+  // Near either end, load more that way. Driven by scrolling as well as
+  // the observer: the tail is a screen tall, so it stays "intersecting"
+  // and the observer alone would fire once and never again (review G).
+  checkEdges() {
+    if (this.el.offsetParent === null) return
+    const view = this.el.getBoundingClientRect()
+    const later = this.el.querySelector('[data-role="m-agenda-later"]')
+    const earlier = this.el.querySelector('[data-role="m-agenda-earlier"]')
+    // A direction whose last load added nothing waits for the list to change.
+    const dry = (dir) => this.dry && this.dry[dir] === this.el.scrollHeight
+    if (later && !dry("later") && nearEdge("later", later.getBoundingClientRect(), view)) this.loadMore("later")
+    else if (earlier && !dry("earlier") && nearEdge("earlier", earlier.getBoundingClientRect(), view))
+      this.loadMore("earlier")
   },
 
   // Earlier days land above: keep the first visible row where it was.
@@ -194,10 +230,21 @@ export const CalendarAgenda = {
     const anchorId = anchor && anchor.el.id
     const before = anchor && anchor.top
 
+    const height = this.el.scrollHeight
+
     this.pushEvent("m_agenda_more", { direction }, () => {
       const el = anchorId && document.getElementById(anchorId)
-      if (el) this.el.scrollTop += anchorShift(before, el.getBoundingClientRect().top)
+      if (el) programmaticScroll(this.el, this.el.scrollTop + anchorShift(before, el.getBoundingClientRect().top))
       this.loading = false
+      // The list grew and its end is still near: keep going. It stops when
+      // a load adds nothing (no event within two years that way).
+      this.dry = this.dry || {}
+      if (this.el.scrollHeight > height) {
+        this.dry[direction] = null
+        requestAnimationFrame(() => this.checkEdges())
+      } else {
+        this.dry[direction] = this.el.scrollHeight
+      }
       this.report(true)
     })
   },
@@ -249,12 +296,200 @@ export const CalendarDay = {
     if (!target) return
     const context = now ? (this.el.clientHeight - offset) * 0.25 : first ? hourPx / 2 : 0
 
-    this.el.scrollTop = scrollTarget({
-      targetTop: target.getBoundingClientRect().top,
-      containerTop: this.el.getBoundingClientRect().top,
-      scrollTop: this.el.scrollTop,
-      offset,
-      context,
+    programmaticScroll(
+      this.el,
+      scrollTarget({
+        targetTop: target.getBoundingClientRect().top,
+        containerTop: this.el.getBoundingClientRect().top,
+        scrollTop: this.el.scrollTop,
+        offset,
+        context,
+      }),
+    )
+  },
+}
+
+// ── week start (review E) ─────────────────────────────────────────────
+
+/**
+ * The locale's first day of the week, ISO 1 (Monday) … 7 (Sunday), from
+ * `Intl.Locale#getWeekInfo()` or the older `weekInfo` property. Monday when
+ * neither exists or the locale does not parse.
+ */
+export function weekStart(tag, IntlLocale = globalThis.Intl && globalThis.Intl.Locale) {
+  try {
+    if (!IntlLocale || !tag) return 1
+    const locale = new IntlLocale(tag)
+    const info =
+      typeof locale.getWeekInfo === "function" ? locale.getWeekInfo() : locale.weekInfo
+    const first = info && Number(info.firstDay)
+    return Number.isInteger(first) && first >= 1 && first <= 7 ? first : 1
+  } catch (_e) {
+    return 1
+  }
+}
+
+// ── the phone layout marks (review A, B, C) ───────────────────────────
+
+/** Rows of a wrapped flex line: tops within `tol` px are one line. */
+export function lineCount(tops, tol = 8) {
+  const sorted = [...tops].sort((a, b) => a - b)
+  let lines = 0
+  let last = -Infinity
+  for (const top of sorted) {
+    if (top - last > tol) lines += 1
+    last = top
+  }
+  return lines
+}
+
+/** The month opens as a bottom sheet in landscape or at 150%+ text. */
+export function monthAsSheet({ width, height, rootPx }) {
+  return width > height || rootPx / 16 >= 1.5
+}
+
+/**
+ * The low-space rule: the visible list, with the strip shown and less the
+ * sticky day header over it, would be under 40% of the viewport height.
+ */
+export function lowSpace({ listPx, stripPx, stripHidden, headerPx, viewportPx }) {
+  const withStrip = listPx - (stripHidden ? stripPx : 0) - headerPx
+  return withStrip < 0.4 * viewportPx
+}
+
+/**
+ * Whether the strip should hide after a scroll by `dy` px in low space:
+ * down hides, up shows, small moves keep it as it is.
+ */
+export function stripHiddenAfter(hidden, dy, low, threshold = 4) {
+  if (!low) return false
+  if (dy > threshold) return true
+  if (dy < -threshold) return false
+  return hidden
+}
+
+export const CalendarPhoneLayout = {
+  mounted() {
+    this.stripHidden = false
+    this.lastTop = new WeakMap()
+    this.onResize = () => this.measure()
+    this.onScroll = (e) => this.follow(e.target)
+    window.addEventListener("resize", this.onResize)
+    this.el.addEventListener("scroll", this.onScroll, { capture: true, passive: true })
+    if (typeof ResizeObserver !== "undefined") {
+      this.ro = new ResizeObserver(() => this.measureRow1())
+      const row1 = this.el.querySelector('[data-role="m-row1"]')
+      if (row1) this.ro.observe(row1)
+    }
+    requestAnimationFrame(() => this.measure())
+  },
+
+  updated() {
+    if (!this.phone()) return
+    this.measureRow1()
+    this.measureSpace()
+  },
+
+  destroyed() {
+    window.removeEventListener("resize", this.onResize)
+    this.el.removeEventListener("scroll", this.onScroll, { capture: true })
+    if (this.ro) this.ro.disconnect()
+  },
+
+  rootPx() {
+    return parseFloat(getComputedStyle(document.documentElement).fontSize) || 16
+  },
+
+  phone() {
+    const c = this.el.querySelector('[data-role="m-controls"]')
+    return !!(c && c.offsetParent !== null)
+  },
+
+  measure() {
+    if (!this.phone()) return
+    const sheet = monthAsSheet({ width: window.innerWidth, height: window.innerHeight, rootPx: this.rootPx() })
+    if (sheet) this.js().setAttribute(this.el, "data-month-sheet", "")
+    else this.js().removeAttribute(this.el, "data-month-sheet")
+    this.measureRow1()
+    this.measureSpace()
+  },
+
+  // Row 1 may wrap to two lines; if it would need three, Agenda | Day goes
+  // into the title menu (review B).
+  measureRow1() {
+    const row1 = this.el.querySelector('[data-role="m-row1"]')
+    if (!row1 || row1.offsetParent === null) return
+    const tops = () =>
+      Array.from(row1.querySelectorAll('[data-role="m-date-group"], .ms-auto > *'))
+        .filter((el) => getComputedStyle(el).display !== "none")
+        .map((el) => el.getBoundingClientRect().top)
+    this.el.removeAttribute("data-row1-compact")
+    const compact = lineCount(tops()) > 2
+    if (compact) this.js().setAttribute(this.el, "data-row1-compact", "")
+    else this.js().removeAttribute(this.el, "data-row1-compact")
+  },
+
+  scroller() {
+    return Array.from(this.el.querySelectorAll("#m-agenda, #m-day")).find((el) => el.offsetParent !== null)
+  },
+
+  strip() {
+    return this.el.querySelector('[data-role="m-strip"]')
+  },
+
+  measureSpace() {
+    const list = this.scroller()
+    const strip = this.strip()
+    if (!list || !strip) return
+    const nav = document.getElementById("bottom-nav")
+    const controls = this.el.querySelector('[data-role="m-controls"]')
+    const row1 = this.el.querySelector('[data-role="m-row1"]')
+    const r = list.getBoundingClientRect()
+    // The bottom nav is position: fixed (no offsetParent): ask its display.
+    const navShown = nav && getComputedStyle(nav).display !== "none"
+    const bottom = navShown ? Math.min(r.bottom, nav.getBoundingClientRect().top) : r.bottom
+    const header = list.querySelector('[data-role="m-agenda-day-header"], [data-role="m-day-pinned"]')
+    this.stripPx = strip.offsetHeight
+    // The list as it is with the strip shown, from the controls' top: not
+    // from the list's own top, which moves while the strip slides.
+    const border = controls.offsetHeight - controls.clientHeight
+    this.low = lowSpace({
+      listPx: bottom - controls.getBoundingClientRect().top - row1.offsetHeight - this.stripPx - border,
+      stripPx: this.stripPx,
+      stripHidden: false,
+      headerPx: header ? header.getBoundingClientRect().height : 0,
+      viewportPx: window.innerHeight,
     })
+    this.el.setAttribute("data-low-space", this.low ? "true" : "false")
+    // In low space the strip starts tucked away; it comes back on scroll-up.
+    this.setStrip(this.low ? (this.lowSeen ? this.stripHidden : true) : false)
+    this.lowSeen = this.low
+  },
+
+  follow(target) {
+    if (!target || (target.id !== "m-agenda" && target.id !== "m-day")) return
+    const last = this.lastTop.get(target)
+    this.lastTop.set(target, target.scrollTop)
+    if (target._mProgrammatic) {
+      target._mProgrammatic = false
+      return
+    }
+    if (last === undefined || !this.low) return
+    this.setStrip(stripHiddenAfter(this.stripHidden, target.scrollTop - last, this.low))
+  },
+
+  setStrip(hidden) {
+    const strip = this.strip()
+    if (!strip || hidden === this.stripHidden) return
+    this.stripHidden = hidden
+    if (hidden) {
+      this.js().setAttribute(strip, "style", `margin-top: -${this.stripPx || strip.offsetHeight}px`)
+      this.js().setAttribute(strip, "inert", "")
+      this.js().setAttribute(strip, "data-hidden", "true")
+    } else {
+      this.js().removeAttribute(strip, "style")
+      this.js().removeAttribute(strip, "inert")
+      this.js().removeAttribute(strip, "data-hidden")
+    }
   },
 }

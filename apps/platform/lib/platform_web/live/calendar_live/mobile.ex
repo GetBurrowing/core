@@ -44,18 +44,31 @@ defmodule PlatformWeb.CalendarLive.Mobile do
   attr(:shown_count, :integer, required: true)
   attr(:month_open, :boolean, required: true)
   attr(:busy, :any, required: true, doc: "MapSet of dates with entries")
+  attr(:week_start, :integer, default: 1, doc: "1 = Monday … 7 = Sunday")
 
   def controls(assigns) do
     anchor = if assigns.view == "day", do: assigns.sel_day, else: assigns.focus
-    assigns = assign(assigns, anchor: anchor, days: Cal.week_days(anchor))
+
+    assigns =
+      assign(assigns,
+        anchor: anchor,
+        days: Agenda.week_days(anchor, assigns.week_start),
+        letters: Agenda.weekday_letters(assigns.week_start)
+      )
 
     ~H"""
+    <%!-- `overflow-hidden`: in the low-space rule (canvas 01a2111c review A,
+         `CalendarPhoneLayout`) the strip slides up under row 1, which
+         always stays. --%>
     <div
-      class="shrink-0 border-b border-edge bg-base-100 lg:hidden"
+      class="shrink-0 overflow-hidden border-b border-edge bg-base-100 lg:hidden"
       data-role="m-controls"
       id="m-controls"
     >
-      <div class="flex min-h-11 flex-wrap items-center gap-1 px-1.5 py-0.5" data-role="m-row1">
+      <div
+        class="relative z-[1] flex min-h-11 flex-wrap items-center gap-1 bg-base-100 px-1.5 py-0.5"
+        data-role="m-row1"
+      >
         <div class="flex shrink-0 items-center" data-role="m-date-group">
           <button
             :if={@view == "day"}
@@ -77,7 +90,7 @@ defmodule PlatformWeb.CalendarLive.Mobile do
             aria-expanded={to_string(@month_open)}
             aria-controls="m-month"
             aria-label={@view == "day" && "#{Cal.day_label(@sel_day)}, show month"}
-            class="inline-flex h-9 shrink-0 items-center gap-0.5 whitespace-nowrap rounded-full px-1 text-sm font-semibold hover:bg-base-200"
+            class="inline-flex h-8 shrink-0 items-center gap-0.5 whitespace-nowrap rounded-[var(--radius-field)] bg-base-200 px-1.5 text-sm font-semibold hover:bg-base-300"
             data-role="m-month-button"
           >
             <span :if={@view == "day"}>{Calendar.strftime(@sel_day, "%a %-d")}</span>
@@ -159,14 +172,14 @@ defmodule PlatformWeb.CalendarLive.Mobile do
         id="m-strip"
         phx-hook="CalendarSwipe"
         data-swipe-event="m_strip_step"
-        class="flex touch-pan-y px-1 pb-1"
+        class="flex touch-pan-y px-1 pb-1 transition-[margin-top] duration-150 motion-reduce:transition-none"
         role="group"
         aria-label={"Week of #{Cal.day_label(hd(@days))}"}
         data-role="m-strip"
         data-week={Date.to_iso8601(hd(@days))}
       >
         <button
-          :for={day <- @days}
+          :for={{day, letter} <- Enum.zip(@days, @letters)}
           type="button"
           phx-click="m_pick"
           phx-value-date={Date.to_iso8601(day)}
@@ -176,9 +189,7 @@ defmodule PlatformWeb.CalendarLive.Mobile do
           data-date={Date.to_iso8601(day)}
           class="flex min-h-11 min-w-0 flex-1 flex-col items-center gap-0.5 rounded-box py-0.5 hover:bg-base-200"
         >
-          <span class="text-xs font-medium text-secondary" aria-hidden="true">
-            {String.first(Calendar.strftime(day, "%a"))}
-          </span>
+          <span class="text-xs font-medium text-secondary" aria-hidden="true">{letter}</span>
           <span
             class={[
               "inline-flex size-7 items-center justify-center rounded-full text-sm font-semibold",
@@ -215,15 +226,28 @@ defmodule PlatformWeb.CalendarLive.Mobile do
   attr(:today, Date, required: true)
   attr(:selected, Date, required: true)
   attr(:busy, :any, required: true)
+  attr(:week_start, :integer, default: 1)
 
+  @doc """
+  The month. Portrait at default text: pushed open in place under the
+  controls, uncapped. In landscape or at 150%+ text `CalendarPhoneLayout`
+  marks the page `data-month-sheet` and app.css lifts it into a bottom
+  sheet over a scrim (review C); picking a date closes it either way.
+  """
   def month(assigns) do
-    assigns = assign(assigns, :weeks, assigns.month |> Agenda.month_days() |> Enum.chunk_every(7))
+    assigns =
+      assign(assigns,
+        weeks: assigns.month |> Agenda.month_days(assigns.week_start) |> Enum.chunk_every(7),
+        letters: Agenda.weekday_letters(assigns.week_start)
+      )
 
     ~H"""
+    <div class="m-month-scrim lg:hidden" phx-click="m_month_toggle" aria-hidden="true"></div>
     <div
       id="m-month"
-      class="max-h-[50dvh] shrink-0 overflow-y-auto overscroll-contain border-b border-edge bg-base-100 px-2 pb-2 lg:hidden"
+      class="m-month shrink-0 border-b border-edge bg-base-100 px-2 pb-2 lg:hidden"
       data-role="m-month"
+      aria-label="Month"
     >
       <div class="flex items-center px-1 py-1">
         <span class="flex-1 text-sm font-semibold" data-role="m-month-label">
@@ -250,7 +274,7 @@ defmodule PlatformWeb.CalendarLive.Mobile do
       </div>
       <div class="grid grid-cols-7 text-center" role="grid" aria-label="Month">
         <span
-          :for={d <- ~w(M T W T F S S)}
+          :for={d <- @letters}
           class="py-0.5 text-xs font-medium text-secondary"
           aria-hidden="true"
         >
@@ -466,8 +490,7 @@ defmodule PlatformWeb.CalendarLive.Mobile do
           |> Cal.entries_on(day, zone)
           |> Enum.filter(&Agenda.pinned?(&1, zone))
           |> Enum.map(&%{entry: &1, span: Agenda.span_label(&1, day, zone)}),
-        now: day == assigns.today && Agenda.now_px(zone),
-        hour_px: Agenda.hour_px()
+        now: day == assigns.today && Agenda.now_hours(zone)
       )
 
     ~H"""
@@ -478,7 +501,7 @@ defmodule PlatformWeb.CalendarLive.Mobile do
       data-day={Date.to_iso8601(@day)}
       data-role="m-day"
       aria-live="off"
-      class="clears-tab-bar relative min-h-0 flex-1 touch-pan-y overflow-y-auto overscroll-contain bg-base-100 lg:hidden"
+      class="m-day clears-tab-bar relative min-h-0 flex-1 touch-pan-y overflow-y-auto overscroll-contain bg-base-100 lg:hidden"
     >
       <div
         :if={@pinned != [] or Enum.any?(@day_entries, &(&1.day == @day and &1.items != []))}
@@ -507,15 +530,15 @@ defmodule PlatformWeb.CalendarLive.Mobile do
         <div aria-hidden="true">
           <div
             :for={hour <- 0..23}
-            class="relative h-[48px] pr-1.5 text-right text-xs tabular-nums text-secondary"
+            class="relative h-[var(--m-hour)] pr-1.5 text-right text-xs tabular-nums text-secondary"
             data-hour={hour}
           >
             <span :if={hour > 0} class="relative -top-2">{Cal.hm(hour * 60)}</span>
           </div>
         </div>
         <div
-          class="cal-col relative"
-          style={"height: #{Agenda.day_px()}px"}
+          class="m-day-col relative"
+          style="height: calc(var(--m-hour) * 24)"
           data-role="m-day-column"
           data-date={Date.to_iso8601(@day)}
         >
@@ -524,7 +547,7 @@ defmodule PlatformWeb.CalendarLive.Mobile do
             type="button"
             tabindex="-1"
             class="cal-slot"
-            style={"top: #{minute / 60 * @hour_px}px"}
+            style={"top: calc(var(--m-hour) * #{minute / 60}); height: calc(var(--m-hour) / 2)"}
             phx-click="new_at"
             phx-value-date={Date.to_iso8601(@day)}
             phx-value-minute={minute}
@@ -536,11 +559,13 @@ defmodule PlatformWeb.CalendarLive.Mobile do
             chip={Map.put(chip, :date, @day)}
             selected={@selected_id == chip.entry.id}
             id_prefix="m-day"
+            style={chip_style(chip)}
+            label={chip_label(chip, @day)}
           />
           <div
             :for={more <- @layout.more}
             class="absolute right-1 z-[5]"
-            style={"top: #{more.top + 2}px"}
+            style={"top: calc(var(--m-hour) * #{more.hour} + 2px)"}
           >
             <button
               type="button"
@@ -573,7 +598,7 @@ defmodule PlatformWeb.CalendarLive.Mobile do
           <div
             :if={@now}
             class="pointer-events-none absolute inset-x-0 z-[4] h-[2px] bg-base-content"
-            style={"top: #{@now}px"}
+            style={"top: calc(var(--m-hour) * #{@now})"}
             data-role="m-now"
           >
           </div>
@@ -581,6 +606,22 @@ defmodule PlatformWeb.CalendarLive.Mobile do
       </div>
     </div>
     """
+  end
+
+  # Hour rows are `--m-hour` tall (48px, growing with the text size to a
+  # 96px cap: app.css `.m-day`), so blocks are placed in hours, not px.
+  defp chip_style(chip) do
+    width = 100 / chip.lanes
+
+    "top: calc(var(--m-hour) * #{chip.s / 60}); " <>
+      "height: max(22px, calc(var(--m-hour) * #{(chip.e - chip.s) / 60} - 2px)); " <>
+      "left: calc(#{chip.lane * width}% + 3px); width: calc(#{width}% - 6px);"
+  end
+
+  # No visual tag on a Day view block (review D): its zone is in the label.
+  defp chip_label(chip, day) do
+    label = Cal.chip_label(chip.entry, day, chip.s, min(chip.e, 1439))
+    if chip.tz, do: label <> ", times in your zone, event set in " <> chip.tz, else: label
   end
 
   # ── the calendar selector's bottom sheet ───────────────────────────────
@@ -607,36 +648,76 @@ defmodule PlatformWeb.CalendarLive.Mobile do
           shown={Cal.shown?(@calendars_shown, cal.key)}
         />
       </section>
-      <%!-- Section seam (canvas 01a2111c §2). "People" (other people's
-           calendars) and "Booking links" (schedules to browse) go here as
-           their own `data-sheet-section`s once that question is answered.
-           Not built yet on purpose. --%>
-      <section
-        data-sheet-section="pages"
-        aria-labelledby="m-sheet-pages"
-        class="mt-3 border-t border-edge pt-3"
-      >
-        <h3
-          id="m-sheet-pages"
-          class="px-2 pb-1 text-xs font-semibold uppercase tracking-[.08em] text-subtle"
-        >
-          Calendar pages
-        </h3>
-        <.sheet_link
-          href={~p"/calendar/booking"}
-          navigate
-          icon="hero-user-group"
-          label="Booking links"
-        />
-        <.sheet_link href={~p"/calendar/settings"} icon="hero-lock-closed" label="Calendar settings" />
-        <.sheet_link
-          href={~p"/calendar?#{%{past: 1}}"}
-          icon="hero-archive-box"
-          label="Past events"
-          past
-        />
-      </section>
+      <%!-- People seam (canvas 01a2111c §2, review H). "People" (other
+           people's calendars) and "Booking links" (schedules to browse) go
+           here as their own `data-sheet-section`s once that question is
+           answered. Not built on purpose. This sheet is filters only: the
+           calendar pages are in the "Calendar ▾" title menu. --%>
+      <div data-sheet-seam="people" hidden></div>
     </.sheet>
+    """
+  end
+
+  # ── the "Calendar ▾" title menu (review H) ─────────────────────────────
+
+  attr(:open, :boolean, required: true)
+  attr(:view, :string, required: true)
+  attr(:section, :atom, default: :calendar)
+
+  @doc """
+  The phone top bar's "Calendar ▾" menu: the calendar pages (Booking links,
+  Calendar settings, Past events). When row 1 would need a third line at
+  large text, `CalendarPhoneLayout` marks the page `data-row1-compact`:
+  Agenda | Day leaves row 1 and shows here instead (app.css).
+  """
+  def title_menu(assigns) do
+    ~H"""
+    <div
+      :if={@open}
+      class="fixed inset-0 z-[62] lg:hidden"
+      phx-click="m_menu_close"
+      aria-hidden="true"
+    >
+    </div>
+    <nav
+      :if={@open}
+      id="m-title-menu"
+      class="fixed left-2 top-[calc(2.75rem+env(safe-area-inset-top))] z-[63] w-64 max-w-[calc(100vw-1rem)] rounded-box border border-edge bg-base-100 p-1.5 shadow-lg lg:hidden"
+      aria-label="Calendar pages"
+      data-role="m-title-menu"
+    >
+      <div :if={@section == :calendar} class="m-menu-views" data-role="m-menu-views">
+        <p class="px-2 pb-1 pt-1 text-xs font-semibold uppercase tracking-[.08em] text-subtle">
+          View
+        </p>
+        <button
+          :for={{value, label} <- [{"agenda", "Agenda"}, {"day", "Day"}]}
+          type="button"
+          phx-click="m_view"
+          phx-value-view={value}
+          aria-pressed={to_string(@view == value)}
+          data-view={value}
+          class="flex min-h-11 w-full items-center gap-2.5 rounded-[var(--radius-field)] px-2 text-left text-sm hover:bg-base-300"
+        >
+          <.icon
+            name={if value == "agenda", do: "hero-list-bullet", else: "hero-calendar"}
+            class="size-[18px] shrink-0 text-subtle"
+          />
+          <span class="flex-1">{label}</span>
+          <.icon :if={@view == value} name="hero-check" class="size-4" />
+        </button>
+        <div class="my-1 border-t border-edge"></div>
+      </div>
+      <.sheet_link href={~p"/calendar"} icon="hero-calendar-days" label="Calendar" />
+      <.sheet_link href={~p"/calendar/booking"} navigate icon="hero-user-group" label="Booking links" />
+      <.sheet_link href={~p"/calendar/settings"} icon="hero-lock-closed" label="Calendar settings" />
+      <.sheet_link
+        href={~p"/calendar?#{%{past: 1}}"}
+        icon="hero-archive-box"
+        label="Past events"
+        past
+      />
+    </nav>
     """
   end
 

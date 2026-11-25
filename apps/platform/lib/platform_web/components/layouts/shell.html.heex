@@ -193,7 +193,32 @@
           brand_name={@brand_name}
           current_unread={@chat_unread_count}
         />
-        <span class="min-w-0 truncate text-sm font-semibold" data-role="phone-top-bar-title">
+        <%!-- A page may turn its title into a menu by assigning
+             `title_menu` (%{event, open, controls}); the page renders the
+             menu itself. Calendar does (canvas 01a2111c review H): its
+             pages live under "Calendar ▾". Every other page: the span. --%>
+        <button
+          :if={assigns[:title_menu]}
+          type="button"
+          id="phone-top-bar-title-menu"
+          phx-click={@title_menu.event}
+          aria-haspopup="true"
+          aria-expanded={to_string(@title_menu.open)}
+          aria-controls={@title_menu.controls}
+          class="-mx-1.5 inline-flex h-9 min-w-0 items-center gap-0.5 rounded-[var(--radius-field)] px-1.5 text-sm font-semibold hover:bg-base-300"
+          data-role="phone-top-bar-title"
+        >
+          <span class="truncate">{@active_module}</span>
+          <.icon
+            name="hero-chevron-down"
+            class={["size-3.5 shrink-0", @title_menu.open && "rotate-180"]}
+          />
+        </button>
+        <span
+          :if={!assigns[:title_menu]}
+          class="min-w-0 truncate text-sm font-semibold"
+          data-role="phone-top-bar-title"
+        >
           {@active_module}
         </span>
       </div>

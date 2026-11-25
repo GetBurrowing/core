@@ -32,6 +32,7 @@ import {hooks as colocatedHooks} from "phoenix-colocated/platform"
 import {installNativeDonations} from "./native_donations"
 import {installMeetingPresence} from "./meeting_presence"
 import {uploadManager} from "./hooks/large_upload"
+import {weekStart} from "./hooks/calendar_mobile"
 import {installReloadGuard} from "./lib/reload_guard"
 import {createReconnectEscalation, parseThresholds} from "./lib/reconnect_escalation"
 import {createConnectionStatusView, fingerprint} from "./lib/connection_status_view"
@@ -104,6 +105,9 @@ const liveSocket = new LiveSocket("/live", Socket, {
     _csrf_token: csrfToken,
     timezone: Intl.DateTimeFormat().resolvedOptions().timeZone,
     viewport_lg: window.matchMedia("(min-width: 64rem)").matches,
+    // The locale's first weekday (1 Monday … 7 Sunday) for the phone
+    // calendar's week strip and month (canvas 01a2111c review E).
+    week_start: weekStart(navigator.language),
   }),
   hooks: {...Hooks, ...colocatedHooks},
 })
