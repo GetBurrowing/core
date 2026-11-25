@@ -10,8 +10,8 @@ defmodule PlatformWeb.CalendarLive.Components do
   in the `/* calendar v4 */` block of `app.css`.
 
   The desktop parts (`list_pane/1`, the desktop `cal_header/1`, `week_grid/1`)
-  show at `lg`; the phone parts (`section_tabs/1`, `day_strip/1`, the
-  single-day column) below it. The prototype switches at 899px; main's shell
+  show at `lg`; below it the page is `PlatformWeb.CalendarLive.Mobile` (the
+  agenda, Day view and week strip) and `section_tabs/1` on the settings page. The prototype switches at 899px; main's shell
   switches at Tailwind `lg` (1024px, `icon_rail.ex` `bottom-nav lg:hidden`).
   """
   use Phoenix.Component
@@ -149,7 +149,7 @@ defmodule PlatformWeb.CalendarLive.Components do
   attr(:cal, :map, required: true)
   attr(:shown, :boolean, required: true)
 
-  defp legend_toggle(assigns) do
+  def legend_toggle(assigns) do
     ~H"""
     <button
       type="button"
@@ -315,7 +315,15 @@ defmodule PlatformWeb.CalendarLive.Components do
           </label>
           <button
             type="submit"
-            class={[primary_btn(), "h-[38px] px-4 disabled:opacity-50"]}
+            class={
+              [
+                primary_btn(),
+                "h-[38px] px-4 disabled:opacity-50",
+                # Below lg this sits in the [+] sheet, and [+] is the phone's
+                # only orange (canvas 01a2111c palette).
+                "max-lg:bg-base-content max-lg:text-base-100"
+              ]
+            }
             disabled={@plan.agents == [] or @busy?}
             data-role="quick-plan-submit"
           >
@@ -483,7 +491,7 @@ defmodule PlatformWeb.CalendarLive.Components do
   attr(:sel_day, Date, required: true)
   attr(:zone, :string, required: true)
 
-  @doc "The main pane header: one desktop row, two phone rows."
+  @doc "The main pane header at `lg`; below it the phone controls are `CalendarLive.Mobile.controls/1`."
   def cal_header(assigns) do
     ~H"""
     <div
@@ -511,41 +519,6 @@ defmodule PlatformWeb.CalendarLive.Components do
       >
         <.icon name="hero-archive-box" class="size-3.5" /> Past events
       </.link>
-    </div>
-    <div class="shrink-0 lg:hidden" data-role="calendar-phone-header">
-      <div class="flex min-h-[52px] items-center gap-1.5 border-b border-edge px-3 py-1.5">
-        <h1 class="m-0 whitespace-nowrap text-[17px] font-[650]">Calendar</h1>
-        <span class="flex-1"></span>
-        <.view_switch view={@view} />
-        <button
-          type="button"
-          class={icon_btn()}
-          phx-click="new"
-          phx-value-date={Date.to_iso8601(@sel_day)}
-          aria-label="New event"
-        >
-          <.icon name="hero-plus" class="size-[18px]" />
-        </button>
-      </div>
-      <div
-        class="flex min-h-11 items-center gap-1.5 border-b border-edge px-3 py-1.5"
-        data-role="calendar-phone-nav"
-      >
-        <.date_nav step="day" />
-        <span class="whitespace-nowrap text-[13px] font-semibold" data-role="calendar-phone-range">
-          {Cal.phone_range_label(@view, @cursor, @sel_day)}
-        </span>
-        <span class="flex-1"></span>
-        <%!-- v7 phone header row 2: "Today | <month> | Past events" (stage 5
-             review, fourth pass); the section tabs no longer carry it. --%>
-        <.link
-          patch={~p"/calendar?#{%{view: @view, past: 1}}"}
-          class={ghost_btn()}
-          data-past-events="open"
-        >
-          Past events
-        </.link>
-      </div>
     </div>
     """
   end
@@ -815,6 +788,8 @@ defmodule PlatformWeb.CalendarLive.Components do
   attr(:chip, :map, required: true)
   attr(:selected, :boolean, default: false)
   attr(:id_prefix, :string, default: "chip")
+  attr(:style, :string, default: nil, doc: "replaces the px placement (the phone Day view)")
+  attr(:label, :string, default: nil, doc: "replaces the aria-label")
 
   @doc "A positioned chip of one of the four kinds (cal.css `.ev`, `.k-*`)."
   def event_chip(assigns) do
@@ -829,9 +804,10 @@ defmodule PlatformWeb.CalendarLive.Components do
         live: Cal.live?(entry),
         range: "#{Cal.hm(chip.s)}–#{Cal.hm(min(chip.e, 1439))}",
         style:
-          "top: #{chip.top}px; height: #{chip.height}px; " <>
-            "left: calc(#{chip.lane * width}% + 3px); width: calc(#{width}% - 6px);",
-        label: Cal.chip_label(entry, chip.date, chip.s, min(chip.e, 1439)),
+          assigns.style ||
+            "top: #{chip.top}px; height: #{chip.height}px; " <>
+              "left: calc(#{chip.lane * width}% + 3px); width: calc(#{width}% - 6px);",
+        label: assigns.label || Cal.chip_label(entry, chip.date, chip.s, min(chip.e, 1439)),
         cancelled: Cal.cancelled?(entry),
         # The chip drops on a short (compact) block and on a block that
         # shares time with another (its lane is genuinely narrow); there the
@@ -904,81 +880,6 @@ defmodule PlatformWeb.CalendarLive.Components do
       name="hero-arrow-path"
       class="size-3 shrink-0"
     />{@range}
-    """
-  end
-
-  # ── phone: day strip + single-day column (app.js `renderWeek` on mob) ──
-
-  attr(:sel_day, Date, required: true)
-  attr(:today, Date, required: true)
-  attr(:entries, :list, required: true)
-  attr(:zone, :string, required: true)
-  attr(:day_entries, :list, default: [])
-
-  def day_strip(assigns) do
-    assigns = assign(assigns, :days, Cal.week_days(assigns.sel_day))
-
-    ~H"""
-    <div
-      class="sticky top-0 z-[5] border-b border-edge bg-base-200 px-1 pb-1 pt-2"
-      data-role="calendar-day-strip"
-    >
-      <div class="flex" role="tablist" aria-label="Days of the week">
-        <button
-          :for={day <- @days}
-          type="button"
-          role="tab"
-          phx-click="select_day"
-          phx-value-date={Date.to_iso8601(day)}
-          aria-selected={to_string(day == @sel_day)}
-          aria-label={"#{Cal.day_label(day)}, #{length(Cal.entries_on(@entries, day, @zone))} items"}
-          class="flex min-h-11 min-w-0 flex-1 flex-col items-center gap-0.5 py-0.5 text-xs uppercase tracking-[.06em] text-subtle"
-        >
-          {String.first(Calendar.strftime(day, "%a"))}
-          <b class={[
-            "inline-flex size-8 items-center justify-center rounded-full text-[13px] font-semibold tracking-normal",
-            day == @sel_day && "bg-primary text-primary-content",
-            day != @sel_day && day == @today && "text-interactive",
-            day != @sel_day && day != @today && "text-base-content"
-          ]}>
-            {day.day}
-          </b>
-        </button>
-      </div>
-      <div :if={@day_entries != []} class="flex">
-        <div :for={day <- @days} class="flex min-w-0 flex-1 justify-center">
-          <.calendar_day_chips day={day} day_entries={@day_entries} placement="week-phone" compact />
-        </div>
-      </div>
-    </div>
-    """
-  end
-
-  attr(:day, Date, required: true)
-  attr(:entries, :list, required: true)
-  attr(:zone, :string, required: true)
-  attr(:today, Date, required: true)
-  attr(:selected_id, :any, default: nil)
-
-  @doc "The phone's single-day column: a 44px gutter and full-width chips."
-  def phone_day(assigns) do
-    ~H"""
-    <div
-      id="calendar-phone-day"
-      class="grid grid-cols-[44px_minmax(0,1fr)]"
-      data-role="calendar-phone-day"
-      phx-hook="CalendarSelection"
-    >
-      <.gutter class="w-11 pr-2" />
-      <.day_column
-        day={@day}
-        entries={@entries}
-        zone={@zone}
-        today={@today}
-        selected_id={@selected_id}
-        id_prefix="day"
-      />
-    </div>
     """
   end
 
@@ -1122,6 +1023,63 @@ defmodule PlatformWeb.CalendarLive.Components do
   end
 
   attr(:selected, :map, required: true)
+
+  attr(:phone, :boolean,
+    default: false,
+    doc:
+      "Below lg: a bounded region whose title row and Close stay put while the items scroll inside it. The calendar island caps its height (`--m-ext-max`) and shows the fade."
+  )
+
+  def calendar_day_list(%{phone: true} = assigns) do
+    ~H"""
+    <section
+      id={"calendar-day-list-#{@selected.open_seq}"}
+      data-role="calendar-extension-list"
+      data-phone
+      tabindex="-1"
+      phx-mounted={JS.focus()}
+      phx-remove={JS.focus(to: "##{@selected.trigger_id}")}
+      aria-labelledby={"calendar-day-list-#{@selected.open_seq}-title"}
+      class="flex max-h-[var(--m-ext-max,40dvh)] min-h-0 flex-col overflow-hidden rounded-box border border-edge bg-base-100 text-sm"
+    >
+      <div class="flex shrink-0 items-center justify-between gap-3 border-b border-edge pl-3 pr-1">
+        <h2
+          id={"calendar-day-list-#{@selected.open_seq}-title"}
+          class="min-w-0 break-words py-2 font-semibold"
+        >
+          {@selected.label} · {Calendar.strftime(@selected.day, "%a %-d %b")}
+        </h2>
+        <button
+          type="button"
+          phx-click="calendar_day_close"
+          aria-label="Close list"
+          class="btn btn-ghost btn-sm min-h-11 shrink-0"
+        >
+          Close
+        </button>
+      </div>
+      <div class="relative flex min-h-0 flex-1 flex-col">
+        <ul
+          data-role="m-ext-body"
+          class="peer min-h-0 flex-1 overflow-y-auto overscroll-contain px-3"
+        >
+          <li :for={item <- @selected.items} class="border-b border-edge py-2 last:border-b-0">
+            <p class="break-words">{item.text}</p>
+            <a href={item.href} class="inline-flex min-h-11 items-center underline underline-offset-2">
+              {item.link_label}
+            </a>
+          </li>
+        </ul>
+        <div
+          aria-hidden="true"
+          data-role="m-ext-fade"
+          class="pointer-events-none absolute inset-x-0 bottom-0 h-4 bg-gradient-to-t from-base-100 to-transparent opacity-0 peer-data-[more]:opacity-100"
+        >
+        </div>
+      </div>
+    </section>
+    """
+  end
 
   def calendar_day_list(assigns) do
     ~H"""
@@ -1397,6 +1355,15 @@ defmodule PlatformWeb.CalendarLive.Components do
       text={"#{length(@detail.call.invitees)} invited"}
       sub={Enum.join(@detail.call.invitees, ", ")}
       data-role="calendar-detail-people"
+    />
+    <%!-- An event set in another zone (canvas 01a2111c "Timezone"): the
+         times above are the viewer's; this row names the event's own. --%>
+    <.detail_row
+      :if={@detail[:zone_note]}
+      icon="hero-globe-alt"
+      text={@detail.zone_note.text}
+      sub={@detail.zone_note.sub}
+      data-role="calendar-detail-zone"
     />
     <.detail_row
       icon="hero-eye-slash"

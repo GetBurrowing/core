@@ -64,7 +64,14 @@ defmodule PlatformWeb.Components.InstallSwitch do
         class="size-5 shrink-0 rounded"
         data-role="install-logo"
       />
-      <span class="max-w-[7rem] truncate text-sm font-semibold">{@brand_name}</span>
+      <%!-- Hidden at large text by the phone top bar's container query; the
+           aria-label still names the install. --%>
+      <span
+        class="max-w-[7rem] truncate text-sm font-semibold @max-[12rem]:hidden"
+        data-role="install-name"
+      >
+        {@brand_name}
+      </span>
       <span class="hero-chevron-down size-4 shrink-0 text-subtle" aria-hidden="true"></span>
       <span
         data-role="install-unread-dot"
