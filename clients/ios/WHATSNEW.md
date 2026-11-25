@@ -8,16 +8,20 @@ MARKETING_VERSION, and it is capped at 4000 characters.
 New in this build:
 - Reply voice can now be Pocket TTS, a natural-sounding voice that runs entirely on this iPhone. It is offered on iPhones with iOS 27 and enough memory; on others the list is unchanged.
 - The first time you pick it, the iPhone downloads about 437 MB, once, with the progress shown under Reply voice ("Downloading Pocket TTS · N%"). Wi-Fi is best. Until it finishes, your usual system voice reads the replies, so nothing goes quiet.
-- Speech can start before the agent has finished writing: the reply is read sentence by sentence as it arrives.
+- The reply is read sentence by sentence, so speech starts as soon as the first sentence is ready rather than after the whole reply.
+- Twenty Pocket TTS voices to choose from, listed as "Pocket TTS (Name)". Marius comes with the first download; each other voice downloads (about 4 to 8 MB) when you pick it, and your system voice reads until it is ready.
 - Pressing the mic stops the reply at once, and taking your AirPods out pauses it instead of moving it to the loudspeaker, just as before.
-- Pocket TTS by Kyutai · CC BY 4.0
+- If a podcast or music is playing, it pauses or dips while you talk or a reply plays, and carries on afterwards.
+- Pocket TTS by Kyutai · CC BY 4.0. Voices Alba (Alba MacKenna) and Anna, Vera, Fantine, Charles, Paul, Eponine, Azelma, George, Mary, Jane, Michael and Eve (VCTK corpus, CSTR, University of Edinburgh) are CC BY 4.0; the others are CC0.
 
 Please try:
 1. Open the Voice tab, pick Pocket TTS under Reply voice, and ask the agent something straight away. The reply should be read by your system voice while the percentage rises.
 2. When the download finishes, ask again. The reply should now be read by Pocket TTS, without picking it again, and still after you close and reopen the app.
-3. Ask for a longer answer (four to six sentences). Speech should begin before the full reply appears.
+3. Ask for a longer answer (four to six sentences). Speech should begin after the first sentence, not after the whole reply.
 4. While Pocket TTS is speaking, press the mic and start talking. Speech should stop at once and not continue later.
 5. With AirPods in, take them out while it speaks. It should pause, not move to the loudspeaker.
+6. Pick another Pocket TTS voice and ask again. The first reply may be read by your system voice while it downloads; the next should be in the new voice.
+7. Start a podcast, switch to Burrow and tap the mic. The podcast should pause, your turn should stay open, and the podcast should resume after the reply.
 Tell us your iPhone model, your iOS version, and how Pocket TTS sounds next to the system voice.
 
 ## v1.3: talk to an agent on this iPhone
