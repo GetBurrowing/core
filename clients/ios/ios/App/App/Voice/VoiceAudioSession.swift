@@ -73,6 +73,9 @@ final class VoiceAudioSession: VoiceAudioSessionControl {
     func activate() throws {
         if isActive { return }
         let before = (backend.category, backend.mode, backend.categoryOptions)
+        // Read BEFORE activating: activating pauses a podcast
+        // (`.interruptSpokenAudioAndMixWithOthers`), so afterwards it reads false.
+        let otherBefore = backend.isOtherAudioPlaying
         do {
             try backend.setCategory(.playAndRecord, mode: .default, options: Self.options)
             try backend.setActive(true, options: [])
@@ -81,7 +84,9 @@ final class VoiceAudioSession: VoiceAudioSessionControl {
             VoiceTrace.log("session activate failed other_audio=\(backend.isOtherAudioPlaying) error=\((error as NSError).code)")
             throw error
         }
-        VoiceTrace.log("session activated other_audio=\(backend.isOtherAudioPlaying) route=\(Self.routeLabel(backend.routePortTypes) ?? "builtin")")
+        VoiceTrace.log(
+            "session activated other_audio_before=\(otherBefore) other_audio=\(backend.isOtherAudioPlaying) route=\(Self.routeLabel(backend.routePortTypes) ?? "builtin")"
+        )
         previous = before
         isActive = true
     }

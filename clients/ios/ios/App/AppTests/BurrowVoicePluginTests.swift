@@ -668,3 +668,104 @@ final class BurrowVoicePluginTests: XCTestCase {
         print("VOICE_SIMULATOR_CAPABILITIES inputs=\(inputs) decided=\(capability)")
     }
 }
+
+// MARK: - The mic tap (task 01a20fdd stage 4)
+
+/// A mic input whose format a test can change while the analyzer prepares,
+/// as a route change or another app's audio being paused does on a device.
+@MainActor
+private final class FakeMicInput: MicTapInput {
+    var shape: (sampleRate: Double, channels: AVAudioChannelCount) = (48_000, 1)
+    let format = AVAudioFormat(standardFormatWithSampleRate: 48_000, channels: 1)!
+    private(set) var calls: [String] = []
+
+    var currentFormat: AVAudioFormat { format }
+    var currentShape: (sampleRate: Double, channels: AVAudioChannelCount) { shape }
+
+    func installMicTap(bufferSize: AVAudioFrameCount, block: @escaping @Sendable (AVAudioPCMBuffer) -> Void) {
+        calls.append("install")
+    }
+
+    func removeMicTap() { calls.append("remove") }
+
+    func note(_ call: String) { calls.append(call) }
+}
+
+@MainActor
+final class MicTapTests: XCTestCase {
+    private let analyzerFormat = AVAudioFormat(standardFormatWithSampleRate: 16_000, channels: 1)!
+
+    /// The crash: the format was read before the analyzer's awaits and went
+    /// stale (here: empty) by the time the tap was installed. The fresh read
+    /// refuses with a Swift error and no tap is ever installed.
+    func testAFormatThatEmptiesWhilePreparingIsRefusedBeforeAnyTap() async {
+        let input = FakeMicInput()
+        let target = analyzerFormat
+        do {
+            _ = try await MicTap.open(
+                input,
+                prepare: { _ in
+                    input.shape = (0, 0)
+                    return target
+                }, tap: { _, _ in })
+            XCTFail("an empty format must not reach installTap")
+        } catch {
+            XCTAssertEqual(error as? MicTapError, .noInputFormat)
+        }
+        XCTAssertFalse(input.calls.contains("install"), "\(input.calls)")
+    }
+
+    func testAnEmptyFormatBeforePreparingIsRefusedAndNothingIsPrepared() async {
+        let input = FakeMicInput()
+        input.shape = (48_000, 0)
+        let target = analyzerFormat
+        var prepared = false
+        do {
+            _ = try await MicTap.open(
+                input,
+                prepare: { _ in
+                    prepared = true
+                    return target
+                }, tap: { _, _ in })
+            XCTFail("refused")
+        } catch {
+            XCTAssertEqual(error as? MicTapError, .noInputFormat)
+        }
+        XCTAssertFalse(prepared)
+        XCTAssertTrue(input.calls.isEmpty)
+    }
+
+    /// A rate change while preparing still opens the mic: the tap takes the
+    /// bus's own format, after any earlier tap is removed, and only once the
+    /// analyzer is prepared.
+    func testAChangedFormatOpensTheTapAfterPreparingAndRemovesAnyOldTapFirst() async throws {
+        let input = FakeMicInput()
+        let target = analyzerFormat
+        let opened = try await MicTap.open(
+            input,
+            prepare: { _ in
+                input.note("prepare")
+                input.shape = (24_000, 1)
+                return target
+            }, tap: { _, _ in })
+        XCTAssertEqual(opened, target)
+        XCTAssertEqual(input.calls, ["prepare", "remove", "install"])
+    }
+
+    /// Buffers are converted from the format they arrive in, which can
+    /// change between turns or mid-turn, not from a format read earlier.
+    func testTheConverterFollowsEachBuffersOwnFormat() throws {
+        let converter = MicBufferConverter()
+        let target = analyzerFormat
+        for rate in [48_000.0, 24_000.0, 48_000.0] {
+            let format = AVAudioFormat(standardFormatWithSampleRate: rate, channels: 1)!
+            let buffer = try XCTUnwrap(AVAudioPCMBuffer(pcmFormat: format, frameCapacity: 4_800))
+            buffer.frameLength = 4_800
+            let out = try XCTUnwrap(converter.convert(buffer, to: target), "\(rate)")
+            XCTAssertEqual(out.format, target)
+            XCTAssertEqual(Double(out.frameLength), 4_800 * 16_000 / rate, accuracy: 2, "\(rate)")
+        }
+        let same = try XCTUnwrap(AVAudioPCMBuffer(pcmFormat: target, frameCapacity: 160))
+        XCTAssertTrue(converter.convert(same, to: target) === same, "already in the analyzer's format: passed through")
+    }
+}
