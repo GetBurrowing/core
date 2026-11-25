@@ -94,6 +94,23 @@ private final class FakeSpeaker: VoiceSpeaking {
         onEvent?(ReplySpeechEvent(id: id, state: .started))
     }
 
+    private(set) var parts: [String] = []
+
+    func begin(id: String, voiceID: String?) {
+        stop(reason: "replaced")
+        log.entries.append("speaker.begin")
+        voiceIDs.append(voiceID)
+        speakingID = id
+        onEvent?(ReplySpeechEvent(id: id, state: .started))
+    }
+
+    func append(id: String, seq: Int, text: String) {
+        guard speakingID == id else { return }
+        parts.append(text)
+    }
+
+    func finish(id: String) {}
+
     func stop(reason: String) {
         log.entries.append("speaker.stop(\(reason))")
         guard let id = speakingID else { return }
@@ -167,6 +184,9 @@ final class BurrowVoicePluginTests: XCTestCase {
         plugin.haptic = { [unowned self] in self.haptics += 1 }
         plugin.notificationCenter = center
         plugin.eventSink = { [unowned self] name, data in self.events.append((name, data)) }
+        // Pocket TTS off: these tests cover the system voice (task 01a20fdd
+        // stage 2 has its own suite, PocketSpeakerTests).
+        plugin.pocketGate = { (false, "simulator") }
         plugin.load()
         return plugin
     }
@@ -187,8 +207,8 @@ final class BurrowVoicePluginTests: XCTestCase {
         XCTAssertEqual(plugin.jsName, "BurrowVoice")
         XCTAssertEqual(
             plugin.pluginMethods.map(\.name),
-            ["capabilities", "prepare", "start", "stop", "cancel", "speak", "stopSpeaking", "openSettings", "voices"])
-        XCTAssertEqual(BurrowVoicePlugin.events, ["partial", "final", "ended", "speech", "route"])
+            ["capabilities", "prepare", "start", "stop", "cancel", "speak", "stopSpeaking", "openSettings", "voices", "speakPart", "prepareModel"])
+        XCTAssertEqual(BurrowVoicePlugin.events, ["partial", "final", "ended", "speech", "route", "model"])
     }
 
     // MARK: Capabilities

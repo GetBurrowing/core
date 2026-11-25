@@ -148,8 +148,15 @@ final class SystemVoiceTranscriber: VoiceTranscribing {
 /// `BurrowBridgeViewController.capacitorDidLoad`.
 ///
 /// Methods: `capabilities`, `prepare`, `start`, `stop`, `cancel`, `speak`,
-/// `stopSpeaking`, `openSettings`, `voices`. Events: `partial {text}`, `final {text}`,
-/// `ended {reason}`, `speech {id, state, reason}`, `route {label}`.
+/// `stopSpeaking`, `openSettings`, `voices`, `speakPart`, `prepareModel`.
+/// Events: `partial {text}`, `final {text}`, `ended {reason}`,
+/// `speech {id, state, reason}`, `route {label}`,
+/// `model {state, received, total, reason}`.
+///
+/// Two reply voices (task 01a20fdd stage 2): the system voice (`speaker`) and,
+/// on an iPhone `PocketTTSSupport` allows, Pocket TTS. ONE is active at a
+/// time; every system stop (route, interruption, background, the mic) stops
+/// both, so it reaches whichever is playing.
 ///
 /// Never logs what was said, the reply, or a device name.
 public class BurrowVoicePlugin: CAPPlugin, CAPBridgedPlugin {
@@ -165,13 +172,25 @@ public class BurrowVoicePlugin: CAPPlugin, CAPBridgedPlugin {
         CAPPluginMethod(name: "stopSpeaking", returnType: CAPPluginReturnPromise),
         CAPPluginMethod(name: "openSettings", returnType: CAPPluginReturnPromise),
         CAPPluginMethod(name: "voices", returnType: CAPPluginReturnPromise),
+        CAPPluginMethod(name: "speakPart", returnType: CAPPluginReturnPromise),
+        CAPPluginMethod(name: "prepareModel", returnType: CAPPluginReturnPromise),
     ]
 
-    static let events = ["partial", "final", "ended", "speech", "route"]
+    static let events = ["partial", "final", "ended", "speech", "route", "model"]
 
     // Seams, injected by tests.
     lazy var transcriber: any VoiceTranscribing = MainActor.assumeIsolated { SystemVoiceTranscriber() }
     lazy var speaker: any VoiceSpeaking = MainActor.assumeIsolated { ReplySpeaker() }
+    /// Pocket TTS: the gate, the engine, and factories for its speaker and
+    /// model store, which are only built on an iPhone the gate allows.
+    var pocketGate: () -> (supported: Bool, reason: String?) = { PocketTTSSupport.current() }
+    lazy var pocketEngine: any PocketEngine = MainActor.assumeIsolated { SystemPocketEngine() }
+    var makePocketSpeaker: @MainActor (any PocketEngine) -> any VoiceSpeaking = { engine in
+        PocketSpeaker(engine: engine, output: AVPocketAudioOutput())
+    }
+    var makePocketStore: @MainActor (any PocketEngine) -> PocketModelStore = { engine in
+        PocketModelStore(root: PocketModelStore.defaultRoot(), fetcher: HTTPRangeFetcher(), engine: engine)
+    }
     lazy var session: any VoiceAudioSessionControl = MainActor.assumeIsolated { VoiceAudioSession() }
     var voiceCatalog: any ReplyVoiceCatalog = SystemReplyVoiceCatalog()
     var languageCode: () -> String = { AVSpeechSynthesisVoice.currentLanguageCode() }
@@ -198,6 +217,13 @@ public class BurrowVoicePlugin: CAPPlugin, CAPBridgedPlugin {
     /// knows its turn was discarded meanwhile.
     private var generation = 0
     private var observers: [NSObjectProtocol] = []
+    private var pocketInstance: (any VoiceSpeaking)?
+    private var storeInstance: PocketModelStore?
+    /// The streamed reply in flight (`speakPart`) and the speaker reading it.
+    private var stream: (id: String, speaker: any VoiceSpeaking)?
+    /// The last streamed reply that was stopped: its later parts are dropped,
+    /// never restarted from the middle.
+    private var droppedID: String?
 
     override public func load() {
         observeSystem()
@@ -214,7 +240,7 @@ public class BurrowVoicePlugin: CAPPlugin, CAPBridgedPlugin {
         for observer in observers { notificationCenter.removeObserver(observer) }
         let names = [
             AVAudioSession.interruptionNotification, AVAudioSession.routeChangeNotification,
-            UIApplication.didEnterBackgroundNotification,
+            UIApplication.didEnterBackgroundNotification, UIApplication.didReceiveMemoryWarningNotification,
         ]
         observers = names.map { name in
             notificationCenter.addObserver(forName: name, object: nil, queue: .main) { [weak self] note in
@@ -225,6 +251,10 @@ public class BurrowVoicePlugin: CAPPlugin, CAPBridgedPlugin {
 
     @MainActor
     private func handleSystem(_ note: Notification) {
+        if note.name == UIApplication.didReceiveMemoryWarningNotification, pocketInstance?.isSpeaking != true {
+            // The model is loaded lazily and comes back on the next reply.
+            pocketEngine.release()
+        }
         if let reason = VoiceAudioSession.stopReason(for: note) {
             stopEverything(reason: reason)
         }
@@ -237,7 +267,7 @@ public class BurrowVoicePlugin: CAPPlugin, CAPBridgedPlugin {
     /// the session if this plugin holds it.
     @MainActor
     private func stopEverything(reason: String) {
-        speaker.stop(reason: reason)
+        stopSpeakers(reason: reason)
         if turn != .idle {
             generation += 1
             turn = .idle
@@ -249,8 +279,80 @@ public class BurrowVoicePlugin: CAPPlugin, CAPBridgedPlugin {
 
     @MainActor
     private func releaseSessionIfIdle() {
-        guard turn == .idle, !speaker.isSpeaking else { return }
+        guard turn == .idle, !speaker.isSpeaking, pocketInstance?.isSpeaking != true else { return }
         session.deactivate()
+    }
+
+    /// Stops whichever reply voice is playing (the other one is idle and
+    /// sends nothing).
+    @MainActor
+    private func stopSpeakers(reason: String) {
+        speaker.stop(reason: reason)
+        pocketInstance?.stop(reason: reason)
+    }
+
+    @MainActor
+    private func pocketSpeaker() -> any VoiceSpeaking {
+        if let pocketInstance { return pocketInstance }
+        let made = makePocketSpeaker(pocketEngine)
+        pocketInstance = made
+        return made
+    }
+
+    /// The model store, built on first use; nil where the gate says no.
+    @MainActor
+    private func pocketStore() -> PocketModelStore? {
+        if let storeInstance { return storeInstance }
+        guard pocketGate().supported else { return nil }
+        let store = makePocketStore(pocketEngine)
+        store.onChange = { [weak self, weak store] _ in
+            guard let self, let store else { return }
+            self.emit("model", store.data)
+        }
+        storeInstance = store
+        return store
+    }
+
+    @MainActor
+    private func pocketAvailability() -> PocketVoice.Availability {
+        guard let store = pocketStore() else { return .unsupported }
+        return store.state == .ready ? .ready : .notReady
+    }
+
+    /// The voice for a reply and the speaker that reads it. Picking Pocket
+    /// TTS before its model is ready starts the download; the best system
+    /// voice reads this reply meanwhile.
+    @MainActor
+    private func choose(_ requested: String?) -> (speaker: any VoiceSpeaking, voice: ReplyVoice?, fellBack: Bool, reason: String?) {
+        let pocket = requested.map(PocketVoice.isPocket) == true ? pocketAvailability() : .unsupported
+        let resolved = ReplyVoicePicker.resolve(
+            requested: requested, language: languageCode(), in: voiceCatalog.installedVoices(), pocket: pocket)
+        if resolved.reason == "model_not_ready" { pocketStore()?.prepare() }
+        let pocketReads = resolved.voice.map { PocketVoice.isPocket($0.id) } == true
+        return (pocketReads ? pocketSpeaker() : speaker, resolved.voice, resolved.fellBack, resolved.reason)
+    }
+
+    /// Routes a speaker's events to the page and keeps the stream in step.
+    @MainActor
+    private func wire(_ reader: any VoiceSpeaking) {
+        reader.onEvent = { [weak self] event in
+            guard let self else { return }
+            self.emit("speech", event.data)
+            guard event.state == .finished || event.state == .stopped else { return }
+            if self.stream?.id == event.id {
+                self.stream = nil
+                if event.state == .stopped { self.droppedID = event.id }
+            }
+            self.releaseSessionIfIdle()
+        }
+    }
+
+    /// Makes `reader` the one active speaker: the other stops (`replaced`).
+    @MainActor
+    private func activate(_ reader: any VoiceSpeaking) {
+        if reader !== speaker { speaker.stop(reason: "replaced") }
+        if let pocketInstance, reader !== pocketInstance { pocketInstance.stop(reason: "replaced") }
+        wire(reader)
     }
 
     @MainActor
@@ -305,7 +407,7 @@ public class BurrowVoicePlugin: CAPPlugin, CAPBridgedPlugin {
 
     @MainActor
     func startTurn() async -> [String: Any] {
-        speaker.stop(reason: "mic_opened")
+        stopSpeakers(reason: "mic_opened")
         guard turn == .idle else { return refusal("busy") }
         if callState().hasCall { return refusal("mic_in_use") }
         turn = .starting
@@ -419,16 +521,78 @@ public class BurrowVoicePlugin: CAPPlugin, CAPBridgedPlugin {
     /// voices for the current language, best first (premium, enhanced,
     /// default); `default` is the first, or null when there is none.
     @objc func voices(_ call: CAPPluginCall) {
-        call.resolve(voiceList())
+        Task { @MainActor in call.resolve(self.voiceList()) }
     }
 
+    /// The Pocket TTS row, first, only where the gate allows it and the
+    /// language is English, with `model {state, received, total}`. `default`
+    /// stays the best SYSTEM voice: picking Pocket starts a 437 MB download.
+    @MainActor
     func voiceList() -> [String: Any] {
         let voices = ReplyVoicePicker.voices(for: languageCode(), in: voiceCatalog.installedVoices())
-        return ["voices": voices.map(\.data), "default": voices.first?.id ?? NSNull()]
+        var rows = voices.map(\.data)
+        if PocketVoice.speaks(languageCode()), let store = pocketStore() {
+            var row = PocketVoice.entry.data
+            let model = store.data
+            row["model"] = ["state": model["state"] as Any, "received": model["received"] as Any, "total": model["total"] as Any]
+            rows.insert(row, at: 0)
+        }
+        return ["voices": rows, "default": voices.first?.id ?? NSNull()]
+    }
+
+    /// `{id, seq, text, final, voice?}`: one sentence of a streamed reply
+    /// (task 01a20fdd stage 2). The first part opens the reply and resolves
+    /// `{spoken, voice, fellBack, reason}` as `speak` does; later parts of the
+    /// same id resolve `{spoken: true}`. Parts of a reply that was stopped (the
+    /// mic, a route loss) resolve `{spoken: false, reason: "stopped"}` and are
+    /// never spoken. The same refusals as `speak`.
+    @objc func speakPart(_ call: CAPPluginCall) {
+        guard let id = call.getString("id"), !id.isEmpty, let text = call.getString("text") else {
+            call.reject("id and text are required")
+            return
+        }
+        let seq = call.getInt("seq") ?? 0
+        let final = call.getBool("final") ?? false
+        let voice = call.getString("voice")
+        Task { @MainActor in call.resolve(self.speakPart(id: id, seq: seq, text: text, final: final, voice: voice)) }
     }
 
     @MainActor
-    func speakReply(id: String, text: String, voice requested: String? = nil) -> [String: Any] {
+    func speakPart(id: String, seq: Int, text: String, final: Bool, voice requested: String? = nil) -> [String: Any] {
+        if let stream, stream.id == id {
+            stream.speaker.append(id: id, seq: seq, text: text)
+            if final { stream.speaker.finish(id: id) }
+            return ["spoken": true]
+        }
+        if droppedID == id { return ["spoken": false, "reason": "stopped"] }
+        if let refused = refuseReply(id) { return refused }
+        let chosen = choose(requested)
+        activate(chosen.speaker)
+        stream = (id, chosen.speaker)
+        chosen.speaker.begin(id: id, voiceID: chosen.voice?.id)
+        chosen.speaker.append(id: id, seq: seq, text: text)
+        if final { chosen.speaker.finish(id: id) }
+        return ["spoken": true, "voice": chosen.voice?.id ?? NSNull(), "fellBack": chosen.fellBack, "reason": chosen.reason ?? NSNull()]
+    }
+
+    /// Starts the Pocket TTS download (and load). Resolves the `model` data;
+    /// `{state: "absent", reason}` where the gate says no.
+    @objc func prepareModel(_ call: CAPPluginCall) {
+        Task { @MainActor in call.resolve(self.prepareModel()) }
+    }
+
+    @MainActor
+    func prepareModel() -> [String: Any] {
+        guard let store = pocketStore() else {
+            return ["state": "absent", "received": 0, "total": 0, "reason": pocketGate().reason ?? NSNull()]
+        }
+        store.prepare()
+        return store.data
+    }
+
+    /// The refusals shared by `speak` and `speakPart`; nil when the reply may play.
+    @MainActor
+    private func refuseReply(_ id: String) -> [String: Any]? {
         if turn != .idle { return ["spoken": false, "reason": "listening"] }
         if callState().hasCall { return unheard(id, "mic_in_use") }
         do {
@@ -440,15 +604,19 @@ public class BurrowVoicePlugin: CAPPlugin, CAPBridgedPlugin {
             releaseSessionIfIdle()
             return unheard(id, "no_audio_route")
         }
-        speaker.onEvent = { [weak self] event in
-            guard let self else { return }
-            self.emit("speech", event.data)
-            if event.state == .finished || event.state == .stopped { self.releaseSessionIfIdle() }
-        }
-        let (voice, fellBack) = ReplyVoicePicker.resolve(
-            requested: requested, language: languageCode(), in: voiceCatalog.installedVoices())
-        speaker.speak(id: id, text: text, voiceID: voice?.id)
-        return ["spoken": true, "voice": voice?.id ?? NSNull(), "fellBack": fellBack]
+        return nil
+    }
+
+    @MainActor
+    func speakReply(id: String, text: String, voice requested: String? = nil) -> [String: Any] {
+        if let refused = refuseReply(id) { return refused }
+        let chosen = choose(requested)
+        activate(chosen.speaker)
+        stream = nil
+        chosen.speaker.speak(id: id, text: text, voiceID: chosen.voice?.id)
+        var result: [String: Any] = ["spoken": true, "voice": chosen.voice?.id ?? NSNull(), "fellBack": chosen.fellBack]
+        if let reason = chosen.reason { result["reason"] = reason }
+        return result
     }
 
     @MainActor
@@ -461,7 +629,7 @@ public class BurrowVoicePlugin: CAPPlugin, CAPBridgedPlugin {
     @objc func stopSpeaking(_ call: CAPPluginCall) {
         let reason = call.getString("reason") ?? "stopped"
         Task { @MainActor in
-            self.speaker.stop(reason: reason)
+            self.stopSpeakers(reason: reason)
             self.releaseSessionIfIdle()
             call.resolve()
         }

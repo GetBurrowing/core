@@ -4,15 +4,16 @@ import AVFoundation
 /// Only voices already on the phone are listed; nothing is downloaded and
 /// no voice is bundled.
 struct ReplyVoice: Equatable {
-    /// Best first: premium, then enhanced, then default.
+    /// Best first: neural (Pocket TTS, task 01a20fdd), premium, enhanced, default.
     enum Quality: String, CaseIterable {
-        case premium, enhanced, `default`
+        case neural, premium, enhanced, `default`
 
         var rank: Int {
             switch self {
-            case .premium: 0
-            case .enhanced: 1
-            case .default: 2
+            case .neural: 0
+            case .premium: 1
+            case .enhanced: 2
+            case .default: 3
             }
         }
     }
@@ -85,7 +86,43 @@ enum ReplyVoicePicker {
         return (best(for: language, in: all), false)
     }
 
-    private static func languagePart(_ language: String) -> String {
+    /// Picking Pocket TTS (task 01a20fdd stage 2): it reads the reply only
+    /// when its model is `ready`. Otherwise the best system voice reads it,
+    /// with `fellBack: true` and `reason` `model_not_ready` (downloading,
+    /// compiling, failed or absent) or `unsupported` (the gate said no). Any
+    /// other request resolves as `resolve(requested:language:in:)`.
+    static func resolve(requested: String?, language: String, in all: [ReplyVoice], pocket: PocketVoice.Availability) -> (
+        voice: ReplyVoice?, fellBack: Bool, reason: String?
+    ) {
+        guard let requested, PocketVoice.isPocket(requested) else {
+            let (voice, fellBack) = resolve(requested: requested, language: language, in: all)
+            return (voice, fellBack, nil)
+        }
+        switch pocket {
+        case .ready: return (PocketVoice.entry, false, nil)
+        case .notReady: return (best(for: language, in: all), true, "model_not_ready")
+        case .unsupported: return (best(for: language, in: all), true, "unsupported")
+        }
+    }
+
+    static func languagePart(_ language: String) -> String {
         String(language.split(whereSeparator: { $0 == "-" || $0 == "_" }).first ?? "").lowercased()
     }
+}
+
+/// The Pocket TTS row in the voice list (task 01a20fdd stage 2): one built-in
+/// English voice, listed only where `PocketTTSSupport` says supported.
+enum PocketVoice {
+    enum Availability: Equatable {
+        case unsupported, notReady, ready
+    }
+
+    static let prefix = "pocket-tts:"
+    static let id = prefix + PocketTTSManifest.voice
+    static let entry = ReplyVoice(id: id, name: "Pocket TTS (\(PocketTTSManifest.voice.capitalized))", quality: .neural, language: "en")
+
+    static func isPocket(_ id: String) -> Bool { id.hasPrefix(prefix) }
+
+    /// English only: the pinned checkpoint is `languages/english`.
+    static func speaks(_ language: String) -> Bool { ReplyVoicePicker.languagePart(language) == "en" }
 }

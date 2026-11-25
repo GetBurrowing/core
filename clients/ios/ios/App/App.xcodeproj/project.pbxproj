@@ -91,6 +91,7 @@
 		3FB3C8C0634A765EE81D042E /* Assets.xcassets in Resources */ = {isa = PBXBuildFile; fileRef = 76989E05CECAD7B8B3C424A7 /* Assets.xcassets */; };
 		4158976107878748A217FD70 /* ChatGeometryProbe.swift in Sources */ = {isa = PBXBuildFile; fileRef = BA31D8C7EDC7E1712A3E83DB /* ChatGeometryProbe.swift */; };
 		417E34D941AFD0DAC756386F /* SlabState.swift in Sources */ = {isa = PBXBuildFile; fileRef = FCEC8A0CD2D3DB02BB85718E /* SlabState.swift */; };
+		44616075A2E31351FAB43ECF /* PocketModelStore.swift in Sources */ = {isa = PBXBuildFile; fileRef = 8984C1D1E418F71D69749959 /* PocketModelStore.swift */; };
 		4477267F5890DCD183087CBB /* Colors.xcassets in Resources */ = {isa = PBXBuildFile; fileRef = F20AEF676C004D2C37F1D06C /* Colors.xcassets */; };
 		45434EE5E79FD1E5AF91F655 /* InstallUnreadStore.swift in Sources */ = {isa = PBXBuildFile; fileRef = 1510D02E40E90C314AC0E673 /* InstallUnreadStore.swift */; };
 		4572C321FE62687D9C3731AA /* PersonResolver.swift in Sources */ = {isa = PBXBuildFile; fileRef = DB4116C761A2BFBE38EA3105 /* PersonResolver.swift */; };
@@ -117,6 +118,7 @@
 		5E32B2E26CA396F9DF1C6B85 /* ShortcutParameterRefresh.swift in Sources */ = {isa = PBXBuildFile; fileRef = EE185BEDD232F08332626453 /* ShortcutParameterRefresh.swift */; };
 		5EC8BDB64E56CE383869D28A /* WebLoadRecovery.swift in Sources */ = {isa = PBXBuildFile; fileRef = 47771A89DA1A63CA80A944F9 /* WebLoadRecovery.swift */; };
 		5EDFAF499101B4164281B7B6 /* PushSeal.swift in Sources */ = {isa = PBXBuildFile; fileRef = BAF90B5FD6EA88A0B9F3A8CC /* PushSeal.swift */; };
+		5F0DD4B0202985397977C0C0 /* PocketSpeaker.swift in Sources */ = {isa = PBXBuildFile; fileRef = 4640CC79602B90E60B6F7EBD /* PocketSpeaker.swift */; };
 		609CE9F8CD127CCA4AF1F3C6 /* LargeUpload.swift in Sources */ = {isa = PBXBuildFile; fileRef = 1B82BD29922E39E43FDDB8AA /* LargeUpload.swift */; };
 		61A310E4B77A61760A56A57A /* InstallUnreadStore.swift in Sources */ = {isa = PBXBuildFile; fileRef = 1510D02E40E90C314AC0E673 /* InstallUnreadStore.swift */; };
 		61F290A0D40F4B00DA94B1C0 /* IntentActions.swift in Sources */ = {isa = PBXBuildFile; fileRef = 50E3C6960995294AC8D0D25F /* IntentActions.swift */; };
@@ -237,6 +239,7 @@
 		BE77ADAF5562EBAD2C628AED /* NativeTabBar.swift in Sources */ = {isa = PBXBuildFile; fileRef = 09A62D1DB5B3E8E89535EF28 /* NativeTabBar.swift */; };
 		BF8199311F69A1DBE7F12E0D /* InCallModel.swift in Sources */ = {isa = PBXBuildFile; fileRef = 53A302BFBC4A79FDF762850D /* InCallModel.swift */; };
 		C017F0CBD0F66A5A22EBFAAF /* MeetingAPITests.swift in Sources */ = {isa = PBXBuildFile; fileRef = DBCBC8BD688D82DFA20B569B /* MeetingAPITests.swift */; };
+		C282385854DEC3FBA0B9FC64 /* PocketSpeakerTests.swift in Sources */ = {isa = PBXBuildFile; fileRef = 0425DB57870F34158EDB5FDD /* PocketSpeakerTests.swift */; };
 		C33C760B72CD050A32E45EF8 /* PersonalIndex.swift in Sources */ = {isa = PBXBuildFile; fileRef = BA623D3963F4BCFBB477D85D /* PersonalIndex.swift */; };
 		C35F1C4173E39FB2C4B8DE1F /* PublicSans-Variable.ttf in Resources */ = {isa = PBXBuildFile; fileRef = 39697D42725EF18B41A8339A /* PublicSans-Variable.ttf */; };
 		C444F6AD625727E7A9EBD770 /* Entities.swift in Sources */ = {isa = PBXBuildFile; fileRef = 0FD909F861CBD9239A49DB52 /* Entities.swift */; };
@@ -399,6 +402,7 @@
 		019DD0FC774F2201544F8C56 /* ShortcutParameterRefreshTests.swift */ = {isa = PBXFileReference; lastKnownFileType = sourcecode.swift; path = ShortcutParameterRefreshTests.swift; sourceTree = "<group>"; };
 		02587FC2025F6C12C4038D77 /* ShareSheetModel.swift */ = {isa = PBXFileReference; lastKnownFileType = sourcecode.swift; path = ShareSheetModel.swift; sourceTree = "<group>"; };
 		032C94FDF2044C01B4E9FC63 /* WidgetCountsRefresher.swift */ = {isa = PBXFileReference; lastKnownFileType = sourcecode.swift; path = WidgetCountsRefresher.swift; sourceTree = "<group>"; };
+		0425DB57870F34158EDB5FDD /* PocketSpeakerTests.swift */ = {isa = PBXFileReference; lastKnownFileType = sourcecode.swift; path = PocketSpeakerTests.swift; sourceTree = "<group>"; };
 		0505CA292D56D7C52E773DBD /* StartCallSystemTests.swift */ = {isa = PBXFileReference; lastKnownFileType = sourcecode.swift; path = StartCallSystemTests.swift; sourceTree = "<group>"; };
 		0538A292E8627337FC97DC57 /* ApprovalsWidgetModel.swift */ = {isa = PBXFileReference; lastKnownFileType = sourcecode.swift; path = ApprovalsWidgetModel.swift; sourceTree = "<group>"; };
 		0606F178D51979FE010E5860 /* NativeTabBarTests.swift */ = {isa = PBXFileReference; lastKnownFileType = sourcecode.swift; path = NativeTabBarTests.swift; sourceTree = "<group>"; };
@@ -440,6 +444,7 @@
 		3C3BB181BE583EE84A0660F9 /* InCallView.swift */ = {isa = PBXFileReference; lastKnownFileType = sourcecode.swift; path = InCallView.swift; sourceTree = "<group>"; };
 		3E28F3CFC25B7856E87ACF6E /* BurrowShortcuts.swift */ = {isa = PBXFileReference; lastKnownFileType = sourcecode.swift; path = BurrowShortcuts.swift; sourceTree = "<group>"; };
 		3E69F987B892561A06F26BE1 /* InstallStore.swift */ = {isa = PBXFileReference; lastKnownFileType = sourcecode.swift; path = InstallStore.swift; sourceTree = "<group>"; };
+		4640CC79602B90E60B6F7EBD /* PocketSpeaker.swift */ = {isa = PBXFileReference; lastKnownFileType = sourcecode.swift; path = PocketSpeaker.swift; sourceTree = "<group>"; };
 		47771A89DA1A63CA80A944F9 /* WebLoadRecovery.swift */ = {isa = PBXFileReference; lastKnownFileType = sourcecode.swift; path = WebLoadRecovery.swift; sourceTree = "<group>"; };
 		48421D60D2C81BD6F37E64D2 /* Theme.swift */ = {isa = PBXFileReference; lastKnownFileType = sourcecode.swift; path = Theme.swift; sourceTree = "<group>"; };
 		49D88A349FD70A9153DD2C03 /* App.app */ = {isa = PBXFileReference; includeInIndex = 0; lastKnownFileType = wrapper.application; path = App.app; sourceTree = BUILT_PRODUCTS_DIR; };
@@ -486,6 +491,7 @@
 		84AD5BD5C2783C3C5B5230A4 /* ShareExtension.appex */ = {isa = PBXFileReference; includeInIndex = 0; lastKnownFileType = "wrapper.app-extension"; path = ShareExtension.appex; sourceTree = BUILT_PRODUCTS_DIR; };
 		8776CD2CC1249496A6F18C86 /* config.xml */ = {isa = PBXFileReference; lastKnownFileType = text.xml; path = config.xml; sourceTree = "<group>"; };
 		886FF05F9CF153F76DC13237 /* PrivacyUsageDescriptionTests.swift */ = {isa = PBXFileReference; lastKnownFileType = sourcecode.swift; path = PrivacyUsageDescriptionTests.swift; sourceTree = "<group>"; };
+		8984C1D1E418F71D69749959 /* PocketModelStore.swift */ = {isa = PBXFileReference; lastKnownFileType = sourcecode.swift; path = PocketModelStore.swift; sourceTree = "<group>"; };
 		93C3857D145C61C1288B68E9 /* SentencePiece.swift */ = {isa = PBXFileReference; lastKnownFileType = sourcecode.swift; path = SentencePiece.swift; sourceTree = "<group>"; };
 		9420949282AB92AA28A975D3 /* AppDelegate.swift */ = {isa = PBXFileReference; lastKnownFileType = sourcecode.swift; path = AppDelegate.swift; sourceTree = "<group>"; };
 		945DADE27ADE0DECFD3B9EEF /* WidgetPendingApprovals.swift */ = {isa = PBXFileReference; lastKnownFileType = sourcecode.swift; path = WidgetPendingApprovals.swift; sourceTree = "<group>"; };
@@ -637,6 +643,7 @@
 				CFC7C5DC2BC35F7484C1EF57 /* PersonalContextTests.swift */,
 				A7996FE25C68D64011A453A6 /* PersonalIndexTests.swift */,
 				E146E1C002664F63C25DB344 /* PKCETests.swift */,
+				0425DB57870F34158EDB5FDD /* PocketSpeakerTests.swift */,
 				390219D2A118FD3CB5427AF9 /* PocketTTSSupportTests.swift */,
 				886FF05F9CF153F76DC13237 /* PrivacyUsageDescriptionTests.swift */,
 				179CD654AFC5317FC6FC6A81 /* PushRelayTests.swift */,
@@ -822,6 +829,8 @@
 			isa = PBXGroup;
 			children = (
 				E65E6C40EF58532EF91E0E90 /* OnDeviceTranscriber.swift */,
+				8984C1D1E418F71D69749959 /* PocketModelStore.swift */,
+				4640CC79602B90E60B6F7EBD /* PocketSpeaker.swift */,
 				E9FB2536BDF75AAA2A289BE1 /* PocketTTSProbe.swift */,
 				F16C1246CD18F5EC8E3093D1 /* PocketTTSSupport.swift */,
 				FEC44957C483DDE5854EA3E6 /* ReplySpeaker.swift */,
@@ -1545,6 +1554,8 @@
 				3EB2CCF2F2FFDCD428486A52 /* OnDeviceTranscriber.swift in Sources */,
 				F37A06BC602C57A38F2821AD /* PersonResolver.swift in Sources */,
 				731ED95C0F636C7947E4DB4C /* PersonalIndex.swift in Sources */,
+				44616075A2E31351FAB43ECF /* PocketModelStore.swift in Sources */,
+				5F0DD4B0202985397977C0C0 /* PocketSpeaker.swift in Sources */,
 				DD8574F807CC23D0B17CFA9C /* PocketTTSProbe.swift in Sources */,
 				FD0815407B5763E60BC92CC5 /* PocketTTSSupport.swift in Sources */,
 				122F95274D5C367FD4177E9C /* PushContentPreparer.swift in Sources */,
@@ -1618,6 +1629,7 @@
 				E06A3A001D6B5BA9967414CC /* PKCETests.swift in Sources */,
 				3236F91765FD8551EDDF94A0 /* PersonalContextTests.swift in Sources */,
 				990449CE17F8F7A44D1F75E3 /* PersonalIndexTests.swift in Sources */,
+				C282385854DEC3FBA0B9FC64 /* PocketSpeakerTests.swift in Sources */,
 				29C27A9F52A94BC5467AE598 /* PocketTTSSupportTests.swift in Sources */,
 				E148CAEBE85295927118EFE4 /* PrivacyUsageDescriptionTests.swift in Sources */,
 				54EAE98369A7A86E9879CC50 /* PushRelayTests.swift in Sources */,
