@@ -84,7 +84,9 @@ defmodule Platform.Meetings.OnDeviceVoiceTest do
                    2_000
 
     # Routing first (above), then the row itself.
-    assert message.content == "what is left on the list"
+    # The words said, then the streaming instruction (task 01a20fdd stage 3).
+    assert message.content == "what is left on the list\n\n" <> OnDeviceVoice.instruction()
+    assert OnDeviceVoice.user_text(message.content) == "what is left on the list"
     assert message.content_type == "text"
     assert message.space_id == voice.space_id
     assert message.participant_id == voice.user_participant_id
@@ -146,6 +148,92 @@ defmodule Platform.Meetings.OnDeviceVoiceTest do
       test "#{inspect(input)}" do
         assert OnDeviceVoice.speakable_text(unquote(input)) == unquote(expected)
       end
+    end
+  end
+
+  # ── streamed sentences (task 01a20fdd stage 3) ──────────────────────
+
+  describe "speakable_sentences/3" do
+    test "only complete sentences; the unfinished tail waits" do
+      assert OnDeviceVoice.speakable_sentences(0, "First one. Second", false) ==
+               {["First one."], 1}
+
+      assert OnDeviceVoice.speakable_sentences(0, "First one.", false) == {[], 0}
+      assert OnDeviceVoice.speakable_sentences(0, "First one. ", false) == {["First one."], 1}
+
+      assert OnDeviceVoice.speakable_sentences(0, "Is it? Yes! Ok", false) ==
+               {["Is it?", "Yes!"], 2}
+    end
+
+    test "cumulative text: only the sentences past `spoken`" do
+      text = "One. Two. Three"
+      assert OnDeviceVoice.speakable_sentences(0, text, false) == {["One.", "Two."], 2}
+      assert OnDeviceVoice.speakable_sentences(2, text, false) == {[], 2}
+
+      assert OnDeviceVoice.speakable_sentences(2, text <> " and four. ", false) ==
+               {["Three and four."], 3}
+    end
+
+    test "abbreviations and initials are held back, a decimal never splits" do
+      assert OnDeviceVoice.speakable_sentences(0, "Use a tool, e.g. a hammer. Next", false) ==
+               {["Use a tool, e.g. a hammer."], 1}
+
+      assert OnDeviceVoice.speakable_sentences(0, "Call Dr. Lee and Mr. Hale. Then", false) ==
+               {["Call Dr. Lee and Mr. Hale."], 1}
+
+      assert OnDeviceVoice.speakable_sentences(0, "It costs 3.5 dollars. Ok", false) ==
+               {["It costs 3.5 dollars."], 1}
+
+      assert OnDeviceVoice.speakable_sentences(0, "Ask J. Smith first. Then", false) ==
+               {["Ask J. Smith first."], 1}
+
+      assert OnDeviceVoice.speakable_sentences(0, "So do I. Next", false) == {["So do I."], 1}
+    end
+
+    test "a newline ends a sentence, and markdown is stripped" do
+      text = "**Three items:** the deck\n- one\n- two"
+
+      assert OnDeviceVoice.speakable_sentences(0, text, false) ==
+               {["Three items: the deck", "one"], 2}
+
+      assert OnDeviceVoice.speakable_sentences(0, "Use `mix test`. **Bold", false) ==
+               {["Use mix test."], 1}
+
+      assert OnDeviceVoice.speakable_sentences(0, "```\n---\nAfter.\n", false) == {["After."], 1}
+    end
+
+    test "final flushes the tail; an empty final speaks nothing" do
+      assert OnDeviceVoice.speakable_sentences(1, "One. And the rest", true) ==
+               {["And the rest"], 2}
+
+      assert OnDeviceVoice.speakable_sentences(0, "", true) == {[], 0}
+      assert OnDeviceVoice.speakable_sentences(0, nil, true) == {[], 0}
+      assert OnDeviceVoice.speakable_sentences(3, "Short.", true) == {[], 3}
+    end
+  end
+
+  describe "agent_chunk?/2" do
+    test "the agent's chunk in the conn's DM after a turn; nothing else", %{voice: voice} do
+      chunk = %{
+        space_id: voice.space_id,
+        chunk_id: "c1",
+        text: "Hi",
+        done: false,
+        participant_id: voice.agent_participant_id
+      }
+
+      refute OnDeviceVoice.agent_chunk?(voice, chunk), "no turn yet"
+      {:ok, voice, _turn} = OnDeviceVoice.send_turn(voice, "hello", "ct-chunk")
+      assert OnDeviceVoice.agent_chunk?(voice, chunk)
+
+      refute OnDeviceVoice.agent_chunk?(voice, %{
+               chunk
+               | participant_id: voice.user_participant_id
+             })
+
+      refute OnDeviceVoice.agent_chunk?(voice, %{chunk | space_id: Ecto.UUID.generate()})
+      refute OnDeviceVoice.agent_chunk?(voice, %{chunk | text: nil})
+      refute OnDeviceVoice.agent_chunk?(nil, chunk)
     end
   end
 

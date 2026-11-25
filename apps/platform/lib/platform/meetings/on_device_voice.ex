@@ -22,12 +22,30 @@ defmodule Platform.Meetings.OnDeviceVoice do
 
   Known prototype limit: a turn goes to the DM even when the Voice tab has a
   context set.
+
+  ## Streamed replies (task 01a20fdd stage 3)
+
+  Speech can start before the reply is posted only if the agent streams it
+  with `reply_chunk`. Core broadcasts `{:agent_reply_chunk, _}` solely from
+  `PlatformWeb.RuntimeChannel`'s `reply_chunk`, and the channel plugins tell
+  agents to stream only long replies, so a short spoken answer usually
+  arrives as one posted message. Every on-device turn therefore carries
+  `instruction/0` after a blank line, as `Platform.Meetings.VoiceAsk` does.
+  The agent and the DM see it; the Voice transcript shows only the words the
+  person said (`user_text/1`). `speakable_sentences/3` cuts the cumulative
+  chunk text into the sentences the phone may speak.
   """
 
   alias Platform.Agents.Agent
   alias Platform.Chat
   alias Platform.Chat.Message
   alias Platform.Chat.SpaceAccess
+
+  @instruction "(Spoken on an iPhone: answer in short spoken-style sentences, plain text, no markdown. Stream it with burrow_reply_chunk, or suite_reply_chunk on a channel plugin older than 0.5.0.)"
+
+  # Words a period ends without ending the sentence (compared lowercased,
+  # without the final period).
+  @abbreviations ~w(e.g i.e etc vs mr mrs ms dr prof sr jr st no approx dept est inc ltd co fig u.s a.m p.m)
 
   @type conn :: %{
           space_id: binary(),
@@ -77,7 +95,7 @@ defmodule Platform.Meetings.OnDeviceVoice do
           space_id: conn.space_id,
           participant_id: conn.user_participant_id,
           content_type: "text",
-          content: content,
+          content: content <> "\n\n" <> @instruction,
           metadata: %{"input" => "on_device", "client_turn_id" => client_turn_id}
         }
 
@@ -85,6 +103,24 @@ defmodule Platform.Meetings.OnDeviceVoice do
           {:ok, %{conn | turn_at: message.inserted_at}, message}
         end
     end
+  end
+
+  @doc "The line appended to every on-device turn: spoken-style sentences, streamed."
+  @spec instruction() :: String.t()
+  def instruction, do: @instruction
+
+  @doc """
+  The words the person said in a posted on-device turn: its content without
+  the trailing `instruction/0`.
+
+      iex> Platform.Meetings.OnDeviceVoice.user_text("Hi there\n\n" <> Platform.Meetings.OnDeviceVoice.instruction())
+      "Hi there"
+  """
+  @spec user_text(String.t() | nil) :: String.t()
+  def user_text(nil), do: ""
+
+  def user_text(content) when is_binary(content) do
+    content |> String.replace_suffix(@instruction, "") |> String.trim()
   end
 
   @doc """
@@ -123,6 +159,104 @@ defmodule Platform.Meetings.OnDeviceVoice do
   end
 
   def agent_reply?(_conn, _message), do: false
+
+  @doc """
+  Whether `chunk` (a `{:agent_reply_chunk, chunk}` payload) is part of the
+  agent's reply to the conn's last turn: in the conn's DM, from the agent's
+  participant, with text, once a turn has been sent. Chunks carry no time, so
+  which chunk id is the answer is the caller's rule (the first new id after
+  the turn, as `VoiceAsk.Accumulator` takes it).
+  """
+  @spec agent_chunk?(conn() | nil, map()) :: boolean()
+  def agent_chunk?(%{turn_at: %DateTime{}} = conn, %{} = chunk) do
+    Map.get(chunk, :space_id) == conn.space_id and
+      Map.get(chunk, :participant_id) == conn.agent_participant_id and
+      is_binary(Map.get(chunk, :chunk_id)) and is_binary(Map.get(chunk, :text))
+  end
+
+  def agent_chunk?(_conn, _chunk), do: false
+
+  @doc """
+  The sentences of a streamed reply that may be spoken now, past the
+  `spoken` already sent, and the new count.
+
+  `text` is the CUMULATIVE reply so far, markdown and all
+  (`speakable_text/1` is applied line by line). A sentence is complete when
+  its terminal `.`, `?` or `!` (plus any closing quote or bracket) is
+  followed by whitespace, or when its line ends with a newline. An unfinished
+  tail waits for more text, or for `final?`, which flushes it. A period after
+  an abbreviation ("e.g.", "Dr.") or a capital initial ("J.", never "I.") does not
+  end a sentence, and a decimal ("3.5") never has whitespace after its point.
+
+      iex> Platform.Meetings.OnDeviceVoice.speakable_sentences(0, "Sure. Dr. Lee has 3.5 hours, e.g. today. And", false)
+      {["Sure.", "Dr. Lee has 3.5 hours, e.g. today."], 2}
+
+      iex> Platform.Meetings.OnDeviceVoice.speakable_sentences(2, "Sure. Dr. Lee has 3.5 hours, e.g. today. And more", true)
+      {["And more"], 3}
+  """
+  @spec speakable_sentences(non_neg_integer(), String.t() | nil, boolean()) ::
+          {[String.t()], non_neg_integer()}
+  def speakable_sentences(spoken, text, final?) when is_integer(spoken) and spoken >= 0 do
+    all = complete_sentences(text || "", final?)
+    {Enum.drop(all, spoken), max(length(all), spoken)}
+  end
+
+  defp complete_sentences(text, final?) do
+    lines = String.split(text, ~r/\R/u)
+    {done, [last]} = Enum.split(lines, -1)
+
+    closed = Enum.flat_map(done, &(&1 |> speakable_line() |> split_sentences(true)))
+    open = last |> speakable_line() |> split_sentences(final? or ends_a_sentence?(last))
+    closed ++ open
+  end
+
+  # One raw line as speech, or "" for a fence or a rule.
+  defp speakable_line(line) do
+    if fence_or_rule?(line), do: "", else: line |> speakable_text() |> drop_stray_marks()
+  end
+
+  # An unclosed `**` or backtick in a partial chunk is never read aloud.
+  defp drop_stray_marks(text), do: text |> String.replace(~r/[*`]|~~/u, "") |> String.trim()
+
+  defp ends_a_sentence?(raw), do: Regex.match?(~r/[.!?]+["'”’)\]*_]*\s+$/u, raw)
+
+  # Sentences of one line. `complete?`: the line's last piece is a sentence
+  # too (its line ended); otherwise it is the held-back tail.
+  defp split_sentences("", _complete?), do: []
+
+  defp split_sentences(line, complete?) do
+    {sentences, tail} =
+      ~r/[.!?]+["'”’)\]]*(?=\s)/u
+      |> Regex.scan(line, return: :index)
+      |> Enum.reduce({[], 0}, fn [{at, len}], {acc, from} ->
+        stop = at + len
+        piece = binary_part(line, from, stop - from)
+
+        if abbreviation?(piece),
+          do: {acc, from},
+          else: {[String.trim(piece) | acc], stop}
+      end)
+      |> then(fn {acc, from} ->
+        {Enum.reverse(acc), binary_part(line, from, byte_size(line) - from)}
+      end)
+
+    tail = String.trim(tail)
+    if complete? and tail != "", do: sentences ++ [tail], else: sentences
+  end
+
+  defp abbreviation?(piece) do
+    word =
+      piece
+      |> String.trim_trailing()
+      |> String.replace(~r/["'”’)\]]+$/u, "")
+      |> String.split(~r/\s+/u)
+      |> List.last()
+      |> Kernel.||("")
+
+    String.ends_with?(word, ".") and
+      (String.downcase(String.trim_trailing(word, ".")) in @abbreviations or
+         Regex.match?(~r/^[A-HJ-Z]\.$/u, word))
+  end
 
   @doc """
   The reply as the system voice should read it: markdown removed so the

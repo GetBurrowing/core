@@ -27,7 +27,12 @@ import {
 // "voice", like the partner and context VoiceContext remembers).
 export const VOICE_NAMESPACE = "voice"
 export const REPLY_VOICE_KEY = "burrow-voice-reply-voice"
-const QUALITIES = ["premium", "enhanced", "default"]
+const QUALITIES = ["neural", "premium", "enhanced", "default"]
+// Pocket TTS (task 01a20fdd stage 3): its voice ids, and the model states
+// the plugin reports while it downloads.
+const POCKET_PREFIX = "pocket-tts:"
+const MODEL_STATES = ["absent", "downloading", "compiling", "ready", "failed"]
+const isPocket = (id) => typeof id === "string" && id.startsWith(POCKET_PREFIX)
 
 const VoiceTabNative = {
   // On the device only: while held, the pointer leaving the mic or a
@@ -124,6 +129,11 @@ const VoiceTabNative = {
       return leaveRoom.call(this)
     }
     this.handleEvent("voice_native_speak", (p) => this._nativeSpeak(p))
+    this.handleEvent("voice_native_speak_part", (p) => this._nativeSpeakPart(p))
+    this.handleEvent("voice_native_stop_speaking", () => this._nativeCall("stopSpeaking", { reason: "diverged" }))
+    this._ttfs = new Map()
+    this._parts = new Map()
+    this._modelMark = null
     this.handleEvent("voice_native_stop", () => this._nativeStop())
     this.handleEvent("voice_native_voice", (p) => this._pickVoice(p && p.id))
     this._loadVoices()
@@ -183,8 +193,10 @@ const VoiceTabNative = {
     on("ended", (d) => this._nativeEnded(d))
     on("speech", (d) => {
       if (!d || typeof d.id !== "string" || typeof d.state !== "string") return
+      this._ttfsSpoke(d.id, d.state)
       this.pushEvent("voice_native_speaking", { id: d.id, state: d.state, reason: d.reason || null })
     })
+    on("model", (d) => this._nativeModel(d))
     on("route", (d) => {
       this._nativeRoute = (d && d.label) || null
       this.pushEvent("voice_native_route", { label: this._nativeRoute })
@@ -333,6 +345,7 @@ const VoiceTabNative = {
 
   _nativeSpeak(p) {
     if (!this._native || !p || typeof p.id !== "string" || typeof p.text !== "string") return
+    this._ttfsMark(p.id)
     const args = { id: p.id, text: p.text }
     if (this._voice) args.voice = this._voice
     try {
@@ -342,6 +355,58 @@ const VoiceTabNative = {
     } catch (_e) {
       // the plugin refused; nothing to undo
     }
+  },
+
+  // One sentence of a streamed reply (task 01a20fdd stage 3), read in the
+  // remembered voice. A plugin without speakPart (an older app build) gets
+  // the parts joined into one speak when the last one arrives.
+  _nativeSpeakPart(p) {
+    if (!this._native || !p || typeof p.id !== "string" || typeof p.text !== "string") return
+    const seq = Number.isInteger(p.seq) ? p.seq : 0
+    const final = p.final === true
+    if (typeof this._native.speakPart !== "function") {
+      const held = (this._parts.get(p.id) || []).concat(p.text ? [p.text] : [])
+      if (!final) return void this._parts.set(p.id, held)
+      this._parts.delete(p.id)
+      return this._nativeSpeak({ id: p.id, text: held.join(" ") })
+    }
+    if (seq === 0) this._ttfsMark(p.id)
+    const args = { id: p.id, seq, text: p.text, final }
+    if (this._voice) args.voice = this._voice
+    try {
+      Promise.resolve(this._native.speakPart(args))
+        .then((r) => r && r.fellBack === true && seq === 0 && this._loadVoices(true))
+        .catch(() => {})
+    } catch (_e) {
+      // the plugin refused; nothing to undo
+    }
+  },
+
+  // Time to first sound, test builds only: from the reply's first text
+  // reaching the device to its speech starting. Only the id and the
+  // milliseconds leave the device.
+  _ttfsMark(id) {
+    if (this._ttfs && !this._ttfs.has(id)) this._ttfs.set(id, now())
+  },
+
+  _ttfsSpoke(id, state) {
+    if (!this._ttfs || !this._ttfs.has(id)) return
+    const at = this._ttfs.get(id)
+    this._ttfs.delete(id)
+    if (state !== "started" || !this._nativeCap || this._nativeCap.testBuild !== true) return
+    this.pushEvent("voice_native_ttfs", { id, ms: Math.max(0, Math.round(now() - at)) })
+  },
+
+  // Pocket TTS's model: pushed on a state change and on each whole percent.
+  _nativeModel(d) {
+    if (!d || !MODEL_STATES.includes(d.state)) return
+    const received = Number(d.received) || 0
+    const total = Number(d.total) || 0
+    const pct = total > 0 ? Math.floor((received * 100) / total) : 0
+    const mark = `${d.state}:${pct}`
+    if (mark === this._modelMark) return
+    this._modelMark = mark
+    this.pushEvent("voice_native_model", { state: d.state, received, total, reason: d.reason || null })
   },
 
   // ── reply voices ──────────────────────────────────────────────────────
@@ -366,7 +431,11 @@ const VoiceTabNative = {
     if (this._destroyed || !r) return
     const voices = (Array.isArray(r.voices) ? r.voices : [])
       .filter((v) => v && typeof v.id === "string" && typeof v.name === "string")
-      .map((v) => ({ id: v.id, name: v.name, quality: QUALITIES.includes(v.quality) ? v.quality : "default" }))
+      .map((v) => {
+        const entry = { id: v.id, name: v.name, quality: QUALITIES.includes(v.quality) ? v.quality : "default" }
+        if (entry.quality === "neural" && v.model && typeof v.model === "object") entry.model = v.model
+        return entry
+      })
     const stored = ClientState.get(VOICE_NAMESPACE, this._voiceKey(), null)
     const installed = voices.some((v) => v.id === stored)
     this._voice = installed ? stored : null
@@ -375,6 +444,7 @@ const VoiceTabNative = {
       voices,
       selected: this._voice || fallback,
       missing: fellBack || (!!stored && !installed),
+      missing_pocket: isPocket(stored) && !installed,
     })
   },
 
@@ -382,6 +452,8 @@ const VoiceTabNative = {
     if (typeof id !== "string" || !id) return
     this._voice = id
     ClientState.set(VOICE_NAMESPACE, this._voiceKey(), id)
+    // Picking Pocket TTS starts its download; a system voice reads meanwhile.
+    if (isPocket(id)) this._nativeCall("prepareModel")
   },
 
   _nativeCall(method, args) {

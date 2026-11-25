@@ -90,6 +90,29 @@ defmodule PlatformWeb.VoiceLive do
       a half-formed turn is discarded; canvas state 10). A partner change
       also releases the `:voice` hold and opens the new partner's DM.
 
+  ### Streamed replies and Pocket TTS (task 01a20fdd stage 3)
+
+    * `{:agent_reply_chunk, chunk}` on the held DM (cumulative text): the
+      first chunk id from the agent while a reply is awaited is this turn's
+      stream (`:native_stream %{chunk_id, said, seq, stopped?}`). Each newly
+      complete sentence (`OnDeviceVoice.speakable_sentences/3`) is pushed as
+      `voice_native_speak_part %{id: chunk_id, seq, text, final: false}`, so
+      the phone starts speaking before the reply is posted.
+    * The posted reply then speaks only what was not streamed, as one last
+      part with `final: true` under the SAME id, and its turn answers to both
+      ids, so `voice_native_speaking` lands on it. A posted text that does
+      not begin with the streamed sentences pushes `voice_native_stop_speaking`
+      instead of reading it again. A stream the phone stopped (the mic) is
+      shown "Stopped" and never resumed. With no chunk, the one-shot
+      `voice_native_speak` path runs unchanged.
+    * A partner or context change, and `voice_native_stop`, drop the stream.
+      A new turn retires it: its late chunks are ignored and its posted
+      message is shown "Stopped" without touching the new reply.
+    * Reply voices may be `neural` (Pocket TTS) with a `model
+      %{state, received, total}`; `voice_native_model` updates it while it
+      downloads. `voice_native_ttfs %{id, ms}` (test builds only) is logged
+      with no reply text.
+
   The words still forming, "Sending", "Not sent" and Retry are drawn by the
   hook inside `#voice-native-pending` (`phx-update="ignore"`), so they still
   show with the socket down; the server renders only confirmed turns.
@@ -172,7 +195,9 @@ defmodule PlatformWeb.VoiceLive do
   # A text agent is slower than the voice worker.
   @native_answer_timeout_ms 60_000
   @max_voices 40
-  @voice_qualities ~w(premium enhanced default)
+  @voice_qualities ~w(neural premium enhanced default)
+  @model_states ~w(absent downloading compiling ready failed)
+  @max_retired 8
   @native_reasons ~w(os_too_old unavailable locale_unsupported speech_permission_denied assets_missing)
 
   @impl true
@@ -224,6 +249,9 @@ defmodule PlatformWeb.VoiceLive do
       |> assign(:native_voices, [])
       |> assign(:native_voice, nil)
       |> assign(:native_voice_missing?, false)
+      |> assign(:native_pocket_missing?, false)
+      |> assign(:native_stream, nil)
+      |> assign(:native_retired, [])
       |> SpaceTopics.ensure_holders()
       |> stream(:turns, [])
 
@@ -293,6 +321,7 @@ defmodule PlatformWeb.VoiceLive do
           voices={@native_voices}
           voice={@native_voice}
           voice_missing?={@native_voice_missing?}
+          pocket_missing?={@native_pocket_missing?}
         />
       </div>
     </Layouts.app>
@@ -601,10 +630,45 @@ defmodule PlatformWeb.VoiceLive do
      socket
      |> assign(:native_voices, voices)
      |> assign(:native_voice, voice)
-     |> assign(:native_voice_missing?, params["missing"] == true)}
+     |> assign(:native_voice_missing?, params["missing"] == true)
+     |> assign(:native_pocket_missing?, params["missing_pocket"] == true)}
   end
 
   def handle_event("voice_native_voices", _params, socket), do: {:noreply, socket}
+
+  # Pocket TTS's model while it downloads (task 01a20fdd stage 3).
+  def handle_event("voice_native_model", params, %{assigns: %{on_device?: true}} = socket)
+      when is_map(params) do
+    case model_entry(params) do
+      nil ->
+        {:noreply, socket}
+
+      model ->
+        voices =
+          Enum.map(socket.assigns.native_voices, fn
+            %{quality: "neural"} = v -> Map.put(v, :model, model)
+            v -> v
+          end)
+
+        {:noreply, assign(socket, :native_voices, voices)}
+    end
+  end
+
+  def handle_event("voice_native_model", _params, socket), do: {:noreply, socket}
+
+  # Time to first sound (test builds only): logged for the device report,
+  # with no reply text.
+  def handle_event(
+        "voice_native_ttfs",
+        %{"id" => id, "ms" => ms},
+        %{assigns: %{on_device?: true, native_test_build?: true}} = socket
+      )
+      when is_binary(id) and is_number(ms) do
+    Logger.info("[VoiceLive] on-device ttfs ms=#{round(ms)} id=#{String.slice(id, 0, 64)}")
+    {:noreply, socket}
+  end
+
+  def handle_event("voice_native_ttfs", _params, socket), do: {:noreply, socket}
 
   def handle_event(
         "voice_native_pick_voice",
@@ -616,6 +680,7 @@ defmodule PlatformWeb.VoiceLive do
        socket
        |> assign(:native_voice, id)
        |> assign(:native_voice_missing?, false)
+       |> assign(:native_pocket_missing?, false)
        |> push_event("voice_native_voice", %{id: id})}
     else
       {:noreply, socket}
@@ -653,16 +718,21 @@ defmodule PlatformWeb.VoiceLive do
       ) do
     if OnDeviceVoice.agent_reply?(conn, message) and
          not Map.has_key?(socket.assigns.native_replies, message.id) do
-      {:noreply,
-       socket
-       |> insert_native_reply(message)
-       |> push_event("voice_native_speak", %{
-         id: message.id,
-         text: OnDeviceVoice.speakable_text(message.content)
-       })}
+      {:noreply, native_reply(socket, message)}
     else
       {:noreply, socket}
     end
+  end
+
+  # The agent's reply streaming in (task 01a20fdd stage 3): on the device
+  # only, and only the agent's chunks in the held DM.
+  def handle_info(
+        {:agent_reply_chunk, %{} = chunk},
+        %{assigns: %{on_device?: true, native_conn: %{} = conn}} = socket
+      ) do
+    if OnDeviceVoice.agent_chunk?(conn, chunk),
+      do: {:noreply, native_chunk(socket, chunk)},
+      else: {:noreply, socket}
   end
 
   # The shell subscribes this process to the viewer's chat spaces (unread
@@ -933,6 +1003,7 @@ defmodule PlatformWeb.VoiceLive do
   defp stop_native(%{assigns: %{on_device?: true}} = socket) do
     socket
     |> push_event("voice_native_stop", %{})
+    |> retire_stream()
     |> cancel_answer_timer()
     |> assign(:mic_state, :idle)
     |> assign(:speaking_id, nil)
@@ -948,6 +1019,8 @@ defmodule PlatformWeb.VoiceLive do
     |> assign(:native_conn, nil)
     |> assign(:native_replies, %{})
     |> assign(:native_announce, nil)
+    |> assign(:native_stream, nil)
+    |> assign(:native_retired, [])
   end
 
   defp drop_native(socket), do: socket
@@ -979,14 +1052,23 @@ defmodule PlatformWeb.VoiceLive do
     |> assign(:native_conn, conn)
     |> update(:native_turn_ids, &Map.put(&1, turn_id, message.id))
     |> assign(:heard?, true)
-    |> insert_turn(%{kind: :me, text: message.content, meta: "on this iPhone · #{clock(at)}"})
+    |> retire_stream()
+    |> insert_turn(%{
+      kind: :me,
+      text: OnDeviceVoice.user_text(message.content),
+      meta: "on this iPhone · #{clock(at)}"
+    })
     |> assign(:mic_state, :thinking)
     |> start_answer_timer()
   end
 
-  defp insert_native_reply(%{assigns: %{partner: nil}} = socket, _message), do: socket
+  defp insert_native_reply(socket, message, opts \\ [])
 
-  defp insert_native_reply(socket, message) do
+  defp insert_native_reply(%{assigns: %{partner: nil}} = socket, _message, _opts), do: socket
+
+  # `:also` is the speech id when it is not the message's (a streamed reply's
+  # chunk id), so the phone's speech events land on this turn too.
+  defp insert_native_reply(socket, message, opts) do
     %{partner: partner} = socket.assigns
     seq = socket.assigns.turn_seq + 1
 
@@ -998,21 +1080,157 @@ defmodule PlatformWeb.VoiceLive do
       text: message.content
     }
 
+    turn = if note = opts[:note], do: Map.put(turn, :note, note), else: turn
+    ids = Enum.reject([message.id, opts[:also]], &is_nil/1)
+
     socket
     |> cancel_answer_timer()
     |> assign(:mic_state, :idle)
     |> assign(:turn_seq, seq)
-    |> update(:native_replies, &Map.put(&1, message.id, turn))
+    |> update(:native_replies, fn replies -> Enum.reduce(ids, replies, &Map.put(&2, &1, turn)) end)
     |> assign(:native_announce, "#{partner.agent.name} replied")
     |> stream_insert(:turns, turn)
   end
+
+  # ── streamed replies (task 01a20fdd stage 3) ──────────────────────────
+
+  # A chunk of the awaited reply. The first chunk id while the agent is
+  # thinking opens the stream; a retired id (an earlier turn's reply) and
+  # any other id are ignored.
+  defp native_chunk(socket, %{chunk_id: id, text: text} = chunk) do
+    %{native_stream: stream, native_retired: retired, mic_state: mic} = socket.assigns
+
+    cond do
+      List.keymember?(retired, id, 0) ->
+        socket
+
+      is_nil(stream) and mic == :thinking ->
+        socket
+        |> assign(:native_stream, %{chunk_id: id, said: [], seq: 0, stopped?: false})
+        |> speak_chunk(text, chunk[:done] == true)
+
+      match?(%{chunk_id: ^id, stopped?: false}, stream) ->
+        speak_chunk(socket, text, chunk[:done] == true)
+
+      true ->
+        socket
+    end
+  end
+
+  defp speak_chunk(socket, text, done?) do
+    stream = socket.assigns.native_stream
+    {sentences, _count} = OnDeviceVoice.speakable_sentences(length(stream.said), text, done?)
+
+    {socket, stream} =
+      Enum.reduce(sentences, {socket, stream}, fn sentence, {socket, stream} ->
+        socket =
+          push_event(socket, "voice_native_speak_part", %{
+            id: stream.chunk_id,
+            seq: stream.seq,
+            text: sentence,
+            final: false
+          })
+
+        {socket, %{stream | said: stream.said ++ [sentence], seq: stream.seq + 1}}
+      end)
+
+    # Activity: a long streamed answer is not a timed-out one.
+    socket = if sentences != [], do: start_answer_timer(socket), else: socket
+    assign(socket, :native_stream, stream)
+  end
+
+  # The posted reply. Streamed: only what was not spoken, as the final part
+  # under the stream's id, or a stop when the text diverged. Not streamed:
+  # today's one-shot speak.
+  defp native_reply(socket, message) do
+    %{native_stream: stream, native_retired: retired} = socket.assigns
+    posted = posted_sentences(message.content)
+
+    cond do
+      old =
+          Enum.find_value(retired, fn {id, said} ->
+            (said != [] and prefix?(said, posted)) && id
+          end) ->
+        socket
+        |> update(:native_retired, &List.keydelete(&1, old, 0))
+        |> insert_native_reply(message, also: old, note: "Stopped")
+
+      is_map(stream) and stream.stopped? ->
+        socket
+        |> finish_stream()
+        |> insert_native_reply(message, also: stream.chunk_id, note: "Stopped")
+
+      is_map(stream) and prefix?(stream.said, posted) ->
+        rest = posted |> Enum.drop(length(stream.said)) |> Enum.join(" ")
+        log_reply(length(stream.said) + if(rest == "", do: 0, else: 1), true)
+
+        socket
+        |> finish_stream()
+        |> insert_native_reply(message, also: stream.chunk_id)
+        |> push_event("voice_native_speak_part", %{
+          id: stream.chunk_id,
+          seq: stream.seq,
+          text: rest,
+          final: true
+        })
+
+      is_map(stream) ->
+        Logger.info("[VoiceLive] on-device reply diverged from its stream; speech stopped")
+
+        socket
+        |> finish_stream()
+        |> insert_native_reply(message, also: stream.chunk_id)
+        |> push_event("voice_native_stop_speaking", %{id: stream.chunk_id})
+
+      true ->
+        log_reply(1, false)
+
+        socket
+        |> insert_native_reply(message)
+        |> push_event("voice_native_speak", %{
+          id: message.id,
+          text: OnDeviceVoice.speakable_text(message.content)
+        })
+    end
+  end
+
+  defp posted_sentences(content) do
+    {sentences, _count} = OnDeviceVoice.speakable_sentences(0, content, true)
+    sentences
+  end
+
+  defp prefix?(said, posted), do: Enum.take(posted, length(said)) == said
+
+  # Parts and streaming per reply, for the device report; never the text.
+  defp log_reply(parts, streamed?),
+    do: Logger.info("[VoiceLive] on-device reply parts=#{parts} streamed=#{streamed?}")
+
+  defp finish_stream(socket), do: assign(socket, :native_stream, nil)
+
+  # The phone stopped the stream's speech (the mic, a route loss): the rest
+  # of it is never spoken.
+  defp stop_stream(%{assigns: %{native_stream: %{chunk_id: id} = stream}} = socket, id),
+    do: assign(socket, :native_stream, %{stream | stopped?: true})
+
+  defp stop_stream(socket, _id), do: socket
+
+  # A new turn, a context change or a stop: the open stream's later chunks
+  # and its posted message must not reach the next reply. The last
+  # @max_retired are kept.
+  defp retire_stream(%{assigns: %{native_stream: %{chunk_id: id, said: said}}} = socket) do
+    socket
+    |> update(:native_retired, &Enum.take([{id, said} | &1], @max_retired))
+    |> assign(:native_stream, nil)
+  end
+
+  defp retire_stream(socket), do: socket
 
   defp native_speaking(socket, id, "started"), do: assign(socket, :speaking_id, id)
 
   defp native_speaking(socket, id, "finished"), do: clear_speaking(socket, id)
 
   defp native_speaking(socket, id, "stopped"),
-    do: socket |> clear_speaking(id) |> mark_reply(id, "Stopped")
+    do: socket |> clear_speaking(id) |> stop_stream(id) |> mark_reply(id, "Stopped")
 
   defp native_speaking(socket, id, "unheard"),
     do: socket |> clear_speaking(id) |> mark_reply(id, "Reply shown as text")
@@ -1074,10 +1292,26 @@ defmodule PlatformWeb.VoiceLive do
   defp voice_entry(%{"id" => id, "name" => name} = v)
        when is_binary(id) and is_binary(name) and id != "" and byte_size(id) <= 200 do
     quality = if v["quality"] in @voice_qualities, do: v["quality"], else: "default"
-    [%{id: id, name: String.slice(name, 0, 60), quality: quality}]
+    entry = %{id: id, name: String.slice(name, 0, 60), quality: quality}
+
+    case quality == "neural" && model_entry(v["model"]) do
+      %{} = model -> [Map.put(entry, :model, model)]
+      _ -> [entry]
+    end
   end
 
   defp voice_entry(_voice), do: []
+
+  # Pocket TTS's model as the picker shows it; nil for anything malformed.
+  defp model_entry(%{"state" => state} = m) when state in @model_states do
+    %{state: state, received: count(m["received"]), total: count(m["total"])}
+  end
+
+  defp model_entry(_model), do: nil
+
+  defp count(n) when is_integer(n) and n >= 0, do: n
+  defp count(n) when is_float(n) and n >= 0, do: round(n)
+  defp count(_n), do: 0
 
   defp first_id([%{id: id} | _]), do: id
   defp first_id([]), do: nil

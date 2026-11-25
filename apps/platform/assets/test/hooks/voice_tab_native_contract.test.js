@@ -47,10 +47,14 @@ describe("on-device voice contract: BurrowVoicePlugin.swift vs the web", () => {
   })
 
   it("the scan found the calls it is meant to check", () => {
-    for (const m of ["capabilities", "prepare", "start", "stop", "cancel", "speak", "stopSpeaking", "openSettings", "voices"]) {
+    for (const m of [
+      "capabilities", "prepare", "start", "stop", "cancel", "speak", "stopSpeaking", "openSettings", "voices",
+      // Pocket TTS (task 01a20fdd stage 3).
+      "speakPart", "prepareModel",
+    ]) {
       expect(usedMethods, m).toContain(m)
     }
-    for (const e of ["partial", "ended", "speech", "route"]) expect(usedEvents, e).toContain(e)
+    for (const e of ["partial", "ended", "speech", "route", "model"]) expect(usedEvents, e).toContain(e)
   })
 
   it("every method the web calls is a promise method the plugin registers, with an @objc body", () => {

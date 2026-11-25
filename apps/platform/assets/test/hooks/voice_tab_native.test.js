@@ -783,6 +783,7 @@ describe("reply voices on the device", () => {
         ],
         selected: "v-premium",
         missing: false,
+        missing_pocket: false,
       },
     ])
     t.handlers.voice_native_speak({ id: "r1", text: "hello" })
@@ -837,6 +838,144 @@ describe("reply voices on the device", () => {
     expect(t.events()).not.toContain("voice_native_voices")
     t.handlers.voice_native_speak({ id: "r1", text: "hello" })
     expect(plugin.speak).toHaveBeenCalledWith({ id: "r1", text: "hello" })
+  })
+})
+
+describe("Pocket TTS and streamed replies on the device (task 01a20fdd stage 3)", () => {
+  let store
+  const key = `suite:${VOICE_NAMESPACE}:${REPLY_VOICE_KEY}:u1`
+  const POCKET = {
+    voices: [
+      {
+        id: "pocket-tts:marius",
+        name: "Pocket TTS (Marius)",
+        quality: "neural",
+        language: "en",
+        model: { state: "absent", received: 0, total: 437400422 },
+      },
+      ...VOICES.voices,
+    ],
+    default: "v-premium",
+  }
+  const withParts = (opts = {}) => {
+    const plugin = fakePlugin(opts)
+    plugin.speakPart = vi.fn(() => Promise.resolve({ spoken: true }))
+    plugin.prepareModel = vi.fn(() => Promise.resolve({ state: "downloading", received: 0, total: 437400422 }))
+    return plugin
+  }
+  beforeEach(() => {
+    store = new Map()
+    vi.stubGlobal("localStorage", {
+      getItem: (k) => (store.has(k) ? store.get(k) : null),
+      setItem: (k, v) => store.set(k, String(v)),
+      removeItem: (k) => store.delete(k),
+      key: (i) => Array.from(store.keys())[i] ?? null,
+      get length() {
+        return store.size
+      },
+    })
+    resetClientState()
+  })
+
+  it("speak_part goes to speakPart with the stored voice, in order, final last", async () => {
+    store.set(key, JSON.stringify("v-enhanced"))
+    const plugin = withParts()
+    install({ plugin })
+    const t = await mount()
+    await settle()
+    t.handlers.voice_native_speak_part({ id: "c1", seq: 0, text: "One.", final: false })
+    t.handlers.voice_native_speak_part({ id: "c1", seq: 1, text: "Two.", final: true })
+    expect(plugin.speakPart.mock.calls.map(([a]) => a)).toEqual([
+      { id: "c1", seq: 0, text: "One.", final: false, voice: "v-enhanced" },
+      { id: "c1", seq: 1, text: "Two.", final: true, voice: "v-enhanced" },
+    ])
+    expect(plugin.speak).not.toHaveBeenCalled()
+  })
+
+  it("an older app build without speakPart reads the joined parts once, at final", async () => {
+    const plugin = fakePlugin()
+    install({ plugin })
+    const t = await mount()
+    t.handlers.voice_native_speak_part({ id: "c1", seq: 0, text: "One.", final: false })
+    expect(plugin.speak).not.toHaveBeenCalled()
+    t.handlers.voice_native_speak_part({ id: "c1", seq: 1, text: "Two.", final: true })
+    expect(plugin.speak).toHaveBeenCalledTimes(1)
+    expect(plugin.speak).toHaveBeenCalledWith({ id: "c1", text: "One. Two." })
+  })
+
+  it("voice_native_stop_speaking stops the reply (a posted text that diverged)", async () => {
+    const plugin = withParts()
+    install({ plugin })
+    const t = await mount()
+    t.handlers.voice_native_stop_speaking({ id: "c1" })
+    expect(plugin.stopSpeaking).toHaveBeenCalledWith({ reason: "diverged" })
+  })
+
+  it("picking Pocket TTS stores it and calls prepareModel; a system voice does not", async () => {
+    const plugin = withParts({ voices: POCKET })
+    install({ plugin })
+    const t = await mount()
+    await settle()
+    expect(t.sent("voice_native_voices").at(-1).voices[0]).toEqual({
+      id: "pocket-tts:marius",
+      name: "Pocket TTS (Marius)",
+      quality: "neural",
+      model: { state: "absent", received: 0, total: 437400422 },
+    })
+    t.handlers.voice_native_voice({ id: "v-enhanced" })
+    expect(plugin.prepareModel).not.toHaveBeenCalled()
+    t.handlers.voice_native_voice({ id: "pocket-tts:marius" })
+    expect(plugin.prepareModel).toHaveBeenCalledTimes(1)
+    expect(JSON.parse(store.get(key))).toBe("pocket-tts:marius")
+  })
+
+  it("model events reach the server only on a state change or a new whole percent", async () => {
+    const plugin = withParts()
+    install({ plugin })
+    const t = await mount()
+    const total = 1000
+    for (const received of [0, 3, 9, 10, 15, 19, 20, 20, 999, 1000]) {
+      plugin.emit("model", { state: "downloading", received, total })
+    }
+    plugin.emit("model", { state: "compiling", received: 1000, total })
+    plugin.emit("model", { state: "ready", received: 1000, total })
+    plugin.emit("model", { state: "bogus", received: 1, total })
+    const sent = t.sent("voice_native_model").map((m) => `${m.state}:${Math.floor((m.received * 100) / m.total)}`)
+    expect(sent).toEqual(["downloading:0", "downloading:1", "downloading:2", "downloading:99", "downloading:100", "compiling:100", "ready:100"])
+  })
+
+  it("a remembered Pocket voice the phone no longer offers says missing_pocket", async () => {
+    store.set(key, JSON.stringify("pocket-tts:marius"))
+    const plugin = withParts()
+    install({ plugin })
+    const t = await mount()
+    await settle()
+    expect(t.sent("voice_native_voices").at(-1)).toMatchObject({ selected: "v-premium", missing: true, missing_pocket: true })
+  })
+
+  it("ttfs is pushed from seq 0 to speech started, only in a test build", async () => {
+    const plugin = withParts()
+    install({ plugin })
+    const t = await mount()
+    clock = 1000
+    t.handlers.voice_native_speak_part({ id: "c1", seq: 0, text: "One.", final: false })
+    clock = 1350
+    t.handlers.voice_native_speak_part({ id: "c1", seq: 1, text: "Two.", final: false })
+    clock = 1742
+    plugin.emit("speech", { id: "c1", state: "started" })
+    plugin.emit("speech", { id: "c1", state: "finished" })
+    expect(t.sent("voice_native_ttfs")).toEqual([{ id: "c1", ms: 742 }])
+  })
+
+  it("ttfs is never pushed outside a test build", async () => {
+    const plugin = withParts({
+      caps: { onDeviceSpeech: true, reason: null, locale: "en-US", testBuild: false, micPermission: "granted" },
+    })
+    install({ plugin })
+    const t = await mount()
+    t.handlers.voice_native_speak({ id: "m1", text: "Hi." })
+    plugin.emit("speech", { id: "m1", state: "started" })
+    expect(t.events()).not.toContain("voice_native_ttfs")
   })
 })
 

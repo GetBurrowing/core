@@ -203,7 +203,13 @@ defmodule PlatformWeb.VoiceLiveOnDeviceTest do
 
     [turn] = dm_rows(viewer, agent)
     assert turn.id == message_id
-    assert turn.content == "what is left on the launch checklist"
+
+    assert turn.content ==
+             "what is left on the launch checklist\n\n" <>
+               Platform.Meetings.OnDeviceVoice.instruction()
+
+    # The transcript shows only the words said (task 01a20fdd stage 3).
+    refute Enum.any?(turn_texts(view), &(&1 =~ "burrow_reply_chunk"))
     assert turn.metadata == %{"input" => "on_device", "client_turn_id" => "ct-1"}
 
     assert turn_texts(view) |> List.last() =~ "on this iPhone · 9:41 AM"
@@ -418,6 +424,353 @@ defmodule PlatformWeb.VoiceLiveOnDeviceTest do
     # A device's own name never reaches the caption.
     hook(view, "voice_native_route", %{"label" => "A Person's Headset"})
     assert text(doc(view), "#voice-native-caption") == "On this iPhone"
+  end
+
+  # ── streamed replies (task 01a20fdd stage 3) ──────────────────────────
+
+  defp turn!(view, id \\ "ct-s") do
+    hook(view, "voice_native_turn", %{"text" => "tell me", "client_turn_id" => id})
+    assert_reply(view, %{ok: true})
+    assigns(view).native_conn
+  end
+
+  defp chunk(conn_state, chunk_id, text, opts \\ []) do
+    Platform.Chat.PubSub.broadcast(
+      conn_state.space_id,
+      {:agent_reply_chunk,
+       %{
+         space_id: conn_state.space_id,
+         chunk_id: chunk_id,
+         text: text,
+         done: Keyword.get(opts, :done, false),
+         participant_id: Keyword.get(opts, :from, conn_state.agent_participant_id)
+       }}
+    )
+  end
+
+  test "chunks are spoken as their sentences complete; the posted reply adds only the rest, once",
+       %{conn: conn} do
+    view = ready!(conn)
+    c = turn!(view)
+
+    chunk(c, "c1", "First sentence. Sec")
+
+    assert_push_event(view, "voice_native_speak_part", %{
+      id: "c1",
+      seq: 0,
+      text: "First sentence.",
+      final: false
+    })
+
+    chunk(c, "c1", "First sentence. Second one, e.g. this. Thi")
+
+    assert_push_event(view, "voice_native_speak_part", %{
+      id: "c1",
+      seq: 1,
+      text: "Second one, e.g. this.",
+      final: false
+    })
+
+    chunk(c, "c1", "First sentence. Second one, e.g. this. Thi")
+    refute_push_event(view, "voice_native_speak_part", %{seq: 2}, 100)
+
+    {:ok, reply} =
+      post_as(c.agent_participant_id, c.space_id, "First sentence. Second one, e.g. this. Third.")
+
+    assert_push_event(view, "voice_native_speak_part", %{
+      id: "c1",
+      seq: 2,
+      text: "Third.",
+      final: true
+    })
+
+    refute_push_event(view, "voice_native_speak", %{}, 100)
+    refute_push_event(view, "voice_native_speak_part", %{seq: 0}, 50)
+    assert turn_texts(view) |> List.last() =~ "Third."
+    refute has_element?(view, "#voice-thinking")
+
+    # The phone's speech events use the chunk id and land on the posted turn.
+    hook(view, "voice_native_speaking", %{"id" => "c1", "state" => "started"})
+    assert assigns(view).speaking_id == "c1"
+
+    hook(view, "voice_native_speaking", %{
+      "id" => "c1",
+      "state" => "stopped",
+      "reason" => "mic_opened"
+    })
+
+    assert turn_texts(view) |> List.last() =~ "Stopped"
+    assert Map.has_key?(assigns(view).native_replies, reply.id)
+  end
+
+  test "a reply posted with nothing left to stream still finishes its stream (empty final part)",
+       %{conn: conn} do
+    view = ready!(conn)
+    c = turn!(view)
+    chunk(c, "c1", "Only this. ")
+    assert_push_event(view, "voice_native_speak_part", %{id: "c1", seq: 0, text: "Only this."})
+    {:ok, _} = post_as(c.agent_participant_id, c.space_id, "Only this.")
+    assert_push_event(view, "voice_native_speak_part", %{id: "c1", seq: 1, text: "", final: true})
+  end
+
+  test "a chunk from anyone else, before a turn, or of another id is ignored", %{conn: conn} do
+    view = ready!(conn)
+    hook(view, "voice_native_turn", %{"text" => "x", "client_turn_id" => "ct-pre"})
+    assert_reply(view, %{ok: true})
+    c = assigns(view).native_conn
+
+    chunk(c, "c-user", "Not the agent. ", from: c.user_participant_id)
+    refute_push_event(view, "voice_native_speak_part", %{}, 100)
+
+    chunk(c, "c1", "Mine. ")
+    assert_push_event(view, "voice_native_speak_part", %{id: "c1"})
+    chunk(c, "c2", "Another reply. ")
+    refute_push_event(view, "voice_native_speak_part", %{id: "c2"}, 100)
+  end
+
+  test "no chunk before a turn is spoken", %{conn: conn} do
+    view = ready!(conn)
+    c = assigns(view).native_conn
+    chunk(%{c | turn_at: DateTime.utc_now()}, "c0", "Too early. ")
+    refute_push_event(view, "voice_native_speak_part", %{}, 100)
+  end
+
+  test "with no chunk the one-shot speak runs unchanged", %{conn: conn} do
+    view = ready!(conn)
+    c = turn!(view)
+    {:ok, reply} = post_as(c.agent_participant_id, c.space_id, "Plain reply. Two sentences.")
+    reply_id = reply.id
+
+    assert_push_event(view, "voice_native_speak", %{
+      id: ^reply_id,
+      text: "Plain reply. Two sentences."
+    })
+
+    refute_push_event(view, "voice_native_speak_part", %{}, 100)
+  end
+
+  test "a posted text that diverges from the stream stops speech, never re-reads it",
+       %{conn: conn} do
+    view = ready!(conn)
+    c = turn!(view)
+    chunk(c, "c1", "Alpha is first. ")
+    assert_push_event(view, "voice_native_speak_part", %{id: "c1", seq: 0})
+    {:ok, _} = post_as(c.agent_participant_id, c.space_id, "Something else entirely.")
+    assert_push_event(view, "voice_native_stop_speaking", %{id: "c1"})
+    refute_push_event(view, "voice_native_speak_part", %{final: true}, 100)
+    refute_push_event(view, "voice_native_speak", %{}, 50)
+    assert turn_texts(view) |> List.last() =~ "Something else entirely."
+  end
+
+  test "a stream the phone stopped (the mic) speaks nothing more and is shown Stopped",
+       %{conn: conn} do
+    view = ready!(conn)
+    c = turn!(view)
+    chunk(c, "c1", "One. ")
+    assert_push_event(view, "voice_native_speak_part", %{id: "c1", seq: 0})
+
+    hook(view, "voice_native_speaking", %{
+      "id" => "c1",
+      "state" => "stopped",
+      "reason" => "mic_opened"
+    })
+
+    chunk(c, "c1", "One. Two. ")
+    refute_push_event(view, "voice_native_speak_part", %{}, 100)
+    {:ok, _} = post_as(c.agent_participant_id, c.space_id, "One. Two. Three.")
+    refute_push_event(view, "voice_native_speak_part", %{}, 100)
+    refute_push_event(view, "voice_native_speak", %{}, 50)
+    assert turn_texts(view) |> List.last() =~ "Stopped"
+  end
+
+  test "a new turn retires the old stream: its late chunks never reach the new reply",
+       %{conn: conn} do
+    view = ready!(conn)
+    c = turn!(view, "ct-1")
+    chunk(c, "c-old", "Old one. ")
+    assert_push_event(view, "voice_native_speak_part", %{id: "c-old"})
+    c = turn!(view, "ct-2")
+    chunk(c, "c-old", "Old one. Old two. ")
+    refute_push_event(view, "voice_native_speak_part", %{id: "c-old"}, 100)
+    chunk(c, "c-new", "New one. ")
+    assert_push_event(view, "voice_native_speak_part", %{id: "c-new", seq: 0})
+  end
+
+  test "a partner change mid-stream clears it", %{conn: conn} do
+    other = agent!("helper-#{System.unique_integer([:positive])}", "Helper")
+    view = ready!(conn)
+    c = turn!(view)
+    chunk(c, "c1", "One. ")
+    assert_push_event(view, "voice_native_speak_part", %{id: "c1"})
+    assert assigns(view).native_stream.chunk_id == "c1"
+    view |> element("#partner-opt-#{other.id}") |> render_click()
+    assert_push_event(view, "voice_native_stop", %{})
+    assert assigns(view).native_stream == nil
+  end
+
+  test "a context change mid-stream clears it", %{conn: conn, viewer: viewer} do
+    space = channel!(viewer)
+    view = ready!(conn)
+    c = turn!(view)
+    chunk(c, "c1", "One. ")
+    assert_push_event(view, "voice_native_speak_part", %{id: "c1"})
+    view |> element("#ctx-opt-#{space.id}") |> render_click()
+    assert assigns(view).native_stream == nil
+    chunk(c, "c1", "One. Two. ")
+    refute_push_event(view, "voice_native_speak_part", %{id: "c1", seq: 1}, 100)
+  end
+
+  test "without the device path a chunk changes nothing", %{
+    conn: conn,
+    viewer: viewer,
+    agent: agent
+  } do
+    {:ok, view, _html} = live(conn, ~p"/voice")
+    before = stable(view)
+    {:ok, dm} = Chat.find_or_create_dm(viewer.id, "agent", agent.id)
+
+    Platform.Chat.PubSub.broadcast(
+      dm.id,
+      {:agent_reply_chunk,
+       %{
+         space_id: dm.id,
+         chunk_id: "c",
+         text: "Hi. ",
+         done: false,
+         participant_id: Ecto.UUID.generate()
+       }}
+    )
+
+    refute_push_event(view, "voice_native_speak_part", %{}, 100)
+    assert stable(view) == before
+    refute render(view) =~ "Pocket TTS"
+  end
+
+  # ── Pocket TTS in the picker ─────────────────────────────────────────
+
+  defp pocket(state, received \\ 0, total \\ 1000) do
+    %{
+      "id" => "pocket-tts:marius",
+      "name" => "Pocket TTS (Marius)",
+      "quality" => "neural",
+      "model" => %{"state" => state, "received" => received, "total" => total}
+    }
+  end
+
+  test "Pocket TTS is one more option in the same select, neural first", %{conn: conn} do
+    view = ready!(conn)
+
+    hook(view, "voice_native_voices", %{
+      "voices" => [pocket("absent") | @voices],
+      "selected" => "v-premium"
+    })
+
+    d = doc(view)
+
+    assert q(d, "#voice-native-voice-select option") |> Enum.map(&String.trim(LazyHTML.text(&1))) ==
+             [
+               "Pocket TTS (Marius) · Neural",
+               "Zoe · Premium",
+               "Ava · Enhanced",
+               "Samantha · Default"
+             ]
+
+    assert [%{quality: "neural", model: %{state: "absent", received: 0, total: 1000}} | _] =
+             assigns(view).native_voices
+
+    refute has_element?(view, "#voice-native-pocket-credit"),
+           "no line while a system voice is chosen"
+  end
+
+  test "picked while downloading: progress, the system voice meanwhile, the credit", %{conn: conn} do
+    view = ready!(conn)
+
+    hook(view, "voice_native_voices", %{
+      "voices" => [pocket("absent") | @voices],
+      "selected" => "v-premium"
+    })
+
+    view |> form("#voice-native-voice", %{"voice" => "pocket-tts:marius"}) |> render_change()
+    assert_push_event(view, "voice_native_voice", %{id: "pocket-tts:marius"})
+
+    hook(view, "voice_native_model", %{
+      "state" => "downloading",
+      "received" => 427,
+      "total" => 1000
+    })
+
+    d = doc(view)
+    assert text(d, "#voice-native-pocket-progress") == "Downloading Pocket TTS · 42%"
+    assert text(d, "#voice-native-pocket-meanwhile") == "Speaking with Zoe until it finishes"
+    assert text(d, "#voice-native-pocket-credit") == "Pocket TTS by Kyutai · CC BY 4.0"
+    refute has_element?(view, "#voice-native-pocket-unavailable")
+
+    hook(view, "voice_native_model", %{"state" => "ready", "received" => 1000, "total" => 1000})
+    refute has_element?(view, "#voice-native-pocket-progress")
+    refute has_element?(view, "#voice-native-pocket-meanwhile")
+    assert text(doc(view), "#voice-native-pocket-credit") == "Pocket TTS by Kyutai · CC BY 4.0"
+  end
+
+  test "a failed model, or a remembered Pocket voice the phone no longer offers, reads unavailable",
+       %{conn: conn} do
+    view = ready!(conn)
+
+    hook(view, "voice_native_voices", %{
+      "voices" => [pocket("failed") | @voices],
+      "selected" => "pocket-tts:marius"
+    })
+
+    assert text(doc(view), "#voice-native-pocket-unavailable") ==
+             "Pocket TTS unavailable on this iPhone"
+
+    hook(view, "voice_native_voices", %{
+      "voices" => @voices,
+      "selected" => "v-premium",
+      "missing" => true,
+      "missing_pocket" => true
+    })
+
+    d = doc(view)
+    assert text(d, "#voice-native-pocket-unavailable") == "Pocket TTS unavailable on this iPhone"
+    refute has_element?(view, "#voice-native-voice-missing")
+    refute has_element?(view, "#voice-native-pocket-credit")
+  end
+
+  test "a malformed model or quality is dropped, never trusted", %{conn: conn} do
+    view = ready!(conn)
+
+    hook(view, "voice_native_voices", %{
+      "voices" => [
+        %{"id" => "x", "name" => "X", "quality" => "neural", "model" => %{"state" => "hacked"}},
+        %{"id" => "y", "name" => "Y", "quality" => "superb"}
+      ],
+      "selected" => "x"
+    })
+
+    assert [%{id: "x", quality: "neural"} = x, %{id: "y", quality: "default"}] =
+             assigns(view).native_voices
+
+    refute Map.has_key?(x, :model)
+    hook(view, "voice_native_model", %{"state" => "nope"})
+    refute Map.has_key?(hd(assigns(view).native_voices), :model)
+  end
+
+  test "ttfs is logged on a test build only, with no reply text", %{conn: conn} do
+    import ExUnit.CaptureLog
+    test_view = ready!(conn, %{"test_build" => true})
+
+    log =
+      capture_log(fn ->
+        hook(test_view, "voice_native_ttfs", %{"id" => "c1", "ms" => 742})
+      end)
+
+    assert log =~ "on-device ttfs ms=742 id=c1"
+
+    store_view = ready!(conn)
+
+    assert capture_log(fn ->
+             hook(store_view, "voice_native_ttfs", %{"id" => "c1", "ms" => 742})
+           end) == ""
   end
 
   # ── helpers ───────────────────────────────────────────────────────────

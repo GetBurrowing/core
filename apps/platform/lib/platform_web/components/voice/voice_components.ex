@@ -308,6 +308,10 @@ defmodule PlatformWeb.Components.Voice do
   attr :voice, :string, default: nil, doc: "on-device: the reply voice in use"
   attr :voice_missing?, :boolean, default: false
 
+  attr :pocket_missing?, :boolean,
+    default: false,
+    doc: "on-device: Pocket TTS was chosen but is not offered"
+
   def voice_area(assigns) do
     assigns = assign(assigns, :card?, assigns.on_device? and assigns.mic_permission == :denied)
 
@@ -434,7 +438,12 @@ defmodule PlatformWeb.Components.Voice do
       >
         {@caption}
       </p>
-      <.native_voice_picker voices={@voices} voice={@voice} missing?={@voice_missing?} />
+      <.native_voice_picker
+        voices={@voices}
+        voice={@voice}
+        missing?={@voice_missing?}
+        pocket_missing?={@pocket_missing?}
+      />
       <div id="voice-audio" class="hidden" phx-update="ignore"></div>
     </div>
     """
@@ -861,11 +870,21 @@ defmodule PlatformWeb.Components.Voice do
   attr :voices, :list, required: true
   attr :voice, :string, default: nil
   attr :missing?, :boolean, default: false
+  attr :pocket_missing?, :boolean, default: false
 
   # The reply voice (on the device only): the phone's installed voices for its
-  # language, best first. The choice is remembered on the device.
+  # language, best first. The choice is remembered on the device. Pocket TTS
+  # (task 01a20fdd stage 3), where the phone offers it, is one more option in
+  # the same select; while its model is not ready the best system voice reads
+  # the reply, and the lines under the select say so.
   defp native_voice_picker(assigns) do
-    assigns = assign(assigns, :current, Enum.find(assigns.voices, &(&1.id == assigns.voice)))
+    current = Enum.find(assigns.voices, &(&1.id == assigns.voice))
+    system = Enum.find(assigns.voices, &(&1.quality != "neural"))
+
+    assigns =
+      assigns
+      |> assign(:current, current)
+      |> assign(:pocket, pocket_status(current, system, assigns.pocket_missing?))
 
     ~H"""
     <form
@@ -886,13 +905,60 @@ defmodule PlatformWeb.Components.Voice do
           </option>
         </select>
       </label>
-      <p :if={@missing? and @current} id="voice-native-voice-missing" class="text-xs text-secondary">
+      <p
+        :if={@missing? and @current and not @pocket_missing?}
+        id="voice-native-voice-missing"
+        class="text-xs text-secondary"
+      >
         Your chosen voice isn't on this iPhone. Using {@current.name} instead.
+      </p>
+      <p :if={@pocket.progress} id="voice-native-pocket-progress" class="text-xs text-secondary">
+        {@pocket.progress}
+      </p>
+      <p :if={@pocket.meanwhile} id="voice-native-pocket-meanwhile" class="text-xs text-secondary">
+        {@pocket.meanwhile}
+      </p>
+      <p :if={@pocket.unavailable} id="voice-native-pocket-unavailable" class="text-xs text-secondary">
+        Pocket TTS unavailable on this iPhone
+      </p>
+      <p :if={@pocket.credit} id="voice-native-pocket-credit" class="text-xs text-secondary">
+        Pocket TTS by Kyutai · CC BY 4.0
       </p>
     </form>
     """
   end
 
+  @doc """
+  The lines under the reply-voice select for Pocket TTS: `progress`
+  ("Downloading Pocket TTS · N%"), `meanwhile` ("Speaking with <system voice>
+  until it finishes"), `unavailable` and `credit` (the CC BY attribution,
+  whenever Pocket TTS is the chosen voice). All nil/false for a system voice.
+  """
+  def pocket_status(current, system, pocket_missing?)
+
+  def pocket_status(%{quality: "neural"} = pocket, system, _missing?) do
+    model = Map.get(pocket, :model) || %{state: "absent", received: 0, total: 0}
+    waiting? = model.state in ~w(absent downloading compiling)
+
+    %{
+      progress:
+        if(model.state == "downloading", do: "Downloading Pocket TTS · #{percent(model)}%"),
+      meanwhile: if(waiting? and system, do: "Speaking with #{system.name} until it finishes"),
+      unavailable: model.state == "failed",
+      credit: true
+    }
+  end
+
+  def pocket_status(_current, _system, true),
+    do: %{progress: nil, meanwhile: nil, unavailable: true, credit: false}
+
+  def pocket_status(_current, _system, _missing?),
+    do: %{progress: nil, meanwhile: nil, unavailable: false, credit: false}
+
+  defp percent(%{received: got, total: total}) when total > 0, do: min(div(got * 100, total), 100)
+  defp percent(_model), do: 0
+
+  defp voice_quality("neural"), do: "Neural"
   defp voice_quality("premium"), do: "Premium"
   defp voice_quality("enhanced"), do: "Enhanced"
   defp voice_quality(_quality), do: "Default"
