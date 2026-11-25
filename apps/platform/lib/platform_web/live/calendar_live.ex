@@ -322,7 +322,7 @@ defmodule PlatformWeb.CalendarLive do
   # list always grows and the agenda never dead-ends on an empty run.
   def handle_event("m_agenda_more", %{"direction" => direction}, socket)
       when direction in ~w(earlier later) do
-    {:reply, %{}, socket |> m_extend(direction) |> m_load()}
+    {:reply, %{}, socket |> m_extend(direction) |> m_load() |> m_recheck_day_selected()}
   end
 
   def handle_event("m_month_toggle", _, socket) do
@@ -1735,6 +1735,7 @@ defmodule PlatformWeb.CalendarLive do
       moved
       |> assign(m_focus: date, m_today_visible: date == socket.assigns.today)
       |> m_load()
+      |> m_recheck_day_selected(date)
       |> push_event("m-agenda-scroll", %{date: Date.to_iso8601(date)})
     end
   end
@@ -1837,6 +1838,33 @@ defmodule PlatformWeb.CalendarLive do
       m_month_ext: month_ext,
       m_month_ext_counts: Agenda.extension_counts(month_ext)
     )
+  end
+
+  # An open dated list after a phone navigation that read the extension
+  # entries again (`m_load/1`): a list for another day than the one picked
+  # closes; one for the same day is re-read from the FRESH phone entries,
+  # never the desktop's, which this path did not refresh. So access lost
+  # since the list opened closes it (review: Social, PR #294).
+  defp m_recheck_day_selected(socket, date \\ nil)
+
+  defp m_recheck_day_selected(%{assigns: %{calendar_day_selected: nil}} = socket, _date),
+    do: socket
+
+  defp m_recheck_day_selected(%{assigns: %{calendar_day_selected: selected}} = socket, date) do
+    selected =
+      if date && selected.day != date do
+        nil
+      else
+        entry =
+          Enum.find(
+            socket.assigns.m_day_entries,
+            &(&1.key == selected.key and &1.day == selected.day and &1.items != [])
+          )
+
+        entry && Map.merge(entry, Map.take(selected, [:trigger_id, :open_seq, :placement]))
+      end
+
+    assign(socket, :calendar_day_selected, selected)
   end
 
   # Every extension entry the page holds: the desktop window's, the phone

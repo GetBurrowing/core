@@ -160,6 +160,29 @@ defmodule PlatformWeb.SocialCalendarChipTest do
     refute has_element?(view, "[data-role='calendar-extension-list']")
   end
 
+  for {name, offset} <- [same: 0, other: 1] do
+    test "phone: an open dated list is re-read under current access when a strip date is picked (#{name} date)",
+         %{conn: conn} = ctx do
+      view = open(conn, ctx.h1, ctx.day)
+      view |> element(phone_header_chip(ctx)) |> render_click()
+      queue_link = "[data-role='calendar-extension-list'] a[href*='post=#{ctx.post.id}']"
+      assert has_element?(view, queue_link)
+
+      {:ok, _} =
+        Platform.Access.Grants.deny(%{
+          principal: {:user, ctx.h1.id},
+          permission: "social.use",
+          resource: {:project, ctx.profile.project_id}
+        })
+
+      pick = Date.add(ctx.day, unquote(offset))
+      render_click(view, "m_pick", %{"date" => Date.to_iso8601(pick)})
+
+      refute has_element?(view, queue_link)
+      refute has_element?(view, "[data-role='calendar-extension-list']")
+    end
+  end
+
   defp phone_header_chip(ctx),
     do:
       "#m-agenda [data-role='m-agenda-day-header'] " <>

@@ -232,9 +232,10 @@ defmodule PlatformWeb.CalendarLive.Mobile do
   attr(:ext, :map, required: true)
   attr(:dot, :string, required: true)
 
-  # The dot (calendar events) and, beside it, the extension count marker: an
-  # 11px `secondary` figure in a row of the dot's own height, so a cell with
-  # a count is no taller than one without. Not a target of its own: the cell
+  # The dot (calendar events) and, beside it, the extension count marker: a
+  # `secondary` figure in a row of the dot's own height, so a cell with a count
+  # is no taller than one without. Sized in rem (0.6875rem, 11px at default
+  # text) so it grows with the text size like the date above it (WCAG 1.4.4). Not a target of its own: the cell
   # picks the date; the agenda day header carries the chip.
   defp cell_marks(assigns) do
     ~H"""
@@ -246,7 +247,7 @@ defmodule PlatformWeb.CalendarLive.Mobile do
       </span>
       <span
         :if={@ext[@day]}
-        class="text-[11px] font-semibold leading-none tabular-nums text-secondary"
+        class="text-[0.6875rem] font-semibold leading-none tabular-nums text-secondary"
         data-role="calendar-extension-count"
         data-date={Date.to_iso8601(@day)}
         aria-label={@ext[@day].label}

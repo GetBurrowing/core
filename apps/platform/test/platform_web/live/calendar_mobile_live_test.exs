@@ -745,6 +745,32 @@ defmodule PlatformWeb.CalendarMobileLiveTest do
       assert Enum.any?(rows, &(&1.type == :empty and &1.from == Date.add(day, 1)))
     end
 
+    test "the strip count is sized in rem so it scales with the text size" do
+      html =
+        render_component(&PlatformWeb.CalendarLive.Mobile.controls/1,
+          view: "agenda",
+          focus: ~D[2026-11-25],
+          sel_day: ~D[2026-11-25],
+          today: ~D[2026-11-25],
+          show_today: false,
+          shown_count: 2,
+          month_open: false,
+          busy: %{},
+          ext: %{~D[2026-11-26] => %{count: 3, label: "3 Social items"}}
+        )
+
+      [count] =
+        html
+        |> LazyHTML.from_fragment()
+        |> LazyHTML.query("[data-role=calendar-day-strip] [data-role=calendar-extension-count]")
+        |> Enum.to_list()
+
+      [class] = LazyHTML.attribute(count, "class")
+      assert class =~ "text-[0.6875rem]"
+      refute class =~ ~r/text-\[\d+px\]/
+      assert LazyHTML.text(count) =~ "3"
+    end
+
     test "extension_counts and the cell label read the extension entries" do
       day = ~D[2026-11-25]
 
