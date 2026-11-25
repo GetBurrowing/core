@@ -232,6 +232,7 @@ public class BurrowVoicePlugin: CAPPlugin, CAPBridgedPlugin {
     }
 
     private func emit(_ name: String, _ data: [String: Any]) {
+        if name == "ended" { VoiceTrace.log("mic ended reason=\(data["reason"] ?? "-")") }
         if let eventSink { eventSink(name, data) } else { notifyListeners(name, data: data) }
     }
 
@@ -253,6 +254,11 @@ public class BurrowVoicePlugin: CAPPlugin, CAPBridgedPlugin {
 
     @MainActor
     private func handleSystem(_ note: Notification) {
+        VoiceTrace.log(
+            "system \(note.name.rawValue) type=\(note.userInfo?[AVAudioSessionInterruptionTypeKey] ?? "-") "
+                + "interruption_reason=\(note.userInfo?[AVAudioSessionInterruptionReasonKey] ?? "-") "
+                + "route_reason=\(note.userInfo?[AVAudioSessionRouteChangeReasonKey] ?? "-") "
+                + "stop=\(VoiceAudioSession.stopReason(for: note) ?? "none") turn=\(turn) speaking=\(speaker.isSpeaking || pocketInstance?.isSpeaking == true)")
         if note.name == UIApplication.didReceiveMemoryWarningNotification, pocketInstance?.isSpeaking != true {
             // The model is loaded lazily and comes back on the next reply.
             pocketEngine.release()
@@ -349,7 +355,8 @@ public class BurrowVoicePlugin: CAPPlugin, CAPBridgedPlugin {
         reader.onEvent = { [weak self] event in
             guard let self else { return }
             VoiceTrace.log(
-                "speech id=\(event.id) state=\(event.state.rawValue) reason=\(event.reason ?? "-") speaker=\(engineName) footprint_mb=\(VoiceTrace.footprintMB())")
+                "speech id=\(event.id) state=\(event.state.rawValue) reason=\(event.reason ?? "-") speaker=\(engineName) footprint_mb=\(VoiceTrace.footprintMB())"
+            )
             self.emit("speech", event.data)
             guard event.state == .finished || event.state == .stopped else { return }
             if self.stream?.id == event.id {
@@ -420,6 +427,7 @@ public class BurrowVoicePlugin: CAPPlugin, CAPBridgedPlugin {
 
     @MainActor
     func startTurn() async -> [String: Any] {
+        VoiceTrace.log("mic start turn=\(turn)")
         stopSpeakers(reason: "mic_opened")
         guard turn == .idle else { return refusal("busy") }
         if callState().hasCall { return refusal("mic_in_use") }
@@ -456,12 +464,16 @@ public class BurrowVoicePlugin: CAPPlugin, CAPBridgedPlugin {
             return refusal("cancelled")
         }
         turn = .listening
+        VoiceTrace.log("mic started route=\(session.routeLabel ?? "builtin")")
         haptic()
         emitRoute()
         return ["started": true, "route": session.routeLabel ?? NSNull()]
     }
 
-    private func refusal(_ reason: String) -> [String: Any] { ["started": false, "reason": reason] }
+    private func refusal(_ reason: String) -> [String: Any] {
+        VoiceTrace.log("mic start refused reason=\(reason)")
+        return ["started": false, "reason": reason]
+    }
 
     /// Release (or the second tap): closes the mic, then `final {text}` and
     /// `ended {reason: "released"}`; with no words, only
@@ -472,6 +484,7 @@ public class BurrowVoicePlugin: CAPPlugin, CAPBridgedPlugin {
 
     @MainActor
     func stopTurn() async -> [String: Any] {
+        VoiceTrace.log("mic stop turn=\(turn)")
         switch turn {
         case .idle:
             return ["text": ""]
@@ -506,6 +519,7 @@ public class BurrowVoicePlugin: CAPPlugin, CAPBridgedPlugin {
 
     @MainActor
     func cancelTurn() {
+        VoiceTrace.log("mic cancel turn=\(turn)")
         guard turn != .idle else { return }
         generation += 1
         turn = .idle

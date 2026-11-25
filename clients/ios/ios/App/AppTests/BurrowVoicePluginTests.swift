@@ -21,6 +21,13 @@ private final class FakeBackend: VoiceAudioSessionBackend {
     var refuseActivation = false
     var routePortTypes: [AVAudioSession.Port] = [.builtInMic, .builtInSpeaker]
     var hasOutputRoute = true
+    /// Another app's audio (a podcast) is playing.
+    var isOtherAudioPlaying = false
+    /// What iOS does to a NON-mixable session opened over another app's
+    /// audio when that app takes its audio back: it interrupts this one.
+    /// Set by tests that model a podcast; runs after a successful
+    /// `setActive(true)`.
+    var onNonMixableActivation: (() -> Void)?
 
     init(_ log: CallLog) { self.log = log }
 
@@ -35,6 +42,8 @@ private final class FakeBackend: VoiceAudioSessionBackend {
         let notify = options.contains(.notifyOthersOnDeactivation)
         MainActor.assumeIsolated { log.entries.append("setActive(\(active)\(notify ? ", notifyOthers" : ""))") }
         if active && refuseActivation { throw NSError(domain: NSOSStatusErrorDomain, code: 561_017_449) }
+        let mixable = !categoryOptions.isDisjoint(with: [.mixWithOthers, .duckOthers, .interruptSpokenAudioAndMixWithOthers])
+        if active, isOtherAudioPlaying, !mixable { onNonMixableActivation?() }
     }
 }
 
@@ -418,6 +427,72 @@ final class BurrowVoicePluginTests: XCTestCase {
         XCTAssertFalse(speaker.isSpeaking)
         let speech = events.filter { $0.name == "speech" }.last
         XCTAssertEqual(speech?.data["reason"] as? String, "route_lost")
+    }
+
+    // MARK: Another app's audio (task 01a20fdd stage 4)
+
+    /// A podcast is playing: what iOS does when that app takes its audio back
+    /// from a NON-mixable session is modelled by posting the interruption
+    /// began it would send.
+    private func podcastPlaying() {
+        backend.isOtherAudioPlaying = true
+        let center = center!
+        backend.onNonMixableActivation = {
+            center.post(
+                name: AVAudioSession.interruptionNotification, object: nil,
+                userInfo: [AVAudioSessionInterruptionTypeKey: AVAudioSession.InterruptionType.began.rawValue])
+        }
+    }
+
+    func testATapLatchesWhileAPodcastPlays() async {
+        podcastPlaying()
+        let plugin = makePlugin()
+        let result = await plugin.startTurn()
+        XCTAssertEqual(result["started"] as? Bool, true)
+        await Task.yield()
+        await Task.yield()
+        XCTAssertFalse(log.entries.contains("transcriber.cancel"), "the toggled turn stays open: \(log.entries)")
+        XCTAssertFalse(eventNames.contains("ended"), "no ended(interrupted) right after the tap: \(eventNames)")
+        transcriber.finalText = "still listening"
+        let stopped = await plugin.stopTurn()
+        XCTAssertEqual(stopped["text"] as? String, "still listening")
+    }
+
+    func testAReplyPlaysOverAPodcastAndThePodcastIsToldToResume() async {
+        podcastPlaying()
+        let plugin = makePlugin()
+        let result = plugin.speakReply(id: "r1", text: "reply")
+        await Task.yield()
+        await Task.yield()
+        XCTAssertEqual(result["spoken"] as? Bool, true)
+        XCTAssertTrue(speaker.isSpeaking, "not stopped by the podcast taking its audio back")
+        XCTAssertFalse(events.contains { $0.data["state"] as? String == "stopped" }, "\(events.map(\.data))")
+        speaker.finish()
+        XCTAssertTrue(deactivated, "deactivated with notifyOthers, so the podcast resumes")
+    }
+
+    func testTheSessionDucksOrPausesOtherAudioInsteadOfInterruptingIt() async {
+        let plugin = makePlugin()
+        _ = plugin.speakReply(id: "r1", text: "reply")
+        XCTAssertTrue(backend.categoryOptions.contains(.duckOthers))
+        XCTAssertTrue(backend.categoryOptions.contains(.interruptSpokenAudioAndMixWithOthers))
+        XCTAssertTrue(backend.categoryOptions.contains(.allowBluetoothHFP))
+        XCTAssertTrue(backend.categoryOptions.contains(.defaultToSpeaker))
+    }
+
+    func testAStaleInterruptionFromAppSuspensionStopsNothing() async {
+        let plugin = makePlugin()
+        _ = plugin.speakReply(id: "r1", text: "reply")
+        await post(
+            AVAudioSession.interruptionNotification,
+            [
+                AVAudioSessionInterruptionTypeKey: AVAudioSession.InterruptionType.began.rawValue,
+                AVAudioSessionInterruptionReasonKey: AVAudioSession.InterruptionReason.appWasSuspended.rawValue,
+            ])
+        XCTAssertTrue(speaker.isSpeaking)
+        // A real interruption (a call) still stops it, as before.
+        await post(AVAudioSession.interruptionNotification, [AVAudioSessionInterruptionTypeKey: AVAudioSession.InterruptionType.began.rawValue])
+        XCTAssertFalse(speaker.isSpeaking)
     }
 
     // MARK: Meetings guard

@@ -12,6 +12,8 @@ protocol VoiceAudioSessionBackend: AnyObject {
     /// The port TYPES of the current route, inputs then outputs.
     var routePortTypes: [AVAudioSession.Port] { get }
     var hasOutputRoute: Bool { get }
+    /// Another app is playing audio (a podcast, music).
+    var isOtherAudioPlaying: Bool { get }
 }
 
 extension AVAudioSession: VoiceAudioSessionBackend {
@@ -54,7 +56,19 @@ final class VoiceAudioSession: VoiceAudioSessionControl {
     /// `.defaultToSpeaker`: a reply plays from the loudspeaker, not the
     /// earpiece, when nothing is connected. `.allowBluetoothHFP`: a headset's
     /// mic can open (A2DP has no mic).
-    static let options: AVAudioSession.CategoryOptions = [.allowBluetoothHFP, .defaultToSpeaker]
+    ///
+    /// `.interruptSpokenAudioAndMixWithOthers` + `.duckOthers` (task 01a20fdd
+    /// stage 4): with another app's audio playing, a podcast or audiobook is
+    /// PAUSED and music is DUCKED while the mic is open or a reply plays, and
+    /// `deactivate()`'s `.notifyOthersOnDeactivation` lets it resume after.
+    /// Without them the session is non-mixable: opening it interrupts the
+    /// other app, and when that app took its audio back iOS interrupted
+    /// THIS session, which `stopReason` reads as `interrupted`, so a toggled
+    /// turn dropped right after the tap and a reply never played over or
+    /// after a podcast.
+    static let options: AVAudioSession.CategoryOptions = [
+        .allowBluetoothHFP, .defaultToSpeaker, .duckOthers, .interruptSpokenAudioAndMixWithOthers,
+    ]
 
     func activate() throws {
         if isActive { return }
@@ -64,8 +78,10 @@ final class VoiceAudioSession: VoiceAudioSessionControl {
             try backend.setActive(true, options: [])
         } catch {
             try? backend.setCategory(before.0, mode: before.1, options: before.2)
+            VoiceTrace.log("session activate failed other_audio=\(backend.isOtherAudioPlaying) error=\((error as NSError).code)")
             throw error
         }
+        VoiceTrace.log("session activated other_audio=\(backend.isOtherAudioPlaying) route=\(Self.routeLabel(backend.routePortTypes) ?? "builtin")")
         previous = before
         isActive = true
     }
@@ -74,6 +90,7 @@ final class VoiceAudioSession: VoiceAudioSessionControl {
         guard isActive else { return }
         isActive = false
         try? backend.setActive(false, options: .notifyOthersOnDeactivation)
+        VoiceTrace.log("session deactivated notify_others=true")
         if let previous {
             try? backend.setCategory(previous.0, mode: previous.1, options: previous.2)
         }
@@ -108,6 +125,13 @@ final class VoiceAudioSession: VoiceAudioSessionControl {
             guard let raw = note.userInfo?[AVAudioSessionInterruptionTypeKey] as? UInt,
                 AVAudioSession.InterruptionType(rawValue: raw) == .began
             else { return nil }
+            // A began delivered because the APP was suspended earlier is
+            // stale: nothing is interrupting the session now.
+            if let reason = note.userInfo?[AVAudioSessionInterruptionReasonKey] as? UInt,
+                AVAudioSession.InterruptionReason(rawValue: reason) == .appWasSuspended
+            {
+                return nil
+            }
             return "interrupted"
         case AVAudioSession.routeChangeNotification:
             guard let raw = note.userInfo?[AVAudioSessionRouteChangeReasonKey] as? UInt,
