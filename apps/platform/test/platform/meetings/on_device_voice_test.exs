@@ -163,11 +163,35 @@ defmodule Platform.Meetings.OnDeviceVoiceTest do
       assert OnDeviceVoice.speakable_sentences(0, "First one. Second", false) ==
                {["First one."], 1}
 
-      assert OnDeviceVoice.speakable_sentences(0, "First one.", false) == {[], 0}
       assert OnDeviceVoice.speakable_sentences(0, "First one. ", false) == {["First one."], 1}
 
       assert OnDeviceVoice.speakable_sentences(0, "Is it? Yes! Ok", false) ==
                {["Is it?", "Yes!"], 2}
+    end
+
+    test "a chunk that ends on a whole sentence speaks it now (task 01a20fdd stage 4)" do
+      # One whole sentence per reply_chunk, nothing after the mark: the
+      # pattern an agent uses, and the one that kept speech a chunk behind.
+      assert OnDeviceVoice.speakable_sentences(0, "Thanks, that's a useful result.", false) ==
+               {["Thanks, that's a useful result."], 1}
+
+      assert OnDeviceVoice.speakable_sentences(0, "Got you. Is it on?", false) ==
+               {["Got you.", "Is it on?"], 2}
+
+      assert OnDeviceVoice.speakable_sentences(1, "Got you. Is it on?", false) ==
+               {["Is it on?"], 2}
+
+      assert OnDeviceVoice.speakable_sentences(0, ~s(He said "yes."), false) ==
+               {[~s(He said "yes.")], 1}
+    end
+
+    test "at the very end, an abbreviation, an initial or a digit's point still waits" do
+      assert OnDeviceVoice.speakable_sentences(0, "Ask Dr.", false) == {[], 0}
+      assert OnDeviceVoice.speakable_sentences(0, "Use a tool, e.g.", false) == {[], 0}
+      assert OnDeviceVoice.speakable_sentences(0, "Ask J.", false) == {[], 0}
+      assert OnDeviceVoice.speakable_sentences(0, "It costs 3.", false) == {[], 0}
+      assert OnDeviceVoice.speakable_sentences(0, "Done. It costs 3.", false) == {["Done."], 1}
+      assert OnDeviceVoice.speakable_sentences(0, "So do I.", false) == {["So do I."], 1}
     end
 
     test "cumulative text: only the sentences past `spoken`" do

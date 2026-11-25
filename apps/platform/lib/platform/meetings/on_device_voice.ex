@@ -226,7 +226,20 @@ defmodule Platform.Meetings.OnDeviceVoice do
   # An unclosed `**` or backtick in a partial chunk is never read aloud.
   defp drop_stray_marks(text), do: text |> String.replace(~r/[*`]|~~/u, "") |> String.trim()
 
-  defp ends_a_sentence?(raw), do: Regex.match?(~r/[.!?]+["'”’)\]*_]*\s+$/u, raw)
+  # The open line's last sentence is complete when its terminal mark is
+  # followed by whitespace, or (task 01a20fdd stage 4) when the text ENDS on
+  # it: an agent that streams one whole sentence per reply_chunk sends
+  # "First one." with nothing after, and holding that until the next chunk
+  # kept every reply one chunk behind (voice-0125-b on the iPhone: sentence 1
+  # spoken only when chunk 2 arrived 4.5 s later; voice-0125-c, one chunk
+  # then done, spoke nothing early). Still held at the very end: an
+  # abbreviation or initial ("Dr.", "e.g.", "J.") and a digit before the
+  # point ("3." may yet be "3.5"), where a token stream can stop mid-sentence.
+  defp ends_a_sentence?(raw) do
+    Regex.match?(~r/[.!?]+["'”’)\]*_]*\s+$/u, raw) or
+      (Regex.match?(~r/[^\d\s.!?][.!?]+["'”’)\]*_]*$/u, raw) and
+         not abbreviation?(String.trim(raw)))
+  end
 
   # Sentences of one line. `complete?`: the line's last piece is a sentence
   # too (its line ended); otherwise it is the held-back tail.
