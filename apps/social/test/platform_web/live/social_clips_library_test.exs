@@ -321,8 +321,37 @@ defmodule PlatformWeb.SocialClipsLibraryTest do
            )
 
     html = view |> element(tile) |> render()
-    refute html =~ "9 Nov 2026"
+    published_row = view |> element("#{tile} [data-role=library-platform]", "TT") |> render()
+
+    assert published_row |> LazyHTML.from_fragment() |> LazyHTML.text() ==
+             "TTPublished 10 Nov 2026, 09:02 UTC"
+
     assert html =~ ~r/YT<\/span><span class="text-subtle">Published<\/span>/
+  end
+
+  test "a 29-Nov schedule cannot mask an unsupported 9-Nov date on a published entry", %{
+    conn: conn,
+    w: w
+  } do
+    clip = clip!(w, "Independent dates", %{}, review_status: "approved")
+    scheduled_at = ~U[2026-11-29 12:00:00.000000Z]
+    published_at = ~U[2026-11-10 09:02:00.000000Z]
+    post!(w, clip, w.ig, "scheduled", scheduled_at: scheduled_at)
+
+    post!(w, clip, w.tiktok, "published",
+      scheduled_at: ~U[2026-11-09 00:00:00.000000Z],
+      published_at: published_at
+    )
+
+    # IG may be uploading once its schedule expires; only TT's stored date matters here.
+
+    view = open(conn, w.approver, w.profile)
+
+    published_row =
+      view |> element("#library-clip-#{clip.id} [data-role=library-platform]", "TT") |> render()
+
+    assert published_row |> LazyHTML.from_fragment() |> LazyHTML.text() ==
+             "TTPublished 10 Nov 2026, 09:02 UTC"
   end
 
   test "Show uses parent's authorized switch path, preserves other filters and removes stale cards",
