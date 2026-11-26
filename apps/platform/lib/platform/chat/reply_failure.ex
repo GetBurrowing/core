@@ -9,7 +9,7 @@ defmodule Platform.Chat.ReplyFailure do
   into the space, authored by the space's system participant, with metadata
 
       %{"kind" => "reply_failure", "agent_id" => ..., "message_id" => ...,
-        "cause" => "needs_login" | "stopped" | "crashed" | "unknown"}
+        "cause" => "needs_login" | "stopped" | "crashed" | "offline" | "unknown"}
 
   and the two lines of copy from the design canvas
   (01a10325-8f2d-7001-b858-b92639451ceb), verbatim:
@@ -101,10 +101,10 @@ defmodule Platform.Chat.ReplyFailure do
   # "Something went wrong before Butter could reply" sat under a message
   # nobody had addressed to Butter).
   @addressed_reasons [:mention, :directed, :multi_mention, :reply]
-  @causes ~w(needs_login stopped crashed unknown)a
+  @causes ~w(needs_login stopped crashed offline unknown)a
   @default_dedupe_s 300
 
-  @type cause :: :needs_login | :stopped | :crashed | :unknown
+  @type cause :: :needs_login | :stopped | :crashed | :offline | :unknown
 
   @doc "The causes a notice can carry."
   @spec causes() :: [cause()]
@@ -551,8 +551,19 @@ defmodule Platform.Chat.ReplyFailure do
   For a native agent, what the install's agent host last observed decides it
   (`Platform.AgentHost.status/1`, stage 2): `needs_login`, `crashed` and
   `stopped` read as themselves. With no observation, a native runtime that is
-  offline because it was told to stop is `:stopped`. Everything else is
-  `:unknown`.
+  offline because it was told to stop is `:stopped`.
+
+  An external (federated) runtime that is offline is `:offline`, whatever its
+  `desired_state` says (task 01a215fb). Its `desired_state` records no
+  decision: the schema defaults it to "stopped" and
+  `Platform.Agents.NativeAgents.set_desired_state/2` refuses any runtime the
+  install does not manage, so a parked runtime and one that dropped a minute
+  ago read the same. What is observable is only that it has not connected,
+  so the line says that and not "stopped".
+
+  Everything else is `:unknown`, including an install-managed runtime that
+  should be running, `:no_runtime`, and a delivered dispatch that got no
+  reply.
   """
   @spec cause_for(Agent.t(), term()) :: cause()
   # The agent host just found the agent's API key rejected (stage 7 round 2):
@@ -578,6 +589,7 @@ defmodule Platform.Chat.ReplyFailure do
   defp fallback_cause(agent, :runtime_offline) do
     case Federation.get_runtime_for_agent(agent) do
       %AgentRuntime{managed_by: "install", desired_state: "stopped"} -> :stopped
+      %AgentRuntime{managed_by: managed_by} when managed_by != "install" -> :offline
       _ -> :unknown
     end
   end
@@ -593,6 +605,7 @@ defmodule Platform.Chat.ReplyFailure do
   def cause_line(:needs_login, name), do: "#{name}'s Claude login has expired."
   def cause_line(:stopped, name), do: "#{name} is stopped."
   def cause_line(:crashed, name), do: "#{name} stopped unexpectedly while replying."
+  def cause_line(:offline, name), do: "#{name} is offline."
   def cause_line(_unknown, name), do: "Something went wrong before #{name} could reply."
 
   @doc "True for a reply-failure notice. `AttentionRouter` never routes one."

@@ -160,6 +160,41 @@ defmodule PlatformWeb.Components.ReplyFailureRowTest do
     assert String.trim(LazyHTML.text(action)) == "Restart Ada"
   end
 
+  # Task 01a215fb: an external agent whose runtime is not connected. Suite
+  # cannot start or restart a runtime it does not run, so the action opens
+  # the agent.
+  test "an offline external agent's notice offers Open, not Start or Restart", %{owner: owner} do
+    n = System.unique_integer([:positive])
+
+    runtime =
+      Repo.insert!(%Platform.Agents.AgentRuntime{
+        owner_user_id: owner.id,
+        status: "active",
+        runtime_id: "rf-row-external-#{n}",
+        display_name: "Bea runtime"
+      })
+
+    {:ok, bea} =
+      Platform.Federation.link_agent(runtime, %{
+        slug: "bea-#{n}",
+        name: "Bea",
+        status: "active"
+      })
+
+    refute NativeAgents.managed?(bea)
+
+    doc = notice(bea, "offline") |> row_html(owner) |> LazyHTML.from_fragment()
+    text = LazyHTML.text(doc)
+
+    assert text =~ "Bea couldn't reply to this message."
+    assert text =~ "Bea is offline."
+    refute text =~ "Something went wrong"
+
+    [action] = doc |> LazyHTML.query(~s([data-role="reply-failure-action"])) |> Enum.to_list()
+    assert String.trim(LazyHTML.text(action)) == "Open Bea"
+    assert doc |> LazyHTML.query(~s([data-role="reply-failure-handoff"])) |> Enum.empty?()
+  end
+
   test "an admin who does not own the agent is a manager too", %{agent: agent} do
     admin = user!("admin", "admin")
     html = row_html(notice(agent, "stopped"), admin)
