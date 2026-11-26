@@ -13,7 +13,7 @@ defmodule Platform.Chat.ReplyFailureTest do
 
   alias Ecto.Adapters.SQL.Sandbox
   alias Platform.Accounts.User
-  alias Platform.Agents.{Agent, NativeAgents}
+  alias Platform.Agents.{Agent, AgentRuntime, NativeAgents}
   alias Platform.Chat
   alias Platform.Chat.{AttentionRouter, Message, ReplyFailure}
   alias Platform.Federation.RuntimePresence
@@ -28,6 +28,7 @@ defmodule Platform.Chat.ReplyFailureTest do
     previous_module = Application.get_env(:platform, :chat_agent_module)
     previous_mode = Application.get_env(:platform, :chat_agent_dispatch_mode)
     previous_window = Application.get_env(:platform, :reply_failure_notice_dedupe_s)
+    previous_standing = Application.get_env(:platform, :reply_failure_standing_notice_s)
 
     Application.put_env(:platform, :chat_agent_dispatch_mode, :sync)
 
@@ -35,6 +36,7 @@ defmodule Platform.Chat.ReplyFailureTest do
       restore(:chat_agent_module, previous_module)
       restore(:chat_agent_dispatch_mode, previous_mode)
       restore(:reply_failure_notice_dedupe_s, previous_window)
+      restore(:reply_failure_standing_notice_s, previous_standing)
     end)
 
     router = Process.whereis(AttentionRouter) || start_supervised!({AttentionRouter, []})
@@ -223,6 +225,252 @@ defmodule Platform.Chat.ReplyFailureTest do
     end
   end
 
+  defp external_agent(name) do
+    owner = create_user()
+    n = System.unique_integer([:positive])
+
+    runtime =
+      Repo.insert!(%AgentRuntime{
+        owner_user_id: owner.id,
+        status: "active",
+        runtime_id: "rf-external-#{n}",
+        display_name: "#{name} runtime"
+      })
+
+    {:ok, agent} =
+      Platform.Federation.link_agent(runtime, %{
+        slug: "#{String.downcase(name)}-#{n}",
+        name: name,
+        status: "active"
+      })
+
+    runtime = Repo.get!(AgentRuntime, runtime.id)
+    assert runtime.managed_by == nil
+    assert runtime.agent_id == agent.id
+    refute RuntimePresence.online?(runtime.runtime_id)
+
+    {agent, runtime}
+  end
+
+  # The agent is not seated, so the router never dispatches the message to
+  # it: the only notice is the one this test asks for.
+  defp unanswered(space, user, content) do
+    {:ok, message} =
+      Chat.post_message(%{
+        space_id: space.id,
+        participant_id: user.id,
+        content_type: "text",
+        content: content
+      })
+
+    :ok = GenServer.call(AttentionRouter, :__drain__)
+    message
+  end
+
+  # Task 01a215fb: an external runtime's desired_state records no decision
+  # (the schema defaults it to "stopped" and set_desired_state/2 refuses an
+  # unmanaged runtime), so "X is stopped." would claim one nobody made. What
+  # is observable is that it has not connected: "X is offline.".
+  #
+  # Mutants these name:
+  #
+  #   * keep the install-only match → both external cases read "unknown";
+  #   * require desired_state "stopped" on the external clause → the
+  #     "running" case reads "unknown";
+  #   * drop the managed_by guard → the install-should-be-running test above
+  #     reads "offline".
+  describe "an offline external agent" do
+    test "with the default desired_state reads as offline, not stopped" do
+      {space, user} = channel_with_user()
+      {bea, runtime} = external_agent("Bea")
+      assert runtime.desired_state == "stopped"
+
+      message = unanswered(space, user, "bea, are you there?")
+
+      assert {:ok, %Message{} = notice} =
+               ReplyFailure.notify(%{agent: bea, message: message}, :runtime_offline)
+
+      assert notice.content == "Bea couldn't reply to this message.\nBea is offline."
+
+      assert notice.metadata == %{
+               "kind" => "reply_failure",
+               "agent_id" => bea.id,
+               "message_id" => message.id,
+               "cause" => "offline"
+             }
+
+      assert [_one] = notices(space)
+    end
+
+    test "with desired_state running still reads as offline" do
+      {space, user} = channel_with_user()
+      {bea, runtime} = external_agent("Bea")
+
+      runtime
+      |> AgentRuntime.changeset(%{desired_state: "running"})
+      |> Repo.update!()
+
+      assert Repo.get!(AgentRuntime, runtime.id).desired_state == "running"
+
+      message = unanswered(space, user, "bea, hello")
+
+      assert {:ok, %Message{} = notice} =
+               ReplyFailure.notify(%{agent: bea, message: message}, :runtime_offline)
+
+      assert notice.metadata["cause"] == "offline"
+      assert notice.content == "Bea couldn't reply to this message.\nBea is offline."
+    end
+
+    test "an install-managed stopped runtime still reads as stopped" do
+      {space, user} = channel_with_user()
+
+      {:ok, ada, rt} =
+        NativeAgents.create(create_user().id, %{name: "Ada", harness: "claude_code"})
+
+      assert rt.managed_by == "install"
+      assert rt.desired_state == "stopped"
+      assert ReplyFailure.cause_for(ada, :runtime_offline) == :stopped
+
+      message = unanswered(space, user, "ada, hello")
+
+      assert {:ok, %Message{} = notice} =
+               ReplyFailure.notify(%{agent: ada, message: message}, :runtime_offline)
+
+      assert notice.metadata["cause"] == "stopped"
+      assert notice.content == "Ada couldn't reply to this message.\nAda is stopped."
+    end
+
+    test "other reasons stay unknown for an external agent" do
+      {bea, _runtime} = external_agent("Bea")
+
+      assert ReplyFailure.cause_for(bea, :no_runtime) == :unknown
+      assert ReplyFailure.cause_for(bea, {:no_reply, :timeout}) == :unknown
+      assert ReplyFailure.cause_for(bea, :no_response) == :unknown
+      # Positive control: the same agent, offline, is :offline.
+      assert ReplyFailure.cause_for(bea, :runtime_offline) == :offline
+    end
+  end
+
+  defp broadcast(agent, message),
+    do:
+      ReplyFailure.notify(
+        %{agent: agent, message: message, reason: :multi_mention},
+        :runtime_offline
+      )
+
+  # Task 01a215fb stage 2: a broadcast (`:multi_mention`) that names parked
+  # agents tells a space once a day that each is stopped or offline. Every
+  # case sets the 300 s per-agent window to 0, so only the standing rule can
+  # be what holds a second notice back.
+  #
+  # Mutants these name:
+  #
+  #   * apply the rule to every reason → the lone :mention case gets no notice;
+  #   * drop the cause filter → the :unknown broadcast case gets one notice;
+  #   * drop the space condition → the second space gets no notice;
+  #   * drop the inserted_at bound → the backdated case gets no notice.
+  describe "a standing fact on a broadcast" do
+    setup do
+      Application.put_env(:platform, :reply_failure_notice_dedupe_s, 0)
+      :ok
+    end
+
+    test "two broadcasts the same day give one offline notice" do
+      {space, user} = channel_with_user()
+      {bea, _runtime} = external_agent("Bea")
+
+      first = unanswered(space, user, "bea and cy, standup?")
+      second = unanswered(space, user, "bea and cy, standup again?")
+
+      assert {:ok, %Message{metadata: %{"cause" => "offline"}}} = broadcast(bea, first)
+      assert :deduped = broadcast(bea, second)
+      assert [%Message{} = notice] = notices(space)
+      assert notice.metadata["message_id"] == first.id
+    end
+
+    test "POSITIVE CONTROL: with the standing window at 0, each broadcast gets its notice" do
+      Application.put_env(:platform, :reply_failure_standing_notice_s, 0)
+      {space, user} = channel_with_user()
+      {bea, _runtime} = external_agent("Bea")
+
+      assert {:ok, _} = broadcast(bea, unanswered(space, user, "one"))
+      assert {:ok, _} = broadcast(bea, unanswered(space, user, "two"))
+      assert length(notices(space)) == 2
+    end
+
+    test "a lone mention after a broadcast notice is still told" do
+      {space, user} = channel_with_user()
+      {bea, _runtime} = external_agent("Bea")
+
+      assert {:ok, _} = broadcast(bea, unanswered(space, user, "bea and cy?"))
+      lone = unanswered(space, user, "bea, just you")
+
+      assert {:ok, %Message{metadata: %{"cause" => "offline"}}} =
+               ReplyFailure.notify(
+                 %{agent: bea, message: lone, reason: :mention},
+                 :runtime_offline
+               )
+
+      assert length(notices(space)) == 2
+    end
+
+    test "an unknown cause on a broadcast is never held back" do
+      {space, user} = channel_with_user()
+
+      {:ok, dot} =
+        %Agent{}
+        |> Agent.changeset(%{
+          slug: "dot-#{System.unique_integer([:positive])}",
+          name: "Dot",
+          status: "active",
+          runtime_type: "external"
+        })
+        |> Repo.insert()
+
+      assert dot.runtime_id == nil
+      context = &%{agent: dot, message: &1, reason: :multi_mention}
+
+      assert {:ok, %Message{metadata: %{"cause" => "unknown"}}} =
+               ReplyFailure.notify(context.(unanswered(space, user, "one")), :no_runtime)
+
+      assert {:ok, %Message{metadata: %{"cause" => "unknown"}}} =
+               ReplyFailure.notify(context.(unanswered(space, user, "two")), :no_runtime)
+
+      assert length(notices(space)) == 2
+    end
+
+    test "another space the same day gets its own notice" do
+      {space, user} = channel_with_user()
+      {other, other_user} = channel_with_user()
+      {bea, _runtime} = external_agent("Bea")
+
+      assert {:ok, _} = broadcast(bea, unanswered(space, user, "here"))
+      assert {:ok, _} = broadcast(bea, unanswered(other, other_user, "there"))
+      assert [_] = notices(space)
+      assert [_] = notices(other)
+    end
+
+    test "a notice older than the window does not hold the next one back" do
+      {space, user} = channel_with_user()
+      {bea, _runtime} = external_agent("Bea")
+
+      assert {:ok, %Message{id: old_id}} = broadcast(bea, unanswered(space, user, "yesterday"))
+
+      past =
+        DateTime.add(
+          DateTime.utc_now(),
+          -(ReplyFailure.standing_window_ms() + 60_000),
+          :millisecond
+        )
+
+      {1, _} =
+        Repo.update_all(from(m in Message, where: m.id == ^old_id), set: [inserted_at: past])
+
+      assert {:ok, _} = broadcast(bea, unanswered(space, user, "today"))
+      assert length(notices(space)) == 2
+    end
+  end
+
   describe "a system-event space" do
     test "gets no notice: nobody there is waiting for the reply" do
       Application.put_env(:platform, :chat_agent_module, CodexAuthMissingChat)
@@ -300,6 +548,9 @@ defmodule Platform.Chat.ReplyFailureTest do
 
       assert ReplyFailure.cause_line(:crashed, "Ada") ==
                "Ada stopped unexpectedly while replying."
+
+      assert ReplyFailure.cause_line(:offline, "Ada") == "Ada is offline."
+      assert :offline in ReplyFailure.causes()
 
       assert ReplyFailure.cause_line(:unknown, "Ada") ==
                "Something went wrong before Ada could reply."

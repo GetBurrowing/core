@@ -9,7 +9,7 @@ defmodule Platform.Chat.ReplyFailure do
   into the space, authored by the space's system participant, with metadata
 
       %{"kind" => "reply_failure", "agent_id" => ..., "message_id" => ...,
-        "cause" => "needs_login" | "stopped" | "crashed" | "unknown"}
+        "cause" => "needs_login" | "stopped" | "crashed" | "offline" | "unknown"}
 
   and the two lines of copy from the design canvas
   (01a10325-8f2d-7001-b858-b92639451ceb), verbatim:
@@ -59,6 +59,21 @@ defmodule Platform.Chat.ReplyFailure do
   ETS, per node): a restart may let one extra notice through, which is the
   cheaper failure.
 
+  A standing fact on a broadcast is told once per space per day (task
+  01a215fb stage 2). When `context.reason` is `:multi_mention` and the cause
+  is `:stopped` or `:offline`, nothing is posted (`:deduped`) if this agent
+  already has a "stopped" or "offline" notice in this space inside the
+  standing window (`REPLY_FAILURE_STANDING_NOTICE_S`, default 86_400 s, read
+  per call; 0 turns the rule off). Without it, every post that names a
+  handful of parked agents got one notice per agent once the delivery queue's
+  TTL ran out, and two such posts nine minutes apart (past the 300 s window)
+  put fourteen notices in one channel. A parked agent is not news the second
+  time. The rule never applies to a single addressed message (`:mention`,
+  `:directed`, `:reply`), so a person who names one stopped agent is told
+  every time, nor to `needs_login`, `crashed` or `unknown`, which are
+  failures rather than standing facts. The check reads the notice rows, not
+  ETS, so a restart or a second node cannot post the day's notice twice.
+
   ## Declined chat (task 01a1b20f)
 
   An agent with `accepts_chat: false` is single-purpose: it answers
@@ -101,10 +116,13 @@ defmodule Platform.Chat.ReplyFailure do
   # "Something went wrong before Butter could reply" sat under a message
   # nobody had addressed to Butter).
   @addressed_reasons [:mention, :directed, :multi_mention, :reply]
-  @causes ~w(needs_login stopped crashed unknown)a
+  @causes ~w(needs_login stopped crashed offline unknown)a
   @default_dedupe_s 300
+  @default_standing_notice_s 86_400
+  # Causes that describe how an agent stands, not a failure of this message.
+  @standing_causes ~w(stopped offline)
 
-  @type cause :: :needs_login | :stopped | :crashed | :unknown
+  @type cause :: :needs_login | :stopped | :crashed | :offline | :unknown
 
   @doc "The causes a notice can carry."
   @spec causes() :: [cause()]
@@ -130,9 +148,15 @@ defmodule Platform.Chat.ReplyFailure do
       else
         cause = cause_for(agent, reason)
 
-        case Dedupe.claim(agent.id, message.id, dedupe_window_ms()) do
-          :ok -> post(agent, message, cause, detail(reason))
-          :duplicate -> :deduped
+        cond do
+          standing_notice_posted?(context, agent, message, cause) ->
+            :deduped
+
+          Dedupe.claim(agent.id, message.id, dedupe_window_ms()) == :ok ->
+            post(agent, message, cause, detail(reason))
+
+          true ->
+            :deduped
         end
       end
 
@@ -150,6 +174,36 @@ defmodule Platform.Chat.ReplyFailure do
   end
 
   def notify(_context, _reason), do: {:error, :invalid_context}
+
+  # A broadcast (`:multi_mention`) that would tell the space a standing fact
+  # it was already told today: see "## Dedupe" in the moduledoc.
+  defp standing_notice_posted?(
+         %{reason: :multi_mention},
+         %Agent{id: agent_id},
+         %Message{space_id: space_id},
+         cause
+       ) do
+    window_ms = standing_window_ms()
+
+    if window_ms > 0 and Atom.to_string(cause) in @standing_causes do
+      since = DateTime.add(DateTime.utc_now(), -window_ms, :millisecond)
+
+      Repo.exists?(
+        from(m in Message,
+          where:
+            m.space_id == ^space_id and m.content_type == "system" and is_nil(m.deleted_at) and
+              fragment("?->>'kind'", m.metadata) == ^@kind and
+              fragment("?->>'agent_id'", m.metadata) == ^agent_id and
+              fragment("?->>'cause'", m.metadata) in ^@standing_causes and
+              m.inserted_at >= ^since
+        )
+      )
+    else
+      false
+    end
+  end
+
+  defp standing_notice_posted?(_context, _agent, _message, _cause), do: false
 
   @doc """
   Post the one-line notice that `context`'s agent does not take chat
@@ -479,7 +533,12 @@ defmodule Platform.Chat.ReplyFailure do
     with {:ok, agent, message} <- unanswered(agent_id, message_id),
          false <- runtime_alive?(agent) do
       notify(
-        %{agent: agent, message: message, agent_participant_id: entry[:agent_participant_id]},
+        %{
+          agent: agent,
+          message: message,
+          agent_participant_id: entry[:agent_participant_id],
+          reason: get_in(entry, [:signal, :reason])
+        },
         :runtime_offline
       )
     else
@@ -551,8 +610,19 @@ defmodule Platform.Chat.ReplyFailure do
   For a native agent, what the install's agent host last observed decides it
   (`Platform.AgentHost.status/1`, stage 2): `needs_login`, `crashed` and
   `stopped` read as themselves. With no observation, a native runtime that is
-  offline because it was told to stop is `:stopped`. Everything else is
-  `:unknown`.
+  offline because it was told to stop is `:stopped`.
+
+  An external (federated) runtime that is offline is `:offline`, whatever its
+  `desired_state` says (task 01a215fb). Its `desired_state` records no
+  decision: the schema defaults it to "stopped" and
+  `Platform.Agents.NativeAgents.set_desired_state/2` refuses any runtime the
+  install does not manage, so a parked runtime and one that dropped a minute
+  ago read the same. What is observable is only that it has not connected,
+  so the line says that and not "stopped".
+
+  Everything else is `:unknown`, including an install-managed runtime that
+  should be running, `:no_runtime`, and a delivered dispatch that got no
+  reply.
   """
   @spec cause_for(Agent.t(), term()) :: cause()
   # The agent host just found the agent's API key rejected (stage 7 round 2):
@@ -578,6 +648,7 @@ defmodule Platform.Chat.ReplyFailure do
   defp fallback_cause(agent, :runtime_offline) do
     case Federation.get_runtime_for_agent(agent) do
       %AgentRuntime{managed_by: "install", desired_state: "stopped"} -> :stopped
+      %AgentRuntime{managed_by: managed_by} when managed_by != "install" -> :offline
       _ -> :unknown
     end
   end
@@ -593,12 +664,30 @@ defmodule Platform.Chat.ReplyFailure do
   def cause_line(:needs_login, name), do: "#{name}'s Claude login has expired."
   def cause_line(:stopped, name), do: "#{name} is stopped."
   def cause_line(:crashed, name), do: "#{name} stopped unexpectedly while replying."
+  def cause_line(:offline, name), do: "#{name} is offline."
   def cause_line(_unknown, name), do: "Something went wrong before #{name} could reply."
 
   @doc "True for a reply-failure notice. `AttentionRouter` never routes one."
   @spec notice?(Message.t() | map()) :: boolean()
   def notice?(%{content_type: "system", metadata: %{"kind" => @kind}}), do: true
   def notice?(_), do: false
+
+  @doc """
+  The standing-fact window in milliseconds, read per call from
+  `config :platform, :reply_failure_standing_notice_s` (default one day).
+  0 turns the broadcast rule off (see "## Dedupe").
+  """
+  @spec standing_window_ms() :: non_neg_integer()
+  def standing_window_ms do
+    case Application.get_env(
+           :platform,
+           :reply_failure_standing_notice_s,
+           @default_standing_notice_s
+         ) do
+      seconds when is_integer(seconds) and seconds >= 0 -> seconds * 1000
+      _ -> @default_standing_notice_s * 1000
+    end
+  end
 
   @doc """
   The dedupe window in milliseconds, read per call from

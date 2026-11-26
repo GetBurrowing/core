@@ -158,23 +158,42 @@ defmodule Platform.Orchestration.ExecutionSpace do
     # Use a deterministic ID so we find the same participant on restart
     system_id = system_participant_id(space_id)
 
-    case Repo.get_by(Participant,
-           space_id: space_id,
-           participant_type: "system",
-           participant_id: system_id
-         ) do
+    case get_system_participant(space_id, system_id) do
       %Participant{} = p ->
         {:ok, p}
 
       nil ->
-        Chat.add_participant(space_id, %{
+        attrs = %{
           participant_type: "system",
           participant_id: system_id,
           display_name: @system_display_name,
           attention_mode: "mention",
           joined_at: DateTime.utc_now()
-        })
+        }
+
+        case Chat.add_participant(space_id, attrs) do
+          {:ok, p} ->
+            {:ok, p}
+
+          # Two callers posting the first system line into a space at once
+          # (several held deliveries expiring on one timer, task 01a215fb
+          # stage 2) both miss the read; the loser's insert hits the unique
+          # constraint. The row it lost to is the one it wanted.
+          {:error, _} = error ->
+            case get_system_participant(space_id, system_id) do
+              %Participant{} = p -> {:ok, p}
+              nil -> error
+            end
+        end
     end
+  end
+
+  defp get_system_participant(space_id, system_id) do
+    Repo.get_by(Participant,
+      space_id: space_id,
+      participant_type: "system",
+      participant_id: system_id
+    )
   end
 
   @doc """

@@ -434,7 +434,7 @@ defmodule Platform.Chat.AgentResponder do
               }
             )
 
-            _ = ReplyFailure.notify(context, :runtime_offline)
+            _ = ReplyFailure.notify(Map.put(context, :reason, signal.reason), :runtime_offline)
             {:error, :runtime_offline}
 
           true ->
