@@ -915,9 +915,16 @@ defmodule PlatformWeb.Components.ChatMessage do
   # display rules. It replaces the desktop hover row, the left-gutter reply
   # and the dead long-press lift pill. The glyphs are literal by design; the
   # names are the aria-labels. Neutral surface, never primary.
+  #
+  # The root carries an explicit id. It is a component root that precedes the
+  # message body in `.message-row-inner`; without an id the client keys it by
+  # a magic id minted afresh on every stream reinsert, the patch rebuilds the
+  # body beside it, and a thread reply field in that body blurs once per
+  # @mention keystroke (see ComposerAncestryGuardTest).
   defp message_pill(assigns) do
     ~H"""
     <div
+      id={"message-pill-#{@msg.id}"}
       data-role="message-pill"
       role="toolbar"
       aria-label="Message actions"
