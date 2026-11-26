@@ -1242,8 +1242,13 @@ jobs:
       - name: Install system packages (with Social)
         run: |
           apt-get update
-          apt-get install -y --no-install-recommends build-essential ca-certificates curl git postgresql-client
+          apt-get install -y --no-install-recommends build-essential ca-certificates curl git postgresql-client python3 ffmpeg procps
           update-ca-certificates
+          python3 --version
+          ffmpeg -version
+          ffprobe -version
+          test -x /usr/bin/kill
+          dpkg-query -S /usr/bin/kill
 
       # The guard for the service's POSTGRES_INITDB_ARGS: fails unless the
       # running server reports every setting the lock-wait log depends on.

@@ -108,6 +108,7 @@ defmodule PlatformWeb.SocialClipsReview do
        headline_attempt: nil,
        headline_error: nil,
        appearance_dirty: false,
+       jobs_refresh_rev: 0,
        awaiting_edits: [],
        jobs_timer?: false
      )}
@@ -165,7 +166,9 @@ defmodule PlatformWeb.SocialClipsReview do
 
   defp refresh_job_state(socket) do
     previous = MapSet.new(socket.assigns.queue, & &1.id)
-    socket = load(socket)
+    # A fast job may finish before we ever observe it in the open-job list.
+    # Its event must still reload the appearance child's retained outcome.
+    socket = socket |> assign(:jobs_refresh_rev, socket.assigns.jobs_refresh_rev + 1) |> load()
 
     # A job's completion broadcast may arrive before its clip broadcast. Keep
     # the existing "New clip in Review" notification when polling loads it first.
@@ -966,6 +969,7 @@ defmodule PlatformWeb.SocialClipsReview do
               clip={@clip}
               profile={@profile}
               appearance_jobs={@jobs}
+              appearance_refresh_rev={@jobs_refresh_rev}
               review_id={@id}
               appearance_dirty={@appearance_dirty}
               user_id={@user_id}
@@ -1573,6 +1577,7 @@ defmodule PlatformWeb.SocialClipsReview do
   attr :review_id, :string, required: true
   attr :appearance_dirty, :boolean, default: false
   attr :appearance_jobs, :list, default: []
+  attr :appearance_refresh_rev, :integer, default: 0
 
   attr :profile, :any, required: true
   attr :user_id, :any, required: true
@@ -1770,7 +1775,7 @@ defmodule PlatformWeb.SocialClipsReview do
           :if={@current_version?}
           module={PlatformWeb.SocialClipAppearance}
           id={"appearance-#{@clip.id}"}
-          refresh_key={Enum.map(@appearance_jobs, &{&1.id, &1.status})}
+          refresh_key={{@appearance_refresh_rev, Enum.map(@appearance_jobs, &{&1.id, &1.status})}}
           review_id={@review_id}
           clip={@clip}
           profile={@profile}

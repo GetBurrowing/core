@@ -14,7 +14,7 @@ defmodule Platform.Social.FfprobeOutputIsolationTest do
     on_exit(fn ->
       restore(:ffprobe_path, old_probe)
       restore(:render_tmp_dir, old_tmp)
-      File.rm_rf!(root)
+      unless File.exists?(Path.join(root, "child-exit-unconfirmed")), do: File.rm_rf!(root)
     end)
 
     Application.put_env(:social, :render_tmp_dir, root)
@@ -117,12 +117,94 @@ defmodule Platform.Social.FfprobeOutputIsolationTest do
 
   test "confirmed exit with output cleanup failure reports a private obligation", %{root: root} do
     owned = input(root, "cleanupfail")
-    assert {:error, {:probe_lifecycle, details}} = Ffmpeg.probe_owned(owned, 2_000)
+    assert {:error, {:probe_lifecycle, details}} = unprivileged_cleanup_probe(root, owned)
     assert %{child_exit: :confirmed, input_used?: true, output_dir: dir} = details
     assert File.regular?(owned)
     assert File.dir?(dir)
     File.chmod!(dir, 0o700)
     File.rm_rf!(dir)
+  end
+
+  # Root can remove a 0500 directory. Run the real probe/cleanup in a
+  # short-lived unprivileged VM, with only this fixture's files writable.
+  # No probe result or filesystem operation is mocked.
+  defp unprivileged_cleanup_probe(root, owned) do
+    code_dir = Path.join(root, "child-code")
+    File.mkdir!(code_dir)
+
+    for module <- [Ffmpeg, Platform.Social.Toolchain | Application.spec(:jason, :modules)] do
+      {^module, beam, _} = :code.get_object_code(module)
+      File.write!(Path.join(code_dir, Atom.to_string(module) <> ".beam"), beam)
+    end
+
+    marker = Path.join(root, "child-exit-unconfirmed")
+    File.write!(marker, "Retain fixture input unless the child confirms probe exit.")
+    python = System.find_executable("python3")
+    elixir = System.find_executable("elixir")
+    assert is_binary(python) and is_binary(elixir)
+
+    launcher = """
+    import os, pwd, sys
+    root, executable, *args = sys.argv[1:]
+    if os.geteuid() == 0:
+        user = pwd.getpwnam('nobody')
+        for directory, dirs, files in os.walk(root):
+            os.chown(directory, user.pw_uid, user.pw_gid)
+            for name in files:
+                os.chown(os.path.join(directory, name), user.pw_uid, user.pw_gid)
+        os.setgroups([])
+        os.setgid(user.pw_gid)
+        os.setuid(user.pw_uid)
+    if os.geteuid() == 0:
+        raise RuntimeError('cleanup fixture must not run as root')
+    os.execv(executable, [executable, *args])
+    """
+
+    child = """
+    [root, owned] = System.argv()
+    Application.put_env(:social, :render_tmp_dir, root)
+    Application.put_env(:social, :ffprobe_path, Path.join(root, "fake-ffprobe"))
+    result = Platform.Social.Renderer.Ffmpeg.probe_owned(owned, 2_000)
+    IO.puts("OWNED_PROBE_RESULT:" <> Base.encode64(:erlang.term_to_binary(result)))
+    """
+
+    supervisor = start_supervised!({Task.Supervisor, []})
+
+    task =
+      Task.Supervisor.async_nolink(supervisor, fn ->
+        System.cmd(
+          python,
+          [
+            "-c",
+            launcher,
+            root,
+            elixir,
+            "--erl",
+            "+S 2:2",
+            "-pa",
+            code_dir,
+            "-e",
+            child,
+            "--",
+            root,
+            owned
+          ],
+          stderr_to_stdout: true
+        )
+      end)
+
+    try do
+      assert {:ok, {output, 0}} = Task.yield(task, 15_000)
+      assert [_, encoded] = Regex.run(~r/^OWNED_PROBE_RESULT:(.+)$/m, output)
+      result = encoded |> String.trim() |> Base.decode64!() |> :erlang.binary_to_term([:safe])
+      assert {:error, {:probe_lifecycle, %{child_exit: :confirmed}}} = result
+      File.rm!(marker)
+      result
+    after
+      # A killed launcher cannot attest to its OS child's exit. In that case
+      # leave the marker, so the fixture's on_exit retains its input too.
+      Task.shutdown(task, :brutal_kill)
+    end
   end
 
   test "nonzero remains refusal with diagnostic even if output is valid", %{root: root, log: log} do
