@@ -34,7 +34,8 @@ defmodule Platform.Federation.DeliveryQueueTest do
       :delivery_queue_ttl_ms,
       :delivery_queue_ack_timeout_ms,
       :delivery_queue_max_attempts,
-      :chat_agent_dispatch_mode
+      :chat_agent_dispatch_mode,
+      :reply_failure_notice_dedupe_s
     ]
 
     previous = Map.new(keys, &{&1, Application.fetch_env(:platform, &1)})
@@ -224,6 +225,73 @@ defmodule Platform.Federation.DeliveryQueueTest do
       assert {:error, :runtime_offline} = AgentResponder.respond(signal)
       assert [_notice] = notices(ctx.space)
       assert entries_for(ctx) == []
+    end
+  end
+
+  # Task 01a215fb stage 2: the incident shape. Two posts, minutes apart, each
+  # name the same parked agents; each held message expires on its own timer.
+  # A space is told once a day that each agent is offline, so two agents on
+  # two messages is 2 notices, not 4. The 300 s per-agent window is set to 0,
+  # so only the standing rule can hold the second batch back. The batches are
+  # sequential, as in the incident, so the rule is not racing itself.
+  # Mutant: drop the reason threading in ReplyFailure.undelivered/1 → 4.
+  describe "a broadcast held for parked agents" do
+    test "one offline notice per agent per space, however many posts expire", ctx do
+      Application.put_env(:platform, :delivery_queue_ttl_ms, 200)
+      Application.put_env(:platform, :reply_failure_notice_dedupe_s, 0)
+
+      n = System.unique_integer([:positive])
+
+      {:ok, second} =
+        %Agent{}
+        |> Agent.changeset(%{slug: "dq-b-#{n}", name: "Brook#{n}", status: "active"})
+        |> Repo.insert()
+
+      {:ok, runtime} =
+        Federation.register_runtime(ctx.user.participant_id, %{runtime_id: "dq-b-rt-#{n}"})
+
+      {:ok, activated, _token} = Federation.activate_runtime(runtime)
+      {:ok, second} = Federation.link_agent(activated, second)
+
+      {:ok, second_p} =
+        Chat.add_agent_participant(ctx.space.id, second, display_name: second.name)
+
+      broadcast! = fn text ->
+        {message, signal} = mention!(ctx, text)
+
+        for participant <- [ctx.agent_p, second_p] do
+          signal = %{signal | reason: :multi_mention, participant_id: participant.id}
+          assert :ok = AgentResponder.respond(signal)
+        end
+
+        message
+      end
+
+      runtime_ids = [ctx.runtime.runtime_id, activated.runtime_id]
+
+      # Every held entry has expired and its notice task has had time to run.
+      settle! = fn ->
+        assert_eventually(fn ->
+          not Enum.any?(DeliveryQueue.entries(), &(&1.runtime_id in runtime_ids))
+        end)
+
+        Process.sleep(500)
+
+        ctx.space
+        |> notices()
+        |> Enum.map(&{&1.metadata["agent_id"], &1.metadata["cause"], &1.metadata["message_id"]})
+        |> Enum.sort()
+      end
+
+      first = broadcast!.("@quill @brook standup?")
+
+      expected =
+        Enum.sort([{ctx.agent.id, "offline", first.id}, {second.id, "offline", first.id}])
+
+      assert settle!.() == expected
+
+      _again = broadcast!.("@quill @brook standup, again?")
+      assert settle!.() == expected
     end
   end
 

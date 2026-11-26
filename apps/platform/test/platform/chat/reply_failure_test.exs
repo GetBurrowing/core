@@ -28,6 +28,7 @@ defmodule Platform.Chat.ReplyFailureTest do
     previous_module = Application.get_env(:platform, :chat_agent_module)
     previous_mode = Application.get_env(:platform, :chat_agent_dispatch_mode)
     previous_window = Application.get_env(:platform, :reply_failure_notice_dedupe_s)
+    previous_standing = Application.get_env(:platform, :reply_failure_standing_notice_s)
 
     Application.put_env(:platform, :chat_agent_dispatch_mode, :sync)
 
@@ -35,6 +36,7 @@ defmodule Platform.Chat.ReplyFailureTest do
       restore(:chat_agent_module, previous_module)
       restore(:chat_agent_dispatch_mode, previous_mode)
       restore(:reply_failure_notice_dedupe_s, previous_window)
+      restore(:reply_failure_standing_notice_s, previous_standing)
     end)
 
     router = Process.whereis(AttentionRouter) || start_supervised!({AttentionRouter, []})
@@ -346,6 +348,126 @@ defmodule Platform.Chat.ReplyFailureTest do
       assert ReplyFailure.cause_for(bea, :no_response) == :unknown
       # Positive control: the same agent, offline, is :offline.
       assert ReplyFailure.cause_for(bea, :runtime_offline) == :offline
+    end
+  end
+
+  defp broadcast(agent, message),
+    do:
+      ReplyFailure.notify(
+        %{agent: agent, message: message, reason: :multi_mention},
+        :runtime_offline
+      )
+
+  # Task 01a215fb stage 2: a broadcast (`:multi_mention`) that names parked
+  # agents tells a space once a day that each is stopped or offline. Every
+  # case sets the 300 s per-agent window to 0, so only the standing rule can
+  # be what holds a second notice back.
+  #
+  # Mutants these name:
+  #
+  #   * apply the rule to every reason → the lone :mention case gets no notice;
+  #   * drop the cause filter → the :unknown broadcast case gets one notice;
+  #   * drop the space condition → the second space gets no notice;
+  #   * drop the inserted_at bound → the backdated case gets no notice.
+  describe "a standing fact on a broadcast" do
+    setup do
+      Application.put_env(:platform, :reply_failure_notice_dedupe_s, 0)
+      :ok
+    end
+
+    test "two broadcasts the same day give one offline notice" do
+      {space, user} = channel_with_user()
+      {bea, _runtime} = external_agent("Bea")
+
+      first = unanswered(space, user, "bea and cy, standup?")
+      second = unanswered(space, user, "bea and cy, standup again?")
+
+      assert {:ok, %Message{metadata: %{"cause" => "offline"}}} = broadcast(bea, first)
+      assert :deduped = broadcast(bea, second)
+      assert [%Message{} = notice] = notices(space)
+      assert notice.metadata["message_id"] == first.id
+    end
+
+    test "POSITIVE CONTROL: with the standing window at 0, each broadcast gets its notice" do
+      Application.put_env(:platform, :reply_failure_standing_notice_s, 0)
+      {space, user} = channel_with_user()
+      {bea, _runtime} = external_agent("Bea")
+
+      assert {:ok, _} = broadcast(bea, unanswered(space, user, "one"))
+      assert {:ok, _} = broadcast(bea, unanswered(space, user, "two"))
+      assert length(notices(space)) == 2
+    end
+
+    test "a lone mention after a broadcast notice is still told" do
+      {space, user} = channel_with_user()
+      {bea, _runtime} = external_agent("Bea")
+
+      assert {:ok, _} = broadcast(bea, unanswered(space, user, "bea and cy?"))
+      lone = unanswered(space, user, "bea, just you")
+
+      assert {:ok, %Message{metadata: %{"cause" => "offline"}}} =
+               ReplyFailure.notify(
+                 %{agent: bea, message: lone, reason: :mention},
+                 :runtime_offline
+               )
+
+      assert length(notices(space)) == 2
+    end
+
+    test "an unknown cause on a broadcast is never held back" do
+      {space, user} = channel_with_user()
+
+      {:ok, dot} =
+        %Agent{}
+        |> Agent.changeset(%{
+          slug: "dot-#{System.unique_integer([:positive])}",
+          name: "Dot",
+          status: "active",
+          runtime_type: "external"
+        })
+        |> Repo.insert()
+
+      assert dot.runtime_id == nil
+      context = &%{agent: dot, message: &1, reason: :multi_mention}
+
+      assert {:ok, %Message{metadata: %{"cause" => "unknown"}}} =
+               ReplyFailure.notify(context.(unanswered(space, user, "one")), :no_runtime)
+
+      assert {:ok, %Message{metadata: %{"cause" => "unknown"}}} =
+               ReplyFailure.notify(context.(unanswered(space, user, "two")), :no_runtime)
+
+      assert length(notices(space)) == 2
+    end
+
+    test "another space the same day gets its own notice" do
+      {space, user} = channel_with_user()
+      {other, other_user} = channel_with_user()
+      {bea, _runtime} = external_agent("Bea")
+
+      assert {:ok, _} = broadcast(bea, unanswered(space, user, "here"))
+      assert {:ok, _} = broadcast(bea, unanswered(other, other_user, "there"))
+      assert [_] = notices(space)
+      assert [_] = notices(other)
+    end
+
+    test "a notice older than the window does not hold the next one back" do
+      {space, user} = channel_with_user()
+      {bea, _runtime} = external_agent("Bea")
+
+      assert {:ok, %Message{id: old_id}} = broadcast(bea, unanswered(space, user, "yesterday"))
+
+      past =
+        DateTime.add(
+          DateTime.utc_now(),
+          -(ReplyFailure.standing_window_ms() + 60_000),
+          :millisecond
+        )
+
+      {1, _} =
+        Repo.update_all(from(m in Message, where: m.id == ^old_id), set: [inserted_at: past])
+
+      assert {:ok, _} = broadcast(bea, unanswered(space, user, "today"))
+      assert length(notices(space)) == 2
     end
   end
 

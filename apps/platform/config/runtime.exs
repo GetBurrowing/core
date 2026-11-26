@@ -67,6 +67,10 @@ config :platform,
 #   REPLY_FAILURE_NOTICE_DEDUPE_S  seconds within which an agent gets at most
 #                        one reply-failure notice (Platform.Chat.ReplyFailure),
 #                        default 300.
+#   REPLY_FAILURE_STANDING_NOTICE_S  seconds within which a broadcast
+#                        (:multi_mention) tells a space at most once that an
+#                        agent is stopped or offline (Platform.Chat.ReplyFailure),
+#                        default 86400; 0 turns the rule off.
 #   NATIVE_REPLY_WATCHDOG_S  seconds a native agent has to reply, or show turn
 #                        activity, before its message gets a reply-failure
 #                        notice (Platform.Chat.ReplyFailure.Watchdog), default
@@ -150,6 +154,20 @@ case System.get_env("REPLY_FAILURE_NOTICE_DEDUPE_S") do
     case Integer.parse(String.trim(value)) do
       {seconds, ""} when seconds >= 0 ->
         config :platform, :reply_failure_notice_dedupe_s, seconds
+
+      _ ->
+        :ok
+    end
+end
+
+case System.get_env("REPLY_FAILURE_STANDING_NOTICE_S") do
+  nil ->
+    :ok
+
+  value ->
+    case Integer.parse(String.trim(value)) do
+      {seconds, ""} when seconds >= 0 ->
+        config :platform, :reply_failure_standing_notice_s, seconds
 
       _ ->
         :ok

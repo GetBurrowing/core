@@ -59,6 +59,21 @@ defmodule Platform.Chat.ReplyFailure do
   ETS, per node): a restart may let one extra notice through, which is the
   cheaper failure.
 
+  A standing fact on a broadcast is told once per space per day (task
+  01a215fb stage 2). When `context.reason` is `:multi_mention` and the cause
+  is `:stopped` or `:offline`, nothing is posted (`:deduped`) if this agent
+  already has a "stopped" or "offline" notice in this space inside the
+  standing window (`REPLY_FAILURE_STANDING_NOTICE_S`, default 86_400 s, read
+  per call; 0 turns the rule off). Without it, every post that names a
+  handful of parked agents got one notice per agent once the delivery queue's
+  TTL ran out, and two such posts nine minutes apart (past the 300 s window)
+  put fourteen notices in one channel. A parked agent is not news the second
+  time. The rule never applies to a single addressed message (`:mention`,
+  `:directed`, `:reply`), so a person who names one stopped agent is told
+  every time, nor to `needs_login`, `crashed` or `unknown`, which are
+  failures rather than standing facts. The check reads the notice rows, not
+  ETS, so a restart or a second node cannot post the day's notice twice.
+
   ## Declined chat (task 01a1b20f)
 
   An agent with `accepts_chat: false` is single-purpose: it answers
@@ -103,6 +118,9 @@ defmodule Platform.Chat.ReplyFailure do
   @addressed_reasons [:mention, :directed, :multi_mention, :reply]
   @causes ~w(needs_login stopped crashed offline unknown)a
   @default_dedupe_s 300
+  @default_standing_notice_s 86_400
+  # Causes that describe how an agent stands, not a failure of this message.
+  @standing_causes ~w(stopped offline)
 
   @type cause :: :needs_login | :stopped | :crashed | :offline | :unknown
 
@@ -130,9 +148,15 @@ defmodule Platform.Chat.ReplyFailure do
       else
         cause = cause_for(agent, reason)
 
-        case Dedupe.claim(agent.id, message.id, dedupe_window_ms()) do
-          :ok -> post(agent, message, cause, detail(reason))
-          :duplicate -> :deduped
+        cond do
+          standing_notice_posted?(context, agent, message, cause) ->
+            :deduped
+
+          Dedupe.claim(agent.id, message.id, dedupe_window_ms()) == :ok ->
+            post(agent, message, cause, detail(reason))
+
+          true ->
+            :deduped
         end
       end
 
@@ -150,6 +174,36 @@ defmodule Platform.Chat.ReplyFailure do
   end
 
   def notify(_context, _reason), do: {:error, :invalid_context}
+
+  # A broadcast (`:multi_mention`) that would tell the space a standing fact
+  # it was already told today: see "## Dedupe" in the moduledoc.
+  defp standing_notice_posted?(
+         %{reason: :multi_mention},
+         %Agent{id: agent_id},
+         %Message{space_id: space_id},
+         cause
+       ) do
+    window_ms = standing_window_ms()
+
+    if window_ms > 0 and Atom.to_string(cause) in @standing_causes do
+      since = DateTime.add(DateTime.utc_now(), -window_ms, :millisecond)
+
+      Repo.exists?(
+        from(m in Message,
+          where:
+            m.space_id == ^space_id and m.content_type == "system" and is_nil(m.deleted_at) and
+              fragment("?->>'kind'", m.metadata) == ^@kind and
+              fragment("?->>'agent_id'", m.metadata) == ^agent_id and
+              fragment("?->>'cause'", m.metadata) in ^@standing_causes and
+              m.inserted_at >= ^since
+        )
+      )
+    else
+      false
+    end
+  end
+
+  defp standing_notice_posted?(_context, _agent, _message, _cause), do: false
 
   @doc """
   Post the one-line notice that `context`'s agent does not take chat
@@ -479,7 +533,12 @@ defmodule Platform.Chat.ReplyFailure do
     with {:ok, agent, message} <- unanswered(agent_id, message_id),
          false <- runtime_alive?(agent) do
       notify(
-        %{agent: agent, message: message, agent_participant_id: entry[:agent_participant_id]},
+        %{
+          agent: agent,
+          message: message,
+          agent_participant_id: entry[:agent_participant_id],
+          reason: get_in(entry, [:signal, :reason])
+        },
         :runtime_offline
       )
     else
@@ -612,6 +671,23 @@ defmodule Platform.Chat.ReplyFailure do
   @spec notice?(Message.t() | map()) :: boolean()
   def notice?(%{content_type: "system", metadata: %{"kind" => @kind}}), do: true
   def notice?(_), do: false
+
+  @doc """
+  The standing-fact window in milliseconds, read per call from
+  `config :platform, :reply_failure_standing_notice_s` (default one day).
+  0 turns the broadcast rule off (see "## Dedupe").
+  """
+  @spec standing_window_ms() :: non_neg_integer()
+  def standing_window_ms do
+    case Application.get_env(
+           :platform,
+           :reply_failure_standing_notice_s,
+           @default_standing_notice_s
+         ) do
+      seconds when is_integer(seconds) and seconds >= 0 -> seconds * 1000
+      _ -> @default_standing_notice_s * 1000
+    end
+  end
 
   @doc """
   The dedupe window in milliseconds, read per call from
