@@ -57,6 +57,7 @@ class NoSecretLoggingTest {
             roots.flatMap { dir -> dir.walkTopDown().filter { it.isFile && (it.extension == "kt" || it.extension == "java") }.toList() }
         assertFalse(sources.isEmpty())
         assertTrue(sources.any { it.name == "DebugPushReceiver.kt" })
+        assertTrue(sources.any { it.path.contains("/voice/") && it.name == "BurrowVoicePlugin.kt" })
         val found = sources.flatMap { file -> offences(file.readText()).map { "${file.name}: ${it.trim()}" } }
         assertTrue("log calls naming a secret:\n" + found.joinToString("\n"), found.isEmpty())
     }

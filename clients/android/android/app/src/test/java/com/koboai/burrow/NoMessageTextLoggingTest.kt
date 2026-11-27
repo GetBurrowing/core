@@ -9,7 +9,7 @@ import java.io.File
 /**
  * Source guard (task 01a116c4): no log call in the app may name message
  * text or who and where it came from: a body, text, reply, content, a
- * space name or an author name. A chat push now carries people and
+ * space name or an author name, or what was said in a Voice turn. A chat push now carries people and
  * conversations into shortcuts; none of it belongs in logcat. Mirrors
  * [NoSecretLoggingTest], with its own positive control.
  */
@@ -24,7 +24,7 @@ class NoMessageTextLoggingTest {
                     """System\.(out|err)\.print\w*""",
                 ).joinToString("|", prefix = """\b(""", postfix = """)\s*\("""),
             )
-        private val MESSAGE_TEXT = Regex("""(?i)body|text|reply|content|spaceName|authorName""")
+        private val MESSAGE_TEXT = Regex("""(?i)body|text|reply|content|spaceName|authorName|transcript|partial|heard|words""")
 
         /** The offending lines of [source]: a log call whose line names message text. */
         fun offences(source: String): List<String> =
@@ -43,6 +43,10 @@ class NoMessageTextLoggingTest {
         assertEquals(1, offences("""println(payload.spaceName)""").size)
         assertEquals(1, offences("""Log.w(TAG, message.content)""").size)
         assertEquals(1, offences("""Log.e(TAG, input.text)""").size)
+        // What was said in a Voice turn.
+        assertEquals(1, offences("""Log.d(TAG, "partial=${'$'}partial")""").size)
+        assertEquals(1, offences("""Log.i(TAG, transcript)""").size)
+        assertEquals(1, offences("""Log.i(TAG, "heard ${'$'}words")""").size)
         assertTrue(offences("""Log.d(TAG, "shortcut published")""").isEmpty())
         assertTrue(offences("""val body = payload.body""").isEmpty())
     }
@@ -58,6 +62,9 @@ class NoMessageTextLoggingTest {
         assertFalse(sources.isEmpty())
         assertTrue(sources.any { it.name == "NotificationPresenter.kt" })
         assertTrue(sources.any { it.name == "ConversationShortcuts.kt" })
+        // The Voice plugin handles what the person said (task 01a21e4a): it is scanned too.
+        assertTrue(sources.any { it.path.contains("/voice/") && it.name == "OnDeviceTranscriber.kt" })
+        assertTrue(sources.any { it.path.contains("/voice/") && it.name == "BurrowVoicePlugin.kt" })
         val found = sources.flatMap { file -> offences(file.readText()).map { "${file.name}: ${it.trim()}" } }
         assertTrue("log calls naming message text:\n" + found.joinToString("\n"), found.isEmpty())
     }

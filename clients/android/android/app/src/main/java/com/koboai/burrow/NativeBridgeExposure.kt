@@ -9,7 +9,8 @@ import com.getcapacitor.JSExport
 import com.getcapacitor.MessageHandler
 
 /**
- * Gives the selected install's pages `window.Capacitor` and the `SuiteNative` plugin.
+ * Gives the selected install's pages `window.Capacitor` and the app's plugins
+ * (`SuiteNative`, `BurrowVoice`).
  *
  * Capacitor Android injects its bridge only into its own origin
  * (`https://localhost`) and accepts plugin messages only from its allowed
@@ -35,7 +36,14 @@ class NativeBridgeExposure(
 
     companion object {
         private const val LISTENER = "androidBridge"
-        private val PLUGIN_IDS = listOf("SuiteNative", "CapacitorCookies", "CapacitorHttp", "WebView", "SystemBars")
+
+        /**
+         * The plugins the install's pages can reach. Only these are in the
+         * bridge script, so a plugin missing here is invisible to the page
+         * (BurrowVoice: the Voice tab would silently keep its LiveKit path).
+         */
+        internal val PLUGIN_IDS =
+            listOf("SuiteNative", "BurrowVoice", "CapacitorCookies", "CapacitorHttp", "WebView", "SystemBars")
 
         val supported: Boolean
             get() =

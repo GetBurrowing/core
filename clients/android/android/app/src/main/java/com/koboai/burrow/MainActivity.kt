@@ -24,6 +24,7 @@ import com.koboai.burrow.push.BurrowPush
 import com.koboai.burrow.push.NotificationPresenter
 import com.koboai.burrow.push.PushPayload
 import com.koboai.burrow.shortcuts.ConversationShortcuts
+import com.koboai.burrow.voice.BurrowVoicePlugin
 import com.koboai.burrow.widgets.BriefingRepository
 import com.koboai.burrow.widgets.CountsRepository
 import com.koboai.burrow.widgets.WidgetRefresh
@@ -86,6 +87,8 @@ class MainActivity :
         tokens = KeystoreTokenStore(SharedPreferencesStore(this, KeystoreTokenStore.PREFS_FILE), AndroidKeyStoreCipher())
         client = AppApiClient(tokens)
         registerPlugin(BurrowNativePlugin::class.java)
+        // The Voice tab's on-device speech (task 01a21e4a); exposed by NativeBridgeExposure.PLUGIN_IDS.
+        registerPlugin(BurrowVoicePlugin::class.java)
         enableEdgeToEdge()
         super.onCreate(savedInstanceState)
 
