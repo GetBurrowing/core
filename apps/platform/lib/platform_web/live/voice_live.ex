@@ -183,6 +183,7 @@ defmodule PlatformWeb.VoiceLive do
   alias Platform.Meetings.OnDeviceVoice
   alias Platform.Meetings.VoiceSession
   alias PlatformWeb.SpaceTopics
+  alias PlatformWeb.VoiceLive.Listening
 
   @default_slug "meeting-assistant"
   # VoiceContext's device keys (ClientState namespace "voice").
@@ -257,6 +258,8 @@ defmodule PlatformWeb.VoiceLive do
       |> assign(:native_pocket_missing?, false)
       |> assign(:native_stream, nil)
       |> assign(:native_retired, [])
+      |> assign(:voice_visible?, true)
+      |> assign(:voice_listening_space_id, nil)
       |> SpaceTopics.ensure_holders()
       |> stream(:turns, [])
 
@@ -544,6 +547,7 @@ defmodule PlatformWeb.VoiceLive do
       |> assign(:native_route, route_label(params["route"]))
       |> assign(:on_device?, true)
       |> assign_caption()
+      |> Listening.set_visible(params["visible"] != false)
 
     {:noreply, if(socket.assigns.native_conn, do: socket, else: open_native(socket))}
   end
@@ -569,6 +573,14 @@ defmodule PlatformWeb.VoiceLive do
     Logger.info("[VoiceLive] on-device voice unavailable: #{native_reason(params)}")
     {:noreply, socket}
   end
+
+  # Page visibility from the island (task 01a21e8d): hidden stops the Voice
+  # listening entry so a backgrounded app still gets its pushes.
+  def handle_event("voice_native_visible", %{"visible" => visible}, socket)
+      when is_boolean(visible),
+      do: {:noreply, Listening.set_visible(socket, visible)}
+
+  def handle_event("voice_native_visible", _params, socket), do: {:noreply, socket}
 
   def handle_event(
         "voice_native_turn",
@@ -1002,6 +1014,7 @@ defmodule PlatformWeb.VoiceLive do
         socket
         |> assign(:native_conn, conn)
         |> SpaceTopics.hold(conn.space_id, :voice)
+        |> Listening.listen(conn.space_id)
 
       _ ->
         assign(socket, :native_conn, nil)
@@ -1031,6 +1044,7 @@ defmodule PlatformWeb.VoiceLive do
   defp drop_native(%{assigns: %{on_device?: true}} = socket) do
     socket
     |> SpaceTopics.release_all(:voice)
+    |> Listening.unlisten()
     |> assign(:native_conn, nil)
     |> assign(:native_replies, %{})
     |> assign(:native_announce, nil)

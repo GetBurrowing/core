@@ -560,14 +560,22 @@ defmodule Platform.Chat.AttentionRouter do
 
     log_added_attention(space, message, attention, decisions, silenced_skipped, :none)
 
-    # Determine which participants are currently online via presence.
-    online_user_ids = space_id |> Presence.list_space() |> Map.keys() |> MapSet.new()
+    # Determine which participants are currently online via presence. Read
+    # ONCE: the online set and the Voice-listener set (task 01a21e8d) both
+    # come from this one map.
+    presences = Presence.list_space(space_id)
+    online_user_ids = presences |> Map.keys() |> MapSet.new()
+    voice_listener_ids = Presence.voice_listener_ids(presences)
 
     # Preload message author display name for notification body.
     # The author participant itself (task 01a111bb): the push carries its
     # display name AND its participant type/id, so the iOS Notification
     # Service Extension can name the sender. "Someone" when unresolved.
     author = Enum.find(participants, &(&1.id == author_id))
+
+    # Only an AGENT's message is what a Voice listener hears spoken; a human's
+    # message keeps today's presence rules.
+    agent_authored? = match?(%Participant{participant_type: "agent"}, author)
 
     # Added attention is sent BY the adder: the push names who asked.
     sender = attention_adder(attention) || author || "Someone"
@@ -599,8 +607,18 @@ defmodule Platform.Chat.AttentionRouter do
           participant = Map.get(participant_by_id, pid)
           user_id = if participant, do: participant.participant_id, else: pid
 
-          if send_push?(reason, MapSet.member?(online_user_ids, user_id)) do
-            maybe_send_push(participant || pid, sender, message, reason, space)
+          online? = MapSet.member?(online_user_ids, user_id)
+          voice_listening? = agent_authored? and MapSet.member?(voice_listener_ids, user_id)
+
+          cond do
+            send_push?(reason, online?, voice_listening?) ->
+              maybe_send_push(participant || pid, sender, message, reason, space)
+
+            voice_listening? ->
+              emit_voice_push_suppressed(reason)
+
+            true ->
+              :ok
           end
       end
 
@@ -1531,6 +1549,27 @@ defmodule Platform.Chat.AttentionRouter do
   @spec send_push?(atom(), boolean()) :: boolean()
   def send_push?(:mention, _online?), do: true
   def send_push?(_reason, online?), do: not online?
+
+  @doc """
+  `send_push?/2` with the Voice-listening gate in front of it (task 01a21e8d).
+
+  `voice_listening?` is true when the recipient is listening on the Voice page
+  in this space (`Presence.voice_listener_ids/1`) AND the message is an
+  agent's. The person is hearing the reply spoken, so no reason pushes, not
+  even `:mention`. Otherwise this is exactly `send_push?/2`.
+
+  Pure, like `send_push?/2`: the call site computes both booleans.
+  """
+  @spec send_push?(atom(), boolean(), boolean()) :: boolean()
+  def send_push?(_reason, _online?, true), do: false
+  def send_push?(reason, online?, false), do: send_push?(reason, online?)
+
+  # Counts only: the reason atom, never ids, names or message text.
+  defp emit_voice_push_suppressed(reason) do
+    :telemetry.execute([:platform, :push, :suppressed_active_voice], %{count: 1}, %{
+      reason: reason
+    })
+  end
 
   @doc """
   Build the push-notification title for a given sender + routing reason.
