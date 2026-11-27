@@ -79,6 +79,8 @@ class BurrowVoiceMethodsTest {
         val manifest = File("src/main/AndroidManifest.xml").readText()
         assertTrue(manifest.contains("android.permission.RECORD_AUDIO"))
         assertTrue(manifest.contains("android.permission.MODIFY_AUDIO_SETTINGS"))
+        // Package visibility: without it a non-system TextToSpeech engine is invisible.
+        assertTrue(manifest.contains("android.intent.action.TTS_SERVICE"))
         val permission =
             BurrowVoicePlugin::class.java
                 .getAnnotation(CapacitorPlugin::class.java)!!
