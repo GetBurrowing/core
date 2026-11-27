@@ -7,8 +7,9 @@ the GitHub API, and Google's Maven repository. The iOS reading this extends is
 voice-to-clip proof below reuses it.
 
 Nothing listed here is bundled in the APK or AAB except the LiteRT runtime
-libraries (stage 3 adds the dependency). The model files and voices are
-downloaded on first use from the pinned revision.
+libraries (a dependency since stage 3). The model files and voices are
+downloaded on first use from the pinned revision, into the app's no-backup
+directory (`voice/pocket/PocketModelStore.kt`).
 
 ## Verdict
 
@@ -29,7 +30,7 @@ On-device speech input uses Android's own `SpeechRecognizer`
 (`createOnDeviceSpeechRecognizer`, API 31+) and the recognition models the
 system manages. The app ships no speech model and no third-party code for it.
 
-## LiteRT runtime (a Maven dependency from stage 3)
+## LiteRT runtime (a Maven dependency, stage 3)
 
 - Artifact: `com.google.ai.edge.litert:litert:2.1.6`,
   https://dl.google.com/android/maven2/com/google/ai/edge/litert/litert/2.1.6/litert-2.1.6.aar
@@ -39,8 +40,12 @@ system manages. The app ships no speech model and no third-party code for it.
   `985e2fe0924312c903f8bab3914bd63f9a38dc268543dab1d29f00762fb9ab20`),
   which carries `liblitert_jni.so`. The POM of each names "The Apache Software
   License, Version 2.0". `litert-api`'s POM also pulls in lifecycle-runtime,
-  guava, kotlinx-coroutines-guava and ai-delivery; stage 3 records the APK
-  size those add.
+  guava, kotlinx-coroutines-guava and ai-delivery.
+- APK size (stage 3, measured on the build rig): debug 10,561,098 -> 38,533,467
+  bytes; unsigned release 8,222,806 -> 35,290,973 bytes (+27.1 MB, all three
+  ABIs in one APK). Native libraries per ABI, uncompressed: arm64-v8a
+  8,750,040, armeabi-v7a 5,848,496, x86_64 11,332,208 bytes; an ABI-split
+  delivery carries one set.
 - Native libraries: `libLiteRt.so` and `libLiteRtClGlAccelerator.so` for
   `arm64-v8a`, `armeabi-v7a` and `x86_64` (no 32-bit `x86`). No ABI filter is
   set, so the x86_64 emulator gets its own libraries.
@@ -48,8 +53,9 @@ system manages. The app ships no speech model and no third-party code for it.
   `71c6915d04265772a0339bed47276942c678b45cc01534210ebe6984fd1aec65`: the
   Apache-2.0 text plus the notices of code TensorFlow derives from) is kept
   verbatim in `LiteRT-Apache-2.0.txt` beside this file. Each AAR also carries a
-  9,026,393-byte `THIRD_PARTY_NOTICE.txt`; stage 3 decides how the app shows it
-  (it ships inside the AAR either way).
+  9,026,393-byte `THIRD_PARTY_NOTICE.txt`. The app has no licences screen yet
+  (the bundled Public Sans font is in the same position), so neither text is
+  shown in the app; that is an open follow-up, not done in this task.
 - Upstream: https://github.com/google-ai-edge/LiteRT.
 
 ## Android sample code (MIT, ported in stage 3)
@@ -187,3 +193,27 @@ numbers and say nothing about a phone's GPU. The SEANet decoder runs one fixed
 256-frame window (20.48 s of audio) per call, about 30 s on this CPU, so the
 emulator will not reach real time on CPU and stage 3's `too_slow` gate is
 expected to fire there.
+
+### Stage 3 probe: the whole pipeline (debug `pocket_probe`, 2026-11-27)
+
+Same emulator, branch debug build, model downloaded by the app itself into
+`no_backup/pocket-tts/<revision>/`:
+
+- Download: 208,767,942 bytes in 21.4 s, every file's SHA-256 matched.
+- Placements: `lm:CPU dectx:CPU dec:CPU`. The language model compiled on the
+  emulator's software OpenGL but could not create its buffers, and the SEANet
+  decoder failed to compile there (`max_3d_texture_size`), so both fell back
+  to CPU; the decoder transformer is CPU by design.
+- First load 2,287 ms. Warm-up sentence (3.2 s of audio): 32,404 ms, RTF 10.1,
+  so `too_slow` fires on this emulator.
+- Three sentences: 31,535 / 31,318 / 31,200 ms for 3,040 / 3,120 / 2,080 ms of
+  audio (RTF 10.4 / 10.0 / 15.0; 11.4 for the paragraph). Almost all of it is
+  the SEANet decoder's fixed 256-frame window.
+- Peak PSS 2,477,431 kB (the low_memory threshold is derived from it:
+  `PocketSupport.MIN_TOTAL_MEM_BYTES`).
+- Start-up transient: the first 80 ms of a sentence peaked at 0.037 / 0.134 /
+  0.046 against 0.009 / 0.582 / 0.015 in the next 80 ms. Two of three
+  sentences start with a burst well above what follows, as on iOS, so the
+  first decoder frame is dropped and the fades are kept.
+
+Emulator CPU numbers say nothing about a phone's GPU.

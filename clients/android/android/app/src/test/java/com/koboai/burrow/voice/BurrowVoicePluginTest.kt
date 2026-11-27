@@ -304,6 +304,7 @@ class BurrowVoicePluginTest {
         rig.plugin.speakReply("r1", "Hello there.")
         rig.engine.start("Hello there.")
         assertTrue(BurrowVoicePlugin.EVENTS.containsAll(rig.eventNames().toSet()))
-        assertEquals(BurrowVoicePlugin.EVENTS.toSet(), rig.eventNames().toSet())
+        // Every event but `model` (BurrowVoicePocketTest sends that one).
+        assertEquals(BurrowVoicePlugin.EVENTS.toSet() - "model", rig.eventNames().toSet())
     }
 }

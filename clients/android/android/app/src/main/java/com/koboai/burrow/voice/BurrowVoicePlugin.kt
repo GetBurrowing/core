@@ -1,7 +1,9 @@
 package com.koboai.burrow.voice
 
 import android.Manifest
+import android.content.ComponentCallbacks2
 import android.content.Intent
+import android.content.res.Configuration
 import android.net.Uri
 import android.os.Build
 import android.os.Handler
@@ -17,7 +19,10 @@ import com.getcapacitor.annotation.CapacitorPlugin
 import com.getcapacitor.annotation.Permission
 import com.getcapacitor.annotation.PermissionCallback
 import com.koboai.burrow.BuildConfig
+import com.koboai.burrow.voice.pocket.PocketManifest
+import com.koboai.burrow.voice.pocket.PocketVoices
 import org.json.JSONObject
+import java.lang.ref.WeakReference
 import java.util.Locale
 
 /** The microphone grant, behind a seam for tests. */
@@ -43,10 +48,12 @@ interface MicPermission {
  * BurrowVoicePlugin.swift`), names unchanged, because the page's JS
  * (`assets/js/lib/on_device_voice.js`, `hooks/voice_tab_native_runtime.js`)
  * checks only that the plugin is there. [METHODS] and [EVENTS] cover speech
- * input (stage 1) and replies read by the system TextToSpeech (stage 2);
- * Pocket TTS (`prepareModel`, `model`) comes later.
+ * input (stage 1), replies read by the system TextToSpeech (stage 2), and
+ * Pocket TTS on the device (stage 3: `prepareModel`, `model`, the Pocket
+ * rows in `voices`).
  *
- * ONE reply speaker is active at a time ([speaker]). Every system stop (the
+ * ONE reply speaker is active at a time: [speaker] (system) or the Pocket
+ * speaker ([pocket]). Every system stop (the
  * mic opening, the output device going away, a call, the app leaving the
  * foreground) reaches it.
  *
@@ -67,6 +74,9 @@ class BurrowVoicePlugin : Plugin() {
     var speaker: VoiceSpeaking = NoReplySpeaker
     var voiceCatalog: ReplyVoiceCatalog = NoVoices
     var languageTag: () -> String = { Locale.getDefault().toLanguageTag() }
+
+    /** Pocket TTS; null where it is not wired (then no Pocket row and no Pocket speaker). */
+    var pocket: PocketVoices? = null
     var isTestBuild: () -> Boolean = { BuildConfig.DEBUG }
     var openAppSettings: () -> Boolean = { false }
 
@@ -87,8 +97,9 @@ class BurrowVoicePlugin : Plugin() {
     private var awaitingPermission = false
     private var permissionAnswer: ((Boolean) -> Unit)? = null
 
-    /** The streamed reply in flight (`speakPart`). */
+    /** The streamed reply in flight (`speakPart`), and the speaker reading it. */
     private var stream: String? = null
+    private var streamSpeaker: VoiceSpeaking? = null
 
     /** The last streamed reply that was stopped: its later parts are dropped, never restarted from the middle. */
     private var droppedId: String? = null
@@ -96,6 +107,7 @@ class BurrowVoicePlugin : Plugin() {
 
     override fun load() {
         val app = context.applicationContext
+        live = WeakReference(this)
         if (Build.VERSION.SDK_INT >= Build.VERSION_CODES.S) {
             if (!::transcriber.isInitialized) transcriber = OnDeviceTranscriber.forContext(app)
             if (!::audio.isInitialized) audio = SystemVoiceAudio(app)
@@ -109,6 +121,20 @@ class BurrowVoicePlugin : Plugin() {
             speaker = SystemReplySpeaker(tts, SystemReplyFocus(app)) { languageTag() }
             voiceCatalog = EngineVoiceCatalog(tts)
         }
+        if (pocket == null) pocket = PocketVoices.forContext(app) { data -> emit("model", data) }
+        app.registerComponentCallbacks(
+            object : ComponentCallbacks2 {
+                override fun onTrimMemory(level: Int) {
+                    onMain { pocket?.trim(level) }
+                }
+
+                override fun onConfigurationChanged(newConfig: Configuration) = Unit
+
+                @Deprecated("Deprecated in Java")
+                @Suppress("OVERRIDE_DEPRECATION")
+                override fun onLowMemory() = Unit
+            },
+        )
         wireSystem()
         openAppSettings = {
             val intent =
@@ -129,6 +155,7 @@ class BurrowVoicePlugin : Plugin() {
     /** Routes the speaker's events to the page and watches for the reply's output device going away. */
     fun wireSystem() {
         speaker.onEvent = { event -> onSpeech(event) }
+        pocket?.speakerOrNull?.onEvent = { event -> onSpeech(event) }
         audio.watchOutputLoss { stopEverything(REASON_ROUTE_LOST) }
     }
 
@@ -137,6 +164,7 @@ class BurrowVoicePlugin : Plugin() {
         val ended = event.state == ReplySpeechEvent.FINISHED || event.state == ReplySpeechEvent.STOPPED
         if (ended && stream == event.id) {
             stream = null
+            streamSpeaker = null
             if (event.state == ReplySpeechEvent.STOPPED) droppedId = event.id
         }
     }
@@ -241,22 +269,48 @@ class BurrowVoicePlugin : Plugin() {
     fun stopSpeaking(call: PluginCall) {
         val reason = call.getString("reason") ?: "stopped"
         onMain {
-            speaker.stop(reason)
+            stopSpeakers(reason)
             call.resolve()
         }
     }
 
-    /** `{voices: [{id, name, quality, language}], default}`: the installed voices for the language, best first. */
+    /**
+     * `{voices: [{id, name, quality, language, model?}], default}`: the Pocket
+     * TTS rows first (where the gate allows and the language is English), then
+     * the installed system voices, best first. `default` stays the best SYSTEM
+     * voice: picking Pocket starts a 209 MB download.
+     */
     @PluginMethod
     fun voices(call: PluginCall) {
         onMain { call.resolve(voiceList()) }
     }
 
+    /**
+     * `{voice?}`: starts the Pocket TTS download (and load) for the picked
+     * voice; resolves `{state, received, total, reason}`, or `{state:
+     * "absent", reason}` where the gate says no. `model` events follow on
+     * each state change and progress step.
+     */
+    @PluginMethod
+    fun prepareModel(call: PluginCall) {
+        val voice = call.getString("voice")
+        onMain { call.resolve(prepareModel(voice)) }
+    }
+
     // MARK: Replies
+
+    fun prepareModel(voice: String?): JSObject =
+        pocket?.prepareModel(voice)
+            ?: JSObject()
+                .put("state", "absent")
+                .put("received", 0)
+                .put("total", 0)
+                .put("reason", "unsupported")
 
     fun voiceList(): JSObject {
         val voices = ReplyVoicePicker.voices(languageTag(), voiceCatalog.installedVoices())
         val rows = JSArray()
+        pocket?.rows(languageTag())?.forEach { rows.put(it) }
         voices.forEach { rows.put(it.data()) }
         return JSObject().put("voices", rows).put("default", voices.firstOrNull()?.id ?: JSONObject.NULL)
     }
@@ -267,11 +321,15 @@ class BurrowVoicePlugin : Plugin() {
         requested: String? = null,
     ): JSObject {
         refuseReply(id)?.let { return it }
-        val (voice, fellBack) = ReplyVoicePicker.resolve(requested, languageTag(), voiceCatalog.installedVoices())
-        speaker.unavailableReason(voice?.id)?.let { return unheard(id, it) }
+        val chosen = choose(requested)
+        chosen.speaker.unavailableReason(chosen.voice)?.let { return unheard(id, it) }
+        activate(chosen.speaker)
         stream = null
-        speaker.speak(id, text, voice?.id)
-        return JSObject().put("spoken", true).put("voice", voice?.id ?: JSONObject.NULL).put("fellBack", fellBack)
+        streamSpeaker = null
+        chosen.speaker.speak(id, text, chosen.voice)
+        val result = JSObject().put("spoken", true).put("voice", chosen.voice ?: JSONObject.NULL).put("fellBack", chosen.fellBack)
+        chosen.reason?.let { result.put("reason", it) }
+        return result
     }
 
     fun speakPart(
@@ -281,24 +339,75 @@ class BurrowVoicePlugin : Plugin() {
         final: Boolean,
         requested: String? = null,
     ): JSObject {
-        if (stream == id) {
-            speaker.append(id, seq, text)
-            if (final) speaker.finish(id)
+        val reading = streamSpeaker
+        if (stream == id && reading != null) {
+            reading.append(id, seq, text)
+            if (final) reading.finish(id)
             return JSObject().put("spoken", true)
         }
         if (droppedId == id) return JSObject().put("spoken", false).put("reason", "stopped")
         refuseReply(id)?.let { return it }
-        val (voice, fellBack) = ReplyVoicePicker.resolve(requested, languageTag(), voiceCatalog.installedVoices())
-        speaker.unavailableReason(voice?.id)?.let { return unheard(id, it) }
-        speaker.begin(id, voice?.id)
+        val chosen = choose(requested)
+        chosen.speaker.unavailableReason(chosen.voice)?.let { return unheard(id, it) }
+        activate(chosen.speaker)
+        chosen.speaker.begin(id, chosen.voice)
         stream = id
-        speaker.append(id, seq, text)
-        if (final) speaker.finish(id)
+        streamSpeaker = chosen.speaker
+        chosen.speaker.append(id, seq, text)
+        if (final) chosen.speaker.finish(id)
         return JSObject()
             .put("spoken", true)
-            .put("voice", voice?.id ?: JSONObject.NULL)
-            .put("fellBack", fellBack)
-            .put("reason", JSONObject.NULL)
+            .put("voice", chosen.voice ?: JSONObject.NULL)
+            .put("fellBack", chosen.fellBack)
+            .put("reason", chosen.reason ?: JSONObject.NULL)
+    }
+
+    private class Choice(
+        val speaker: VoiceSpeaking,
+        val voice: String?,
+        val fellBack: Boolean,
+        val reason: String?,
+    )
+
+    /**
+     * The voice for a reply and the speaker that reads it. Picking Pocket TTS
+     * before its model is ready starts the download; the best system voice
+     * reads this reply meanwhile, with `fellBack` and `model_not_ready` (or
+     * `unsupported` where the gate says no).
+     */
+    private fun choose(requested: String?): Choice {
+        val installed = voiceCatalog.installedVoices()
+        if (PocketManifest.isPocket(requested)) {
+            val best = ReplyVoicePicker.best(languageTag(), installed)?.id
+            val voice = PocketManifest.voiceFor(requested) ?: return Choice(speaker, best, true, "unknown_voice")
+            val voices = pocket
+            return when (voices?.availability(voice) ?: PocketVoices.Availability.UNSUPPORTED) {
+                PocketVoices.Availability.READY -> Choice(voices!!.speaker().also { wire(it) }, voice.id, false, null)
+                PocketVoices.Availability.NOT_READY -> {
+                    voices!!.prepare(voice)
+                    Choice(speaker, best, true, "model_not_ready")
+                }
+                PocketVoices.Availability.UNSUPPORTED -> Choice(speaker, best, true, "unsupported")
+            }
+        }
+        val (voice, fellBack) = ReplyVoicePicker.resolve(requested, languageTag(), installed)
+        return Choice(speaker, voice?.id, fellBack, null)
+    }
+
+    private fun wire(reader: VoiceSpeaking) {
+        if (reader.onEvent == null) reader.onEvent = { event -> onSpeech(event) }
+    }
+
+    /** Makes [reader] the one active speaker: the other stops (`replaced`). */
+    private fun activate(reader: VoiceSpeaking) {
+        if (reader !== speaker) speaker.stop(REASON_REPLACED)
+        pocket?.speakerOrNull?.let { if (it !== reader) it.stop(REASON_REPLACED) }
+    }
+
+    /** Stops whichever reply voice is playing (the other is idle and sends nothing). */
+    private fun stopSpeakers(reason: String) {
+        speaker.stop(reason)
+        pocket?.speakerOrNull?.stop(reason)
     }
 
     /** The refusals shared by `speak` and `speakPart`; null when the reply may play. */
@@ -336,7 +445,7 @@ class BurrowVoicePlugin : Plugin() {
         call: PluginCall,
         done: (JSObject) -> Unit,
     ) {
-        speaker.stop(REASON_MIC_OPENED)
+        stopSpeakers(REASON_MIC_OPENED)
         if (turn != Turn.IDLE) return done(refusal("busy"))
         if (audio.inCall || audio.othersRecording) return done(refusal("mic_in_use"))
         turn = Turn.STARTING
@@ -421,7 +530,7 @@ class BurrowVoicePlugin : Plugin() {
 
     /** Stops the reply and discards any turn, with [reason] (iOS `stopEverything`). */
     private fun stopEverything(reason: String) {
-        speaker.stop(reason)
+        stopSpeakers(reason)
         endTurn(reason)
     }
 
@@ -490,6 +599,10 @@ class BurrowVoicePlugin : Plugin() {
     }
 
     companion object {
+        /** The loaded plugin, for the debug-only VOICE receiver (src/debug). */
+        @Volatile
+        internal var live: WeakReference<BurrowVoicePlugin>? = null
+
         const val MIC = "microphone"
         private const val GRANTED = "granted"
         private const val DENIED = "denied"
@@ -497,6 +610,7 @@ class BurrowVoicePlugin : Plugin() {
         const val REASON_BACKGROUND = "background"
         const val REASON_INTERRUPTED = "interrupted"
         const val REASON_ROUTE_LOST = "route_lost"
+        const val REASON_REPLACED = "replaced"
 
         /** The `@PluginMethod`s, in the iOS names (BurrowVoiceMethodsTest pins both). */
         val METHODS =
@@ -511,10 +625,11 @@ class BurrowVoicePlugin : Plugin() {
                 "speakPart",
                 "stopSpeaking",
                 "voices",
+                "prepareModel",
             )
 
         /** The events this plugin sends, in the iOS names. */
-        val EVENTS = listOf("partial", "final", "ended", "route", "speech")
+        val EVENTS = listOf("partial", "final", "ended", "route", "speech", "model")
     }
 }
 

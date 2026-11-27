@@ -25,4 +25,8 @@ ext {
     datastoreVersion = '1.2.1'
     // HPKE for sealed push previews (task 01a1261e); the fixture test pins it.
     tinkVersion = '1.23.0'
+    // Pocket TTS on the device (task 01a21e4a stage 3): LiteRT CompiledModel.
+    // 2.1.6: the Mali delegate before 2.1.5 rejects the language model's
+    // weight shapes. No ABI filter: arm64-v8a, armeabi-v7a and x86_64 ship.
+    litertVersion = '2.1.6'
 }
