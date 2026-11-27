@@ -44,7 +44,7 @@ defmodule Platform.Meetings.OnDeviceVoice do
   alias Platform.Chat.Message
   alias Platform.Chat.SpaceAccess
 
-  @instruction "(Spoken on an iPhone: answer in short spoken-style sentences, plain text, no markdown. Stream it with burrow_reply_chunk, or suite_reply_chunk on a channel plugin older than 0.5.0.)"
+  @instruction "(Spoken on a phone: answer in short spoken-style sentences, plain text, no markdown. Stream it with burrow_reply_chunk, or suite_reply_chunk on a channel plugin older than 0.5.0.)"
 
   # Words a period ends without ending the sentence (compared lowercased,
   # without the final period).

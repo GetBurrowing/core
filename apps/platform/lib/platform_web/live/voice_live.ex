@@ -50,9 +50,9 @@ defmodule PlatformWeb.VoiceLive do
 
   ## The on-device path (task 01a20dc5 stage 2)
 
-  On an iPhone whose `BurrowVoice` plugin can transcribe on the device, the
-  hook pushes `voice_native_ready` with `available: true`, and the tab talks
-  without LiveKit: the phone turns speech into text, the text is posted as a
+  On a phone (iPhone, or Android since task 01a21e4a) whose `BurrowVoice`
+  plugin can transcribe on the device, the hook pushes `voice_native_ready`
+  with `available: true`, and the tab talks without LiveKit: the phone turns speech into text, the text is posted as a
   plain DM message (`Platform.Meetings.OnDeviceVoice`), and the agent's text
   reply is pushed back as `voice_native_speak` for the system voice. Nothing
   here changes for any other client: until `voice_native_ready` arrives with
@@ -195,7 +195,8 @@ defmodule PlatformWeb.VoiceLive do
   # A text agent is slower than the voice worker.
   @native_answer_timeout_ms 60_000
   # Reply voices kept from the device: the system voices and, separately,
-  # the Pocket TTS rows (20 on the iPhone as of task 01a20fdd stage 4), so
+  # the Pocket TTS rows (20 on the iPhone as of task 01a20fdd stage 4, 6 on
+  # Android as of task 01a21e4a stage 3), so
   # Pocket rows never push a system voice out. 72 rows at most.
   @max_system_voices 40
   @max_pocket_voices 32

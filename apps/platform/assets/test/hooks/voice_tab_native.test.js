@@ -219,14 +219,14 @@ let windowListeners
 
 // `island: false` leaves the voice_native island unloaded, so the hook has to
 // fetch it; by default it is already on the page, as after its script ran.
-function install({ plugin, native = true, meetings, island = true } = {}) {
+function install({ plugin, native = true, meetings, island = true, platform = "ios" } = {}) {
   windowListeners = {}
   const Plugins = {}
   if (plugin) Plugins.BurrowVoice = plugin
   if (meetings) Plugins.BurrowMeetings = meetings
   const win = {
     __burrowVoiceNative: island ? VoiceTabNative : undefined,
-    Capacitor: { isNativePlatform: () => native, Plugins },
+    Capacitor: { isNativePlatform: () => native, getPlatform: () => platform, Plugins },
     addEventListener: (t, fn) => (windowListeners[t] = fn),
     removeEventListener: (t) => delete windowListeners[t],
   }
@@ -328,7 +328,7 @@ describe("without the on-device path a press is today's LiveKit press", () => {
     await expectToday(await mount())
   })
 
-  it("on Android or the web inside Capacitor (not native)", async () => {
+  it("on the web inside Capacitor (not native)", async () => {
     const plugin = fakePlugin()
     install({ plugin, native: false })
     await expectToday(await mount(), plugin)
@@ -336,6 +336,11 @@ describe("without the on-device path a press is today's LiveKit press", () => {
 
   it("in an older app build without the plugin", async () => {
     install({})
+    await expectToday(await mount())
+  })
+
+  it("in an older Android build without the plugin", async () => {
+    install({ platform: "android" })
     await expectToday(await mount())
   })
 
@@ -437,6 +442,28 @@ describe("on the device", () => {
     expect(t.events()).not.toContain("voice_press")
     expect(lk.rooms.length).toBe(0)
     expect(t.sent("voice_native_mic")).toEqual([{ state: "held" }])
+  })
+
+  it("an Android build with the plugin takes the same path: the web never checks the platform (task 01a21e4a)", async () => {
+    const plugin = fakePlugin()
+    const win = install({ plugin, platform: "android", island: false })
+    expect(win.Capacitor.getPlatform()).toBe("android")
+    const mounting = mount()
+    await settle()
+    const [script] = document.head.appended
+    expect(script.src).toBe("/assets/js/voice_native_island.js")
+    win.__burrowVoiceNative = VoiceTabNative
+    script.onload()
+    const t = await mounting
+    expect(t.sent("voice_native_ready")).toEqual([
+      { available: true, reason: null, locale: "en-US", test_build: true, route: null },
+    ])
+    t.down(0)
+    await settle()
+    expect(plugin.start).toHaveBeenCalledTimes(1)
+    expect(t.gum).not.toHaveBeenCalled()
+    expect(t.events()).not.toContain("voice_start")
+    expect(lk.rooms.length).toBe(0)
   })
 
   it("partials land in #voice-native-pending as text; a hold release sends one turn", async () => {
@@ -704,11 +731,12 @@ describe("on the device", () => {
 // ── mic release (the core #289 rule) ───────────────────────────────────────
 
 describe("the voice_native island loads only inside the app", () => {
-  it("a browser, Android and an older app build never fetch it", async () => {
+  it("a browser, the web inside Capacitor and an older app build (iPhone or Android) without the plugin never fetch it", async () => {
     const setups = [
       () => vi.stubGlobal("window", {}),
       () => install({ plugin: fakePlugin(), native: false, island: false }),
       () => install({ island: false }),
+      () => install({ island: false, platform: "android" }),
     ]
     for (const setup of setups) {
       vi.stubGlobal("document", fakeDocument(pending))
