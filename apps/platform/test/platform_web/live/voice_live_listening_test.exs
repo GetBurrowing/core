@@ -36,11 +36,6 @@ defmodule PlatformWeb.VoiceLiveListeningTest do
   end
 
   setup %{conn: conn} do
-    router = Process.whereis(AttentionRouter) || start_supervised!({AttentionRouter, []})
-    Sandbox.allow(Repo, self(), router)
-    store = Process.whereis(ActiveAgentStore) || start_supervised!({ActiveAgentStore, []})
-    Sandbox.allow(Repo, self(), store)
-
     previous = Application.get_env(:platform, :notifications_module)
     Application.put_env(:platform, :notifications_module, PushRecorder)
     :persistent_term.put({PushRecorder, :owner}, self())
@@ -66,6 +61,11 @@ defmodule PlatformWeb.VoiceLiveListeningTest do
     c = assigns(view).native_conn
 
     assert voice_entry?(c.space_id, viewer.id)
+
+    # A turn first, so the page speaks the reply (it proves the LiveView got
+    # `{:new_message, _}`). The router is not running yet, so the turn itself
+    # is not routed to the agent.
+    hook(view, "voice_native_turn", %{"text" => "status?", "client_turn_id" => "ct-1"})
 
     {:ok, reply} = reply!(c, "The build is green.")
     reply_id = reply.id
@@ -212,8 +212,12 @@ defmodule PlatformWeb.VoiceLiveListeningTest do
 
   defp await_no_entry!(space_id, user_id, tries \\ 100) do
     cond do
-      not Map.has_key?(Presence.list_space(space_id), user_id) -> :ok
-      tries == 0 -> flunk("presence entry never cleared")
+      not Map.has_key?(Presence.list_space(space_id), user_id) ->
+        :ok
+
+      tries == 0 ->
+        flunk("presence entry never cleared")
+
       true ->
         Process.sleep(20)
         await_no_entry!(space_id, user_id, tries - 1)
@@ -223,7 +227,19 @@ defmodule PlatformWeb.VoiceLiveListeningTest do
   defp reply!(conn_state, text),
     do: post_as(conn_state.agent_participant_id, conn_state.space_id, text)
 
+  # Started on first use, so a `voice_native_turn` posted before it is not
+  # routed to the agent (no agent dispatch runs in these tests).
+  defp router! do
+    router = Process.whereis(AttentionRouter) || start_supervised!({AttentionRouter, []})
+    Sandbox.allow(Repo, self(), router)
+    store = Process.whereis(ActiveAgentStore) || start_supervised!({ActiveAgentStore, []})
+    Sandbox.allow(Repo, self(), store)
+    :ok
+  end
+
   defp post_as(participant_id, space_id, text) do
+    :ok = router!()
+
     result =
       Chat.post_message(%{
         space_id: space_id,
