@@ -955,7 +955,7 @@ defmodule PlatformWeb.Components.Voice do
           id="voice-native-voice-missing"
           class="text-xs text-secondary"
         >
-          Your chosen voice isn't on this iPhone. Using {@current.name} instead.
+          Your chosen voice isn't available. Using {@current.name} instead.
         </p>
         <p :if={@pocket.progress} id="voice-native-pocket-progress" class="text-xs text-secondary">
           {@pocket.progress}
@@ -968,7 +968,7 @@ defmodule PlatformWeb.Components.Voice do
           id="voice-native-pocket-unavailable"
           class="text-xs text-secondary"
         >
-          Pocket TTS unavailable on this iPhone
+          Pocket TTS unavailable
         </p>
         <p :if={@pocket.credit} id="voice-native-pocket-credit" class="text-xs text-secondary">
           {@pocket.credit}
@@ -1058,7 +1058,7 @@ defmodule PlatformWeb.Components.Voice do
   """
   def native_listen_text(nil, _state, _mic), do: "No voice partner"
   def native_listen_text(_partner, _state, :in_use), do: "Microphone in use by another app"
-  def native_listen_text(_partner, _state, :preparing), do: "Preparing speech on this iPhone"
+  def native_listen_text(_partner, _state, :preparing), do: "Preparing speech"
   def native_listen_text(_partner, :listening, _mic), do: "Release to send"
   def native_listen_text(_partner, :toggled, _mic), do: "Tap to send"
   def native_listen_text(%{agent: agent}, :thinking, _mic), do: "#{agent.name} is thinking…"

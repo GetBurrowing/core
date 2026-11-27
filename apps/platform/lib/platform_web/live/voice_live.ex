@@ -64,12 +64,12 @@ defmodule PlatformWeb.VoiceLive do
       sets `:on_device?` ONLY when `available` is true, opens the DM
       (`OnDeviceVoice.open/2`) and holds it with `SpaceTopics.hold/3` as
       `:voice`. `test_build` (a debug or TestFlight build) turns on the
-      "On this iPhone" caption (canvas state 17).
+      "On device" caption (canvas state 17).
     * `voice_native_turn` `%{text, client_turn_id}` (with a reply): posts the
       turn and replies `%{ok: true, message_id}` (or `%{ok: false}`); a
       `client_turn_id` already posted replies with that message and posts
       nothing. The confirmed turn is inserted with meta
-      "on this iPhone · {clock}", and the agent is thinking until its reply
+      "on device · {clock}", and the agent is thinking until its reply
       lands or `:voice_native_answer_timeout_ms` (default 60s) passes.
     * The agent's reply arrives as `{:new_message, msg}` on the held DM
       topic; `OnDeviceVoice.agent_reply?/2` takes only the agent's message
@@ -81,7 +81,7 @@ defmodule PlatformWeb.VoiceLive do
     * `voice_native_mic` `%{state}`: `held` / `toggled` / `idle` drive the mic
       and the listen line ("Release to send", "Tap to send"); `in_use`
       disables the mic with "Microphone in use by another app"; `preparing`
-      disables it with "Preparing speech on this iPhone" while iOS fetches
+      disables it with "Preparing speech" while iOS fetches
       its speech files (canvas state 13).
     * `voice_native_permission` `%{mic: "denied"}`: the permission card
       replaces the mic, with "Type instead" beneath it (canvas state 12).
@@ -986,7 +986,7 @@ defmodule PlatformWeb.VoiceLive do
   defp route_label(_label), do: nil
 
   defp assign_caption(%{assigns: %{native_test_build?: true, native_route: route}} = socket) do
-    caption = if route, do: "On this iPhone · #{route}", else: "On this iPhone"
+    caption = if route, do: "On device · #{route}", else: "On device"
     assign(socket, :on_device_caption, caption)
   end
 
@@ -1070,7 +1070,7 @@ defmodule PlatformWeb.VoiceLive do
     |> insert_turn(%{
       kind: :me,
       text: message.content,
-      meta: "on this iPhone · #{clock(at)}"
+      meta: "on device · #{clock(at)}"
     })
     |> assign(:mic_state, :thinking)
     |> start_answer_timer()

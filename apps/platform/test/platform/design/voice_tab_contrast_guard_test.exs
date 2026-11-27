@@ -380,7 +380,7 @@ defmodule Platform.Design.VoiceTabContrastGuardTest do
 
     assert body.(".voice-mic") =~ ~r/border:\s*1px solid var\(--color-subtle\);/
 
-    # "Preparing speech on this iPhone" (canvas state 13): the outline is
+    # "Preparing speech" (canvas state 13): the outline is
     # secondary, what the two preparing pairs above measure.
     assert body.(".voice-mic.preparing") =~ ~r/border-color:\s*var\(--color-secondary\);/
 

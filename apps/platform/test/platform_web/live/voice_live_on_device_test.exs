@@ -189,6 +189,7 @@ defmodule PlatformWeb.VoiceLiveOnDeviceTest do
 
     view |> element("#voice-settings") |> render_click()
     assert has_element?(view, "#voice-settings-sheet.sheet-open")
+    refute render(view) =~ ~r/on this iPhone/i, "no \"on this iPhone\" on the Voice screen"
 
     assert has_element?(
              view,
@@ -221,7 +222,7 @@ defmodule PlatformWeb.VoiceLiveOnDeviceTest do
     })
 
     assert text(doc(view), "#voice-native-voice-missing") ==
-             "Your chosen voice isn't on this iPhone. Using Zoe instead."
+             "Your chosen voice isn't available. Using Zoe instead."
 
     pick(view, "v-default")
     refute has_element?(view, "#voice-native-voice-missing")
@@ -254,7 +255,8 @@ defmodule PlatformWeb.VoiceLiveOnDeviceTest do
     refute Enum.any?(turn_texts(view), &(&1 =~ "burrow_reply_chunk"))
     assert turn.metadata == %{"input" => "on_device", "client_turn_id" => "ct-1"}
 
-    assert turn_texts(view) |> List.last() =~ "on this iPhone · 9:41 AM"
+    assert turn_texts(view) |> List.last() =~ "on device · 9:41 AM"
+    refute render(view) =~ ~r/on this iPhone/i
     assert has_element?(view, "#voice-thinking")
 
     # The user's own message echoes back on the DM topic: never spoken.
@@ -366,12 +368,13 @@ defmodule PlatformWeb.VoiceLiveOnDeviceTest do
     assert text(doc(view), "#listen-text") == Voice.idle_line()
   end
 
-  test "preparing disables the mic with \"Preparing speech on this iPhone\" until the files are in",
+  test "preparing disables the mic with \"Preparing speech\" until the files are in",
        %{conn: conn} do
     view = ready!(conn)
     hook(view, "voice_native_mic", %{"state" => "preparing"})
 
-    assert text(doc(view), "#listen-text") == "Preparing speech on this iPhone"
+    assert text(doc(view), "#listen-text") == "Preparing speech"
+    refute render(view) =~ ~r/on this iPhone/i
     assert has_element?(view, "#listen-text.text-secondary")
     assert has_element?(view, "#mic[disabled].preparing.text-secondary")
 
@@ -458,14 +461,15 @@ defmodule PlatformWeb.VoiceLiveOnDeviceTest do
     refute has_element?(view, "#voice-native-caption")
 
     view = ready!(conn, %{"test_build" => true})
-    assert text(doc(view), "#voice-native-caption") == "On this iPhone"
+    assert text(doc(view), "#voice-native-caption") == "On device"
 
     hook(view, "voice_native_route", %{"label" => "Bluetooth"})
-    assert text(doc(view), "#voice-native-caption") == "On this iPhone · Bluetooth"
+    assert text(doc(view), "#voice-native-caption") == "On device · Bluetooth"
 
     # A device's own name never reaches the caption.
     hook(view, "voice_native_route", %{"label" => "A Person's Headset"})
-    assert text(doc(view), "#voice-native-caption") == "On this iPhone"
+    assert text(doc(view), "#voice-native-caption") == "On device"
+    refute render(view) =~ ~r/on this iPhone/i
   end
 
   # ── streamed replies (task 01a20fdd stage 3) ──────────────────────────
@@ -846,7 +850,7 @@ defmodule PlatformWeb.VoiceLiveOnDeviceTest do
     })
 
     assert text(doc(view), "#voice-native-pocket-unavailable") ==
-             "Pocket TTS unavailable on this iPhone"
+             "Pocket TTS unavailable"
 
     hook(view, "voice_native_voices", %{
       "voices" => @voices,
@@ -856,7 +860,8 @@ defmodule PlatformWeb.VoiceLiveOnDeviceTest do
     })
 
     d = doc(view)
-    assert text(d, "#voice-native-pocket-unavailable") == "Pocket TTS unavailable on this iPhone"
+    assert text(d, "#voice-native-pocket-unavailable") == "Pocket TTS unavailable"
+    refute render(view) =~ ~r/on this iPhone/i
     refute has_element?(view, "#voice-native-voice-missing")
     refute has_element?(view, "#voice-native-pocket-credit")
   end

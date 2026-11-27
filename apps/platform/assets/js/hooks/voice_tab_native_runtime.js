@@ -58,7 +58,7 @@ const VoiceTabNative = {
     if (this._destroyed) return
     if (cap.available) return this._goNative(cap)
     if (cap.reason !== "assets_missing" || !cap.plugin || typeof cap.plugin.prepare !== "function") return
-    // "Preparing speech on this iPhone" (canvas state 13): iOS is fetching
+    // "Preparing speech" (canvas state 13): iOS is fetching
     // its speech files. The server draws the on-device mic disabled with that
     // line; a press does nothing until the files are in. If they never come,
     // the tab goes back to today's.
