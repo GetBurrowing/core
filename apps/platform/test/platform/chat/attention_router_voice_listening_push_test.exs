@@ -351,7 +351,9 @@ defmodule Platform.Chat.AttentionRouterVoiceListeningPushTest do
 
     test "a key with a chat meta AND a voice meta is a voice listener" do
       presences = %{
-        "a" => %{metas: [%{participant_type: "user"}, %{participant_type: "user", surface: "voice"}]}
+        "a" => %{
+          metas: [%{participant_type: "user"}, %{participant_type: "user", surface: "voice"}]
+        }
       }
 
       assert Presence.voice_listener_ids(presences) == MapSet.new(["a"])
