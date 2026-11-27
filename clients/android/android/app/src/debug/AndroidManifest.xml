@@ -38,6 +38,12 @@
             </intent-filter>
         </receiver>
 
+        <!-- The Voice debug trace's sink (VoiceTrace), installed at process start. -->
+        <provider
+            android:name="com.koboai.burrow.voice.DebugVoiceTraceInit"
+            android:authorities="${applicationId}.voicetrace"
+            android:exported="false" />
+
         <!-- Pocket TTS and the Voice turn on an emulator (DebugVoiceReceiver, task 01a21e4a). -->
         <receiver
             android:name="com.koboai.burrow.voice.DebugVoiceReceiver"

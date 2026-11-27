@@ -76,6 +76,10 @@ class ReleaseManifestTest {
         val debug = receivers("burrow.debugManifest").single { it.name() == "com.koboai.burrow.voice.DebugVoiceReceiver" }
         assertEquals(listOf("com.koboai.burrow.debug.VOICE"), debug.actions())
         assertEquals("android.permission.DUMP", debug.getAttributeNS(android, "permission"))
+        // The Voice debug trace's sink: debug-only, never exported.
+        assertTrue(elements("burrow.releaseManifest", "provider").none { it.name().endsWith("DebugVoiceTraceInit") })
+        val trace = elements("burrow.debugManifest", "provider").single { it.name().endsWith("DebugVoiceTraceInit") }
+        assertEquals("false", trace.getAttributeNS(android, "exported"))
     }
 
     @Test

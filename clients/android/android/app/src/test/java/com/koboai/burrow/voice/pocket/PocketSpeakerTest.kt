@@ -82,7 +82,7 @@ class PocketSpeakerTest {
     private val output = FakeOutput()
     private val focus = FakeFocus()
     private val worker = ManualWorker()
-    private val speaker = PocketSpeaker(engine, output, focus, worker) { it() }
+    private val speaker = PocketSpeaker(engine, output, focus, worker, { it() }) { 0L }
     private val events = mutableListOf<String>()
 
     init {

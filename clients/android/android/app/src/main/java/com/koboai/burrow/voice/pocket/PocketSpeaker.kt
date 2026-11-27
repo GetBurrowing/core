@@ -8,6 +8,7 @@ import com.koboai.burrow.voice.ReplyFocus
 import com.koboai.burrow.voice.ReplyPartQueue
 import com.koboai.burrow.voice.ReplySpeechEvent
 import com.koboai.burrow.voice.VoiceSpeaking
+import com.koboai.burrow.voice.VoiceTrace
 import java.io.File
 import java.util.concurrent.Executor
 import java.util.concurrent.Executors
@@ -111,6 +112,8 @@ class PocketSpeaker(
     private val focus: ReplyFocus,
     private val worker: Executor,
     private val post: (() -> Unit) -> Unit,
+    /** For the debug trace's synthesis times. */
+    private val clock: () -> Long = SystemClock::elapsedRealtime,
 ) : VoiceSpeaking {
     override var onEvent: ((ReplySpeechEvent) -> Unit)? = null
 
@@ -126,6 +129,7 @@ class PocketSpeaker(
         var played = 0
         var final = false
         var started = false
+        var sentences = 0
     }
 
     /** Read by the worker too, so a stopped reply's synthesis gives up early. */
@@ -192,13 +196,19 @@ class PocketSpeaker(
         val text = reply.texts.removeFirst()
         reply.synthesizing = true
         val mine = reply.generation
+        val n = ++reply.sentences
+        val rid = reply.id
         worker.execute {
+            val start = clock()
             val pcm =
                 try {
                     engine.synthesize(text, reply.voice) { generation.get() != mine }
                 } catch (_: Exception) {
                     null
                 }
+            val ms = clock() - start
+            val audioMs = (pcm?.size ?: 0) * 1000L / PocketWarmUp.SAMPLE_RATE
+            VoiceTrace.log { "pocket sentence id=$rid n=$n synth_ms=$ms audio_ms=$audioMs current=${generation.get() == mine}" }
             post { synthesized(mine, pcm) }
         }
     }

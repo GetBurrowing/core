@@ -45,7 +45,7 @@ class BurrowVoicePocketTest {
                 }, { it.run() }, { it() })
             },
             makeVoiceStore = { v -> PocketModelStore(tmp.root, listOf(voiceFile(v.name)), fetcher, null, { it.run() }, { it() }) },
-            makeSpeaker = { PocketSpeaker(engine, output, rig.focus, synthesis) { it() } },
+            makeSpeaker = { PocketSpeaker(engine, output, rig.focus, synthesis, { it() }) },
             emit = { data -> rig.events.add("model" to data) },
         )
 

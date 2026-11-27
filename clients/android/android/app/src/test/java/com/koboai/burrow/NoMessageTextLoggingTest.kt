@@ -22,7 +22,9 @@ class NoMessageTextLoggingTest {
                     """Logger\.(verbose|debug|info|warn|error)""",
                     """println|print""",
                     """System\.(out|err)\.print\w*""",
-                ).joinToString("|", prefix = """\b(""", postfix = """)\s*\("""),
+                    // The Voice debug trace (task 01a21e4a): ids and timings only.
+                    """VoiceTrace\.log""",
+                ).joinToString("|", prefix = """\b(""", postfix = """)\s*[({]"""),
             )
         private val MESSAGE_TEXT = Regex("""(?i)body|text|reply|content|spaceName|authorName|transcript|partial|heard|words""")
 
@@ -48,6 +50,8 @@ class NoMessageTextLoggingTest {
         assertEquals(1, offences("""Log.i(TAG, transcript)""").size)
         assertEquals(1, offences("""Log.i(TAG, "heard ${'$'}words")""").size)
         assertTrue(offences("""Log.d(TAG, "shortcut published")""").isEmpty())
+        assertEquals(1, offences("""VoiceTrace.log { "part ${'$'}text" }""").size)
+        assertTrue(offences("""VoiceTrace.log { "part id=${'$'}id seq=${'$'}seq chars=${'$'}size" }""").isEmpty())
         assertTrue(offences("""val body = payload.body""").isEmpty())
     }
 

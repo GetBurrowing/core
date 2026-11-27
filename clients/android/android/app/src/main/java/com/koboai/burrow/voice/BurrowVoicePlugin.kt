@@ -148,6 +148,8 @@ class BurrowVoicePlugin : Plugin() {
         name: String,
         data: JSObject,
     ) {
+        if (name == "ended") VoiceTrace.log { "mic ended reason=${data.optString("reason")}" }
+        if (name == "model") VoiceTrace.log { "model state=${data.optString("state")} received=${data.optLong("received")}" }
         val sink = eventSink
         if (sink != null) sink(name, data) else notifyListeners(name, data)
     }
@@ -160,6 +162,7 @@ class BurrowVoicePlugin : Plugin() {
     }
 
     private fun onSpeech(event: ReplySpeechEvent) {
+        VoiceTrace.log { "speech id=${event.id} state=${event.state} reason=${event.reason ?: "-"}" }
         emit("speech", event.data())
         val ended = event.state == ReplySpeechEvent.FINISHED || event.state == ReplySpeechEvent.STOPPED
         if (ended && stream == event.id) {
@@ -320,8 +323,11 @@ class BurrowVoicePlugin : Plugin() {
         text: String,
         requested: String? = null,
     ): JSObject {
+        val size = text.length
+        VoiceTrace.log { "speak id=$id chars=$size" }
         refuseReply(id)?.let { return it }
         val chosen = choose(requested)
+        trace(id, chosen)
         chosen.speaker.unavailableReason(chosen.voice)?.let { return unheard(id, it) }
         activate(chosen.speaker)
         stream = null
@@ -339,6 +345,8 @@ class BurrowVoicePlugin : Plugin() {
         final: Boolean,
         requested: String? = null,
     ): JSObject {
+        val size = text.length
+        VoiceTrace.log { "part id=$id seq=$seq final=$final chars=$size" }
         val reading = streamSpeaker
         if (stream == id && reading != null) {
             reading.append(id, seq, text)
@@ -348,6 +356,7 @@ class BurrowVoicePlugin : Plugin() {
         if (droppedId == id) return JSObject().put("spoken", false).put("reason", "stopped")
         refuseReply(id)?.let { return it }
         val chosen = choose(requested)
+        trace(id, chosen)
         chosen.speaker.unavailableReason(chosen.voice)?.let { return unheard(id, it) }
         activate(chosen.speaker)
         chosen.speaker.begin(id, chosen.voice)
@@ -360,6 +369,16 @@ class BurrowVoicePlugin : Plugin() {
             .put("voice", chosen.voice ?: JSONObject.NULL)
             .put("fellBack", chosen.fellBack)
             .put("reason", chosen.reason ?: JSONObject.NULL)
+    }
+
+    private fun trace(
+        id: String,
+        chosen: Choice,
+    ) {
+        val engine = if (chosen.speaker === speaker) "system" else "pocket"
+        val voice = chosen.voice ?: "-"
+        val why = chosen.reason ?: "-"
+        VoiceTrace.log { "choose id=$id voice=$voice fellBack=${chosen.fellBack} reason=$why speaker=$engine" }
     }
 
     private class Choice(
@@ -445,6 +464,7 @@ class BurrowVoicePlugin : Plugin() {
         call: PluginCall,
         done: (JSObject) -> Unit,
     ) {
+        VoiceTrace.log { "mic start turn=$turn" }
         stopSpeakers(REASON_MIC_OPENED)
         if (turn != Turn.IDLE) return done(refusal("busy"))
         if (audio.inCall || audio.othersRecording) return done(refusal("mic_in_use"))

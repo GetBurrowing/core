@@ -976,6 +976,23 @@ describe("Pocket TTS and streamed replies on the device (task 01a20fdd stage 3)"
     expect(sent).toEqual(["downloading:0", "downloading:1", "downloading:2", "downloading:99", "downloading:100", "compiling:100", "ready:100"])
   })
 
+  it("a remembered Pocket voice the phone offers starts loading on mount; a system voice does not", async () => {
+    store.set(key, JSON.stringify("pocket-tts:marius"))
+    const plugin = withParts({ voices: POCKET })
+    install({ plugin })
+    await mount()
+    await settle()
+    expect(plugin.prepareModel).toHaveBeenCalledTimes(1)
+    expect(plugin.prepareModel).toHaveBeenCalledWith({ voice: "pocket-tts:marius" })
+
+    store.set(key, JSON.stringify("v-enhanced"))
+    const other = withParts({ voices: POCKET })
+    install({ plugin: other })
+    await mount()
+    await settle()
+    expect(other.prepareModel).not.toHaveBeenCalled()
+  })
+
   it("a remembered Pocket voice the phone no longer offers says missing_pocket", async () => {
     store.set(key, JSON.stringify("pocket-tts:marius"))
     const plugin = withParts()
@@ -983,6 +1000,7 @@ describe("Pocket TTS and streamed replies on the device (task 01a20fdd stage 3)"
     const t = await mount()
     await settle()
     expect(t.sent("voice_native_voices").at(-1)).toMatchObject({ selected: "v-premium", missing: true, missing_pocket: true })
+    expect(plugin.prepareModel).not.toHaveBeenCalled()
   })
 
   it("ttfs is pushed from seq 0 to speech started, only in a test build", async () => {
