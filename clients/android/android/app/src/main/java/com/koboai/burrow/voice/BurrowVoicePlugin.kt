@@ -7,6 +7,7 @@ import android.os.Build
 import android.os.Handler
 import android.os.Looper
 import android.provider.Settings
+import com.getcapacitor.JSArray
 import com.getcapacitor.JSObject
 import com.getcapacitor.PermissionState
 import com.getcapacitor.Plugin
@@ -17,6 +18,7 @@ import com.getcapacitor.annotation.Permission
 import com.getcapacitor.annotation.PermissionCallback
 import com.koboai.burrow.BuildConfig
 import org.json.JSONObject
+import java.util.Locale
 
 /** The microphone grant, behind a seam for tests. */
 interface MicPermission {
@@ -40,9 +42,13 @@ interface MicPermission {
  * The contract is the iOS plugin's (`clients/ios/ios/App/App/Plugins/
  * BurrowVoicePlugin.swift`), names unchanged, because the page's JS
  * (`assets/js/lib/on_device_voice.js`, `hooks/voice_tab_native_runtime.js`)
- * checks only that the plugin is there. [METHODS] and [EVENTS] are this
- * stage's half: reply speech (`speak`, `speakPart`, `stopSpeaking`,
- * `voices`, `speech`) and Pocket TTS (`prepareModel`, `model`) come later.
+ * checks only that the plugin is there. [METHODS] and [EVENTS] cover speech
+ * input (stage 1) and replies read by the system TextToSpeech (stage 2);
+ * Pocket TTS (`prepareModel`, `model`) comes later.
+ *
+ * ONE reply speaker is active at a time ([speaker]). Every system stop (the
+ * mic opening, the output device going away, a call, the app leaving the
+ * foreground) reaches it.
  *
  * Every method hops to the main thread; the recognizer and the audio
  * callbacks live there.
@@ -59,6 +65,8 @@ class BurrowVoicePlugin : Plugin() {
     lateinit var audio: VoiceAudioControl
     lateinit var micPermission: MicPermission
     var speaker: VoiceSpeaking = NoReplySpeaker
+    var voiceCatalog: ReplyVoiceCatalog = NoVoices
+    var languageTag: () -> String = { Locale.getDefault().toLanguageTag() }
     var isTestBuild: () -> Boolean = { BuildConfig.DEBUG }
     var openAppSettings: () -> Boolean = { false }
 
@@ -79,6 +87,13 @@ class BurrowVoicePlugin : Plugin() {
     private var awaitingPermission = false
     private var permissionAnswer: ((Boolean) -> Unit)? = null
 
+    /** The streamed reply in flight (`speakPart`). */
+    private var stream: String? = null
+
+    /** The last streamed reply that was stopped: its later parts are dropped, never restarted from the middle. */
+    private var droppedId: String? = null
+    private var engine: AndroidTtsEngine? = null
+
     override fun load() {
         val app = context.applicationContext
         if (Build.VERSION.SDK_INT >= Build.VERSION_CODES.S) {
@@ -89,6 +104,12 @@ class BurrowVoicePlugin : Plugin() {
             if (!::audio.isInitialized) audio = NoVoiceAudio
         }
         if (!::micPermission.isInitialized) micPermission = CapacitorMicPermission()
+        if (speaker === NoReplySpeaker) {
+            val tts = AndroidTtsEngine(app).also { engine = it }
+            speaker = SystemReplySpeaker(tts, SystemReplyFocus(app)) { languageTag() }
+            voiceCatalog = EngineVoiceCatalog(tts)
+        }
+        wireSystem()
         openAppSettings = {
             val intent =
                 Intent(Settings.ACTION_APPLICATION_DETAILS_SETTINGS, Uri.fromParts("package", app.packageName, null))
@@ -103,6 +124,21 @@ class BurrowVoicePlugin : Plugin() {
     ) {
         val sink = eventSink
         if (sink != null) sink(name, data) else notifyListeners(name, data)
+    }
+
+    /** Routes the speaker's events to the page and watches for the reply's output device going away. */
+    fun wireSystem() {
+        speaker.onEvent = { event -> onSpeech(event) }
+        audio.watchOutputLoss { stopEverything(REASON_ROUTE_LOST) }
+    }
+
+    private fun onSpeech(event: ReplySpeechEvent) {
+        emit("speech", event.data())
+        val ended = event.state == ReplySpeechEvent.FINISHED || event.state == ReplySpeechEvent.STOPPED
+        if (ended && stream == event.id) {
+            stream = null
+            if (event.state == ReplySpeechEvent.STOPPED) droppedId = event.id
+        }
     }
 
     private val audioListener =
@@ -164,6 +200,120 @@ class BurrowVoicePlugin : Plugin() {
     @PluginMethod
     fun openSettings(call: PluginCall) {
         onMain { call.resolve(JSObject().put("opened", openAppSettings())) }
+    }
+
+    /**
+     * `{id, text, voice?}`: reads the reply in `voice` (an id from `voices`)
+     * or, without one, the best installed voice. Resolves `{spoken: true,
+     * voice, fellBack}`; `fellBack` is true when the requested voice is not on
+     * the phone and the default read it instead. Refused while the mic is open
+     * (`listening`) and during a call (`mic_in_use`, with `unheard`).
+     */
+    @PluginMethod
+    fun speak(call: PluginCall) {
+        val id = call.getString("id")
+        val text = call.getString("text")
+        if (id.isNullOrEmpty() || text == null) return call.reject("id and text are required")
+        val voice = call.getString("voice")
+        onMain { call.resolve(speakReply(id, text, voice)) }
+    }
+
+    /**
+     * `{id, seq, text, final, voice?}`: one sentence of a streamed reply. The
+     * first part opens the reply and resolves as `speak` does; later parts of
+     * the same id resolve `{spoken: true}`. Parts of a reply that was stopped
+     * (the mic, a route loss) resolve `{spoken: false, reason: "stopped"}` and
+     * are never spoken.
+     */
+    @PluginMethod
+    fun speakPart(call: PluginCall) {
+        val id = call.getString("id")
+        val text = call.getString("text")
+        if (id.isNullOrEmpty() || text == null) return call.reject("id and text are required")
+        val seq = call.getInt("seq") ?: 0
+        val final = call.getBoolean("final") ?: false
+        val voice = call.getString("voice")
+        onMain { call.resolve(speakPart(id, seq, text, final, voice)) }
+    }
+
+    /** `{reason?}`: stops the reply (`speech {state: "stopped", reason}`). */
+    @PluginMethod
+    fun stopSpeaking(call: PluginCall) {
+        val reason = call.getString("reason") ?: "stopped"
+        onMain {
+            speaker.stop(reason)
+            call.resolve()
+        }
+    }
+
+    /** `{voices: [{id, name, quality, language}], default}`: the installed voices for the language, best first. */
+    @PluginMethod
+    fun voices(call: PluginCall) {
+        onMain { call.resolve(voiceList()) }
+    }
+
+    // MARK: Replies
+
+    fun voiceList(): JSObject {
+        val voices = ReplyVoicePicker.voices(languageTag(), voiceCatalog.installedVoices())
+        val rows = JSArray()
+        voices.forEach { rows.put(it.data()) }
+        return JSObject().put("voices", rows).put("default", voices.firstOrNull()?.id ?: JSONObject.NULL)
+    }
+
+    fun speakReply(
+        id: String,
+        text: String,
+        requested: String? = null,
+    ): JSObject {
+        refuseReply(id)?.let { return it }
+        val (voice, fellBack) = ReplyVoicePicker.resolve(requested, languageTag(), voiceCatalog.installedVoices())
+        speaker.unavailableReason(voice?.id)?.let { return unheard(id, it) }
+        stream = null
+        speaker.speak(id, text, voice?.id)
+        return JSObject().put("spoken", true).put("voice", voice?.id ?: JSONObject.NULL).put("fellBack", fellBack)
+    }
+
+    fun speakPart(
+        id: String,
+        seq: Int,
+        text: String,
+        final: Boolean,
+        requested: String? = null,
+    ): JSObject {
+        if (stream == id) {
+            speaker.append(id, seq, text)
+            if (final) speaker.finish(id)
+            return JSObject().put("spoken", true)
+        }
+        if (droppedId == id) return JSObject().put("spoken", false).put("reason", "stopped")
+        refuseReply(id)?.let { return it }
+        val (voice, fellBack) = ReplyVoicePicker.resolve(requested, languageTag(), voiceCatalog.installedVoices())
+        speaker.unavailableReason(voice?.id)?.let { return unheard(id, it) }
+        speaker.begin(id, voice?.id)
+        stream = id
+        speaker.append(id, seq, text)
+        if (final) speaker.finish(id)
+        return JSObject()
+            .put("spoken", true)
+            .put("voice", voice?.id ?: JSONObject.NULL)
+            .put("fellBack", fellBack)
+            .put("reason", JSONObject.NULL)
+    }
+
+    /** The refusals shared by `speak` and `speakPart`; null when the reply may play. */
+    private fun refuseReply(id: String): JSObject? {
+        if (turn != Turn.IDLE) return JSObject().put("spoken", false).put("reason", "listening")
+        if (audio.inCall) return unheard(id, "mic_in_use")
+        return null
+    }
+
+    private fun unheard(
+        id: String,
+        reason: String,
+    ): JSObject {
+        emit("speech", ReplySpeechEvent(id, ReplySpeechEvent.UNHEARD, reason).data())
+        return JSObject().put("spoken", false).put("reason", reason)
     }
 
     // MARK: Turn
@@ -272,6 +422,11 @@ class BurrowVoicePlugin : Plugin() {
     /** Stops the reply and discards any turn, with [reason] (iOS `stopEverything`). */
     private fun stopEverything(reason: String) {
         speaker.stop(reason)
+        endTurn(reason)
+    }
+
+    /** Discards any turn, with [reason]; the reply is left alone. */
+    private fun endTurn(reason: String) {
         if (turn == Turn.IDLE) return
         cancelTurn()
         emit("ended", JSObject().put("reason", reason))
@@ -287,9 +442,13 @@ class BurrowVoicePlugin : Plugin() {
 
     // MARK: Lifecycle
 
-    /** Leaving the app stops the turn natively: the page's JS may already be suspended. */
+    /**
+     * Leaving the app stops the turn natively: the page's JS may already be
+     * suspended. A pause (the permission prompt, split screen) ends only the
+     * turn; going to the background (`onStop`) also stops the reply.
+     */
     public override fun handleOnPause() {
-        if (!awaitingPermission) stopEverything(REASON_BACKGROUND)
+        if (!awaitingPermission) endTurn(REASON_BACKGROUND)
     }
 
     public override fun handleOnStop() {
@@ -297,7 +456,10 @@ class BurrowVoicePlugin : Plugin() {
     }
 
     public override fun handleOnDestroy() {
-        cancelTurn()
+        stopEverything(REASON_BACKGROUND)
+        audio.unwatchOutputLoss()
+        engine?.shutdown()
+        engine = null
     }
 
     // MARK: Permission
@@ -334,12 +496,25 @@ class BurrowVoicePlugin : Plugin() {
         const val REASON_MIC_OPENED = "mic_opened"
         const val REASON_BACKGROUND = "background"
         const val REASON_INTERRUPTED = "interrupted"
+        const val REASON_ROUTE_LOST = "route_lost"
 
         /** The `@PluginMethod`s, in the iOS names (BurrowVoiceMethodsTest pins both). */
-        val METHODS = listOf("capabilities", "prepare", "start", "stop", "cancel", "openSettings")
+        val METHODS =
+            listOf(
+                "capabilities",
+                "prepare",
+                "start",
+                "stop",
+                "cancel",
+                "openSettings",
+                "speak",
+                "speakPart",
+                "stopSpeaking",
+                "voices",
+            )
 
         /** The events this plugin sends, in the iOS names. */
-        val EVENTS = listOf("partial", "final", "ended", "route")
+        val EVENTS = listOf("partial", "final", "ended", "route", "speech")
     }
 }
 
@@ -359,6 +534,10 @@ object OldOsTranscriber : VoiceTranscribing {
     override fun cancel() = Unit
 }
 
+object NoVoices : ReplyVoiceCatalog {
+    override fun installedVoices(): List<ReplyVoice> = emptyList()
+}
+
 object NoVoiceAudio : VoiceAudioControl {
     override val inCall = false
     override val othersRecording = false
@@ -367,4 +546,8 @@ object NoVoiceAudio : VoiceAudioControl {
     override fun beginCapture(listener: VoiceAudioListener) = Unit
 
     override fun endCapture() = Unit
+
+    override fun watchOutputLoss(onLost: () -> Unit) = Unit
+
+    override fun unwatchOutputLoss() = Unit
 }

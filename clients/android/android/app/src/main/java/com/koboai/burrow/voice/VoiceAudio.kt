@@ -2,7 +2,10 @@ package com.koboai.burrow.voice
 
 import android.annotation.SuppressLint
 import android.app.UiModeManager
+import android.content.BroadcastReceiver
 import android.content.Context
+import android.content.Intent
+import android.content.IntentFilter
 import android.content.res.Configuration
 import android.media.AudioAttributes
 import android.media.AudioDeviceCallback
@@ -13,6 +16,7 @@ import android.os.Build
 import android.os.Handler
 import android.os.Looper
 import androidx.annotation.RequiresApi
+import androidx.core.content.ContextCompat
 import java.util.concurrent.Executor
 
 /** What the audio system tells an open turn. */
@@ -43,6 +47,16 @@ interface VoiceAudioControl {
 
     /** The mic closed: stop watching and give back any focus. */
     fun endCapture()
+
+    /**
+     * Calls [onLost] whenever the device a reply plays on goes away: a
+     * Bluetooth or wired output is removed, or the system says audio is
+     * becoming noisy (headphones pulled). The reply then stops instead of
+     * moving to the loudspeaker (iOS `route_lost`).
+     */
+    fun watchOutputLoss(onLost: () -> Unit)
+
+    fun unwatchOutputLoss()
 }
 
 object VoiceRoute {
@@ -63,6 +77,9 @@ object VoiceRoute {
             AudioDeviceInfo.TYPE_USB_HEADSET,
             AudioDeviceInfo.TYPE_USB_DEVICE,
         )
+
+    /** Whether removing devices of these types takes away a reply's personal output (not the loudspeaker). */
+    fun isOutputLoss(removedTypes: Collection<Int>): Boolean = removedTypes.any { it in BLUETOOTH || it in HEADPHONES }
 
     /**
      * The route label from the device TYPES only, never a device's name (that
@@ -108,7 +125,7 @@ object VoiceRoute {
  */
 @RequiresApi(Build.VERSION_CODES.S)
 class SystemVoiceAudio(
-    context: Context,
+    private val context: Context,
 ) : VoiceAudioControl {
     private val audio = context.getSystemService(AudioManager::class.java)
     private val uiMode = context.getSystemService(UiModeManager::class.java)
@@ -127,6 +144,25 @@ class SystemVoiceAudio(
 
             override fun onAudioDevicesRemoved(removedDevices: Array<out AudioDeviceInfo>?) {
                 listener?.onRouteChanged()
+            }
+        }
+
+    private var onOutputLost: (() -> Unit)? = null
+
+    internal val outputs =
+        object : AudioDeviceCallback() {
+            override fun onAudioDevicesRemoved(removedDevices: Array<out AudioDeviceInfo>?) {
+                if (VoiceRoute.isOutputLoss(removedDevices.orEmpty().map { it.type })) onOutputLost?.invoke()
+            }
+        }
+
+    private val noisy =
+        object : BroadcastReceiver() {
+            override fun onReceive(
+                context: Context,
+                intent: Intent,
+            ) {
+                if (intent.action == AudioManager.ACTION_AUDIO_BECOMING_NOISY) onOutputLost?.invoke()
             }
         }
 
@@ -171,11 +207,61 @@ class SystemVoiceAudio(
         audio.unregisterAudioDeviceCallback(devices)
     }
 
+    override fun watchOutputLoss(onLost: () -> Unit) {
+        unwatchOutputLoss()
+        onOutputLost = onLost
+        audio.registerAudioDeviceCallback(outputs, main)
+        // A protected system broadcast: delivered to a not-exported receiver.
+        ContextCompat.registerReceiver(
+            context,
+            noisy,
+            IntentFilter(AudioManager.ACTION_AUDIO_BECOMING_NOISY),
+            ContextCompat.RECEIVER_NOT_EXPORTED,
+        )
+    }
+
+    override fun unwatchOutputLoss() {
+        if (onOutputLost == null) return
+        onOutputLost = null
+        audio.unregisterAudioDeviceCallback(outputs)
+        context.unregisterReceiver(noisy)
+    }
+
     internal fun onFocusChange(change: Int) {
         if (VoiceRoute.focusEndsTurn(change)) listener?.onInterrupted()
     }
 
     internal fun onModeChanged(mode: Int) {
         if (VoiceRoute.modeEndsTurn(mode)) listener?.onInterrupted()
+    }
+}
+
+/** The reply's audio focus: `AUDIOFOCUS_GAIN_TRANSIENT_MAY_DUCK`, so a podcast ducks or pauses and then resumes. */
+class SystemReplyFocus(
+    context: Context,
+) : ReplyFocus {
+    private val audio = context.getSystemService(AudioManager::class.java)
+    private var held: AudioFocusRequest? = null
+
+    override fun request() {
+        if (held != null) return
+        val request =
+            AudioFocusRequest
+                .Builder(AudioManager.AUDIOFOCUS_GAIN_TRANSIENT_MAY_DUCK)
+                .setAudioAttributes(
+                    AudioAttributes
+                        .Builder()
+                        .setUsage(AudioAttributes.USAGE_ASSISTANT)
+                        .setContentType(AudioAttributes.CONTENT_TYPE_SPEECH)
+                        .build(),
+                ).build()
+        audio.requestAudioFocus(request)
+        held = request
+    }
+
+    override fun abandon() {
+        val request = held ?: return
+        held = null
+        audio.abandonAudioFocusRequest(request)
     }
 }

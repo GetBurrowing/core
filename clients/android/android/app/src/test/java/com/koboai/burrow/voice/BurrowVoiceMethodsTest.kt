@@ -32,8 +32,9 @@ class BurrowVoiceMethodsTest {
     }
 
     @Test
-    fun `the methods are this stage's iOS methods, by reflection and in the source`() {
-        val expected = listOf("capabilities", "prepare", "start", "stop", "cancel", "openSettings")
+    fun `the methods are the iOS methods so far, by reflection and in the source`() {
+        val expected =
+            listOf("capabilities", "prepare", "start", "stop", "cancel", "openSettings", "speak", "speakPart", "stopSpeaking", "voices")
         assertEquals(expected, BurrowVoicePlugin.METHODS)
         val reflected =
             BurrowVoicePlugin::class.java.declaredMethods
@@ -47,7 +48,7 @@ class BurrowVoiceMethodsTest {
 
     @Test
     fun `the events are the iOS names, and the source sends exactly those`() {
-        assertEquals(listOf("partial", "final", "ended", "route"), BurrowVoicePlugin.EVENTS)
+        assertEquals(listOf("partial", "final", "ended", "route", "speech"), BurrowVoicePlugin.EVENTS)
         val listed =
             EVENTS_DECL
                 .find(source)!!

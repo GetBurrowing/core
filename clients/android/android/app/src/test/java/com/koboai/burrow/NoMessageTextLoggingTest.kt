@@ -65,6 +65,7 @@ class NoMessageTextLoggingTest {
         // The Voice plugin handles what the person said (task 01a21e4a): it is scanned too.
         assertTrue(sources.any { it.path.contains("/voice/") && it.name == "OnDeviceTranscriber.kt" })
         assertTrue(sources.any { it.path.contains("/voice/") && it.name == "BurrowVoicePlugin.kt" })
+        assertTrue(sources.any { it.path.contains("/voice/") && it.name == "SystemReplySpeaker.kt" })
         val found = sources.flatMap { file -> offences(file.readText()).map { "${file.name}: ${it.trim()}" } }
         assertTrue("log calls naming message text:\n" + found.joinToString("\n"), found.isEmpty())
     }

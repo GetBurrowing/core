@@ -1,6 +1,8 @@
 package com.koboai.burrow.voice
 
 import android.content.Context
+import android.content.Intent
+import android.media.AudioAttributes
 import android.media.AudioDeviceInfo
 import android.media.AudioManager
 import org.junit.Assert.assertEquals
@@ -13,6 +15,7 @@ import org.junit.runner.RunWith
 import org.robolectric.RobolectricTestRunner
 import org.robolectric.RuntimeEnvironment
 import org.robolectric.Shadows.shadowOf
+import org.robolectric.shadows.AudioDeviceInfoBuilder
 import org.robolectric.shadows.ShadowLooper
 
 @RunWith(RobolectricTestRunner::class)
@@ -112,5 +115,45 @@ class VoiceAudioTest {
         assertTrue(VoiceRoute.focusEndsTurn(AudioManager.AUDIOFOCUS_LOSS))
         assertFalse(VoiceRoute.focusEndsTurn(AudioManager.AUDIOFOCUS_LOSS_TRANSIENT))
         assertFalse(VoiceRoute.focusEndsTurn(AudioManager.AUDIOFOCUS_LOSS_TRANSIENT_CAN_DUCK))
+    }
+
+    @Test
+    fun `removing a personal output is an output loss, the loudspeaker is not`() {
+        assertTrue(VoiceRoute.isOutputLoss(listOf(AudioDeviceInfo.TYPE_BLUETOOTH_A2DP)))
+        assertTrue(VoiceRoute.isOutputLoss(listOf(AudioDeviceInfo.TYPE_BLUETOOTH_SCO)))
+        assertTrue(VoiceRoute.isOutputLoss(listOf(AudioDeviceInfo.TYPE_BLE_HEADSET)))
+        assertTrue(VoiceRoute.isOutputLoss(listOf(AudioDeviceInfo.TYPE_WIRED_HEADPHONES)))
+        assertFalse(VoiceRoute.isOutputLoss(listOf(AudioDeviceInfo.TYPE_BUILTIN_SPEAKER)))
+        assertFalse(VoiceRoute.isOutputLoss(emptyList()))
+    }
+
+    @Test
+    fun `audio becoming noisy or a removed headset reports the output lost`() {
+        var lost = 0
+        audio.watchOutputLoss { lost++ }
+        context.sendBroadcast(Intent(AudioManager.ACTION_AUDIO_BECOMING_NOISY))
+        ShadowLooper.idleMainLooper()
+        assertEquals(1, lost)
+        val headset = AudioDeviceInfoBuilder.newBuilder().setType(AudioDeviceInfo.TYPE_BLUETOOTH_A2DP).build()
+        val speaker = AudioDeviceInfoBuilder.newBuilder().setType(AudioDeviceInfo.TYPE_BUILTIN_SPEAKER).build()
+        audio.outputs.onAudioDevicesRemoved(arrayOf(speaker))
+        assertEquals(1, lost)
+        audio.outputs.onAudioDevicesRemoved(arrayOf(headset))
+        assertEquals(2, lost)
+        audio.unwatchOutputLoss()
+        context.sendBroadcast(Intent(AudioManager.ACTION_AUDIO_BECOMING_NOISY))
+        ShadowLooper.idleMainLooper()
+        assertEquals(2, lost)
+    }
+
+    @Test
+    fun `a reply asks for may-duck focus and gives it back`() {
+        val focus = SystemReplyFocus(context)
+        focus.request()
+        val request = shadowOf(manager).lastAudioFocusRequest
+        assertEquals(AudioManager.AUDIOFOCUS_GAIN_TRANSIENT_MAY_DUCK, request.durationHint)
+        assertEquals(AudioAttributes.USAGE_ASSISTANT, request.audioFocusRequest.audioAttributes.usage)
+        focus.abandon()
+        assertSame(request.audioFocusRequest, shadowOf(manager).lastAbandonedAudioFocusRequest)
     }
 }

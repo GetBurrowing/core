@@ -81,6 +81,7 @@ class FakeAudio(
     override var othersRecording = false
     override var routeLabel: String? = null
     var listener: VoiceAudioListener? = null
+    var onOutputLost: (() -> Unit)? = null
 
     override fun beginCapture(listener: VoiceAudioListener) {
         log.add("audio.begin")
@@ -90,6 +91,14 @@ class FakeAudio(
     override fun endCapture() {
         log.add("audio.end")
         listener = null
+    }
+
+    override fun watchOutputLoss(onLost: () -> Unit) {
+        onOutputLost = onLost
+    }
+
+    override fun unwatchOutputLoss() {
+        onOutputLost = null
     }
 }
 
@@ -110,14 +119,83 @@ class FakeMic(
     }
 }
 
+/** A scripted TextToSpeech: records what was queued, and fires its callbacks on demand. */
+class FakeTtsEngine(
+    private val log: CallLog = CallLog(),
+) : TtsEngine {
+    override var usable = true
+    override var events: TtsEvents? = null
+    var languages = mutableSetOf("en-US")
+    var installed = mutableListOf<EngineVoice>()
+    val queued = mutableListOf<Pair<String, String>>()
+    val selected = mutableListOf<String?>()
+    var stops = 0
+
+    override fun voices(): List<EngineVoice> = installed
+
+    override fun hasLanguage(languageTag: String): Boolean = languageTag in languages
+
+    override fun select(
+        voiceId: String?,
+        languageTag: String,
+    ): Boolean {
+        selected.add(voiceId)
+        return true
+    }
+
+    override fun enqueue(
+        text: String,
+        utteranceId: String,
+    ) {
+        log.add("tts.enqueue")
+        queued.add(text to utteranceId)
+    }
+
+    override fun stop() {
+        log.add("tts.stop")
+        stops++
+    }
+
+    fun texts(): List<String> = queued.map { it.first }
+
+    fun idOf(text: String): String = queued.last { it.first == text }.second
+
+    fun start(text: String) = events!!.onStart(idOf(text))
+
+    fun done(text: String) = events!!.onDone(idOf(text))
+}
+
+class FakeFocus : ReplyFocus {
+    var requests = 0
+    var abandons = 0
+    val held: Boolean get() = requests > abandons
+
+    override fun request() {
+        requests++
+    }
+
+    override fun abandon() {
+        abandons++
+    }
+}
+
+class FakeCatalog : ReplyVoiceCatalog {
+    var voices = mutableListOf<ReplyVoice>()
+
+    override fun installedVoices(): List<ReplyVoice> = voices
+}
+
+/** The real system speaker over a fake engine, with every stop recorded in the shared log. */
 class RecordingSpeaker(
     private val log: CallLog,
-) : VoiceSpeaking {
+    val inner: VoiceSpeaking,
+) : VoiceSpeaking by inner {
     val stops = mutableListOf<String>()
 
     override fun stop(reason: String) {
         log.add("speaker.stop:$reason")
         stops.add(reason)
+        inner.stop(reason)
     }
 }
 
@@ -127,7 +205,10 @@ class VoiceRig {
     val transcriber = FakeTranscriber(log)
     val audio = FakeAudio(log)
     val mic = FakeMic(log)
-    val speaker = RecordingSpeaker(log)
+    val engine = FakeTtsEngine(log)
+    val focus = FakeFocus()
+    val catalog = FakeCatalog()
+    val speaker = RecordingSpeaker(log, SystemReplySpeaker(engine, focus) { "en-US" })
     val events = mutableListOf<Pair<String, JSObject>>()
     val plugin =
         BurrowVoicePlugin().also { p ->
@@ -137,6 +218,9 @@ class VoiceRig {
             p.speaker = speaker
             p.onMain = { it() }
             p.eventSink = { name, data -> events.add(name to data) }
+            p.voiceCatalog = catalog
+            p.languageTag = { "en-US" }
+            p.wireSystem()
         }
 
     fun call(method: (PluginCall) -> Unit): FakeCall = FakeCall().also { method(it) }
@@ -148,4 +232,19 @@ class VoiceRig {
     fun eventNames(): List<String> = events.map { it.first }
 
     fun event(name: String): JSObject? = events.lastOrNull { it.first == name }?.second
+
+    /** The `speech` events, as "state" or "state:reason". */
+    fun speech(): List<String> =
+        events.filter { it.first == "speech" }.map { (_, d) ->
+            d.getString("state") +
+                (if (d.has("reason")) ":" + d.getString("reason") else "")
+        }
+
+    fun part(
+        id: String,
+        seq: Int,
+        text: String,
+        final: Boolean = false,
+        voice: String? = null,
+    ): JSObject = plugin.speakPart(id, seq, text, final, voice)
 }

@@ -246,7 +246,8 @@ class BurrowVoicePluginTest {
         assertEquals("background", rig.event("ended")!!.getString("reason"))
         assertEquals(1, rig.transcriber.cancelCalls)
         assertTrue(rig.log.entries.contains("audio.end"))
-        assertEquals(listOf("mic_opened", "background"), rig.speaker.stops)
+        // A pause ends the turn only; the reply is stopped by onStop.
+        assertEquals(listOf("mic_opened"), rig.speaker.stops)
         // onStop after onPause: the turn is already gone, nothing more is sent.
         rig.plugin.handleOnStop()
         assertEquals(1, rig.events.count { it.first == "ended" })
@@ -300,6 +301,8 @@ class BurrowVoicePluginTest {
         rig.stop()
         rig.start()
         rig.plugin.handleOnStop()
+        rig.plugin.speakReply("r1", "Hello there.")
+        rig.engine.start("Hello there.")
         assertTrue(BurrowVoicePlugin.EVENTS.containsAll(rig.eventNames().toSet()))
         assertEquals(BurrowVoicePlugin.EVENTS.toSet(), rig.eventNames().toSet())
     }
