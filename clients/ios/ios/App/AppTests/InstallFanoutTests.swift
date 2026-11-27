@@ -94,11 +94,11 @@ final class InstallFanoutTests: XCTestCase {
     func testASlowInstallTimesOutAsUnreachable() async {
         let results = await InstallFanout.fetch(
             installs: installs([a, b]), client: client([a: "t", b: "t"]), timeout: 0.1,
-            lastKnown: { $0 == self.b ? (41, Date(timeIntervalSince1970: 0)) : nil }
-        ) { host -> Int in
-            if host == self.b { try await Task.sleep(nanoseconds: 2_000_000_000) }
-            return 1
-        }
+            lastKnown: { $0 == self.b ? (41, Date(timeIntervalSince1970: 0)) : nil },
+            fetch: { host -> Int in
+                if host == self.b { try await Task.sleep(nanoseconds: 2_000_000_000) }
+                return 1
+            })
         guard case .ok(1) = results[0].result else { return XCTFail("a: \(results[0].result)") }
         guard case .unreachable(lastKnown: 41?, fetchedAt: _?) = results[1].result else { return XCTFail("b: \(results[1].result)") }
     }
@@ -113,8 +113,8 @@ final class InstallFanoutTests: XCTestCase {
         let client = client([a: "token-for-a", b: "token-for-b", c: "token-for-c"])
 
         let results = await InstallFanout.fetch(
-            installs: installs([a, b, c]), client: client, lastKnown: { host in cache.counts(for: host).map { ($0, $0.fetchedAt) } }
-        ) { host in try await client.fetchCounts(host: host) }
+            installs: installs([a, b, c]), client: client, lastKnown: { host in cache.counts(for: host).map { ($0, $0.fetchedAt) } },
+            fetch: { host in try await client.fetchCounts(host: host) })
 
         guard case .ok(let fresh) = results[0].result else { return XCTFail("a") }
         XCTAssertEqual(fresh.approvals, 5)

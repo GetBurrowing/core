@@ -428,17 +428,20 @@ final class ExtensionRenderTests: XCTestCase {
             return CountsEntry.merged(
                 date: now, results: zip(covered, results).map { (install: $0.0, result: $0.1) }, saved: saved, scope: scope)
         }
+        func stale(_ approvals: Int, _ tasks: Int, minutes: Double) -> InstallResult<BurrowCounts> {
+            .unreachable(lastKnown: counts(approvals, tasks, minutesOld: minutes), fetchedAt: nil)
+        }
         return [
             ("empty", merged(one, [.ok(counts(0, 0))])),
             ("some", merged(one, [.ok(counts(3, 4))])),
             ("many", merged(one, [.ok(counts(48, 112))])),
             ("signed-out", merged(one, [.signedOut])),
             ("several", merged(two, [.ok(counts(5, 7)), .ok(counts(2, 1))])),
-            ("one-failing", merged(two, [.ok(counts(5, 7)), .unreachable(lastKnown: counts(2, 1, minutesOld: 120), fetchedAt: nil)])),
+            ("one-failing", merged(two, [.ok(counts(5, 7)), stale(2, 1, minutes: 120)])),
             ("one-failing-no-count", merged(two, [.ok(counts(5, 7)), .unreachable(lastKnown: nil, fetchedAt: nil)])),
             ("one-signed-out", merged(two, [.ok(counts(5, 7)), .signedOut])),
-            ("two-failing", merged(fixtureInstalls, [.ok(counts(5, 7)), .unreachable(lastKnown: counts(1, 1, minutesOld: 90), fetchedAt: nil), .signedOut])),
-            ("all-failing", merged(two, [.unreachable(lastKnown: counts(5, 7, minutesOld: 120), fetchedAt: nil), .unreachable(lastKnown: counts(2, 1, minutesOld: 120), fetchedAt: nil)])),
+            ("two-failing", merged(fixtureInstalls, [.ok(counts(5, 7)), stale(1, 1, minutes: 90), .signedOut])),
+            ("all-failing", merged(two, [stale(5, 7, minutes: 120), stale(2, 1, minutes: 120)])),
             ("pinned", merged(two, [.ok(counts(2, 1))], scope: .pinned("lab.example.test"))),
             ("three-nameless", merged(fixtureInstalls, [.ok(counts(5, 7)), .ok(counts(2, 1)), .ok(counts(1, 0))])),
         ]
@@ -480,7 +483,9 @@ final class ExtensionRenderTests: XCTestCase {
             ApprovalsSource(
                 host: install.host, label: InstallLabel.name(for: install.host, installs: fixtureInstalls), signedIn: signedIn,
                 unreachable: unreachable,
-                cached: signedIn ? CachedApprovals(approvals: (0..<n).map { approval($0, install.host) }, fetchedAt: now.addingTimeInterval(-minutesOld * 60)) : nil)
+                cached: signedIn
+                    ? CachedApprovals(approvals: (0..<n).map { approval($0, install.host) }, fetchedAt: now.addingTimeInterval(-minutesOld * 60))
+                    : nil)
         }
         func entry(_ sources: [ApprovalsSource], installName: String? = nil) -> ApprovalsEntry {
             ApprovalsTimeline.merged(at: now, sources: sources, installName: installName, arm: nil, marks: [:])
