@@ -1026,13 +1026,15 @@ defmodule PlatformWeb.AppApiControllerTest do
       user: user,
       space: space
     } do
-      previous = Logger.level()
-      Logger.configure(level: :debug)
-      on_exit(fn -> Logger.configure(level: previous) end)
-
       sentinel = "SENTINEL-#{System.unique_integer([:positive])}"
       widget_mention!(user, space, "Mention carrying #{sentinel}-content")
       widget_blocked_task!(user, "Task titled #{sentinel}-title")
+
+      # Debug from here on, so the request's own query logs are captured and
+      # the fixture inserts above (which carry the sentinel) are not printed.
+      previous = Logger.level()
+      Logger.configure(level: :debug)
+      on_exit(fn -> Logger.configure(level: previous) end)
 
       {body, log} =
         with_log([level: :debug], fn ->

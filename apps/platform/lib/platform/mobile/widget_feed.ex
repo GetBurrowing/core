@@ -312,11 +312,11 @@ defmodule Platform.Mobile.WidgetFeed do
   def start_of_today(%DateTime{} = now) do
     date = Disseminator.local_date(now)
 
-    case DateTime.new(date, ~T[00:00:00], Disseminator.timezone()) do
+    case DateTime.new(date, ~T[00:00:00.000000], Disseminator.timezone()) do
       {:ok, local} -> DateTime.shift_zone!(local, "Etc/UTC")
       {:ambiguous, first, _second} -> DateTime.shift_zone!(first, "Etc/UTC")
       {:gap, _before, after_gap} -> DateTime.shift_zone!(after_gap, "Etc/UTC")
-      {:error, _} -> DateTime.new!(date, ~T[00:00:00], "Etc/UTC")
+      {:error, _} -> DateTime.new!(date, ~T[00:00:00.000000], "Etc/UTC")
     end
   end
 

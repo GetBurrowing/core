@@ -381,7 +381,16 @@ defmodule Platform.Mobile.WidgetFeedTest do
 
       # Read the newest channel up to its tip: it is not unread.
       [c5 | _] = Enum.reverse(convs)
-      tip = Repo.one(from(m in Message, where: m.space_id == ^c5.space.id, select: max(m.id)))
+
+      tip =
+        Repo.one(
+          from(m in Message,
+            where: m.space_id == ^c5.space.id,
+            order_by: [desc: m.id],
+            limit: 1,
+            select: m.id
+          )
+        )
 
       Repo.update_all(from(p in Participant, where: p.id == ^c5.me.id),
         set: [last_read_message_id: tip]
@@ -444,7 +453,7 @@ defmodule Platform.Mobile.WidgetFeedTest do
       project = org_project!(user)
       now = ~U[2026-11-28 03:30:00Z]
 
-      assert WidgetFeed.start_of_today(now) == ~U[2026-11-27 06:00:00Z]
+      assert WidgetFeed.start_of_today(now) == ~U[2026-11-27 06:00:00.000000Z]
 
       before_midnight = task!(project, %{status: "done", title: "Before Chicago midnight"})
       done_at!(before_midnight, ~U[2026-11-27 05:00:00.000000Z])
