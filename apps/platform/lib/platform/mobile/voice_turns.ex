@@ -16,7 +16,11 @@ defmodule Platform.Mobile.VoiceTurns do
       The app compares `last_used_at` across installs.
     * `send_turn/4`: idempotent on `client_turn_id` (a retry posts nothing).
     * `await_reply/4`: a long-poll, at most #{25_000} ms, that returns the
-      sentences not yet spoken. Only the caller's OWN turn resolves.
+      sentences not yet spoken. Only the caller's OWN turn resolves. While
+      it waits, the caller is tracked as a Voice listener in the DM
+      (`Platform.Chat.Presence`, meta `voice_meta/0`), so the reply the
+      device shows in its Live Activity is not pushed on top of it (the
+      push rule of task 01a21e8d).
 
   Nothing here logs. The turn text and the reply are message text: they are
   stored as the DM message and returned to the person's own device only.
@@ -26,12 +30,13 @@ defmodule Platform.Mobile.VoiceTurns do
 
   alias Platform.Agents.Agent
   alias Platform.Chat
-  alias Platform.Chat.{Message, Participant, Space}
+  alias Platform.Chat.{Message, Participant, Presence, Space}
   alias Platform.Chat.PubSub, as: ChatPubSub
   alias Platform.Meetings.OnDeviceVoice
   alias Platform.Repo
 
   @max_wait_ms 25_000
+  @voice_meta %{participant_type: "user", surface: "voice"}
 
   @type reply :: %{
           state: String.t(),
@@ -178,7 +183,7 @@ defmodule Platform.Mobile.VoiceTurns do
     with :ok <- check_turn_id(client_turn_id),
          %Message{} = turn <- own_turn(user, client_turn_id),
          {:ok, conn} <- reopen(user, turn) do
-      {:ok, wait(conn, spoken, timeout_ms)}
+      {:ok, as_voice_listener(conn.space_id, user.id, fn -> wait(conn, spoken, timeout_ms) end)}
     else
       _ -> {:error, :not_found}
     end
@@ -220,6 +225,28 @@ defmodule Platform.Mobile.VoiceTurns do
       _ -> {:error, :not_found}
     end
   end
+
+  # While the device waits for the reply it is a Voice listener in the DM,
+  # exactly as the Voice page is: tracked in `Platform.Chat.Presence` with
+  # `%{participant_type: "user", surface: "voice"}`, so the reply it is about
+  # to show in the Live Activity is not also pushed (task 01a21e8d's rule).
+  # Tracked on THIS process, so a dropped connection clears the entry with
+  # the process; untracked on every exit. A tracker that cannot be reached
+  # fails open: the wait goes on and the reply may also be pushed.
+  defp as_voice_listener(space_id, user_id, fun) do
+    tracked? =
+      match?({:ok, _}, Presence.safe_track_in_space(self(), space_id, user_id, @voice_meta))
+
+    try do
+      fun.()
+    after
+      if tracked?, do: Presence.safe_untrack_in_space(self(), space_id, user_id)
+    end
+  end
+
+  @doc "The presence meta a waiting device is tracked with in the turn's DM."
+  @spec voice_meta() :: map()
+  def voice_meta, do: @voice_meta
 
   defp wait(conn, spoken, timeout_ms) do
     case posted_reply(conn) do
@@ -288,10 +315,13 @@ defmodule Platform.Mobile.VoiceTurns do
 
   # Frames already delivered for this space before the unsubscribe; a
   # keep-alive connection's next request may run in this same process.
-  defp flush(space_id) do
+  defp flush(space_id), do: flush(space_id, ChatPubSub.space_topic(space_id))
+
+  defp flush(space_id, topic) do
     receive do
-      {:new_message, %{space_id: ^space_id}} -> flush(space_id)
-      {:agent_reply_chunk, %{space_id: ^space_id}} -> flush(space_id)
+      {:new_message, %{space_id: ^space_id}} -> flush(space_id, topic)
+      {:agent_reply_chunk, %{space_id: ^space_id}} -> flush(space_id, topic)
+      %Phoenix.Socket.Broadcast{topic: ^topic} -> flush(space_id, topic)
     after
       0 -> :ok
     end

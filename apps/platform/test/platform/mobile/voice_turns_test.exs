@@ -70,6 +70,22 @@ defmodule Platform.Mobile.VoiceTurnsTest do
      }}
   end
 
+  defp voice_metas(space_id, user_id) do
+    space_id
+    |> Platform.Chat.Presence.list_space()
+    |> Map.get(user_id, %{metas: []})
+    |> Map.fetch!(:metas)
+    |> Enum.filter(&(Map.get(&1, :surface) == "voice"))
+  end
+
+  defp eventually(fun, tries \\ 40) do
+    cond do
+      fun.() -> true
+      tries == 0 -> false
+      true -> Process.sleep(25) && eventually(fun, tries - 1)
+    end
+  end
+
   # ── partner ────────────────────────────────────────────────────────────
 
   describe "last_partner/1" do
@@ -273,6 +289,47 @@ defmodule Platform.Mobile.VoiceTurnsTest do
     test "the wait is capped", %{user: user, id: id} do
       assert VoiceTurns.max_wait_ms() == 25_000
       assert {:ok, %{state: "thinking"}} = VoiceTurns.await_reply(user, id, 0, -5)
+    end
+
+    # The push rule itself (task 01a21e8d: no push to a user tracked with a
+    # voice surface) is not on main yet; until it is, these assert the
+    # presence entry it reads. Whichever branch merges second adds the
+    # end-to-end push assertion.
+    test "the caller is a voice listener in the DM only while waiting", %{
+      user: user,
+      id: id,
+      conn: conn
+    } do
+      parent = self()
+
+      spawn(fn ->
+        Process.sleep(150)
+        send(parent, {:during, voice_metas(conn.space_id, user.id)})
+      end)
+
+      assert voice_metas(conn.space_id, user.id) == []
+      assert {:ok, %{state: "thinking"}} = VoiceTurns.await_reply(user, id, 0, 400)
+      assert_receive {:during, [meta]}, 1_000
+      assert Map.take(meta, [:participant_type, :surface]) == VoiceTurns.voice_meta()
+      assert eventually(fn -> voice_metas(conn.space_id, user.id) == [] end)
+    end
+
+    test "the entry also goes when the request process dies mid-wait", %{
+      user: user,
+      id: id,
+      conn: conn
+    } do
+      parent = self()
+
+      waiter =
+        spawn(fn ->
+          Ecto.Adapters.SQL.Sandbox.allow(Repo, parent, self())
+          VoiceTurns.await_reply(user, id, 0, 5_000)
+        end)
+
+      assert eventually(fn -> voice_metas(conn.space_id, user.id) != [] end)
+      Process.exit(waiter, :kill)
+      assert eventually(fn -> voice_metas(conn.space_id, user.id) == [] end)
     end
 
     test "another user's client_turn_id is not_found", %{id: id} do
