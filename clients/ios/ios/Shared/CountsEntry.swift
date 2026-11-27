@@ -65,7 +65,7 @@ struct CountsEntry: TimelineEntry {
     /// Labels, the breakdown and "2 installs" show only with a choice.
     var isMultiInstall: Bool { signedInInstalls.count > 1 }
 
-    /// "Kobo 5 · Home 2 (2h ago)": each signed-in install's count, a failed
+    /// "Alpha 5 · Lab 2 (2h ago)": each signed-in install's count, a failed
     /// one's last-known count marked stale, "Home —" with none.
     func breakdown(_ kind: SlabKind) -> String? {
         guard isMultiInstall else { return nil }
@@ -92,7 +92,7 @@ struct CountsEntry: TimelineEntry {
         }
     }
 
-    /// VoiceOver for the total: "7: Kobo 5, Home 2, last updated 2 hours ago".
+    /// VoiceOver for the total: "7: Alpha 5, Lab 2, last updated 2 hours ago".
     func spokenBreakdown(_ kind: SlabKind) -> String? {
         guard isMultiInstall else { return nil }
         return signedInInstalls.map { install in

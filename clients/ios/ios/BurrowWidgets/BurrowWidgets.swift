@@ -138,7 +138,7 @@ struct SlabView: View {
 
 /// The All installs line under a count (canvas 01a21e80 "All installs"): a
 /// failure line when an install failed or is signed out, else the pinned
-/// marker, else the breakdown ("Kobo 5 · Home 2"), or "2 installs" when it
+/// marker, else the breakdown ("Alpha 5 · Lab 2"), or "2 installs" when it
 /// is compact or the breakdown does not fit. Every variant is dropped WHOLE,
 /// never truncated. Secondary type, never error red.
 struct InstallDetailLine: View {
