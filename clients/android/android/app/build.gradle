@@ -90,6 +90,11 @@ android {
             // ReleaseManifestTest parses the merged RELEASE manifest.
             systemProperty "burrow.releaseManifest", releaseManifest.get().asFile.absolutePath
             systemProperty "burrow.debugManifest", debugManifest.get().asFile.absolutePath
+            // Robolectric downloads its android-all jars itself, by default
+            // from Maven Central, which rate-limits shared build hosts. Use
+            // Google's mirror of Maven Central; the jars land in ~/.m2.
+            systemProperty "robolectric.dependency.repo.id", "google-maven-central-mirror"
+            systemProperty "robolectric.dependency.repo.url", "https://maven-central.storage-download.googleapis.com/maven2"
         }
     }
 }

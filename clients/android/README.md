@@ -72,6 +72,9 @@ clients/android/scripts/rig/rig.sh emulator-down
   `system-images;android-35;google_apis;x86_64` and `...android-32...`) into
   the named volume `burrow-android-sdk`; Gradle's cache is the volume
   `burrow-android-gradle`.
+  Robolectric's android-all jars (150-200 MB each) live in the volume
+  `burrow-android-m2` (`~/.m2`), fetched once from Google's mirror of
+  Maven Central, so a run does not download them again.
 - Containers run `--device /dev/kvm --network host`. The emulator is
   headless (`-no-window -no-audio -no-boot-anim -gpu swiftshader_indirect`)
   on console port 5654 with the adb server on 5137, off the defaults so the
