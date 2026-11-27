@@ -39,8 +39,24 @@ final class InstallFanoutTests: XCTestCase {
     // MARK: Token isolation
 
     /// Three hosts, three bearers: every request carries exactly its own
-    /// host's token, and none to A carries B's or C's.
+    /// host's token, and none to A carries B's or C's. Host A is made the
+    /// app's SELECTED install for the duration, so an implementation that
+    /// looked the bearer up by the selection instead of the request's host
+    /// would send A's token everywhere and fail here.
     func testEveryRequestCarriesOnlyItsOwnHostsBearer() async {
+        let shared = InstallStore.shared
+        let hadA = shared.installs.contains { $0.host == a }
+        let previous = shared.selectedHost
+        let removeHook = InstallStore.didRemove
+        InstallStore.didRemove = nil
+        shared.add(host: a)
+        defer {
+            if !hadA { shared.remove(host: a) }
+            if let previous { shared.select(previous) }
+            InstallStore.didRemove = removeHook
+        }
+        XCTAssertEqual(shared.selectedHost, a)
+
         let tokens = [a: "token-for-a", b: "token-for-b", c: "token-for-c"]
         StubURLProtocol.respond = { _ in (200, self.countsBody(1, 2)) }
         let client = client(tokens)
@@ -108,7 +124,8 @@ final class InstallFanoutTests: XCTestCase {
     func testA500IsUnreachableWithItsLastKnownCountWhileOthersAreOk() async {
         StubURLProtocol.respond = { request in request.url?.host == self.b ? (500, Data()) : (200, self.countsBody(5, 1)) }
         let cache = CountsCache(defaults: UserDefaults(suiteName: defaultsName))
-        let old = BurrowCounts(approvals: 2, tasks: 9, fetchedAt: Date().addingTimeInterval(-7200))
+        // Whole seconds: CountsCache stores ISO-8601, which drops fractions.
+        let old = BurrowCounts(approvals: 2, tasks: 9, fetchedAt: Date(timeIntervalSince1970: (Date().timeIntervalSince1970 - 7200).rounded(.down)))
         cache.write(old, for: b)
         let client = client([a: "token-for-a", b: "token-for-b", c: "token-for-c"])
 
