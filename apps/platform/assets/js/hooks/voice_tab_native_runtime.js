@@ -111,11 +111,18 @@ const VoiceTabNative = {
     this._nativeTurns = new Map()
     this._onPointerMove = (e) => this._pointerMove(e)
     this._onClick = (e) => this._click(e)
+    // Every visibility change is told to the server (task 01a21e8d): hidden
+    // stops the Voice listening entry, so a backgrounded app still gets its
+    // pushes; visible starts it again.
     this._onHidden = () => {
-      if (typeof document !== "undefined" && document.visibilityState === "visible") return
+      if (typeof document !== "undefined" && document.visibilityState === "visible") return this._pushVisible(true)
+      this._pushVisible(false)
       this._nativeLeave("hidden")
     }
-    this._onPageHide = () => this._nativeLeave("hidden")
+    this._onPageHide = () => {
+      this._pushVisible(false)
+      this._nativeLeave("hidden")
+    }
     this._native = plugin
     // From here a press, a release and leaving take the device path. The
     // LiveKit path's methods are replaced on this hook only.
@@ -148,20 +155,48 @@ const VoiceTabNative = {
     if (typeof window !== "undefined" && typeof window.addEventListener === "function") {
       window.addEventListener("pagehide", this._onPageHide)
     }
+    this._listenAppState(plugin)
     this._nativeCap = cap
     this._announceNative()
   },
 
   _announceNative() {
     const cap = this._nativeCap || {}
+    // A reconnect while hidden mounts a LiveView that must not listen yet.
+    // `visible` is sent only when false: absent means visible to the server.
+    const visible = typeof document === "undefined" || document.visibilityState !== "hidden"
+    this._visibleSent = visible
     this.pushEvent("voice_native_ready", {
       available: true,
       reason: null,
       locale: cap.locale || null,
       test_build: cap.testBuild === true,
       route: this._nativeRoute || null,
+      ...(visible ? {} : { visible: false }),
     })
     if (cap.micPermission === "denied") this.pushEvent("voice_native_permission", { mic: "denied" })
+  },
+
+  // `voice_native_visible`, never the same value twice in a row.
+  _pushVisible(visible) {
+    if (this._visibleSent === visible) return
+    this._visibleSent = visible
+    this.pushEvent("voice_native_visible", { visible })
+  },
+
+  // The app's own foreground/background signal (`appStateChanged {active}`),
+  // when this build's voice plugin sends it: WKWebView's visibilitychange
+  // can lag a suspension. Skipped silently when the plugin lacks it.
+  _listenAppState(plugin) {
+    if (!plugin || typeof plugin.addListener !== "function") return
+    try {
+      this._appStateHandle = plugin.addListener("appStateChanged", (d) => {
+        if (d && d.active === false) this._pushVisible(false)
+        else if (d && d.active === true) this._pushVisible(true)
+      })
+    } catch (_e) {
+      this._appStateHandle = null
+    }
   },
 
   // Re-attach the held turns' nodes once #voice-native-pending exists again
@@ -210,6 +245,12 @@ const VoiceTabNative = {
         .catch(() => {})
     }
     this._nativeHandles = []
+    if (this._appStateHandle) {
+      Promise.resolve(this._appStateHandle)
+        .then((handle) => handle && typeof handle.remove === "function" && handle.remove())
+        .catch(() => {})
+      this._appStateHandle = null
+    }
     if (typeof window !== "undefined" && typeof window.removeEventListener === "function") {
       window.removeEventListener("pagehide", this._onPageHide)
     }
