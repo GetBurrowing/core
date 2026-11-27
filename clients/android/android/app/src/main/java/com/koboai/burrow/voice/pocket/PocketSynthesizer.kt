@@ -4,7 +4,9 @@
 // Local changes (task 01a21e4a stage 3), and only these: the package; the
 // model directory is a parameter (the app's no-backup download dir, not
 // external storage); voices are read from `voices/`; generation and decode
-// stop early when [cancelled] says so; no logging (the sample logged token
+// stop early when [cancelled] says so, checked before every graph run (the
+// prompt, generation and decode loops live in [PocketChunk], task 01a21e4a
+// stage 6, so they are tested without LiteRT); no logging (the sample logged token
 // and frame counts); the debug placement overrides are dropped; formatting.
 package com.koboai.burrow.voice.pocket
 
@@ -19,7 +21,6 @@ import java.nio.ByteBuffer
 import java.nio.ByteOrder
 import java.nio.channels.FileChannel
 import java.util.Random
-import kotlin.math.ceil
 import kotlin.math.cos
 import kotlin.math.sin
 import kotlin.math.sqrt
@@ -315,11 +316,12 @@ class PocketSynthesizer(
             val (prepared, eosGuess) = prepareTextPrompt(chunk)
             val ids = tokenizer.encode(prepared)
             if (cancelled()) break
-            val latents = generateChunk(ids, framesAfterEos = eosGuess + 2, cancelled)
-            if (cancelled()) break
+            val latents = PocketChunk.generate(steps, ids, framesAfterEos = eosGuess + 2, cancelled) ?: break
             frames += latents.size
-            if (latents.isNotEmpty()) audio.add(decode(latents))
+            if (latents.isEmpty()) continue
+            audio.add(PocketChunk.decode(steps, latents, cancelled) ?: break)
         }
+        if (cancelled()) return Result(FloatArray(0), frames, (System.nanoTime() - t0) / 1_000_000)
         val total = audio.sumOf { it.size }
         val out = FloatArray(total)
         var o = 0
@@ -330,76 +332,41 @@ class PocketSynthesizer(
         return Result(out, frames, (System.nanoTime() - t0) / 1_000_000)
     }
 
-    /** The reference autoregressive loop for one <=50-token chunk. */
-    private fun generateChunk(
-        ids: IntArray,
-        framesAfterEos: Int,
-        cancelled: () -> Boolean,
-    ): List<FloatArray> {
-        resetToVoice()
-        for (id in ids) step(embRow(id), zeroNoise)
-        val estimate = ceil((ids.size / TOKENS_PER_SECOND + GEN_SECONDS_PADDING) * FRAME_RATE)
-        val maxGen = minOf(estimate.toInt(), PMAX - pos - 1)
-        val latents = ArrayList<FloatArray>(maxGen)
-        var emb = bosInput
-        var eosStep = -1
-        for (g in 0 until maxGen) {
-            if (cancelled()) break
-            val noise =
-                FloatArray(LDIM) {
-                    (rnd.nextGaussian() * sqrt(TEMP.toDouble())).toFloat()
-                }
-            val (lat, eosLogit) = step(emb, noise)
-            if (eosLogit > EOS_THRESHOLD && eosStep < 0) eosStep = g
-            if (eosStep >= 0 && g >= eosStep + framesAfterEos) break
-            latents.add(lat)
-            emb = projectLatent(lat)
-        }
-        return latents
-    }
+    /** The graph runs [PocketChunk] drives, on this synthesizer's LiteRT graphs and host state. */
+    private val steps =
+        object : PocketSteps {
+            override val bos get() = bosInput
+            override val neutral get() = this@PocketSynthesizer.neutral
 
-    /** Mimi decode: overlapped dec_tx blocks -> one-shot SEANet window. */
-    private fun decode(latents: List<FloatArray>): FloatArray {
-        val t = minOf(latents.size, DEC_FRAMES)
-        val feat = FloatArray(MIMI_D * S_DEC)
-        val blk = FloatArray((1 + F_BLK) * LDIM)
+            override fun reset() = resetToVoice()
 
-        fun runBlock(
-            prev: FloatArray,
-            start: Int,
-        ): FloatArray {
-            System.arraycopy(prev, 0, blk, 0, LDIM)
-            for (f in 0 until F_BLK) {
-                val src = if (start + f < t) latents[start + f] else neutral
-                System.arraycopy(src, 0, blk, (1 + f) * LDIM, LDIM)
+            override fun room() = PMAX - pos - 1
+
+            override fun embed(id: Int) = embRow(id)
+
+            override fun prompt() = zeroNoise
+
+            override fun noise() = FloatArray(LDIM) { (rnd.nextGaussian() * sqrt(TEMP.toDouble())).toFloat() }
+
+            override fun step(
+                emb: FloatArray,
+                noise: FloatArray,
+            ) = this@PocketSynthesizer.step(emb, noise)
+
+            override fun project(latent: FloatArray) = projectLatent(latent)
+
+            override fun decTx(block: FloatArray): FloatArray {
+                dectxIn[0].writeFloat(block)
+                dectx.run(dectxIn, dectxOut)
+                return dectxOut[0].readFloat() // [512 * 1024]
             }
-            dectxIn[0].writeFloat(blk)
-            dectx.run(dectxIn, dectxOut)
-            return dectxOut[0].readFloat() // [512 * 1024]
-        }
 
-        var out = runBlock(neutral, 0)
-        val n0 = minOf(F_BLK, t)
-        for (c in 0 until MIMI_D) {
-            System.arraycopy(out, c * S_BLK, feat, c * S_DEC, n0 * UPS)
-        }
-        var kept = F_BLK
-        while (kept < t) {
-            val start = kept - F_HOP
-            out = runBlock(latents[start - 1], start)
-            val n = minOf(F_BLK, t - start)
-            val keepN = (n - F_HOP) * UPS
-            for (c in 0 until MIMI_D) {
-                System.arraycopy(out, c * S_BLK + F_HOP * UPS, feat, c * S_DEC + kept * UPS, keepN)
+            override fun decOnly(features: FloatArray): FloatArray {
+                deconlyIn[0].writeFloat(features)
+                deconly.run(deconlyIn, deconlyOut)
+                return deconlyOut[0].readFloat()
             }
-            kept += n - F_HOP
         }
-
-        deconlyIn[0].writeFloat(feat)
-        deconly.run(deconlyIn, deconlyOut)
-        val wav = deconlyOut[0].readFloat()
-        return FloatArray(t * SPF) { wav[it].coerceIn(-1f, 1f) }
-    }
 
     // ---- text preparation (ports of pocket_tts.models.tts_model) ----------
 

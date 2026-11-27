@@ -75,7 +75,9 @@ system manages. The app ships no speech model and no third-party code for it.
 - Files stage 3 ports: `app/src/main/java/com/pockettts/PocketTtsSynthesizer.kt`
   (19,066 bytes) and `SpTokenizer.kt` (5,059 bytes). Not taken: the sample's
   `MainActivity.kt`, `WaveformView.kt`, the conversion script, and its
-  `abiFilters += setOf("arm64-v8a")`.
+  `abiFilters += setOf("arm64-v8a")`. Stage 6 moved the synthesizer's
+  prompt, generation and decode loops into `PocketChunk.kt` (same licence and
+  provenance) and checks cancellation before every graph run.
 
 ## Pocket TTS LiteRT graphs (downloaded)
 
