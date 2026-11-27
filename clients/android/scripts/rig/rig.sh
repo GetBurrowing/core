@@ -33,6 +33,10 @@ NAME="burrow-android-${PREFIX}"
 IMAGE="localhost/burrow-android-rig:latest"
 SDK_VOLUME="burrow-android-sdk"
 GRADLE_VOLUME="burrow-android-gradle"
+# Robolectric fetches its android-all jars (150-200 MB each) into ~/.m2,
+# outside Gradle's cache. Without this volume every run downloads them again,
+# and Maven Central rate-limits the rig host (HTTP 429 for about a day).
+M2_VOLUME="burrow-android-m2"
 [ -n "${RIG_ROOT:-}" ] || { echo "rig: RIG_ROOT is required (no default); see the header" >&2; exit 2; }
 WORK="${RIG_ROOT}/${PREFIX}"
 EMU_CONTAINER="${NAME}-emu"
@@ -80,6 +84,7 @@ run_in_image() {
     -e ANDROID_USER_HOME=/root/.gradle/android-user \
     -v "${SDK_VOLUME}:/opt/android-sdk" \
     -v "${GRADLE_VOLUME}:/root/.gradle" \
+    -v "${M2_VOLUME}:/root/.m2" \
     -v "${WORK}:/work:z" \
     -w /work \
     "${IMAGE}" "$@"
@@ -104,6 +109,7 @@ cmd_build_image() {
   podman build -t "${IMAGE}" -f "${here}/Containerfile" "${here}"
   podman volume exists "${SDK_VOLUME}" || podman volume create "${SDK_VOLUME}" >/dev/null
   podman volume exists "${GRADLE_VOLUME}" || podman volume create "${GRADLE_VOLUME}" >/dev/null
+  podman volume exists "${M2_VOLUME}" || podman volume create "${M2_VOLUME}" >/dev/null
   mkdir -p "${WORK}"
   run_in_image sdk bash -c '
     set -euo pipefail
