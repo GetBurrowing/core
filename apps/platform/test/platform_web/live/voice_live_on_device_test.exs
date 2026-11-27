@@ -154,19 +154,60 @@ defmodule PlatformWeb.VoiceLiveOnDeviceTest do
     })
 
     d = doc(view)
-    assert text(d, "#voice-native-voice label > span") == "Reply voice"
+    assert text(d, "#voice-settings-sheet-title") == "Reply voice"
+    assert rows(d) == ["Zoe · Premium", "Ava · Enhanced", "Samantha · Default"]
 
-    assert q(d, "#voice-native-voice-select option")
-           |> Enum.map(&LazyHTML.text/1)
-           |> Enum.map(&String.trim/1) ==
-             ["Zoe · Premium", "Ava · Enhanced", "Samantha · Default"]
+    assert has_element?(
+             view,
+             ~s|#voice-native-voice button[data-voice="v-premium"][data-current]|
+           )
 
-    assert has_element?(view, ~s|#voice-native-voice-select option[value="v-premium"][selected]|)
     refute has_element?(view, "#voice-native-voice-missing")
 
-    view |> form("#voice-native-voice", %{"voice" => "v-enhanced"}) |> render_change()
+    pick(view, "v-enhanced")
     assert_push_event(view, "voice_native_voice", %{id: "v-enhanced"})
-    assert has_element?(view, ~s|#voice-native-voice-select option[value="v-enhanced"][selected]|)
+
+    assert has_element?(
+             view,
+             ~s|#voice-native-voice button[data-voice="v-enhanced"][data-current]|
+           )
+  end
+
+  test "the screen matches main: no picker on it, the voice settings button opens the sheet (task 01a20fdd stage 4)",
+       %{conn: conn} do
+    view = ready!(conn)
+    hook(view, "voice_native_voices", %{"voices" => @voices, "selected" => "v-premium"})
+
+    refute has_element?(view, "select"), "no dropdown on the Voice screen"
+
+    assert has_element?(
+             view,
+             ~s|#voice-settings[aria-label="Sound and video"] .hero-adjustments-horizontal|
+           )
+
+    refute has_element?(view, "#voice-settings-sheet.sheet-open")
+
+    view |> element("#voice-settings") |> render_click()
+    assert has_element?(view, "#voice-settings-sheet.sheet-open")
+
+    assert has_element?(
+             view,
+             ~s|#voice-settings-sheet #voice-native-voice button[data-voice="v-enhanced"]|
+           )
+
+    pick(view, "v-default")
+
+    assert has_element?(view, "#voice-settings-sheet.sheet-open"),
+           "stays open to show progress and credit"
+
+    render_hook(view, "close_sheet", %{})
+    refute has_element?(view, "#voice-settings-sheet.sheet-open")
+  end
+
+  test "with no voices from the phone there is no voice settings button", %{conn: conn} do
+    view = ready!(conn)
+    refute has_element?(view, "#voice-settings")
+    refute has_element?(view, "#voice-settings-sheet")
   end
 
   test "a remembered voice that is gone: the default is selected and the tab says so",
@@ -182,7 +223,7 @@ defmodule PlatformWeb.VoiceLiveOnDeviceTest do
     assert text(doc(view), "#voice-native-voice-missing") ==
              "Your chosen voice isn't on this iPhone. Using Zoe instead."
 
-    view |> form("#voice-native-voice", %{"voice" => "v-default"}) |> render_change()
+    pick(view, "v-default")
     refute has_element?(view, "#voice-native-voice-missing")
   end
 
@@ -649,6 +690,19 @@ defmodule PlatformWeb.VoiceLiveOnDeviceTest do
 
   # ── Pocket TTS in the picker ─────────────────────────────────────────
 
+  # The reply-voice sheet's rows as "<name> · <quality>", in order.
+  defp rows(d) do
+    for row <- q(d, "#voice-native-voice button") do
+      name = row |> LazyHTML.query("b") |> LazyHTML.text() |> String.trim()
+      quality = row |> LazyHTML.query("small") |> Enum.at(0) |> LazyHTML.text() |> String.trim()
+      "#{name} · #{quality}"
+    end
+  end
+
+  defp pick(view, id) do
+    view |> element(~s|#voice-native-voice button[data-voice="#{id}"]|) |> render_click()
+  end
+
   defp pocket(state, received \\ 0, total \\ 1000, name \\ "marius") do
     %{
       "id" => "pocket-tts:" <> name,
@@ -668,7 +722,7 @@ defmodule PlatformWeb.VoiceLiveOnDeviceTest do
 
     d = doc(view)
 
-    assert q(d, "#voice-native-voice-select option") |> Enum.map(&String.trim(LazyHTML.text(&1))) ==
+    assert rows(d) ==
              [
                "Pocket TTS (Marius) · Neural",
                "Zoe · Premium",
@@ -691,7 +745,7 @@ defmodule PlatformWeb.VoiceLiveOnDeviceTest do
       "selected" => "v-premium"
     })
 
-    view |> form("#voice-native-voice", %{"voice" => "pocket-tts:marius"}) |> render_change()
+    pick(view, "pocket-tts:marius")
     assert_push_event(view, "voice_native_voice", %{id: "pocket-tts:marius"})
 
     hook(view, "voice_native_model", %{
@@ -726,15 +780,15 @@ defmodule PlatformWeb.VoiceLiveOnDeviceTest do
     credit = fn -> text(doc(view), "#voice-native-pocket-credit") end
     assert credit.() == "Pocket TTS by Kyutai · CC BY 4.0 · voice: Alba MacKenna"
 
-    view |> form("#voice-native-voice", %{"voice" => "pocket-tts:george"}) |> render_change()
+    pick(view, "pocket-tts:george")
 
     assert credit.() ==
              "Pocket TTS by Kyutai · CC BY 4.0 · voice: VCTK corpus, CSTR, University of Edinburgh"
 
-    view |> form("#voice-native-voice", %{"voice" => "pocket-tts:bill_boerst"}) |> render_change()
+    pick(view, "pocket-tts:bill_boerst")
     assert credit.() == "Pocket TTS by Kyutai · CC BY 4.0"
 
-    view |> form("#voice-native-voice", %{"voice" => "v-premium"}) |> render_change()
+    pick(view, "v-premium")
     refute has_element?(view, "#voice-native-pocket-credit")
   end
 

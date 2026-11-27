@@ -312,6 +312,8 @@ defmodule PlatformWeb.Components.Voice do
     default: false,
     doc: "on-device: Pocket TTS was chosen but is not offered"
 
+  attr :voice_sheet?, :boolean, default: false, doc: "on-device: the reply-voice sheet is open"
+
   def voice_area(assigns) do
     assigns = assign(assigns, :card?, assigns.on_device? and assigns.mic_permission == :denied)
 
@@ -430,6 +432,7 @@ defmodule PlatformWeb.Components.Voice do
         >
           <.icon name="hero-microphone" class="size-10" />
         </button>
+        <.voice_settings_trigger :if={@voices != []} />
       </div>
       <p
         :if={@caption}
@@ -438,7 +441,9 @@ defmodule PlatformWeb.Components.Voice do
       >
         {@caption}
       </p>
-      <.native_voice_picker
+      <.voice_settings_sheet
+        :if={@voices != []}
+        open={@voice_sheet?}
         voices={@voices}
         voice={@voice}
         missing?={@voice_missing?}
@@ -867,17 +872,42 @@ defmodule PlatformWeb.Components.Voice do
 
   defp cant_talk(agent), do: "#{agent.name} can't talk right now."
 
+  # The voice settings button on the device (task 01a20fdd stage 4): the same
+  # 44px "Sound and video" control main shows to the right of #mic, a SIBLING
+  # of #mic so a press on it never starts a turn. On the device it opens the
+  # reply-voice sheet (the phone's own mic and speaker need no browser picker).
+  defp voice_settings_trigger(assigns) do
+    ~H"""
+    <div class="absolute left-full ml-3 flex items-center">
+      <button
+        type="button"
+        id="voice-settings"
+        phx-click="open_sheet"
+        phx-value-sheet="voice"
+        aria-haspopup="dialog"
+        aria-controls="voice-settings-sheet"
+        aria-label="Sound and video"
+        class="btn btn-sm btn-square min-h-11 min-w-11 rounded-field border-edge bg-base-100 font-normal text-base-content"
+      >
+        <span class="hero-adjustments-horizontal size-5" aria-hidden="true"></span>
+      </button>
+    </div>
+    """
+  end
+
+  attr :open, :boolean, default: false
   attr :voices, :list, required: true
   attr :voice, :string, default: nil
   attr :missing?, :boolean, default: false
   attr :pocket_missing?, :boolean, default: false
 
-  # The reply voice (on the device only): the phone's installed voices for its
-  # language, best first. The choice is remembered on the device. Pocket TTS
-  # (task 01a20fdd stage 3), where the phone offers it, is one more option in
-  # the same select; while its model is not ready the best system voice reads
-  # the reply, and the lines under the select say so.
-  defp native_voice_picker(assigns) do
+  # The reply voice (on the device only), in the sheet the voice settings
+  # button opens, with rows like the partner sheet's: the phone's installed
+  # voices for its language, best first, and Pocket TTS's voices where the
+  # phone offers them. The choice is remembered on the device. While a Pocket
+  # voice is not ready the best system voice reads the reply, and the lines
+  # under the list say so; the model credit is the last line.
+  def voice_settings_sheet(assigns) do
     current = Enum.find(assigns.voices, &(&1.id == assigns.voice))
     system = Enum.find(assigns.voices, &(&1.quality != "neural"))
 
@@ -887,49 +917,69 @@ defmodule PlatformWeb.Components.Voice do
       |> assign(:pocket, pocket_status(current, system, assigns.pocket_missing?))
 
     ~H"""
-    <form
-      :if={@voices != []}
-      id="voice-native-voice"
-      phx-change="voice_native_pick_voice"
-      class="flex flex-col items-center gap-1"
+    <.sheet
+      id="voice-settings-sheet"
+      open={@open}
+      on_close="close_sheet"
+      handle_close
+      swipe_dismiss
+      class={sheet_class(:sheet)}
+      data-variant={:sheet}
+      data-return-focus="#voice-settings"
     >
-      <label class="flex items-center gap-2 text-xs text-secondary">
-        <span>Reply voice</span>
-        <select
-          id="voice-native-voice-select"
-          name="voice"
-          class="select select-xs min-h-8 max-w-[14rem] bg-base-100 text-base-content"
+      <:title>Reply voice</:title>
+      <h2 class="px-2.5 pt-1 pb-2.5 text-base font-semibold text-base-content" aria-hidden="true">
+        Reply voice
+      </h2>
+      <div id="voice-native-voice" class="flex max-h-[55vh] flex-col overflow-y-auto">
+        <button
+          :for={{v, i} <- Enum.with_index(@voices)}
+          type="button"
+          id={"voice-opt-#{i}"}
+          class="opt flex w-full items-center gap-3 rounded-lg px-2.5 py-3 text-left active:bg-base-200"
+          data-voice={v.id}
+          data-current={v.id == @voice && "true"}
+          phx-click="voice_native_pick_voice"
+          phx-value-voice={v.id}
         >
-          <option :for={v <- @voices} value={v.id} selected={v.id == @voice}>
-            {v.name} · {voice_quality(v.quality)}
-          </option>
-        </select>
-      </label>
-      <p
-        :if={@missing? and not is_nil(@current) and not @pocket_missing?}
-        id="voice-native-voice-missing"
-        class="text-xs text-secondary"
-      >
-        Your chosen voice isn't on this iPhone. Using {@current.name} instead.
-      </p>
-      <p :if={@pocket.progress} id="voice-native-pocket-progress" class="text-xs text-secondary">
-        {@pocket.progress}
-      </p>
-      <p :if={@pocket.meanwhile} id="voice-native-pocket-meanwhile" class="text-xs text-secondary">
-        {@pocket.meanwhile}
-      </p>
-      <p :if={@pocket.unavailable} id="voice-native-pocket-unavailable" class="text-xs text-secondary">
-        Pocket TTS unavailable on this iPhone
-      </p>
-      <p :if={@pocket.credit} id="voice-native-pocket-credit" class="text-xs text-secondary">
-        {@pocket.credit}
-      </p>
-    </form>
+          <span class="min-w-0 flex-1">
+            <b class="block text-[15px] font-semibold text-base-content">{v.name}</b>
+            <small class="block text-xs text-subtle">{voice_quality(v.quality)}</small>
+          </span>
+          <small :if={v.id == @voice} class="text-sm text-subtle">current</small>
+        </button>
+      </div>
+      <div class="flex flex-col gap-1 px-2.5 pt-2 pb-1">
+        <p
+          :if={@missing? and not is_nil(@current) and not @pocket_missing?}
+          id="voice-native-voice-missing"
+          class="text-xs text-secondary"
+        >
+          Your chosen voice isn't on this iPhone. Using {@current.name} instead.
+        </p>
+        <p :if={@pocket.progress} id="voice-native-pocket-progress" class="text-xs text-secondary">
+          {@pocket.progress}
+        </p>
+        <p :if={@pocket.meanwhile} id="voice-native-pocket-meanwhile" class="text-xs text-secondary">
+          {@pocket.meanwhile}
+        </p>
+        <p
+          :if={@pocket.unavailable}
+          id="voice-native-pocket-unavailable"
+          class="text-xs text-secondary"
+        >
+          Pocket TTS unavailable on this iPhone
+        </p>
+        <p :if={@pocket.credit} id="voice-native-pocket-credit" class="text-xs text-secondary">
+          {@pocket.credit}
+        </p>
+      </div>
+    </.sheet>
     """
   end
 
   @doc """
-  The lines under the reply-voice select for Pocket TTS: `progress`
+  The lines under the reply-voice list for Pocket TTS: `progress`
   ("Downloading Pocket TTS · N%"), `meanwhile` ("Speaking with <system voice>
   until it finishes"), `unavailable` and `credit` (the CC BY attribution,
   whenever Pocket TTS is the chosen voice). All nil/false for a system voice.

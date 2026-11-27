@@ -326,6 +326,7 @@ defmodule PlatformWeb.VoiceLive do
           voice={@native_voice}
           voice_missing?={@native_voice_missing?}
           pocket_missing?={@native_pocket_missing?}
+          voice_sheet?={@sheet == :voice}
         />
       </div>
     </Layouts.app>
@@ -343,6 +344,12 @@ defmodule PlatformWeb.VoiceLive do
      |> assign(:query, "")
      |> assign(:ctx_form, to_form(%{"q" => ""}, as: :ctx))}
   end
+
+  # The reply-voice sheet behind the voice settings button (on the device).
+  def handle_event("open_sheet", %{"sheet" => "voice"}, %{assigns: %{on_device?: true}} = socket),
+    do: {:noreply, assign(socket, :sheet, :voice)}
+
+  def handle_event("open_sheet", %{"sheet" => "voice"}, socket), do: {:noreply, socket}
 
   def handle_event("close_sheet", _params, socket), do: {:noreply, assign(socket, :sheet, nil)}
 
