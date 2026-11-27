@@ -640,7 +640,10 @@ defmodule Platform.Chat.AgentResponder do
          # and `dispatch_to_built_in/2` needs it to render a body for an
          # attachment-only message. One query, one source (task 019ff107).
          attachments: message_attachments(message),
-         user_message: String.trim(message.content || ""),
+         # An on-device Voice turn also asks the agent for short, streamed
+         # sentences; only the body handed over carries that, never the
+         # stored message (task 01a20fdd stage 4).
+         user_message: String.trim(Platform.Meetings.OnDeviceVoice.agent_content(message) || ""),
          reply_to: reply_to(message, active_agent_participant.id),
          history: history
        }}

@@ -3177,6 +3177,35 @@ defmodule Platform.Chat do
   def hide_link_unfurls(_message_id, _actor), do: {:error, :not_author}
 
   @doc """
+  The earliest message in `space_id`, posted by `participant_id`, whose
+  `metadata` contains every key/value pair in `match` (jsonb containment),
+  or `nil`.
+
+  Used to dedupe a client-retried post by a client-supplied id carried in
+  the metadata, e.g. the Voice tab's on-device turn
+  (`%{"input" => "on_device", "client_turn_id" => id}`): a retry after a
+  reconnect must find the turn already posted instead of posting it twice.
+  Deleted messages count as posted. A malformed space or participant id, or
+  an empty `match`, answers `nil`.
+  """
+  @spec find_message_by_metadata(binary(), binary(), map()) :: Message.t() | nil
+  def find_message_by_metadata(space_id, participant_id, match)
+      when is_map(match) and map_size(match) > 0 do
+    if Platform.UUID.valid?(space_id) and Platform.UUID.valid?(participant_id) do
+      from(m in Message,
+        where:
+          m.space_id == ^space_id and m.participant_id == ^participant_id and
+            fragment("? @> ?::jsonb", m.metadata, ^match),
+        order_by: [asc: m.inserted_at],
+        limit: 1
+      )
+      |> Repo.one()
+    end
+  end
+
+  def find_message_by_metadata(_space_id, _participant_id, _match), do: nil
+
+  @doc """
   Fetch a message by primary key. Returns `nil` if not found.
 
   The optional `:scope` (a `%Platform.Chat.ExternalScope{}` or `%Platform.Access.Scope{}`) gates the message

@@ -121,7 +121,18 @@ const ASSETS = resolve(HERE, "..");
 // hooks/native_back.js (the Duo-gated native Back/Close bridge) joined the
 // bundle. First-party code with no new dependency; the overage is under one
 // 16 KB step, so one. 1136 KB still catches the ~8.2 MB leak.
-const MAX_BYTES = 1136 * 1024;
+//
+// Raised from 1136 KB to 1137 KB by task 01a20fdd (Pocket TTS on iPhone, a
+// do-not-merge prototype branch) when it merged main 70ec05bf (Calendar
+// #294): main alone measured 1,163,135 bytes WITH Play in CI run 45655359846,
+// 129 under 1136 KB, and the merged branch measured 1,163,947, 683 over. The
+// overage is main's Calendar growth plus the 812 bytes of first-party Voice
+// hook code the prototype already had in app.js (the island loader and its
+// device wiring; without-modules 1,098,586 against main's 1,097,774). This
+// round adds 0 bytes to app.js: its new JS is in the voice_native island.
+// Moving the remaining device wiring into the island saves only about 500
+// bytes, so one 1 KB step instead. 1137 KB still catches the ~8.2 MB leak.
+const MAX_BYTES = 1137 * 1024;
 
 // The profile also sets `env: %{"NODE_PATH" => [.../deps, build_path]}`, and
 // that half was missing here until this commit. js/app.js has exactly three

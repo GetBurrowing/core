@@ -314,6 +314,7 @@ defmodule Platform.MixProject do
         "esbuild emoji",
         "esbuild terminal",
         "esbuild cohost_face",
+        "esbuild voice_native",
         "esbuild calendar_mobile",
         "cmd --cd assets node scripts/copy_excalidraw_assets.mjs"
       ],
@@ -329,6 +330,7 @@ defmodule Platform.MixProject do
         "esbuild emoji --minify",
         "esbuild terminal --minify",
         "esbuild cohost_face --minify",
+        "esbuild voice_native --minify",
         "esbuild calendar_mobile --minify",
         "cmd --cd assets node scripts/copy_excalidraw_assets.mjs",
         "phx.digest"

@@ -4,6 +4,42 @@ The top `## v<version>` section is sent as the build's "What to Test" by
 `scripts/set_testflight_notes.py`. It must match project.yml's
 MARKETING_VERSION, and it is capped at 4000 characters.
 
+## v1.4: Pocket TTS reads replies on this iPhone
+New in this build:
+- Reply voice can now be Pocket TTS, a natural-sounding voice that runs entirely on this iPhone. It is offered on iPhones with iOS 27 and enough memory; on others the list is unchanged.
+- The first time you pick it, the iPhone downloads about 437 MB, once, with the progress shown under Reply voice ("Downloading Pocket TTS · N%"). Wi-Fi is best. Until it finishes, your usual system voice reads the replies, so nothing goes quiet.
+- The reply is read sentence by sentence, so speech starts as soon as the first sentence is ready rather than after the whole reply.
+- Twenty Pocket TTS voices to choose from, listed as "Pocket TTS (Name)". Marius comes with the first download; each other voice downloads (about 4 to 8 MB) when you pick it, and your system voice reads until it is ready.
+- Pressing the mic stops the reply at once, and taking your AirPods out pauses it instead of moving it to the loudspeaker, just as before.
+- If a podcast or music is playing, it pauses or dips while you talk or a reply plays, and carries on afterwards.
+- Pocket TTS by Kyutai · CC BY 4.0. Voices Alba (Alba MacKenna) and Anna, Vera, Fantine, Charles, Paul, Eponine, Azelma, George, Mary, Jane, Michael and Eve (VCTK corpus, CSTR, University of Edinburgh) are CC BY 4.0; the others are CC0.
+
+Please try:
+1. Open the Voice tab, pick Pocket TTS under Reply voice, and ask the agent something straight away. The reply should be read by your system voice while the percentage rises.
+2. When the download finishes, ask again. The reply should now be read by Pocket TTS, without picking it again, and still after you close and reopen the app.
+3. Ask for a longer answer (four to six sentences). Speech should begin after the first sentence, not after the whole reply.
+4. While Pocket TTS is speaking, press the mic and start talking. Speech should stop at once and not continue later.
+5. With AirPods in, take them out while it speaks. It should pause, not move to the loudspeaker.
+6. Pick another Pocket TTS voice and ask again. The first reply may be read by your system voice while it downloads; the next should be in the new voice.
+7. Start a podcast, switch to Burrow and tap the mic. The podcast should pause, your turn should stay open, and the podcast should resume after the reply.
+Tell us your iPhone model, your iOS version, and how Pocket TTS sounds next to the system voice.
+
+## v1.3: talk to an agent on this iPhone
+New in this build:
+- On an iPhone that supports on-device speech, the Voice tab now listens on the phone itself. Your words appear as you speak, are sent to the agent as an ordinary message when you let go, and the agent's answer is read aloud in the phone's own voice.
+- Other phones, older iOS versions and the web keep the Voice tab you already know. Nothing is hidden.
+- This only works once your install has the matching web update. Until then the Voice tab behaves as before.
+
+Please try:
+1. Hold the mic, speak, and let go. Watch the words grow while you speak, then "Sending", then your message settles and the agent answers out loud.
+2. Tap the mic once, speak, and tap again to send.
+3. Hold the mic and slide your finger off it. Nothing should be sent.
+4. While the agent is speaking, press the mic. The speech should stop at once.
+5. Turn on airplane mode, hold the mic and speak. The words should still appear; sending should show "Not sent" with Retry. Turn airplane mode off and tap Retry: the message is sent once.
+6. With AirPods in, take them out while the agent is speaking. Speech should pause, not move to the loudspeaker.
+7. Leave the Voice tab, lock the phone, or switch apps while holding the mic or while the agent speaks. The orange microphone dot at the top of the screen should go away each time.
+Tell us your iPhone model and iOS version, and whether iOS asked for speech recognition permission.
+
 ## v1.2: Siri Ask and the "which one?" check
 New in this build:
 - Siri Ask now reaches the agent. Say "Ask Burrow" or "Ask Dalton in Burrow", then say your question when Siri asks for it. Siri reads back a short spoken reply instead of a long text answer.

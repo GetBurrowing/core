@@ -37,6 +37,17 @@ defmodule PlatformWeb.Components.Voice do
   shared `DevicePanel` with MICROPHONE and SPEAKER only, opened by a caret
   beside #mic at `sm` with a fine pointer and by a 44px button on a phone.
 
+  The on-device states (task 01a20dc5 stage 2) render ONLY when VoiceLive's
+  `@on_device?` is true: `native_pending/1` (#voice-native-pending, filled by
+  the hook), the speaking outline on #partner-avatar (`speaking`), the
+  reply's "Stopped" / "Reply shown as text" note, the on-device listen line
+  ("Release to send", "Tap to send", "Microphone in use by another app"),
+  the permission card (#voice-permission) with "Type instead" beneath it,
+  the test caption (#voice-native-caption) and the reply-voice picker
+  (#voice-native-voice, the phone's on-device voices, with a note when the
+  remembered voice is no longer installed). With `@on_device?` false
+  every component renders exactly what it rendered before.
+
   No `hover:` classes: these are phone surfaces. The one exception is
   `lg:hover:bg-base-200` on the popover variant's rows, which only exist as
   popovers at lg. The pills' focus-visible ring is a primary outline.
@@ -60,6 +71,7 @@ defmodule PlatformWeb.Components.Voice do
   attr :slot, :string, required: true
   attr :id, :string, default: nil
   attr :class, :string, default: "size-7 text-xs"
+  attr :speaking, :boolean, default: false
 
   def avatar(assigns) do
     ~H"""
@@ -67,9 +79,11 @@ defmodule PlatformWeb.Components.Voice do
       id={@id}
       class={[
         "voice-avatar inline-flex flex-none items-center justify-center rounded-full font-semibold",
-        @class
+        @class,
+        @speaking && "outline-2 outline-offset-2 outline-primary"
       ]}
       data-agent-slot={@slot}
+      data-speaking={@speaking && "true"}
       aria-hidden="true"
     >
       {initial(@name)}
@@ -80,6 +94,10 @@ defmodule PlatformWeb.Components.Voice do
   # ── pills ─────────────────────────────────────────────────────────────
 
   attr :partner, :map, default: nil, doc: "%{agent, slot, reachable?} or nil"
+
+  attr :speaking, :boolean,
+    default: false,
+    doc: "on-device only: the reply is playing (canvas state 9)"
 
   def partner_pill(assigns) do
     ~H"""
@@ -93,7 +111,12 @@ defmodule PlatformWeb.Components.Voice do
       phx-value-sheet="partner"
     >
       <%= if @partner do %>
-        <.avatar id="partner-avatar" name={@partner.agent.name} slot={@partner.slot} />
+        <.avatar
+          id="partner-avatar"
+          name={@partner.agent.name}
+          slot={@partner.slot}
+          speaking={@speaking}
+        />
         <b id="partner-name" class="font-semibold">{@partner.agent.name}</b>
       <% else %>
         <b id="partner-name" class="pl-2 font-medium text-subtle">No voice partner</b>
@@ -167,7 +190,11 @@ defmodule PlatformWeb.Components.Voice do
     >
       <span class="from voice-bubble-from mb-0.5 block text-xs font-bold tracking-wide">
         {@turn.from}
-      </span>{@turn.text}
+      </span>{@turn.text}<span
+        :if={@turn[:note]}
+        class="voice-reply-note mt-1 block text-xs text-secondary"
+        data-reply-note
+      >{@turn[:note]}</span>
     </div>
     """
   end
@@ -246,6 +273,23 @@ defmodule PlatformWeb.Components.Voice do
 
   def pending_turn(assigns), do: ~H""
 
+  @doc """
+  On-device only: the container the hook fills with the words still forming,
+  "Sending", "Not sent" and Retry. `phx-update="ignore"`, so what the hook
+  draws survives re-renders and still shows with the socket down.
+  """
+  def native_pending(assigns) do
+    ~H"""
+    <div
+      id="voice-native-pending"
+      phx-update="ignore"
+      class="flex flex-col gap-2 text-secondary"
+      data-native-pending
+    >
+    </div>
+    """
+  end
+
   # ── mic area ──────────────────────────────────────────────────────────
 
   attr :partner, :map, default: nil
@@ -255,8 +299,194 @@ defmodule PlatformWeb.Components.Voice do
   attr :typing?, :boolean, default: false
   attr :type_form, :any, default: nil
   attr :user_id, :string, default: nil
+  attr :on_device?, :boolean, default: false
+  attr :native_mic, :atom, default: :ready, doc: "on-device: :ready, :in_use or :preparing"
+  attr :mic_permission, :atom, default: nil, doc: "on-device: :denied after a refusal"
+  attr :caption, :string, default: nil, doc: "on-device test caption, test builds only"
+  attr :announce, :string, default: nil, doc: "on-device live region, \"{partner} replied\""
+  attr :voices, :list, default: [], doc: "on-device reply voices, best first"
+  attr :voice, :string, default: nil, doc: "on-device: the reply voice in use"
+  attr :voice_missing?, :boolean, default: false
+
+  attr :pocket_missing?, :boolean,
+    default: false,
+    doc: "on-device: Pocket TTS was chosen but is not offered"
+
+  attr :voice_sheet?, :boolean, default: false, doc: "on-device: the reply-voice sheet is open"
 
   def voice_area(assigns) do
+    assigns = assign(assigns, :card?, assigns.on_device? and assigns.mic_permission == :denied)
+
+    ~H"""
+    <%= if @on_device? do %>
+      <.native_voice_area {assigns} />
+    <% else %>
+      <.web_voice_area {assigns} />
+    <% end %>
+    """
+  end
+
+  # The on-device mic area (task 01a20dc5 stage 2): the same structure as
+  # `web_voice_area/1`, with the on-device listen line, the permission card in
+  # place of #mic after a refusal, the test caption under the mic, and a
+  # polite live region for "{partner} replied" (canvas state 18).
+  defp native_voice_area(assigns) do
+    ~H"""
+    <div
+      id="voice-area"
+      class="voice-area relative flex flex-none flex-col items-center gap-2.5 px-[18px] pt-1.5 pb-3"
+      phx-hook="VoiceTab"
+      data-state={@state}
+      data-live={live?(@state) && "true"}
+      data-user-id={@user_id}
+      data-partner-id={@partner && @partner.agent.id}
+      data-on-device="true"
+      data-native-mic={@native_mic}
+    >
+      <div
+        :if={@toast}
+        id="voice-toast"
+        role="status"
+        class="absolute bottom-full mb-2 max-w-[calc(100%-2rem)] rounded-xl border border-edge bg-base-100 px-3 py-2 text-center text-sm text-base-content shadow-lg"
+      >
+        {@toast}
+      </div>
+      <div id="voice-native-announce" class="sr-only" aria-live="polite">{@announce}</div>
+      <div
+        :if={not @card?}
+        id="listen-line"
+        class={[
+          "flex min-h-[18px] flex-wrap items-center justify-center gap-x-2 gap-y-1 text-center text-sm text-subtle",
+          live?(@state) && "on"
+        ]}
+        aria-live="polite"
+      >
+        <span
+          class={[
+            "size-[7px] flex-none rounded-full",
+            if(live?(@state), do: "bg-primary", else: "bg-edge")
+          ]}
+          aria-hidden="true"
+        >
+        </span>
+        <span
+          id="listen-text"
+          class={native_listen_class(@native_mic)}
+        >
+          {native_listen_text(@partner, @state, @native_mic)}
+        </span>
+      </div>
+      <div
+        :if={@card?}
+        id="voice-permission"
+        class="flex w-full max-w-sm flex-col items-center gap-3 rounded-2xl border border-edge bg-base-100 p-4 text-center"
+        role="group"
+        aria-labelledby="voice-permission-text"
+      >
+        <p id="voice-permission-text" class="text-[15px] text-base-content">
+          Burrow needs the microphone to hear you.
+        </p>
+        <button
+          type="button"
+          id="voice-open-settings"
+          class="min-h-11 rounded-full bg-primary px-4 py-2 text-sm font-semibold text-primary-content"
+          data-native-action="open-settings"
+        >
+          Open Settings
+        </button>
+      </div>
+      <button
+        :if={@card? and not @typing?}
+        type="button"
+        id="voice-type-instead"
+        class="rounded-full border border-edge bg-base-100 px-2.5 py-0.5 text-sm font-semibold text-base-content active:bg-base-200"
+        phx-click="voice_type_open"
+      >
+        Type instead
+      </button>
+      <.type_form :if={@typing? and @type_form} form={@type_form} />
+      <div
+        id="meter"
+        class="voice-meter flex h-[30px] items-center gap-[3px]"
+        phx-update="ignore"
+        aria-hidden="true"
+      >
+        <i :for={_ <- 1..14} data-meter-bar></i>
+      </div>
+      <div :if={not @card?} class="relative flex items-center justify-center">
+        <button
+          type="button"
+          id="mic"
+          class={[
+            "voice-mic flex size-24 items-center justify-center rounded-full disabled:opacity-60",
+            cond do
+              live?(@state) -> "on scale-[1.06] bg-primary text-primary-content"
+              @native_mic == :in_use -> "bg-base-100 text-secondary"
+              @native_mic == :preparing -> "preparing bg-base-100 text-secondary"
+              true -> "bg-base-100 text-base-content"
+            end
+          ]}
+          aria-pressed={if live?(@state), do: "true", else: "false"}
+          aria-label={mic_aria(@partner)}
+          disabled={is_nil(@partner) or @native_mic in [:in_use, :preparing]}
+        >
+          <.icon name="hero-microphone" class="size-10" />
+        </button>
+        <.voice_settings_trigger :if={@voices != []} />
+      </div>
+      <p
+        :if={@caption}
+        id="voice-native-caption"
+        class="text-xs text-secondary"
+      >
+        {@caption}
+      </p>
+      <.voice_settings_sheet
+        :if={@voices != []}
+        open={@voice_sheet?}
+        voices={@voices}
+        voice={@voice}
+        missing?={@voice_missing?}
+        pocket_missing?={@pocket_missing?}
+      />
+      <div id="voice-audio" class="hidden" phx-update="ignore"></div>
+    </div>
+    """
+  end
+
+  attr :form, :any, required: true
+
+  defp type_form(assigns) do
+    ~H"""
+    <.form
+      for={@form}
+      id="voice-type-form"
+      class="flex w-full max-w-md items-center gap-2"
+      phx-submit="voice_type"
+    >
+      <.input
+        field={@form[:text]}
+        id="voice-type-input"
+        type="text"
+        placeholder="Type to the partner"
+        aria-label="Type instead of talking"
+        autocomplete="off"
+        class="input input-sm w-full rounded-full placeholder:text-subtle"
+      />
+      <button
+        type="submit"
+        id="voice-type-send"
+        class="flex-none rounded-full bg-primary px-3 py-1 text-sm font-semibold text-primary-content"
+      >
+        Send
+      </button>
+    </.form>
+    """
+  end
+
+  # Today's mic area, unchanged, for every client that is not on the
+  # on-device path (web, Android, incompatible iPhones, older app builds).
+  defp web_voice_area(assigns) do
     ~H"""
     <div
       id="voice-area"
@@ -641,6 +871,201 @@ defmodule PlatformWeb.Components.Voice do
   def listen_text(_partner, _state), do: @idle_line
 
   defp cant_talk(agent), do: "#{agent.name} can't talk right now."
+
+  # The voice settings button on the device (task 01a20fdd stage 4): the same
+  # 44px "Sound and video" control main shows to the right of #mic, a SIBLING
+  # of #mic so a press on it never starts a turn. On the device it opens the
+  # reply-voice sheet (the phone's own mic and speaker need no browser picker).
+  defp voice_settings_trigger(assigns) do
+    ~H"""
+    <div class="absolute left-full ml-3 flex items-center">
+      <button
+        type="button"
+        id="voice-settings"
+        phx-click="open_sheet"
+        phx-value-sheet="voice"
+        aria-haspopup="dialog"
+        aria-controls="voice-settings-sheet"
+        aria-label="Sound and video"
+        class="btn btn-sm btn-square min-h-11 min-w-11 rounded-field border-edge bg-base-100 font-normal text-base-content"
+      >
+        <span class="hero-adjustments-horizontal size-5" aria-hidden="true"></span>
+      </button>
+    </div>
+    """
+  end
+
+  attr :open, :boolean, default: false
+  attr :voices, :list, required: true
+  attr :voice, :string, default: nil
+  attr :missing?, :boolean, default: false
+  attr :pocket_missing?, :boolean, default: false
+
+  # The reply voice (on the device only), in the sheet the voice settings
+  # button opens, with rows like the partner sheet's: the phone's installed
+  # voices for its language, best first, and Pocket TTS's voices where the
+  # phone offers them. The choice is remembered on the device. While a Pocket
+  # voice is not ready the best system voice reads the reply, and the lines
+  # under the list say so; the model credit is the last line.
+  def voice_settings_sheet(assigns) do
+    current = Enum.find(assigns.voices, &(&1.id == assigns.voice))
+    system = Enum.find(assigns.voices, &(&1.quality != "neural"))
+
+    assigns =
+      assigns
+      |> assign(:current, current)
+      |> assign(:pocket, pocket_status(current, system, assigns.pocket_missing?))
+
+    ~H"""
+    <.sheet
+      id="voice-settings-sheet"
+      open={@open}
+      on_close="close_sheet"
+      handle_close
+      swipe_dismiss
+      class={sheet_class(:sheet)}
+      data-variant={:sheet}
+      data-return-focus="#voice-settings"
+    >
+      <:title>Reply voice</:title>
+      <h2 class="px-2.5 pt-1 pb-2.5 text-base font-semibold text-base-content" aria-hidden="true">
+        Reply voice
+      </h2>
+      <div id="voice-native-voice" class="flex max-h-[55vh] flex-col overflow-y-auto">
+        <button
+          :for={{v, i} <- Enum.with_index(@voices)}
+          type="button"
+          id={"voice-opt-#{i}"}
+          class="opt flex w-full items-center gap-3 rounded-lg px-2.5 py-3 text-left active:bg-base-200"
+          data-voice={v.id}
+          data-current={v.id == @voice && "true"}
+          phx-click="voice_native_pick_voice"
+          phx-value-voice={v.id}
+        >
+          <span class="min-w-0 flex-1">
+            <b class="block text-[15px] font-semibold text-base-content">{v.name}</b>
+            <small class="block text-xs text-subtle">{voice_quality(v.quality)}</small>
+          </span>
+          <small :if={v.id == @voice} class="text-sm text-subtle">current</small>
+        </button>
+      </div>
+      <div class="flex flex-col gap-1 px-2.5 pt-2 pb-1">
+        <p
+          :if={@missing? and not is_nil(@current) and not @pocket_missing?}
+          id="voice-native-voice-missing"
+          class="text-xs text-secondary"
+        >
+          Your chosen voice isn't available. Using {@current.name} instead.
+        </p>
+        <p :if={@pocket.progress} id="voice-native-pocket-progress" class="text-xs text-secondary">
+          {@pocket.progress}
+        </p>
+        <p :if={@pocket.meanwhile} id="voice-native-pocket-meanwhile" class="text-xs text-secondary">
+          {@pocket.meanwhile}
+        </p>
+        <p
+          :if={@pocket.unavailable}
+          id="voice-native-pocket-unavailable"
+          class="text-xs text-secondary"
+        >
+          Pocket TTS unavailable
+        </p>
+        <p :if={@pocket.credit} id="voice-native-pocket-credit" class="text-xs text-secondary">
+          {@pocket.credit}
+        </p>
+      </div>
+    </.sheet>
+    """
+  end
+
+  @doc """
+  The lines under the reply-voice list for Pocket TTS: `progress`
+  ("Downloading Pocket TTS · N%"), `meanwhile` ("Speaking with <system voice>
+  until it finishes"), `unavailable` and `credit` (the CC BY attribution,
+  whenever Pocket TTS is the chosen voice). All nil/false for a system voice.
+  """
+  def pocket_status(current, system, pocket_missing?)
+
+  def pocket_status(%{quality: "neural"} = pocket, system, _missing?) do
+    model = Map.get(pocket, :model) || %{state: "absent", received: 0, total: 0}
+    waiting? = model.state in ~w(absent downloading compiling)
+
+    %{
+      progress:
+        if(model.state == "downloading", do: "Downloading Pocket TTS · #{percent(model)}%"),
+      meanwhile: if(waiting? and system, do: "Speaking with #{system.name} until it finishes"),
+      unavailable: model.state == "failed",
+      credit: pocket_credit(pocket.id)
+    }
+  end
+
+  def pocket_status(_current, _system, true),
+    do: %{progress: nil, meanwhile: nil, unavailable: true, credit: nil}
+
+  def pocket_status(_current, _system, _missing?),
+    do: %{progress: nil, meanwhile: nil, unavailable: false, credit: nil}
+
+  # The Pocket TTS voices whose source clip is CC BY 4.0 and so must be
+  # credited too (task 01a20fdd stage 4; clients/ios/.../PocketTTS/THIRD_PARTY.md).
+  # The CC0 voices need only the model's credit.
+  @vctk "VCTK corpus, CSTR, University of Edinburgh"
+  @pocket_voice_credits %{
+    "alba" => "Alba MacKenna",
+    "anna" => @vctk,
+    "vera" => @vctk,
+    "fantine" => @vctk,
+    "charles" => @vctk,
+    "paul" => @vctk,
+    "eponine" => @vctk,
+    "azelma" => @vctk,
+    "george" => @vctk,
+    "mary" => @vctk,
+    "jane" => @vctk,
+    "michael" => @vctk,
+    "eve" => @vctk
+  }
+
+  @doc """
+  The attribution line for a chosen Pocket TTS voice: Kyutai's model, then
+  the voice's source when that clip is CC BY 4.0.
+
+      iex> PlatformWeb.Components.Voice.pocket_credit("pocket-tts:marius")
+      "Pocket TTS by Kyutai · CC BY 4.0"
+
+      iex> PlatformWeb.Components.Voice.pocket_credit("pocket-tts:alba")
+      "Pocket TTS by Kyutai · CC BY 4.0 · voice: Alba MacKenna"
+  """
+  def pocket_credit("pocket-tts:" <> name) do
+    case Map.fetch(@pocket_voice_credits, name) do
+      {:ok, source} -> "Pocket TTS by Kyutai · CC BY 4.0 · voice: " <> source
+      :error -> "Pocket TTS by Kyutai · CC BY 4.0"
+    end
+  end
+
+  def pocket_credit(_id), do: "Pocket TTS by Kyutai · CC BY 4.0"
+
+  defp percent(%{received: got, total: total}) when total > 0, do: min(div(got * 100, total), 100)
+  defp percent(_model), do: 0
+
+  defp voice_quality("neural"), do: "Neural"
+  defp voice_quality("premium"), do: "Premium"
+  defp voice_quality("enhanced"), do: "Enhanced"
+  defp voice_quality(_quality), do: "Default"
+
+  @doc """
+  The on-device listen line. The partner needs no voice worker here (the
+  turn is a text DM message), so an unreachable partner reads as idle.
+  """
+  def native_listen_text(nil, _state, _mic), do: "No voice partner"
+  def native_listen_text(_partner, _state, :in_use), do: "Microphone in use by another app"
+  def native_listen_text(_partner, _state, :preparing), do: "Preparing speech"
+  def native_listen_text(_partner, :listening, _mic), do: "Release to send"
+  def native_listen_text(_partner, :toggled, _mic), do: "Tap to send"
+  def native_listen_text(%{agent: agent}, :thinking, _mic), do: "#{agent.name} is thinking…"
+  def native_listen_text(_partner, _state, _mic), do: @idle_line
+
+  defp native_listen_class(mic) when mic in [:in_use, :preparing], do: "text-secondary"
+  defp native_listen_class(_mic), do: nil
 
   defp listen_class(%{reachable?: false}, _state), do: "text-error"
 

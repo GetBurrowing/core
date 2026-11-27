@@ -28,6 +28,22 @@ defmodule Platform.Design.VoiceTabContrastGuardTest do
   | popover row subtitle: --subtle on base-200 (stage 4)     | 4.5   |
   | pill focus outline: primary on base-100 (stage 4)        | 3     |
   | pill focus outline: primary on base-200, its ground (stage 4) | 3 |
+  | on-device listen line / test caption: secondary on base-200 (01a20dc5) | 4.5 |
+  | on-device forming words: secondary on base-100 (01a20dc5) | 4.5 |
+  | reply note "Stopped": secondary on the --ag tint, every slot (01a20dc5) | 4.5 |
+  | mic in use glyph: secondary on base-100 (01a20dc5)       | 3     |
+  | preparing mic outline: secondary on base-200, its ground (01a20dc5) | 3 |
+  | preparing mic outline: secondary on base-100, its fill (01a20dc5) | 3 |
+  | speaking outline: primary on base-100 (01a20dc5)         | 3     |
+  | "Not sent": error on base-100 (01a20dc5)                 | 4.5   |
+  | "Not sent": error on base-200 (01a20dc5)                 | 4.5   |
+  | Open Settings label: primary-content on primary (01a20dc5) | 4.5 |
+
+  ## The on-device states (task 01a20dc5 stage 2)
+
+  The canvas computed its ratios on base-100; the listen line, the caption
+  and the mic area sit on base-200, so each new pair is measured on the
+  ground it is painted on. `secondary` is an opaque token.
 
   ## The lg popovers (stage 4)
 
@@ -115,6 +131,7 @@ defmodule Platform.Design.VoiceTabContrastGuardTest do
                         {[], ".voice-meter i"},
                         {[], ".voice-area[data-live] .voice-meter i"},
                         {[], ".voice-mic.on"},
+                        {[], ".voice-mic.preparing"},
                         {[], ".voice-bubble-live"},
                         {[], ".voice-caret"},
                         {[], ".voice-dots i"},
@@ -231,7 +248,25 @@ defmodule Platform.Design.VoiceTabContrastGuardTest do
       {"pill focus outline (primary) / base-100", ratio(b, "--color-primary", "--color-base-100"),
        @non_text},
       {"pill focus outline (primary) / base-200", ratio(b, "--color-primary", "--color-base-200"),
-       @non_text}
+       @non_text},
+      {"on-device caption (secondary) / base-200",
+       ratio(b, "--color-secondary", "--color-base-200"), @aa_text},
+      {"on-device forming words (secondary) / base-100",
+       ratio(b, "--color-secondary", "--color-base-100"), @aa_text},
+      {"reply note (secondary) / ag tint (worst slot)",
+       on_tint_worst(b, fn _ -> "--color-secondary" end), @aa_text},
+      {"mic in use glyph (secondary) / base-100",
+       ratio(b, "--color-secondary", "--color-base-100"), @non_text},
+      {"preparing mic outline (secondary) / base-200",
+       ratio(b, "--color-secondary", "--color-base-200"), @non_text},
+      {"preparing mic outline (secondary) / base-100",
+       ratio(b, "--color-secondary", "--color-base-100"), @non_text},
+      {"speaking outline (primary) / base-100", ratio(b, "--color-primary", "--color-base-100"),
+       @non_text},
+      {"Not sent (error) / base-100", ratio(b, "--color-error", "--color-base-100"), @aa_text},
+      {"Not sent (error) / base-200", ratio(b, "--color-error", "--color-base-200"), @aa_text},
+      {"Open Settings label (primary-content) / primary",
+       ratio(b, "--color-primary-content", "--color-primary"), @aa_text}
     ]
   end
 
@@ -344,6 +379,10 @@ defmodule Platform.Design.VoiceTabContrastGuardTest do
     assert avatar =~ ~r/color:\s*var\(--color-base-content\);/
 
     assert body.(".voice-mic") =~ ~r/border:\s*1px solid var\(--color-subtle\);/
+
+    # "Preparing speech" (canvas state 13): the outline is
+    # secondary, what the two preparing pairs above measure.
+    assert body.(".voice-mic.preparing") =~ ~r/border-color:\s*var\(--color-secondary\);/
 
     # Stage 3: the ring is opaque primary (painted at 100%, what the pair
     # above measures), the live bubble's edge is dashed primary, and the

@@ -6548,6 +6548,12 @@ main:has(> .tab-switch-layer--instant) > :not(.tab-switch-layer, #connection-sta
   -webkit-user-select: none;
 }
 
+/* On-device Voice, "Preparing speech on this iPhone" (task 01a20dc5, canvas
+   state 13): outline and glyph secondary while the mic is disabled. */
+.voice-mic.preparing {
+  border-color: var(--color-secondary);
+}
+
 /* The 14-bar level meter: decorative (aria-hidden), hairline bars. A bar is
    26px tall and rests at scaleY(.154), the masters' 4px; during a turn the
    VoiceTab hook paints each bar's scaleY from the local mic level

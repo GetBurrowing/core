@@ -509,7 +509,7 @@ defmodule PlatformWeb.VoiceLiveTest do
       view |> element("#ctx") |> render_click()
       view |> element("#ctx-opt-#{design.id}") |> render_click()
 
-      assert_push_event(view, "voice_ctx_saved", %{id: id})
+      assert_push_event(view, "voice_saved", %{key: "burrow-voice-ctx", id: id})
       assert id == design.id
       refute has_element?(view, "#ctx-sheet.sheet-open")
 
@@ -522,7 +522,7 @@ defmodule PlatformWeb.VoiceLiveTest do
 
       view |> element("#ctx") |> render_click()
       view |> element("#ctx-opt-none") |> render_click()
-      assert_push_event(view, "voice_ctx_saved", %{id: nil})
+      assert_push_event(view, "voice_saved", %{key: "burrow-voice-ctx", id: nil})
       assert List.last(turn_texts(view)) == "no context · transcript stays here"
       assert view |> doc() |> text("#ctx-name") == "No context"
     end
@@ -532,14 +532,14 @@ defmodule PlatformWeb.VoiceLiveTest do
       {:ok, view, _html} = live(conn, ~p"/voice")
       assert attr(doc(view), "#voice-screen", "phx-hook") == ["VoiceContext"]
 
-      render_hook(view, "voice_restore_context", %{"id" => design.id})
+      render_hook(view, "voice_restore", %{"burrow-voice-ctx" => design.id})
       assert view |> doc() |> text("#ctx-name") == "Design"
       # A restore adds no day note: only the greeting is in the stream.
       assert length(turn_texts(view)) == 1
 
       {:ok, view2, _html} = live(conn, ~p"/voice")
-      render_hook(view2, "voice_restore_context", %{"id" => other.id})
-      assert_push_event(view2, "voice_ctx_saved", %{id: nil})
+      render_hook(view2, "voice_restore", %{"burrow-voice-ctx" => other.id})
+      assert_push_event(view2, "voice_saved", %{key: "burrow-voice-ctx", id: nil})
       assert view2 |> doc() |> text("#ctx-name") == "No context"
     end
   end
