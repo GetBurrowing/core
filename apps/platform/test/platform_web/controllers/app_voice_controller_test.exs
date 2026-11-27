@@ -50,7 +50,7 @@ defmodule PlatformWeb.AppVoiceControllerTest do
   # the router's "Parameters:" line among it, stays in.
   defp without_query_entries(log) do
     log
-    |> String.split(~r/^(?=\d{2}:\d{2}:\d{2}\.\d{3} \[)/m)
+    |> String.split(~r/^(?=\d{2}:\d{2}:\d{2}\.\d{3} )/m)
     |> Enum.reject(&(&1 =~ ~r/\[debug\] QUERY (OK|ERROR)/))
     |> Enum.join()
   end
@@ -225,10 +225,15 @@ defmodule PlatformWeb.AppVoiceControllerTest do
 
       # Positive control: the request was logged (Plug's request line), and
       # the stored message carries the sentinel, so the capture is not empty.
-      assert log =~ "POST /api/app/voice/turns"
-      assert log =~ sentinel, "the repo's own debug line should carry it (control)"
-      refute without_query_entries(log) =~ sentinel
-      refute without_query_entries(log) =~ agent.name
+      # Controls: the repo's own debug entry carries the sentinel (so the
+      # capture is real), and the filtered log still holds the request's own
+      # entries (so the filter did not drop everything).
+      assert log =~ sentinel
+      rest = without_query_entries(log)
+      assert rest =~ "POST /api/app/voice/turns"
+      assert rest =~ "Sent 201"
+      refute rest =~ sentinel
+      refute rest =~ agent.name
     end
 
     test "the reply text never reaches the log on GET", %{
@@ -270,8 +275,10 @@ defmodule PlatformWeb.AppVoiceControllerTest do
         end)
 
       assert body =~ sentinel
-      assert log =~ "GET /api/app/voice/turns/"
-      refute without_query_entries(log) =~ sentinel
+      rest = without_query_entries(log)
+      assert rest =~ "GET /api/app/voice/turns/"
+      assert rest =~ "Sent 200"
+      refute rest =~ sentinel
     end
   end
 end
