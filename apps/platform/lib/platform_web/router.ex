@@ -1349,6 +1349,7 @@ defmodule PlatformWeb.Router do
     post("/spaces/:space_id/uploads", AppApiController, :create_upload)
     get("/upload_config", AppApiController, :upload_config)
     get("/counts", AppApiController, :counts)
+    get("/widgets", AppApiController, :widgets)
     # Today's briefing counts for the Android widget (task 01a161f9).
     get("/briefing", AppApiController, :briefing)
 

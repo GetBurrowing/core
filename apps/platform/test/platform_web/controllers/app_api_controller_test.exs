@@ -37,6 +37,7 @@ defmodule PlatformWeb.AppApiControllerTest do
     {:get, "/api/app/spaces", %{}},
     {:post, "/api/app/spaces/:space_id/messages", %{"text" => "hello"}},
     {:get, "/api/app/counts", %{}},
+    {:get, "/api/app/widgets", %{}},
     {:get, "/api/app/briefing", %{}},
     {:get, "/api/app/upload_config", %{}},
     {:post, "/api/app/spaces/:space_id/uploads",
@@ -887,6 +888,162 @@ defmodule PlatformWeb.AppApiControllerTest do
       assert log != "", "the capture saw nothing, so its refutations prove nothing"
       refute log =~ bearer_token
       refute log =~ @device_token
+    end
+  end
+
+  # ── widgets (task 01a21e75 stage 1) ────────────────────────────────────
+
+  # An agent message tagging `user` in `space`, with its inbox row. Inserted
+  # as a row so no posting side effect touches the read cursor.
+  defp widget_mention!(user, space, content) do
+    agent = agent!("Build agent")
+    bot = add_agent!(space.id, agent.id)
+
+    msg =
+      Repo.insert!(%Message{
+        space_id: space.id,
+        participant_id: bot.id,
+        content_type: "text",
+        content: content,
+        author_participant_type: "agent",
+        author_agent_id: agent.id,
+        author_display_name: "Build agent"
+      })
+
+    {:ok, _} =
+      Platform.Inbox.emit(%{
+        user_id: user.id,
+        kind: "chat_mention",
+        source_type: "chat_message",
+        source_id: msg.id,
+        title: "Mentioned",
+        url: "/chat"
+      })
+
+    msg
+  end
+
+  defp widget_blocked_task!(user, title) do
+    org = Platform.Tenancy.get_org_by_slug!("globex")
+    plain_member!(user, org)
+
+    {:ok, project} =
+      Platform.Tasks.create_project(%{
+        name: "Widgets #{System.unique_integer([:positive])}",
+        org_id: org.id
+      })
+
+    Repo.insert!(%Platform.Tasks.Task{
+      project_id: project.id,
+      title: title,
+      status: "blocked",
+      sponsor_user_id: user.id,
+      metadata: %{"blocked_reason" => "Needs a key"}
+    })
+  end
+
+  describe "GET /api/app/widgets" do
+    test "200 with the four sections and ISO-8601 times", %{
+      conn: conn,
+      token: token,
+      user: user,
+      space: space
+    } do
+      widget_mention!(user, space, "Can you approve?")
+      task = widget_blocked_task!(user, "Blocked task")
+
+      body = conn |> bearer(token) |> get("/api/app/widgets") |> json_response(200)
+
+      assert {:ok, _, 0} = DateTime.from_iso8601(body["as_of"])
+
+      assert %{"count" => 1, "rows" => [row]} = body["waiting"]
+
+      assert Map.keys(row) |> Enum.sort() ==
+               ~w(asker at item_id space_path_segment summary)
+
+      assert row["asker"] == "Build agent"
+      assert row["summary"] == "Can you approve?"
+      assert row["space_path_segment"] == Chat.space_path_segment(space)
+      assert {:ok, _, 0} = DateTime.from_iso8601(row["at"])
+
+      assert body["blocked"] == %{
+               "count" => 1,
+               "rows" => [
+                 %{"id" => task.id, "title" => "Blocked task", "reason" => "Needs a key"}
+               ]
+             }
+
+      assert %{"rows" => [recent]} = body["recent"]
+
+      assert recent == %{
+               "space_id" => space.id,
+               "path_segment" => Chat.space_path_segment(space),
+               "kind" => "channel",
+               "name" => space.name,
+               "counterpart" => nil,
+               "unread" => true
+             }
+
+      assert body["shipped"] == %{"count" => 0, "newest_title" => nil}
+    end
+
+    test "another user's bearer sees none of this user's rows", %{
+      conn: conn,
+      user: user,
+      space: space
+    } do
+      widget_mention!(user, space, "Only for the first user")
+      %{token: other_token} = app_session!(create_user!())
+
+      body = conn |> bearer(other_token) |> get("/api/app/widgets") |> json_response(200)
+
+      assert body["waiting"] == %{"count" => 0, "rows" => []}
+      assert body["recent"] == %{"rows" => []}
+    end
+
+    test "a long mention's full content never appears in the body", %{
+      conn: conn,
+      token: token,
+      user: user,
+      space: space
+    } do
+      tail = "UNIQUE-TAIL-#{System.unique_integer([:positive])}"
+      long = String.duplicate("words that run on ", 12) <> "\n\nSecond paragraph " <> tail
+      widget_mention!(user, space, long)
+
+      raw = conn |> bearer(token) |> get("/api/app/widgets") |> response(200)
+
+      refute raw =~ tail
+      refute raw =~ "Second paragraph"
+      %{"waiting" => %{"rows" => [%{"summary" => summary}]}} = Jason.decode!(raw)
+      assert String.length(summary) <= 101
+      refute summary =~ "\n"
+    end
+
+    test "no mention content or task title reaches the log", %{
+      conn: conn,
+      token: token,
+      user: user,
+      space: space
+    } do
+      previous = Logger.level()
+      Logger.configure(level: :debug)
+      on_exit(fn -> Logger.configure(level: previous) end)
+
+      sentinel = "SENTINEL-#{System.unique_integer([:positive])}"
+      widget_mention!(user, space, "Mention carrying #{sentinel}-content")
+      widget_blocked_task!(user, "Task titled #{sentinel}-title")
+
+      {body, log} =
+        with_log([level: :debug], fn ->
+          conn |> bearer(token) |> get("/api/app/widgets") |> response(200)
+        end)
+
+      # Precondition: the sentinels are in the response, so their absence
+      # from the log is not an empty feed's.
+      assert body =~ "#{sentinel}-content"
+      assert body =~ "#{sentinel}-title"
+      refute log =~ sentinel
     end
   end
 end
