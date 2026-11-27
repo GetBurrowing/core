@@ -8,6 +8,10 @@ import WidgetKit
 enum WidgetKinds {
     /// Unchanged from v1, so a placed widget survives the update.
     static let approvals = "com.kobo-ai.burrow.widgets.approvals"
+    /// Unchanged from v1 (task 01a21e75 stage 3 moved them to
+    /// `AppIntentConfiguration` under the same kinds).
+    static let tasks = "com.kobo-ai.burrow.widgets.tasks"
+    static let overview = "com.kobo-ai.burrow.widgets.overview"
 }
 
 /// What an intent wrote about one row, keyed by its `<host>|<id>`.
@@ -195,6 +199,12 @@ struct ApprovalsEntry: TimelineEntry {
         let id: String
         let approval: BurrowApproval
         let display: Display
+        /// Its install's name, only with several installs signed in (task
+        /// 01a21e75 stage 3). Dropped whole before the title truncates.
+        var installLabel: String? = nil
+
+        /// The install the row belongs to, read from its id.
+        var host: String? { EntityRef(id)?.host }
     }
 
     let date: Date
@@ -204,6 +214,9 @@ struct ApprovalsEntry: TimelineEntry {
     let signedIn: Bool
     let fetchedAt: Date?
     let rows: [Row]
+    /// Per install, for the summed count's breakdown and the failure line
+    /// (task 01a21e75 stage 3). Empty for one install.
+    var installs: [InstallCounts] = []
 
     var count: Int { rows.count }
 
@@ -216,7 +229,9 @@ struct ApprovalsEntry: TimelineEntry {
     /// The v1 count entry, so small and lock-screen families render exactly
     /// as before.
     var countsEntry: CountsEntry {
-        CountsEntry(date: date, host: host, signedIn: signedIn, counts: fetchedAt.map { BurrowCounts(approvals: count, tasks: 0, fetchedAt: $0) })
+        CountsEntry(
+            date: date, host: host, signedIn: signedIn, counts: fetchedAt.map { BurrowCounts(approvals: count, tasks: 0, fetchedAt: $0) },
+            installs: installs, pinnedLabel: installName.flatMap { $0.hasSuffix(" only") ? $0 : nil })
     }
 
     /// The approvals list (`/inbox`), or just the app with no install.
@@ -226,8 +241,10 @@ struct ApprovalsEntry: TimelineEntry {
 
     /// A row's task page; the inbox when the approval names no task.
     func taskURL(_ row: Row) -> URL {
-        guard let host else { return inboxURL }
-        return row.approval.taskID.flatMap { DeepLink.task(host: host, id: $0) }?.url ?? inboxURL
+        // The row's OWN install: with All installs, rows come from several.
+        guard let host = row.host ?? host else { return inboxURL }
+        let inbox = DeepLink(host: host, path: SlabKind.approvals.path).url
+        return row.approval.taskID.flatMap { DeepLink.task(host: host, id: $0) }?.url ?? inbox
     }
 
     static let preview = ApprovalsEntry(
@@ -297,6 +314,62 @@ enum ApprovalsTimeline {
         return dates.filter { $0 >= now }.sorted().map {
             entry(at: $0, host: host, installName: installName, signedIn: signedIn, cached: cached, arm: arm, marks: marks)
         }
+    }
+}
+
+/// One install's input to a merged approvals timeline (task 01a21e75 stage 3).
+struct ApprovalsSource {
+    let host: String
+    /// Display name, never the host.
+    let label: String
+    let signedIn: Bool
+    /// The last fetch failed (the rows shown are the cached ones).
+    let unreachable: Bool
+    let cached: CachedApprovals?
+}
+
+extension ApprovalsTimeline {
+    /// The entries for several installs: each install's rows built exactly
+    /// as for one (`entry(at:...)`), then merged in saved order, each row
+    /// keeping its own host. `installName` is "<install> only" for a widget
+    /// pinned to one of several.
+    static func mergedEntries(
+        now: Date, sources: [ApprovalsSource], installName: String?, arm: WidgetArm?, marks: [String: WidgetRowMark]
+    ) -> [ApprovalsEntry] {
+        if sources.count == 1, let one = sources.first {
+            return entries(now: now, host: one.host, installName: installName, signedIn: one.signedIn, cached: one.cached, arm: arm, marks: marks)
+        }
+        var dates: Set<Date> = [now]
+        if let arm { dates.insert(arm.at.addingTimeInterval(WidgetApprovalStore.armWindow)) }
+        for mark in marks.values { dates.insert(mark.at.addingTimeInterval(mark.hold)) }
+        for source in sources { if let cached = source.cached { dates.insert(cached.fetchedAt.addingTimeInterval(SlabState.staleAfter + 1)) } }
+        return dates.filter { $0 >= now }.sorted().map { merged(at: $0, sources: sources, installName: installName, arm: arm, marks: marks) }
+    }
+
+    static func merged(at date: Date, sources: [ApprovalsSource], installName: String?, arm: WidgetArm?, marks: [String: WidgetRowMark]) -> ApprovalsEntry {
+        let signedIn = sources.filter(\.signedIn)
+        let multi = signedIn.count > 1
+        var rows: [ApprovalsEntry.Row] = []
+        var parts: [InstallCounts] = []
+        for source in sources {
+            let one = entry(at: date, host: source.host, installName: nil, signedIn: source.signedIn, cached: source.cached, arm: arm, marks: marks)
+            rows += one.rows.map { row in
+                var row = row
+                row.installLabel = multi ? source.label : nil
+                return row
+            }
+            let status: InstallCounts.Status = !source.signedIn ? .signedOut : (source.unreachable ? .unreachable : .ok)
+            parts.append(
+                InstallCounts(
+                    host: source.host, label: source.label, status: status,
+                    counts: source.cached.map { BurrowCounts(approvals: one.rows.count, tasks: 0, fetchedAt: $0.fetchedAt) }))
+        }
+        let fresh = signedIn.filter { !$0.unreachable }.compactMap(\.cached?.fetchedAt)
+        let known = signedIn.compactMap(\.cached?.fetchedAt)
+        let primary = signedIn.first { !$0.unreachable }?.host ?? signedIn.first?.host ?? sources.first?.host
+        return ApprovalsEntry(
+            date: date, host: primary, installName: installName, signedIn: !signedIn.isEmpty, fetchedAt: (fresh.isEmpty ? known : fresh).max(),
+            rows: rows, installs: sources.count > 1 ? parts : [])
     }
 }
 

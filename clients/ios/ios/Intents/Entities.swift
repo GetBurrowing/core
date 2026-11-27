@@ -39,9 +39,17 @@ struct InstallQuery: EntityQuery {
         IntentEnvironment.current.installs.installs.map(InstallEntity.init)
     }
 
+    /// The selected install, except in an app extension (task 01a21e75
+    /// stage 3): there the only `InstallEntity` parameter configured is the
+    /// My approvals widget's legacy `install`, and a default would pin every
+    /// NEW widget to one install instead of All installs. Intents that take
+    /// an optional install fall back to the selected one themselves.
     func defaultResult() async -> InstallEntity? {
-        IntentEnvironment.current.installs.selectedInstall.map(InstallEntity.init)
+        guard !Self.isAppExtension else { return nil }
+        return IntentEnvironment.current.installs.selectedInstall.map(InstallEntity.init)
     }
+
+    static var isAppExtension: Bool { Bundle.main.bundleURL.pathExtension == "appex" }
 }
 
 // MARK: - Space and DM

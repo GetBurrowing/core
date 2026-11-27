@@ -17,7 +17,7 @@ struct ApprovalsWidget: Widget {
             ApprovalsWidgetView(entry: entry)
         }
         .configurationDisplayName("My approvals")
-        .description("Approvals waiting on you in one Burrow install. Approve takes two taps.")
+        .description("Approvals waiting on you, across your Burrow installs or in one. Approve takes two taps.")
         .supportedFamilies([.systemSmall, .systemMedium, .systemLarge, .systemExtraLarge, .accessoryCircular, .accessoryInline])
         .contentMarginsDisabled()
     }
@@ -77,7 +77,13 @@ struct ApprovalsList: View {
 
     var body: some View {
         VStack(alignment: .leading, spacing: ApprovalsLayout.rowSpacing) {
-            if showsHeader { ApprovalsHeader(entry: entry) }
+            if showsHeader {
+                ApprovalsHeader(entry: entry)
+                if entry.countsEntry.isMultiInstall || !entry.countsEntry.failures.isEmpty {
+                    InstallDetailLine(entry: entry.countsEntry, kind: .approvals)
+                        .foregroundStyle(BurrowColor.muted.color)
+                }
+            }
             switch entry.slab {
             case .signedOut, .zero:
                 Link(destination: entry.inboxURL) {
@@ -218,6 +224,15 @@ struct ApprovalRowView: View {
         }
     }
 
+    /// "<install> · <space>" with several installs, else the space.
+    private var detailLine: String? {
+        switch (row.installLabel, row.approval.spaceName) {
+        case (let label?, let space?): return "\(label) · \(space)"
+        case (let label?, nil): return label
+        case (nil, let space): return space
+        }
+    }
+
     private func titleBlock(note: String?) -> some View {
         VStack(alignment: .leading, spacing: 1) {
             Text(row.approval.title)
@@ -229,11 +244,16 @@ struct ApprovalRowView: View {
                     .font(.system(size: 13))
                     .foregroundStyle(BurrowColor.onSurface.color)
                     .lineLimit(1)
-            } else if let space = row.approval.spaceName {
-                Text(space)
-                    .font(.system(size: 13))
-                    .foregroundStyle(BurrowColor.muted.color)
-                    .lineLimit(1)
+            } else if let detail = detailLine {
+                // The install label is dropped whole before the space name
+                // truncates (canvas 01a21e80 "All installs").
+                ViewThatFits(in: .horizontal) {
+                    Text(detail).lineLimit(1).fixedSize(horizontal: true, vertical: false)
+                    Text(row.approval.spaceName ?? detail).lineLimit(1)
+                }
+                .font(.system(size: 13))
+                .foregroundStyle(BurrowColor.muted.color)
+                .accessibilityLabel(detail)
             }
             if showsSummary, note == nil, let summary = row.approval.summary, !summary.isEmpty {
                 Text(summary)

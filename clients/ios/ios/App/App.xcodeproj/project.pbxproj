@@ -28,6 +28,7 @@
 		111CF4B007C1E9DFDFF243D5 /* WidgetPendingApprovals.swift in Sources */ = {isa = PBXBuildFile; fileRef = 945DADE27ADE0DECFD3B9EEF /* WidgetPendingApprovals.swift */; };
 		122F95274D5C367FD4177E9C /* PushContentPreparer.swift in Sources */ = {isa = PBXBuildFile; fileRef = DBB8006C64908FD4EA1BA7E3 /* PushContentPreparer.swift */; };
 		1263CD52F9690E5CAA14A00F /* NavigationPolicy.swift in Sources */ = {isa = PBXBuildFile; fileRef = F46DFC793311833A64DEB882 /* NavigationPolicy.swift */; };
+		127A1A6DCB11C2BBA32E7EA4 /* WidgetInstallScope.swift in Sources */ = {isa = PBXBuildFile; fileRef = A7D5A486542C67B5092120DA /* WidgetInstallScope.swift */; };
 		12912D3B3307AC68FD961E17 /* RingModels.swift in Sources */ = {isa = PBXBuildFile; fileRef = EF0F766573D1C4B63696DC95 /* RingModels.swift */; };
 		1313ED76F46B008BF24670A1 /* TaskReminderTrial.swift in Sources */ = {isa = PBXBuildFile; fileRef = 9CAD421181524C41F26D5056 /* TaskReminderTrial.swift */; };
 		1395F730E094510742A342BF /* SwitchBanner.swift in Sources */ = {isa = PBXBuildFile; fileRef = 0C90C2D4E1529AE82939AB74 /* SwitchBanner.swift */; };
@@ -63,6 +64,7 @@
 		26E51AC20D9FE4119F144870 /* public in Resources */ = {isa = PBXBuildFile; fileRef = 7E5BBB12596EE01767A6151A /* public */; };
 		29C27A9F52A94BC5467AE598 /* PocketTTSSupportTests.swift in Sources */ = {isa = PBXBuildFile; fileRef = 390219D2A118FD3CB5427AF9 /* PocketTTSSupportTests.swift */; };
 		2A70F4BA78D48D41CE4B5E53 /* TorchRandom.swift in Sources */ = {isa = PBXBuildFile; fileRef = E103C1B9D35C38451FC1F886 /* TorchRandom.swift */; };
+		2C77230427A261EBA40C129C /* InstallFanout.swift in Sources */ = {isa = PBXBuildFile; fileRef = 1B05AFDF3385150F4B66898E /* InstallFanout.swift */; };
 		2C8D7313F19E24C8DA15D617 /* InstallUnreadStore.swift in Sources */ = {isa = PBXBuildFile; fileRef = 1510D02E40E90C314AC0E673 /* InstallUnreadStore.swift */; };
 		2ECE93607259D3499F13D382 /* ReplySpeaker.swift in Sources */ = {isa = PBXBuildFile; fileRef = FEC44957C483DDE5854EA3E6 /* ReplySpeaker.swift */; };
 		2F49C1B6D44EDA758AA6506D /* AvatarNotificationDelivery.swift in Sources */ = {isa = PBXBuildFile; fileRef = 618BCA2EB96F819023727101 /* AvatarNotificationDelivery.swift */; };
@@ -104,6 +106,7 @@
 		4B25C65C5D2D21680C644026 /* CountsEntry.swift in Sources */ = {isa = PBXBuildFile; fileRef = C3CE35968982C56B6596BF2D /* CountsEntry.swift */; };
 		4D69D1DB4C9F4073E8B27F1A /* SlabStateTests.swift in Sources */ = {isa = PBXBuildFile; fileRef = 37C9E327224C059F2EF3BDFA /* SlabStateTests.swift */; };
 		4FB34C264C0E482A4F3BA9EA /* LaunchScreen.storyboard in Resources */ = {isa = PBXBuildFile; fileRef = 23F8D68E28D07D16EB72E4AA /* LaunchScreen.storyboard */; };
+		5174CC632A052E7DF1035E58 /* WidgetScope.swift in Sources */ = {isa = PBXBuildFile; fileRef = 0D0E633199BF18C832CC6483 /* WidgetScope.swift */; };
 		520EBC5F2DD14D3D07FC1701 /* Entities.swift in Sources */ = {isa = PBXBuildFile; fileRef = 0FD909F861CBD9239A49DB52 /* Entities.swift */; };
 		52587DE54E0AD3D712213B34 /* ShortcutParameterRefreshTests.swift in Sources */ = {isa = PBXBuildFile; fileRef = 019DD0FC774F2201544F8C56 /* ShortcutParameterRefreshTests.swift */; };
 		52BAA0D817B124F39B6F931A /* ApprovalsProvider.swift in Sources */ = {isa = PBXBuildFile; fileRef = 5EB61A8732FC59D4E0A1326A /* ApprovalsProvider.swift */; };
@@ -120,14 +123,18 @@
 		5EC8BDB64E56CE383869D28A /* WebLoadRecovery.swift in Sources */ = {isa = PBXBuildFile; fileRef = 47771A89DA1A63CA80A944F9 /* WebLoadRecovery.swift */; };
 		5EDFAF499101B4164281B7B6 /* PushSeal.swift in Sources */ = {isa = PBXBuildFile; fileRef = BAF90B5FD6EA88A0B9F3A8CC /* PushSeal.swift */; };
 		5F0DD4B0202985397977C0C0 /* PocketSpeaker.swift in Sources */ = {isa = PBXBuildFile; fileRef = 4640CC79602B90E60B6F7EBD /* PocketSpeaker.swift */; };
+		5F41AD9DE81BC2B98C5ABCB9 /* InstallFanout.swift in Sources */ = {isa = PBXBuildFile; fileRef = 1B05AFDF3385150F4B66898E /* InstallFanout.swift */; };
 		609CE9F8CD127CCA4AF1F3C6 /* LargeUpload.swift in Sources */ = {isa = PBXBuildFile; fileRef = 1B82BD29922E39E43FDDB8AA /* LargeUpload.swift */; };
 		61A310E4B77A61760A56A57A /* InstallUnreadStore.swift in Sources */ = {isa = PBXBuildFile; fileRef = 1510D02E40E90C314AC0E673 /* InstallUnreadStore.swift */; };
 		61F290A0D40F4B00DA94B1C0 /* IntentActions.swift in Sources */ = {isa = PBXBuildFile; fileRef = 50E3C6960995294AC8D0D25F /* IntentActions.swift */; };
 		6334356D98AB7C351C87C643 /* TabBarUITests.swift in Sources */ = {isa = PBXBuildFile; fileRef = 1BC0FC52771986461AAC1F42 /* TabBarUITests.swift */; };
 		641897D3AF57D7EC2D4FDCF0 /* CountsEntry.swift in Sources */ = {isa = PBXBuildFile; fileRef = C3CE35968982C56B6596BF2D /* CountsEntry.swift */; };
 		6426394B1249C80136E61F4F /* ShareSheetView.swift in Sources */ = {isa = PBXBuildFile; fileRef = 724BFD2B3188FEBA62B4EA35 /* ShareSheetView.swift */; };
+		645E39B811260CFE66427432 /* InstallFanoutTests.swift in Sources */ = {isa = PBXBuildFile; fileRef = EB30688F1BFC10A8EEC8B909 /* InstallFanoutTests.swift */; };
 		6486CA391FD7AC442E27E43E /* InCallView.swift in Sources */ = {isa = PBXBuildFile; fileRef = 3C3BB181BE583EE84A0660F9 /* InCallView.swift */; };
+		6586BC83D576B39108D7A6B4 /* WidgetInstallScope.swift in Sources */ = {isa = PBXBuildFile; fileRef = A7D5A486542C67B5092120DA /* WidgetInstallScope.swift */; };
 		65973EC4D5A275905D4EBE37 /* IntentSupport.swift in Sources */ = {isa = PBXBuildFile; fileRef = AEA2B3BC253F91FAD530FA0A /* IntentSupport.swift */; };
+		66D1D05AB31C521CBB4E4C55 /* WidgetScope.swift in Sources */ = {isa = PBXBuildFile; fileRef = 0D0E633199BF18C832CC6483 /* WidgetScope.swift */; };
 		673A8D97377F884B8BCA62C4 /* ShareSheetModel.swift in Sources */ = {isa = PBXBuildFile; fileRef = 02587FC2025F6C12C4038D77 /* ShareSheetModel.swift */; };
 		67740B5377F807ABF1532F55 /* SceneDelegate.swift in Sources */ = {isa = PBXBuildFile; fileRef = ED2016878D44EAA9692D059F /* SceneDelegate.swift */; };
 		680844FDA2AB2B0E052C1A93 /* ShortcutParameterRefresh.swift in Sources */ = {isa = PBXBuildFile; fileRef = EE185BEDD232F08332626453 /* ShortcutParameterRefresh.swift */; };
@@ -146,16 +153,19 @@
 		734D66D391EF3B0FF9075628 /* SlabState.swift in Sources */ = {isa = PBXBuildFile; fileRef = FCEC8A0CD2D3DB02BB85718E /* SlabState.swift */; };
 		75264844650B93C08F3A804C /* BurrowAPIClient.swift in Sources */ = {isa = PBXBuildFile; fileRef = 093FAFBFF4FD069367820CB6 /* BurrowAPIClient.swift */; };
 		7636EEC6CB448FD6FD817985 /* WAV.swift in Sources */ = {isa = PBXBuildFile; fileRef = 61453B3E38585FE31A73CF2E /* WAV.swift */; };
+		76AA0AFA8584AFA7C2032675 /* InstallLabel.swift in Sources */ = {isa = PBXBuildFile; fileRef = C5195AE1AAB4ED2B687294E3 /* InstallLabel.swift */; };
 		77EA1202CE361931617C37B4 /* NavigationPolicyTests.swift in Sources */ = {isa = PBXBuildFile; fileRef = 34783DF2CF8177A50A2AF0BA /* NavigationPolicyTests.swift */; };
 		78C9F69404BDB40A2F575EE5 /* PushKeyStore.swift in Sources */ = {isa = PBXBuildFile; fileRef = FE3041ACCDD071543A1F8A76 /* PushKeyStore.swift */; };
 		7BB531099707DB4CF0FCC4F1 /* Entities.swift in Sources */ = {isa = PBXBuildFile; fileRef = 0FD909F861CBD9239A49DB52 /* Entities.swift */; };
 		7BBF2B7DE3F3FD53A2FA29AE /* TaskReminderTrial.swift in Sources */ = {isa = PBXBuildFile; fileRef = 9CAD421181524C41F26D5056 /* TaskReminderTrial.swift */; };
+		7D0E5E9F6B00F5A478B2211F /* WidgetInstallScope.swift in Sources */ = {isa = PBXBuildFile; fileRef = A7D5A486542C67B5092120DA /* WidgetInstallScope.swift */; };
 		7D233016C71DBB15B8D18CFD /* IntentActions.swift in Sources */ = {isa = PBXBuildFile; fileRef = 50E3C6960995294AC8D0D25F /* IntentActions.swift */; };
 		7DA31A31867F911F4F76145F /* BurrowVoicePlugin.swift in Sources */ = {isa = PBXBuildFile; fileRef = 549738BBABD458F3A8D4823A /* BurrowVoicePlugin.swift */; };
 		7DA97E079D00BCA359B1675F /* LargeUpload.swift in Sources */ = {isa = PBXBuildFile; fileRef = 1B82BD29922E39E43FDDB8AA /* LargeUpload.swift */; };
 		7E3065BDEF8AF61D3DD306B7 /* VoIPHandlingTests.swift in Sources */ = {isa = PBXBuildFile; fileRef = 8238860C98E6B71B908E7B98 /* VoIPHandlingTests.swift */; };
 		7E7081A3201BC84F210CAC32 /* BurrowAPIClient.swift in Sources */ = {isa = PBXBuildFile; fileRef = 093FAFBFF4FD069367820CB6 /* BurrowAPIClient.swift */; };
 		7EEB701150B0CD66C52AB210 /* BurrowWidgetBundle.swift in Sources */ = {isa = PBXBuildFile; fileRef = ACBED8EDACDD79A361322E49 /* BurrowWidgetBundle.swift */; };
+		7EFFC3169995F29A9AFF34DF /* InstallFanout.swift in Sources */ = {isa = PBXBuildFile; fileRef = 1B05AFDF3385150F4B66898E /* InstallFanout.swift */; };
 		7F913ED003E75592CA041E5D /* TaskReminderTrial.swift in Sources */ = {isa = PBXBuildFile; fileRef = 9CAD421181524C41F26D5056 /* TaskReminderTrial.swift */; };
 		7FFC5B7C44EDD4DFA09E31A9 /* MessagingTests.swift in Sources */ = {isa = PBXBuildFile; fileRef = 396E0468FC8D346D9D1C5196 /* MessagingTests.swift */; };
 		80D7B925580A8C899EB01AE6 /* MessagingIntents.swift in Sources */ = {isa = PBXBuildFile; fileRef = C4A209DF9B0ACB4D8CE63E6C /* MessagingIntents.swift */; };
@@ -165,9 +175,11 @@
 		8200BB5853F8B373D250391D /* InstallStore.swift in Sources */ = {isa = PBXBuildFile; fileRef = 3E69F987B892561A06F26BE1 /* InstallStore.swift */; };
 		824E4DD3D344F7AF72276F89 /* WebMediaCaptureTrace.swift in Sources */ = {isa = PBXBuildFile; fileRef = B986C8E0C3CA20D722AA71B3 /* WebMediaCaptureTrace.swift */; };
 		82744D5D6588C3F037B075B9 /* PushKeyStore.swift in Sources */ = {isa = PBXBuildFile; fileRef = FE3041ACCDD071543A1F8A76 /* PushKeyStore.swift */; };
+		82798F3806AFAC73B373F511 /* WidgetScope.swift in Sources */ = {isa = PBXBuildFile; fileRef = 0D0E633199BF18C832CC6483 /* WidgetScope.swift */; };
 		83766D31177476EC38F9CB16 /* PersonalIndex.swift in Sources */ = {isa = PBXBuildFile; fileRef = BA623D3963F4BCFBB477D85D /* PersonalIndex.swift */; };
 		83F3A87C406986C60905DDD8 /* BackgroundUploader.swift in Sources */ = {isa = PBXBuildFile; fileRef = A996D53743DDB9A1F8129771 /* BackgroundUploader.swift */; };
 		84230A51D8CB3BC9752BCB43 /* TaskReminderTrial.swift in Sources */ = {isa = PBXBuildFile; fileRef = 9CAD421181524C41F26D5056 /* TaskReminderTrial.swift */; };
+		85040E81BD9522E6236D8F80 /* InstallLabel.swift in Sources */ = {isa = PBXBuildFile; fileRef = C5195AE1AAB4ED2B687294E3 /* InstallLabel.swift */; };
 		85B24C189A89E6F0786980B8 /* NativeTabBarContractTests.swift in Sources */ = {isa = PBXBuildFile; fileRef = 08D06023E2FE093368EB5BED /* NativeTabBarContractTests.swift */; };
 		8622DC2EC7B5E8139ABDDCA9 /* PushContentPreparer.swift in Sources */ = {isa = PBXBuildFile; fileRef = DBB8006C64908FD4EA1BA7E3 /* PushContentPreparer.swift */; };
 		86ACBC15F996EA87643DCCF8 /* RingBannerView.swift in Sources */ = {isa = PBXBuildFile; fileRef = 62EB15AFD720B054ACA4A0F9 /* RingBannerView.swift */; };
@@ -179,6 +191,7 @@
 		8A53910772C243D9F91960BC /* ShareSheetModel.swift in Sources */ = {isa = PBXBuildFile; fileRef = 02587FC2025F6C12C4038D77 /* ShareSheetModel.swift */; };
 		8B8413C9B4822173974CB42E /* MeetingLauncher.swift in Sources */ = {isa = PBXBuildFile; fileRef = 6BA25A3AE7E8BD6A4694E6F3 /* MeetingLauncher.swift */; };
 		8BD7A0F5537D8BF38BCD0C5E /* RingBannerTests.swift in Sources */ = {isa = PBXBuildFile; fileRef = 5CD9BD23135D38FF5068EB7F /* RingBannerTests.swift */; };
+		8E105401C94B9C499D75857A /* InstallLabel.swift in Sources */ = {isa = PBXBuildFile; fileRef = C5195AE1AAB4ED2B687294E3 /* InstallLabel.swift */; };
 		8F27559256B885AC349A394D /* SlabState.swift in Sources */ = {isa = PBXBuildFile; fileRef = FCEC8A0CD2D3DB02BB85718E /* SlabState.swift */; };
 		90D15CB08305100B666613D1 /* MessagingIntents.swift in Sources */ = {isa = PBXBuildFile; fileRef = C4A209DF9B0ACB4D8CE63E6C /* MessagingIntents.swift */; };
 		912C9FA2979719FBB165D705 /* HubStore.swift in Sources */ = {isa = PBXBuildFile; fileRef = B100ED23BCDCF3FFFD00D2D2 /* HubStore.swift */; };
@@ -200,6 +213,7 @@
 		9ABD003A8FC8171D875452AD /* InstallSessionTests.swift in Sources */ = {isa = PBXBuildFile; fileRef = E403DEF8CD6D9A80946DB96B /* InstallSessionTests.swift */; };
 		9B4628A53FE238ECB7719576 /* IntentActions.swift in Sources */ = {isa = PBXBuildFile; fileRef = 50E3C6960995294AC8D0D25F /* IntentActions.swift */; };
 		9C63CB79CE864549A8C8975F /* TTSPipeline+Hub.swift in Sources */ = {isa = PBXBuildFile; fileRef = 80781FCEF80FCB24500BF867 /* TTSPipeline+Hub.swift */; };
+		9D255B25E446BC957DE90118 /* WidgetScope.swift in Sources */ = {isa = PBXBuildFile; fileRef = 0D0E633199BF18C832CC6483 /* WidgetScope.swift */; };
 		9D4E68AE99676FCC040FEA96 /* TTSPipeline.swift in Sources */ = {isa = PBXBuildFile; fileRef = 07F5453CE95F140483D21AAA /* TTSPipeline.swift */; };
 		9FC504B1C06ADCAAC822DBC7 /* ExtensionRenderTests.swift in Sources */ = {isa = PBXBuildFile; fileRef = 836AD2615673CF01F0A69B5F /* ExtensionRenderTests.swift */; };
 		A12AB70E3DAAADFA1C17F878 /* InstallUnreadStore.swift in Sources */ = {isa = PBXBuildFile; fileRef = 1510D02E40E90C314AC0E673 /* InstallUnreadStore.swift */; };
@@ -225,15 +239,19 @@
 		B0F935EDBEC2125E6BE74998 /* CountsCache.swift in Sources */ = {isa = PBXBuildFile; fileRef = 9D27347C121D5A67129627D1 /* CountsCache.swift */; };
 		B11CEEBFD732D77CA4B5DAC5 /* MeetingLauncherTests.swift in Sources */ = {isa = PBXBuildFile; fileRef = F118604722A79298C098211A /* MeetingLauncherTests.swift */; };
 		B17F1545A743D2C2D5C6B0D9 /* WidgetApprovalIntents.swift in Sources */ = {isa = PBXBuildFile; fileRef = 9FF8E4E0D1FFE8E18A9853D1 /* WidgetApprovalIntents.swift */; };
+		B3C65AB89749923A69141BE1 /* InstallFanout.swift in Sources */ = {isa = PBXBuildFile; fileRef = 1B05AFDF3385150F4B66898E /* InstallFanout.swift */; };
 		B479D67459AFBEC15159CB91 /* WidgetCountsRefresher.swift in Sources */ = {isa = PBXBuildFile; fileRef = 032C94FDF2044C01B4E9FC63 /* WidgetCountsRefresher.swift */; };
 		B483CBC4832AB7DFC7E14CC2 /* AvatarRenderer.swift in Sources */ = {isa = PBXBuildFile; fileRef = 356E09CEC202C090775751B2 /* AvatarRenderer.swift */; };
 		B48A21ADE5E41B337659024B /* Theme.swift in Sources */ = {isa = PBXBuildFile; fileRef = 48421D60D2C81BD6F37E64D2 /* Theme.swift */; };
 		B54A431C6B25FFD28691B6A5 /* IntentSupport.swift in Sources */ = {isa = PBXBuildFile; fileRef = AEA2B3BC253F91FAD530FA0A /* IntentSupport.swift */; };
 		B5B76C9528884AA2209C7B9B /* DuoShellTests.swift in Sources */ = {isa = PBXBuildFile; fileRef = 68E72AA6C48E526E7A266A0F /* DuoShellTests.swift */; };
+		B5C0A0684329FF0A2BB2A90F /* InstallLabel.swift in Sources */ = {isa = PBXBuildFile; fileRef = C5195AE1AAB4ED2B687294E3 /* InstallLabel.swift */; };
 		B69AA93D34B0E34EE4F6F254 /* NativeTabBarTests.swift in Sources */ = {isa = PBXBuildFile; fileRef = 0606F178D51979FE010E5860 /* NativeTabBarTests.swift */; };
+		B75238E40C5867229EB042DE /* WidgetInstallScope.swift in Sources */ = {isa = PBXBuildFile; fileRef = A7D5A486542C67B5092120DA /* WidgetInstallScope.swift */; };
 		B88749DE3D8DDC2BCB1654FA /* PushSeal.swift in Sources */ = {isa = PBXBuildFile; fileRef = BAF90B5FD6EA88A0B9F3A8CC /* PushSeal.swift */; };
 		BA23C3D94242FA0DB715C6C3 /* StartCallIntent.swift in Sources */ = {isa = PBXBuildFile; fileRef = E207F14F676AA0A3745860A5 /* StartCallIntent.swift */; };
 		BAC485300187E776379524D1 /* KeychainTokenStore.swift in Sources */ = {isa = PBXBuildFile; fileRef = 70196345FD59A4C9806BE4E5 /* KeychainTokenStore.swift */; };
+		BAD9E1C490AE3F7D8F90DF07 /* InstallLabel.swift in Sources */ = {isa = PBXBuildFile; fileRef = C5195AE1AAB4ED2B687294E3 /* InstallLabel.swift */; };
 		BC88F74B23C798E493F973E9 /* BurrowMeetingsPluginTests.swift in Sources */ = {isa = PBXBuildFile; fileRef = 2D522D8BBB8EE946DF7386D2 /* BurrowMeetingsPluginTests.swift */; };
 		BC9D453071E07AF21314818D /* MeetingLauncher.swift in Sources */ = {isa = PBXBuildFile; fileRef = 6BA25A3AE7E8BD6A4694E6F3 /* MeetingLauncher.swift */; };
 		BCECA4323CCC93B2BBDB96A8 /* MessagingActions.swift in Sources */ = {isa = PBXBuildFile; fileRef = ED3B99F76B669B5C6D360D67 /* MessagingActions.swift */; };
@@ -267,6 +285,7 @@
 		D6CD765EF7684FA43283AACA /* ApprovalsProvider.swift in Sources */ = {isa = PBXBuildFile; fileRef = 5EB61A8732FC59D4E0A1326A /* ApprovalsProvider.swift */; };
 		D7E19C30BC549C9294ABC389 /* CallAndMeetingTests.swift in Sources */ = {isa = PBXBuildFile; fileRef = E2ED0BC0639B56B26AFCBE4D /* CallAndMeetingTests.swift */; };
 		D811D6D8851C97B667406CC9 /* DeepLinkTests.swift in Sources */ = {isa = PBXBuildFile; fileRef = 5AB72D587D4F0F2BF4D98D9D /* DeepLinkTests.swift */; };
+		D88A753611A08F9B5894D49C /* InstallFanout.swift in Sources */ = {isa = PBXBuildFile; fileRef = 1B05AFDF3385150F4B66898E /* InstallFanout.swift */; };
 		D945CB8F4F75FE12293DA1BB /* Colors.xcassets in Resources */ = {isa = PBXBuildFile; fileRef = F20AEF676C004D2C37F1D06C /* Colors.xcassets */; };
 		D9F548505A6E559AC9351187 /* PersonResolver.swift in Sources */ = {isa = PBXBuildFile; fileRef = DB4116C761A2BFBE38EA3105 /* PersonResolver.swift */; };
 		DB85697BEEEACA5831087520 /* VoIPRegistrar.swift in Sources */ = {isa = PBXBuildFile; fileRef = F5CA68A6E37861FFC3234F07 /* VoIPRegistrar.swift */; };
@@ -281,6 +300,7 @@
 		E06A3A001D6B5BA9967414CC /* PKCETests.swift in Sources */ = {isa = PBXBuildFile; fileRef = E146E1C002664F63C25DB344 /* PKCETests.swift */; };
 		E148CAEBE85295927118EFE4 /* PrivacyUsageDescriptionTests.swift in Sources */ = {isa = PBXBuildFile; fileRef = 886FF05F9CF153F76DC13237 /* PrivacyUsageDescriptionTests.swift */; };
 		E1BCDAFC7EFCB97EA205555C /* BurrowVoiceContractTests.swift in Sources */ = {isa = PBXBuildFile; fileRef = 545206A9AA012E33A1746CDE /* BurrowVoiceContractTests.swift */; };
+		E296C0122A801AB40FB75706 /* WidgetScope.swift in Sources */ = {isa = PBXBuildFile; fileRef = 0D0E633199BF18C832CC6483 /* WidgetScope.swift */; };
 		E34A91D774083A754D0871D2 /* InstallStoreTests.swift in Sources */ = {isa = PBXBuildFile; fileRef = 06E3B6079D4C49F493B272A2 /* InstallStoreTests.swift */; };
 		E49B7615178FD174A1D68FC8 /* WebLoadTrace.swift in Sources */ = {isa = PBXBuildFile; fileRef = F0FC73A7579DE895A5E44986 /* WebLoadTrace.swift */; };
 		E519972A9641E5EE21957D64 /* PushSeal.swift in Sources */ = {isa = PBXBuildFile; fileRef = BAF90B5FD6EA88A0B9F3A8CC /* PushSeal.swift */; };
@@ -416,12 +436,14 @@
 		0A5E3E6D8DA6D9FF07B2123D /* RingCenter.swift */ = {isa = PBXFileReference; lastKnownFileType = sourcecode.swift; path = RingCenter.swift; sourceTree = "<group>"; };
 		0B555801C556B1309E280BC2 /* SafeTensors.swift */ = {isa = PBXFileReference; lastKnownFileType = sourcecode.swift; path = SafeTensors.swift; sourceTree = "<group>"; };
 		0C90C2D4E1529AE82939AB74 /* SwitchBanner.swift */ = {isa = PBXFileReference; lastKnownFileType = sourcecode.swift; path = SwitchBanner.swift; sourceTree = "<group>"; };
+		0D0E633199BF18C832CC6483 /* WidgetScope.swift */ = {isa = PBXFileReference; lastKnownFileType = sourcecode.swift; path = WidgetScope.swift; sourceTree = "<group>"; };
 		0FD909F861CBD9239A49DB52 /* Entities.swift */ = {isa = PBXFileReference; lastKnownFileType = sourcecode.swift; path = Entities.swift; sourceTree = "<group>"; };
 		1057831535AAC14BF4CC1F1F /* PersonalContextSystemTests.swift */ = {isa = PBXFileReference; lastKnownFileType = sourcecode.swift; path = PersonalContextSystemTests.swift; sourceTree = "<group>"; };
 		11304C4A8D70FFE733DA4E06 /* BurrowNativePlugin.swift */ = {isa = PBXFileReference; lastKnownFileType = sourcecode.swift; path = BurrowNativePlugin.swift; sourceTree = "<group>"; };
 		1510D02E40E90C314AC0E673 /* InstallUnreadStore.swift */ = {isa = PBXFileReference; lastKnownFileType = sourcecode.swift; path = InstallUnreadStore.swift; sourceTree = "<group>"; };
 		1789456078BB71790213DC24 /* AskAgentSystemTests.swift */ = {isa = PBXFileReference; lastKnownFileType = sourcecode.swift; path = AskAgentSystemTests.swift; sourceTree = "<group>"; };
 		179CD654AFC5317FC6FC6A81 /* PushRelayTests.swift */ = {isa = PBXFileReference; lastKnownFileType = sourcecode.swift; path = PushRelayTests.swift; sourceTree = "<group>"; };
+		1B05AFDF3385150F4B66898E /* InstallFanout.swift */ = {isa = PBXFileReference; lastKnownFileType = sourcecode.swift; path = InstallFanout.swift; sourceTree = "<group>"; };
 		1B82BD29922E39E43FDDB8AA /* LargeUpload.swift */ = {isa = PBXFileReference; lastKnownFileType = sourcecode.swift; path = LargeUpload.swift; sourceTree = "<group>"; };
 		1BC0FC52771986461AAC1F42 /* TabBarUITests.swift */ = {isa = PBXFileReference; lastKnownFileType = sourcecode.swift; path = TabBarUITests.swift; sourceTree = "<group>"; };
 		1BCA4F7949BCEADF89CA73DD /* TestSupport.swift */ = {isa = PBXFileReference; lastKnownFileType = sourcecode.swift; path = TestSupport.swift; sourceTree = "<group>"; };
@@ -507,6 +529,7 @@
 		9D27347C121D5A67129627D1 /* CountsCache.swift */ = {isa = PBXFileReference; lastKnownFileType = sourcecode.swift; path = CountsCache.swift; sourceTree = "<group>"; };
 		9FF8E4E0D1FFE8E18A9853D1 /* WidgetApprovalIntents.swift */ = {isa = PBXFileReference; lastKnownFileType = sourcecode.swift; path = WidgetApprovalIntents.swift; sourceTree = "<group>"; };
 		A7996FE25C68D64011A453A6 /* PersonalIndexTests.swift */ = {isa = PBXFileReference; lastKnownFileType = sourcecode.swift; path = PersonalIndexTests.swift; sourceTree = "<group>"; };
+		A7D5A486542C67B5092120DA /* WidgetInstallScope.swift */ = {isa = PBXFileReference; lastKnownFileType = sourcecode.swift; path = WidgetInstallScope.swift; sourceTree = "<group>"; };
 		A996D53743DDB9A1F8129771 /* BackgroundUploader.swift */ = {isa = PBXFileReference; lastKnownFileType = sourcecode.swift; path = BackgroundUploader.swift; sourceTree = "<group>"; };
 		A9DC08ECFA84095D28184D7E /* IntentSourceScanTests.swift */ = {isa = PBXFileReference; lastKnownFileType = sourcecode.swift; path = IntentSourceScanTests.swift; sourceTree = "<group>"; };
 		AC96500C251272FC26DC89DB /* NotificationTests.swift */ = {isa = PBXFileReference; lastKnownFileType = sourcecode.swift; path = NotificationTests.swift; sourceTree = "<group>"; };
@@ -525,6 +548,7 @@
 		C3CE35968982C56B6596BF2D /* CountsEntry.swift */ = {isa = PBXFileReference; lastKnownFileType = sourcecode.swift; path = CountsEntry.swift; sourceTree = "<group>"; };
 		C4A209DF9B0ACB4D8CE63E6C /* MessagingIntents.swift */ = {isa = PBXFileReference; lastKnownFileType = sourcecode.swift; path = MessagingIntents.swift; sourceTree = "<group>"; };
 		C502C80B1C599EA47F7B501E /* AuthSession.swift */ = {isa = PBXFileReference; lastKnownFileType = sourcecode.swift; path = AuthSession.swift; sourceTree = "<group>"; };
+		C5195AE1AAB4ED2B687294E3 /* InstallLabel.swift */ = {isa = PBXFileReference; lastKnownFileType = sourcecode.swift; path = InstallLabel.swift; sourceTree = "<group>"; };
 		C814CAF236371C316B1D8201 /* DebugPersonalContext.swift */ = {isa = PBXFileReference; lastKnownFileType = sourcecode.swift; path = DebugPersonalContext.swift; sourceTree = "<group>"; };
 		C8977151DDDD6E10A4A3C3C8 /* UnreadReconciler.swift */ = {isa = PBXFileReference; lastKnownFileType = sourcecode.swift; path = UnreadReconciler.swift; sourceTree = "<group>"; };
 		C8A9A2F9E029400EE1562218 /* AppTests.xctest */ = {isa = PBXFileReference; includeInIndex = 0; lastKnownFileType = wrapper.cfbundle; path = AppTests.xctest; sourceTree = BUILT_PRODUCTS_DIR; };
@@ -551,6 +575,7 @@
 		E9C9FA3362A07A1248540CEC /* Chunker.swift */ = {isa = PBXFileReference; lastKnownFileType = sourcecode.swift; path = Chunker.swift; sourceTree = "<group>"; };
 		E9FB2536BDF75AAA2A289BE1 /* PocketTTSProbe.swift */ = {isa = PBXFileReference; lastKnownFileType = sourcecode.swift; path = PocketTTSProbe.swift; sourceTree = "<group>"; };
 		EA815E3BEDBE2F7BC3127D78 /* BurrowAPIClientTests.swift */ = {isa = PBXFileReference; lastKnownFileType = sourcecode.swift; path = BurrowAPIClientTests.swift; sourceTree = "<group>"; };
+		EB30688F1BFC10A8EEC8B909 /* InstallFanoutTests.swift */ = {isa = PBXFileReference; lastKnownFileType = sourcecode.swift; path = InstallFanoutTests.swift; sourceTree = "<group>"; };
 		ECDEC69FD14BE511398815DF /* LargeUploadTests.swift */ = {isa = PBXFileReference; lastKnownFileType = sourcecode.swift; path = LargeUploadTests.swift; sourceTree = "<group>"; };
 		ED2016878D44EAA9692D059F /* SceneDelegate.swift */ = {isa = PBXFileReference; lastKnownFileType = sourcecode.swift; path = SceneDelegate.swift; sourceTree = "<group>"; };
 		ED3B99F76B669B5C6D360D67 /* MessagingActions.swift */ = {isa = PBXFileReference; lastKnownFileType = sourcecode.swift; path = MessagingActions.swift; sourceTree = "<group>"; };
@@ -627,6 +652,7 @@
 				5AB72D587D4F0F2BF4D98D9D /* DeepLinkTests.swift */,
 				68E72AA6C48E526E7A266A0F /* DuoShellTests.swift */,
 				6A754CB8A1AEAAA985633885 /* InCallModelTests.swift */,
+				EB30688F1BFC10A8EEC8B909 /* InstallFanoutTests.swift */,
 				E403DEF8CD6D9A80946DB96B /* InstallSessionTests.swift */,
 				06E3B6079D4C49F493B272A2 /* InstallStoreTests.swift */,
 				A9DC08ECFA84095D28184D7E /* IntentSourceScanTests.swift */,
@@ -887,6 +913,7 @@
 				9CAD421181524C41F26D5056 /* TaskReminderTrial.swift */,
 				F002A7B532553DD366E09F0F /* WaitingSummary.swift */,
 				9FF8E4E0D1FFE8E18A9853D1 /* WidgetApprovalIntents.swift */,
+				A7D5A486542C67B5092120DA /* WidgetInstallScope.swift */,
 				945DADE27ADE0DECFD3B9EEF /* WidgetPendingApprovals.swift */,
 			);
 			path = Intents;
@@ -931,6 +958,8 @@
 				F20AEF676C004D2C37F1D06C /* Colors.xcassets */,
 				9D27347C121D5A67129627D1 /* CountsCache.swift */,
 				C3CE35968982C56B6596BF2D /* CountsEntry.swift */,
+				1B05AFDF3385150F4B66898E /* InstallFanout.swift */,
+				C5195AE1AAB4ED2B687294E3 /* InstallLabel.swift */,
 				3E69F987B892561A06F26BE1 /* InstallStore.swift */,
 				1510D02E40E90C314AC0E673 /* InstallUnreadStore.swift */,
 				70196345FD59A4C9806BE4E5 /* KeychainTokenStore.swift */,
@@ -941,6 +970,7 @@
 				02587FC2025F6C12C4038D77 /* ShareSheetModel.swift */,
 				FCEC8A0CD2D3DB02BB85718E /* SlabState.swift */,
 				48421D60D2C81BD6F37E64D2 /* Theme.swift */,
+				0D0E633199BF18C832CC6483 /* WidgetScope.swift */,
 			);
 			path = Shared;
 			sourceTree = "<group>";
@@ -1335,6 +1365,8 @@
 				591680164EFFE46048C60154 /* CountsEntry.swift in Sources */,
 				46C09A5414802C6736DF7A5D /* DonationPolicy.swift in Sources */,
 				A8EFE50BE48FCA8ADB2B3DF3 /* Entities.swift in Sources */,
+				B3C65AB89749923A69141BE1 /* InstallFanout.swift in Sources */,
+				B5C0A0684329FF0A2BB2A90F /* InstallLabel.swift in Sources */,
 				8200BB5853F8B373D250391D /* InstallStore.swift in Sources */,
 				4582366819213B76DABE5E6E /* InstallUnreadStore.swift in Sources */,
 				61F290A0D40F4B00DA94B1C0 /* IntentActions.swift in Sources */,
@@ -1362,7 +1394,9 @@
 				B48A21ADE5E41B337659024B /* Theme.swift in Sources */,
 				35DB3FCB2E7B341A34F47A45 /* WaitingSummary.swift in Sources */,
 				3B10257CB7BE20FABAC2D2DF /* WidgetApprovalIntents.swift in Sources */,
+				6586BC83D576B39108D7A6B4 /* WidgetInstallScope.swift in Sources */,
 				021C84659BA40FDEC4E0A364 /* WidgetPendingApprovals.swift in Sources */,
+				E296C0122A801AB40FB75706 /* WidgetScope.swift in Sources */,
 			);
 			runOnlyForDeploymentPostprocessing = 0;
 		};
@@ -1387,6 +1421,8 @@
 				EB08F419786BE735FFDA575C /* CountsProvider.swift in Sources */,
 				5A307123197FAFBAE816A8D5 /* DonationPolicy.swift in Sources */,
 				7BB531099707DB4CF0FCC4F1 /* Entities.swift in Sources */,
+				7EFFC3169995F29A9AFF34DF /* InstallFanout.swift in Sources */,
+				8E105401C94B9C499D75857A /* InstallLabel.swift in Sources */,
 				F2A02A66727A1F8CE325A990 /* InstallStore.swift in Sources */,
 				2C8D7313F19E24C8DA15D617 /* InstallUnreadStore.swift in Sources */,
 				9B4628A53FE238ECB7719576 /* IntentActions.swift in Sources */,
@@ -1413,7 +1449,9 @@
 				36EA4763F4D5755A4DBADE53 /* Theme.swift in Sources */,
 				AB5073966730786F6701CA95 /* WaitingSummary.swift in Sources */,
 				4A98900E884BACF79905B688 /* WidgetApprovalIntents.swift in Sources */,
+				B75238E40C5867229EB042DE /* WidgetInstallScope.swift in Sources */,
 				111CF4B007C1E9DFDFF243D5 /* WidgetPendingApprovals.swift in Sources */,
+				5174CC632A052E7DF1035E58 /* WidgetScope.swift in Sources */,
 			);
 			runOnlyForDeploymentPostprocessing = 0;
 		};
@@ -1441,6 +1479,8 @@
 				9FC504B1C06ADCAAC822DBC7 /* ExtensionRenderTests.swift in Sources */,
 				BF8199311F69A1DBE7F12E0D /* InCallModel.swift in Sources */,
 				9612C3DF328141EB8CDDCC24 /* InCallView.swift in Sources */,
+				2C77230427A261EBA40C129C /* InstallFanout.swift in Sources */,
+				76AA0AFA8584AFA7C2032675 /* InstallLabel.swift in Sources */,
 				72FCB6A6EAFDF33BAF86128D /* InstallPickerView.swift in Sources */,
 				04F8E890893E2E303D9B6E9D /* InstallStore.swift in Sources */,
 				A12AB70E3DAAADFA1C17F878 /* InstallUnreadStore.swift in Sources */,
@@ -1470,7 +1510,9 @@
 				45D48C96A52AE8CE339A50D4 /* Theme.swift in Sources */,
 				C500660B132B5CD786DCD7F8 /* WaitingSummary.swift in Sources */,
 				218C5A240C726C349DE7CE99 /* WidgetApprovalIntents.swift in Sources */,
+				127A1A6DCB11C2BBA32E7EA4 /* WidgetInstallScope.swift in Sources */,
 				A5EF9785C4E26545C2A1E0F3 /* WidgetPendingApprovals.swift in Sources */,
+				9D255B25E446BC957DE90118 /* WidgetScope.swift in Sources */,
 			);
 			runOnlyForDeploymentPostprocessing = 0;
 		};
@@ -1484,6 +1526,8 @@
 				7E7081A3201BC84F210CAC32 /* BurrowAPIClient.swift in Sources */,
 				0E6CE73A2B2DC006506F588B /* CountsCache.swift in Sources */,
 				E5EF3CD7AD29A6DF59110A1A /* CountsEntry.swift in Sources */,
+				D88A753611A08F9B5894D49C /* InstallFanout.swift in Sources */,
+				85040E81BD9522E6236D8F80 /* InstallLabel.swift in Sources */,
 				2265D173C2042787131BDDD5 /* InstallStore.swift in Sources */,
 				61A310E4B77A61760A56A57A /* InstallUnreadStore.swift in Sources */,
 				9A470546E17410818A8CDDA6 /* KeychainTokenStore.swift in Sources */,
@@ -1496,6 +1540,7 @@
 				68FBCB46612651E204EEEE1F /* ShareViewController.swift in Sources */,
 				734D66D391EF3B0FF9075628 /* SlabState.swift in Sources */,
 				F94D63D4DF140526381BF998 /* Theme.swift in Sources */,
+				66D1D05AB31C521CBB4E4C55 /* WidgetScope.swift in Sources */,
 			);
 			runOnlyForDeploymentPostprocessing = 0;
 		};
@@ -1534,6 +1579,8 @@
 				556AE8ECBD6FC4E87265F820 /* InCallModel.swift in Sources */,
 				3D44143F6050E86F26E4F2CC /* InCallScreen.swift in Sources */,
 				6486CA391FD7AC442E27E43E /* InCallView.swift in Sources */,
+				5F41AD9DE81BC2B98C5ABCB9 /* InstallFanout.swift in Sources */,
+				BAD9E1C490AE3F7D8F90DF07 /* InstallLabel.swift in Sources */,
 				7022E2E1D5D1BC14E84EF64E /* InstallPickerView.swift in Sources */,
 				CE60DE7885DA376880CF1CCB /* InstallSession.swift in Sources */,
 				DDBA16A62D69BDBF390B65C3 /* InstallStore.swift in Sources */,
@@ -1596,7 +1643,9 @@
 				FA30FE3D1D596FD2EBB58D80 /* Weights.swift in Sources */,
 				B17F1545A743D2C2D5C6B0D9 /* WidgetApprovalIntents.swift in Sources */,
 				B479D67459AFBEC15159CB91 /* WidgetCountsRefresher.swift in Sources */,
+				7D0E5E9F6B00F5A478B2211F /* WidgetInstallScope.swift in Sources */,
 				CCE83DD1660681BEEC2FEC80 /* WidgetPendingApprovals.swift in Sources */,
+				82798F3806AFAC73B373F511 /* WidgetScope.swift in Sources */,
 			);
 			runOnlyForDeploymentPostprocessing = 0;
 		};
@@ -1615,6 +1664,7 @@
 				D811D6D8851C97B667406CC9 /* DeepLinkTests.swift in Sources */,
 				B5B76C9528884AA2209C7B9B /* DuoShellTests.swift in Sources */,
 				FB5EE48EC224C03107858CDD /* InCallModelTests.swift in Sources */,
+				645E39B811260CFE66427432 /* InstallFanoutTests.swift in Sources */,
 				9ABD003A8FC8171D875452AD /* InstallSessionTests.swift in Sources */,
 				E34A91D774083A754D0871D2 /* InstallStoreTests.swift in Sources */,
 				3EDF9E8869059EFA42347341 /* IntentSourceScanTests.swift in Sources */,

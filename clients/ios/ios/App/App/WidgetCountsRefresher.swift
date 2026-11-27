@@ -1,24 +1,27 @@
 import Foundation
 import WidgetKit
 
-/// Keeps the widgets current from the app's side: after sign-in or an
-/// install switch, fetch `GET /api/app/counts` for that install, write it to
-/// the App Group, and reload every timeline. NOT on foreground: there
-/// `OpenRefresh` writes the cache from the reconcile's own request, so an
-/// open sends one counts request per install (task 01a1261e).
-/// The widgets' own 15-minute refresh covers the time the app is closed.
+/// Keeps the widgets current from the app's side: after sign-in, sign-out
+/// or an install switch, fetch `GET /api/app/counts` for EVERY signed-in
+/// install through `InstallFanout` (each with its own bearer, at most 3 at
+/// once), write each answer to its own App Group slot, and reload every
+/// timeline once (task 01a21e75 stage 3: the widgets show All installs).
+/// NOT on foreground: there `OpenRefresh` writes the cache from the
+/// reconcile's own request, so an open sends one counts request per install
+/// (task 01a1261e). The widgets' own 15-minute refresh covers the time the
+/// app is closed.
 enum WidgetCountsRefresher {
-    static func refresh(host: String? = InstallStore.shared.selectedHost,
-                        client: BurrowAPIClient = .shared, cache: CountsCache = CountsCache()) {
-        guard let host, client.isSignedIn(host: host) else {
-            WidgetCenter.shared.reloadAllTimelines()
-            return
-        }
-        client.counts(host: host) { result in
-            if case .success(let counts) = result {
-                cache.write(counts, for: host)
+    static func refresh(
+        installs: [Install] = InstallStore.shared.installs, client: BurrowAPIClient = .shared, cache: CountsCache = CountsCache(),
+        reload: @escaping () -> Void = { WidgetCenter.shared.reloadAllTimelines() }, completion: @escaping () -> Void = {}
+    ) {
+        Task {
+            let results = await InstallFanout.fetch(installs: installs, client: client) { host in try await client.fetchCounts(host: host) }
+            for case (let install, .ok(let counts)) in results {
+                cache.write(counts, for: install.host)
             }
-            WidgetCenter.shared.reloadAllTimelines()
+            reload()
+            completion()
         }
     }
 }

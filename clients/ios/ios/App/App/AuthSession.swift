@@ -122,7 +122,7 @@ final class AuthSession: NSObject, ASWebAuthenticationPresentationContextProvidi
             guard KeychainTokenStore.shared.store(token, for: host) else {
                 return completion(.failure(Failure.badResponse))
             }
-            WidgetCountsRefresher.refresh(host: host)
+            WidgetCountsRefresher.refresh()
             IntentAppHooks.didSignIn(host: host)
             completion(.success(handoff))
         }.resume()

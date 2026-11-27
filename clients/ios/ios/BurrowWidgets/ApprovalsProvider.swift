@@ -2,27 +2,47 @@ import AppIntents
 import Foundation
 import WidgetKit
 
-/// Which install a My approvals widget shows. Each widget is configured to
-/// ONE install and fetches and acts with that install's bearer only.
+/// Which installs a My approvals widget shows (task 01a21e75 stage 3).
+///
+/// `install` is the v1 parameter, kept so a widget placed before this
+/// change decodes unchanged: a legacy `install` that is still saved keeps
+/// the widget PINNED to it. `scope` is new, defaulting to All installs. An
+/// explicit one-install `scope` wins over `install`. Each install is
+/// fetched and acted on with its own bearer only.
 struct ApprovalsWidgetIntent: WidgetConfigurationIntent {
     static var title: LocalizedStringResource = "My approvals"
-    static var description = IntentDescription("Choose the Burrow install this widget shows.")
+    static var description = IntentDescription("Choose the Burrow installs this widget shows.")
 
-    /// Defaults to the install selected in the app (InstallQuery).
+    /// v1: the one install a widget was pinned to.
     @Parameter(title: "Install")
     var install: InstallEntity?
 
+    @Parameter(title: "Installs")
+    var scope: InstallScopeEntity?
+
     init() {}
 
-    init(install: InstallEntity?) { self.install = install }
+    init(install: InstallEntity?, scope: InstallScopeEntity? = nil) {
+        self.install = install
+        self.scope = scope
+    }
+
+    /// Pinned by an explicit one-install scope, else by a legacy `install`
+    /// that is still saved, else All installs. A pinned install that was
+    /// removed falls back to All installs.
+    func widgetScope(saved: [Install]) -> WidgetScope {
+        WidgetScope.approvals(legacyInstall: install?.id, scope: scope?.scope, saved: saved)
+    }
 }
 
-/// `GET /api/app/approvals` for the configured install, cached in the App
-/// Group like CountsCache. Emits extra entries at every moment the picture
-/// changes by itself (the confirm strip reverting 8 s after arming, a
-/// settled row leaving, the list going stale). Sends the approves Confirm
-/// left pending without waiting for them, so Approving is drawn while the
-/// request is in flight (WidgetPendingApprovals.swift).
+/// `GET /api/app/approvals` for every install the widget covers, through
+/// `InstallFanout`, cached per host in the App Group like CountsCache.
+/// Emits extra entries at every moment the picture changes by itself (the
+/// confirm strip reverting 8 s after arming, a settled row leaving, the
+/// list going stale). Sends the approves Confirm left pending without
+/// waiting for them, so Approving is drawn while the request is in flight
+/// (WidgetPendingApprovals.swift). Every row keeps its host, so Approve and
+/// Confirm act on the row's own install.
 struct ApprovalsProvider: AppIntentTimelineProvider {
     var installs = InstallStore.shared
     var client = BurrowAPIClient.shared
@@ -34,41 +54,55 @@ struct ApprovalsProvider: AppIntentTimelineProvider {
 
     func snapshot(for configuration: ApprovalsWidgetIntent, in context: Context) async -> ApprovalsEntry {
         if context.isPreview { return .preview }
-        return entries(host: host(configuration), now: Date()).first ?? .preview
+        let scope = configuration.widgetScope(saved: installs.installs)
+        return entries(scope: scope, unreachable: [], now: Date()).first ?? .preview
     }
 
     func timeline(for configuration: ApprovalsWidgetIntent, in context: Context) async -> Timeline<ApprovalsEntry> {
-        let host = host(configuration)
-        if let host, client.isSignedIn(host: host) {
+        let saved = installs.installs
+        let scope = configuration.widgetScope(saved: saved)
+        let covered = scope.installs(from: saved)
+        for install in covered where client.isSignedIn(host: install.host) {
             // Claimed here, once across every run and process; the result
             // asks for the next redraw.
-            sender.startSending(host: host)
-            do {
-                let fetched = try await client.approvals(host: host)
+            sender.startSending(host: install.host)
+        }
+        let client = client
+        let results = await InstallFanout.fetch(
+            installs: covered, client: client, fetch: { host in try await client.approvals(host: host) })
+        var unreachable: Set<String> = []
+        for (install, result) in results {
+            let host = install.host
+            switch result {
+            case .ok(let fetched):
                 IntentLog.count("widget_approvals", host: host, count: fetched.count)
                 let now = Date()
                 let merged = ApprovalsCache.merge(
                     fetched: fetched, previous: cache.approvals(for: host)?.approvals ?? [], host: host, marks: store.marks(), now: now)
                 cache.write(CachedApprovals(approvals: merged, fetchedAt: now), for: host)
-            } catch {
-                IntentLog.route("widget_approvals", host: host, status: EntityCatalog.status(of: error))
+            case .unreachable:
+                unreachable.insert(host)
+                IntentLog.route("widget_approvals", host: host, status: 0)
+            case .signedOut:
+                break
             }
         }
         let now = Date()
-        return Timeline(entries: entries(host: host, now: now), policy: .after(now.addingTimeInterval(CountsEntry.refreshInterval)))
+        return Timeline(
+            entries: entries(scope: scope, unreachable: unreachable, now: now), policy: .after(now.addingTimeInterval(CountsEntry.refreshInterval)))
     }
 
-    /// The configured install if it is still saved, else the selected one.
-    private func host(_ configuration: ApprovalsWidgetIntent) -> String? {
-        if let host = configuration.install?.id, installs.installs.contains(where: { $0.host == host }) { return host }
-        return installs.selectedHost
-    }
-
-    private func entries(host: String?, now: Date) -> [ApprovalsEntry] {
-        let signedIn = host.map(client.isSignedIn(host:)) ?? false
-        let installName = host.flatMap { host in installs.installs.count > 1 ? installs.installs.first { $0.host == host }?.displayName : nil }
-        return ApprovalsTimeline.entries(
-            now: now, host: host, installName: installName, signedIn: signedIn, cached: host.flatMap(cache.approvals(for:)),
-            arm: store.armed(now: now), marks: store.marks())
+    private func entries(scope: WidgetScope, unreachable: Set<String>, now: Date) -> [ApprovalsEntry] {
+        let saved = installs.installs
+        let sources = scope.installs(from: saved).map { install in
+            ApprovalsSource(
+                host: install.host, label: InstallLabel.name(for: install.host, installs: saved), signedIn: client.isSignedIn(host: install.host),
+                unreachable: unreachable.contains(install.host), cached: cache.approvals(for: install.host))
+        }
+        guard !sources.isEmpty else {
+            return [ApprovalsEntry(date: now, host: nil, installName: nil, signedIn: false, fetchedAt: nil, rows: [])]
+        }
+        let pinned = scope.pinnedHost.flatMap { host in saved.count > 1 ? "\(InstallLabel.name(for: host, installs: saved)) only" : nil }
+        return ApprovalsTimeline.mergedEntries(now: now, sources: sources, installName: pinned, arm: store.armed(now: now), marks: store.marks())
     }
 }

@@ -520,7 +520,8 @@ final class PushRelayTests: XCTestCase {
         XCTAssertEqual(StubURLProtocol.requests.count, 3)
         XCTAssertEqual(cache.counts(for: "b.test")?.approvals, 4, "the selected install's widgets come from the same answer")
         XCTAssertEqual(cache.counts(for: "b.test")?.tasks, 5)
-        XCTAssertNil(cache.counts(for: "a.test"), "only the selected install feeds the widgets")
+        XCTAssertNotNil(cache.counts(for: "a.test"), "every install feeds the widgets (task 01a21e75: All installs)")
+        XCTAssertNotNil(cache.counts(for: "c.test"))
         XCTAssertEqual(store.total, 6)
         XCTAssertEqual(reloads, 1)
     }

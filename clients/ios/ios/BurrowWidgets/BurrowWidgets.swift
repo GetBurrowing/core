@@ -8,11 +8,13 @@ import WidgetKit
 
 struct TasksWidget: Widget {
     var body: some WidgetConfiguration {
-        StaticConfiguration(kind: "com.kobo-ai.burrow.widgets.tasks", provider: CountsProvider()) { entry in
+        // Kind unchanged (task 01a21e75 stage 3), so a placed widget survives
+        // and takes the All installs default.
+        AppIntentConfiguration(kind: WidgetKinds.tasks, intent: WidgetScopeIntent.self, provider: CountsProvider()) { entry in
             SingleCountView(kind: .tasks, entry: entry)
         }
         .configurationDisplayName("My tasks")
-        .description("Open tasks assigned to you in the selected Burrow install.")
+        .description("Open tasks assigned to you, across your Burrow installs or in one.")
         .supportedFamilies([.systemSmall, .accessoryCircular, .accessoryInline])
         .contentMarginsDisabled()
     }
@@ -20,7 +22,7 @@ struct TasksWidget: Widget {
 
 struct OverviewWidget: Widget {
     var body: some WidgetConfiguration {
-        StaticConfiguration(kind: "com.kobo-ai.burrow.widgets.overview", provider: CountsProvider()) { entry in
+        AppIntentConfiguration(kind: WidgetKinds.overview, intent: WidgetScopeIntent.self, provider: CountsProvider()) { entry in
             OverviewView(entry: entry)
         }
         .configurationDisplayName("My approvals and tasks")
@@ -50,7 +52,7 @@ struct SingleCountView: View {
                 .widgetURL(entry.link(kind))
                 .containerBackground(.clear, for: .widget)
         default:
-            SlabView(kind: kind, entry: entry)
+            SlabView(kind: kind, entry: entry, compact: true)
                 .padding(8)
                 .widgetURL(entry.link(kind))
                 .containerBackground(BurrowColor.surface.color, for: .widget)
@@ -90,6 +92,8 @@ struct OverviewView: View {
 struct SlabView: View {
     let kind: SlabKind
     let entry: CountsEntry
+    /// The small size: "2 installs" in place of the per-install breakdown.
+    var compact = false
 
     var body: some View {
         let state = entry.state(kind)
@@ -114,6 +118,9 @@ struct SlabView: View {
                     .font(.system(size: 12, weight: .semibold))
                     .lineLimit(2)
                     .minimumScaleFactor(0.8)
+                if state != .signedOut {
+                    InstallDetailLine(entry: entry, kind: kind, compact: compact)
+                }
             }
             .foregroundColor(state.usesLiveFill ? BurrowColor.onInfo.color : BurrowColor.onSurface.color)
             .padding(.horizontal, 12)
@@ -125,6 +132,42 @@ struct SlabView: View {
             )
         }
         .accessibilityElement(children: .combine)
+        .accessibilityValue(entry.spokenBreakdown(kind) ?? "")
+    }
+}
+
+/// The All installs line under a count (canvas 01a21e80 "All installs"): a
+/// failure line when an install failed or is signed out, else the pinned
+/// marker, else the breakdown ("Kobo 5 · Home 2"), or "2 installs" when it
+/// is compact or the breakdown does not fit. Every variant is dropped WHOLE,
+/// never truncated. Secondary type, never error red.
+struct InstallDetailLine: View {
+    let entry: CountsEntry
+    let kind: SlabKind
+    var compact = false
+
+    var body: some View {
+        ViewThatFits(in: .horizontal) {
+            ForEach(Array(candidates.enumerated()), id: \.offset) { _, line in
+                line.lineLimit(1).fixedSize(horizontal: true, vertical: false)
+            }
+            Color.clear.frame(width: 0, height: 0)
+        }
+        .font(.system(size: 12))
+        .opacity(0.8)
+    }
+
+    private var candidates: [Text] {
+        let failures = entry.failures
+        if !failures.isEmpty {
+            let glyph = failures.first?.unreachable == true ? Text(Image(systemName: "icloud.slash")) + Text(" ") : Text("")
+            return InstallFailure.line(failures).map { glyph + Text($0) }
+        }
+        if let pinned = entry.pinnedLabel { return [Text(pinned)] }
+        var lines: [Text] = []
+        if !compact, let breakdown = entry.breakdown(kind) { lines.append(Text(breakdown)) }
+        if let count = entry.installCountLine { lines.append(Text(count)) }
+        return lines
     }
 }
 

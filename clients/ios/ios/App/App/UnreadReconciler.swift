@@ -84,8 +84,8 @@ enum UnreadReconciler {
 
 /// What every app open refreshes (task 01a1261e, review round 2): each
 /// signed-in install's `GET /api/app/counts`, ONCE. The one answer feeds both
-/// consumers: the per-install unread (`UnreadReconciler`) and, for the
-/// selected install, the widgets' `CountsCache` (what
+/// consumers: the per-install unread (`UnreadReconciler`) and, for every
+/// install (task 01a21e75 stage 3), the widgets' `CountsCache` (what
 /// `WidgetCountsRefresher` would have written), then every widget timeline
 /// reloads. Before this, `sceneDidBecomeActive` ran both and the selected
 /// install got two counts requests per open. Android's `ResumeRefresh`.
@@ -108,7 +108,9 @@ enum OpenRefresh {
             hosts: hosts, store: store,
             fetch: { client.counts(host: $0, completion: $1) },
             answered: { host, counts in
-                if host == selectedHost { cache.write(counts, for: host) }
+                // Every install's widgets come from the same answer (task
+                // 01a21e75 stage 3: the widgets show All installs).
+                cache.write(counts, for: host)
             },
             completion: { total in
                 reloadWidgets()

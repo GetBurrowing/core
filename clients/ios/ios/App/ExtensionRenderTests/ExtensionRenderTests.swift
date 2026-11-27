@@ -407,6 +407,123 @@ final class ExtensionRenderTests: XCTestCase {
             size: CGSize(width: 194, height: 194))
     }
 
+    // MARK: All installs (task 01a21e75 stage 3)
+
+    private let fixtureInstalls = [
+        Install(host: "app.example.test", name: "Alpha"), Install(host: "lab.example.test", name: "Lab"),
+        Install(host: "home.example.test", name: nil),
+    ]
+
+    private func counts(_ approvals: Int, _ tasks: Int, minutesOld: Double = 2) -> BurrowCounts {
+        BurrowCounts(approvals: approvals, tasks: tasks, fetchedAt: now.addingTimeInterval(-minutesOld * 60))
+    }
+
+    /// The counts entry for each All installs state, from the same merge the
+    /// provider runs.
+    private func allInstallsStates() -> [(String, CountsEntry)] {
+        let one = [fixtureInstalls[0]]
+        let two = Array(fixtureInstalls.prefix(2))
+        func merged(_ saved: [Install], _ results: [InstallResult<BurrowCounts>], scope: WidgetScope = .all) -> CountsEntry {
+            let covered = scope.installs(from: saved)
+            return CountsEntry.merged(
+                date: now, results: zip(covered, results).map { (install: $0.0, result: $0.1) }, saved: saved, scope: scope)
+        }
+        return [
+            ("empty", merged(one, [.ok(counts(0, 0))])),
+            ("some", merged(one, [.ok(counts(3, 4))])),
+            ("many", merged(one, [.ok(counts(48, 112))])),
+            ("signed-out", merged(one, [.signedOut])),
+            ("several", merged(two, [.ok(counts(5, 7)), .ok(counts(2, 1))])),
+            ("one-failing", merged(two, [.ok(counts(5, 7)), .unreachable(lastKnown: counts(2, 1, minutesOld: 120), fetchedAt: nil)])),
+            ("one-failing-no-count", merged(two, [.ok(counts(5, 7)), .unreachable(lastKnown: nil, fetchedAt: nil)])),
+            ("one-signed-out", merged(two, [.ok(counts(5, 7)), .signedOut])),
+            ("two-failing", merged(fixtureInstalls, [.ok(counts(5, 7)), .unreachable(lastKnown: counts(1, 1, minutesOld: 90), fetchedAt: nil), .signedOut])),
+            ("all-failing", merged(two, [.unreachable(lastKnown: counts(5, 7, minutesOld: 120), fetchedAt: nil), .unreachable(lastKnown: counts(2, 1, minutesOld: 120), fetchedAt: nil)])),
+            ("pinned", merged(two, [.ok(counts(2, 1))], scope: .pinned("lab.example.test"))),
+            ("three-nameless", merged(fixtureInstalls, [.ok(counts(5, 7)), .ok(counts(2, 1)), .ok(counts(1, 0))])),
+        ]
+    }
+
+    func testCountsWidgetsAcrossInstalls() throws {
+        for (state, e) in allInstallsStates() {
+            for dark in [false, true] {
+                let suffix = dark ? "-dark" : ""
+                try save(
+                    "all-tasks-small-\(state)\(suffix)",
+                    widgetFrame(SingleCountView(kind: .tasks, entry: e, family: .systemSmall).frame(width: 170, height: 170)),
+                    size: CGSize(width: 194, height: 194), dark: dark)
+                try save(
+                    "all-overview-medium-\(state)\(suffix)",
+                    widgetFrame(OverviewView(entry: e, family: .systemMedium).frame(width: 364, height: 170)),
+                    size: CGSize(width: 388, height: 194), dark: dark)
+            }
+            func lock<V: View>(_ view: V) -> some View {
+                view.foregroundStyle(.white).padding(12).background(Color.black.opacity(0.75))
+            }
+            try save(
+                "all-tasks-circular-\(state)", lock(SingleCountView(kind: .tasks, entry: e, family: .accessoryCircular).frame(width: 72, height: 72)),
+                size: CGSize(width: 96, height: 96), dark: true)
+            try save(
+                "all-overview-rectangular-\(state)", lock(OverviewView(entry: e, family: .accessoryRectangular).frame(width: 172, height: 76)),
+                size: CGSize(width: 196, height: 100), dark: true)
+        }
+    }
+
+    func testApprovalsWidgetAcrossInstalls() throws {
+        let two = Array(fixtureInstalls.prefix(2))
+        func approval(_ index: Int, _ host: String) -> BurrowApproval {
+            BurrowApproval(
+                id: "\(host.prefix(3))\(index)", kind: "plan", title: ["Release notes plan", "Calendar landscape fix", "Widget feed"][index % 3],
+                spaceName: ["Release", "Calendar", "Mobile"][index % 3], spacePathSegment: nil, taskID: nil, insertedAt: nil, summary: nil)
+        }
+        func source(_ install: Install, _ n: Int, signedIn: Bool = true, unreachable: Bool = false, minutesOld: Double = 2) -> ApprovalsSource {
+            ApprovalsSource(
+                host: install.host, label: InstallLabel.name(for: install.host, installs: fixtureInstalls), signedIn: signedIn,
+                unreachable: unreachable,
+                cached: signedIn ? CachedApprovals(approvals: (0..<n).map { approval($0, install.host) }, fetchedAt: now.addingTimeInterval(-minutesOld * 60)) : nil)
+        }
+        func entry(_ sources: [ApprovalsSource], installName: String? = nil) -> ApprovalsEntry {
+            ApprovalsTimeline.merged(at: now, sources: sources, installName: installName, arm: nil, marks: [:])
+        }
+        let states: [(String, ApprovalsEntry)] = [
+            ("empty", entry([source(two[0], 0)])),
+            ("some", entry([source(two[0], 2)])),
+            ("many", entry([source(two[0], 6)])),
+            ("signed-out", entry([source(two[0], 0, signedIn: false)])),
+            ("several", entry([source(two[0], 2), source(two[1], 3)])),
+            ("one-failing", entry([source(two[0], 2), source(two[1], 1, unreachable: true, minutesOld: 120)])),
+            ("one-signed-out", entry([source(two[0], 2), source(two[1], 0, signedIn: false)])),
+            ("pinned", entry([source(two[1], 2)], installName: "Lab only")),
+        ]
+        for (state, e) in states {
+            for dark in [false, true] {
+                let suffix = dark ? "-dark" : ""
+                try save(
+                    "all-approvals-medium-\(state)\(suffix)",
+                    widgetFrame(ApprovalsWidgetView(entry: e, family: .systemMedium).frame(width: 364, height: 170)),
+                    size: CGSize(width: 388, height: 194), dark: dark)
+                try save(
+                    "all-approvals-small-\(state)\(suffix)",
+                    widgetFrame(ApprovalsWidgetView(entry: e, family: .systemSmall).frame(width: 170, height: 170)),
+                    size: CGSize(width: 194, height: 194), dark: dark)
+            }
+            try save(
+                "all-approvals-large-\(state)",
+                widgetFrame(ApprovalsWidgetView(entry: e, family: .systemLarge).frame(width: 364, height: 382)),
+                size: CGSize(width: 388, height: 406))
+        }
+    }
+
+    func testControlsAcrossInstalls() throws {
+        for (name, copy) in [
+            ("waiting-two-installs", ControlCopy.waiting(signedIn: true, approvals: 7, install: InstallLabel.count(2))),
+            ("meeting-several", ControlCopy.startMeeting(lastSpace: "Release", install: "Alpha")),
+        ] {
+            try save(
+                "all-control-\(name)", controlTile(copy).padding(12).background(Color(white: 0.3)), size: CGSize(width: 244, height: 100), dark: true)
+        }
+    }
+
     /// Stand-in for the system's control tile: iOS draws the tile and its
     /// tint; Burrow supplies the symbol, label and value line.
     private func controlTile(_ copy: ControlCopy) -> some View {

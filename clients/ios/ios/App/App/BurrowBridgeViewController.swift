@@ -810,7 +810,7 @@ final class BurrowBridgeViewController: CAPBridgeViewController {
         let switched = store.selectedHost != install.host
         store.select(install.host)
         store.confirmSelection()
-        if switched { WidgetCountsRefresher.refresh(host: install.host) }
+        if switched { WidgetCountsRefresher.refresh() }
         launch(install, at: url)
     }
 
@@ -843,7 +843,7 @@ final class BurrowBridgeViewController: CAPBridgeViewController {
         NativeSignOut().run(host: install.host) { [weak self] in
             DispatchQueue.main.async {
                 guard let self, self.signingOutHost == install.host else { return }
-                WidgetCountsRefresher.refresh(host: install.host)
+                WidgetCountsRefresher.refresh()
                 self.loadTraced(URLRequest(url: install.baseURL.appendingPathComponent("auth/logout")), reason: "sign-out")
             }
         }
