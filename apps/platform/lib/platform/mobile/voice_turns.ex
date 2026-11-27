@@ -207,15 +207,31 @@ defmodule Platform.Mobile.VoiceTurns do
     |> Repo.one()
   end
 
-  defp reopen(user, %Message{space_id: space_id} = turn) do
-    agent =
-      from(a in Agent,
-        join: p in Participant,
-        on: p.participant_id == a.id and p.participant_type == "agent",
-        where: p.space_id == ^space_id,
-        limit: 1
+  # Only the caller's own DM is re-opened: the turn's space must be a DM the
+  # caller already participates in, checked BEFORE `OnDeviceVoice.open/2`,
+  # whose `find_or_create_dm` would otherwise create a DM for a caller who is
+  # not in it. A refused turn creates nothing.
+  defp reopen(%{id: user_id} = user, %Message{space_id: space_id} = turn) do
+    member? =
+      Repo.exists?(
+        from(p in Participant,
+          join: s in Space,
+          on: s.id == p.space_id,
+          where: p.space_id == ^space_id and s.kind == "dm",
+          where: p.participant_type == "user" and p.participant_id == ^user_id
+        )
       )
-      |> Repo.one()
+
+    agent =
+      if member?,
+        do:
+          from(a in Agent,
+            join: p in Participant,
+            on: p.participant_id == a.id and p.participant_type == "agent",
+            where: p.space_id == ^space_id,
+            limit: 1
+          )
+          |> Repo.one()
 
     with %Agent{} <- agent,
          {:ok, conn} <- OnDeviceVoice.open(user, agent),
