@@ -78,11 +78,11 @@ defmodule Platform.Mobile.VoiceTurnsTest do
     |> Enum.filter(&(Map.get(&1, :surface) == "voice"))
   end
 
-  defp eventually(fun, tries \\ 40) do
+  defp settles?(fun, tries \\ 40) do
     cond do
       fun.() -> true
       tries == 0 -> false
-      true -> Process.sleep(25) && eventually(fun, tries - 1)
+      true -> Process.sleep(25) && settles?(fun, tries - 1)
     end
   end
 
@@ -311,7 +311,7 @@ defmodule Platform.Mobile.VoiceTurnsTest do
       assert {:ok, %{state: "thinking"}} = VoiceTurns.await_reply(user, id, 0, 400)
       assert_receive {:during, [meta]}, 1_000
       assert Map.take(meta, [:participant_type, :surface]) == VoiceTurns.voice_meta()
-      assert eventually(fn -> voice_metas(conn.space_id, user.id) == [] end)
+      assert settles?(fn -> voice_metas(conn.space_id, user.id) == [] end)
     end
 
     test "the entry also goes when the request process dies mid-wait", %{
@@ -327,9 +327,9 @@ defmodule Platform.Mobile.VoiceTurnsTest do
           VoiceTurns.await_reply(user, id, 0, 5_000)
         end)
 
-      assert eventually(fn -> voice_metas(conn.space_id, user.id) != [] end)
+      assert settles?(fn -> voice_metas(conn.space_id, user.id) != [] end)
       Process.exit(waiter, :kill)
-      assert eventually(fn -> voice_metas(conn.space_id, user.id) == [] end)
+      assert settles?(fn -> voice_metas(conn.space_id, user.id) == [] end)
     end
 
     test "another user's client_turn_id is not_found", %{id: id} do
