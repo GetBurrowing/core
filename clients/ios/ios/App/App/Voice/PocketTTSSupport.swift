@@ -31,7 +31,7 @@ struct PocketTTSVoice: Equatable {
     /// The clip's path in kyutai/tts-voices.
     let source: String
     let licence: Licence
-    /// Median RMS of three sentences at unity gain, measured on rock with the
+    /// Median RMS of three sentences at unity gain, measured on the Mac build host with the
     /// vendored host (fp16, seed 0) for the voices the vendored `VoiceGain`
     /// table does not cover; nil where it does. `PocketLoudness` levels them
     /// to the same 0.10 target.

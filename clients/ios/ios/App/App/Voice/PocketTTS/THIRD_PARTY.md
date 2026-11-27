@@ -77,7 +77,7 @@ is one embedding, `languages/english/embeddings/<name>.safetensors` at
 `e041936c`, fetched only when it is picked (3.7 to 8.3 MB; 124.4 MB for all
 nineteen). Each is pinned in `PocketTTSManifest.voices` by size and SHA-256, the
 HF tree API's `lfs.oid`; all twenty were re-downloaded from the pinned `resolve`
-URL and re-hashed on rock, and all matched.
+URL and re-hashed on the Mac build host, and all matched.
 
 ### How each voice's source is proven
 
@@ -149,7 +149,7 @@ English-model embedding like the rest and is listed as one.
 ### Loudness
 
 The vendored `VoiceGain` levels eight voices it measured. The fourteen listed
-voices it does not cover were measured on rock (vendored host, fp16, seed 0,
+voices it does not cover were measured on the Mac build host (vendored host, fp16, seed 0,
 median RMS of three sentences at unity gain) and are levelled by
 `PocketLoudness` to the same 0.10 target, peak at most 0.99; the figures are
 `measuredRMS` in the manifest (stuart_bell 0.021 to anna 0.116).

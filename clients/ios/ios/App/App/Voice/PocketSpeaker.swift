@@ -350,7 +350,7 @@ final class PocketSpeaker: VoiceSpeaking {
     /// state every time, so EVERY sentence begins with the same start-up
     /// transient: a burst peaking at 0.09 to 0.17 in its first 5 to 20 ms,
     /// decayed to about 0.0002 by 80 to 130 ms, whatever the text (measured
-    /// on rock with the vendored host, marius, fp16: the first samples were
+    /// on the Mac build host with the vendored host, marius, fp16: the first samples were
     /// identical across three different sentences). Played at the start of
     /// each sentence it is heard as a click. The first decoder frame is
     /// dropped (speech began no earlier than about 145 ms in the samples
