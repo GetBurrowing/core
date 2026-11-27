@@ -1350,6 +1350,12 @@ defmodule PlatformWeb.Router do
     get("/upload_config", AppApiController, :upload_config)
     get("/counts", AppApiController, :counts)
     get("/widgets", AppApiController, :widgets)
+    # Native Voice turns (task 01a21e75 stage 2). `log: false` on the turn
+    # routes: Phoenix's request log prints parameters, and the POST body
+    # carries the spoken words.
+    get("/voice/partner", AppVoiceController, :partner)
+    post("/voice/turns", AppVoiceController, :create_turn, log: false)
+    get("/voice/turns/:client_turn_id", AppVoiceController, :reply, log: false)
     # Today's briefing counts for the Android widget (task 01a161f9).
     get("/briefing", AppApiController, :briefing)
 
