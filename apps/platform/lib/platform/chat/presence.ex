@@ -101,6 +101,39 @@ defmodule Platform.Chat.Presence do
     list(ChatPubSub.space_topic(space_id))
   end
 
+  @doc """
+  Return the keys of a `list_space/1` presence map that are listening on the
+  Voice page (task 01a21e8d).
+
+  A key is a voice listener when any of its metas carries `surface: "voice"`
+  and does not carry `visible: false`. Both atom and string meta keys are
+  read. The Voice LiveView (`PlatformWeb.VoiceLive.Listening`, stage 2) is the
+  single writer of that entry and tracks it as:
+
+      %{participant_type: "user", surface: "voice"}
+
+  under the user's id, the same key ChatLive uses. A plain ChatLive entry has
+  no `surface` and is NOT a voice listener.
+
+  Pure over the map, so `AttentionRouter` reads presence once per message and
+  derives both the online set and this set from the one read.
+  """
+  @spec voice_listener_ids(map()) :: MapSet.t(binary())
+  def voice_listener_ids(presences) when is_map(presences) do
+    for {key, %{metas: metas}} when is_list(metas) <- presences,
+        Enum.any?(metas, &voice_meta?/1),
+        into: MapSet.new(),
+        do: key
+  end
+
+  defp voice_meta?(meta) when is_map(meta) do
+    meta_value(meta, :surface) == "voice" and meta_value(meta, :visible) != false
+  end
+
+  defp voice_meta?(_meta), do: false
+
+  defp meta_value(meta, key), do: Map.get(meta, key, Map.get(meta, Atom.to_string(key)))
+
   @doc "Return the number of unique participants currently online in a space."
   @spec online_count(binary()) :: non_neg_integer()
   def online_count(space_id) do
