@@ -146,16 +146,23 @@ enum WidgetFeedLoader {
 
     static func load(
         installs: [Install], client: BurrowAPIClient, cache: WidgetFeedCache, reuseAfter: TimeInterval = WidgetFeedLoader.reuseAfter,
-        now: @escaping @Sendable () -> Date = Date.init
+        diagnosis: WidgetDiagnosisStore = WidgetDiagnosisStore(), now: @escaping @Sendable () -> Date = Date.init
     ) async -> [(install: Install, result: InstallResult<CachedWidgetFeed>)] {
         await InstallFanout.fetch(
             installs: installs, client: client,
             lastKnown: { host in cache.feed(for: host).map { ($0, $0.fetchedAt) } },
             fetch: { host in
                 if let cached = cache.feed(for: host), now().timeIntervalSince(cached.fetchedAt) < reuseAfter { return cached }
-                let fresh = CachedWidgetFeed(feed: try await client.widgetFeed(host: host), fetchedAt: now())
-                cache.write(fresh, for: host)
-                return fresh
+                do {
+                    let fresh = CachedWidgetFeed(feed: try await client.widgetFeed(host: host), fetchedAt: now())
+                    cache.write(fresh, for: host)
+                    diagnosis.record(nil, for: host)
+                    return fresh
+                } catch {
+                    // Which step failed, for the widget's "Not loaded yet" line.
+                    diagnosis.record(WidgetDiagnosis.code(for: error), for: host)
+                    throw error
+                }
             })
     }
 }
@@ -185,6 +192,9 @@ struct FeedEntry: TimelineEntry {
     let installs: [FeedInstall]
     /// "<install> only" for a widget pinned to one of several installs.
     var pinnedLabel: String? = nil
+    /// Which step failed when there is nothing to show
+    /// (`WidgetDiagnosis`): "HTTP 404", "no token", "no install"…
+    var diagnosis: String? = nil
 
     struct Waiting: Equatable, Identifiable {
         let host: String
@@ -367,7 +377,13 @@ struct FeedEntry: TimelineEntry {
         return FeedEntry(date: date, installs: parts, pinnedLabel: pinned)
     }
 
-    func at(_ date: Date) -> FeedEntry { FeedEntry(date: date, installs: installs, pinnedLabel: pinnedLabel) }
+    func at(_ date: Date) -> FeedEntry { FeedEntry(date: date, installs: installs, pinnedLabel: pinnedLabel, diagnosis: diagnosis) }
+
+    /// "Not loaded yet · HTTP 404": the placeholder with the failed step.
+    var notLoadedLine: String { diagnosis.map { "Not loaded yet · \($0)" } ?? "Not loaded yet" }
+
+    /// "Sign in to Burrow · no token".
+    var signInLine: String { diagnosis.map { "Sign in to Burrow · \($0)" } ?? "Sign in to Burrow" }
 
     /// The entry now, plus one just past the stale boundary of its newest
     /// data, so a widget whose refresh never comes switches to "Updated …".

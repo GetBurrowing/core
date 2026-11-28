@@ -51,9 +51,9 @@ struct BlockedMedium: View {
                 title: BlockedWidgetView.title, entry: entry, section: .blocked,
                 count: entry.signedIn && !entry.notLoaded && count > 0 ? count : nil)
             if !entry.signedIn {
-                FeedPlaceholder(text: FeedCopy.signIn)
+                FeedPlaceholder(text: entry.signInLine)
             } else if entry.notLoaded {
-                FeedPlaceholder(text: FeedCopy.notLoaded)
+                FeedPlaceholder(text: entry.notLoadedLine)
             } else if count == 0 {
                 FeedPlaceholder(text: BlockedWidgetView.empty)
             } else {

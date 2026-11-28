@@ -31,9 +31,9 @@ struct RecentWidgetView: View {
 
     @ViewBuilder private var content: some View {
         if !entry.signedIn {
-            FeedPlaceholder(text: FeedCopy.signIn)
+            FeedPlaceholder(text: entry.signInLine)
         } else if entry.notLoaded {
-            FeedPlaceholder(text: FeedCopy.notLoaded)
+            FeedPlaceholder(text: entry.notLoadedLine)
         } else if entry.recentRows.isEmpty {
             FeedPlaceholder(text: Self.empty)
         } else {

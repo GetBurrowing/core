@@ -24,9 +24,12 @@ struct FeedProvider: AppIntentTimelineProvider {
     func timeline(for configuration: WidgetScopeIntent, in context: Context) async -> Timeline<FeedEntry> {
         let scope = configuration.widgetScope
         let saved = installs.installs
-        let results = await WidgetFeedLoader.load(installs: scope.installs(from: saved), client: client, cache: cache)
+        let covered = scope.installs(from: saved)
+        let results = await WidgetFeedLoader.load(installs: covered, client: client, cache: cache)
         let now = Date()
-        return FeedEntry.timeline(from: FeedEntry.merged(date: now, results: results, saved: saved, scope: scope), now: now)
+        var entry = FeedEntry.merged(date: now, results: results, saved: saved, scope: scope)
+        entry.diagnosis = Self.diagnosis(saved: saved, covered: covered, client: client)
+        return FeedEntry.timeline(from: entry, now: now)
     }
 
     /// From the cache alone, with no request.
@@ -37,6 +40,13 @@ struct FeedProvider: AppIntentTimelineProvider {
             guard let cached = cache.feed(for: install.host) else { return (install, .unreachable(lastKnown: nil, fetchedAt: nil)) }
             return (install, .ok(cached))
         }
-        return FeedEntry.merged(date: now, results: results, saved: saved, scope: scope)
+        var entry = FeedEntry.merged(date: now, results: results, saved: saved, scope: scope)
+        entry.diagnosis = Self.diagnosis(saved: saved, covered: scope.installs(from: saved), client: client)
+        return entry
+    }
+
+    static func diagnosis(saved: [Install], covered: [Install], client: BurrowAPIClient) -> String? {
+        WidgetDiagnosis.summary(
+            saved: saved, installs: covered, signedIn: { client.isSignedIn(host: $0) }, failures: WidgetDiagnosisStore().failures)
     }
 }

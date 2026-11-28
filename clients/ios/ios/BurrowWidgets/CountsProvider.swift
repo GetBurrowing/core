@@ -30,14 +30,27 @@ struct CountsProvider: AppIntentTimelineProvider {
         let saved = installs.installs
         let client = client
         let cache = cache
+        let diagnosis = WidgetDiagnosisStore()
+        let covered = scope.installs(from: saved)
         let results = await InstallFanout.fetch(
-            installs: scope.installs(from: saved), client: client,
+            installs: covered, client: client,
             lastKnown: { host in cache.counts(for: host).map { ($0, $0.fetchedAt) } },
-            fetch: { host in try await client.fetchCounts(host: host) })
+            fetch: { host in
+                do {
+                    let counts = try await client.fetchCounts(host: host)
+                    diagnosis.record(nil, for: Self.key(host))
+                    return counts
+                } catch {
+                    diagnosis.record(WidgetDiagnosis.code(for: error), for: Self.key(host))
+                    throw error
+                }
+            })
         for case (let install, .ok(let counts)) in results {
             cache.write(counts, for: install.host)
         }
-        return CountsEntry.merged(date: Date(), results: results, saved: saved, scope: scope)
+        var entry = CountsEntry.merged(date: Date(), results: results, saved: saved, scope: scope)
+        entry.diagnosis = Self.diagnosis(saved: saved, covered: covered, client: client)
+        return entry
     }
 
     /// The entry from the cache alone, with no request (snapshots).
@@ -48,6 +61,17 @@ struct CountsProvider: AppIntentTimelineProvider {
             guard let counts = cache.counts(for: install.host) else { return (install, .unreachable(lastKnown: nil, fetchedAt: nil)) }
             return (install, .ok(counts))
         }
-        return CountsEntry.merged(date: now, results: results, saved: saved, scope: scope)
+        var entry = CountsEntry.merged(date: now, results: results, saved: saved, scope: scope)
+        entry.diagnosis = Self.diagnosis(saved: saved, covered: scope.installs(from: saved), client: client)
+        return entry
+    }
+
+    /// The counts fetch's failures live beside the feed's, under their own key.
+    static func key(_ host: String) -> String { "counts|\(host)" }
+
+    static func diagnosis(saved: [Install], covered: [Install], client: BurrowAPIClient) -> String? {
+        let failures = WidgetDiagnosisStore().failures
+        let mine = Dictionary(uniqueKeysWithValues: covered.compactMap { install in failures[key(install.host)].map { (install.host, $0) } })
+        return WidgetDiagnosis.summary(saved: saved, installs: covered, signedIn: { client.isSignedIn(host: $0) }, failures: mine)
     }
 }

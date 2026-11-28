@@ -32,6 +32,8 @@ struct CountsEntry: TimelineEntry {
     var installs: [InstallCounts] = []
     /// "<install> only" for a widget pinned to one of several installs.
     var pinnedLabel: String? = nil
+    /// Which step failed when there is nothing to show (`WidgetDiagnosis`).
+    var diagnosis: String? = nil
 
     func state(_ kind: SlabKind) -> SlabState {
         guard signedIn else { return .signedOut }
@@ -43,7 +45,10 @@ struct CountsEntry: TimelineEntry {
     func count(_ kind: SlabKind) -> Int? { counts?.count(kind) }
 
     func caption(_ kind: SlabKind) -> String {
-        kind.caption(for: state(kind), fetchedAt: counts?.fetchedAt)
+        let base = kind.caption(for: state(kind), fetchedAt: counts?.fetchedAt)
+        // "Not loaded yet · HTTP 500" / "Sign in to see tasks · no token".
+        guard let diagnosis, counts == nil || !signedIn else { return base }
+        return "\(base) · \(diagnosis)"
     }
 
     /// The deep link the slab opens; with no install selected, just the app.
@@ -151,7 +156,7 @@ struct CountsEntry: TimelineEntry {
     }
 
     func at(_ date: Date) -> CountsEntry {
-        CountsEntry(date: date, host: host, signedIn: signedIn, counts: counts, installs: installs, pinnedLabel: pinnedLabel)
+        CountsEntry(date: date, host: host, signedIn: signedIn, counts: counts, installs: installs, pinnedLabel: pinnedLabel, diagnosis: diagnosis)
     }
 
     static let preview = CountsEntry(

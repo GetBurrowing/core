@@ -171,9 +171,9 @@ struct FeedSmallCount: View {
             Text(title).font(FeedType.header).foregroundStyle(BurrowColor.onSurface.color).lineLimit(2)
             Spacer(minLength: 4)
             if !entry.signedIn {
-                Secondary(text: FeedCopy.signIn, font: FeedType.summary).lineLimit(2)
+                Secondary(text: entry.signInLine, font: FeedType.summary).lineLimit(2)
             } else if entry.notLoaded {
-                Secondary(text: FeedCopy.notLoaded, font: FeedType.summary).lineLimit(2)
+                Secondary(text: entry.notLoadedLine, font: FeedType.summary).lineLimit(2)
             } else if count == 0 {
                 Secondary(text: empty, font: FeedType.summary).lineLimit(3)
             } else {

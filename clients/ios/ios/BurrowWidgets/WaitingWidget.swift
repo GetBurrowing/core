@@ -52,9 +52,9 @@ struct WaitingMedium: View {
         VStack(alignment: .leading, spacing: 6) {
             FeedHeader(title: Self.title, entry: entry, section: .waiting, count: entry.signedIn && !entry.notLoaded && count > 0 ? count : nil)
             if !entry.signedIn {
-                FeedPlaceholder(text: FeedCopy.signIn)
+                FeedPlaceholder(text: entry.signInLine)
             } else if entry.notLoaded {
-                FeedPlaceholder(text: FeedCopy.notLoaded)
+                FeedPlaceholder(text: entry.notLoadedLine)
             } else if count == 0 {
                 FeedPlaceholder(text: Self.empty)
             } else {
@@ -157,11 +157,11 @@ struct WaitingRectangular: View {
         VStack(alignment: .leading, spacing: 0) {
             if !entry.signedIn {
                 Text(WaitingMedium.title).font(.headline)
-                Text(FeedCopy.signIn)
+                Text(entry.signInLine)
             } else {
                 titleLine
                 if entry.count(.waiting) == 0 {
-                    Text(entry.notLoaded ? FeedCopy.notLoaded : WaitingMedium.empty).lineLimit(1)
+                    Text(entry.notLoaded ? entry.notLoadedLine : WaitingMedium.empty).lineLimit(1)
                 } else if let row = entry.waitingRows.first {
                     // The install label is dropped whole before the name truncates.
                     ViewThatFits(in: .horizontal) {
