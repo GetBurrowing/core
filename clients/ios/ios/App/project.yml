@@ -239,6 +239,13 @@ targets:
       - path: ../BurrowWidgets/ApprovalsWidget.swift
       - path: ../BurrowWidgets/ApprovalsProvider.swift
       - path: ../BurrowWidgets/Controls.swift
+      # The feed widgets (task 01a21e75 stage 4).
+      - path: ../BurrowWidgets/FeedProvider.swift
+      - path: ../BurrowWidgets/FeedWidgetParts.swift
+      - path: ../BurrowWidgets/WaitingWidget.swift
+      - path: ../BurrowWidgets/BlockedWidget.swift
+      - path: ../BurrowWidgets/RecentWidget.swift
+      - path: ../BurrowWidgets/ShippedWidget.swift
       - path: App/InstallPickerView.swift
       # The "Switched to" banner (task 01a1261e stage 4 evidence).
       - path: App/SwitchBanner.swift

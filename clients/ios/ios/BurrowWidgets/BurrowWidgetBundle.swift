@@ -7,6 +7,13 @@ import WidgetKit
 @main
 struct BurrowWidgetBundle: WidgetBundle {
     var body: some Widget {
+        // Gallery order (task 01a21e75 stage 4): the feed widgets first,
+        // Waiting on you leading (stage 5 inserts Voice second), then the
+        // existing widgets in their v1 order.
+        WaitingWidget()
+        BlockedWidget()
+        RecentWidget()
+        ShippedWidget()
         ApprovalsWidget()
         TasksWidget()
         OverviewWidget()

@@ -16,10 +16,14 @@ enum WidgetCountsRefresher {
         reload: @escaping () -> Void = { WidgetCenter.shared.reloadAllTimelines() }, completion: @escaping () -> Void = {}
     ) {
         Task {
+            // The feed widgets' data too (task 01a21e75 stage 4), fresh after
+            // a sign-in, sign-out or switch, before the one reload.
+            async let feeds = WidgetFeedLoader.load(installs: installs, client: client, cache: WidgetFeedCache(), reuseAfter: 0)
             let results = await InstallFanout.fetch(installs: installs, client: client) { host in try await client.fetchCounts(host: host) }
             for case (let install, .ok(let counts)) in results {
                 cache.write(counts, for: install.host)
             }
+            _ = await feeds
             reload()
             completion()
         }

@@ -95,7 +95,15 @@ enum OpenRefresh {
         let hosts = InstallStore.shared.installs.map(\.host).filter { client.isSignedIn(host: $0) }
         run(
             hosts: hosts, selectedHost: InstallStore.shared.selectedHost, client: client, store: .shared,
-            cache: CountsCache(), reloadWidgets: { WidgetCenter.shared.reloadAllTimelines() },
+            cache: CountsCache(),
+            // The feed widgets' cache is refreshed before the reload (task
+            // 01a21e75 stage 4); a feed under 5 minutes old is reused.
+            reloadWidgets: {
+                Task {
+                    _ = await WidgetFeedLoader.load(installs: InstallStore.shared.installs, client: client, cache: WidgetFeedCache())
+                    WidgetCenter.shared.reloadAllTimelines()
+                }
+            },
             completion: { total in UNUserNotificationCenter.current().setBadgeCount(total) })
     }
 

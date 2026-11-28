@@ -12,6 +12,12 @@ enum WidgetKinds {
     /// `AppIntentConfiguration` under the same kinds).
     static let tasks = "com.kobo-ai.burrow.widgets.tasks"
     static let overview = "com.kobo-ai.burrow.widgets.overview"
+    /// The feed widgets (task 01a21e75 stage 4).
+    static let waiting = "com.kobo-ai.burrow.widgets.waiting"
+    static let blocked = "com.kobo-ai.burrow.widgets.blocked"
+    static let recent = "com.kobo-ai.burrow.widgets.recent"
+    static let shipped = "com.kobo-ai.burrow.widgets.shipped"
+    static let feed = [waiting, blocked, recent, shipped]
 }
 
 /// What an intent wrote about one row, keyed by its `<host>|<id>`.

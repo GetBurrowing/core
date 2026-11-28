@@ -529,6 +529,126 @@ final class ExtensionRenderTests: XCTestCase {
         }
     }
 
+    // MARK: Feed widgets (task 01a21e75 stage 4)
+
+    private func feed(waiting: Int, blocked: Int, recent: Int, shipped: Int, prefix: String = "a", unreadEvery: Int = 2) -> WidgetFeed {
+        let askers = ["Build agent", "Voice agent", "Test Person", "Release agent", "Calendar agent"]
+        let summaries = [
+            "Needs a yes on the release note", "Can you check the test inbox?",
+            "The migration plan is ready for your review before tonight's deploy window opens", "Approve the copy", "One question",
+        ]
+        let titles = ["Android Voice parity", "Calendar landscape tab bar", "Widget feed", "Push relay"]
+        let reasons = ["Waiting on a device test", "Needs a decision", nil, "Blocked by an upstream fix"]
+        let names: [(String, String, String?)] = [
+            ("Agents", "channel", nil), ("Test Person", "dm", "user"), ("Build agent", "dm", "agent"), ("Calendar mobile", "channel", nil),
+            ("Release", "group", nil),
+        ]
+        let formatter = ISO8601DateFormatter()
+        return WidgetFeed(
+            asOf: nil,
+            waiting: .init(
+                count: waiting,
+                rows: (0..<min(waiting, 5)).map { i in
+                    .init(
+                        itemID: "\(prefix)w\(i)", spacePathSegment: "seg\(prefix)\(i)", asker: askers[i % askers.count],
+                        summary: summaries[i % summaries.count],
+                        at: formatter.string(from: now.addingTimeInterval(TimeInterval(-60 * (4 + 18 * i)))))
+                }),
+            blocked: .init(
+                count: blocked,
+                rows: (0..<min(blocked, 3)).map { i in
+                    .init(
+                        id: "0b000000-0000-4000-8000-0000000000\(prefix == "a" ? "1" : "2")\(i)", title: titles[i % titles.count],
+                        reason: reasons[i % reasons.count])
+                }),
+            recent: .init(
+                rows: (0..<min(recent, 4)).map { i in
+                    let n = names[i % names.count]
+                    return .init(
+                        spaceID: "\(prefix)s\(i)", pathSegment: "\(prefix)p\(i)", kind: n.1, name: n.0, counterpart: n.2.map { .init(type: $0, id: "c\(i)") },
+                        unread: i % unreadEvery == 0)
+                }),
+            shipped: .init(count: shipped, newestTitle: shipped > 0 ? "Calendar mobile landscape fix for the tab bar" : nil))
+    }
+
+    private func feedStates() -> [(String, FeedEntry)] {
+        let one = [fixtureInstalls[0]]
+        let two = Array(fixtureInstalls.prefix(2))
+        func fresh(_ f: WidgetFeed, minutesOld: Double = 1) -> InstallResult<CachedWidgetFeed> {
+            .ok(CachedWidgetFeed(feed: f, fetchedAt: now.addingTimeInterval(-minutesOld * 60)))
+        }
+        func stale(_ f: WidgetFeed?, minutesOld: Double = 120) -> InstallResult<CachedWidgetFeed> {
+            .unreachable(lastKnown: f.map { CachedWidgetFeed(feed: $0, fetchedAt: now.addingTimeInterval(-minutesOld * 60)) }, fetchedAt: nil)
+        }
+        func merged(_ saved: [Install], _ results: [InstallResult<CachedWidgetFeed>], scope: WidgetScope = .all) -> FeedEntry {
+            FeedEntry.merged(date: now, results: zip(scope.installs(from: saved), results).map { (install: $0.0, result: $0.1) }, saved: saved, scope: scope)
+        }
+        let some = feed(waiting: 2, blocked: 2, recent: 3, shipped: 1)
+        let many = feed(waiting: 23, blocked: 9, recent: 4, shipped: 12)
+        let lab = feed(waiting: 2, blocked: 1, recent: 4, shipped: 3, prefix: "b", unreadEvery: 3)
+        return [
+            ("empty", merged(one, [fresh(feed(waiting: 0, blocked: 0, recent: 0, shipped: 0))])),
+            ("some", merged(one, [fresh(some)])),
+            ("many", merged(one, [fresh(many)])),
+            ("signed-out", merged(one, [.signedOut])),
+            ("not-loaded", merged(one, [stale(nil)])),
+            ("couldnt-refresh", merged(one, [stale(some)])),
+            ("several", merged(two, [fresh(some), fresh(lab)])),
+            ("one-failing", merged(two, [fresh(some), stale(lab)])),
+            ("one-failing-no-data", merged(two, [fresh(some), stale(nil)])),
+            ("one-signed-out", merged(two, [fresh(some), .signedOut])),
+            ("two-failing", merged(fixtureInstalls, [fresh(some), stale(lab), .signedOut])),
+            ("all-failing", merged(two, [stale(some), stale(lab)])),
+            ("pinned", merged(two, [fresh(lab)], scope: .pinned("lab.example.test"))),
+        ]
+    }
+
+    func testFeedWidgets() throws {
+        let small = CGSize(width: 170, height: 170)
+        let medium = CGSize(width: 364, height: 170)
+        func framed<V: View>(_ name: String, _ view: V, _ size: CGSize, dark: Bool = false, type: DynamicTypeSize = .large) throws {
+            try save(
+                name, widgetFrame(view.environment(\.dynamicTypeSize, type).frame(width: size.width, height: size.height)),
+                size: CGSize(width: size.width + 24, height: size.height + 24), dark: dark)
+        }
+        for (state, e) in feedStates() {
+            for dark in [false, true] {
+                let suffix = dark ? "-dark" : ""
+                try framed("feed-waiting-medium-\(state)\(suffix)", WaitingWidgetView(entry: e, family: .systemMedium), medium, dark: dark)
+                try framed("feed-blocked-small-\(state)\(suffix)", BlockedWidgetView(entry: e, family: .systemSmall), small, dark: dark)
+                try framed("feed-blocked-medium-\(state)\(suffix)", BlockedWidgetView(entry: e, family: .systemMedium), medium, dark: dark)
+                try framed("feed-recent-medium-\(state)\(suffix)", RecentWidgetView(entry: e), medium, dark: dark)
+                try framed("feed-shipped-small-\(state)\(suffix)", ShippedWidgetView(entry: e), small, dark: dark)
+            }
+            func lock<V: View>(_ view: V) -> some View {
+                view.foregroundStyle(.white).padding(12).background(Color.black.opacity(0.75))
+            }
+            try save(
+                "feed-waiting-circular-\(state)", lock(WaitingWidgetView(entry: e, family: .accessoryCircular).frame(width: 72, height: 72)),
+                size: CGSize(width: 96, height: 96), dark: true)
+            try save(
+                "feed-waiting-rectangular-\(state)", lock(WaitingWidgetView(entry: e, family: .accessoryRectangular).frame(width: 172, height: 76)),
+                size: CGSize(width: 196, height: 100), dark: true)
+            try save(
+                "feed-waiting-rectangular-locked-\(state)",
+                lock(WaitingWidgetView(entry: e, family: .accessoryRectangular).redacted(reason: .privacy).frame(width: 172, height: 76)),
+                size: CGSize(width: 196, height: 100), dark: true)
+        }
+        // Two rows that do not fit: the largest accessibility text size, and a
+        // shorter widget (a smaller phone).
+        let several = feedStates().first { $0.0 == "several" }!.1
+        for (name, type) in [("ax5", DynamicTypeSize.accessibility5), ("xxl", DynamicTypeSize.xxxLarge)] {
+            try framed("feed-waiting-medium-several-\(name)", WaitingWidgetView(entry: several, family: .systemMedium), medium, type: type)
+            try framed("feed-blocked-medium-several-\(name)", BlockedWidgetView(entry: several, family: .systemMedium), medium, type: type)
+            try framed("feed-recent-medium-several-\(name)", RecentWidgetView(entry: several), medium, type: type)
+            try framed("feed-blocked-small-several-\(name)", BlockedWidgetView(entry: several, family: .systemSmall), small, type: type)
+            try framed("feed-shipped-small-several-\(name)", ShippedWidgetView(entry: several), small, type: type)
+        }
+        let short = CGSize(width: 338, height: 148)
+        try framed("feed-waiting-medium-many-short", WaitingWidgetView(entry: feedStates()[2].1, family: .systemMedium), short)
+        try framed("feed-recent-medium-several-short", RecentWidgetView(entry: several), short)
+    }
+
     /// Stand-in for the system's control tile: iOS draws the tile and its
     /// tint; Burrow supplies the symbol, label and value line.
     private func controlTile(_ copy: ControlCopy) -> some View {
