@@ -446,13 +446,20 @@ defmodule PlatformWeb.SocialClipsLibrary do
   defp safe_post_url(_), do: nil
 
   defp renderer(%{submitted_by_agent: %{name: name}}) when is_binary(name),
-    do: "rendered by #{name}"
+    do: "originally submitted by #{name}"
 
   defp renderer(_), do: nil
 
-  defp decision(%{review_status: status, reviewed_by_user: %{name: name}, reviewed_at: at})
+  defp decision(%{review_status: status, reviewed_by_user: %{name: name}, reviewed_at: at} = clip)
        when status in ["approved", "rejected"] do
-    "#{if status == "approved", do: "Approved", else: "Rejected"} by #{name} · #{time(at)}"
+    action =
+      cond do
+        status == "approved" -> "Approved"
+        Social.ClipRevisions.awaiting?(clip, Social.ClipRevisions.latest(clip.id)) -> "Sent back"
+        true -> "Rejected"
+      end
+
+    "#{action} by #{name} · #{time(at)}"
   end
 
   defp decision(_), do: nil
@@ -585,6 +592,7 @@ defmodule PlatformWeb.SocialClipsLibrary do
       |> Enum.join(" · ")
 
   defp mark("Failed"), do: SocialCalendar.mark(:failed)
+  defp mark("Awaiting edit"), do: SocialCalendar.mark(:waiting)
   defp mark("Rejected"), do: SocialCalendar.mark(:refused)
   defp mark("Scheduled"), do: SocialCalendar.mark(:scheduled)
   defp mark("Published"), do: SocialCalendar.mark(:published)
@@ -815,6 +823,7 @@ defmodule PlatformWeb.SocialClipsLibrary do
         detail={@detail}
         myself={@myself}
         profile={@library_profile}
+        user_id={@user_id}
         retry_error={@retry_error}
         retry_notice={@retry_notice}
         retry_chooser={@retry_chooser}
@@ -889,7 +898,10 @@ defmodule PlatformWeb.SocialClipsLibrary do
                 {decision(@detail.clip)}
               </p>
               <blockquote
-                :if={@detail.clip.review_status == "rejected" and @detail.clip.review_note}
+                :if={
+                  @detail.clip.review_status == "rejected" and is_binary(@detail.clip.review_note) and
+                    not Social.ClipRevisions.editing_note?(@detail.clip)
+                }
                 data-role="library-rejection"
                 class="break-words text-sm"
               >
@@ -904,6 +916,15 @@ defmodule PlatformWeb.SocialClipsLibrary do
               </a>
             </div>
           </div>
+          <.live_component
+            :if={PlatformWeb.SocialClipRevision.visible?(@detail.clip)}
+            module={PlatformWeb.SocialClipRevision}
+            id={"library-revision-#{@detail.clip.id}"}
+            clip={@detail.clip}
+            profile={@profile}
+            scope={@profile.org_id}
+            user_id={@user_id}
+          />
           <section aria-label="Platforms" class="space-y-3">
             <h3 class="text-xs font-semibold uppercase tracking-wider text-subtle">Platforms</h3>
             <article

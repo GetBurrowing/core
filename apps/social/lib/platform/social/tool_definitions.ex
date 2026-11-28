@@ -15,9 +15,10 @@ defmodule Platform.Social.ToolDefinitions do
   and six tools a clip runner uses to work Clip Studio's
   job list (list, claim, source download, progress, complete, fail), and (Social authoring
   2/11) create and list ideas, the record one post per account hangs off.
-  Twenty-seven in all, including weekly-note submission and listing. No tool
+  These also include weekly-note submission and listing, assigned clip-edit
+  request reads and a same-clip returned-version append. No tool
   creates a job (humans enqueue through `Platform.Social.ClipJobs`) and no
-  tool writes a review field. Every description
+  tool records a human review decision. Every description
   carries `human_approves/0` verbatim. A human approves in Burrow and the
   platform publishes.
 
@@ -32,10 +33,65 @@ defmodule Platform.Social.ToolDefinitions do
 
   @names ~w(social_profile_list social_profile_get social_draft_create social_studio_draft_create
             social_draft_update
-            social_post_list social_results_get social_clip_propose social_clip_submit social_clip_render
-            social_clip_update_copy social_clip_list social_task_request social_clip_job_list social_clip_job_claim
+            social_post_list social_results_get social_clip_propose social_clip_submit
+            social_clip_edit_request_list social_clip_edit_request_get social_clip_version_append
+            social_clip_render social_clip_update_copy social_clip_list social_task_request social_clip_job_list social_clip_job_claim
             social_clip_job_source social_clip_job_progress social_clip_job_complete social_clip_job_fail
             social_idea_create social_idea_list social_idea_vote social_idea_unvote social_idea_archive social_idea_note_add social_weekly_note_submit social_weekly_note_list)
+
+  @revision_interval %{
+    type: "object",
+    additionalProperties: false,
+    required: ["start_s", "end_s"],
+    properties: %{start_s: %{type: "number", minimum: 0}, end_s: %{type: "number", minimum: 0}}
+  }
+  @revision_output %{
+    type: "object",
+    additionalProperties: false,
+    required: ["sha256", "bytes", "duration_s", "width", "height"],
+    properties: %{
+      sha256: %{type: "string", pattern: "^[0-9a-f]{64}$"},
+      bytes: %{type: "integer", minimum: 1},
+      duration_s: %{type: "number", exclusiveMinimum: 0},
+      width: %{type: "integer", minimum: 1},
+      height: %{type: "integer", minimum: 1},
+      fps: %{type: "number", exclusiveMinimum: 0}
+    }
+  }
+  @revision_provenance %{
+    type: "object",
+    additionalProperties: false,
+    required: [
+      "provided_by",
+      "tool_version",
+      "source_fingerprint",
+      "requested_range",
+      "edited_range",
+      "exported"
+    ],
+    properties: %{
+      provided_by: %{type: "string", enum: ["exporter"]},
+      tool_version: %{type: "string", maxLength: 128},
+      episode_code: %{type: "string", maxLength: 32},
+      source_fingerprint: %{type: "string", maxLength: 256},
+      requested_range: @revision_interval,
+      edited_range: @revision_interval,
+      exported: %{
+        type: "object",
+        additionalProperties: false,
+        required: ["continuous", "handle_before_s", "handle_after_s", "spans"],
+        properties: %{
+          continuous: %{type: "boolean"},
+          start_s: %{type: "number", minimum: 0},
+          end_s: %{type: "number", minimum: 0},
+          handle_before_s: %{type: "number", minimum: 0},
+          handle_after_s: %{type: "number", minimum: 0},
+          spans: %{type: "array", minItems: 1, maxItems: 256, items: @revision_interval}
+        }
+      }
+    }
+  }
+  @revision_request_row "%{id, clip_id, base_render_id, current_render_id, requested_by_user_id, assigned_user_id, assigned_agent_id, note, awaiting?, notification_status, notification_message_id, notification_attempted_at, returned_render_id, returned_at, inserted_at}"
 
   @doc "The sentence every tool's description carries."
   @spec human_approves() :: String.t()
@@ -449,6 +505,94 @@ defmodule Platform.Social.ToolDefinitions do
             " Chat attachments are not accepted: the file must be in Burrow Files. " <>
             @privacy_null,
         when_to_use: "When a clip rendered outside Burrow should reach review."
+      },
+      %{
+        name: "social_clip_edit_request_list",
+        description:
+          "Read editing requests explicitly assigned to your currently admitted agent runtime, with the instruction and base/current version identities. " <>
+            @human_approves,
+        parameters: %{
+          limit: %{type: "integer", required: false, description: "Page size (default 50)."},
+          offset: %{type: "integer", required: false, description: "Rows to skip (default 0)."}
+        },
+        returns: "%{requests: [#{@revision_request_row}], total, has_more, limit, offset}",
+        limitations:
+          "Requires the actual active runtime with current Social and Files access and an explicit maker assignment. Client actor, runtime and org inputs grant no access. Returns no media URLs, storage keys, raw source or transcripts. Revocation removes access, including to old receipts.",
+        when_to_use:
+          "To find your assigned same-clip editing instructions before returning a revised version."
+      },
+      %{
+        name: "social_clip_edit_request_get",
+        description:
+          "Read one clip-edit request assigned to you, its instruction, base and current render IDs, notification receipt and any returned render ID. " <>
+            @human_approves,
+        parameters: %{
+          request_id: %{
+            type: "string",
+            required: true,
+            description: "The editing request ID assigned to you."
+          }
+        },
+        returns: "%{request: #{@revision_request_row}}",
+        limitations:
+          "Current assignment and actual runtime admission are checked again on every read; revoked runtimes cannot read historical receipts. It returns no media URL, storage key, transcript or raw source. Reading the request changes no clip, post, job or role.",
+        when_to_use:
+          "To read the instruction and version identities for an assigned editing request."
+      },
+      %{
+        name: "social_clip_version_append",
+        description:
+          "Return a revised video for your assigned editing request by appending one immutable version to the same clip, pending human review. " <>
+            @human_approves,
+        parameters: %{
+          clip_id: %{
+            type: "string",
+            required: true,
+            description: "The existing clip ID; this tool never creates a clip."
+          },
+          file_id: %{
+            type: "string",
+            required: true,
+            description:
+              "The finalized returned video in Burrow Files, admitted to the profile's project."
+          },
+          request_id: %{
+            type: "string",
+            required: true,
+            description: "The editing request explicitly assigned to you."
+          },
+          base_render_id: %{
+            type: "string",
+            required: true,
+            description: "The base render ID recorded in that editing request."
+          },
+          submission_id: %{
+            type: "string",
+            required: true,
+            description:
+              "Stable submission UUID from the exporter contract, reused unchanged on an equal retry."
+          },
+          output: %{
+            type: "object",
+            required: true,
+            schema: @revision_output,
+            description:
+              "Returned file identity and positive output measurements: sha256, bytes, duration_s, width, height; optional fps."
+          },
+          provenance: %{
+            type: "object",
+            required: false,
+            schema: @revision_provenance,
+            description:
+              "Strict exporter claim: provided_by exporter, tool_version, optional episode_code, source_fingerprint, requested_range, edited_range and exported ranges/handles. Never paths, URLs, raw sources or transcripts."
+          }
+        },
+        returns:
+          "%{render: %{id, clip_id, rev, file_id, duration_s, width, height, byte_size, submitted_by_agent_id, inserted_at}, duplicate?: boolean}",
+        limitations:
+          "Uses the trusted execution runtime and exact maker assignment, rechecked before any receipt replay. All fields are strictly validated; unknown fields are refused rather than discarded. Equal retries return the original receipt; changed payloads conflict. Does not create a clip, change its working title or caption, create posts/jobs, change roles, approve or publish. No storage keys or media URLs are returned. Provenance is an exporter claim, not server verification of source editing.",
+        when_to_use:
+          "After reading your assigned request and registering the revised video in Burrow Files."
       },
       %{
         name: "social_clip_render",

@@ -151,6 +151,66 @@ defmodule PlatformWeb.SocialClipAppearanceTest do
            ) == 2
   end
 
+  test "a failure arriving before Review loads the open job still refreshes appearance", %{
+    conn: conn,
+    w: w
+  } do
+    child = open(conn, w)
+    choose(child, "plain")
+    owner = self()
+    tag = make_ref()
+    handler = {__MODULE__, tag}
+    supervisor = start_supervised!({Task.Supervisor, []})
+
+    # Pinned LiveView 1.1.27 start metadata. This gate delays the real
+    # component callback, never fabricates a job or a successful return.
+    :ok =
+      :telemetry.attach(
+        handler,
+        [:phoenix, :live_component, :update, :start],
+        fn _, _, metadata, _ ->
+          if self() == child.pid and metadata[:component] == PlatformWeb.SocialClipsReview and
+               Enum.any?(metadata[:assigns_sockets] || [], fn
+                 {%{id: "social-clips-review", job_event: true}, _} -> true
+                 _ -> false
+               end) do
+            monitor = Process.monitor(owner)
+            send(owner, {tag, :blocked, self()})
+
+            receive do
+              {^tag, :release} -> :ok
+              {:DOWN, ^monitor, :process, ^owner, _} -> :ok
+            end
+
+            Process.demonitor(monitor, [:flush])
+          end
+        end,
+        nil
+      )
+
+    task = Task.Supervisor.async_nolink(supervisor, fn -> preview(child, w.base.id) end)
+
+    try do
+      assert_receive {^tag, :blocked, view_pid}, 2_000
+      :telemetry.detach(handler)
+      j = job(w)
+      assert {:ok, _} = ClipJobs.claim(w.scope, j.id, w.agent.id)
+      assert {:ok, _} = ClipJobs.fail(w.scope, j.id, w.agent.id, "APPEARANCE_PROJECT_MISSING")
+      assert Platform.Social.ClipReviewFeed.rendering(w.org_id, w.profile.id) == []
+      send(view_pid, {tag, :release})
+      assert {:ok, _} = Task.yield(task, 2_000)
+
+      render(child)
+      assert has_element?(child, "[data-role='caption-failure']", "original project or source")
+      assert has_element?(child, "video[src='/files/blob/#{w.file.id}']")
+      refute has_element?(child, "[data-role='caption-pending']")
+    after
+      send(child.pid, {tag, :release})
+      :telemetry.detach(handler)
+      Task.shutdown(task, :brutal_kill)
+    end
+  end
+
   test "music picker, mute/gain draft, preview and completion keep exact immutable settings", %{
     conn: conn,
     w: w

@@ -231,11 +231,11 @@ defmodule PlatformWeb.SocialClipsReviewTest do
              "[data-role='clip-platform-row'][data-platform='tiktok'] input[checked]"
            )
 
-    assert has_element?(child, "[data-role='clip-note-hint']", "needed to reject")
+    assert has_element?(child, "[data-role='clip-note-hint']", "Used when you choose Reject")
 
     assert has_element?(
              child,
-             "[data-role='clip-note'][placeholder='Why not? Octavius reads this for the next cut…']"
+             "[data-role='clip-note'][placeholder='Why should this clip be rejected?']"
            )
 
     assert has_element?(
@@ -346,7 +346,7 @@ defmodule PlatformWeb.SocialClipsReviewTest do
     assert has_element?(
              child,
              "[data-role='clip-byline']",
-             "htc-clip-tool · rendered by Octavius"
+             "htc-clip-tool · originally submitted by Octavius"
            )
 
     assert has_element?(child, "[data-role='clip-byline'] .font-mono", "htc-clip-tool")

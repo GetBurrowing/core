@@ -108,6 +108,8 @@ defmodule PlatformWeb.SocialClipsReview do
        headline_attempt: nil,
        headline_error: nil,
        appearance_dirty: false,
+       jobs_refresh_rev: 0,
+       awaiting_edits: [],
        jobs_timer?: false
      )}
   end
@@ -164,7 +166,9 @@ defmodule PlatformWeb.SocialClipsReview do
 
   defp refresh_job_state(socket) do
     previous = MapSet.new(socket.assigns.queue, & &1.id)
-    socket = load(socket)
+    # A fast job may finish before we ever observe it in the open-job list.
+    # Its event must still reload the appearance child's retained outcome.
+    socket = socket |> assign(:jobs_refresh_rev, socket.assigns.jobs_refresh_rev + 1) |> load()
 
     # A job's completion broadcast may arrive before its clip broadcast. Keep
     # the existing "New clip in Review" notification when polling loads it first.
@@ -388,9 +392,6 @@ defmodule PlatformWeb.SocialClipsReview do
          {:ok, %Clip{} = clip} <- ClipReviewFeed.fetch_clip(profile.org_id, profile.id, id),
          {:ok, %Clip{} = decided} <-
            ClipDecisions.reject_clip(profile.org_id, clip.id, user_id, note) do
-      byline = ClipReviewFeed.byline(profile.org_id, decided)
-      reader = byline.agent_name || byline.source_label || "The clip tool"
-
       until =
         deadline([
           DateTime.add(decided.reviewed_at, ClipPublish.window_ms(), :millisecond)
@@ -403,7 +404,7 @@ defmodule PlatformWeb.SocialClipsReview do
          kind: :rejected,
          clip_id: decided.id,
          lead: "Rejected",
-         text: "#{reader} gets your note",
+         text: "Rejection note saved. No editing request was sent.",
          until: until
        })}
     else
@@ -555,6 +556,7 @@ defmodule PlatformWeb.SocialClipsReview do
       end
 
     socket
+    |> assign(:awaiting_edits, awaiting_edits(profile, socket.assigns.user_id))
     |> assign(:jobs, ClipReviewFeed.rendering(profile.org_id, profile.id))
     |> assign(:episode_jobs, ClipReviewFeed.episode_jobs(profile.org_id, profile.id))
   end
@@ -579,6 +581,7 @@ defmodule PlatformWeb.SocialClipsReview do
       socket =
         socket
         |> assign(:queue, queue)
+        |> assign(:awaiting_edits, awaiting_edits(profile, socket.assigns.user_id))
         |> assign(:landed, MapSet.put(socket.assigns.landed, clip.id))
 
       socket =
@@ -733,6 +736,7 @@ defmodule PlatformWeb.SocialClipsReview do
     socket
     |> assign(:profile, profile)
     |> assign(:queue, queue)
+    |> assign(:awaiting_edits, awaiting_edits(profile, socket.assigns.user_id))
     |> assign(:jobs, ClipReviewFeed.rendering(profile.org_id, profile.id))
     |> assign(:episode_jobs, ClipReviewFeed.episode_jobs(profile.org_id, profile.id))
     |> assign(:accounts, Social.list_accounts(profile.org_id, profile_id: profile.id))
@@ -752,12 +756,23 @@ defmodule PlatformWeb.SocialClipsReview do
     do:
       assign(socket,
         queue: [],
+        awaiting_edits: [],
         jobs: [],
         episode_jobs: [],
         accounts: [],
         clip: nil,
         can_decide?: false
       )
+
+  # Sent-back editing work is separate from undecided pending clips.
+  defp awaiting_edits(profile, user_id) do
+    if Social.ClipRevisionAccess.human(profile, user_id) == :ok do
+      Social.list_clips(profile.org_id, profile_id: profile.id)
+      |> Enum.filter(&Social.ClipRevisions.awaiting?(&1, Social.ClipRevisions.latest(&1.id)))
+    else
+      []
+    end
+  end
 
   # Shares the selected immutable version with the sibling version picker.
   # Re-read on promotion; queueing/failure never changes the playable clip.
@@ -910,6 +925,14 @@ defmodule PlatformWeb.SocialClipsReview do
     >
       <div id="social-clips-review-keys" phx-hook="ClipReview" data-role="clips-review-keys">
         <.subhead view={@view} count={length(@queue)} jobs={@jobs} myself={@myself} />
+        <a
+          :if={@view == "review" and @awaiting_edits != []}
+          href="#clips-awaiting-edit"
+          data-role="clips-awaiting-edit-link"
+          class="mb-3 inline-block link link-primary text-sm"
+        >
+          Awaiting edit ({length(@awaiting_edits)})
+        </a>
         <div
           :if={@closing_filter == "previous" and @view == "review"}
           class="alert alert-info mb-3"
@@ -946,6 +969,7 @@ defmodule PlatformWeb.SocialClipsReview do
               clip={@clip}
               profile={@profile}
               appearance_jobs={@jobs}
+              appearance_refresh_rev={@jobs_refresh_rev}
               review_id={@id}
               appearance_dirty={@appearance_dirty}
               user_id={@user_id}
@@ -969,6 +993,37 @@ defmodule PlatformWeb.SocialClipsReview do
             <aside class="border-base-300 max-[760px]:hidden min-[761px]:border-l"></aside>
           <% end %>
         </div>
+
+        <section
+          :if={@view == "review" and @awaiting_edits != []}
+          id="clips-awaiting-edit"
+          data-role="clips-awaiting-edit"
+          class="mt-5 space-y-3"
+        >
+          <h2 class="text-base font-semibold">Awaiting edit</h2>
+          <p class="text-sm text-subtle">
+            These clips have editing requests. Returned versions will need a new review.
+          </p>
+          <article :for={editing_clip <- @awaiting_edits} class="space-y-2">
+            <h3 class="font-medium">{editing_clip.title || "Untitled clip"}</h3>
+            <.live_component
+              module={PlatformWeb.SocialClipRevision}
+              id={"awaiting-revision-#{editing_clip.id}"}
+              clip={editing_clip}
+              profile={@profile}
+              scope={@profile.org_id}
+              user_id={@user_id}
+            />
+          </article>
+          <div
+            :if={@can_decide? and @clip != nil}
+            aria-hidden="true"
+            data-role="clip-edit-action-clearance"
+            class="hidden max-[760px]:block"
+            style="height: calc(12rem + var(--bottom-nav-height, 0px) + env(safe-area-inset-bottom));"
+          >
+          </div>
+        </section>
 
         <.pbar
           :if={@view == "review" and @can_decide? and @clip != nil}
@@ -1522,6 +1577,7 @@ defmodule PlatformWeb.SocialClipsReview do
   attr :review_id, :string, required: true
   attr :appearance_dirty, :boolean, default: false
   attr :appearance_jobs, :list, default: []
+  attr :appearance_refresh_rev, :integer, default: 0
 
   attr :profile, :any, required: true
   attr :user_id, :any, required: true
@@ -1664,7 +1720,7 @@ defmodule PlatformWeb.SocialClipsReview do
             <span>
               <span :if={@byline.source_label} class="font-mono">{@byline.source_label}</span><span :if={
                 @agent
-              }> · rendered by <b class="font-semibold text-base-content">{@agent}</b></span>
+              }> · originally submitted by <b class="font-semibold text-base-content">{@agent}</b></span>
             </span>
           </p>
           <div class="mt-3 hidden flex-wrap gap-2 max-[760px]:flex" data-role="clip-platform-chips">
@@ -1703,10 +1759,23 @@ defmodule PlatformWeb.SocialClipsReview do
         />
 
         <.live_component
+          :if={
+            @current_version? and @clip.flow == "legacy" and
+              PlatformWeb.SocialClipRevision.visible?(@clip)
+          }
+          module={PlatformWeb.SocialClipRevision}
+          id={"review-revision-#{@clip.id}"}
+          clip={@clip}
+          profile={@profile}
+          scope={@profile.org_id}
+          user_id={@user_id}
+        />
+
+        <.live_component
           :if={@current_version?}
           module={PlatformWeb.SocialClipAppearance}
           id={"appearance-#{@clip.id}"}
-          refresh_key={Enum.map(@appearance_jobs, &{&1.id, &1.status})}
+          refresh_key={{@appearance_refresh_rev, Enum.map(@appearance_jobs, &{&1.id, &1.status})}}
           review_id={@review_id}
           clip={@clip}
           profile={@profile}
@@ -1831,8 +1900,8 @@ defmodule PlatformWeb.SocialClipsReview do
 
         <form phx-change="note" phx-target={@myself}>
           <div class="mb-1 flex items-center justify-between text-xs">
-            <label for="clip-note" class="font-semibold text-base-content">Note</label>
-            <span class="text-subtle" data-role="clip-note-hint">needed to reject</span>
+            <label for="clip-note" class="font-semibold text-base-content">Rejection note</label>
+            <span class="text-subtle" data-role="clip-note-hint">Used when you choose Reject.</span>
           </div>
           <textarea
             id="clip-note"
@@ -1841,7 +1910,7 @@ defmodule PlatformWeb.SocialClipsReview do
             maxlength="2000"
             phx-debounce="200"
             disabled={!@can_decide?}
-            placeholder={"Why not? #{@agent || @byline.source_label || "the clip tool"} reads this for the next cut…"}
+            placeholder="Why should this clip be rejected?"
             class="textarea textarea-bordered w-full bg-base-100 text-sm"
             data-role="clip-note"
           >{@note}</textarea>

@@ -19,13 +19,18 @@ defmodule Platform.Social.Tools do
   `needs_approval`. The six `social_clip_job_*` tools
   work the job list in `Platform.Social.ClipJobs`; the claimer is always
   the calling agent, never an argument. `social_clip_submit` lands a clip as
-  review pending; no tool writes a review field, and the submitting agent
+  review pending; no tool records a human review decision, and the submitting agent
   comes from the context, never from arguments. `social_task_request`
   (Social 6/7) files a task through
   `Platform.Social.TaskBridge`, assigned to the calling agent; the agent
   and space come from the context, never from arguments. Refusals are Play-style envelopes
   `%{error, code, recoverable, suggestion}`; each status or lock refusal
   repeats that a human approves and the platform publishes.
+
+  Assigned clip-edit request reads and returned-version appends go through
+  `ClipRevisions` with the actual context runtime. Their explicit receipts
+  contain no storage keys, media URLs, raw source or transcripts; append
+  preserves the clip's working copy and creates no post or job.
   """
 
   import Ecto.Query
@@ -40,6 +45,7 @@ defmodule Platform.Social.Tools do
     ClipJob,
     ClipJobs,
     ClipReviewFeed,
+    ClipRevisions,
     Idea,
     IdeaNote,
     IdeaNotes,
@@ -63,6 +69,8 @@ defmodule Platform.Social.Tools do
 
   # Social authoring 2/11: the tools that need the calling agent (the idea
   # creator, and the change log's actor on a draft write).
+  @revision_tools ~w(social_clip_edit_request_list social_clip_edit_request_get social_clip_version_append)
+
   @agent_tools ~w(social_draft_create social_draft_update social_weekly_note_submit social_studio_draft_create
                   social_clip_update_copy)
 
@@ -97,6 +105,11 @@ defmodule Platform.Social.Tools do
         with {:ok, scope} <- scope(context),
              do: idea_vote_tool(tool, args, scope, agent(context), context)
 
+      tool in @revision_tools ->
+        with {:ok, scope} <- scope(context),
+             {:ok, actor} <- revision_actor(context),
+             do: revision_tool(tool, args, scope, actor)
+
       tool in @agent_tools ->
         with {:ok, scope} <- scope(context), do: agent_tool(tool, args, scope, agent(context))
 
@@ -107,6 +120,122 @@ defmodule Platform.Social.Tools do
         {:error, unknown_tool(tool)}
     end
   end
+
+  # These tools require the execution context's actual runtime. Client actor,
+  # runtime and org arguments cannot select the maker or widen its admission.
+  defp revision_actor(%{runtime_id: runtime_id} = context) when is_binary(runtime_id) do
+    case agent(context) do
+      %Platform.Agents.Agent{id: id} -> {:ok, {:agent, id, runtime_id}}
+      _ -> {:error, revision_error({:error, :unauthorized})}
+    end
+  end
+
+  defp revision_actor(_), do: {:error, revision_error({:error, :unauthorized})}
+
+  defp revision_tool("social_clip_edit_request_list", args, scope, actor) do
+    case ClipRevisions.list_assigned(scope, actor) do
+      {:ok, requests} ->
+        {limit, offset} = ResultBound.page(args)
+
+        page =
+          requests |> Enum.drop(offset) |> Enum.take(limit) |> Enum.map(&revision_request_json/1)
+
+        {:ok,
+         ResultBound.paged(:requests, page, length(requests), offset, %{
+           limit: limit,
+           offset: offset
+         })}
+
+      error ->
+        {:error, revision_error(error)}
+    end
+  end
+
+  defp revision_tool("social_clip_edit_request_get", args, scope, actor) do
+    case ClipRevisions.get_request(scope, args["request_id"], actor) do
+      {:ok, request} -> {:ok, %{request: revision_request_json(request)}}
+      error -> {:error, revision_error(error)}
+    end
+  end
+
+  defp revision_tool("social_clip_version_append", args, scope, actor) do
+    # The core contract rejects unsupported fields; never silently discard a
+    # caption, role, transcript or unknown provenance key before validation.
+    case ClipRevisions.append_version(scope, args["clip_id"], actor, Map.delete(args, "clip_id")) do
+      {:ok, %{render: render, duplicate?: duplicate?}} ->
+        {:ok, %{render: revision_render_json(render), duplicate?: duplicate?}}
+
+      error ->
+        {:error, revision_error(error)}
+    end
+  end
+
+  defp revision_request_json(%{
+         request: request,
+         current_render_id: current_id,
+         awaiting?: awaiting?
+       }) do
+    request
+    |> Map.take([
+      :id,
+      :clip_id,
+      :base_render_id,
+      :requested_by_user_id,
+      :assigned_user_id,
+      :assigned_agent_id,
+      :note,
+      :notification_status,
+      :notification_message_id,
+      :notification_attempted_at,
+      :returned_render_id,
+      :returned_at,
+      :inserted_at
+    ])
+    |> Map.put(:current_render_id, current_id)
+    |> Map.put(:awaiting?, awaiting?)
+  end
+
+  defp revision_render_json(render) do
+    Map.take(render, [
+      :id,
+      :clip_id,
+      :rev,
+      :file_id,
+      :duration_s,
+      :width,
+      :height,
+      :byte_size,
+      :submitted_by_agent_id,
+      :inserted_at
+    ])
+  end
+
+  defp revision_error({:error, :probe_lifecycle}),
+    do:
+      err(
+        :probe_lifecycle,
+        "Video inspection could not finish safely; nothing was returned.",
+        false,
+        "Ask an operator to resolve the retained inspection before trying again."
+      )
+
+  defp revision_error({:error, reason}) when is_atom(reason) do
+    err(
+      reason,
+      "Clip editing request refused (#{reason}).",
+      true,
+      "Use your current assigned request and an active admitted runtime; nothing was changed."
+    )
+  end
+
+  defp revision_error(_),
+    do:
+      err(
+        :invalid_argument,
+        "Clip editing request refused.",
+        true,
+        "Check the request and version arguments; nothing was changed."
+      )
 
   # ── Social 6/7: social_task_request ──────────────────────────────────
 
@@ -1735,6 +1864,7 @@ defmodule Platform.Social.Tools do
       ])
       |> Map.put(:next_rev, Platform.Social.ClipVersions.next_rev(c))
       |> Map.put(:copy_rev, ClipReviewFeed.copy_rev(c))
+      |> Map.put(:review_note, if(ClipRevisions.editing_note?(c), do: nil, else: c.review_note))
 
   defp job_json(%ClipJob{} = j),
     do:

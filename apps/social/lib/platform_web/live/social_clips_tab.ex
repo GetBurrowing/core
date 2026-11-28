@@ -14,6 +14,7 @@ defmodule PlatformWeb.SocialClipsTab do
 
   use PlatformWeb.SocialTab
 
+  alias Phoenix.LiveView.JS
   alias Platform.Social
 
   # The Review bay's two views (`?view=`).
@@ -30,6 +31,7 @@ defmodule PlatformWeb.SocialClipsTab do
     |> assign(:clips_clip_id, nil)
     |> assign(:clips_profile_id, nil)
     |> assign(:clips_count, 0)
+    |> assign(:clip_return_notice_key, nil)
   end
 
   # The current profile's clips topic (the previous profile's is dropped)
@@ -90,6 +92,13 @@ defmodule PlatformWeb.SocialClipsTab do
     end
   end
 
+  def handle_info({PlatformWeb.SocialClipRevision, :returned, _clip_id}, socket),
+    do:
+      {:noreply,
+       socket
+       |> notice("New version returned for review.")
+       |> assign(:clip_return_notice_key, System.unique_integer([:positive]))}
+
   def handle_info({:social_clip_job, %{profile_id: profile_id}}, socket) do
     if socket.assigns.profile && socket.assigns.profile.id == profile_id do
       send_update(PlatformWeb.SocialClipsReview, id: "social-clips-review", job_event: true)
@@ -116,6 +125,23 @@ defmodule PlatformWeb.SocialClipsTab do
   @impl true
   def pane(assigns) do
     ~H"""
+    <div
+      :if={@notice == "New version returned for review."}
+      id={"clip-return-confirmation-#{@clip_return_notice_key}"}
+      data-role="clip-return-confirmation"
+      role="region"
+      aria-label={@notice}
+      tabindex="-1"
+      phx-mounted={JS.focus()}
+      style="position: fixed; top: calc(72px + env(safe-area-inset-top)); inset-inline: 1rem; z-index: 80; max-width: 42rem; margin-inline: auto;"
+    >
+      <.notice_line notice={@notice} tone={@notice_tone} />
+    </div>
+    <.notice_line
+      :if={@notice != "New version returned for review."}
+      notice={@notice}
+      tone={@notice_tone}
+    />
     <.live_component
       module={PlatformWeb.SocialClipsReview}
       id="social-clips-review"

@@ -264,7 +264,7 @@ defmodule PlatformWeb.SocialClipsReviewDecisionsTest do
     assert has_element?(
              child,
              "[data-role='clip-toast-text']",
-             "Rejected · Octavius gets your note"
+             "Rejected · Rejection note saved. No editing request was sent."
            )
 
     assert has_element?(child, "[data-role='clip-toast-undo']", "Undo")
