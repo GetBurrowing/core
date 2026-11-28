@@ -28,7 +28,7 @@ enum IntentAppHooks {
         // THIS process (it is a LiveActivityIntent), where the native turn
         // lives. The widget process never sets these, so a tap that lands
         // there opens Voice already listening instead.
-        VoiceLauncher.start = { await VoiceTurnRunner.shared.start() }
+        VoiceLauncher.start = { chosen in await VoiceTurnRunner.shared.start(with: chosen) }
         VoiceLauncher.send = { await VoiceTurnRunner.shared.send() }
         VoiceLauncher.cancel = { VoiceTurnRunner.shared.cancel() }
     }

@@ -197,3 +197,25 @@ enum VoiceActivityButtons {
         }
     }
 }
+
+/// One recent agent on the medium Voice widget (device rev 3).
+struct VoiceRecentRow: Equatable, Identifiable {
+    static let emptyLine = "Agents you talk to show here"
+
+    let partner: VoicePartnerChoice
+    /// The install's display name, only with several installs signed in.
+    let installLabel: String?
+
+    var id: String { "\(partner.host)|\(partner.agentID)" }
+
+    /// "Talk to Build agent, on Lab".
+    var spoken: String { "Talk to \(partner.name)" + (installLabel.map { ", on \($0)" } ?? "") }
+
+    /// Up to three, newest first, without the agent the big mic talks to.
+    static func rows(_ recents: [VoicePartnerChoice], excluding target: VoicePartnerChoice?, label: (String) -> String?) -> [VoiceRecentRow] {
+        recents
+            .filter { !($0.host == target?.host && $0.agentID == target?.agentID) }
+            .prefix(VoicePartnerHistory.limit)
+            .map { VoiceRecentRow(partner: $0, installLabel: label($0.host)) }
+    }
+}

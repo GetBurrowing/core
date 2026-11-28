@@ -217,7 +217,10 @@ final class BurrowVoicePluginTests: XCTestCase {
         XCTAssertEqual(plugin.jsName, "BurrowVoice")
         XCTAssertEqual(
             plugin.pluginMethods.map(\.name),
-            ["capabilities", "prepare", "start", "stop", "cancel", "speak", "stopSpeaking", "openSettings", "voices", "speakPart", "prepareModel"])
+            [
+                "capabilities", "prepare", "start", "stop", "cancel", "speak", "stopSpeaking", "openSettings", "voices", "speakPart", "prepareModel",
+                "rememberVoice",
+            ])
         XCTAssertEqual(BurrowVoicePlugin.events, ["partial", "final", "ended", "speech", "route", "model"])
     }
 

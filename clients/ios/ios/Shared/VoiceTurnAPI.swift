@@ -72,7 +72,9 @@ extension BurrowAPIClient {
 /// through `InstallFanout`, and cached in the App Group so the control and
 /// the widget can name the partner without a fetch.
 enum VoicePartnerResolver {
-    static func newest(installs: [Install], client: BurrowAPIClient, cache: VoicePartnerCache = VoicePartnerCache()) async -> VoicePartnerChoice? {
+    static func newest(
+        installs: [Install], client: BurrowAPIClient, cache: VoicePartnerCache = VoicePartnerCache(), history: VoicePartnerHistory = VoicePartnerHistory()
+    ) async -> VoicePartnerChoice? {
         let results = await InstallFanout.fetch(installs: installs, client: client) { host -> VoicePartnerChoice? in
             guard let partner = try await client.voicePartner(host: host) else { return nil }
             return VoicePartnerChoice(host: host, agentID: partner.agentID, name: partner.name, lastUsedAt: partner.lastUsed)
@@ -82,8 +84,39 @@ enum VoicePartnerResolver {
         guard anyAnswered else { return cache.partner }
         let newest = answered.max { ($0.lastUsedAt ?? .distantPast) < ($1.lastUsedAt ?? .distantPast) }
         cache.partner = newest
+        // Each install's last partner joins the recent list, oldest first, so
+        // the newest ends up first.
+        for partner in answered.sorted(by: { ($0.lastUsedAt ?? .distantPast) < ($1.lastUsedAt ?? .distantPast) }) { history.add(partner) }
         return newest
     }
+}
+
+/// The Voice partners used most recently, newest first, at most three,
+/// across every install (device rev 3): the medium Voice widget offers them
+/// as one-tap buttons. Ids and names only, in the App Group.
+struct VoicePartnerHistory {
+    static let key = "burrow.voice.recent.v1"
+    static let limit = 3
+    let defaults: UserDefaults
+
+    init(defaults: UserDefaults? = UserDefaults(suiteName: InstallStore.appGroup)) {
+        self.defaults = defaults ?? .standard
+    }
+
+    var partners: [VoicePartnerChoice] {
+        defaults.data(forKey: Self.key).flatMap { try? JSONDecoder().decode([VoicePartnerChoice].self, from: $0) } ?? []
+    }
+
+    /// `partner` first; an earlier entry for the same agent on the same
+    /// install is replaced.
+    func add(_ partner: VoicePartnerChoice) {
+        let rest = partners.filter { !($0.host == partner.host && $0.agentID == partner.agentID) }
+        let next = Array(([partner] + rest).prefix(Self.limit))
+        if let data = try? JSONEncoder().encode(next) { defaults.set(data, forKey: Self.key) }
+    }
+
+    /// Drops the partners of a signed-out or removed install.
+    func keep(hosts: Set<String>) -> [VoicePartnerChoice] { partners.filter { hosts.contains($0.host) } }
 }
 
 /// The last resolved partner, in the App Group. A name and ids, never text.

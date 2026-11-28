@@ -234,6 +234,16 @@ class BurrowVoicePlugin : Plugin() {
     }
 
     /**
+     * `{voice}`: the iPhone keeps the Voice tab's reply-voice pick for turns
+     * started from its Voice control or widget (task 01a21e75). Android has
+     * no such surface yet, so it only resolves; the page keeps its own pick.
+     */
+    @PluginMethod
+    fun rememberVoice(call: PluginCall) {
+        call.resolve()
+    }
+
+    /**
      * `{id, text, voice?}`: reads the reply in `voice` (an id from `voices`)
      * or, without one, the best installed voice. Resolves `{spoken: true,
      * voice, fellBack}`; `fellBack` is true when the requested voice is not on
@@ -641,6 +651,7 @@ class BurrowVoicePlugin : Plugin() {
                 "stop",
                 "cancel",
                 "openSettings",
+                "rememberVoice",
                 "speak",
                 "speakPart",
                 "stopSpeaking",

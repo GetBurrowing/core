@@ -88,36 +88,47 @@ struct MeetingControlProvider: ControlValueProvider {
 
 /// The Voice control (task 01a21e75 stage 5; canvas "Control"): Control
 /// Center, the Lock Screen and the Action button. One tap starts a Voice
-/// turn with the last partner in the background; a second tap sends.
+/// turn in the background with the configured agent ("Last used" by
+/// default, device rev 3); a second tap sends.
 @available(iOS 18, *)
 struct VoiceControl: ControlWidget {
     var body: some ControlWidgetConfiguration {
-        StaticControlConfiguration(kind: "com.kobo-ai.burrow.controls.voice", provider: VoiceControlProvider()) { copy in
-            ControlWidgetButton(action: StartVoiceTurnIntent()) {
+        AppIntentControlConfiguration(kind: "com.kobo-ai.burrow.controls.voice", provider: VoiceControlProvider()) { value in
+            ControlWidgetButton(action: StartVoiceTurnIntent(agent: value.agent)) {
                 Label {
-                    Text(copy.label)
-                    Text(copy.value)
+                    Text(value.copy.label)
+                    Text(value.copy.value)
                 } icon: {
-                    Image(systemName: copy.symbol)
+                    Image(systemName: value.copy.symbol)
                 }
             }
         }
         .displayName("Voice")
-        .description("Talks to the agent you talked to last.")
+        .description("Talks to an agent: the one you talked to last, or the one you pick.")
     }
 }
 
-/// The partner from the App Group cache: no fetch.
 @available(iOS 18, *)
-struct VoiceControlProvider: ControlValueProvider {
-    var previewValue: ControlCopy { .voice(signedIn: true, partner: nil, install: nil) }
+struct VoiceControlValue {
+    let copy: ControlCopy
+    let agent: VoiceAgentEntity?
+}
 
-    func currentValue() async throws -> ControlCopy {
+/// The partner from the App Group cache, or the configured agent: no fetch.
+@available(iOS 18, *)
+struct VoiceControlProvider: AppIntentControlValueProvider {
+    func previewValue(configuration: VoiceControlIntent) -> VoiceControlValue {
+        VoiceControlValue(copy: .voice(signedIn: true, partner: configuration.agent?.choice?.name, install: nil), agent: configuration.agent)
+    }
+
+    func currentValue(configuration: VoiceControlIntent) async throws -> VoiceControlValue {
         let installs = InstallStore.shared.installs
         let signedIn = Set(installs.map(\.host).filter { BurrowAPIClient.shared.isSignedIn(host: $0) })
-        let partner = VoicePartnerCache().partner.flatMap { signedIn.contains($0.host) ? $0 : nil }
-        return .voice(
+        let target = configuration.agent?.choice ?? VoicePartnerCache().partner
+        let partner = target.flatMap { signedIn.contains($0.host) ? $0 : nil }
+        let copy = ControlCopy.voice(
             signedIn: !signedIn.isEmpty, partner: partner?.name,
             install: partner.flatMap { InstallLabel.label(for: $0.host, installs: installs, signedIn: signedIn) })
+        return VoiceControlValue(copy: copy, agent: configuration.agent)
     }
 }

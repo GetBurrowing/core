@@ -2,18 +2,22 @@ import AppIntents
 import SwiftUI
 import WidgetKit
 
-/// The Voice tile (task 01a21e75 stage 5; canvas "Voice tile"): one tap
-/// talks to the last partner. The whole tile is the button. iOS 18 runs
-/// the turn in the background (StartVoiceTurnIntent); iOS 17 opens Voice
-/// already listening (OpenVoiceIntent).
+/// The Voice widget (task 01a21e75 stage 5; device rev 3). Small: one tap
+/// talks to the configured agent ("Last used" by default); the whole tile is
+/// the button. Medium: the big mic on the left, and up to three recent
+/// agents across installs on the right, each a one-tap turn with that
+/// agent. iOS 18 runs the turn in the background (StartVoiceTurnIntent); iOS
+/// 17 opens Voice already listening (OpenVoiceIntent). Long-pressing to edit
+/// the widget is the system's own gesture and cannot be turned off; the tap
+/// targets are as large as each size allows.
 struct VoiceWidget: Widget {
     var body: some WidgetConfiguration {
-        StaticConfiguration(kind: WidgetKinds.voice, provider: VoiceTileProvider()) { entry in
+        AppIntentConfiguration(kind: WidgetKinds.voice, intent: VoiceWidgetIntent.self, provider: VoiceTileProvider()) { entry in
             VoiceTileView(entry: entry)
         }
         .configurationDisplayName("Voice")
-        .description("Talk to the agent you talked to last.")
-        .supportedFamilies([.systemSmall])
+        .description("Talk to an agent in one tap: the one you talked to last, or the one you pick.")
+        .supportedFamilies([.systemSmall, .systemMedium])
         .contentMarginsDisabled()
     }
 }
@@ -22,18 +26,24 @@ struct VoiceTileEntry: TimelineEntry {
     let date: Date
     let model: VoiceTileModel
     let partner: String?
+    /// The configured agent; nil or `lastUsed` talks to the last partner.
+    var agent: VoiceAgentEntity? = nil
+    /// The medium size's recent agents.
+    var rows: [VoiceRecentRow] = []
 }
 
-struct VoiceTileProvider: TimelineProvider {
+struct VoiceTileProvider: AppIntentTimelineProvider {
     func placeholder(in context: Context) -> VoiceTileEntry { Self.entry(signedIn: true, partner: nil, install: nil, listening: false) }
 
-    func getSnapshot(in context: Context, completion: @escaping (VoiceTileEntry) -> Void) { completion(Self.current()) }
+    func snapshot(for configuration: VoiceWidgetIntent, in context: Context) async -> VoiceTileEntry {
+        Self.current(agent: configuration.agent)
+    }
 
-    func getTimeline(in context: Context, completion: @escaping (Timeline<VoiceTileEntry>) -> Void) {
-        let entry = Self.current()
+    func timeline(for configuration: VoiceWidgetIntent, in context: Context) async -> Timeline<VoiceTileEntry> {
+        let entry = Self.current(agent: configuration.agent)
         // A listening mark goes stale after VoiceTurnStatusStore.validFor.
         let next = entry.model.kind == .listening ? Date().addingTimeInterval(VoiceTurnStatusStore.validFor) : Date().addingTimeInterval(3600)
-        completion(Timeline(entries: [entry], policy: .after(next)))
+        return Timeline(entries: [entry], policy: .after(next))
     }
 
     static func entry(signedIn: Bool, partner: String?, install: String?, listening: Bool) -> VoiceTileEntry {
@@ -41,35 +51,131 @@ struct VoiceTileProvider: TimelineProvider {
     }
 
     /// From the App Group only: no fetch.
-    static func current() -> VoiceTileEntry {
+    static func current(agent: VoiceAgentEntity?) -> VoiceTileEntry {
         let installs = InstallStore.shared.installs
         let signedIn = Set(installs.map(\.host).filter { BurrowAPIClient.shared.isSignedIn(host: $0) })
-        let partner = VoicePartnerCache().partner.flatMap { signedIn.contains($0.host) ? $0 : nil }
+        let target = agent?.choice ?? VoicePartnerCache().partner
+        let partner = target.flatMap { signedIn.contains($0.host) ? $0 : nil }
         let install = partner.flatMap { InstallLabel.label(for: $0.host, installs: installs, signedIn: signedIn) }
-        return entry(signedIn: !signedIn.isEmpty, partner: partner?.name, install: install, listening: VoiceTurnStatusStore().isListening())
+        var entry = entry(signedIn: !signedIn.isEmpty, partner: partner?.name, install: install, listening: VoiceTurnStatusStore().isListening())
+        entry.agent = agent
+        entry.rows = VoiceRecentRow.rows(
+            VoicePartnerHistory().keep(hosts: signedIn), excluding: partner,
+            label: { InstallLabel.label(for: $0, installs: installs, signedIn: signedIn) })
+        return entry
     }
 }
 
 struct VoiceTileView: View {
+    @Environment(\.widgetFamily) private var environmentFamily
     let entry: VoiceTileEntry
+    /// Render tests only: `widgetFamily` cannot be set from outside WidgetKit.
+    var family: WidgetFamily?
 
     var body: some View {
         Group {
             if entry.model.kind == .signedOut {
                 VoiceTileContent(model: entry.model)
                     .widgetURL(URL(string: "\(DeepLink.scheme)://"))
-            } else if #available(iOS 18, *) {
-                Button(intent: StartVoiceTurnIntent()) { VoiceTileContent(model: entry.model) }
-                    .buttonStyle(.plain)
+            } else if (family ?? environmentFamily) == .systemMedium {
+                HStack(spacing: 0) {
+                    micButton.frame(maxWidth: .infinity, maxHeight: .infinity)
+                    VoiceRecentList(rows: entry.rows) { row in rowButton(row) }
+                        .frame(maxWidth: .infinity, maxHeight: .infinity)
+                }
             } else {
-                Button(intent: OpenVoiceIntent()) { VoiceTileContent(model: entry.model) }
-                    .buttonStyle(.plain)
+                micButton
             }
         }
-        .accessibilityElement(children: .ignore)
-        .accessibilityLabel(entry.model.accessibilityLabel(partner: entry.partner))
-        .accessibilityAddTraits(.isButton)
         .feedBackground()
+    }
+
+    private var micButton: some View {
+        start(entry.agent) { VoiceTileContent(model: entry.model) }
+            .accessibilityElement(children: .ignore)
+            .accessibilityLabel(entry.model.accessibilityLabel(partner: entry.partner))
+            .accessibilityAddTraits(.isButton)
+    }
+
+    private func rowButton(_ row: VoiceRecentRow) -> some View {
+        start(VoiceAgentEntity(row.partner)) { VoiceRecentRowView(row: row) }
+            .accessibilityElement(children: .ignore)
+            .accessibilityLabel(row.spoken)
+            .accessibilityAddTraits(.isButton)
+    }
+
+    /// A button that starts a turn with `agent`.
+    @ViewBuilder private func start<Label: View>(_ agent: VoiceAgentEntity?, @ViewBuilder label: () -> Label) -> some View {
+        if #available(iOS 18, *) {
+            Button(intent: StartVoiceTurnIntent(agent: agent), label: label).buttonStyle(.plain)
+        } else {
+            Button(intent: OpenVoiceIntent(), label: label).buttonStyle(.plain)
+        }
+    }
+}
+
+/// The medium Voice widget's right half: up to three recent agents, as many
+/// as fit (3, then 2, then 1), each row a full-width tap target.
+struct VoiceRecentList<RowButton: View>: View {
+    let rows: [VoiceRecentRow]
+    let button: (VoiceRecentRow) -> RowButton
+
+    var body: some View {
+        Group {
+            if rows.isEmpty {
+                Secondary(text: VoiceRecentRow.emptyLine, font: FeedType.caption)
+                    .frame(maxWidth: .infinity, maxHeight: .infinity, alignment: .leading)
+            } else {
+                ViewThatFits(in: .vertical) {
+                    list(3)
+                    list(2)
+                    list(1)
+                }
+            }
+        }
+        .padding(.vertical, 8)
+        .padding(.trailing, 12)
+    }
+
+    private func list(_ n: Int) -> some View {
+        VStack(spacing: 4) {
+            ForEach(rows.prefix(n)) { row in button(row) }
+        }
+        .frame(maxHeight: .infinity)
+    }
+}
+
+/// One recent agent: the name, and the install with several installs
+/// (dropped whole before the name truncates).
+struct VoiceRecentRowView: View {
+    let row: VoiceRecentRow
+
+    var body: some View {
+        HStack(spacing: 8) {
+            // Base-content, not orange: the big mic is the one orange thing.
+            Image(systemName: "mic.fill")
+                .font(.system(size: 13, weight: .semibold))
+                .foregroundStyle(BurrowColor.onSurface.color)
+                .frame(width: 28, height: 28)
+                .background(Circle().fill(BurrowColor.surfaceMuted.color))
+            ViewThatFits(in: .horizontal) {
+                if let install = row.installLabel {
+                    VStack(alignment: .leading, spacing: 0) {
+                        name.fixedSize().neverTruncates("voice.row.name.withInstall")
+                        Secondary(text: install).lineLimit(1).fixedSize()
+                    }
+                }
+                name.lineLimit(1)
+            }
+            Spacer(minLength: 0)
+        }
+        .frame(maxWidth: .infinity, minHeight: 44, alignment: .leading)
+        .contentShape(Rectangle())
+        .noOverlap("voice.rows", row.id)
+    }
+
+    private var name: some View {
+        Text(row.partner.name).font(FeedType.rowTitle).foregroundStyle(BurrowColor.onSurface.color).privacySensitive()
     }
 }
 

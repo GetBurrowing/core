@@ -41,6 +41,7 @@ class BurrowVoiceMethodsTest {
                 "stop",
                 "cancel",
                 "openSettings",
+                "rememberVoice",
                 "speak",
                 "speakPart",
                 "stopSpeaking",

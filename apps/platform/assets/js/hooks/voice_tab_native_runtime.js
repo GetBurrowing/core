@@ -502,12 +502,16 @@ const VoiceTabNative = {
     // otherwise fall back to a system voice (task 01a21e4a stage 5). The first
     // reply would call prepare anyway; this only moves it earlier.
     if (installed && isPocket(stored)) this._nativeCall("prepareModel", { voice: stored })
+    // The app keeps the pick too, for replies to turns started from the
+    // Voice control or widget, which have no page (task 01a21e75).
+    if (stored) this._nativeCall("rememberVoice", { voice: stored })
   },
 
   _pickVoice(id) {
     if (typeof id !== "string" || !id) return
     this._voice = id
     ClientState.set(VOICE_NAMESPACE, this._voiceKey(), id)
+    this._nativeCall("rememberVoice", { voice: id })
     // Picking Pocket TTS starts its download (the model, and this voice if
     // it is not on the phone); a system voice reads meanwhile.
     if (isPocket(id)) this._nativeCall("prepareModel", { voice: id })

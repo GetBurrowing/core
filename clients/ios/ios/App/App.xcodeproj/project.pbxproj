@@ -140,6 +140,7 @@
 		5DE01760B6873F25DCED83E7 /* ShareExtension.appex in Embed Foundation Extensions */ = {isa = PBXBuildFile; fileRef = 84AD5BD5C2783C3C5B5230A4 /* ShareExtension.appex */; settings = {ATTRIBUTES = (RemoveHeadersOnCopy, ); }; };
 		5E04533C01261A377D816DB8 /* config.xml in Resources */ = {isa = PBXBuildFile; fileRef = 8776CD2CC1249496A6F18C86 /* config.xml */; };
 		5E2DC180316E54C456DCBD88 /* StartCallSystemTests.swift in Sources */ = {isa = PBXBuildFile; fileRef = 0505CA292D56D7C52E773DBD /* StartCallSystemTests.swift */; };
+		5E30AA99603F042F7BCDE7C5 /* ReplyVoiceChoice.swift in Sources */ = {isa = PBXBuildFile; fileRef = AE6B1508588C5B15D2ECFA96 /* ReplyVoiceChoice.swift */; };
 		5E32B2E26CA396F9DF1C6B85 /* ShortcutParameterRefresh.swift in Sources */ = {isa = PBXBuildFile; fileRef = EE185BEDD232F08332626453 /* ShortcutParameterRefresh.swift */; };
 		5EC8BDB64E56CE383869D28A /* WebLoadRecovery.swift in Sources */ = {isa = PBXBuildFile; fileRef = 47771A89DA1A63CA80A944F9 /* WebLoadRecovery.swift */; };
 		5EDFAF499101B4164281B7B6 /* PushSeal.swift in Sources */ = {isa = PBXBuildFile; fileRef = BAF90B5FD6EA88A0B9F3A8CC /* PushSeal.swift */; };
@@ -596,6 +597,7 @@
 		A9DC08ECFA84095D28184D7E /* IntentSourceScanTests.swift */ = {isa = PBXFileReference; lastKnownFileType = sourcecode.swift; path = IntentSourceScanTests.swift; sourceTree = "<group>"; };
 		AC96500C251272FC26DC89DB /* NotificationTests.swift */ = {isa = PBXFileReference; lastKnownFileType = sourcecode.swift; path = NotificationTests.swift; sourceTree = "<group>"; };
 		ACBED8EDACDD79A361322E49 /* BurrowWidgetBundle.swift */ = {isa = PBXFileReference; lastKnownFileType = sourcecode.swift; path = BurrowWidgetBundle.swift; sourceTree = "<group>"; };
+		AE6B1508588C5B15D2ECFA96 /* ReplyVoiceChoice.swift */ = {isa = PBXFileReference; lastKnownFileType = sourcecode.swift; path = ReplyVoiceChoice.swift; sourceTree = "<group>"; };
 		AEA2B3BC253F91FAD530FA0A /* IntentSupport.swift */ = {isa = PBXFileReference; lastKnownFileType = sourcecode.swift; path = IntentSupport.swift; sourceTree = "<group>"; };
 		B100ED23BCDCF3FFFD00D2D2 /* HubStore.swift */ = {isa = PBXFileReference; lastKnownFileType = sourcecode.swift; path = HubStore.swift; sourceTree = "<group>"; };
 		B2FB56777367B2E4A4FC4C11 /* AppIntentsTesting.framework */ = {isa = PBXFileReference; lastKnownFileType = wrapper.framework; name = AppIntentsTesting.framework; path = System/Library/Frameworks/AppIntentsTesting.framework; sourceTree = DEVELOPER_DIR; };
@@ -932,6 +934,7 @@
 				E9FB2536BDF75AAA2A289BE1 /* PocketTTSProbe.swift */,
 				F16C1246CD18F5EC8E3093D1 /* PocketTTSSupport.swift */,
 				FEC44957C483DDE5854EA3E6 /* ReplySpeaker.swift */,
+				AE6B1508588C5B15D2ECFA96 /* ReplyVoiceChoice.swift */,
 				9A4B8EDB38BE775365E4E31B /* ReplyVoices.swift */,
 				1FAE8925EE4B4D296E4E3CFB /* VoiceAudioSession.swift */,
 				5651178A9C099BB8F95671C1 /* VoiceTrace.swift */,
@@ -1736,6 +1739,7 @@
 				E9DDCC35D92EB83A7FC4B25D /* PushSeal.swift in Sources */,
 				14674C0B74C66D26C36A8714 /* RecentCalls.swift in Sources */,
 				2ECE93607259D3499F13D382 /* ReplySpeaker.swift in Sources */,
+				5E30AA99603F042F7BCDE7C5 /* ReplyVoiceChoice.swift in Sources */,
 				36646A01FE4F12BCA6189CED /* ReplyVoices.swift in Sources */,
 				05F82264DE2C47C780F86D98 /* RingBanner.swift in Sources */,
 				86ACBC15F996EA87643DCCF8 /* RingBannerView.swift in Sources */,

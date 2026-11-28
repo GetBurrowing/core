@@ -14,7 +14,9 @@ enum VoiceLaunchOutcome: Equatable {
 /// this file and installs nothing, so a tap that lands in the extension
 /// falls back to opening Voice already listening. Mirrors `MeetingLauncher`.
 enum VoiceLauncher {
-    static var start: (@MainActor () async -> VoiceLaunchOutcome)?
+    /// The agent chosen in the widget or control's configuration, or nil
+    /// for the last one used.
+    static var start: (@MainActor (VoicePartnerChoice?) async -> VoiceLaunchOutcome)?
     static var send: (@MainActor () async -> Void)?
     static var cancel: (@MainActor () async -> Void)?
 
@@ -37,14 +39,30 @@ enum VoiceLauncher {
 @available(iOS 18, *)
 struct StartVoiceTurnIntent: AudioRecordingIntent, LiveActivityIntent {
     static var title: LocalizedStringResource = "Talk to Burrow"
-    static var description = IntentDescription("Starts a Voice turn with the agent you talked to last.")
+    static var description = IntentDescription("Starts a Voice turn with an agent: the one you talked to last, or the one you pick.")
+    /// Never opens the app to run: the turn runs in the background with its
+    /// Live Activity (iOS only foregrounds it for the fallback).
+    static var openAppWhenRun = false
+
+    /// "Last used" by default (device rev 3).
+    @Parameter(title: "Agent")
+    var agent: VoiceAgentEntity?
+
+    init() {}
+
+    init(agent: VoiceAgentEntity?) {
+        self.agent = agent
+    }
 
     @MainActor
     func perform() async throws -> IntentResultContainer<Never, Never, Never, Never> {
         // Which process ran perform: ids and states only, never words.
-        IntentLog.step("voice.perform", "process=\(InstallQuery.isAppExtension ? "extension" : "app") hook=\(VoiceLauncher.start != nil)")
+        let chosen = agent?.choice
+        let process = InstallQuery.isAppExtension ? "extension" : "app"
+        let agentKind = chosen == nil ? "last" : "chosen"
+        IntentLog.step("voice.perform", "process=\(process) hook=\(VoiceLauncher.start != nil) agent=\(agentKind)")
         if let start = VoiceLauncher.start {
-            switch await start() {
+            switch await start(chosen) {
             case .background: return .result()
             case .openApp(let link): return open(link)
             }
@@ -116,4 +134,87 @@ extension ControlCopy {
         let value = install.flatMap { $0.isEmpty ? nil : "\(name) · \($0)" } ?? name
         return ControlCopy(symbol: "mic", label: "Voice", value: value)
     }
+}
+
+// MARK: - The agent a Voice surface talks to (device rev 3)
+
+/// "Last used", or one agent on one install: the Voice widget's and the
+/// Voice control's configuration parameter. Its id is `last` or an agent
+/// `EntityRef` (`<host>|<uuid>`); the host is never shown.
+struct VoiceAgentEntity: AppEntity {
+    static var typeDisplayRepresentation: TypeDisplayRepresentation = "Agent"
+    static var defaultQuery = VoiceAgentQuery()
+    static let lastUsedID = "last"
+    static let lastUsed = VoiceAgentEntity(id: lastUsedID, name: "Last used", subtitle: "The agent you talked to last")
+
+    let id: String
+    let name: String
+    let subtitle: String
+
+    var displayRepresentation: DisplayRepresentation {
+        DisplayRepresentation(
+            title: "\(name)", subtitle: "\(subtitle)", image: .init(systemName: id == Self.lastUsedID ? "clock.arrow.circlepath" : "cpu"))
+    }
+
+    init(id: String, name: String, subtitle: String) {
+        self.id = id
+        self.name = name
+        self.subtitle = subtitle
+    }
+
+    init(_ agent: AgentEntity) {
+        self.init(id: agent.id, name: agent.name, subtitle: agent.subtitle)
+    }
+
+    /// A recent partner, as a widget button's agent.
+    init(_ partner: VoicePartnerChoice, subtitle: String = "Agent") {
+        self.init(id: EntityRef(host: partner.host, uuid: partner.agentID).id, name: partner.name, subtitle: subtitle)
+    }
+
+    /// The partner the turn talks to; nil for "Last used".
+    var choice: VoicePartnerChoice? {
+        guard id != Self.lastUsedID, let ref = EntityRef(id) else { return nil }
+        return VoicePartnerChoice(host: ref.host, agentID: ref.uuid, name: name, lastUsedAt: nil)
+    }
+}
+
+struct VoiceAgentQuery: EntityStringQuery {
+    func entities(for identifiers: [String]) async throws -> [VoiceAgentEntity] {
+        let agents = identifiers.filter { $0 != VoiceAgentEntity.lastUsedID }
+        let resolved = agents.isEmpty ? [] : try await AgentQuery().entities(for: agents).map(VoiceAgentEntity.init)
+        return (identifiers.contains(VoiceAgentEntity.lastUsedID) ? [.lastUsed] : []) + resolved
+    }
+
+    func suggestedEntities() async throws -> [VoiceAgentEntity] {
+        [.lastUsed] + (try await AgentQuery().suggestedEntities()).map(VoiceAgentEntity.init)
+    }
+
+    func entities(matching string: String) async throws -> [VoiceAgentEntity] {
+        try await suggestedEntities().filter { $0.name.localizedCaseInsensitiveContains(string) }
+    }
+
+    func defaultResult() async -> VoiceAgentEntity? { .lastUsed }
+}
+
+/// The Voice widget's configuration: which agent the big mic talks to.
+struct VoiceWidgetIntent: WidgetConfigurationIntent {
+    static var title: LocalizedStringResource = "Voice"
+    static var description = IntentDescription("Pick the agent the mic talks to.")
+
+    @Parameter(title: "Agent")
+    var agent: VoiceAgentEntity?
+
+    init() {}
+}
+
+/// The Voice control's configuration (Control Center, Lock Screen).
+@available(iOS 18, *)
+struct VoiceControlIntent: ControlConfigurationIntent {
+    static var title: LocalizedStringResource = "Voice"
+    static var description = IntentDescription("Pick the agent the control talks to.")
+
+    @Parameter(title: "Agent")
+    var agent: VoiceAgentEntity?
+
+    init() {}
 }

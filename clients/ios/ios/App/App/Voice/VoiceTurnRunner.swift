@@ -87,6 +87,28 @@ final class VoiceTurnRunner {
     var sleep: (TimeInterval) async -> Void = { seconds in try? await Task.sleep(nanoseconds: UInt64(seconds * 1_000_000_000)) }
     /// How long "No words heard" shows before the activity ends (canvas: about 2 s).
     var noWordsHold: TimeInterval = 2
+    /// The pause before the one retry of a refused session.
+    var sessionRetryDelay: TimeInterval = 0.3
+    /// The reply voice: the Voice tab's last pick (`ReplyVoiceChoice`).
+    var replyVoice: @MainActor () -> NativeReplyVoice.Pick = { NativeReplyVoice.current() }
+    /// Pocket TTS, built only when the pick is a Pocket voice.
+    var makePocketReader: @MainActor () -> any VoiceSpeaking = {
+        PocketSpeaker(engine: SystemPocketEngine(), output: AVPocketAudioOutput())
+    }
+    private var pocketInstance: (any VoiceSpeaking)?
+    private var chosenReader: (any VoiceSpeaking)?
+    /// Whichever voice reads this turn's reply.
+    private var reader: any VoiceSpeaking { chosenReader ?? speaker }
+
+    private func pocketReader() -> any VoiceSpeaking {
+        if let pocketInstance { return pocketInstance }
+        let made = makePocketReader()
+        pocketInstance = made
+        return made
+    }
+
+    /// The recent partners the medium Voice widget offers.
+    var recents = VoicePartnerHistory()
     /// How long the finished activity keeps Talk filled before it ends.
     var finishedHold: TimeInterval = 8
     /// How long the ended activity stays on the Lock Screen.
@@ -149,7 +171,7 @@ final class VoiceTurnRunner {
     /// One tap. Listening: the tap sends. Speaking or thinking: it barges
     /// in with a new turn. Otherwise it starts listening, or says why the
     /// app must open (`VoiceFallback`).
-    func start() async -> VoiceLaunchOutcome {
+    func start(with chosen: VoicePartnerChoice? = nil) async -> VoiceLaunchOutcome {
         trace("tap process=app")
         switch phase {
         case .listening:
@@ -163,37 +185,49 @@ final class VoiceTurnRunner {
         case .idle:
             break
         }
-        return await beginTurn()
+        return await beginTurn(with: chosen)
     }
 
-    private func beginTurn() async -> VoiceLaunchOutcome {
+    private func beginTurn(with chosen: VoicePartnerChoice?) async -> VoiceLaunchOutcome {
         VoiceCoordinator.stopPluginSpeakers?()
         let inputs = VoiceFallback.Inputs(
             osSupportsIntent: true, speechReady: await speechReady(), activitiesEnabled: activity.areActivitiesEnabled, hookPresent: true)
         if let reason = VoiceFallback.decide(inputs) { return fallback(reason.rawValue) }
-        // Mic permission missing or the mic busy: no activity; the app opens
-        // to Voice's own permission or busy state.
+        // Mic permission missing or a call holding the mic: no activity; the
+        // app opens to Voice's own permission or busy state.
         guard micGranted() else { return fallback("mic_permission") }
         if callState().hasCall { return fallback("mic_in_use") }
-        guard let partner = await api.partner() else { return fallback("no_partner") }
+        var resolved = chosen
+        if resolved == nil { resolved = await api.partner() }
+        guard let partner = resolved else { return fallback("no_partner") }
         self.partner = partner
+        recents.add(partner)
         transcript = ""
         pathSegment = nil
         spoken = 0
         seq = 0
         lastSentence = nil
+        chosenReader = nil
         generation += 1
         let mine = generation
-        do {
-            try session.activate()
-        } catch {
-            return fallback("mic_in_use")
-        }
+        // The Live Activity FIRST (device rev 3): an AudioRecordingIntent may
+        // record from the background only while its Live Activity is up.
+        // Activating the session before it was refused with '!pla'
+        // (cannotStartPlaying) on the device whenever the app was not in
+        // the foreground.
         do {
             try activity.start(partner: partner.name, installLabel: installLabel(partner.host), host: partner.host, state: state(.listening))
+            trace("activity started")
         } catch {
-            session.deactivate()
+            trace("activity failed \(Self.code(error))")
             return fallback(VoiceFallback.Reason.activityRequestFailed.rawValue)
+        }
+        do {
+            try await activateSession()
+        } catch {
+            trace("session refused \(Self.code(error))")
+            activity.end(state(.ended), dismissAfter: nil)
+            return fallback("mic_in_use")
         }
         do {
             try await transcriber.start { [weak self] text in
@@ -202,6 +236,7 @@ final class VoiceTurnRunner {
                 self.activity.update(self.state(.listening))
             }
         } catch {
+            trace("transcriber failed \(Self.code(error))")
             activity.end(state(.ended), dismissAfter: nil)
             session.deactivate()
             return fallback("start_failed")
@@ -212,6 +247,24 @@ final class VoiceTurnRunner {
         VoiceCoordinator.stopRunner = { [weak self] in self?.cancel(reason: "tab_turn") }
         trace("listening")
         return .background
+    }
+
+    /// The session, once more after a short pause if iOS refuses it at
+    /// first: the activity just requested can take a moment to count.
+    private func activateSession() async throws {
+        do {
+            try session.activate()
+        } catch {
+            trace("session retry \(Self.code(error))")
+            await sleep(sessionRetryDelay)
+            try session.activate()
+        }
+    }
+
+    /// An error's domain and code, for the trace: never its message.
+    static func code(_ error: Error) -> String {
+        let ns = error as NSError
+        return "domain=\(ns.domain) code=\(ns.code)"
     }
 
     private func fallback(_ reason: String) -> VoiceLaunchOutcome {
@@ -298,27 +351,31 @@ final class VoiceTurnRunner {
             for sentence in poll.sentences { speak(sentence) }
             spoken = max(spoken, poll.spoken)
             if poll.final {
-                speaker.finish(id: clientTurnID)
+                reader.finish(id: clientTurnID)
                 break
             }
         }
         guard generation == mine else { return }
-        if !speaker.isSpeaking { await finish(mine) }
+        if !reader.isSpeaking { await finish(mine) }
     }
 
     private func speak(_ sentence: String) {
         guard let clientTurnID else { return }
         if seq == 0 {
             let mine = generation
-            speaker.onEvent = { [weak self] event in
+            // The voice the person last picked in the Voice tab (device rev 3).
+            let pick = replyVoice()
+            chosenReader = pick.pocket ? pocketReader() : speaker
+            trace("reply voice pocket=\(pick.pocket) fell_back=\(pick.reason ?? "-")")
+            reader.onEvent = { [weak self] event in
                 guard let self, event.id == self.clientTurnID else { return }
                 if event.state == .finished || event.state == .stopped || event.state == .unheard {
                     Task { @MainActor in await self.finish(mine) }
                 }
             }
-            speaker.begin(id: clientTurnID, voiceID: nil)
+            reader.begin(id: clientTurnID, voiceID: pick.voiceID)
         }
-        speaker.append(id: clientTurnID, seq: seq, text: sentence)
+        reader.append(id: clientTurnID, seq: seq, text: sentence)
         seq += 1
         lastSentence = sentence
         phase = .speaking
@@ -347,7 +404,7 @@ final class VoiceTurnRunner {
         trace("cancel reason=\(reason)")
         generation += 1
         transcriber.cancel()
-        speaker.stop(reason: reason)
+        reader.stop(reason: reason)
         activity.end(state(.ended, reply: lastSentence), dismissAfter: nil)
         phase = .idle
         releaseAll()
@@ -357,7 +414,7 @@ final class VoiceTurnRunner {
         trace("interrupt reason=\(reason)")
         generation += 1
         transcriber.cancel()
-        speaker.stop(reason: reason)
+        reader.stop(reason: reason)
         activity.end(state(.ended, reply: lastSentence), dismissAfter: nil)
         phase = .idle
         releaseAll()

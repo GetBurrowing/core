@@ -148,7 +148,8 @@ final class SystemVoiceTranscriber: VoiceTranscribing {
 /// `BurrowBridgeViewController.capacitorDidLoad`.
 ///
 /// Methods: `capabilities`, `prepare`, `start`, `stop`, `cancel`, `speak`,
-/// `stopSpeaking`, `openSettings`, `voices`, `speakPart`, `prepareModel`.
+/// `stopSpeaking`, `openSettings`, `voices`, `speakPart`, `prepareModel`,
+/// `rememberVoice`.
 /// Events: `partial {text}`, `final {text}`, `ended {reason}`,
 /// `speech {id, state, reason}`, `route {label}`,
 /// `model {state, received, total, reason}`.
@@ -174,6 +175,7 @@ public class BurrowVoicePlugin: CAPPlugin, CAPBridgedPlugin {
         CAPPluginMethod(name: "voices", returnType: CAPPluginReturnPromise),
         CAPPluginMethod(name: "speakPart", returnType: CAPPluginReturnPromise),
         CAPPluginMethod(name: "prepareModel", returnType: CAPPluginReturnPromise),
+        CAPPluginMethod(name: "rememberVoice", returnType: CAPPluginReturnPromise),
     ]
 
     static let events = ["partial", "final", "ended", "speech", "route", "model"]
@@ -202,6 +204,9 @@ public class BurrowVoicePlugin: CAPPlugin, CAPBridgedPlugin {
     /// The one-shot "open Voice already listening" flag (task 01a21e75
     /// stage 5), reported once by `capabilities` as `autoStart`.
     var autoStart = VoiceAutoStart()
+    /// The Voice tab's reply-voice pick, kept for turns started with no
+    /// page (the Voice control and widget; device rev 3).
+    var replyVoiceChoice = ReplyVoiceChoice()
     var voiceCatalog: any ReplyVoiceCatalog = SystemReplyVoiceCatalog()
     var languageCode: () -> String = { AVSpeechSynthesisVoice.currentLanguageCode() }
     var callState: @MainActor () -> any VoiceCallState = { CallController.shared }
@@ -651,6 +656,7 @@ public class BurrowVoicePlugin: CAPPlugin, CAPBridgedPlugin {
 
     @MainActor
     func speakPart(id: String, seq: Int, text: String, final: Bool, voice requested: String? = nil) -> [String: Any] {
+        replyVoiceChoice.record(requested)
         VoiceTrace.log("part id=\(id) seq=\(seq) final=\(final) chars=\(text.count)")
         if let stream, stream.id == id {
             stream.speaker.append(id: id, seq: seq, text: text)
@@ -682,6 +688,7 @@ public class BurrowVoicePlugin: CAPPlugin, CAPBridgedPlugin {
 
     @MainActor
     func prepareModel(voice requested: String? = nil) -> [String: Any] {
+        replyVoiceChoice.record(requested)
         guard let store = pocketStore() else {
             return ["state": "absent", "received": 0, "total": 0, "reason": pocketGate().reason ?? NSNull()]
         }
@@ -709,6 +716,7 @@ public class BurrowVoicePlugin: CAPPlugin, CAPBridgedPlugin {
 
     @MainActor
     func speakReply(id: String, text: String, voice requested: String? = nil) -> [String: Any] {
+        replyVoiceChoice.record(requested)
         VoiceTrace.log("speak id=\(id) chars=\(text.count)")
         if let refused = refuseReply(id) { return refused }
         let chosen = choose(requested)
@@ -733,6 +741,17 @@ public class BurrowVoicePlugin: CAPPlugin, CAPBridgedPlugin {
         Task { @MainActor in
             self.stopSpeakers(reason: reason)
             self.releaseSessionIfIdle()
+            call.resolve()
+        }
+    }
+
+    /// `{voice}`: the reply voice the person picked in the Voice tab, kept
+    /// for replies to turns started from the Voice control or widget
+    /// (`ReplyVoiceChoice`; task 01a21e75). Resolves at once.
+    @objc func rememberVoice(_ call: CAPPluginCall) {
+        let voice = call.getString("voice")
+        Task { @MainActor in
+            self.replyVoiceChoice.record(voice)
             call.resolve()
         }
     }

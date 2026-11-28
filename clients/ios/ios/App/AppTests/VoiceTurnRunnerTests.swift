@@ -21,6 +21,8 @@ private final class RecordingBackend: VoiceAudioSessionBackend {
     var hasOutputRoute = true
     var isOtherAudioPlaying = false
     var refuse = false
+    /// Refuse only this many activations, then accept.
+    var refuseTimes: Int?
     private(set) var activations: [Bool] = []
 
     func setCategory(_ category: AVAudioSession.Category, mode: AVAudioSession.Mode, options: AVAudioSession.CategoryOptions) throws {
@@ -28,7 +30,11 @@ private final class RecordingBackend: VoiceAudioSessionBackend {
     }
 
     func setActive(_ active: Bool, options: AVAudioSession.SetActiveOptions) throws {
-        if active && refuse { throw NSError(domain: NSOSStatusErrorDomain, code: 561_017_449) }
+        if active, refuse || (refuseTimes ?? 0) > 0 {
+            refuseTimes = refuseTimes.map { $0 - 1 }
+            // '!pla', what iOS answered on the device before the activity was up.
+            throw NSError(domain: NSOSStatusErrorDomain, code: 561_015_905)
+        }
         activations.append(active)
     }
 }
@@ -78,7 +84,11 @@ private final class Speaker: VoiceSpeaking {
 
     var isSpeaking: Bool { id != nil }
     func speak(id: String, text: String, voiceID: String?) {}
-    func begin(id: String, voiceID: String?) { self.id = id }
+    private(set) var voiceIDs: [String?] = []
+    func begin(id: String, voiceID: String?) {
+        self.id = id
+        voiceIDs.append(voiceID)
+    }
     func append(id: String, seq: Int, text: String) {
         guard self.id == id else { return }
         parts.append(text)
@@ -108,6 +118,7 @@ private final class API: VoiceTurnAPI {
         host: "app.example.test", agentID: "a0000000-0000-4000-8000-000000000001", name: "Test Agent", lastUsedAt: nil)
     var sendFailures = 0
     private(set) var sent: [(text: String, id: String)] = []
+    private(set) var sentTo: [VoicePartnerChoice] = []
     var polls: [VoiceReplyPoll] = []
     private(set) var pollCount = 0
 
@@ -115,6 +126,7 @@ private final class API: VoiceTurnAPI {
 
     func send(_ partner: VoicePartnerChoice, text: String, clientTurnID: String) async throws -> VoiceTurnPosted {
         sent.append((text, clientTurnID))
+        sentTo.append(partner)
         if sendFailures > 0 {
             sendFailures -= 1
             throw BurrowAPIClient.Failure.badResponse
@@ -138,7 +150,11 @@ private final class FakeActivity: VoiceActivityControlling {
     private(set) var ended: [(VoiceActivityState, TimeInterval?)] = []
     var isLive: Bool { started > ended.count }
 
+    /// Runs at `start`, so a test can read what was already true then.
+    var onStart: (() -> Void)?
+
     func start(partner: String, installLabel: String?, host: String, state: VoiceActivityState) throws {
+        onStart?()
         if requestFails { throw ActivityKitVoiceActivity.Failure.unavailable }
         started += 1
         states.append(state)
@@ -181,6 +197,7 @@ final class VoiceTurnRunnerTests: XCTestCase {
     private var speechReady = true
     private var micGranted = true
     private var autoStartName = ""
+    private var replyPick = NativeReplyVoice.Pick(pocket: false, voiceID: "en-premium", reason: nil)
 
     override func setUp() async throws {
         log = Log()
@@ -204,6 +221,7 @@ final class VoiceTurnRunnerTests: XCTestCase {
         VoiceCoordinator.stopRunner = nil
         VoiceCoordinator.stopPluginSpeakers = nil
         UserDefaults().removePersistentDomain(forName: autoStartName)
+        UserDefaults().removePersistentDomain(forName: autoStartName + "-recents")
     }
 
     private func makeRunner() -> VoiceTurnRunner {
@@ -213,6 +231,9 @@ final class VoiceTurnRunnerTests: XCTestCase {
             callState: { [unowned self] in self.call }, installLabel: { _ in nil })
         runner.sleep = { _ in }
         runner.listeningMark = { _ in }
+        runner.sessionRetryDelay = 0
+        runner.recents = VoicePartnerHistory(defaults: UserDefaults(suiteName: autoStartName + "-recents"))
+        runner.replyVoice = { [unowned self] in self.replyPick }
         runner.fallbackLink = { DeepLink(host: "app.example.test", path: "/voice") }
         var n = 0
         runner.newTurnID = {
@@ -419,7 +440,7 @@ final class VoiceTurnRunnerTests: XCTestCase {
         let outcome = await runner.start()
         XCTAssertEqual(outcome, .openApp(DeepLink(host: "app.example.test", path: "/voice")), file: file, line: line)
         XCTAssertEqual(runner.phase, .idle, file: file, line: line)
-        XCTAssertEqual(activity.started, 0, "no Live Activity duplicates the app", file: file, line: line)
+        XCTAssertEqual(activity.started, activity.ended.count, "no Live Activity is left up", file: file, line: line)
         XCTAssertTrue(api.sent.isEmpty, file: file, line: line)
         assertReleased(runner, file: file, line: line)
     }
@@ -434,10 +455,10 @@ final class VoiceTurnRunnerTests: XCTestCase {
         await assertFallsBack(makeRunner())
     }
 
-    func testActivityRequestThrowingFallsBackAndReleasesTheSession() async {
+    func testActivityRequestThrowingFallsBackAndNeverOpensTheSession() async {
         activity.requestFails = true
         await assertFallsBack(makeRunner())
-        XCTAssertEqual(backend.activations, [true, false])
+        XCTAssertEqual(backend.activations, [], "the session is opened only once the activity is up")
     }
 
     func testMicPermissionMissingOrBusyOpensTheAppWithNoActivity() async {
@@ -447,8 +468,82 @@ final class VoiceTurnRunnerTests: XCTestCase {
         call.hasCall = true
         await assertFallsBack(makeRunner())
         call.hasCall = false
+        XCTAssertEqual(activity.started, 0, "no permission or a call: no activity at all")
+        // The mic refused even after the retry: the activity started for it
+        // ends at once.
         backend.refuse = true
         await assertFallsBack(makeRunner())
+        XCTAssertEqual(activity.started, 1)
+        XCTAssertNil(activity.ended.last?.1)
+    }
+
+    // MARK: Device rev 3
+
+    /// On the device the session was refused ('!pla') whenever it was
+    /// opened before the Live Activity. The activity now comes first.
+    func testTheLiveActivityStartsBeforeTheSessionOpens() async {
+        var sessionActiveAtActivityStart: Bool?
+        activity.onStart = { [unowned self] in sessionActiveAtActivityStart = self.shared.isActive }
+        let runner = makeRunner()
+        _ = await runner.start()
+        XCTAssertEqual(sessionActiveAtActivityStart, false)
+        XCTAssertTrue(shared.isActive)
+        XCTAssertEqual(runner.phase, .listening)
+        runner.cancel()
+        assertReleased(runner)
+    }
+
+    func testARefusedSessionIsRetriedOnce() async {
+        backend.refuseTimes = 1
+        let runner = makeRunner()
+        let outcome = await runner.start()
+        XCTAssertEqual(outcome, .background)
+        XCTAssertEqual(runner.phase, .listening)
+        XCTAssertEqual(backend.activations, [true])
+        runner.cancel()
+        assertReleased(runner)
+    }
+
+    func testAChosenAgentIsTalkedToInsteadOfTheLastPartner() async {
+        let chosen = VoicePartnerChoice(host: "lab.example.test", agentID: "a0000000-0000-4000-8000-000000000002", name: "Lab Agent", lastUsedAt: nil)
+        let runner = makeRunner()
+        _ = await runner.start(with: chosen)
+        await runner.send()
+        XCTAssertEqual(api.sentTo.map(\.agentID), [chosen.agentID])
+        XCTAssertEqual(api.sentTo.map(\.host), [chosen.host])
+        XCTAssertEqual(runner.recents.partners.first, chosen, "a chosen agent becomes the newest recent")
+        speaker.done()
+        await settle(runner)
+        assertReleased(runner)
+    }
+
+    /// Ryan: "use the last stored voice". The reply of a turn started from
+    /// the control or widget is read in the voice the Voice tab last picked.
+    func testTheReplyIsReadInTheStoredVoice() async {
+        replyPick = NativeReplyVoice.Pick(pocket: false, voiceID: "en-enhanced", reason: nil)
+        api.polls = [VoiceReplyPoll(state: "done", sentences: ["One."], spoken: 1, final: true)]
+        let runner = makeRunner()
+        _ = await runner.start()
+        await runner.send()
+        XCTAssertEqual(speaker.voiceIDs, ["en-enhanced"])
+        speaker.done()
+        await settle(runner)
+    }
+
+    func testAPocketPickIsReadByPocketTTS() async {
+        replyPick = NativeReplyVoice.Pick(pocket: true, voiceID: "pocket-tts:marius", reason: nil)
+        let pocket = Speaker(log)
+        api.polls = [VoiceReplyPoll(state: "done", sentences: ["One."], spoken: 1, final: true)]
+        let runner = makeRunner()
+        runner.makePocketReader = { pocket }
+        _ = await runner.start()
+        await runner.send()
+        XCTAssertEqual(pocket.voiceIDs, ["pocket-tts:marius"])
+        XCTAssertEqual(pocket.parts, ["One."])
+        XCTAssertTrue(speaker.voiceIDs.isEmpty, "the system voice did not read it")
+        pocket.done()
+        await settle(runner)
+        assertReleased(runner)
     }
 
     func testAutoStartIsOneShotAndExpires() {
@@ -631,5 +726,67 @@ final class VoicePartnerResolverTests: XCTestCase {
             XCTAssertEqual(request.url?.host, b)
             XCTAssertEqual(request.value(forHTTPHeaderField: "Authorization"), "Bearer token-for-b")
         }
+    }
+}
+
+/// Device rev 3: the stored reply voice, and the recent agents.
+@MainActor
+final class NativeReplyVoiceTests: XCTestCase {
+    private let installed = [
+        ReplyVoice(id: "en-default", name: "Samantha", quality: .default, language: "en-US"),
+        ReplyVoice(id: "en-enhanced", name: "Ava", quality: .enhanced, language: "en-US"),
+        ReplyVoice(id: "en-premium", name: "Zoe", quality: .premium, language: "en-US"),
+    ]
+    private var suite = ""
+
+    override func setUp() async throws { suite = "reply-voice-\(UUID().uuidString)" }
+    override func tearDown() async throws { UserDefaults().removePersistentDomain(forName: suite) }
+
+    func testTheStoredSystemVoiceIsUsedNotTheBest() {
+        let pick = NativeReplyVoice.pick(choice: "en-default", language: "en-US", installed: installed, pocket: .unsupported)
+        XCTAssertEqual(pick, NativeReplyVoice.Pick(pocket: false, voiceID: "en-default", reason: nil))
+    }
+
+    func testAStoredPocketVoiceIsUsedWhenItIsOnThePhone() {
+        let id = PocketVoice.id
+        XCTAssertEqual(NativeReplyVoice.pick(choice: id, language: "en-US", installed: installed, pocket: .ready).voiceID, id)
+        XCTAssertTrue(NativeReplyVoice.pick(choice: id, language: "en-US", installed: installed, pocket: .ready).pocket)
+        let notReady = NativeReplyVoice.pick(choice: id, language: "en-US", installed: installed, pocket: .notReady)
+        XCTAssertEqual(notReady.voiceID, "en-premium", "as in the tab: the best system voice reads while Pocket is not on the phone")
+        XCTAssertEqual(notReady.reason, "model_not_ready")
+    }
+
+    func testThePluginStoresEveryPickItIsGiven() async {
+        let choice = ReplyVoiceChoice(defaults: UserDefaults(suiteName: suite))
+        let plugin = BurrowVoicePlugin()
+        plugin.replyVoiceChoice = choice
+        plugin.pocketGate = { (false, "test") }
+        _ = plugin.prepareModel(voice: "en-enhanced")
+        XCTAssertEqual(choice.voiceID, "en-enhanced")
+        choice.record(nil)
+        XCTAssertEqual(choice.voiceID, "en-enhanced", "a reply with no voice keeps the last pick")
+        XCTAssertEqual(plugin.pluginMethods.map(\.name).last, "rememberVoice")
+    }
+
+    func testTheHistoryKeepsThreeNewestFirstWithoutRepeats() {
+        let history = VoicePartnerHistory(defaults: UserDefaults(suiteName: suite))
+        func partner(_ n: Int, _ host: String = "app.example.test") -> VoicePartnerChoice {
+            VoicePartnerChoice(host: host, agentID: "a0000000-0000-4000-8000-00000000000\(n)", name: "Agent \(n)", lastUsedAt: nil)
+        }
+        for n in 1...4 { history.add(partner(n)) }
+        history.add(partner(3))
+        XCTAssertEqual(history.partners.map(\.name), ["Agent 3", "Agent 4", "Agent 2"])
+        let rows = VoiceRecentRow.rows(history.partners, excluding: partner(3), label: { _ in "Alpha" })
+        XCTAssertEqual(rows.map(\.partner.name), ["Agent 4", "Agent 2"])
+        XCTAssertEqual(rows.first?.spoken, "Talk to Agent 4, on Alpha")
+    }
+
+    func testTheAgentParameterDefaultsToLastUsed() async {
+        let lastUsed = await VoiceAgentQuery().defaultResult()
+        XCTAssertEqual(lastUsed?.id, VoiceAgentEntity.lastUsedID)
+        XCTAssertNil(lastUsed?.choice, "Last used carries no agent")
+        let chosen = VoiceAgentEntity(id: "app.example.test|a0000000-0000-4000-8000-000000000001", name: "Build agent", subtitle: "Agent")
+        XCTAssertEqual(chosen.choice?.host, "app.example.test")
+        XCTAssertEqual(chosen.choice?.agentID, "a0000000-0000-4000-8000-000000000001")
     }
 }

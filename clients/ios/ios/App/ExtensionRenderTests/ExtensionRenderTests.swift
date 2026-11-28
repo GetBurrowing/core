@@ -732,6 +732,35 @@ final class ExtensionRenderTests: XCTestCase {
         }
         try tile("rest-several-ax5", .make(signedIn: true, partner: "Test Agent", install: "Lab", listening: false), type: .accessibility5)
 
+        // The medium Voice widget (device rev 3): the big mic and up to three
+        // recent agents, each its own tap target.
+        let medium = CGSize(width: 338, height: 158)
+        func recent(_ n: Int, _ host: String) -> VoicePartnerChoice {
+            VoicePartnerChoice(
+                host: host, agentID: "a0000000-0000-4000-8000-00000000000\(n)", name: ["Build agent", "Release agent", "Test Agent"][n - 1],
+                lastUsedAt: nil)
+        }
+        let sameInstall = [recent(1, "app.example.test"), recent(2, "app.example.test"), recent(3, "app.example.test")]
+        let mixedInstalls = [recent(1, "app.example.test"), recent(2, "lab.example.test"), recent(3, "app.example.test")]
+        let labels = ["app.example.test": "Alpha", "lab.example.test": "Lab"]
+        let mediumCases: [(String, [VoiceRecentRow], String?, DynamicTypeSize)] = [
+            ("none", [], nil, .large),
+            ("one-row", Array(sameInstall.prefix(1)).map { VoiceRecentRow(partner: $0, installLabel: nil) }, nil, .large),
+            ("three", sameInstall.map { VoiceRecentRow(partner: $0, installLabel: nil) }, nil, .large),
+            ("three-several", mixedInstalls.map { VoiceRecentRow(partner: $0, installLabel: labels[$0.host]) }, "Alpha", .large),
+            ("three-several-ax5", mixedInstalls.map { VoiceRecentRow(partner: $0, installLabel: labels[$0.host]) }, "Alpha", .accessibility5),
+        ]
+        for (name, rows, install, type) in mediumCases {
+            for dark in [false, true] where !(dark && type != .large) {
+                let entry = VoiceTileEntry(
+                    date: now, model: .make(signedIn: true, partner: "Test Agent", install: install, listening: false), partner: "Test Agent",
+                    rows: rows)
+                let view = VoiceTileView(entry: entry, family: .systemMedium).environment(\.dynamicTypeSize, type)
+                    .frame(width: medium.width, height: medium.height)
+                try save("voice-medium-\(name)\(dark ? "-dark" : "")", widgetFrame(view), size: CGSize(width: 362, height: 182), dark: dark)
+            }
+        }
+
         let one = VoiceActivityAttributes(partnerName: "Test Agent", installLabel: nil, host: "app.example.test")
         let several = VoiceActivityAttributes(partnerName: "Test Agent", installLabel: "Legacy Lab Install", host: "app.example.test")
         let heard = "can you check what is left on the release list for today"
