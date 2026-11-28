@@ -12,7 +12,10 @@ struct BlockedWidget: Widget {
         }
         .configurationDisplayName("Blocked for you")
         .description("Blocked tasks you can act on, with why.")
-        .supportedFamilies([.systemSmall, .systemMedium])
+        // Lock Screen too (device rev 4): on the phone Waiting, approvals
+        // and tasks were all 0, so every Lock Screen widget read empty
+        // while this count was not.
+        .supportedFamilies([.systemSmall, .systemMedium, .accessoryCircular, .accessoryRectangular])
         .contentMarginsDisabled()
     }
 }
@@ -27,6 +30,14 @@ struct BlockedWidgetView: View {
 
     var body: some View {
         switch family ?? environmentFamily {
+        case .accessoryCircular:
+            BlockedCircular(entry: entry)
+                .widgetURL(entry.link(path: "/tasks"))
+                .containerBackground(for: .widget) { AccessoryWidgetBackground() }
+        case .accessoryRectangular:
+            BlockedRectangular(entry: entry)
+                .widgetURL(entry.blockedRows.first?.link ?? entry.link(path: "/tasks"))
+                .containerBackground(.clear, for: .widget)
         case .systemSmall:
             FeedSmallCount(title: Self.title, entry: entry, section: .blocked, empty: Self.empty)
                 .padding(16)
@@ -99,5 +110,53 @@ struct BlockedMedium: View {
             }
             if failing { FeedFailureLine(failures: entry.failures) }
         }
+    }
+}
+
+/// Lock Screen circular: the total only, under the blocked mark. Tinted by
+/// the system, so no colour.
+struct BlockedCircular: View {
+    let entry: FeedEntry
+
+    var body: some View {
+        VStack(spacing: 0) {
+            Image(systemName: "hand.raised").font(.system(size: 11, weight: .semibold))
+            if !entry.signedIn {
+                Image(systemName: "person.crop.circle.badge.exclamationmark").font(.system(size: 18, weight: .semibold))
+            } else {
+                Text(entry.notLoaded ? "-" : "\(entry.count(.blocked))")
+                    .font(.system(size: 22, weight: .semibold)).monospacedDigit().lineLimit(1).minimumScaleFactor(0.5)
+            }
+        }
+        .accessibilityElement(children: .ignore)
+        .accessibilityLabel(entry.signedIn ? "Blocked for you, \(entry.count(.blocked))." : FeedCopy.signIn)
+    }
+}
+
+/// Lock Screen rectangular: "Blocked · 14" and the top task's title, which
+/// is redacted on a locked phone; the title line and count never are.
+struct BlockedRectangular: View {
+    static let title = "Blocked"
+    let entry: FeedEntry
+
+    var body: some View {
+        VStack(alignment: .leading, spacing: 0) {
+            if !entry.signedIn {
+                Text(BlockedWidgetView.title).font(.headline)
+                Text(entry.signInLine)
+            } else {
+                HStack(spacing: 0) {
+                    Text("\(BlockedWidgetView.title) · ").lineLimit(1)
+                    Text("\(entry.count(.blocked))").monospacedDigit().fixedSize().neverTruncates("blocked.rect.count")
+                }
+                .font(.headline)
+                if entry.count(.blocked) == 0 {
+                    Text(entry.notLoaded ? entry.notLoadedLine : BlockedWidgetView.empty).lineLimit(1)
+                } else if let row = entry.blockedRows.first {
+                    Text(row.row.title).lineLimit(1).privacySensitive()
+                }
+            }
+        }
+        .frame(maxWidth: .infinity, alignment: .leading)
     }
 }

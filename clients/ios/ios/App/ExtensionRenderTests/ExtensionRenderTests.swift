@@ -289,6 +289,18 @@ final class ExtensionRenderTests: XCTestCase {
         try save(
             "lock-inline", lock(SingleCountView(kind: .approvals, entry: e, family: .accessoryInline).frame(width: 260, height: 24)),
             size: CGSize(width: 284, height: 48), dark: true)
+        // As a locked phone draws them (device rev 4).
+        try save(
+            "lock-circular-locked",
+            lock(SingleCountView(kind: .approvals, entry: e, family: .accessoryCircular).redacted(reason: .privacy).frame(width: 72, height: 72)),
+            size: CGSize(width: 96, height: 96), dark: true)
+        try save(
+            "lock-rectangular-locked", lock(OverviewView(entry: e, family: .accessoryRectangular).redacted(reason: .privacy).frame(width: 172, height: 76)),
+            size: CGSize(width: 196, height: 100), dark: true)
+        try save(
+            "lock-inline-locked",
+            lock(SingleCountView(kind: .approvals, entry: e, family: .accessoryInline).redacted(reason: .privacy).frame(width: 260, height: 24)),
+            size: CGSize(width: 284, height: 48), dark: true)
     }
 
     // MARK: Siri and Shortcuts snippets (task 01a10db6 stage 3)
@@ -664,6 +676,26 @@ final class ExtensionRenderTests: XCTestCase {
                 "feed-waiting-rectangular-locked-\(state)",
                 lock(WaitingWidgetView(entry: e, family: .accessoryRectangular).redacted(reason: .privacy).frame(width: 172, height: 76)),
                 size: CGSize(width: 196, height: 100), dark: true)
+            // Device rev 4: every Lock Screen family, as a locked phone draws
+            // it (privacy redaction): the title and the count must remain.
+            try save(
+                "feed-waiting-circular-locked-\(state)",
+                lock(WaitingWidgetView(entry: e, family: .accessoryCircular).redacted(reason: .privacy).frame(width: 72, height: 72)),
+                size: CGSize(width: 96, height: 96), dark: true)
+            try save(
+                "feed-blocked-circular-\(state)", lock(BlockedWidgetView(entry: e, family: .accessoryCircular).frame(width: 72, height: 72)),
+                size: CGSize(width: 96, height: 96), dark: true)
+            try save(
+                "feed-blocked-circular-locked-\(state)",
+                lock(BlockedWidgetView(entry: e, family: .accessoryCircular).redacted(reason: .privacy).frame(width: 72, height: 72)),
+                size: CGSize(width: 96, height: 96), dark: true)
+            try save(
+                "feed-blocked-rectangular-\(state)", lock(BlockedWidgetView(entry: e, family: .accessoryRectangular).frame(width: 172, height: 76)),
+                size: CGSize(width: 196, height: 100), dark: true)
+            try save(
+                "feed-blocked-rectangular-locked-\(state)",
+                lock(BlockedWidgetView(entry: e, family: .accessoryRectangular).redacted(reason: .privacy).frame(width: 172, height: 76)),
+                size: CGSize(width: 196, height: 100), dark: true)
         }
         // Two rows that do not fit: the largest accessibility text size, and a
         // shorter widget (a smaller phone).
@@ -731,6 +763,26 @@ final class ExtensionRenderTests: XCTestCase {
             try tile("signed-out", .make(signedIn: false, partner: nil, install: nil, listening: false), dark: dark)
         }
         try tile("rest-several-ax5", .make(signedIn: true, partner: "Test Agent", install: "Lab", listening: false), type: .accessibility5)
+
+        // The turn's state on the tile and the medium widget (device rev 4),
+        // with the Cancel (x) beside the disc, at the default and largest text.
+        let recentPartner = VoicePartnerChoice(
+            host: "app.example.test", agentID: "a0000000-0000-4000-8000-000000000001", name: "Build agent", lastUsedAt: nil)
+        for phase in VoiceWidgetPhase.allCases where phase != .idle {
+            for (suffix, type) in [("", DynamicTypeSize.large), ("-ax5", .accessibility5)] {
+                let entry = VoiceTileEntry(
+                    date: now, model: .make(signedIn: true, partner: "Test Agent", install: nil, phase: phase), partner: "Test Agent",
+                    rows: [VoiceRecentRow(partner: recentPartner, installLabel: nil)])
+                try save(
+                    "voice-small-\(phase.rawValue)\(suffix)",
+                    widgetFrame(VoiceTileView(entry: entry, family: .systemSmall).environment(\.dynamicTypeSize, type).frame(width: 158, height: 158)),
+                    size: CGSize(width: 182, height: 182))
+                try save(
+                    "voice-medium-\(phase.rawValue)\(suffix)",
+                    widgetFrame(VoiceTileView(entry: entry, family: .systemMedium).environment(\.dynamicTypeSize, type).frame(width: 338, height: 158)),
+                    size: CGSize(width: 362, height: 182))
+            }
+        }
 
         // The medium Voice widget (device rev 3): the big mic and up to three
         // recent agents, each its own tap target.
@@ -831,6 +883,9 @@ final class ExtensionRenderTests: XCTestCase {
             ("voice", ControlCopy.voice(signedIn: true, partner: "Test Agent", install: nil)),
             ("voice-several", .voice(signedIn: true, partner: "Test Agent", install: "Lab")),
             ("voice-signed-out", .voice(signedIn: false, partner: nil, install: nil)),
+            ("voice-listening", .voice(signedIn: true, partner: "Test Agent", install: nil, phase: .listening)),
+            ("voice-sending", .voice(signedIn: true, partner: "Test Agent", install: nil, phase: .sending)),
+            ("voice-replying", .voice(signedIn: true, partner: "Test Agent", install: nil, phase: .replying)),
         ] {
             try save(
                 "control-\(name)", controlTile(copy).padding(12).background(Color(white: 0.3)), size: CGSize(width: 244, height: 100), dark: true)

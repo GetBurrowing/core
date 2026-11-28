@@ -112,6 +112,11 @@ enum VoiceFallback {
     }
 }
 
+/// The turn state a Voice widget or control shows (device rev 4).
+enum VoiceWidgetPhase: String, Codable, Equatable, CaseIterable {
+    case idle, listening, sending, replying
+}
+
 /// The Voice widget tile (canvas "Voice tile"): what it says and how big
 /// the disc is. Pure, so every state is unit-tested and rendered.
 struct VoiceTileModel: Equatable {
@@ -120,6 +125,11 @@ struct VoiceTileModel: Equatable {
         case rest
         /// The same disc with the send glyph: a tap sends.
         case listening
+        /// Grey disc: the turn is on its way.
+        case sending
+        /// Outline mic: the reply is being read; a tap interrupts it and
+        /// starts a new turn, as in the app.
+        case replying
         /// Outline disc: a tap opens the app to sign in.
         case signedOut
     }
@@ -133,43 +143,82 @@ struct VoiceTileModel: Equatable {
 
     static let minimumDisc: Double = 44
 
+    /// The small Cancel (x) beside the disc while a turn is under way.
+    var showsCancel: Bool { [.listening, .sending, .replying].contains(kind) }
+
     static func make(signedIn: Bool, partner: String?, install: String?, listening: Bool) -> VoiceTileModel {
+        make(signedIn: signedIn, partner: partner, install: install, phase: listening ? .listening : .idle)
+    }
+
+    static func make(signedIn: Bool, partner: String?, install: String?, phase: VoiceWidgetPhase) -> VoiceTileModel {
         guard signedIn else { return VoiceTileModel(kind: .signedOut, title: "Sign in to Burrow", detail: nil, discSize: 64) }
         let detail = install.flatMap { $0.isEmpty ? nil : "on \($0)" }
         let disc: Double = detail == nil ? 64 : 52
-        if listening { return VoiceTileModel(kind: .listening, title: "Tap to send", detail: detail, discSize: disc) }
-        return VoiceTileModel(kind: .rest, title: "Talk to \(partner ?? "Burrow")", detail: detail, discSize: disc)
+        let name = partner ?? "Burrow"
+        switch phase {
+        case .idle: return VoiceTileModel(kind: .rest, title: "Talk to \(name)", detail: detail, discSize: disc)
+        case .listening: return VoiceTileModel(kind: .listening, title: "Tap to send", detail: detail, discSize: disc)
+        case .sending: return VoiceTileModel(kind: .sending, title: "Sending", detail: detail, discSize: disc)
+        case .replying: return VoiceTileModel(kind: .replying, title: "\(name) is replying", detail: detail, discSize: disc)
+        }
     }
 
     /// VoiceOver: "Talk to Burrow" / "Send to Burrow" (the system adds ", button").
     func accessibilityLabel(partner: String?) -> String {
         switch kind {
-        case .rest: return "Talk to \(partner ?? "Burrow")"
+        case .rest, .replying: return "Talk to \(partner ?? "Burrow")"
         case .listening: return "Send to \(partner ?? "Burrow")"
+        case .sending: return "Sending"
         case .signedOut: return title
         }
     }
 }
 
-/// Whether a native turn is listening right now, in the App Group, so the
-/// widget tile can show "Tap to send". A phase and a time, never words.
+/// The Voice turn's state, in the App Group, so the Voice widget and the
+/// Voice control can show it (device rev 4). A phase and a time, never
+/// words. A state older than its phase can last reads as idle, so a turn
+/// whose process died never leaves the widget stuck.
 struct VoiceTurnStatusStore {
-    private static let key = "burrow.voice.listening.v1"
-    /// A listening turn is capped at a minute; a stale mark reads as rest.
-    static let validFor: TimeInterval = 90
+    private static let key = "burrow.voice.turnstate.v1"
+
+    /// How long each phase can honestly last: a turn listens at most a
+    /// minute; a reply is long-polled and read in a few minutes at most.
+    static func validFor(_ phase: VoiceWidgetPhase) -> TimeInterval {
+        switch phase {
+        case .idle: return .infinity
+        case .listening: return 90
+        case .sending: return 60
+        case .replying: return 180
+        }
+    }
+
     let defaults: UserDefaults
 
     init(defaults: UserDefaults? = UserDefaults(suiteName: InstallStore.appGroup)) {
         self.defaults = defaults ?? .standard
     }
 
-    func setListening(_ listening: Bool, now: Date = Date()) {
-        if listening { defaults.set(now.timeIntervalSince1970, forKey: Self.key) } else { defaults.removeObject(forKey: Self.key) }
+    func set(_ phase: VoiceWidgetPhase, now: Date = Date()) {
+        if phase == .idle {
+            defaults.removeObject(forKey: Self.key)
+        } else {
+            defaults.set(["phase": phase.rawValue, "at": now.timeIntervalSince1970], forKey: Self.key)
+        }
     }
 
-    func isListening(now: Date = Date()) -> Bool {
-        let at = defaults.double(forKey: Self.key)
-        return at > 0 && now.timeIntervalSince1970 - at <= Self.validFor
+    func phase(now: Date = Date()) -> VoiceWidgetPhase {
+        guard let stored = defaults.dictionary(forKey: Self.key), let raw = stored["phase"] as? String,
+            let phase = VoiceWidgetPhase(rawValue: raw), let at = stored["at"] as? Double
+        else { return .idle }
+        let age = now.timeIntervalSince1970 - at
+        return age >= 0 && age <= Self.validFor(phase) ? phase : .idle
+    }
+
+    /// When the stored state stops counting, for the widget's next refresh.
+    func expiry(now: Date = Date()) -> Date? {
+        let current = phase(now: now)
+        guard current != .idle, let at = defaults.dictionary(forKey: Self.key)?["at"] as? Double else { return nil }
+        return Date(timeIntervalSince1970: at + Self.validFor(current))
     }
 }
 

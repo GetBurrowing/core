@@ -128,9 +128,16 @@ struct OpenVoiceIntent: AppIntent {
 extension ControlCopy {
     /// The Voice control (canvas "Control"): the system mic, "Voice", and
     /// the partner as the value; with several installs "<partner> · <install>".
-    static func voice(signedIn: Bool, partner: String?, install: String?) -> ControlCopy {
+    static func voice(signedIn: Bool, partner: String?, install: String?, phase: VoiceWidgetPhase = .idle) -> ControlCopy {
         guard signedIn else { return ControlCopy(symbol: "mic", label: "Voice", value: "Sign in to Burrow") }
         let name = partner ?? "Burrow"
+        // The turn's state (device rev 4): a tap while listening sends.
+        switch phase {
+        case .listening: return ControlCopy(symbol: "arrow.up.circle.fill", label: "Tap to send", value: name)
+        case .sending: return ControlCopy(symbol: "arrow.up.circle", label: "Sending", value: name)
+        case .replying: return ControlCopy(symbol: "waveform", label: "\(name) is replying", value: "Tap to talk")
+        case .idle: break
+        }
         let value = install.flatMap { $0.isEmpty ? nil : "\(name) · \($0)" } ?? name
         return ControlCopy(symbol: "mic", label: "Voice", value: value)
     }

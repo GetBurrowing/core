@@ -44,6 +44,12 @@ private final class Transcriber: VoiceTranscribing {
     let log: Log
     var finalText = "what is left on the list"
     var startFails = false
+    /// Fail this many starts with avfaudio 'what', then succeed (rev 4).
+    var failingStarts = 0
+    private(set) var starts = 0
+    /// Holds `start` until the test resumes it.
+    var gate: CheckedContinuation<Void, Never>?
+    var holdNextStart = false
     private var onPartial: (@MainActor (String) -> Void)?
     private(set) var open = false
 
@@ -53,7 +59,16 @@ private final class Transcriber: VoiceTranscribing {
     func prepare() async throws {}
     func start(onPartial: @escaping @MainActor (String) -> Void) async throws {
         log.entries.append("mic.open")
+        starts += 1
+        if holdNextStart {
+            holdNextStart = false
+            await withCheckedContinuation { gate = $0 }
+        }
         if startFails { throw VoiceTranscriberError.noAudioFormat }
+        if failingStarts > 0 {
+            failingStarts -= 1
+            throw NSError(domain: "com.apple.coreaudio.avfaudio", code: 2_003_329_396)
+        }
         self.onPartial = onPartial
         open = true
     }
@@ -104,6 +119,14 @@ private final class Speaker: VoiceSpeaking {
         onEvent?(ReplySpeechEvent(id: id, state: .stopped, reason: reason))
     }
 
+    /// The voice ended the reply early: Pocket's own failures are a stop
+    /// with "synthesis_failed" or "audio_unavailable" (`PocketSpeaker`).
+    func ended(_ state: ReplySpeechEvent.State, reason: String) {
+        guard let id else { return }
+        self.id = nil
+        onEvent?(ReplySpeechEvent(id: id, state: state, reason: reason))
+    }
+
     /// The last queued part has been read out.
     func done() {
         guard let id else { return }
@@ -134,8 +157,12 @@ private final class API: VoiceTurnAPI {
         return VoiceTurnPosted(spaceID: "s1", pathSegment: "d0000000-0000-4000-8000-000000000001")
     }
 
+    /// Runs before poll `n` (1-based) answers.
+    var onPoll: ((Int) -> Void)?
+
     func reply(_ partner: VoicePartnerChoice, clientTurnID: String, spoken: Int) async throws -> VoiceReplyPoll {
         pollCount += 1
+        onPoll?(pollCount)
         guard !polls.isEmpty else { return VoiceReplyPoll(state: "done", sentences: [], spoken: spoken, final: true) }
         return polls.removeFirst()
     }
@@ -197,6 +224,7 @@ final class VoiceTurnRunnerTests: XCTestCase {
     private var speechReady = true
     private var micGranted = true
     private var autoStartName = ""
+    private var marks: [VoiceWidgetPhase] = []
     private var replyPick = NativeReplyVoice.Pick(pocket: false, voiceID: "en-premium", reason: nil)
 
     override func setUp() async throws {
@@ -211,6 +239,7 @@ final class VoiceTurnRunnerTests: XCTestCase {
         call = Call()
         speechReady = true
         micGranted = true
+        marks = []
         autoStartName = "voice-autostart-\(UUID().uuidString)"
         VoiceCoordinator.stopRunner = nil
         VoiceCoordinator.stopPluginSpeakers = nil
@@ -230,8 +259,9 @@ final class VoiceTurnRunnerTests: XCTestCase {
             backgroundTasks: tasks, speechReady: { [unowned self] in self.speechReady }, micGranted: { [unowned self] in self.micGranted },
             callState: { [unowned self] in self.call }, installLabel: { _ in nil })
         runner.sleep = { _ in }
-        runner.listeningMark = { _ in }
+        runner.statusMark = { [unowned self] in self.marks.append($0) }
         runner.sessionRetryDelay = 0
+        runner.handOffLink = { DeepLink(host: $0.host, path: "/voice") }
         runner.recents = VoicePartnerHistory(defaults: UserDefaults(suiteName: autoStartName + "-recents"))
         runner.replyVoice = { [unowned self] in self.replyPick }
         runner.fallbackLink = { DeepLink(host: "app.example.test", path: "/voice") }
@@ -297,6 +327,7 @@ final class VoiceTurnRunnerTests: XCTestCase {
         XCTAssertEqual(activity.ended.last?.1, VoiceTurnRunner.endedDismissAfter)
         XCTAssertEqual(activity.ended.last?.0.pathSegment, "d0000000-0000-4000-8000-000000000001")
         XCTAssertEqual(tasks.begun, 1, "a background task holds the reply while thinking")
+        XCTAssertEqual(marks, [.listening, .sending, .replying, .idle], "the widget and control saw every state")
         assertReleased(runner)
     }
 
@@ -515,6 +546,166 @@ final class VoiceTurnRunnerTests: XCTestCase {
         speaker.done()
         await settle(runner)
         assertReleased(runner)
+    }
+
+    // MARK: Device rev 4
+
+    /// Toggle only: a second start request while listening sends.
+    func testASecondTapWhileListeningSendsNeverCancelsOrRestarts() async {
+        let runner = makeRunner()
+        _ = await runner.start()
+        XCTAssertEqual(runner.phase, .listening)
+        _ = await runner.start()
+        XCTAssertEqual(api.sent.count, 1, "the second tap sent the turn")
+        XCTAssertEqual(transcriber.starts, 1, "the mic was not reopened")
+        XCTAssertFalse(log.entries.contains("mic.cancel"), "nothing was cancelled")
+        XCTAssertEqual(activity.started, 1)
+        speaker.done()
+        await settle(runner)
+    }
+
+    /// A tap that lands while the mic is still opening is the same tap.
+    func testATapWhileTheMicIsOpeningIsIgnored() async {
+        let runner = makeRunner()
+        transcriber.holdNextStart = true
+        let first = Task { await runner.start() }
+        for _ in 0..<50 where transcriber.gate == nil { await Task.yield() }
+        XCTAssertEqual(runner.phase, .starting)
+        let second = await runner.start()
+        XCTAssertEqual(second, .background)
+        transcriber.gate?.resume()
+        _ = await first.value
+        XCTAssertEqual(runner.phase, .listening)
+        XCTAssertEqual(transcriber.starts, 1)
+        XCTAssertEqual(activity.started, 1, "one turn, one activity")
+        runner.cancel()
+        assertReleased(runner)
+    }
+
+    func testTheMicIsRetriedWhenIOSRefusesItAtFirst() async {
+        transcriber.failingStarts = 2
+        let runner = makeRunner()
+        runner.transcriberRetryDelays = [0, 0, 0]
+        let outcome = await runner.start()
+        XCTAssertEqual(outcome, .background)
+        XCTAssertEqual(runner.phase, .listening)
+        XCTAssertEqual(transcriber.starts, 3)
+        runner.cancel()
+        assertReleased(runner)
+    }
+
+    /// iOS would not open the mic in the background: the app opens, and the
+    /// turn starts natively once it is in front, with the same agent.
+    func testABackgroundRefusalHandsTheTurnToTheForeground() async {
+        transcriber.failingStarts = 4
+        let chosen = VoicePartnerChoice(host: "lab.example.test", agentID: "a0000000-0000-4000-8000-000000000002", name: "Lab Agent", lastUsedAt: nil)
+        let runner = makeRunner()
+        runner.transcriberRetryDelays = [0, 0, 0]
+        let outcome = await runner.start(with: chosen)
+        XCTAssertEqual(outcome, .openApp(DeepLink(host: chosen.host, path: "/voice")))
+        XCTAssertEqual(activity.ended.count, 1, "the failed attempt's activity ended")
+        XCTAssertEqual(runner.phase, .idle)
+        await runner.appDidBecomeActive()
+        XCTAssertEqual(runner.phase, .listening)
+        XCTAssertEqual(runner.partner, chosen)
+        await runner.appDidBecomeActive()
+        XCTAssertEqual(activity.started, 2, "the hand-off starts once")
+        runner.cancel()
+        assertReleased(runner)
+    }
+
+    func testAStaleHandOffDoesNotStartTheMic() async {
+        transcriber.failingStarts = 4
+        var clock = Date(timeIntervalSince1970: 1_000_000)
+        let runner = makeRunner()
+        runner.now = { clock }
+        runner.transcriberRetryDelays = [0, 0, 0]
+        _ = await runner.start()
+        clock = clock.addingTimeInterval(VoiceTurnRunner.handOffValidFor + 1)
+        await runner.appDidBecomeActive()
+        XCTAssertEqual(runner.phase, .idle)
+        XCTAssertEqual(activity.started, 1)
+    }
+
+    /// Rev 3 on the device: the voice stopped after part 2 of 3 and the
+    /// turn ended there, closing the session under part 3. Now a voice that
+    /// stops before the reply is final does not end the turn.
+    func testAVoiceThatStopsBeforeTheReplyIsFinalKeepsTheTurn() async {
+        api.polls = [
+            VoiceReplyPoll(state: "speaking", sentences: ["One."], spoken: 1, final: false),
+            VoiceReplyPoll(state: "speaking", sentences: ["Two."], spoken: 2, final: false),
+            VoiceReplyPoll(state: "done", sentences: ["Three."], spoken: 3, final: true),
+        ]
+        let runner = makeRunner()
+        var during: (VoiceTurnRunner.Phase, Bool)?
+        api.onPoll = { [unowned self] n in
+            if n == 2 { self.speaker.ended(.stopped, reason: "system") }
+            if n == 3 { during = (runner.phase, self.shared.isActive) }
+        }
+        _ = await runner.start()
+        await runner.send()
+        await settle(runner)
+        XCTAssertEqual(during?.0, .speaking, "the turn did not end before the reply was final")
+        XCTAssertEqual(during?.1, true, "the session stayed open for the rest of the reply")
+        XCTAssertEqual(runner.phase, .idle, "the final poll ended it")
+        assertReleased(runner)
+    }
+
+    /// Pocket could not play (the stop PocketSpeaker sends when audio is
+    /// unavailable): the system voice reads the whole reply instead.
+    func testAPocketVoiceThatCannotPlayHandsTheReplyToTheSystemVoice() async {
+        replyPick = NativeReplyVoice.Pick(pocket: true, voiceID: "pocket-tts:marius", reason: nil)
+        let pocket = Speaker(log)
+        api.polls = [
+            VoiceReplyPoll(state: "speaking", sentences: ["One."], spoken: 1, final: false),
+            VoiceReplyPoll(state: "done", sentences: ["Two."], spoken: 2, final: true),
+        ]
+        api.onPoll = { n in if n == 2 { pocket.ended(.stopped, reason: "audio_unavailable") } }
+        let runner = makeRunner()
+        runner.makePocketReader = { pocket }
+        _ = await runner.start()
+        await runner.send()
+        XCTAssertEqual(pocket.parts, ["One."])
+        XCTAssertEqual(speaker.parts, ["One.", "Two."], "the system voice read the whole reply")
+        XCTAssertEqual(runner.phase, .speaking)
+        speaker.done()
+        await settle(runner)
+        assertReleased(runner)
+    }
+
+    func testAPocketStopForAnotherReasonIsNotRescued() {
+        XCTAssertTrue(VoiceTurnRunner.couldNotPlay(ReplySpeechEvent(id: "t", state: .stopped, reason: "synthesis_failed")))
+        XCTAssertTrue(VoiceTurnRunner.couldNotPlay(ReplySpeechEvent(id: "t", state: .unheard, reason: nil)))
+        XCTAssertFalse(VoiceTurnRunner.couldNotPlay(ReplySpeechEvent(id: "t", state: .stopped, reason: "replaced")))
+    }
+
+    func testAStaleTurnStateReadsAsIdle() {
+        let name = "turn-state-\(UUID().uuidString)"
+        defer { UserDefaults().removePersistentDomain(forName: name) }
+        let store = VoiceTurnStatusStore(defaults: UserDefaults(suiteName: name))
+        let at = Date(timeIntervalSince1970: 1_000_000)
+        store.set(.listening, now: at)
+        XCTAssertEqual(store.phase(now: at.addingTimeInterval(10)), .listening)
+        XCTAssertEqual(store.phase(now: at.addingTimeInterval(VoiceTurnStatusStore.validFor(.listening) + 1)), .idle, "no runner wrote it lately")
+        store.set(.replying, now: at)
+        XCTAssertEqual(store.phase(now: at.addingTimeInterval(120)), .replying)
+        XCTAssertEqual(store.phase(now: at.addingTimeInterval(VoiceTurnStatusStore.validFor(.replying) + 1)), .idle)
+        XCTAssertEqual(store.phase(now: at.addingTimeInterval(-5)), .idle, "a state from the future is not trusted")
+        store.set(.idle, now: at)
+        XCTAssertEqual(store.phase(now: at), .idle)
+    }
+
+    func testTheTileAndControlFollowTheTurn() {
+        let listening = VoiceTileModel.make(signedIn: true, partner: "Test Agent", install: nil, phase: .listening)
+        XCTAssertEqual(listening.kind, .listening)
+        XCTAssertEqual(listening.title, "Tap to send")
+        XCTAssertTrue(listening.showsCancel)
+        XCTAssertEqual(VoiceTileModel.make(signedIn: true, partner: "Test Agent", install: nil, phase: .sending).title, "Sending")
+        XCTAssertEqual(VoiceTileModel.make(signedIn: true, partner: "Test Agent", install: nil, phase: .replying).title, "Test Agent is replying")
+        XCTAssertFalse(VoiceTileModel.make(signedIn: true, partner: "Test Agent", install: nil, phase: .idle).showsCancel)
+        XCTAssertEqual(ControlCopy.voice(signedIn: true, partner: "Test Agent", install: nil, phase: .listening).label, "Tap to send")
+        XCTAssertEqual(ControlCopy.voice(signedIn: true, partner: "Test Agent", install: nil, phase: .listening).symbol, "arrow.up.circle.fill")
+        XCTAssertEqual(ControlCopy.voice(signedIn: true, partner: "Test Agent", install: nil, phase: .idle).label, "Voice")
     }
 
     /// Ryan: "use the last stored voice". The reply of a turn started from

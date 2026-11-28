@@ -41,8 +41,8 @@ struct VoiceTileProvider: AppIntentTimelineProvider {
 
     func timeline(for configuration: VoiceWidgetIntent, in context: Context) async -> Timeline<VoiceTileEntry> {
         let entry = Self.current(agent: configuration.agent)
-        // A listening mark goes stale after VoiceTurnStatusStore.validFor.
-        let next = entry.model.kind == .listening ? Date().addingTimeInterval(VoiceTurnStatusStore.validFor) : Date().addingTimeInterval(3600)
+        // A turn state clears itself when it goes stale (VoiceTurnStatusStore).
+        let next = VoiceTurnStatusStore().expiry() ?? Date().addingTimeInterval(3600)
         return Timeline(entries: [entry], policy: .after(next))
     }
 
@@ -57,7 +57,9 @@ struct VoiceTileProvider: AppIntentTimelineProvider {
         let target = agent?.choice ?? VoicePartnerCache().partner
         let partner = target.flatMap { signedIn.contains($0.host) ? $0 : nil }
         let install = partner.flatMap { InstallLabel.label(for: $0.host, installs: installs, signedIn: signedIn) }
-        var entry = entry(signedIn: !signedIn.isEmpty, partner: partner?.name, install: install, listening: VoiceTurnStatusStore().isListening())
+        let phase = VoiceTurnStatusStore().phase()
+        var entry = VoiceTileEntry(
+            date: Date(), model: .make(signedIn: !signedIn.isEmpty, partner: partner?.name, install: install, phase: phase), partner: partner?.name)
         entry.agent = agent
         entry.rows = VoiceRecentRow.rows(
             VoicePartnerHistory().keep(hosts: signedIn), excluding: partner,
@@ -79,12 +81,12 @@ struct VoiceTileView: View {
                     .widgetURL(URL(string: "\(DeepLink.scheme)://"))
             } else if (family ?? environmentFamily) == .systemMedium {
                 HStack(spacing: 0) {
-                    micButton.frame(maxWidth: .infinity, maxHeight: .infinity)
+                    withCancel(micButton).frame(maxWidth: .infinity, maxHeight: .infinity)
                     VoiceRecentList(rows: entry.rows) { row in rowButton(row) }
                         .frame(maxWidth: .infinity, maxHeight: .infinity)
                 }
             } else {
-                micButton
+                withCancel(micButton)
             }
         }
         .feedBackground()
@@ -95,6 +97,22 @@ struct VoiceTileView: View {
             .accessibilityElement(children: .ignore)
             .accessibilityLabel(entry.model.accessibilityLabel(partner: entry.partner))
             .accessibilityAddTraits(.isButton)
+    }
+
+    /// While a turn is under way, a small Cancel (x) in the corner: its own
+    /// 44pt target, apart from the disc so the two are never confused.
+    @ViewBuilder private func withCancel<Mic: View>(_ mic: Mic) -> some View {
+        if entry.model.showsCancel, #available(iOS 18, *) {
+            ZStack(alignment: .topTrailing) {
+                mic
+                Button(intent: CancelVoiceTurnIntent()) { VoiceCancelMark() }
+                    .buttonStyle(.plain)
+                    .accessibilityLabel("Cancel")
+                    .padding(4)
+            }
+        } else {
+            mic
+        }
     }
 
     private func rowButton(_ row: VoiceRecentRow) -> some View {
@@ -179,6 +197,19 @@ struct VoiceRecentRowView: View {
     }
 }
 
+/// The Cancel (x): a 44pt target with a small glyph, in base-content.
+struct VoiceCancelMark: View {
+    var body: some View {
+        Image(systemName: "xmark")
+            .font(.system(size: 13, weight: .semibold))
+            .foregroundStyle(BurrowColor.onSurface.color)
+            .frame(width: 28, height: 28)
+            .background(Circle().fill(BurrowColor.surfaceMuted.color))
+            .frame(width: 44, height: 44)
+            .contentShape(Rectangle())
+    }
+}
+
 /// The tile's disc and lines. Public for the render tests.
 struct VoiceTileContent: View {
     @Environment(\.dynamicTypeSize) private var typeSize
@@ -215,7 +246,7 @@ struct VoiceTileContent: View {
 
     private func stack<Lines: View>(disc: CGFloat, @ViewBuilder lines: () -> Lines) -> some View {
         VStack(spacing: 10) {
-            VoiceDisc(style: discStyle, glyph: model.kind == .listening ? .send : .mic, size: disc)
+            VoiceDisc(style: discStyle, glyph: [.listening, .sending].contains(model.kind) ? .send : .mic, size: disc)
             VStack(spacing: 2) { lines() }
         }
         .frame(maxWidth: .infinity)
@@ -226,7 +257,16 @@ struct VoiceTileContent: View {
         return max(CGFloat(size), CGFloat(VoiceTileModel.minimumDisc))
     }
 
-    private var discStyle: VoiceDisc.Style { model.kind == .signedOut ? .outline(BurrowColor.muted.color) : .filled(BurrowColor.primary.color) }
+    /// One orange meaning at a time: filled orange to start or to send; grey
+    /// while sending; an outline while the reply is read (a tap interrupts).
+    private var discStyle: VoiceDisc.Style {
+        switch model.kind {
+        case .signedOut: return .outline(BurrowColor.muted.color)
+        case .sending: return .filled(BurrowColor.muted.color)
+        case .replying: return .outline(BurrowColor.onSurface.color)
+        case .rest, .listening: return .filled(BurrowColor.primary.color)
+        }
+    }
 }
 
 /// The Voice disc: the tile's and the Live Activity's one control.

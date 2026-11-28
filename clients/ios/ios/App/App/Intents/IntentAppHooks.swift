@@ -1,5 +1,6 @@
 import AppIntents
 import Foundation
+import UIKit
 
 /// Wires the shared intent code to the app process: Spotlight indexing
 /// (proactive per host after sign-in and on foreground, PersonalIndex);
@@ -31,6 +32,11 @@ enum IntentAppHooks {
         VoiceLauncher.start = { chosen in await VoiceTurnRunner.shared.start(with: chosen) }
         VoiceLauncher.send = { await VoiceTurnRunner.shared.send() }
         VoiceLauncher.cancel = { VoiceTurnRunner.shared.cancel() }
+        // A turn iOS would not start in the background (device rev 4)
+        // starts natively the moment the app it opened is in front.
+        NotificationCenter.default.addObserver(forName: UIApplication.didBecomeActiveNotification, object: nil, queue: .main) { _ in
+            Task { @MainActor in await VoiceTurnRunner.shared.appDidBecomeActive() }
+        }
     }
 
     /// A successful intent run. It is NOT donated whole (task 01a111bb

@@ -43,4 +43,32 @@ final class KeychainTokenStoreTests: XCTestCase {
         let dump = String(describing: defaults.dictionaryRepresentation())
         XCTAssertFalse(dump.contains(secret))
     }
+
+    /// Lock Screen widgets refresh while the phone is locked (device rev 4):
+    /// the bearer is readable after the first unlock, not only while
+    /// unlocked, and an update re-applies that to an older item.
+    func testTheBearerIsReadableOnALockedPhoneAfterFirstUnlock() throws {
+        let store = KeychainTokenStore.shared
+        let host = "d-\(UUID().uuidString.lowercased()).test.invalid"
+        defer { store.remove(for: host) }
+        XCTAssertTrue(store.store("token-d", for: host))
+        XCTAssertEqual(try accessible(host), kSecAttrAccessibleAfterFirstUnlock as String)
+        XCTAssertTrue(store.store("token-d2", for: host))
+        XCTAssertEqual(try accessible(host), kSecAttrAccessibleAfterFirstUnlock as String)
+    }
+
+    private func accessible(_ host: String) throws -> String? {
+        let query: [String: Any] = [
+            kSecClass as String: kSecClassGenericPassword,
+            kSecAttrService as String: KeychainTokenStore.service,
+            kSecAttrAccount as String: host,
+            kSecAttrAccessGroup as String: KeychainTokenStore.shared.accessGroup,
+            kSecReturnAttributes as String: true,
+            kSecMatchLimit as String: kSecMatchLimitOne,
+        ]
+        var item: CFTypeRef?
+        XCTAssertEqual(SecItemCopyMatching(query as CFDictionary, &item), errSecSuccess)
+        let attributes = try XCTUnwrap(item as? [String: Any])
+        return attributes[kSecAttrAccessible as String] as? String
+    }
 }

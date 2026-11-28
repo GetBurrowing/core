@@ -54,7 +54,17 @@ final class SystemBackgroundTasks: VoiceBackgroundTasks {
 @MainActor
 final class VoiceTurnRunner {
     enum Phase: String, Equatable {
-        case idle, listening, sending, thinking, speaking, finished, notSent
+        case idle, starting, listening, sending, thinking, speaking, finished, notSent
+
+        /// What the Voice widget and control show.
+        var widgetPhase: VoiceWidgetPhase {
+            switch self {
+            case .listening: return .listening
+            case .sending: return .sending
+            case .thinking, .speaking: return .replying
+            case .idle, .starting, .finished, .notSent: return .idle
+            }
+        }
     }
 
     /// The app's runner, built on first use in the app process only.
@@ -76,10 +86,12 @@ final class VoiceTurnRunner {
     /// "Talk to <partner>" needs a label for the install when several are
     /// signed in.
     var installLabel: (String) -> String?
-    /// Tells the Voice widget a turn is listening ("Tap to send").
-    var listeningMark: (Bool) -> Void = { listening in
-        VoiceTurnStatusStore().setListening(listening)
+    /// Tells the Voice widget and the Voice control the turn's state
+    /// (device rev 4): written to the App Group, then both reload.
+    var statusMark: (VoiceWidgetPhase) -> Void = { phase in
+        VoiceTurnStatusStore().set(phase)
         WidgetCenter.shared.reloadTimelines(ofKind: WidgetKinds.voice)
+        if #available(iOS 18, *) { ControlCenter.shared.reloadControls(ofKind: WidgetKinds.voiceControl) }
     }
     /// Where the app opens when the turn cannot run in the background.
     var fallbackLink: () -> DeepLink? = { VoiceLauncher.fallback() }
@@ -87,6 +99,13 @@ final class VoiceTurnRunner {
     var sleep: (TimeInterval) async -> Void = { seconds in try? await Task.sleep(nanoseconds: UInt64(seconds * 1_000_000_000)) }
     /// How long "No words heard" shows before the activity ends (canvas: about 2 s).
     var noWordsHold: TimeInterval = 2
+    /// The pauses between transcriber attempts.
+    var transcriberRetryDelays: [TimeInterval] = [0.25, 0.5, 0.75]
+    /// Where the app opens when the turn has to move to the foreground.
+    var handOffLink: (VoicePartnerChoice) -> DeepLink? = { DeepLink(host: $0.host, path: "/voice") }
+    var now: () -> Date = Date.init
+    static let handOffValidFor: TimeInterval = 30
+    private(set) var pendingForeground: (partner: VoicePartnerChoice, at: Date)?
     /// The pause before the one retry of a refused session.
     var sessionRetryDelay: TimeInterval = 0.3
     /// The reply voice: the Voice tab's last pick (`ReplyVoiceChoice`).
@@ -96,6 +115,9 @@ final class VoiceTurnRunner {
         PocketSpeaker(engine: SystemPocketEngine(), output: AVPocketAudioOutput())
     }
     private var pocketInstance: (any VoiceSpeaking)?
+    /// This turn's reply so far (message text: kept only in memory, never traced).
+    private var sentences: [String] = []
+    private var replyFinal = false
     private var chosenReader: (any VoiceSpeaking)?
     /// Whichever voice reads this turn's reply.
     private var reader: any VoiceSpeaking { chosenReader ?? speaker }
@@ -116,7 +138,7 @@ final class VoiceTurnRunner {
 
     private(set) var phase: Phase = .idle {
         didSet {
-            if (oldValue == .listening) != (phase == .listening) { listeningMark(phase == .listening) }
+            if oldValue.widgetPhase != phase.widgetPhase { statusMark(phase.widgetPhase) }
         }
     }
     private(set) var partner: VoicePartnerChoice?
@@ -177,7 +199,10 @@ final class VoiceTurnRunner {
         case .listening:
             await send()
             return .background
-        case .sending:
+        case .sending, .starting:
+            // Toggle only (device rev 4): a tap while the mic is opening is
+            // a repeat of the same tap, never a second turn or a cancel.
+            trace("tap ignored")
             return .background
         case .speaking, .thinking, .finished, .notSent:
             // Barge-in: the reply stops once, and a new turn starts.
@@ -200,6 +225,7 @@ final class VoiceTurnRunner {
         var resolved = chosen
         if resolved == nil { resolved = await api.partner() }
         guard let partner = resolved else { return fallback("no_partner") }
+        phase = .starting
         self.partner = partner
         recents.add(partner)
         transcript = ""
@@ -208,6 +234,8 @@ final class VoiceTurnRunner {
         seq = 0
         lastSentence = nil
         chosenReader = nil
+        sentences = []
+        replyFinal = false
         generation += 1
         let mine = generation
         // The Live Activity FIRST (device rev 3): an AudioRecordingIntent may
@@ -220,6 +248,7 @@ final class VoiceTurnRunner {
             trace("activity started")
         } catch {
             trace("activity failed \(Self.code(error))")
+            phase = .idle
             return fallback(VoiceFallback.Reason.activityRequestFailed.rawValue)
         }
         do {
@@ -227,19 +256,17 @@ final class VoiceTurnRunner {
         } catch {
             trace("session refused \(Self.code(error))")
             activity.end(state(.ended), dismissAfter: nil)
-            return fallback("mic_in_use")
+            phase = .idle
+            return foregroundHandOff(partner, reason: "mic_in_use")
         }
         do {
-            try await transcriber.start { [weak self] text in
-                guard let self, self.generation == mine, self.phase == .listening else { return }
-                self.transcript = text
-                self.activity.update(self.state(.listening))
-            }
+            try await startTranscriber(mine)
         } catch {
             trace("transcriber failed \(Self.code(error))")
             activity.end(state(.ended), dismissAfter: nil)
             session.deactivate()
-            return fallback("start_failed")
+            phase = .idle
+            return foregroundHandOff(partner, reason: "start_failed")
         }
         guard generation == mine else { return .background }
         clientTurnID = newTurnID()
@@ -247,6 +274,50 @@ final class VoiceTurnRunner {
         VoiceCoordinator.stopRunner = { [weak self] in self?.cancel(reason: "tab_turn") }
         trace("listening")
         return .background
+    }
+
+    /// The transcriber, retried while iOS refuses to start the mic engine.
+    /// On the device (rev 3 trace) a turn started with the app in the
+    /// background failed at once with avfaudio 2003329396 ('what') while the
+    /// same tap worked with the app in front; the retries cover an activity
+    /// that needs a moment before recording counts.
+    private func startTranscriber(_ mine: Int) async throws {
+        var attempt = 0
+        while true {
+            do {
+                try await transcriber.start { [weak self] text in
+                    guard let self, self.generation == mine, self.phase == .listening else { return }
+                    self.transcript = text
+                    self.activity.update(self.state(.listening))
+                }
+                if attempt > 0 { trace("transcriber started attempt=\(attempt + 1)") }
+                return
+            } catch {
+                guard attempt < transcriberRetryDelays.count else { throw error }
+                trace("transcriber retry attempt=\(attempt + 1) \(Self.code(error))")
+                await sleep(transcriberRetryDelays[attempt])
+                attempt += 1
+            }
+        }
+    }
+
+    /// iOS would not open the mic with the app in the background: the app
+    /// opens (on Voice), and the moment it is in front the turn starts here,
+    /// natively, with its Live Activity: no web page and no second tap.
+    private func foregroundHandOff(_ partner: VoicePartnerChoice, reason: String) -> VoiceLaunchOutcome {
+        trace("hand off to foreground reason=\(reason)")
+        pendingForeground = (partner, now())
+        guard let link = handOffLink(partner) else { return .background }
+        return .openApp(link)
+    }
+
+    /// The app came to the front: a turn handed off in the last 30 s starts.
+    func appDidBecomeActive() async {
+        guard let pending = pendingForeground else { return }
+        pendingForeground = nil
+        guard now().timeIntervalSince(pending.at) <= Self.handOffValidFor, phase == .idle else { return }
+        trace("foreground start")
+        _ = await beginTurn(with: pending.partner)
     }
 
     /// The session, once more after a short pause if iOS refuses it at
@@ -351,12 +422,55 @@ final class VoiceTurnRunner {
             for sentence in poll.sentences { speak(sentence) }
             spoken = max(spoken, poll.spoken)
             if poll.final {
+                replyFinal = true
                 reader.finish(id: clientTurnID)
                 break
             }
         }
         guard generation == mine else { return }
+        // Failed polls also end the turn; otherwise it ends when the voice
+        // has read the last sentence (`readerEvent`).
+        replyFinal = true
         if !reader.isSpeaking { await finish(mine) }
+    }
+
+    /// The reading voice reported `event`. The turn ends only once the reply
+    /// is final AND read: a voice that runs dry between sentences (rev 3:
+    /// Pocket TTS said finished after part 2 of 3 and the session closed under
+    /// part 3) does not end it. A Pocket voice that could not play hands the
+    /// whole reply to the system voice.
+    private func readerEvent(_ event: ReplySpeechEvent, _ mine: Int) {
+        guard generation == mine, event.id == clientTurnID else { return }
+        let voice = chosenReader === pocketInstance && pocketInstance != nil ? "pocket" : "system"
+        trace("reply event state=\(event.state.rawValue) reason=\(event.reason ?? "-") speaker=\(voice)")
+        if chosenReader != nil, chosenReader !== speaker, Self.couldNotPlay(event) {
+            rescueWithSystemVoice()
+            return
+        }
+        switch event.state {
+        case .started:
+            return
+        case .finished, .stopped, .unheard:
+            guard replyFinal else { return }
+            Task { @MainActor in await self.finish(mine) }
+        }
+    }
+
+    /// Pocket's own failures (`PocketSpeaker`): it could not synthesise or
+    /// could not reach the speaker. A stop for any other reason is not one.
+    static func couldNotPlay(_ event: ReplySpeechEvent) -> Bool {
+        event.state == .unheard || ["synthesis_failed", "audio_unavailable"].contains(event.reason ?? "")
+    }
+
+    private func rescueWithSystemVoice() {
+        guard let clientTurnID else { return }
+        trace("reply rescued by system voice parts=\(sentences.count)")
+        let mine = generation
+        chosenReader = speaker
+        speaker.onEvent = { [weak self] event in self?.readerEvent(event, mine) }
+        speaker.begin(id: clientTurnID, voiceID: nil)
+        for (index, sentence) in sentences.enumerated() { speaker.append(id: clientTurnID, seq: index, text: sentence) }
+        if replyFinal { speaker.finish(id: clientTurnID) }
     }
 
     private func speak(_ sentence: String) {
@@ -367,15 +481,11 @@ final class VoiceTurnRunner {
             let pick = replyVoice()
             chosenReader = pick.pocket ? pocketReader() : speaker
             trace("reply voice pocket=\(pick.pocket) fell_back=\(pick.reason ?? "-")")
-            reader.onEvent = { [weak self] event in
-                guard let self, event.id == self.clientTurnID else { return }
-                if event.state == .finished || event.state == .stopped || event.state == .unheard {
-                    Task { @MainActor in await self.finish(mine) }
-                }
-            }
+            reader.onEvent = { [weak self] event in self?.readerEvent(event, mine) }
             reader.begin(id: clientTurnID, voiceID: pick.voiceID)
         }
         reader.append(id: clientTurnID, seq: seq, text: sentence)
+        sentences.append(sentence)
         seq += 1
         lastSentence = sentence
         phase = .speaking

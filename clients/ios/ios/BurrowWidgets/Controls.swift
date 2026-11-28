@@ -128,7 +128,8 @@ struct VoiceControlProvider: AppIntentControlValueProvider {
         let partner = target.flatMap { signedIn.contains($0.host) ? $0 : nil }
         let copy = ControlCopy.voice(
             signedIn: !signedIn.isEmpty, partner: partner?.name,
-            install: partner.flatMap { InstallLabel.label(for: $0.host, installs: installs, signedIn: signedIn) })
+            install: partner.flatMap { InstallLabel.label(for: $0.host, installs: installs, signedIn: signedIn) },
+            phase: VoiceTurnStatusStore().phase())
         return VoiceControlValue(copy: copy, agent: configuration.agent)
     }
 }

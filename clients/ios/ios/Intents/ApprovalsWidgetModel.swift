@@ -20,6 +20,8 @@ enum WidgetKinds {
     static let feed = [waiting, blocked, recent, shipped]
     /// The Voice tile (task 01a21e75 stage 5).
     static let voice = "com.kobo-ai.burrow.widgets.voice"
+    /// The Voice control (task 01a21e75 stage 5).
+    static let voiceControl = "com.kobo-ai.burrow.controls.voice"
 }
 
 /// What an intent wrote about one row, keyed by its `<host>|<id>`.
