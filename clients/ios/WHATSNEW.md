@@ -4,6 +4,19 @@ The top `## v<version>` section is sent as the build's "What to Test" by
 `scripts/set_testflight_notes.py`. It must match project.yml's
 MARKETING_VERSION, and it is capped at 4000 characters.
 
+## v1.5: five new widgets, a one-tap Voice control, and every install at once
+New in this build:
+- Five new widgets. Waiting on you: agents that tagged you and are still waiting for an answer, newest first, each row opening its thread (also on the Lock Screen as a count). Voice: one tap talks to the agent you talked to last. Blocked for you: tasks stuck on you, with a short reason. Recent: your four most active conversations, with unread dots. Shipped today: what got done today.
+- The Voice control, for Control Center, the Lock Screen and the Action button. On iOS 18 and later a tap starts listening with a Live Activity showing your words, Send and Cancel, and the reply is read aloud and shown there. Where that cannot run in the background, Burrow opens on Voice already listening.
+- All installs. Every widget now shows every install you are signed in to, by default: totals add up, rows say which install they come from, and a row opens its own install. Long-press a widget and choose Edit to show one install instead. If one install cannot be reached or you are signed out of it, the widget says so in a small line and keeps showing the others. Approvals widgets you already pinned to one install stay pinned.
+
+Please try:
+1. With the phone locked, add the Voice control to the Lock Screen, tap it, say a short question, tap Send and let the reply finish. Does the app stay closed? Note anything that opened the app.
+2. Do the same from the Action button (set it to the Voice control) and from the Voice widget on the Home Screen. How many taps did it take to send from the widget?
+3. While a reply is being read, tap the mic again. The reply should stop at once and a new turn start.
+4. Place all five new widgets on one Home Screen. With two installs signed in, check every row says which install it is from.
+Tell us which Voice surface stayed in the background and which opened the app.
+
 ## v1.4: Pocket TTS reads replies on this iPhone
 New in this build:
 - Reply voice can now be Pocket TTS, a natural-sounding voice that runs entirely on this iPhone. It is offered on iPhones with iOS 27 and enough memory; on others the list is unchanged.
