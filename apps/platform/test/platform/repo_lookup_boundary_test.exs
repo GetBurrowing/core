@@ -886,6 +886,12 @@ defmodule Platform.RepoLookupBoundaryTest do
      "task 01a1ccd4 stage 2: (1) `verify/3` and (stage 4) `refusal_origin/2` look the badge key up by `token_hash`, a :binary column holding the SHA-256 of the presented key, so no client value reaches a UUID column; (2) `revoke/2` calls Repo.get_by(BadgeKey, id: key_id, user_id: user_id) only after `Platform.UUID.valid?(key_id)` heads the same with-chain (the id comes from a LiveView phx-value), and `user_id` is a loaded %User{} struct's primary key; a malformed id answers {:error, :not_found}"},
     {"platform/switcher.ex", :platform_uuid_guard, "-", 1, :safe_internal,
      "task 01a1ccd4 stage 2: `revoke/2` guards the LiveView-supplied badge key id with Platform.UUID.valid?/1 as a BOOLEAN at the head of its with-chain; a malformed id folds into {:error, :not_found} instead of raising Ecto.Query.CastError"},
+    {"platform/mobile/voice_turns.ex", :platform_uuid_guard, "-", 1, :safe_internal,
+     "task 01a21e75 stage 2: `fetch_agent/1` casts the `agent_id` from the `POST /api/app/voice/turns` JSON body with Platform.UUID.cast/1 at the head of its with-chain; a malformed id folds into {:error, :not_found} (404) instead of raising Ecto.Query.CastError"},
+    {"platform/mobile/voice_turns.ex", :get, "Agent", 1, :safe_internal,
+     "task 01a21e75 stage 2: `fetch_agent/1` calls Repo.get(Agent, uuid) only with the value Platform.UUID.cast/1 returned on the line before"},
+    {"platform/mobile/voice_turns.ex", :get!, "Space", 1, :safe_internal,
+     "task 01a21e75 stage 2: `send_turn/4` calls Repo.get!(Space, conn.space_id), the :binary_id primary key of the DM space OnDeviceVoice.open/2 just opened or created, never a client value"},
     {"platform/mobile/app_entities.ex", :platform_uuid_guard, "-", 5, :safe_internal,
      "task 01a10db6: the iOS App Intents API's entity layer. `fetch_own_approval/2` guards the approve/reject `item_id`, `actor_name/1` guards a generic actor string (user id, agent id, or a label such as \"system:auto\"), `authorize_space/2` guards the space id from a URL path / JSON body, `open_agent_dm/2` guards the `agent_id` from the request body, and `cursor/1` guards the `after` message cursor. Each is used as a BOOLEAN; a malformed id folds into the site's existing {:error, :not_found} / {:error, :forbidden} / {:error, :invalid_cursor} / nil instead of raising Ecto.Query.CastError"},
     {"platform/mobile/app_entities.ex", :get, "Agent", 2, :safe_internal,
@@ -1927,6 +1933,15 @@ defmodule Platform.RepoLookupBoundaryTest do
     # `review_requests.task_id` via `ReviewRequests.task_id_for_request/1`, so
     # no boundary value reaches those `where:` clauses uncast.
     "platform/mobile/app_entities.ex" => 5,
+    # Task 01a21e75 stages 1-2. Triaged by hand: voice_turns.ex's
+    # `own_turn/2` pins the caller's own participant id off the loaded
+    # %User{} and matches `client_turn_id` inside a jsonb containment (a
+    # string, not a UUID column); `reopen/2` pins `p.space_id` off a loaded
+    # %Message{} row. widget_feed.ex's shipped `newest_title` pins
+    # `t.project_id in ^project_ids`, ids selected from the projects query.
+    # No boundary value reaches any of these `where:` clauses uncast.
+    "platform/mobile/voice_turns.ex" => 2,
+    "platform/mobile/widget_feed.ex" => 1,
     "platform/orchestration/context_assembler.ex" => 1,
     # 3 → 4 for task 01a03ed3's `latest_engagement/1`, the durable read of the
     # last engagement the TaskRouter posted into an execution space. Triaged by
