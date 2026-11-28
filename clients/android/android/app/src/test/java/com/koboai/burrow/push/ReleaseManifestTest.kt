@@ -69,6 +69,20 @@ class ReleaseManifestTest {
     }
 
     @Test
+    fun `the Voice debug receiver is debug-only and exported only to the adb shell`() {
+        val release = receivers("burrow.releaseManifest")
+        assertTrue(release.none { it.name().endsWith("DebugVoiceReceiver") })
+        assertFalse(release.flatMap { it.actions() }.contains("com.koboai.burrow.debug.VOICE"))
+        val debug = receivers("burrow.debugManifest").single { it.name() == "com.koboai.burrow.voice.DebugVoiceReceiver" }
+        assertEquals(listOf("com.koboai.burrow.debug.VOICE"), debug.actions())
+        assertEquals("android.permission.DUMP", debug.getAttributeNS(android, "permission"))
+        // The Voice debug trace's sink: debug-only, never exported.
+        assertTrue(elements("burrow.releaseManifest", "provider").none { it.name().endsWith("DebugVoiceTraceInit") })
+        val trace = elements("burrow.debugManifest", "provider").single { it.name().endsWith("DebugVoiceTraceInit") }
+        assertEquals("false", trace.getAttributeNS(android, "exported"))
+    }
+
+    @Test
     fun `the share target is its own task-less activity, not MainActivity`() {
         val activities = elements("burrow.releaseManifest", "activity")
         val share = activities.single { it.name() == "com.koboai.burrow.share.ShareActivity" }

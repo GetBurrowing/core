@@ -130,6 +130,9 @@ dependencies {
     // Sealed push previews (task 01a1261e): HPKE X25519 / HKDF-SHA256 /
     // AES-128-GCM opened on the phone (push/PushSeal.kt), keys per install.
     implementation "com.google.crypto.tink:tink-android:$tinkVersion"
+    // Pocket TTS replies (task 01a21e4a): the model is downloaded on first
+    // use, never bundled; only the runtime is in the APK (licenses/THIRD_PARTY.md).
+    implementation "com.google.ai.edge.litert:litert:$litertVersion"
     implementation project(':capacitor-android')
     // MessageHandler's constructor names Cordova's PluginManager
     // (NativeBridgeExposure); Capacitor already ships it at runtime.

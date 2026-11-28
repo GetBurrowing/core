@@ -513,6 +513,11 @@ const VoiceTabNative = {
       missing: fellBack || (!!stored && !installed),
       missing_pocket: isPocket(stored) && !installed,
     })
+    // A remembered Pocket voice starts loading now, not at the first reply:
+    // Android holds no loaded model across a cold start, so that reply would
+    // otherwise fall back to a system voice (task 01a21e4a stage 5). The first
+    // reply would call prepare anyway; this only moves it earlier.
+    if (installed && isPocket(stored)) this._nativeCall("prepareModel", { voice: stored })
   },
 
   _pickVoice(id) {
