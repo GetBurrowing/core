@@ -39,8 +39,6 @@ struct StartVoiceTurnIntent: AudioRecordingIntent, LiveActivityIntent {
     static var title: LocalizedStringResource = "Talk to Burrow"
     static var description = IntentDescription("Starts a Voice turn with the agent you talked to last.")
 
-    init() {}
-
     @MainActor
     func perform() async throws -> IntentResultContainer<Never, Never, Never, Never> {
         // Which process ran perform: ids and states only, never words.
@@ -71,8 +69,6 @@ struct SendVoiceTurnIntent: LiveActivityIntent {
     static var title: LocalizedStringResource = "Send to Burrow"
     static var isDiscoverable = false
 
-    init() {}
-
     @MainActor
     func perform() async throws -> some IntentResult {
         IntentLog.step("voice.send", "process=\(InstallQuery.isAppExtension ? "extension" : "app") hook=\(VoiceLauncher.send != nil)")
@@ -86,8 +82,6 @@ struct SendVoiceTurnIntent: LiveActivityIntent {
 struct CancelVoiceTurnIntent: LiveActivityIntent {
     static var title: LocalizedStringResource = "Cancel Voice"
     static var isDiscoverable = false
-
-    init() {}
 
     @MainActor
     func perform() async throws -> some IntentResult {
@@ -104,8 +98,6 @@ struct OpenVoiceIntent: AppIntent {
     static var description = IntentDescription("Opens Voice, already listening.")
     static var openAppWhenRun = true
     static var isDiscoverable = false
-
-    init() {}
 
     @MainActor
     func perform() async throws -> some IntentResult {

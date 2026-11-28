@@ -54,39 +54,68 @@ struct VoiceLockScreenView: View {
 
     var body: some View {
         VStack(alignment: .leading, spacing: 8) {
-            HStack(spacing: 8) {
-                VoicePartnerMarker(name: attributes.partnerName, ringing: state.phase == .speaking)
-                VoicePartnerLine(attributes: attributes)
-                Spacer(minLength: 4)
-                VoiceCaption(state: state)
+            // The caption beside the partner, or under it when both do not
+            // fit (the largest text sizes): it never truncates.
+            ViewThatFits(in: .horizontal) {
+                HStack(spacing: 8) {
+                    header
+                    Spacer(minLength: 4)
+                    VoiceCaption(state: state)
+                }
+                VStack(alignment: .leading, spacing: 4) {
+                    header
+                    VoiceCaption(state: state, wraps: true)
+                }
             }
             VoiceTranscriptLine(state: state, partner: attributes.partnerName, lines: 2)
             VoiceControlsRow(attributes: attributes, state: state)
         }
         .padding(16)
     }
+
+    private var header: some View {
+        HStack(spacing: 8) {
+            VoicePartnerMarker(name: attributes.partnerName, ringing: state.phase == .speaking)
+            VoicePartnerLine(attributes: attributes)
+        }
+    }
 }
 
-/// "<partner> · <install>": the install truncates first, the partner never.
+/// "<partner> · <install>": the install truncates first, and is dropped
+/// whole when not even a few letters of it fit; the partner never truncates.
 struct VoicePartnerLine: View {
+    @Environment(\.dynamicTypeSize) private var typeSize
     let attributes: VoiceActivityAttributes
 
     var body: some View {
-        HStack(spacing: 0) {
-            Text(attributes.partnerName)
-                .font(.subheadline.weight(.semibold))
-                .foregroundStyle(BurrowColor.onSurface.color)
-                .lineLimit(1)
-                .layoutPriority(2)
-            if let install = attributes.installLabel, !install.isEmpty {
-                Text(" · \(install)")
-                    .font(.subheadline)
-                    .foregroundStyle(BurrowColor.muted.color)
-                    .lineLimit(1)
-                    .truncationMode(.tail)
+        // At the accessibility sizes the install is dropped first.
+        if let install = attributes.installLabel, !install.isEmpty, !typeSize.isAccessibilitySize {
+            ViewThatFits(in: .horizontal) {
+                HStack(spacing: 0) {
+                    partner
+                    // Ideal width 56: chosen whenever that much is free, then
+                    // takes whatever is left and truncates there.
+                    Text(" · \(install)")
+                        .font(.subheadline)
+                        .foregroundStyle(BurrowColor.muted.color)
+                        .lineLimit(1)
+                        .truncationMode(.tail)
+                        .frame(minWidth: 56, idealWidth: 56, maxWidth: .infinity, alignment: .leading)
+                }
+                partner
             }
+            .accessibilityElement(children: .combine)
+        } else {
+            partner
         }
-        .accessibilityElement(children: .combine)
+    }
+
+    private var partner: some View {
+        Text(attributes.partnerName)
+            .font(.subheadline.weight(.semibold))
+            .foregroundStyle(BurrowColor.onSurface.color)
+            .lineLimit(1)
+            .fixedSize(horizontal: true, vertical: false)
     }
 }
 
@@ -108,14 +137,16 @@ struct VoicePartnerMarker: View {
 /// The phase caption. "Not sent" in the error colour. Never truncates.
 struct VoiceCaption: View {
     let state: VoiceActivityState
+    /// Under the partner: wraps instead of truncating.
+    var wraps = false
 
     var body: some View {
         if !state.caption.isEmpty {
             Text(state.caption)
                 .font(.footnote.weight(.semibold))
                 .foregroundStyle(state.phase == .notSent ? BurrowColor.destructive.color : BurrowColor.muted.color)
-                .lineLimit(1)
-                .fixedSize(horizontal: true, vertical: false)
+                .lineLimit(wraps ? nil : 1)
+                .fixedSize(horizontal: !wraps, vertical: wraps)
                 .accessibilityAddTraits(.updatesFrequently)
         }
     }
@@ -147,6 +178,7 @@ struct VoiceIslandCaption: View {
 /// the default until answered).
 struct VoiceTranscriptLine: View {
     @Environment(\.redactionReasons) private var redaction
+    @Environment(\.dynamicTypeSize) private var typeSize
     let state: VoiceActivityState
     let partner: String
     let lines: Int
@@ -162,7 +194,8 @@ struct VoiceTranscriptLine: View {
             }
             .font(.subheadline)
             .foregroundStyle(BurrowColor.onSurface.color)
-            .lineLimit(lines)
+            // One line at the largest text sizes.
+            .lineLimit(typeSize.isAccessibilitySize ? 1 : lines)
             .frame(maxWidth: .infinity, alignment: .leading)
         } else if !state.transcriptTail.isEmpty {
             Text(state.transcriptTail)
