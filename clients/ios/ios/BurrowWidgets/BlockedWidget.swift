@@ -46,7 +46,7 @@ struct BlockedMedium: View {
 
     var body: some View {
         let count = entry.count(.blocked)
-        VStack(alignment: .leading, spacing: 8) {
+        VStack(alignment: .leading, spacing: 6) {
             FeedHeader(
                 title: BlockedWidgetView.title, entry: entry, section: .blocked,
                 count: entry.signedIn && !entry.notLoaded && count > 0 ? count : nil)
@@ -60,6 +60,7 @@ struct BlockedMedium: View {
                 ViewThatFits(in: .vertical) {
                     rows(2)
                     rows(1)
+                    Color.clear.frame(height: 0)
                 }
                 Spacer(minLength: 0)
             }
@@ -70,10 +71,10 @@ struct BlockedMedium: View {
     private func rows(_ n: Int) -> some View {
         let failing = !entry.failures.isEmpty && n > 1
         let shown = Array(entry.blockedRows.prefix(failing ? n - 1 : n))
-        return VStack(alignment: .leading, spacing: 6) {
+        return VStack(alignment: .leading, spacing: 4) {
             ForEach(shown) { row in
                 Link(destination: row.link) {
-                    VStack(alignment: .leading, spacing: 1) {
+                    VStack(alignment: .leading, spacing: 0) {
                         HStack(alignment: .firstTextBaseline, spacing: 6) {
                             Text(row.row.title).font(FeedType.rowTitle).foregroundStyle(BurrowColor.onSurface.color).lineLimit(1)
                                 .privacySensitive()

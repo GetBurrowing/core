@@ -604,8 +604,10 @@ final class ExtensionRenderTests: XCTestCase {
     }
 
     func testFeedWidgets() throws {
-        let small = CGSize(width: 170, height: 170)
-        let medium = CGSize(width: 364, height: 170)
+        // iPhone 17 (6.3-inch) widget sizes, so the canvas height budget
+        // (about 126pt inside 16pt margins) is what the render tests.
+        let small = CGSize(width: 158, height: 158)
+        let medium = CGSize(width: 338, height: 158)
         func framed<V: View>(_ name: String, _ view: V, _ size: CGSize, dark: Bool = false, type: DynamicTypeSize = .large) throws {
             try save(
                 name, widgetFrame(view.environment(\.dynamicTypeSize, type).frame(width: size.width, height: size.height)),
@@ -644,7 +646,7 @@ final class ExtensionRenderTests: XCTestCase {
             try framed("feed-blocked-small-several-\(name)", BlockedWidgetView(entry: several, family: .systemSmall), small, type: type)
             try framed("feed-shipped-small-several-\(name)", ShippedWidgetView(entry: several), small, type: type)
         }
-        let short = CGSize(width: 338, height: 148)
+        let short = CGSize(width: 322, height: 148)
         try framed("feed-waiting-medium-many-short", WaitingWidgetView(entry: feedStates()[2].1, family: .systemMedium), short)
         try framed("feed-recent-medium-several-short", RecentWidgetView(entry: several), short)
     }

@@ -95,7 +95,10 @@ struct FeedHeader: View {
     let count: Int?
 
     var body: some View {
-        HStack(alignment: .firstTextBaseline, spacing: 8) {
+        // Top-aligned, so the 28pt count sits beside the two header lines
+        // instead of adding height above them (canvas height budget:
+        // header 34 + 2 rows x 40 + gaps within about 126pt).
+        HStack(alignment: .top, spacing: 8) {
             VStack(alignment: .leading, spacing: 0) {
                 Text(title).font(FeedType.header).foregroundStyle(BurrowColor.onSurface.color).lineLimit(1)
                 FeedHeaderDetail(entry: entry, section: section)
@@ -104,6 +107,7 @@ struct FeedHeader: View {
             Spacer(minLength: 4)
             if let count {
                 Text("\(count)").font(FeedType.countMedium).foregroundStyle(BurrowColor.onSurface.color).fixedSize().layoutPriority(1)
+                    .padding(.top, -4)
             }
         }
         .accessibilityElement(children: .ignore)

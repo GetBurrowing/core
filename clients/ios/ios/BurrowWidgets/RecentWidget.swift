@@ -42,6 +42,7 @@ struct RecentWidgetView: View {
                 rows(4)
                 rows(3)
                 rows(2)
+                rows(1)
             }
         }
     }

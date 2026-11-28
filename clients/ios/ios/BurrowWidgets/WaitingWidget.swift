@@ -49,7 +49,7 @@ struct WaitingMedium: View {
 
     var body: some View {
         let count = entry.count(.waiting)
-        VStack(alignment: .leading, spacing: 8) {
+        VStack(alignment: .leading, spacing: 6) {
             FeedHeader(title: Self.title, entry: entry, section: .waiting, count: entry.signedIn && !entry.notLoaded && count > 0 ? count : nil)
             if !entry.signedIn {
                 FeedPlaceholder(text: FeedCopy.signIn)
@@ -63,6 +63,9 @@ struct WaitingMedium: View {
                 ViewThatFits(in: .vertical) {
                     rows(2)
                     rows(1)
+                    // Not even one row fits (the largest text sizes): the
+                    // header and count alone, never clipped.
+                    Color.clear.frame(height: 0)
                 }
                 Spacer(minLength: 0)
             }
@@ -74,7 +77,7 @@ struct WaitingMedium: View {
     private func rows(_ n: Int) -> some View {
         let failing = !entry.failures.isEmpty && n > 1
         let shown = Array(entry.waitingRows.prefix(failing ? n - 1 : n))
-        return VStack(alignment: .leading, spacing: 6) {
+        return VStack(alignment: .leading, spacing: 4) {
             ForEach(shown) { row in
                 Link(destination: row.link) { WaitingRowView(row: row, entry: entry) }
             }
@@ -91,7 +94,7 @@ struct WaitingRowView: View {
     private var time: String { entry.updatedLine ?? FeedEntry.shortAgo(row.row.date, now: entry.date) }
 
     var body: some View {
-        VStack(alignment: .leading, spacing: 1) {
+        VStack(alignment: .leading, spacing: 0) {
             HStack(alignment: .firstTextBaseline, spacing: 6) {
                 Text(asker).font(FeedType.rowTitle).foregroundStyle(BurrowColor.onSurface.color).lineLimit(1).privacySensitive()
                 Spacer(minLength: 4)
@@ -151,9 +154,10 @@ struct WaitingRectangular: View {
                 if entry.count(.waiting) == 0 {
                     Text(entry.notLoaded ? FeedCopy.notLoaded : WaitingMedium.empty).lineLimit(1)
                 } else if let row = entry.waitingRows.first {
-                    HStack(spacing: 0) {
-                        Text(row.row.asker ?? "An agent").lineLimit(1).privacySensitive()
-                        Text(suffix(row)).lineLimit(1).fixedSize()
+                    // The install label is dropped whole before the name truncates.
+                    ViewThatFits(in: .horizontal) {
+                        line(row, withInstall: true).fixedSize()
+                        line(row, withInstall: false)
                     }
                 }
             }
@@ -166,8 +170,11 @@ struct WaitingRectangular: View {
         return "\(WaitingMedium.title)\(pinned) · \(entry.count(.waiting))"
     }
 
-    private func suffix(_ row: FeedEntry.Waiting) -> String {
-        let install = row.installLabel.map { " · \($0)" } ?? ""
-        return "\(install) · \(FeedEntry.shortAgo(row.row.date, now: entry.date))"
+    private func line(_ row: FeedEntry.Waiting, withInstall: Bool) -> some View {
+        let install = withInstall ? row.installLabel.map { " · \($0)" } ?? "" : ""
+        return HStack(spacing: 0) {
+            Text(row.row.asker ?? "An agent").lineLimit(1).privacySensitive()
+            Text("\(install) · \(FeedEntry.shortAgo(row.row.date, now: entry.date))").lineLimit(1).fixedSize()
+        }
     }
 }
