@@ -8659,6 +8659,40 @@ defmodule Platform.Chat do
   @chat_surface_kinds ~w(channel dm group)
 
   @doc """
+  The space kinds the Chat surface renders as conversations
+  (`#{Enum.join(@chat_surface_kinds, "`, `")}`). Read this rather than
+  restating the list (the app's Recent widget, `Platform.Mobile.WidgetFeed`,
+  lists the same set the rail badge counts).
+  """
+  @spec chat_surface_kinds() :: [String.t()]
+  def chat_surface_kinds, do: @chat_surface_kinds
+
+  @doc """
+  A correlated subquery for "`user_id` has posted in this message's space
+  after it": a non-deleted message by the user's own participant row in the
+  same space whose UUIDv7 id sorts after the outer message's id (the same
+  ordering `unread_counts_for_user/1` uses).
+
+  Correlated on an outer `chat_messages` binding named `:message`, so a caller
+  writes `where: not exists(Chat.user_posted_after_query(user_id))` on a query
+  that declares `as: :message`. The one definition of "the user answered this
+  message" (task 01a21e75: the Waiting on you widget).
+  """
+  @spec user_posted_after_query(binary()) :: Ecto.Query.t()
+  def user_posted_after_query(user_id) when is_binary(user_id) do
+    from(r in Message,
+      join: p in Participant,
+      on: p.id == r.participant_id,
+      where: r.space_id == parent_as(:message).space_id,
+      where: r.id > parent_as(:message).id,
+      where: is_nil(r.deleted_at),
+      where: p.space_id == r.space_id,
+      where: p.participant_type == "user" and p.participant_id == ^user_id,
+      select: 1
+    )
+  end
+
+  @doc """
   One number for the whole viewer: unread messages summed across the Chat
   conversations this viewer both participates in and can observe.
 

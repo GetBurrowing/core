@@ -102,6 +102,15 @@ defmodule Platform.Chat.Presence do
   end
 
   @doc """
+  The meta a Voice listener is tracked with: the Voice page
+  (`PlatformWeb.VoiceLive.Listening`) and a device waiting on a native Voice
+  turn (`Platform.Mobile.VoiceTurns.await_reply/4`). `voice_listener_ids/1`
+  reads exactly this shape, so both writers share it.
+  """
+  @spec voice_listener_meta() :: %{participant_type: String.t(), surface: String.t()}
+  def voice_listener_meta, do: %{participant_type: "user", surface: "voice"}
+
+  @doc """
   Return the keys of a `list_space/1` presence map that are listening on the
   Voice page (task 01a21e8d).
 

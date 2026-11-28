@@ -33,11 +33,9 @@ defmodule PlatformWeb.VoiceLive.Listening do
 
   alias Platform.Chat.Presence
 
-  @meta %{participant_type: "user", surface: "voice"}
-
-  @doc "The presence meta the Voice page tracks."
+  @doc "The presence meta the Voice page tracks (`Presence.voice_listener_meta/0`)."
   @spec meta() :: map()
-  def meta, do: @meta
+  def meta, do: Presence.voice_listener_meta()
 
   @doc """
   Listen on `space_id`: remember it as the target and track it when the
@@ -90,7 +88,12 @@ defmodule PlatformWeb.VoiceLive.Listening do
         socket
 
       connected?(socket) and socket.assigns[:voice_visible?] != false and is_binary(user_id) ->
-        case Presence.safe_track_in_space(self(), space_id, user_id, @meta) do
+        case Presence.safe_track_in_space(
+               self(),
+               space_id,
+               user_id,
+               Presence.voice_listener_meta()
+             ) do
           {:ok, _ref} ->
             assign(socket, :voice_listening_space_id, space_id)
 

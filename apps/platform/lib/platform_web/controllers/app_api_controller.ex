@@ -492,6 +492,30 @@ defmodule PlatformWeb.AppApiController do
     })
   end
 
+  # ── widgets ──────────────────────────────────────────────────────────
+
+  @doc """
+  `GET /api/app/widgets` (task 01a21e75): the iOS Waiting on you, Blocked
+  for you, Recent and Shipped today widgets in one response; see
+  `Platform.Mobile.WidgetFeed`. Every query param is ignored: the user is the
+  bearer's. A mention row carries a one-line `summary`, never the message
+  body. Nothing here logs a name, summary, title or content.
+  """
+  def widgets(conn, _params) do
+    feed = Platform.Mobile.WidgetFeed.for_user(conn.assigns.current_user)
+
+    json(conn, %{
+      as_of: DateTime.to_iso8601(feed.as_of),
+      waiting: %{
+        count: feed.waiting.count,
+        rows: Enum.map(feed.waiting.rows, &%{&1 | at: DateTime.to_iso8601(&1.at)})
+      },
+      blocked: feed.blocked,
+      recent: feed.recent,
+      shipped: feed.shipped
+    })
+  end
+
   # ── briefing ─────────────────────────────────────────────────────────
 
   @doc """
