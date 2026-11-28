@@ -138,7 +138,8 @@ struct DeepLink: Equatable {
 
     static func isAllowed(path: String) -> Bool {
         switch path {
-        case "/", "/inbox", "/tasks", "/meetings": return true
+        // "/voice": the Voice tab, opened already listening (task 01a21e75 stage 5).
+        case "/", "/inbox", "/tasks", "/meetings", "/voice": return true
         default: break
         }
         // Exactly "/<section>/<one segment>": split keeps empty pieces, so

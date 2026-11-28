@@ -13,14 +13,20 @@ enum VoiceTrace {
         private static let url: URL? = FileManager.default.urls(for: .cachesDirectory, in: .userDomainMask).first?
             .appendingPathComponent("voice-trace.log")
 
+        /// Tests only: every line, as written, so a test can scan what the
+        /// trace would hold for a transcript or reply sentinel.
+        nonisolated(unsafe) static var sink: ((String) -> Void)?
+
         /// Milliseconds since boot (CLOCK_UPTIME_RAW): comparable across lines.
         static var nowMs: Int { Int(clock_gettime_nsec_np(CLOCK_UPTIME_RAW) / 1_000_000) }
     #endif
 
     static func log(_ line: @autoclosure () -> String) {
         #if DEBUG
+            let text = line()
+            sink?(text)
             guard let url else { return }
-            let entry = "t=\(nowMs) \(line())\n"
+            let entry = "t=\(nowMs) \(text)\n"
             lock.lock()
             defer { lock.unlock() }
             guard let data = entry.data(using: .utf8) else { return }

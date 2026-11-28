@@ -686,6 +686,99 @@ final class ExtensionRenderTests: XCTestCase {
         }
     }
 
+    // MARK: Voice (task 01a21e75 stage 5)
+
+    func testVoiceSurfaces() throws {
+        guard #available(iOS 18, *) else { throw XCTSkip("the Voice Live Activity needs iOS 18") }
+        let small = CGSize(width: 158, height: 158)
+        func tile(_ name: String, _ model: VoiceTileModel, partner: String? = "Test Agent", dark: Bool = false, type: DynamicTypeSize = .large) throws {
+            let view = VoiceTileContent(model: model).environment(\.dynamicTypeSize, type).frame(width: small.width, height: small.height)
+            try save("voice-tile-\(name)\(dark ? "-dark" : "")", widgetFrame(view), size: CGSize(width: 182, height: 182), dark: dark)
+        }
+        for dark in [false, true] {
+            try tile("rest", .make(signedIn: true, partner: "Test Agent", install: nil, listening: false), dark: dark)
+            try tile("rest-several", .make(signedIn: true, partner: "Test Agent", install: "Lab", listening: false), dark: dark)
+            try tile("listening", .make(signedIn: true, partner: "Test Agent", install: nil, listening: true), dark: dark)
+            try tile("signed-out", .make(signedIn: false, partner: nil, install: nil, listening: false), dark: dark)
+        }
+        try tile("rest-several-ax5", .make(signedIn: true, partner: "Test Agent", install: "Lab", listening: false), type: .accessibility5)
+
+        let one = VoiceActivityAttributes(partnerName: "Test Agent", installLabel: nil, host: "app.example.test")
+        let several = VoiceActivityAttributes(partnerName: "Test Agent", installLabel: "Legacy Lab Install", host: "app.example.test")
+        let heard = "can you check what is left on the release list for today"
+        let reply = "Two items are left: the changelog and the store screenshots."
+        let states: [(String, VoiceActivityState)] = [
+            ("listening", .make(.listening, partner: "Test Agent", transcript: heard)),
+            ("sending", .make(.sending, partner: "Test Agent", transcript: heard)),
+            ("thinking", .make(.thinking, partner: "Test Agent", transcript: heard)),
+            ("speaking", .make(.speaking, partner: "Test Agent", transcript: heard, reply: reply)),
+            ("finished", .make(.finished, partner: "Test Agent", transcript: heard, reply: reply)),
+            ("no-words", .make(.noWords, partner: "Test Agent")),
+            ("not-sent", .make(.notSent, partner: "Test Agent", transcript: heard)),
+            ("ended", .make(.ended, partner: "Test Agent", transcript: heard, reply: reply)),
+        ]
+        func lock<V: View>(_ view: V, width: CGFloat = 364) -> some View {
+            view.frame(width: width).background(BurrowColor.surface.color).clipShape(RoundedRectangle(cornerRadius: 22, style: .continuous))
+                .padding(12).background(Color(white: 0.25))
+        }
+        for (name, state) in states {
+            for dark in [false, true] {
+                try save(
+                    "voice-lock-\(name)\(dark ? "-dark" : "")", lock(VoiceLockScreenView(attributes: one, state: state)),
+                    size: CGSize(width: 388, height: 190), dark: dark)
+            }
+        }
+        let speaking = states[3].1
+        try save(
+            "voice-lock-speaking-locked", lock(VoiceLockScreenView(attributes: one, state: speaking).redacted(reason: .privacy)),
+            size: CGSize(width: 388, height: 190))
+        try save(
+            "voice-lock-listening-several", lock(VoiceLockScreenView(attributes: several, state: states[0].1)), size: CGSize(width: 388, height: 190))
+        try save(
+            "voice-lock-thinking-ax5",
+            lock(VoiceLockScreenView(attributes: several, state: states[2].1).environment(\.dynamicTypeSize, .accessibility5)),
+            size: CGSize(width: 388, height: 420))
+
+        // The Dynamic Island, always dark on black: stand-ins for the system's
+        // pill with Burrow's regions in place.
+        for (name, state) in [("listening", states[0].1), ("speaking", speaking), ("thinking", states[2].1)] {
+            let compact = HStack {
+                VoiceIslandGlyph(attributes: one, state: state)
+                Spacer()
+            }
+            .padding(.horizontal, 14).frame(width: 250, height: 37).background(Capsule().fill(.black)).environment(\.colorScheme, .dark)
+            try save("voice-island-compact-\(name)", compact.padding(8).background(Color(white: 0.5)), size: CGSize(width: 266, height: 53), dark: true)
+            let minimal = VoiceIslandGlyph(attributes: one, state: state).frame(width: 37, height: 37).background(Circle().fill(.black))
+                .environment(\.colorScheme, .dark)
+            try save("voice-island-minimal-\(name)", minimal.padding(8).background(Color(white: 0.5)), size: CGSize(width: 53, height: 53), dark: true)
+            for (label, attributes) in [("", one), ("-several", several)] {
+                let expanded = VStack(spacing: 8) {
+                    HStack(alignment: .top) {
+                        VoicePartnerMarker(name: attributes.partnerName, ringing: state.phase == .speaking)
+                        Spacer()
+                        VoiceIslandCaption(attributes: attributes, state: state)
+                    }
+                    VoiceTranscriptLine(state: state, partner: attributes.partnerName, lines: 1)
+                    VoiceControlsRow(attributes: attributes, state: state)
+                }
+                .padding(18).frame(width: 371).background(RoundedRectangle(cornerRadius: 44, style: .continuous).fill(.black))
+                .environment(\.colorScheme, .dark)
+                try save(
+                    "voice-island-expanded-\(name)\(label)", expanded.padding(8).background(Color(white: 0.5)), size: CGSize(width: 387, height: 180),
+                    dark: true)
+            }
+        }
+
+        for (name, copy) in [
+            ("voice", ControlCopy.voice(signedIn: true, partner: "Test Agent", install: nil)),
+            ("voice-several", .voice(signedIn: true, partner: "Test Agent", install: "Lab")),
+            ("voice-signed-out", .voice(signedIn: false, partner: nil, install: nil)),
+        ] {
+            try save(
+                "control-\(name)", controlTile(copy).padding(12).background(Color(white: 0.3)), size: CGSize(width: 244, height: 100), dark: true)
+        }
+    }
+
     // MARK: In-call screen (task 01a10db7 stage 4)
 
     /// Snapshots through the app's own `InCallHostingController` in a

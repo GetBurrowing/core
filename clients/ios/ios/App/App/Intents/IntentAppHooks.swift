@@ -23,6 +23,14 @@ enum IntentAppHooks {
         MeetingLauncher.start = { host, meetingID in
             Task { @MainActor in CallController.shared.start(host: host, meetingID: meetingID, donates: false) }
         }
+        // The one-tap Voice mic (task 01a21e75 stage 5): the Voice control,
+        // the Action button and the Voice widget run StartVoiceTurnIntent in
+        // THIS process (it is a LiveActivityIntent), where the native turn
+        // lives. The widget process never sets these, so a tap that lands
+        // there opens Voice already listening instead.
+        VoiceLauncher.start = { await VoiceTurnRunner.shared.start() }
+        VoiceLauncher.send = { await VoiceTurnRunner.shared.send() }
+        VoiceLauncher.cancel = { VoiceTurnRunner.shared.cancel() }
     }
 
     /// A successful intent run. It is NOT donated whole (task 01a111bb

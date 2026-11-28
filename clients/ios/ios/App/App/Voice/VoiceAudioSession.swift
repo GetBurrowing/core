@@ -39,13 +39,46 @@ protocol VoiceAudioSessionControl: AnyObject {
     var hasOutputRoute: Bool { get }
 }
 
+/// Who holds the Voice audio session (task 01a21e75 stage 5): the Voice
+/// tab's plugin, or the native turn a Voice control, Action button or
+/// widget starts (`VoiceTurnRunner`).
+enum VoiceSessionHolder: String, Hashable {
+    case plugin, runner
+}
+
 /// The Voice tab's audio session (task 01a20dc5 stage 1): active only for a
 /// turn (the mic is open) or an utterance (a reply is playing), never for a
 /// meeting. Meetings own their own session through `CallController`.
+///
+/// ONE owner of the session for both Voice paths (task 01a21e75 stage 5):
+/// each path holds it through its own `handle(_:)`, the session is activated
+/// by the first holder and deactivated only when the LAST one lets go. So the
+/// plugin's background stop (which fires on `didEnterBackground`, exactly
+/// when a native turn runs) releases only the plugin's hold and never the
+/// runner's.
 @MainActor
 final class VoiceAudioSession: VoiceAudioSessionControl {
+    /// The session both Voice paths share.
+    static let shared = VoiceAudioSession()
+
     private let backend: VoiceAudioSessionBackend
     private(set) var isActive = false
+    private(set) var holders: Set<VoiceSessionHolder> = []
+
+    /// `holder`'s view of the shared session.
+    func handle(_ holder: VoiceSessionHolder) -> VoiceAudioSessionHandle { VoiceAudioSessionHandle(session: self, holder: holder) }
+
+    func activate(holder: VoiceSessionHolder) throws {
+        if !isActive { try activate() }
+        holders.insert(holder)
+    }
+
+    func deactivate(holder: VoiceSessionHolder) {
+        holders.remove(holder)
+        if holders.isEmpty { deactivateBackend() }
+    }
+
+    func isHeld(by holder: VoiceSessionHolder) -> Bool { holders.contains(holder) }
     /// The category before `activate()`, restored on `deactivate()`.
     private var previous: (AVAudioSession.Category, AVAudioSession.Mode, AVAudioSession.CategoryOptions)?
 
@@ -91,7 +124,14 @@ final class VoiceAudioSession: VoiceAudioSessionControl {
         isActive = true
     }
 
+    /// Deactivates whatever holds it (the single-owner form, kept for the
+    /// plugin's own tests and callers without a holder).
     func deactivate() {
+        holders.removeAll()
+        deactivateBackend()
+    }
+
+    private func deactivateBackend() {
         guard isActive else { return }
         isActive = false
         try? backend.setActive(false, options: .notifyOthersOnDeactivation)
@@ -147,4 +187,32 @@ final class VoiceAudioSession: VoiceAudioSessionControl {
             return nil
         }
     }
+}
+
+/// One holder's view of the shared `VoiceAudioSession`: `activate` adds its
+/// hold, `deactivate` drops only its hold, `isActive` is its own hold.
+@MainActor
+final class VoiceAudioSessionHandle: VoiceAudioSessionControl {
+    let session: VoiceAudioSession
+    let holder: VoiceSessionHolder
+
+    init(session: VoiceAudioSession, holder: VoiceSessionHolder) {
+        self.session = session
+        self.holder = holder
+    }
+
+    var isActive: Bool { session.isHeld(by: holder) }
+    func activate() throws { try session.activate(holder: holder) }
+    func deactivate() { session.deactivate(holder: holder) }
+    var routeLabel: String? { session.routeLabel }
+    var hasOutputRoute: Bool { session.hasOutputRoute }
+}
+
+/// The two Voice paths stop each other (task 01a21e75 stage 5): a turn
+/// started in the Voice tab stops a native turn, and a native turn stops
+/// the tab's reply. Set by each side; nil when that side is not running.
+@MainActor
+enum VoiceCoordinator {
+    static var stopRunner: (() -> Void)?
+    static var stopPluginSpeakers: (() -> Void)?
 }

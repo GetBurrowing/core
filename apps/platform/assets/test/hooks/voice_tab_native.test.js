@@ -1042,6 +1042,29 @@ describe("leaving releases the mic", () => {
   })
 })
 
+describe("autoStart (task 01a21e75 stage 5)", () => {
+  it("capabilities autoStart: true starts a toggled turn at once, with no press", async () => {
+    const plugin = fakePlugin({
+      caps: { onDeviceSpeech: true, reason: null, locale: "en-US", testBuild: false, micPermission: "granted", autoStart: true },
+    })
+    install({ plugin })
+    const t = await mount()
+    await settle()
+    expect(plugin.capabilities).toHaveBeenCalledTimes(1)
+    expect(plugin.start).toHaveBeenCalledTimes(1)
+    expect(t.hook._toggled).toBe(true)
+    expect(t.sent("voice_native_mic")).toContainEqual({ state: "toggled" })
+  })
+
+  it("without autoStart nothing starts until a press", async () => {
+    const plugin = fakePlugin()
+    install({ plugin })
+    await mount()
+    await settle()
+    expect(plugin.start).not.toHaveBeenCalled()
+  })
+})
+
 describe("source hygiene", () => {
   // Every file of the hook: the app.js half, the island half and what they share.
   const src = ["voice_tab.js", "voice_tab_native_runtime.js", "voice_tab_shared.js", "../lib/on_device_voice.js"]

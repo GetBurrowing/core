@@ -196,6 +196,7 @@ final class BurrowVoicePluginTests: XCTestCase {
         // Pocket TTS off: these tests cover the system voice (task 01a20fdd
         // stage 2 has its own suite, PocketSpeakerTests).
         plugin.pocketGate = { (false, "simulator") }
+        plugin.autoStart = VoiceAutoStart(defaults: UserDefaults(suiteName: "voice-plugin-autostart-tests"))
         plugin.load()
         return plugin
     }

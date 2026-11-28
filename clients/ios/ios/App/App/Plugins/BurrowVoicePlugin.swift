@@ -196,7 +196,12 @@ public class BurrowVoicePlugin: CAPPlugin, CAPBridgedPlugin {
     var makePocketVoiceStore: @MainActor (PocketTTSFile) -> PocketModelStore = { file in
         PocketModelStore(root: PocketModelStore.defaultRoot(), files: [file], fetcher: HTTPRangeFetcher(), engine: PocketVoiceFileLoader())
     }
-    lazy var session: any VoiceAudioSessionControl = MainActor.assumeIsolated { VoiceAudioSession() }
+    /// The plugin's hold on the session it shares with the native turn
+    /// (task 01a21e75 stage 5): its stops release only its own hold.
+    lazy var session: any VoiceAudioSessionControl = MainActor.assumeIsolated { VoiceAudioSession.shared.handle(.plugin) }
+    /// The one-shot "open Voice already listening" flag (task 01a21e75
+    /// stage 5), reported once by `capabilities` as `autoStart`.
+    var autoStart = VoiceAutoStart()
     var voiceCatalog: any ReplyVoiceCatalog = SystemReplyVoiceCatalog()
     var languageCode: () -> String = { AVSpeechSynthesisVoice.currentLanguageCode() }
     var callState: @MainActor () -> any VoiceCallState = { CallController.shared }
@@ -236,6 +241,13 @@ public class BurrowVoicePlugin: CAPPlugin, CAPBridgedPlugin {
 
     override public func load() {
         observeSystem()
+        MainActor.assumeIsolated {
+            // A native turn starting stops the tab's reply (task 01a21e75 stage 5).
+            VoiceCoordinator.stopPluginSpeakers = { [weak self] in
+                self?.stopSpeakers(reason: "voice_turn")
+                self?.releaseSessionIfIdle()
+            }
+        }
     }
 
     private func emit(_ name: String, _ data: [String: Any]) {
@@ -442,6 +454,9 @@ public class BurrowVoicePlugin: CAPPlugin, CAPBridgedPlugin {
             "locale": capability.locale ?? NSNull(),
             "testBuild": await isTestBuild(),
             "micPermission": micPermissionStatus(),
+            // One-shot: a Voice control, Action button or widget that had to
+            // open the app asks the tab to start listening (task 01a21e75 stage 5).
+            "autoStart": capability.onDeviceSpeech && autoStart.take(),
         ]
     }
 
@@ -472,6 +487,8 @@ public class BurrowVoicePlugin: CAPPlugin, CAPBridgedPlugin {
     @MainActor
     func startTurn() async -> [String: Any] {
         VoiceTrace.log("mic start turn=\(turn)")
+        // A turn in the tab stops a native turn (task 01a21e75 stage 5).
+        VoiceCoordinator.stopRunner?()
         stopSpeakers(reason: "mic_opened")
         guard turn == .idle else { return refusal("busy") }
         if callState().hasCall { return refusal("mic_in_use") }

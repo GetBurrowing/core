@@ -68,6 +68,12 @@ struct BurrowShortcuts: AppShortcutsProvider {
             phrases: ["Approve a plan in \(.applicationName)"],
             shortTitle: "Approve Plan",
             systemImageName: "checkmark.seal")
+        // The one-tap Voice mic (task 01a21e75 stage 5) is NOT listed here
+        // either, for the same reason: StartVoiceTurnIntent is an iOS 18
+        // AudioRecordingIntent and this builder cannot take `if #available`
+        // at iOS 17.0. It reaches the Action button through the Voice
+        // control (iOS 18 offers controls there) and Shortcuts as a
+        // discoverable action ("Talk to Burrow").
         // The iOS 27 messages-domain intents (task 01a111bb) are NOT listed
         // here, deliberately. Siri reaches all five through their schemas
         // from one sentence, with no phrase, and they appear in Shortcuts.

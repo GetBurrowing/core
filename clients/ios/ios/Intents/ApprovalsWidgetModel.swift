@@ -18,6 +18,8 @@ enum WidgetKinds {
     static let recent = "com.kobo-ai.burrow.widgets.recent"
     static let shipped = "com.kobo-ai.burrow.widgets.shipped"
     static let feed = [waiting, blocked, recent, shipped]
+    /// The Voice tile (task 01a21e75 stage 5).
+    static let voice = "com.kobo-ai.burrow.widgets.voice"
 }
 
 /// What an intent wrote about one row, keyed by its `<host>|<id>`.

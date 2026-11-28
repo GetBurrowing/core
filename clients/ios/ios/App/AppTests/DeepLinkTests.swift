@@ -25,6 +25,7 @@ final class DeepLinkTests: XCTestCase {
             "/chat/\(dmSegment)",
             "/meetings/standup-2026-10-05",
             "/chat/" + String(repeating: "a", count: DeepLink.maxSegmentLength),
+            "/voice",
         ]
         for path in accepted {
             XCTAssertTrue(DeepLink.isAllowed(path: path), "should accept \(path)")
@@ -64,6 +65,8 @@ final class DeepLinkTests: XCTestCase {
             "/inbox?x=1",
             "https://evil.example/inbox",
             "/settings/agent-1",
+            "/voice/x",
+            "/voice?x=1",
         ]
         for path in rejected {
             XCTAssertFalse(DeepLink.isAllowed(path: path), "should reject \(path)")
