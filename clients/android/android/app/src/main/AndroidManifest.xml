@@ -29,6 +29,11 @@
         <intent>
             <action android:name="android.support.customtabs.action.CustomTabsService" />
         </intent>
+        <!-- Voice replies (task 01a21e4a): the TextToSpeech engine, which may be
+             a Play-installed one that package visibility would hide. -->
+        <intent>
+            <action android:name="android.intent.action.TTS_SERVICE" />
+        </intent>
     </queries>
 
     <application

@@ -1,14 +1,17 @@
 // On-device Voice (task 01a20dc5 stage 3): the one seam between the Voice
-// tab and the iOS app's `BurrowVoice` plugin
-// (clients/ios/ios/App/App/Plugins/BurrowVoicePlugin.swift).
+// tab and the app's `BurrowVoice` plugin, on iOS
+// (clients/ios/ios/App/App/Plugins/BurrowVoicePlugin.swift) and, since task
+// 01a21e4a, Android
+// (clients/android/android/app/src/main/java/com/koboai/burrow/voice/BurrowVoicePlugin.kt).
+// Nothing here checks the platform: only that the plugin is there.
 //
 // `onDeviceVoiceCapability()` is the single question "can this client talk
-// on the device?". It answers `available: false` for a browser, Android, an
-// older app build without the plugin (prod web is served to every installed
-// build, and Capacitor rejects an unknown plugin or method), an iPhone whose
-// SpeechTranscriber is unavailable, and on ANY throw or hang. The follow-up
-// that shows Voice only on compatible iPhones calls this same function; this
-// ticket hides Voice for nobody.
+// on the device?". It answers `available: false` for a browser, an older app
+// build without the plugin (iPhone or Android: prod web is served to every
+// installed build, and Capacitor rejects an unknown plugin or method), a
+// phone whose on-device recognizer is unavailable, and on ANY throw or hang.
+// The follow-up that shows Voice only on compatible phones calls this same
+// function; this ticket hides Voice for nobody.
 
 export const CAPABILITY_TIMEOUT_MS = 3000
 
