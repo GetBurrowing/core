@@ -19,7 +19,35 @@ final class ExtensionRenderTests: XCTestCase {
         try FileManager.default.createDirectory(at: outDir, withIntermediateDirectories: true)
     }
 
+    override func tearDownWithError() throws {
+        defer { fitMisses = [] }
+        guard !fitMisses.isEmpty else { return }
+        // Also kept beside the PNGs, so a run's misses can be read by name.
+        let log = outDir.appendingPathComponent("fit-misses.txt")
+        let text = fitMisses.joined(separator: "\n") + "\n"
+        if let handle = try? FileHandle(forWritingTo: log) {
+            _ = try? handle.seekToEnd()
+            try? handle.write(contentsOf: Data(text.utf8))
+            try? handle.close()
+        } else {
+            try Data(text.utf8).write(to: log)
+        }
+        XCTFail("fit probes failed:\n" + fitMisses.joined(separator: "\n"))
+    }
+
+    /// Every render also runs the fit probes (task 01a21e75 stage 7):
+    /// counts never truncate, install labels drop whole, rows stay inside.
+    /// A render that breaks one is recorded here and fails the test.
+    private var fitMisses: [String] = []
+
     private func save<V: View>(_ name: String, _ view: V, size: CGSize, dark: Bool = false) throws {
+        FitProbe.isEnabled = true
+        FitProbe.reset()
+        defer {
+            let misses = FitProbe.misses()
+            if !misses.isEmpty { fitMisses.append("\(name): \(misses.joined(separator: "; "))") }
+            FitProbe.isEnabled = false
+        }
         let framed =
             view
             .frame(width: size.width, height: size.height)
@@ -210,6 +238,7 @@ final class ExtensionRenderTests: XCTestCase {
 
     private func widgetFrame<V: View>(_ view: V) -> some View {
         view
+            .fitProbeRoot()
             .background(BurrowColor.surface.color)
             .clipShape(RoundedRectangle(cornerRadius: 22, style: .continuous))
             .padding(12)

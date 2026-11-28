@@ -123,6 +123,19 @@ struct FeedHeader: View {
     }
 }
 
+/// One secondary line shown whole or not at all ("2 installs", "Alpha
+/// only", "Updated 2h ago"): never truncated (task 01a21e75 stage 7).
+struct DropWhole: View {
+    let text: String
+
+    var body: some View {
+        ViewThatFits(in: .horizontal) {
+            Secondary(text: text).lineLimit(1).fixedSize().neverTruncates("small.line")
+            Color.clear.frame(width: 0, height: 0)
+        }
+    }
+}
+
 /// The signed-out and not-loaded lines that replace a widget's content.
 struct FeedPlaceholder: View {
     let text: String
@@ -180,11 +193,11 @@ struct FeedSmallCount: View {
             if !entry.failures.isEmpty {
                 FeedFailureLine(failures: entry.failures)
             } else if let pinned = entry.pinnedLabel {
-                Secondary(text: pinned).lineLimit(1)
+                DropWhole(text: pinned)
             } else if let installs = entry.installCountLine {
-                Secondary(text: installs).lineLimit(1)
+                DropWhole(text: installs)
             } else if let updated = entry.updatedLine {
-                Secondary(text: updated).lineLimit(1)
+                DropWhole(text: updated)
             } else if let detail, entry.count(section) > 0 {
                 ViewThatFits(in: .vertical) {
                     Secondary(text: detail, font: FeedType.caption).lineLimit(2).privacySensitive()

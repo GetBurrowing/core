@@ -227,6 +227,7 @@
 		9629C49742AAB86E84A34806 /* PublicSans-Variable.ttf in Resources */ = {isa = PBXBuildFile; fileRef = 39697D42725EF18B41A8339A /* PublicSans-Variable.ttf */; };
 		9670414B69771C55162C61A3 /* PersonalIndex.swift in Sources */ = {isa = PBXBuildFile; fileRef = BA623D3963F4BCFBB477D85D /* PersonalIndex.swift */; };
 		9746794DCAD03A86C6F9B107 /* TestSupport.swift in Sources */ = {isa = PBXBuildFile; fileRef = 1BCA4F7949BCEADF89CA73DD /* TestSupport.swift */; };
+		97AFBA64FFBFDD192956388A /* FitProbe.swift in Sources */ = {isa = PBXBuildFile; fileRef = 26B05C19814156C00A2EE1B9 /* FitProbe.swift */; };
 		9882EDC81404B836F9A6134A /* Colors.xcassets in Resources */ = {isa = PBXBuildFile; fileRef = F20AEF676C004D2C37F1D06C /* Colors.xcassets */; };
 		98C474DC77F7657C40E7A5F5 /* KeychainTokenStoreTests.swift in Sources */ = {isa = PBXBuildFile; fileRef = BFB6A384F7FA204052DB6C2D /* KeychainTokenStoreTests.swift */; };
 		990449CE17F8F7A44D1F75E3 /* PersonalIndexTests.swift in Sources */ = {isa = PBXBuildFile; fileRef = A7996FE25C68D64011A453A6 /* PersonalIndexTests.swift */; };
@@ -370,6 +371,7 @@
 		F410DACF893D296718155247 /* IntentsTests.swift in Sources */ = {isa = PBXBuildFile; fileRef = F6F6FCE55A638A1302FC2263 /* IntentsTests.swift */; };
 		F53E01ED1EB02D62DB4B6280 /* VoiceIntents.swift in Sources */ = {isa = PBXBuildFile; fileRef = 8E8F45806A153BF0A93EBE08 /* VoiceIntents.swift */; };
 		F776924550C3EDA56F7F7D7A /* BurrowBridgeViewController.swift in Sources */ = {isa = PBXBuildFile; fileRef = D916E0C6383FBD2B8718B163 /* BurrowBridgeViewController.swift */; };
+		F78A1FAB8CCC314CE823A6BC /* FitProbe.swift in Sources */ = {isa = PBXBuildFile; fileRef = 26B05C19814156C00A2EE1B9 /* FitProbe.swift */; };
 		F8211A6039D9991C73204E10 /* CallController.swift in Sources */ = {isa = PBXBuildFile; fileRef = E1A2D68E8DFAEDB9B459BFA3 /* CallController.swift */; };
 		F877863E202DECB42ADDDF7C /* SlabState.swift in Sources */ = {isa = PBXBuildFile; fileRef = FCEC8A0CD2D3DB02BB85718E /* SlabState.swift */; };
 		F94D63D4DF140526381BF998 /* Theme.swift in Sources */ = {isa = PBXBuildFile; fileRef = 48421D60D2C81BD6F37E64D2 /* Theme.swift */; };
@@ -493,6 +495,7 @@
 		1E626261E5DDF2ECDA4D7C67 /* VoiceTurnSystemTests.swift */ = {isa = PBXFileReference; lastKnownFileType = sourcecode.swift; path = VoiceTurnSystemTests.swift; sourceTree = "<group>"; };
 		1FAE8925EE4B4D296E4E3CFB /* VoiceAudioSession.swift */ = {isa = PBXFileReference; lastKnownFileType = sourcecode.swift; path = VoiceAudioSession.swift; sourceTree = "<group>"; };
 		2069B8F19321710E6992DDCD /* ShippedWidget.swift */ = {isa = PBXFileReference; lastKnownFileType = sourcecode.swift; path = ShippedWidget.swift; sourceTree = "<group>"; };
+		26B05C19814156C00A2EE1B9 /* FitProbe.swift */ = {isa = PBXFileReference; lastKnownFileType = sourcecode.swift; path = FitProbe.swift; sourceTree = "<group>"; };
 		2D522D8BBB8EE946DF7386D2 /* BurrowMeetingsPluginTests.swift */ = {isa = PBXFileReference; lastKnownFileType = sourcecode.swift; path = BurrowMeetingsPluginTests.swift; sourceTree = "<group>"; };
 		3105A037DC16B7EB85FA7C98 /* IntentAppHooks.swift */ = {isa = PBXFileReference; lastKnownFileType = sourcecode.swift; path = IntentAppHooks.swift; sourceTree = "<group>"; };
 		32798D99CA9F9644F3696A57 /* IntentSnippets.swift */ = {isa = PBXFileReference; lastKnownFileType = sourcecode.swift; path = IntentSnippets.swift; sourceTree = "<group>"; };
@@ -991,6 +994,7 @@
 				FC25CB5128DF42592877E61F /* CountsProvider.swift */,
 				8B1B2A37559F47F9E21F1A43 /* FeedProvider.swift */,
 				1698F79918FEBAF131A24B2C /* FeedWidgetParts.swift */,
+				26B05C19814156C00A2EE1B9 /* FitProbe.swift */,
 				8FCE7DCD29C0905BCFE703EE /* RecentWidget.swift */,
 				2069B8F19321710E6992DDCD /* ShippedWidget.swift */,
 				016FA7ACEAA1A0D4375FB2E9 /* VoiceLiveActivity.swift */,
@@ -1500,6 +1504,7 @@
 				7BB531099707DB4CF0FCC4F1 /* Entities.swift in Sources */,
 				13EC33CB0D0A51932DA213EC /* FeedProvider.swift in Sources */,
 				EAE06A11BD778795E07CD044 /* FeedWidgetParts.swift in Sources */,
+				F78A1FAB8CCC314CE823A6BC /* FitProbe.swift in Sources */,
 				7EFFC3169995F29A9AFF34DF /* InstallFanout.swift in Sources */,
 				8E105401C94B9C499D75857A /* InstallLabel.swift in Sources */,
 				F2A02A66727A1F8CE325A990 /* InstallStore.swift in Sources */,
@@ -1568,6 +1573,7 @@
 				9FC504B1C06ADCAAC822DBC7 /* ExtensionRenderTests.swift in Sources */,
 				4319C63F07DE29E7FEE486B2 /* FeedProvider.swift in Sources */,
 				3E8D594D57BDF38E342C2FCC /* FeedWidgetParts.swift in Sources */,
+				97AFBA64FFBFDD192956388A /* FitProbe.swift in Sources */,
 				BF8199311F69A1DBE7F12E0D /* InCallModel.swift in Sources */,
 				9612C3DF328141EB8CDDCC24 /* InCallView.swift in Sources */,
 				2C77230427A261EBA40C129C /* InstallFanout.swift in Sources */,

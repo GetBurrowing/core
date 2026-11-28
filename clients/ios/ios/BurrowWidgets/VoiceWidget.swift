@@ -79,26 +79,40 @@ struct VoiceTileContent: View {
     let model: VoiceTileModel
 
     var body: some View {
-        VStack(spacing: 10) {
-            Spacer(minLength: 0)
-            VoiceDisc(style: discStyle, glyph: model.kind == .listening ? .send : .mic, size: discSize)
-            VStack(spacing: 2) {
-                Text(model.title)
-                    .font(.subheadline.weight(.semibold))
-                    .foregroundStyle(BurrowColor.onSurface.color)
-                    .lineLimit(2)
-                    .multilineTextAlignment(.center)
-                    .minimumScaleFactor(0.9)
-                // "on <install>" is dropped first at large text.
-                if let detail = model.detail, !typeSize.isAccessibilitySize {
-                    Text(detail).font(.caption).foregroundStyle(BurrowColor.muted.color).lineLimit(1)
+        // "on <install>" is dropped whole first, then the disc shrinks to
+        // 44pt, then the title is dropped whole (the tile stays one button,
+        // labelled for VoiceOver): the title is never cut (stage 7).
+        ViewThatFits(in: .vertical) {
+            if let detail = model.detail {
+                stack(disc: discSize) {
+                    title
+                    Text(detail).font(.caption).foregroundStyle(BurrowColor.muted.color).fixedSize()
                 }
             }
-            Spacer(minLength: 0)
+            stack(disc: discSize) { title }
+            stack(disc: CGFloat(VoiceTileModel.minimumDisc)) { title }
+            stack(disc: CGFloat(VoiceTileModel.minimumDisc)) { EmptyView() }
         }
         .padding(12)
         .frame(maxWidth: .infinity, maxHeight: .infinity)
         .contentShape(Rectangle())
+    }
+
+    private var title: some View {
+        Text(model.title)
+            .font(.subheadline.weight(.semibold))
+            .foregroundStyle(BurrowColor.onSurface.color)
+            .multilineTextAlignment(.center)
+            .fixedSize(horizontal: false, vertical: true)
+            .neverCut("voice.tile.title")
+    }
+
+    private func stack<Lines: View>(disc: CGFloat, @ViewBuilder lines: () -> Lines) -> some View {
+        VStack(spacing: 10) {
+            VoiceDisc(style: discStyle, glyph: model.kind == .listening ? .send : .mic, size: disc)
+            VStack(spacing: 2) { lines() }
+        }
+        .frame(maxWidth: .infinity)
     }
 
     private var discSize: CGFloat {

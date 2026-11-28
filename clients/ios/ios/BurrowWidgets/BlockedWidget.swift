@@ -68,6 +68,10 @@ struct BlockedMedium: View {
         .frame(maxWidth: .infinity, maxHeight: .infinity, alignment: .topLeading)
     }
 
+    private func title(_ row: FeedEntry.Blocked) -> some View {
+        Text(row.row.title).font(FeedType.rowTitle).foregroundStyle(BurrowColor.onSurface.color).privacySensitive()
+    }
+
     private func rows(_ n: Int) -> some View {
         let failing = !entry.failures.isEmpty && n > 1
         let shown = Array(entry.blockedRows.prefix(failing ? n - 1 : n))
@@ -75,16 +79,16 @@ struct BlockedMedium: View {
             ForEach(shown) { row in
                 Link(destination: row.link) {
                     VStack(alignment: .leading, spacing: 0) {
-                        HStack(alignment: .firstTextBaseline, spacing: 6) {
-                            Text(row.row.title).font(FeedType.rowTitle).foregroundStyle(BurrowColor.onSurface.color).lineLimit(1)
-                                .privacySensitive()
-                            Spacer(minLength: 4)
+                        // The install label is dropped whole before the title truncates.
+                        ViewThatFits(in: .horizontal) {
                             if let label = row.installLabel {
-                                ViewThatFits(in: .horizontal) {
+                                HStack(alignment: .firstTextBaseline, spacing: 6) {
+                                    title(row).fixedSize().neverTruncates("blocked.title.withInstall")
+                                    Spacer(minLength: 4)
                                     Secondary(text: label).lineLimit(1).fixedSize()
-                                    Color.clear.frame(width: 0, height: 0)
                                 }
                             }
+                            title(row).lineLimit(1).frame(maxWidth: .infinity, alignment: .leading)
                         }
                         if let reason = row.row.reason {
                             Secondary(text: reason, font: FeedType.summary).lineLimit(1).privacySensitive()

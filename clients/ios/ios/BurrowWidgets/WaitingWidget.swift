@@ -91,20 +91,29 @@ struct WaitingRowView: View {
     let entry: FeedEntry
 
     private var asker: String { row.row.asker ?? "An agent" }
+    private var name: some View {
+        Text(asker).font(FeedType.rowTitle).foregroundStyle(BurrowColor.onSurface.color).privacySensitive()
+    }
+
     private var time: String { entry.updatedLine ?? FeedEntry.shortAgo(row.row.date, now: entry.date) }
 
     var body: some View {
         VStack(alignment: .leading, spacing: 0) {
-            HStack(alignment: .firstTextBaseline, spacing: 6) {
-                Text(asker).font(FeedType.rowTitle).foregroundStyle(BurrowColor.onSurface.color).lineLimit(1).privacySensitive()
-                Spacer(minLength: 4)
-                // The install label is dropped whole before the name
-                // truncates; the time never truncates.
-                ViewThatFits(in: .horizontal) {
-                    if let label = row.installLabel { Secondary(text: "\(label) · \(time)").lineLimit(1).fixedSize() }
-                    Secondary(text: time).lineLimit(1).fixedSize()
+            // The install label is dropped whole before the name truncates;
+            // the time never truncates.
+            ViewThatFits(in: .horizontal) {
+                if let label = row.installLabel {
+                    HStack(alignment: .firstTextBaseline, spacing: 6) {
+                        name.fixedSize().neverTruncates("waiting.row.name.withInstall")
+                        Spacer(minLength: 4)
+                        Secondary(text: "\(label) · \(time)").lineLimit(1).fixedSize()
+                    }
                 }
-                .layoutPriority(1)
+                HStack(alignment: .firstTextBaseline, spacing: 6) {
+                    name.lineLimit(1)
+                    Spacer(minLength: 4)
+                    Secondary(text: time).lineLimit(1).fixedSize().neverTruncates("waiting.row.time")
+                }
             }
             Secondary(text: row.row.summary, font: FeedType.summary).lineLimit(1).privacySensitive()
         }
@@ -150,7 +159,7 @@ struct WaitingRectangular: View {
                 Text(WaitingMedium.title).font(.headline)
                 Text(FeedCopy.signIn)
             } else {
-                Text(title).font(.headline).monospacedDigit().lineLimit(1)
+                titleLine
                 if entry.count(.waiting) == 0 {
                     Text(entry.notLoaded ? FeedCopy.notLoaded : WaitingMedium.empty).lineLimit(1)
                 } else if let row = entry.waitingRows.first {
@@ -165,9 +174,25 @@ struct WaitingRectangular: View {
         .frame(maxWidth: .infinity, alignment: .leading)
     }
 
-    private var title: String {
-        let pinned = entry.pinnedLabel.map { " · \($0.replacingOccurrences(of: " only", with: ""))" } ?? ""
-        return "\(WaitingMedium.title)\(pinned) · \(entry.count(.waiting))"
+    /// "Waiting on you · Alpha · 7" when pinned and it fits, else "Waiting
+    /// on you · 7": the install is dropped whole, then the title truncates;
+    /// the count never does.
+    private var titleLine: some View {
+        let pinned = entry.pinnedLabel.map { $0.replacingOccurrences(of: " only", with: "") }
+        let count = Text("\(entry.count(.waiting))").monospacedDigit().fixedSize().neverTruncates("waiting.rect.count")
+        return ViewThatFits(in: .horizontal) {
+            if let pinned {
+                HStack(spacing: 0) {
+                    Text("\(WaitingMedium.title) · \(pinned) · ").fixedSize()
+                    count
+                }
+            }
+            HStack(spacing: 0) {
+                Text("\(WaitingMedium.title) · ").lineLimit(1)
+                count
+            }
+        }
+        .font(.headline)
     }
 
     private func line(_ row: FeedEntry.Waiting, withInstall: Bool) -> some View {

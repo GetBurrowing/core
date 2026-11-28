@@ -131,19 +131,27 @@ struct ApprovalsHeader: View {
                 .lineLimit(1)
             Spacer(minLength: 4)
             if let install = entry.installName {
-                Text(install)
-                    .font(.system(size: 11, weight: .semibold))
-                    .foregroundStyle(BurrowColor.onSurface.color)
-                    .lineLimit(1)
-                    .padding(.horizontal, 8)
-                    .padding(.vertical, 3)
-                    .background(Capsule().fill(BurrowColor.surfaceMuted.color))
+                // Dropped whole, never truncated (task 01a21e75 stage 7).
+                ViewThatFits(in: .horizontal) {
+                    Text(install)
+                        .font(.system(size: 11, weight: .semibold))
+                        .foregroundStyle(BurrowColor.onSurface.color)
+                        .lineLimit(1)
+                        .fixedSize()
+                        .neverTruncates("approvals.install")
+                        .padding(.horizontal, 8)
+                        .padding(.vertical, 3)
+                        .background(Capsule().fill(BurrowColor.surfaceMuted.color))
+                    Color.clear.frame(width: 0, height: 0)
+                }
             }
             if entry.slab != .signedOut {
                 let live = entry.slab.usesLiveFill
                 Text("\(entry.count)")
                     .font(.system(size: 15, weight: .heavy))
                     .monospacedDigit()
+                    .fixedSize()
+                    .neverTruncates("approvals.count")
                     .foregroundStyle(live ? BurrowColor.onInfo.color : BurrowColor.onSurface.color)
                     .frame(minWidth: 28, minHeight: 24)
                     .padding(.horizontal, 4)

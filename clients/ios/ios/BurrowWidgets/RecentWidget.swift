@@ -57,9 +57,9 @@ struct RecentWidgetView: View {
         let shown = Array(entry.recentRows.prefix(footer == nil ? n : n - 1))
         return VStack(alignment: .leading, spacing: 6) {
             ForEach(shown) { row in
-                Link(destination: row.link) { RecentRowView(row: row) }
+                Link(destination: row.link) { RecentRowView(row: row) }.staysInside("recent.row.\(row.id)")
             }
-            if let footer { footer.frame(height: 24, alignment: .leading) }
+            if let footer { footer.frame(minHeight: 24, alignment: .leading) }
         }
     }
 }
@@ -70,13 +70,18 @@ struct RecentRowView: View {
     var body: some View {
         HStack(spacing: 8) {
             mark
-            Text(row.row.name).font(FeedType.rowTitle).foregroundStyle(BurrowColor.onSurface.color).lineLimit(1).privacySensitive()
-            Spacer(minLength: 4)
-            if let label = row.installLabel {
-                // Dropped whole before the name truncates.
-                ViewThatFits(in: .horizontal) {
-                    Secondary(text: label).lineLimit(1).fixedSize()
-                    Color.clear.frame(width: 0, height: 0)
+            // The install label is dropped whole before the name truncates.
+            ViewThatFits(in: .horizontal) {
+                if let label = row.installLabel {
+                    HStack(spacing: 8) {
+                        name.fixedSize().neverTruncates("recent.name.withInstall")
+                        Spacer(minLength: 4)
+                        Secondary(text: label).lineLimit(1).fixedSize()
+                    }
+                }
+                HStack(spacing: 8) {
+                    name.lineLimit(1)
+                    Spacer(minLength: 4)
                 }
             }
             Circle()
@@ -84,9 +89,16 @@ struct RecentRowView: View {
                 .frame(width: 8, height: 8)
                 .accessibilityHidden(true)
         }
-        .frame(height: 24)
+        // At least 24pt, and taller at large text, so the list's
+        // ViewThatFits drops rows instead of overlapping them.
+        .frame(minHeight: 24)
         .accessibilityElement(children: .ignore)
         .accessibilityLabel(spoken)
+    }
+
+    private var name: some View {
+        Text(row.row.name).font(FeedType.rowTitle).foregroundStyle(BurrowColor.onSurface.color).privacySensitive()
+            .noOverlap("recent.names", "\(row.id)")
     }
 
     /// A 20pt mark: # for a channel, a person or agent glyph for a DM.

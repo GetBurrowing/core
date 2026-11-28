@@ -249,6 +249,8 @@ targets:
       # The Voice tile and Live Activity (task 01a21e75 stage 5).
       - path: ../BurrowWidgets/VoiceWidget.swift
       - path: ../BurrowWidgets/VoiceLiveActivity.swift
+      # The fit probes the render tests assert (task 01a21e75 stage 7).
+      - path: ../BurrowWidgets/FitProbe.swift
       - path: App/InstallPickerView.swift
       # The "Switched to" banner (task 01a1261e stage 4 evidence).
       - path: App/SwitchBanner.swift
