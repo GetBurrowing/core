@@ -88,7 +88,7 @@ enum VoicePartnerResolver {
 
 /// The last resolved partner, in the App Group. A name and ids, never text.
 struct VoicePartnerCache {
-    private static let key = "suite.voice.partner.v1"
+    private static let key = "burrow.voice.partner.v1"
     let defaults: UserDefaults
 
     init(defaults: UserDefaults? = UserDefaults(suiteName: InstallStore.appGroup)) {
@@ -113,7 +113,7 @@ struct VoicePartnerCache {
 /// a turn with no second tap. Expires, so a flag left by an open that never
 /// reached the Voice tab does not start the mic hours later.
 struct VoiceAutoStart {
-    private static let key = "suite.voice.autostart.v1"
+    private static let key = "burrow.voice.autostart.v1"
     static let validFor: TimeInterval = 60
     let defaults: UserDefaults
 

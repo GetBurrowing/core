@@ -154,7 +154,7 @@ struct VoiceTileModel: Equatable {
 /// Whether a native turn is listening right now, in the App Group, so the
 /// widget tile can show "Tap to send". A phase and a time, never words.
 struct VoiceTurnStatusStore {
-    private static let key = "suite.voice.listening.v1"
+    private static let key = "burrow.voice.listening.v1"
     /// A listening turn is capped at a minute; a stale mark reads as rest.
     static let validFor: TimeInterval = 90
     let defaults: UserDefaults

@@ -125,7 +125,7 @@ defmodule Platform.Mobile.VoiceTurns do
   defp check_turn_id(_id), do: {:error, :invalid}
 
   defp fetch_agent(id) when is_binary(id) do
-    with {:ok, uuid} <- Ecto.UUID.cast(id),
+    with {:ok, uuid} <- Platform.UUID.cast(id),
          %Agent{} = agent <- Repo.get(Agent, uuid) do
       {:ok, agent}
     else

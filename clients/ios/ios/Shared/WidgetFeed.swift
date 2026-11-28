@@ -98,7 +98,7 @@ struct CachedWidgetFeed: Codable, Equatable {
 /// shows the last data ("Updated 2h ago") and four placed feed widgets share
 /// one request per install (`WidgetFeedLoader.reuseAfter`).
 struct WidgetFeedCache {
-    private static let keyPrefix = "suite.widgetfeed.v1."
+    private static let keyPrefix = "burrow.widgetfeed.v1."
     let defaults: UserDefaults
 
     init(defaults: UserDefaults? = UserDefaults(suiteName: InstallStore.appGroup)) {
