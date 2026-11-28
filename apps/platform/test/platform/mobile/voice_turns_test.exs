@@ -310,7 +310,10 @@ defmodule Platform.Mobile.VoiceTurnsTest do
       assert voice_metas(conn.space_id, user.id) == []
       assert {:ok, %{state: "thinking"}} = VoiceTurns.await_reply(user, id, 0, 400)
       assert_receive {:during, [meta]}, 1_000
-      assert Map.take(meta, [:participant_type, :surface]) == VoiceTurns.voice_meta()
+
+      assert Map.take(meta, [:participant_type, :surface]) ==
+               Platform.Chat.Presence.voice_listener_meta()
+
       assert settles?(fn -> voice_metas(conn.space_id, user.id) == [] end)
     end
 

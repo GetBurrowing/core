@@ -7,7 +7,7 @@
 // here too. See voice_tab.js's header for the behaviour.
 
 import ClientState from "../client_state.js"
-import { CAPABILITY_TIMEOUT_MS, capabilityOf, nativeVoice, onDeviceVoiceCapability } from "../lib/on_device_voice"
+import { onDeviceVoiceCapability } from "../lib/on_device_voice"
 import {
   DRAG_CANCEL_PX,
   MIC_TIMEOUT_MS,
@@ -53,24 +53,8 @@ const VoiceTabNative = {
     }
   },
 
-  // `onDeviceVoiceCapability()`, plus the one-shot `autoStart` the app sets
-  // when the Voice control, Action button or widget had to open the app
-  // (task 01a21e75 stage 5). Read here, in the island, so app.js does not
-  // grow; the same timeout and the same "unavailable on any throw".
-  async _capability() {
-    const plugin = nativeVoice()
-    if (!plugin) return onDeviceVoiceCapability()
-    try {
-      const caps = await withTimeout(Promise.resolve(plugin.capabilities()), CAPABILITY_TIMEOUT_MS)
-      if (caps === TIMED_OUT) return { available: false, reason: "error", plugin: null }
-      return { ...capabilityOf(caps, plugin), autoStart: !!caps && caps.autoStart === true }
-    } catch (_e) {
-      return { available: false, reason: "error", plugin: null }
-    }
-  },
-
   async _probeOnDevice() {
-    const cap = await this._capability()
+    const cap = await onDeviceVoiceCapability()
     if (this._destroyed) return
     if (cap.available) {
       this._goNative(cap)

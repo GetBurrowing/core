@@ -18,7 +18,7 @@ defmodule Platform.Mobile.VoiceTurns do
     * `await_reply/4`: a long-poll, at most #{25_000} ms, that returns the
       sentences not yet spoken. Only the caller's OWN turn resolves. While
       it waits, the caller is tracked as a Voice listener in the DM
-      (`Platform.Chat.Presence`, meta `voice_meta/0`), so the reply the
+      (`Platform.Chat.Presence`, meta `Presence.voice_listener_meta/0`), so the reply the
       device shows in its Live Activity is not pushed on top of it (the
       push rule of task 01a21e8d).
 
@@ -36,7 +36,6 @@ defmodule Platform.Mobile.VoiceTurns do
   alias Platform.Repo
 
   @max_wait_ms 25_000
-  @voice_meta %{participant_type: "user", surface: "voice"}
 
   @type reply :: %{
           state: String.t(),
@@ -251,7 +250,10 @@ defmodule Platform.Mobile.VoiceTurns do
   # fails open: the wait goes on and the reply may also be pushed.
   defp as_voice_listener(space_id, user_id, fun) do
     tracked? =
-      match?({:ok, _}, Presence.safe_track_in_space(self(), space_id, user_id, @voice_meta))
+      match?(
+        {:ok, _},
+        Presence.safe_track_in_space(self(), space_id, user_id, Presence.voice_listener_meta())
+      )
 
     try do
       fun.()
@@ -259,10 +261,6 @@ defmodule Platform.Mobile.VoiceTurns do
       if tracked?, do: Presence.safe_untrack_in_space(self(), space_id, user_id)
     end
   end
-
-  @doc "The presence meta a waiting device is tracked with in the turn's DM."
-  @spec voice_meta() :: map()
-  def voice_meta, do: @voice_meta
 
   defp wait(conn, spoken, timeout_ms) do
     case posted_reply(conn) do

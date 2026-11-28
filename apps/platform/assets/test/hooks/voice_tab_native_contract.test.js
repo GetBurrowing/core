@@ -78,9 +78,10 @@ describe("on-device voice contract: BurrowVoicePlugin.swift vs the web", () => {
 
   it("autoStart (task 01a21e75 stage 5): the plugin resolves it from capabilities and the island reads it", () => {
     expect(pluginSwift).toContain('"autoStart":')
-    expect(hookJs).toContain("caps.autoStart === true")
-    // Read in the island only, so app.js (voice_tab.js and the lib) does not grow.
-    expect(libJs).not.toContain("autoStart")
+    // capabilityOf reads it (the lib ships only in the voice_native island)...
+    expect(libJs).toContain("autoStart: caps.autoStart === true")
+    // ...and the island's probe acts on it; voice_tab.js (app.js) never does.
+    expect(hookJs).toContain("cap.autoStart === true")
     expect(read("apps/platform/assets/js/hooks/voice_tab.js")).not.toContain("autoStart")
   })
 

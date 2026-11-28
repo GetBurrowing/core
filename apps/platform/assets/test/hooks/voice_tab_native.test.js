@@ -61,7 +61,7 @@ import VoiceTab, {
   TURN_WARN_MS,
   VOICE_NATIVE_ISLAND,
 } from "../../js/hooks/voice_tab.js"
-import { onDeviceVoiceCapability } from "../../js/lib/on_device_voice.js"
+import { capabilityOf, onDeviceVoiceCapability } from "../../js/lib/on_device_voice.js"
 import VoiceTabNative from "../../js/hooks/voice_tab_native_runtime.js"
 import { DRAG_CANCEL_PX } from "../../js/hooks/voice_tab_shared.js"
 import { REPLY_VOICE_KEY, VOICE_NAMESPACE } from "../../js/hooks/voice_tab_native_runtime.js"
@@ -369,6 +369,10 @@ describe("without the on-device path a press is today's LiveKit press", () => {
     expect(await onDeviceVoiceCapability(hanging, 5)).toMatchObject({ available: false, reason: "error" })
     const yes = { Capacitor: { isNativePlatform: () => true, Plugins: { BurrowVoice: fakePlugin() } } }
     expect(await onDeviceVoiceCapability(yes)).toMatchObject({ available: true, reason: null, testBuild: true })
+    // autoStart (task 01a21e75 stage 5): true only when the plugin says exactly true.
+    expect(capabilityOf({ onDeviceSpeech: true, autoStart: true }, null).autoStart).toBe(true)
+    expect(capabilityOf({ onDeviceSpeech: true, autoStart: "yes" }, null).autoStart).toBe(false)
+    expect(capabilityOf({ onDeviceSpeech: true }, null).autoStart).toBe(false)
   })
 
   it("assets_missing shows Preparing with the mic held, then adopts the device path", async () => {

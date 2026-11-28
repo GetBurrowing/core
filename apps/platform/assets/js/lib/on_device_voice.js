@@ -61,6 +61,9 @@ export function capabilityOf(caps, plugin) {
     locale: typeof caps.locale === "string" ? caps.locale : null,
     testBuild: caps.testBuild === true,
     micPermission: typeof caps.micPermission === "string" ? caps.micPermission : null,
+    // One-shot: the Voice control, Action button or widget had to open the
+    // app, so the tab starts listening at once (task 01a21e75 stage 5).
+    autoStart: caps.autoStart === true,
     plugin,
   }
 }
